@@ -157,6 +157,7 @@ impl ToolExecutor for SubagentExecutor {
                     exit_code: None,
                     artifacts: Vec::new(),
                     truncation: None,
+                    managed_output: None,
                 },
                 Err(SubagentStartError::ConversationInactive) => {
                     failed_result("the conversation is shutting down")

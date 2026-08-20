@@ -449,25 +449,6 @@ pub fn tool(name: &str, id: &str) -> rustx::tools::types::ToolDefinition {
     }
 }
 
-/// A process-wide serial for isolating the durable store of each
-/// `tool_runtime` fixture.
-///
-/// Since Issue #63 every canonical commit (assistant/tool/context facts)
-/// appends to the conversation's durable Message Ledger, so two loop tests
-/// that reuse the same `conversation_id` in one process must not share one
-/// durable database file. The serial makes each fixture's storage roots
-/// unique without changing the sibling workspace/artifact layout.
-static TOOL_RUNTIME_SERIAL: AtomicU64 = AtomicU64::new(0);
-
-/// The isolated sibling storage roots of one `tool_runtime` fixture.
-fn tool_runtime_dir(conversation_id: &str) -> std::path::PathBuf {
-    let serial = TOOL_RUNTIME_SERIAL.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!(
-        "rustx-tool-runtime-{conversation_id}-{}-{serial}",
-        std::process::id()
-    ))
-}
-
 /// Test-only full walk over the bounded `RequestHistory` page API.
 ///
 /// Production code must choose an explicit page size; this helper is kept in
@@ -589,23 +570,87 @@ pub fn durable_agent_result(
     }
 }
 
-/// A conversation tool runtime over a unique temporary workspace.
+/// A conversation tool runtime over a unique temporary workspace, with
+/// explicit RAII ownership of the isolated storage root.
 ///
 /// Fake tools never touch the workspace, but the durable store now holds the
-/// full canonical Message Ledger, so every fixture gets its own storage roots
-/// (see [`tool_runtime_dir`]); native-tool tests use isolated temporary
-/// workspaces. The artifact root is a sibling of the workspace root, never
-/// nested inside it.
+/// full canonical Message Ledger, so every fixture gets its own storage roots;
+/// native-tool tests use isolated temporary workspaces. The artifact root is
+/// a sibling of the workspace root, never nested inside it.
+///
+/// # Ownership
+///
+/// The temporary storage root is owned by this fixture, never by the
+/// production runtime: struct fields drop in declaration order, so
+/// `runtime` (and every handle obtained from it) drops FIRST and `temp`
+/// removes the directory SECOND. The fixture is deliberately not `Clone`:
+/// a raw runtime clone must never outlive its storage owner. Consumers
+/// borrow the runtime through `Deref` for the fixture's lifetime, which
+/// also covers any async task the test drives to settlement before the
+/// fixture drops.
+pub struct ToolRuntimeFixture {
+    /// The conversation tool runtime. Declared FIRST so it — and the file
+    /// handles reachable from it — drops before the directory is removed.
+    runtime: rustx::tools::runtime::ConversationToolRuntime,
+    /// The storage-root owner; dropping it removes the whole directory.
+    /// Never move this field above `runtime`.
+    #[allow(clippy::used_underscore_binding)]
+    temp: tempfile::TempDir,
+}
+
+impl ToolRuntimeFixture {
+    /// The isolated storage root of this fixture (test infrastructure
+    /// only; production code never sees it).
+    #[must_use]
+    pub fn storage_root(&self) -> &std::path::Path {
+        self.temp.path()
+    }
+}
+
+impl std::ops::Deref for ToolRuntimeFixture {
+    type Target = rustx::tools::runtime::ConversationToolRuntime;
+
+    fn deref(&self) -> &Self::Target {
+        &self.runtime
+    }
+}
+
+/// A conversation tool runtime over a unique temporary workspace whose
+/// storage root is owned by the returned fixture (RAII cleanup on drop),
+/// with an optional explicitly configured durable authority.
+///
+/// This is the single shared constructor for every
+/// `ConversationToolRuntime` test fixture (integration suites, the
+/// scripted in-crate suites, and direct Agent Loop tests): the storage
+/// root is always a fixture-owned `TempDir`, never a raw
+/// `std::env::temp_dir()` path that outlives the test.
 #[must_use]
-pub fn tool_runtime(conversation_id: &str) -> rustx::tools::runtime::ConversationToolRuntime {
-    let dir = tool_runtime_dir(conversation_id);
-    let _ = std::fs::create_dir_all(dir.join("workspace"));
-    rustx::tools::runtime::ConversationToolRuntime::new(
+pub fn tool_runtime_with_store(
+    conversation_id: &str,
+    store: Option<Arc<dyn ConversationStore>>,
+) -> ToolRuntimeFixture {
+    let temp = tempfile::tempdir().expect("tool runtime temp dir");
+    let dir = temp.path();
+    std::fs::create_dir_all(dir.join("workspace")).expect("workspace root");
+    let runtime = rustx::tools::runtime::ConversationToolRuntime::from_config(
         rustx::runtime::identity::ConversationId::new(conversation_id),
-        dir.join("workspace"),
-        dir.join("artifacts"),
+        rustx::tools::runtime::ConversationRuntimeConfig {
+            durable_binding: store.map(rustx::durable::ConversationStoreBinding::new),
+            ..rustx::tools::runtime::ConversationRuntimeConfig::new(
+                dir.join("workspace"),
+                dir.join("artifacts"),
+            )
+        },
     )
-    .expect("tool runtime")
+    .expect("tool runtime");
+    ToolRuntimeFixture { runtime, temp }
+}
+
+/// A conversation tool runtime over a unique temporary workspace whose
+/// storage root is owned by the returned fixture (RAII cleanup on drop).
+#[must_use]
+pub fn tool_runtime(conversation_id: &str) -> ToolRuntimeFixture {
+    tool_runtime_with_store(conversation_id, None)
 }
 
 /// A canonical tool definition with explicit execution/concurrency
@@ -634,9 +679,6 @@ pub fn tool_policies(
 /// A conversation tool runtime over a unique temporary workspace with the
 /// native tool registry attached.
 pub struct NativeFixture {
-    /// The temporary directory kept alive for the fixture lifetime.
-    #[allow(clippy::used_underscore_binding)]
-    _dir: tempfile::TempDir,
     /// The conversation tool runtime.
     pub runtime: rustx::tools::runtime::ConversationToolRuntime,
     /// The registry with every native tool registered.
@@ -647,6 +689,11 @@ pub struct NativeFixture {
     /// Tool/runtime code receives only the mailbox capability; the test
     /// harness passes this handle explicitly at the execution boundary.
     pub store: Arc<rustx::durable::SqliteConversationStore>,
+    /// The temporary directory owner, declared LAST: struct fields drop in
+    /// declaration order, so the runtime and every handle obtained from it
+    /// drop before the directory is removed.
+    #[allow(clippy::used_underscore_binding)]
+    _dir: tempfile::TempDir,
 }
 
 impl NativeFixture {
@@ -759,6 +806,7 @@ pub async fn run_tool_with_cancellation(
         workspace: fixture.runtime.workspace(),
         progress: &reporter,
         artifacts: fixture.runtime.artifacts(),
+        tool_output: fixture.runtime.tool_output(),
         environment: fixture.runtime.environment(),
     };
     executor.execute(prepared.invocation, context).await
@@ -801,6 +849,7 @@ pub async fn run_tool(
         workspace: fixture.runtime.workspace(),
         progress: &reporter,
         artifacts: fixture.runtime.artifacts(),
+        tool_output: fixture.runtime.tool_output(),
         environment: fixture.runtime.environment(),
     };
     executor.execute(prepared.invocation, context).await
@@ -871,12 +920,14 @@ pub fn replay_execution_states(events: &[RuntimeEvent]) -> Result<Vec<ExecutionS
 /// one pinned attempt lease. The temporary directory is kept alive for the
 /// fixture lifetime.
 pub struct CapabilityFixture {
-    /// The temporary directory kept alive for the fixture lifetime.
-    #[allow(clippy::used_underscore_binding)]
-    _dir: tempfile::TempDir,
     /// The capability coordinator of the conversation.
     pub coordinator: rustx::capabilities::CapabilityCoordinator,
     lease: rustx::capabilities::AttemptCapabilityLease,
+    /// The temporary directory owner, declared LAST: struct fields drop in
+    /// declaration order, so the coordinator (and its handles) drops
+    /// before the directory is removed.
+    #[allow(clippy::used_underscore_binding)]
+    _dir: tempfile::TempDir,
 }
 
 impl CapabilityFixture {

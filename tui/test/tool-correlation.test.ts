@@ -125,7 +125,7 @@ describe("correlation identity", () => {
     const state = stateOf({
       messages: [
         assistantBlocks("m1", [
-          toolCallBlock("call-1", "tool-read", "read", { path: "a.rs" }),
+          toolCallBlock("call-1", "tool-read", "read", { file_path: "/workspace/a.rs" }),
         ]),
         toolMessage("m2", "call-1", "tool-read"),
       ],
@@ -133,7 +133,7 @@ describe("correlation identity", () => {
         foreground: [
           foreground("call-1", "tool-read", "read", {
             type: "running",
-            arguments: '{"path":"a.rs"}',
+            arguments: '{"file_path":"/workspace/a.rs"}',
           }),
         ],
       }),

@@ -407,6 +407,7 @@ fn additional_event_variants_round_trip() {
             exit_code: None,
             artifacts: Vec::new(),
             truncation: None,
+            managed_output: None,
         },
     };
     let decoded: RuntimeEvent =

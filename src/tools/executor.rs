@@ -30,6 +30,7 @@ use crate::runtime::cancellation::ExecutionCancellation;
 use crate::runtime::identity::{ConversationId, ToolExecutionId, ToolId};
 use crate::tools::artifacts::ArtifactStore;
 use crate::tools::environment::ToolEnvironment;
+use crate::tools::managed_output::ManagedToolOutput;
 use crate::tools::schema::{
     SchemaError, compile_model_definition, resolve_invocation_metadata,
     validate_business_arguments, validate_canonical_schema,
@@ -59,7 +60,8 @@ pub trait ProgressReporter: Send + Sync {
 /// The context provides the concrete resources the current contract needs —
 /// conversation identity, execution identity when background, the runtime
 /// cancellation signal, the workspace boundary, the progress reporter, the
-/// artifact store, and the explicit authorized environment. Executor-
+/// artifact store, the managed tool-output store, and the explicit
+/// authorized environment. Executor-
 /// specific resources (process ids, MCP SDK types, Python runtime objects)
 /// belong inside executor implementations and never appear here.
 pub struct ToolExecutionContext<'a> {
@@ -82,8 +84,14 @@ pub struct ToolExecutionContext<'a> {
     pub workspace: &'a Workspace,
     /// The bounded progress reporter of the execution.
     pub progress: &'a dyn ProgressReporter,
-    /// The conversation-owned artifact store for spooled output.
+    /// The conversation-owned artifact store for genuine semantic file
+    /// artifacts (never for oversized textual output).
     pub artifacts: &'a ArtifactStore,
+    /// The conversation-owned managed tool-output store: the read-only
+    /// region of auxiliary textual output — lazy result spills of oversized
+    /// foreground output, and the dispatch-allocated live-output channel of
+    /// background executions.
+    pub tool_output: &'a ManagedToolOutput,
     /// The explicit authorized tool environment.
     pub environment: &'a ToolEnvironment,
 }
@@ -562,6 +570,7 @@ mod tests {
                     exit_code: None,
                     artifacts: Vec::new(),
                     truncation: None,
+                    managed_output: None,
                 },
             }
         }
@@ -1036,15 +1045,11 @@ mod tests {
                     exit_code: None,
                     artifacts: Vec::new(),
                     truncation: None,
+                    managed_output: None,
                 }))
             }
         }
-        let dir = std::env::temp_dir().join(format!(
-            "rustx-reg-{}-{}",
-            std::process::id(),
-            std::thread::current().name().unwrap_or("worker")
-        ));
-        let _ = std::fs::create_dir_all(&dir);
+        let dir = tempfile::tempdir().expect("temp dir");
         let received = Arc::new(Mutex::new(Vec::new()));
         let mut registry = ToolRegistry::new();
         registry
@@ -1074,9 +1079,14 @@ mod tests {
         let workspace = Workspace::new(&dir).expect("workspace");
         let artifacts = ArtifactStore::new(
             crate::runtime::identity::ConversationId::new("conv-1"),
-            dir.join("artifacts"),
+            dir.path().join("artifacts"),
         )
         .expect("store");
+        let tool_output = crate::tools::managed_output::ManagedToolOutput::new(
+            crate::runtime::identity::ConversationId::new("conv-1"),
+            dir.path().join("tool-output"),
+        )
+        .expect("managed tool output");
         let reporter = Capturing;
         let context = ToolExecutionContext {
             conversation_id: &ConversationId::new("conv-1"),
@@ -1088,6 +1098,7 @@ mod tests {
             workspace: &workspace,
             progress: &reporter,
             artifacts: &artifacts,
+            tool_output: &tool_output,
             environment: &ToolEnvironment::new(),
         };
         let executor = registry.executor(&prepared.invocation.tool_id);
@@ -1100,6 +1111,5 @@ mod tests {
             vec![json!({"path": "a.txt"})],
             "the executor receives only the stripped business arguments"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

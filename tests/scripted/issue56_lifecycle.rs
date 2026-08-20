@@ -516,6 +516,7 @@ impl ToolExecutor for InstantTool {
                 exit_code: Some(0),
                 artifacts: Vec::new(),
                 truncation: None,
+                managed_output: None,
             }
         })
     }
@@ -639,6 +640,7 @@ impl ToolExecutor for GatedTool {
                 exit_code: Some(0),
                 artifacts: Vec::new(),
                 truncation: None,
+                managed_output: None,
             }
         })
     }
@@ -2113,7 +2115,15 @@ async fn native_read_is_distinguished_from_a_non_native_tool_named_read() {
         id: "call-read",
         tool_id: "tool-read",
         name: "read",
-        arguments: serde_json::json!({"path": "notes.txt"}),
+        arguments: serde_json::json!({
+            "file_path": fixture
+                .runtime
+                .workspace()
+                .root()
+                .join("notes.txt")
+                .to_str()
+                .expect("utf8"),
+        }),
     }]));
     let capability = common::capability_lease(fixture.registry.clone(), &fixture.runtime).await;
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
@@ -2751,7 +2761,15 @@ async fn observer_reads_the_native_read_target_from_validated_arguments() {
         id: "call-read",
         tool_id: "tool-read",
         name: "read",
-        arguments: serde_json::json!({"path": "notes.txt"}),
+        arguments: serde_json::json!({
+            "file_path": fixture
+                .runtime
+                .workspace()
+                .root()
+                .join("notes.txt")
+                .to_str()
+                .expect("utf8"),
+        }),
     }]));
     let capability = common::capability_lease(fixture.registry.clone(), &fixture.runtime).await;
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
@@ -2779,12 +2797,21 @@ async fn observer_reads_the_native_read_target_from_validated_arguments() {
     assert_eq!(invocation.origin, ToolOrigin::Builtin);
     assert_eq!(invocation.mode, ToolInvocationMode::Foreground);
     // The fact the result alone under-determines: which file was touched.
+    // The validated argument is the absolute locator the model supplied.
+    let expected = fixture
+        .runtime
+        .workspace()
+        .root()
+        .join("notes.txt")
+        .to_str()
+        .expect("utf8")
+        .to_owned();
     assert_eq!(
         invocation
             .arguments
-            .get("path")
+            .get("file_path")
             .and_then(|path| path.as_str()),
-        Some("notes.txt"),
+        Some(expected.as_str()),
     );
     // The observation carries no model-facing name to compare against, and the
     // arguments carry no reserved invocation metadata.

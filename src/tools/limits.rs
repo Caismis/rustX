@@ -9,6 +9,15 @@ use std::time::Duration;
 /// The maximum model-facing bytes of one tool result payload.
 pub const MAX_MODEL_TOOL_RESULT_BYTES: usize = 64 * 1024;
 
+/// The maximum bytes of one managed-output continuation diagnostic.
+///
+/// The absolute managed-output locator and the fixed continuation guidance
+/// are essential continuation state and are retained structurally; an
+/// output-storage diagnostic is advisory and is always bounded to this cap
+/// when the continuation is rendered, so an arbitrary diagnostic can never
+/// make the canonical terminal record unbounded.
+pub const MAX_OUTPUT_CONTINUATION_DIAGNOSTIC_BYTES: usize = 1024;
+
 /// The maximum number of Glob results returned to the model.
 pub const MAX_GLOB_RESULTS: usize = 2_000;
 
@@ -122,7 +131,7 @@ pub fn bound_tool_progress(
         total,
     } = progress;
     crate::tools::types::ToolProgress {
-        message: message.map(|text| bound_utf8_message(text, MAX_PROGRESS_MESSAGE_BYTES)),
+        message: message.map(|text| bound_utf8_text(text, MAX_PROGRESS_MESSAGE_BYTES)),
         completed: completed.filter(|value| value.is_finite()),
         total: total.filter(|value| value.is_finite()),
     }
@@ -131,7 +140,7 @@ pub fn bound_tool_progress(
 /// Truncates `text` to at most `max_bytes` bytes at a UTF-8 character
 /// boundary. Never panics and never splits a code point.
 #[must_use]
-fn bound_utf8_message(mut text: String, max_bytes: usize) -> String {
+pub fn bound_utf8_text(mut text: String, max_bytes: usize) -> String {
     if text.len() <= max_bytes {
         return text;
     }

@@ -381,6 +381,7 @@ impl ToolExecutor for FakeTool {
                             exit_code: None,
                             artifacts: Vec::new(),
                             truncation: None,
+                            managed_output: None,
                         }
                     }
                     released = release.wait_for(|released| *released) => {
@@ -477,6 +478,7 @@ pub fn success_result(text: &str) -> ToolExecutionResult {
         exit_code: Some(0),
         artifacts: Vec::new(),
         truncation: None,
+        managed_output: None,
     }
 }
 
@@ -492,5 +494,6 @@ pub fn failed_result(error: &str) -> ToolExecutionResult {
         exit_code: Some(1),
         artifacts: Vec::new(),
         truncation: None,
+        managed_output: None,
     }
 }

@@ -4,8 +4,10 @@
 //! 1-based first line and `limit` bounds the number of lines; both are
 //! optional and default to `offset = 1`, `limit = 200`. Output is bounded by
 //! [`MAX_MODEL_TOOL_RESULT_BYTES`]; invalid UTF-8 or binary input fails
-//! explicitly rather than fabricating text. Path resolution goes through the
-//! workspace contract — nothing outside the workspace is ever read.
+//! explicitly rather than fabricating text. The model-facing `file_path` is
+//! an absolute locator resolved through the one filesystem authority
+//! ([`crate::tools::locator`]): the workspace root and the read-only managed
+//! tool-output root are readable, nothing else.
 //!
 //! The model-facing argument contract is the typed [`ReadInput`]; the
 //! canonical schema is generated from it.
@@ -34,8 +36,9 @@ pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistrati
         native_definition::<ReadInput>(
             "tool-read",
             NAME,
-            "Read a UTF-8 text file inside the workspace. Returns a line window starting at the \
-             1-based offset (default 1) of at most limit lines (default 200).",
+            "Read a UTF-8 text file at an absolute path. The path must resolve inside the \
+             workspace root or the read-only managed tool-output root. Returns a line window \
+             starting at the 1-based offset (default 1) of at most limit lines (default 200).",
             policy,
         ),
         std::sync::Arc::new(ReadTool),
@@ -64,7 +67,13 @@ fn run_read(
         Err(error) => return failed(error),
     };
     let (offset, limit) = (input.offset(), input.limit());
-    let resolved = match context.workspace.resolve(&input.path) {
+    let resolved = crate::tools::locator::resolve(
+        context.workspace,
+        context.tool_output,
+        &input.file_path,
+        crate::tools::locator::LocatorOperation::Read,
+    );
+    let resolved = match resolved {
         Ok(resolved) => resolved,
         Err(error) => return failed(error.to_string()),
     };
@@ -77,7 +86,7 @@ fn run_read(
     let Ok(text) = String::from_utf8(bytes) else {
         return failed(format!(
             "{} is not a UTF-8 text file; binary content is never fabricated as text",
-            context.workspace.relative(&resolved).unwrap_or_default()
+            resolved.display()
         ));
     };
     let lines: Vec<&str> = text.lines().collect();
@@ -96,6 +105,7 @@ fn run_read(
             truncated: true,
             original_bytes: Some(output.len() as u64),
         }),
+        managed_output: None,
     }
 }
 
@@ -127,5 +137,6 @@ fn failed(error: impl Into<String>) -> ToolExecutionResult {
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        managed_output: None,
     }
 }

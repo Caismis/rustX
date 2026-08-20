@@ -345,6 +345,7 @@ mod tests {
                 exit_code: Some(0),
                 artifacts: Vec::new(),
                 truncation: None,
+                managed_output: None,
             },
         });
         for (block, role) in [

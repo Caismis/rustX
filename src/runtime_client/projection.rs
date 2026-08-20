@@ -750,6 +750,7 @@ impl RuntimeClientProjection {
                     exit_code: None,
                     artifacts: Vec::new(),
                     truncation: None,
+                    managed_output: None,
                 };
                 self.settle_foreground(tool_call_id, result.clone());
                 vec![RuntimeClientEvent::ToolExecutionSettled {
@@ -1939,6 +1940,7 @@ mod tests {
             exit_code: Some(0),
             artifacts: Vec::new(),
             truncation: None,
+            managed_output: None,
         }
     }
 

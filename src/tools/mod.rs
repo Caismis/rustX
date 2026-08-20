@@ -3,8 +3,9 @@
 //! The tool plane owns the canonical [`ToolDefinition`] contract, the
 //! validating [`ToolRegistry`], the [`ToolExecutor`] boundary, the JSON
 //! Schema validation and the model-facing schema compiler, the workspace
-//! boundary, the artifact store, the explicit tool environment, and the
-//! conversation-owned background registry. Native, MCP, and Python executor
+//! boundary, the absolute-locator filesystem authority, the managed
+//! tool-output store, the artifact store, the explicit tool environment, and
+//! the conversation-owned background registry. Native, MCP, and Python executor
 //! implementations share exactly this contract; M5 implements the native
 //! tools.
 
@@ -13,6 +14,8 @@ pub mod background;
 pub mod environment;
 pub mod executor;
 pub mod limits;
+pub mod locator;
+pub mod managed_output;
 pub mod mcp;
 pub mod native;
 pub mod python;
@@ -33,6 +36,8 @@ pub use executor::{
     BACKGROUND_TASK_TOOL_NAME, PreflightOutcome, PreparedInvocation, ProgressReporter,
     ToolExecutionContext, ToolExecutor, ToolPreflightError, ToolRegistry, ToolRegistryError,
 };
+pub use locator::{LocatorError, LocatorOperation};
+pub use managed_output::{BackgroundOutput, ManagedOutputError, ManagedToolOutput, ResultSpill};
 pub use runtime::ConversationToolRuntime;
 pub use schema::{
     EXECUTION_FIELD, EXECUTION_FIELD_VALUES, RUNTIME_PROPERTY_PREFIX, SchemaError,
@@ -40,8 +45,8 @@ pub use schema::{
     validate_business_arguments, validate_canonical_schema,
 };
 pub use types::{
-    ModelToolDefinition, ToolCall, ToolCallStart, ToolConcurrencyPolicy, ToolDefinition,
-    ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
+    ManagedOutputContinuation, ModelToolDefinition, ToolCall, ToolCallStart, ToolConcurrencyPolicy,
+    ToolDefinition, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
     ToolInvocationMode, ToolInvocationPolicy, ToolOrigin, ToolProgress, ToolReplayPolicy,
     ToolResultContent, TruncationState,
 };

@@ -245,6 +245,11 @@ pub struct ToolExecutionResult {
     /// Typed execution status, including interrupted/unknown outcomes.
     pub status: ToolExecutionStatus,
     /// Model-facing result content.
+    ///
+    /// This content is TOOL-OWNED: [`ToolResultContent::Json`] is arbitrary
+    /// tool-owned structured data, and the runtime never infers semantics
+    /// from its property names. rustX reserves no ordinary JSON field names;
+    /// runtime-owned facts live in the typed fields of this struct.
     #[serde(default)]
     pub content: Vec<ToolResultContent>,
     /// Execution duration in integer milliseconds (stable for persistence).
@@ -258,6 +263,117 @@ pub struct ToolExecutionResult {
     /// Truncation metadata where output was truncated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub truncation: Option<TruncationState>,
+    /// Runtime-owned managed textual-output continuation metadata: where
+    /// the complete — or honestly partial — textual output of this result
+    /// lives in the conversation's managed tool-output store (Issue #86).
+    /// Absent for results whose output fits the model-facing content.
+    ///
+    /// This is the one typed source of truth for complete-vs-partial
+    /// managed output; producers never encode these facts as magic
+    /// properties of tool-owned JSON, and generic runtime publication code
+    /// consumes only this typed field, never arbitrary JSON keys.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_output: Option<ManagedOutputContinuation>,
+}
+
+/// Runtime-owned managed textual-output continuation metadata of one tool
+/// result (Issue #86): where the complete — or honestly partial — textual
+/// output of the execution lives in the conversation's managed tool-output
+/// store.
+///
+/// This is rustX runtime metadata, explicitly typed and separate from
+/// arbitrary tool-owned structured content (`ToolResultContent::Json`). It
+/// is not a semantic artifact, not a `FileReference`, and not a File
+/// modality: textual output stays textual. The locator is an advisory
+/// model-facing absolute path inside the read-only managed tool-output
+/// root — it is a locator, never filesystem authority.
+///
+/// The two managed-output lifecycles both use this type: a foreground
+/// result references its lazy result spill (`results/result_N.txt`) only
+/// when the output crossed the preview bound, while a background result
+/// references its dispatch-allocated live-output file
+/// (`tasks/exec_N.output`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ManagedOutputContinuation {
+    /// The complete textual output of the result is retained at the
+    /// absolute managed-output locator; the bounded result content is a
+    /// preview of it.
+    Complete {
+        /// The absolute locator inside the managed tool-output root.
+        locator: std::path::PathBuf,
+    },
+    /// Output storage did not settle completely: the locator holds only
+    /// partial output and must never be presented as the complete output.
+    Partial {
+        /// The absolute locator inside the managed tool-output root.
+        locator: std::path::PathBuf,
+        /// The output-storage failure diagnostic. Advisory only: it is
+        /// bounded whenever the continuation is rendered.
+        diagnostic: String,
+    },
+    /// No managed-output file exists for the result — output storage
+    /// failed before or without allocation — so the bounded result content
+    /// is the only record.
+    Unavailable {
+        /// The output-storage failure diagnostic. Advisory only: it is
+        /// bounded whenever the continuation is rendered.
+        diagnostic: String,
+    },
+}
+
+impl ManagedOutputContinuation {
+    /// The fixed guidance sentence of a complete-output continuation.
+    const COMPLETE_GUIDANCE: &'static str =
+        "Use Read or Grep with this absolute path to inspect the complete output.";
+
+    /// The fixed guidance sentence of a partial-output continuation.
+    const PARTIAL_GUIDANCE: &'static str =
+        "The output storage did not complete; this file does NOT hold the complete output.";
+
+    /// The model-facing textual rendering of this continuation.
+    ///
+    /// This is the ONE rendering of runtime-owned continuation metadata,
+    /// used both by a producer that presents its own continuation inside
+    /// its tool-owned result content (a foreground result the model
+    /// receives directly) and by the generic background terminal
+    /// publication (which appends it as the structurally retained
+    /// continuation section). The absolute locator and the fixed guidance
+    /// are essential continuation state and always survive; the advisory
+    /// diagnostic is bounded to
+    /// [`MAX_OUTPUT_CONTINUATION_DIAGNOSTIC_BYTES`](crate::tools::limits::MAX_OUTPUT_CONTINUATION_DIAGNOSTIC_BYTES)
+    /// so an arbitrary diagnostic can never make canonical history
+    /// unbounded.
+    #[must_use]
+    pub fn render(&self) -> String {
+        let bound_diagnostic = |diagnostic: &String| {
+            crate::tools::limits::bound_utf8_text(
+                diagnostic.clone(),
+                crate::tools::limits::MAX_OUTPUT_CONTINUATION_DIAGNOSTIC_BYTES,
+            )
+        };
+        match self {
+            Self::Complete { locator } => format!(
+                "Complete output: {}\n{}",
+                locator.display(),
+                Self::COMPLETE_GUIDANCE
+            ),
+            Self::Partial {
+                locator,
+                diagnostic,
+            } => format!(
+                "Partial output only: {}\n{}\nDiagnostic: {}",
+                locator.display(),
+                Self::PARTIAL_GUIDANCE,
+                bound_diagnostic(diagnostic)
+            ),
+            Self::Unavailable { diagnostic } => format!(
+                "The output capture did not complete; the bounded result content is the only \
+                 record and no complete output file is available.\nDiagnostic: {}",
+                bound_diagnostic(diagnostic)
+            ),
+        }
+    }
 }
 
 /// Typed execution status of a tool call.
@@ -481,6 +597,7 @@ mod tests {
                 truncated: false,
                 original_bytes: None,
             }),
+            managed_output: None,
         };
         let json = serde_json::to_string(&result).expect("serialize result");
         let decoded: ToolExecutionResult = serde_json::from_str(&json).expect("deserialize result");

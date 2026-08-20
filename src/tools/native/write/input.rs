@@ -9,23 +9,30 @@ use crate::tools::native::input::decode;
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct WriteInput {
-    /// The workspace-relative path of the file to create or replace.
-    pub path: String,
+    /// The absolute path of the file to create or replace. It must resolve
+    /// inside the workspace root; the managed tool-output root is
+    /// read-only.
+    pub file_path: String,
     /// The complete new UTF-8 content of the file.
     pub content: String,
 }
 
 impl WriteInput {
-    /// Deserializes one Write invocation.
+    /// Deserializes and semantically validates one Write invocation.
     ///
-    /// Write has no semantic input rules beyond its contract: the parent
-    /// directory rule and the workspace boundary are execution concerns.
+    /// The parent directory rule and the workspace boundary are execution
+    /// concerns; the absolute-locator rule is enforced on the typed value
+    /// so a direct executor call can never bypass it.
     ///
     /// # Errors
     ///
     /// Returns the deterministic rejection message of the first input
     /// contract violation.
     pub(super) fn parse(arguments: &serde_json::Value) -> Result<Self, String> {
-        decode(super::NAME, arguments)
+        let input: Self = decode(super::NAME, arguments)?;
+        if !std::path::Path::new(&input.file_path).is_absolute() {
+            return Err("write requires an absolute file_path".to_owned());
+        }
+        Ok(input)
     }
 }

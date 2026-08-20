@@ -227,16 +227,16 @@ fn explicit_null_is_rejected_for_optional_native_properties() {
         (
             "read",
             "offset",
-            serde_json::json!({"path": "a.txt"}),
-            serde_json::json!({"path": "a.txt", "offset": 3}),
-            serde_json::json!({"path": "a.txt", "offset": null}),
+            serde_json::json!({"file_path": "/w/a.txt"}),
+            serde_json::json!({"file_path": "/w/a.txt", "offset": 3}),
+            serde_json::json!({"file_path": "/w/a.txt", "offset": null}),
         ),
         (
             "read",
             "limit",
-            serde_json::json!({"path": "a.txt"}),
-            serde_json::json!({"path": "a.txt", "limit": 5}),
-            serde_json::json!({"path": "a.txt", "limit": null}),
+            serde_json::json!({"file_path": "/w/a.txt"}),
+            serde_json::json!({"file_path": "/w/a.txt", "limit": 5}),
+            serde_json::json!({"file_path": "/w/a.txt", "limit": null}),
         ),
         (
             "grep",
@@ -350,15 +350,16 @@ fn preflight(
 }
 
 /// The generated Read schema is exactly the `ReadInput` contract: one
-/// required path plus the optional bounded `offset`/`limit` line window.
-/// The obsolete `start_line`/`line_count` spelling is gone, not aliased.
+/// required absolute `file_path` plus the optional bounded `offset`/`limit`
+/// line window. The obsolete workspace-relative `path` spelling and the
+/// older `start_line`/`line_count` spelling are gone, not aliased.
 #[test]
 fn read_schema_matches_its_input_contract() {
     let fixture = common::native_fixture();
     let schema = definition(&fixture, "read").input_schema;
-    assert_eq!(required(&schema), ["path"]);
-    assert_eq!(properties(&schema), ["limit", "offset", "path"]);
-    assert_eq!(schema["properties"]["path"]["type"], "string");
+    assert_eq!(required(&schema), ["file_path"]);
+    assert_eq!(properties(&schema), ["file_path", "limit", "offset"]);
+    assert_eq!(schema["properties"]["file_path"]["type"], "string");
     for optional in ["offset", "limit"] {
         assert_eq!(
             schema["properties"][optional]["minimum"], 1,
@@ -371,8 +372,8 @@ fn read_schema_matches_its_input_contract() {
     }
 }
 
-/// Write intentionally stays `path` + `content`, and the generated Edit
-/// schema is exactly the atomic multi-edit contract: one path plus a
+/// Write and Edit take an absolute `file_path`, and the generated Edit
+/// schema is exactly the atomic multi-edit contract: one file path plus a
 /// non-empty `edits` array whose items carry the Pi-compatible camelCase
 /// `oldText`/`newText` names. The obsolete single-replacement fields
 /// (`old_text`, `new_text`, `replace_all`) exist nowhere in the contract.
@@ -380,12 +381,12 @@ fn read_schema_matches_its_input_contract() {
 fn write_and_edit_schemas_match_their_input_contracts() {
     let fixture = common::native_fixture();
     let write = definition(&fixture, "write").input_schema;
-    assert_eq!(required(&write), ["content", "path"]);
-    assert_eq!(properties(&write), ["content", "path"]);
+    assert_eq!(required(&write), ["content", "file_path"]);
+    assert_eq!(properties(&write), ["content", "file_path"]);
 
     let edit = definition(&fixture, "edit").input_schema;
-    assert_eq!(required(&edit), ["edits", "path"]);
-    assert_eq!(properties(&edit), ["edits", "path"]);
+    assert_eq!(required(&edit), ["edits", "file_path"]);
+    assert_eq!(properties(&edit), ["edits", "file_path"]);
     assert_eq!(edit["properties"]["edits"]["type"], "array");
     assert_eq!(
         edit["properties"]["edits"]["minItems"], 1,
@@ -498,39 +499,53 @@ fn bash_and_background_task_schemas_match_their_input_contracts() {
 #[test]
 fn invalid_native_arguments_are_rejected_before_any_invocation_exists() {
     let fixture = common::native_fixture();
-    let cases: [(&str, serde_json::Value); 22] = [
+    let cases: [(&str, serde_json::Value); 23] = [
         ("read", serde_json::json!({})),
-        ("read", serde_json::json!({"path": 42})),
-        ("read", serde_json::json!({"path": "a.txt", "offset": 0})),
-        ("read", serde_json::json!({"path": "a.txt", "limit": 0})),
+        ("read", serde_json::json!({"file_path": 42})),
         (
             "read",
-            serde_json::json!({"path": "a.txt", "limit": "many"}),
+            serde_json::json!({"file_path": "/w/a.txt", "offset": 0}),
         ),
-        ("read", serde_json::json!({"path": "a.txt", "extra": true})),
-        // The obsolete Read spelling is an unknown field now, not an alias.
         (
             "read",
-            serde_json::json!({"path": "a.txt", "start_line": 2, "line_count": 1}),
-        ),
-        ("write", serde_json::json!({"path": "a.txt"})),
-        ("edit", serde_json::json!({"path": "a.txt", "edits": []})),
-        (
-            "edit",
-            serde_json::json!({"path": "a.txt", "edits": [{"oldText": "", "newText": "b"}]}),
+            serde_json::json!({"file_path": "/w/a.txt", "limit": 0}),
         ),
         (
+            "read",
+            serde_json::json!({"file_path": "/w/a.txt", "limit": "many"}),
+        ),
+        (
+            "read",
+            serde_json::json!({"file_path": "/w/a.txt", "extra": true}),
+        ),
+        // The obsolete workspace-relative `path` spelling is an unknown
+        // field now, not an alias; so is the older Read spelling.
+        ("read", serde_json::json!({"path": "a.txt"})),
+        (
+            "read",
+            serde_json::json!({"file_path": "/w/a.txt", "start_line": 2, "line_count": 1}),
+        ),
+        ("write", serde_json::json!({"file_path": "/w/a.txt"})),
+        (
             "edit",
-            serde_json::json!({"path": "a.txt", "edits": [{"oldText": "a"}]}),
+            serde_json::json!({"file_path": "/w/a.txt", "edits": []}),
+        ),
+        (
+            "edit",
+            serde_json::json!({"file_path": "/w/a.txt", "edits": [{"oldText": "", "newText": "b"}]}),
+        ),
+        (
+            "edit",
+            serde_json::json!({"file_path": "/w/a.txt", "edits": [{"oldText": "a"}]}),
         ),
         // The obsolete Edit spelling is an unknown field now, not an alias.
         (
             "edit",
-            serde_json::json!({"path": "a.txt", "old_text": "a", "new_text": "b"}),
+            serde_json::json!({"file_path": "/w/a.txt", "old_text": "a", "new_text": "b"}),
         ),
         (
             "edit",
-            serde_json::json!({"path": "a.txt", "edits": [{"old_text": "a", "new_text": "b"}]}),
+            serde_json::json!({"file_path": "/w/a.txt", "edits": [{"old_text": "a", "new_text": "b"}]}),
         ),
         ("glob", serde_json::json!({"pattern": "*", "path": 3})),
         (
@@ -585,7 +600,7 @@ async fn rejected_input_never_reaches_the_executed_work() {
     let write = execute_directly(
         &fixture,
         "write",
-        serde_json::json!({"path": "never.txt", "content": 7}),
+        serde_json::json!({"file_path": created.to_str().expect("utf8"), "content": 7}),
     )
     .await;
     assert!(matches!(write.status, ToolExecutionStatus::Failed { .. }));
@@ -597,7 +612,10 @@ async fn rejected_input_never_reaches_the_executed_work() {
     let edit = execute_directly(
         &fixture,
         "edit",
-        serde_json::json!({"path": "kept.txt", "edits": [{"oldText": "", "newText": "replaced"}]}),
+        serde_json::json!({
+            "file_path": workspace.join("kept.txt").to_str().expect("utf8"),
+            "edits": [{"oldText": "", "newText": "replaced"}],
+        }),
     )
     .await;
     assert!(matches!(edit.status, ToolExecutionStatus::Failed { .. }));
@@ -635,6 +653,7 @@ async fn execute_directly(
         workspace: fixture.runtime.workspace(),
         progress: &reporter,
         artifacts: fixture.runtime.artifacts(),
+        tool_output: fixture.runtime.tool_output(),
         environment: fixture.runtime.environment(),
     };
     executor
@@ -667,7 +686,17 @@ async fn native_tools_still_execute_through_the_agent_loop() {
         id: "call-1",
         tool_id: "tool-read",
         name: "read",
-        arguments: serde_json::json!({"path": "sample.txt", "offset": 2, "limit": 1}),
+        arguments: serde_json::json!({
+            "file_path": fixture
+                .runtime
+                .workspace()
+                .root()
+                .join("sample.txt")
+                .to_str()
+                .expect("utf8"),
+            "offset": 2,
+            "limit": 1,
+        }),
     };
     let result = run_through_agent_loop(&fixture, &call).await;
 
@@ -703,7 +732,7 @@ async fn rejected_native_input_is_a_normal_failed_result_slot_in_the_agent_loop(
         id: "call-1",
         tool_id: "tool-read",
         name: "read",
-        arguments: serde_json::json!({"path": 42}),
+        arguments: serde_json::json!({"file_path": 42}),
     };
     let result = run_through_agent_loop(&fixture, &call).await;
 
@@ -770,7 +799,7 @@ async fn explicit_null_optional_argument_is_rejected_by_the_agent_loop() {
 
 /// The Bash lifecycle is unchanged behind the typed input contract: a
 /// valid invocation still spawns its supervised process, settles, captures
-/// its output as artifacts, and reports the exit code — including a
+/// its output as bounded text, and reports the exit code — including a
 /// non-zero exit as a normal failed result.
 ///
 /// The supervisor ownership, timeout, and cancellation regressions in
@@ -789,8 +818,8 @@ async fn bash_still_settles_its_process_lifecycle_behind_the_typed_contract() {
     assert_eq!(success.status, ToolExecutionStatus::Success);
     assert_eq!(success.exit_code, Some(0));
     assert!(
-        !success.artifacts.is_empty(),
-        "the stdout capture is still spooled as an artifact"
+        success.artifacts.is_empty(),
+        "ordinary textual output is never a semantic artifact"
     );
 
     let failure =

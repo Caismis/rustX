@@ -658,6 +658,7 @@ mod tests {
                 exit_code: Some(0),
                 artifacts: Vec::new(),
                 truncation: None,
+                managed_output: None,
             },
         };
         let value = serde_json::to_value(event).expect("serialize event");
@@ -845,6 +846,7 @@ mod tests {
                     exit_code: Some(0),
                     artifacts: Vec::new(),
                     truncation: None,
+                    managed_output: None,
                 },
             },
             RuntimeEvent::ToolExecutionCompleted {
@@ -857,6 +859,7 @@ mod tests {
                     exit_code: Some(0),
                     artifacts: Vec::new(),
                     truncation: None,
+                    managed_output: None,
                 },
             },
         ];

@@ -1,6 +1,9 @@
 //! Native Write tool (M5).
 //!
-//! Creates or replaces a file inside the workspace. The parent directory
+//! Creates or replaces a file inside the workspace. The model-facing
+//! `file_path` is an absolute locator resolved through the one filesystem
+//! authority ([`crate::tools::locator`]): mutation is authorized inside the
+//! workspace root only. The parent directory
 //! must already exist — there is no implicit recursive directory creation —
 //! and the write is atomic: a temporary file in the target directory is
 //! written and then renamed over the target. No shell invocation is used.
@@ -30,7 +33,8 @@ pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistrati
         native_definition::<WriteInput>(
             "tool-write",
             NAME,
-            "Create or replace a file inside the workspace (parent directory must already exist).",
+            "Create or replace a file at an absolute path inside the workspace (parent \
+             directory must already exist).",
             policy,
         ),
         std::sync::Arc::new(WriteTool),
@@ -59,7 +63,12 @@ fn run_write(
         Err(error) => return failed_result(error),
     };
     let file_content = input.content.as_str();
-    let target = match context.workspace.resolve(&input.path) {
+    let target = match crate::tools::locator::resolve(
+        context.workspace,
+        context.tool_output,
+        &input.file_path,
+        crate::tools::locator::LocatorOperation::Mutate,
+    ) {
         Ok(target) => target,
         Err(error) => return failed_result(error.to_string()),
     };
@@ -69,7 +78,7 @@ fn run_write(
             return failed_result(format!(
                 "the parent directory of {} does not exist; Write never creates directories \
                  implicitly",
-                context.workspace.relative(&target).unwrap_or_default()
+                target.display()
             ));
         }
     }
@@ -77,7 +86,7 @@ fn run_write(
         return failed_result(error);
     }
     success_json(serde_json::json!({
-        "path": context.workspace.relative(&target).unwrap_or_default(),
+        "path": target.display().to_string(),
         "bytes_written": file_content.len(),
     }))
 }

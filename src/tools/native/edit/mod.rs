@@ -1,7 +1,9 @@
 //! Native Edit tool (M5).
 //!
 //! Applies a set of exact text replacements to one UTF-8 file inside the
-//! workspace.
+//! workspace. The model-facing `file_path` is an absolute locator resolved
+//! through the one filesystem authority ([`crate::tools::locator`]):
+//! mutation is authorized inside the workspace root only.
 //!
 //! # The atomic multi-edit invariant
 //!
@@ -58,7 +60,8 @@ pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistrati
         native_definition::<EditInput>(
             "tool-edit",
             NAME,
-            "Apply exact text replacements to one UTF-8 file inside the workspace. Every oldText \
+            "Apply exact text replacements to one UTF-8 file at an absolute path inside the \
+             workspace. Every oldText \
              must occur exactly once in the file as it is now, and all edits are applied together \
              as one atomic change.",
             policy,
@@ -88,11 +91,16 @@ fn run_edit(
         Ok(input) => input,
         Err(error) => return failed_result(error),
     };
-    let target = match context.workspace.resolve(&input.path) {
+    let target = match crate::tools::locator::resolve(
+        context.workspace,
+        context.tool_output,
+        &input.file_path,
+        crate::tools::locator::LocatorOperation::Mutate,
+    ) {
         Ok(target) => target,
         Err(error) => return failed_result(error.to_string()),
     };
-    let relative = context.workspace.relative(&target).unwrap_or_default();
+    let display = target.display().to_string();
     // (1) One original snapshot; every later step reads only from it.
     let bytes = match std::fs::read(&target) {
         Ok(bytes) => bytes,
@@ -102,11 +110,11 @@ fn run_edit(
     };
     let Ok(original) = String::from_utf8(bytes) else {
         return failed_result(format!(
-            "{relative} is not a UTF-8 text file; Edit never operates on binary content"
+            "{display} is not a UTF-8 text file; Edit never operates on binary content"
         ));
     };
     // (2)-(4) The whole edit set is validated before anything is mutated.
-    let planned = match plan(&original, &input.edits, &relative) {
+    let planned = match plan(&original, &input.edits, &display) {
         Ok(planned) => planned,
         Err(error) => return failed_result(error),
     };
@@ -117,7 +125,7 @@ fn run_edit(
         return failed_result(error);
     }
     success_json(serde_json::json!({
-        "path": relative,
+        "path": display,
         "replacements": planned.len(),
     }))
 }

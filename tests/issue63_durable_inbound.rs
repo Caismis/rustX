@@ -333,6 +333,7 @@ fn tool_block(id: &str) -> MessageBlock {
             exit_code: None,
             artifacts: Vec::new(),
             truncation: None,
+            managed_output: None,
         },
     })
 }

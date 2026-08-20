@@ -269,11 +269,24 @@ def test_an_out_of_range_step_index_is_rejected():
 
 
 def test_every_registered_scenario_builds():
+    # A scenario carrying the {workspace} placeholder needs the concrete
+    # absolute root of the runtime under test; build() substitutes it.
     for name in SCENARIOS:
-        scenario = build(name)
+        scenario = build(name, "/tmp/rustx-test-workspace")
         assert scenario.name == name
         assert scenario.steps
         declared_gates(scenario)
+
+
+def test_a_workspace_placeholder_without_a_workspace_fails_loudly():
+    with pytest.raises(SystemExit, match="--workspace"):
+        build("tool_call_continuation")
+
+
+def test_the_workspace_placeholder_is_substituted():
+    scenario = build("tool_call_continuation", "/tmp/rustx-ws")
+    args = scenario.steps[0].respond.script[0].arguments
+    assert '"file_path":"/tmp/rustx-ws/note.txt"' in args
 
 
 def test_an_unknown_scenario_name_fails_loudly():

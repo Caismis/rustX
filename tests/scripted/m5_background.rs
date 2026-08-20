@@ -146,6 +146,7 @@ impl ToolExecutor for ControlledExecutor {
                             exit_code: None,
                             artifacts: Vec::new(),
                             truncation: None,
+                            managed_output: None,
                         };
                     }
                     released = release.wait_for(|released| *released) => {
@@ -193,6 +194,11 @@ fn background_fixture_with_sink(conversation_id: &str, with_sink: bool) -> Backg
         mailbox: mailbox.clone(),
         workspace: Workspace::new(&workspace_root).expect("workspace"),
         artifacts: ArtifactStore::new(conversation.clone(), &artifacts).expect("artifacts"),
+        tool_output: rustx::tools::managed_output::ManagedToolOutput::new(
+            conversation.clone(),
+            artifacts.join("tool-output"),
+        )
+        .expect("managed tool output"),
         clock: Arc::new(FixedRuntimeClock(utc("2026-08-09T12:00:00Z"))),
         event_sink: sink
             .clone()
@@ -214,6 +220,7 @@ fn success() -> ToolExecutionResult {
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        managed_output: None,
     }
 }
 
@@ -227,6 +234,7 @@ fn cancelled() -> ToolExecutionResult {
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        managed_output: None,
     }
 }
 
@@ -372,6 +380,28 @@ async fn ownership_commit_wins_over_later_attempt_cancellation() {
     assert_eq!(accepted["execution_id"], "exec_1");
     assert_eq!(accepted["state"], "starting");
     assert_eq!(accepted["tool"], "bash");
+    // Issue #86: the accepted result advertises the stable read-only
+    // live-output locator, allocated at dispatch time.
+    let output_path = accepted["output_path"].as_str().expect("output_path");
+    assert!(std::path::Path::new(output_path).is_absolute());
+    assert!(
+        output_path.ends_with("tasks/exec_1.output"),
+        "{output_path}"
+    );
+    assert!(std::path::Path::new(output_path).exists());
+    let note = accepted["note"].as_str().expect("note");
+    assert!(
+        note.contains("Read or Grep"),
+        "the continuation guidance travels with the locator"
+    );
+    assert!(
+        note.contains("when produced"),
+        "the wording is precise: only streaming executors append live output: {note}"
+    );
+    assert!(
+        !note.contains("is being written"),
+        "no blanket streaming promise for non-streaming executors: {note}"
+    );
 }
 
 /// Natural completion before cancel: completion wins, and a later cancel is

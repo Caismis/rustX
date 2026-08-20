@@ -1147,6 +1147,13 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   regions: construction rejects an artifact root that equals the workspace
   root, nests inside it, or contains it — including symlink-resolved
   overlap — so Glob/Grep/Bash cannot surface runtime-private output files.
+  The conversation's managed tool-output root inherits the same
+  disjointness and is additionally read-only for every native tool, and
+  its composition is validated where the runtime composes it: construction
+  rejects a pre-existing symlink at the `tool-output/` root and requires
+  the canonical managed root to be a strict dedicated descendant of the
+  canonical artifact root, disjoint from the canonical workspace root, so
+  no authorized filesystem root can ever alias another.
 - All progress entering runtime state and events passes through one shared
   UTF-8-safe bound (`bound_tool_progress`); the foreground reporter and the
   background registry produce the same normalized value, and an oversized
@@ -1164,21 +1171,43 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
 
 ## Native tools and Bash (M5)
 
-- Native filesystem tools and Bash operate only inside the canonical
-  workspace: relative UTF-8 paths, no absolute paths, no lexical `..`
-  escape, and symlinks resolving only to targets inside the canonical root.
+- Native filesystem tools and Bash operate only inside explicitly
+  authorized filesystem roots: the canonical workspace (read and mutate)
+  and the conversation's managed tool-output root (read-only), with Bash
+  running inside the canonical workspace. Model-facing locators are
+  absolute paths, authority is decided on the canonical target, and a
+  symlink can never resolve authority outside its owning root. The full
+  locator contract follows in the absolute-locators bullet below.
 - The model-facing contracts of the six ordinary native tools follow
-  established Pi coding-agent conventions — `read {path, offset?, limit?}`,
-  `write {path, content}`, `edit {path, edits:[{oldText, newText}]}`,
-  `glob {pattern, path?}`,
+  established Pi coding-agent conventions — `read {file_path, offset?,
+  limit?}`, `write {file_path, content}`, `edit {file_path,
+  edits:[{oldText, newText}]}`, `glob {pattern, path?}`,
   `grep {pattern, path?, glob?, ignoreCase?, literal?, context?, limit?}`,
   `bash {command, timeout?}` — while execution semantics stay rustX-owned.
   Adopting the schema convention never imports another agent's runtime,
-  subprocess model, permission system, ignore behavior, or result ordering,
-  and `path` is never renamed to `file_path`. There are no legacy aliases:
-  the obsolete `start_line`/`line_count`, `old_text`/`new_text`/
-  `replace_all`, `case_sensitive`, and `timeout_ms` spellings are unknown
-  fields, rejected before dispatch.
+  subprocess model, permission system, ignore behavior, or result ordering.
+  There are no legacy aliases: the obsolete `path` (for `file_path`),
+  `start_line`/`line_count`, `old_text`/`new_text`/`replace_all`,
+  `case_sensitive`, and `timeout_ms` spellings are unknown fields, rejected
+  before dispatch.
+- **Absolute locators, explicit authority.** Every native filesystem tool
+  takes absolute locators with explicit authority: `file_path` of
+  Read/Write/Edit must be absolute, and an omitted `path` of Glob/Grep
+  means the workspace root. One locator-authority boundary
+  (`crate::tools::locator`) admits exactly two roots: the workspace (read
+  and mutate) and the conversation's managed tool-output root (read-only —
+  the model reads spilled tool output but can never mutate runtime-owned
+  storage). Every other absolute location — including runtime-private
+  regions such as the durable store — is rejected. The locator's **owning
+  root** is determined lexically (after `.`/`..` normalization) BEFORE any
+  symlink traversal, and the canonicalized target must remain inside that
+  same owning root (Read canonicalizes the existing file; Mutate
+  canonicalizes the deepest existing ancestor): a symlink can never escape
+  its owning root and can never transfer authority between the two roots —
+  `managed-output/link -> workspace` and `workspace/link ->
+  managed-output` are both rejected even though both targets are otherwise
+  authorized. Path shape never decides authority. An invalid locator is a
+  normal failed result, never an agent-loop failure.
 - **One Edit invocation is one atomic transformation from one original file
   snapshot to one final file snapshot.** Every `oldText` is resolved against
   that same original snapshot — never against the result of an earlier edit
@@ -1243,10 +1272,88 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   runtime semantics are outside the ordinary-native-tool contract
   alignment, and it is never moved, renamed, or re-schema'd to make the
   native tool directory look uniform.
-- Model-facing output is bounded by named limits; full Bash output is
-  spooled to the conversation artifact store (opaque monotonic
-  `artifact_N` ids outside the model workspace) while bounded head/tail
-  previews are retained, with explicit `TruncationState`.
+- Model-facing output is bounded by named limits. Text overflow is not an
+  artifact (Issue #86): Bash output is *text*, and the bounded head/tail
+  preview is the canonical replayable record. The managed tool-output
+  store owns two deliberately distinct lifecycles over one authorized
+  read-only root. Foreground output is context-overflow storage: only
+  when the combined text crosses its preview bound does the capture
+  lazily allocate one result spill (`tool-output/results/result_N.txt`,
+  monotonic per-conversation sequence, `create_new`), write the retained
+  complete prefix, and stream every subsequent fragment into it; the
+  absolute spill path is runtime-owned typed continuation metadata
+  (`ToolExecutionResult::managed_output`, never a magic tool-JSON key,
+  never a `FileReference`, never a semantic artifact, and never a model
+  `File` modality), which the producer presents inside its ordinary
+  textual result content so the model can Read/Grep it explicitly. **Foreground** output
+  at or below the bound creates no file at all; a spill allocation or
+  write failure is an explicit invocation failure, never silently lost
+  output. A **background** execution instead owns a live-output channel
+  from the dispatch commit point on (`tool-output/tasks/exec_N.output`):
+  the file is allocated before the accepted result advertises its
+  absolute path (`output_path`) with Read/Grep continuation guidance,
+  decoded output is appended from the first byte on so the model can
+  Read/Grep it while the execution runs, and the settlement notification
+  reuses the exact same path when it already represents the complete
+  textual output — no second file is created for the same payload. A
+  distinct settled-result spill is legitimate only when the final logical
+  result is a different oversized payload than the live execution output.
+  An output-storage failure of an already-advertised background path
+  settles the execution as an explicit failure that names the file as
+  partial output — never as a false "complete output" claim.
+- The advertised background live-output locator participates in EVERY
+  terminal settlement after the dispatch commits — execution status and
+  output completeness are independent axes, and no post-accept Bash
+  return path escapes with `managed_output: None`. A settlement whose
+  storage was healthy and whose subprocess never started (input parse
+  failure, non-unix refusal, supervisor spawn failure) settles Failed
+  with the locator as COMPLETE EMPTY output: the zero bytes in the
+  already-advertised file are the complete textual output of an
+  execution that produced none. A settlement whose storage was NOT
+  healthy (the sink could not be opened after the dispatch committed)
+  settles Failed with the locator as explicitly PARTIAL and a diagnostic
+  naming the storage failure — never falsely Complete, never dropped.
+  Foreground Bash keeps its own spill lifecycle (lazy allocation, no
+  file below the preview bound, allocation failure is an invocation
+  failure); the post-accept axis invariant is a background-execution
+  property rooted at the dispatch commit. Every
+  advertised path holds valid UTF-8 text: each byte stream is decoded
+  with its own incremental UTF-8 decoder (invalid sequences become
+  U+FFFD) before fragments are multiplexed, so a sequence split across
+  read boundaries can never be corrupted by interleaving and Read/Grep
+  always work on advertised paths. Genuine semantic artifacts
+  (real files a tool produces for the user) keep the existing
+  `ArtifactStore`/`FileReference` publication path.
+- Test infrastructure owns every `ConversationToolRuntime` storage root by
+  RAII: `common::tool_runtime`/`tool_runtime_with_store` (integration and
+  scripted suites alike) return a fixture that holds the runtime and a
+  `TempDir` whose drop removes the root AFTER the runtime drops (declared
+  in that order); the fixture is deliberately not `Clone`, so a raw
+  runtime handle can never outlive its storage owner. No test creates a
+  raw `std::env::temp_dir()` storage root anymore — the pre-RAII
+  `rustx-tool-runtime-*` dirs (and their in-crate duplicates
+  `rustx-agent-crate-tests-*`, `rustx-crt-*`, `rustx-art-*`,
+  `rustx-reg-*`) that accumulated in `/tmp` are gone, and nothing
+  recreates them.
+- Tool-owned structured content and runtime-owned managed-output metadata
+  are different domains with different typed fields.
+  `ToolResultContent::Json` is arbitrary tool-owned structured data:
+  rustX reserves NO ordinary JSON field names, and no generic runtime
+  code may infer semantics from properties that happen to be named
+  `full_output`, `partial_output`, or `note` — an MCP, Python, or future
+  plugin tool may legally return such properties as ordinary business
+  data, and they project verbatim. Managed textual-output continuation
+  (the absolute read-only locator, the typed complete-vs-partial state,
+  and any output-storage diagnostic) is explicit rustX-owned metadata on
+  `ToolExecutionResult::managed_output` — one typed source of truth,
+  never encoded as magic tool-JSON keys and never a semantic artifact.
+  The generic background terminal publication consumes only that typed
+  metadata: the absolute locator and its fixed Read/Grep guidance are
+  structurally retained under bounding, advisory diagnostics are bounded
+  to `MAX_OUTPUT_CONTINUATION_DIAGNOSTIC_BYTES`, and the complete
+  terminal result projection — body plus continuation — never exceeds
+  `MAX_MODEL_TOOL_RESULT_BYTES`. The bounded textual record remains the
+  canonical replayable history; managed output files are auxiliary.
 - Bash owns a distinct process group per invocation inside a dedicated
   invocation session created by a small per-invocation supervisor;
   cancellation/timeout signals the owned group (`TERM`, then a bounded

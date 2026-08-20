@@ -15,8 +15,9 @@ const DEFAULT_LIMIT: u64 = 200;
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ReadInput {
-    /// The workspace-relative path of the file to read.
-    pub path: String,
+    /// The absolute path of the file to read. It must resolve inside the
+    /// workspace root or the read-only managed tool-output root.
+    pub file_path: String,
     /// The 1-based line to start reading from. Defaults to 1, the first
     /// line of the file.
     #[schemars(range(min = 1))]
@@ -43,6 +44,9 @@ impl ReadInput {
     /// already rejects `0`; the same rule is enforced on the typed value so
     /// a direct executor call can never read from a zero line either.
     fn validate(&self) -> Result<(), String> {
+        if !std::path::Path::new(&self.file_path).is_absolute() {
+            return Err("read requires an absolute file_path".to_owned());
+        }
         if self.offset == Some(0) {
             return Err("read requires a 1-based offset of at least 1".to_owned());
         }

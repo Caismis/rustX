@@ -95,17 +95,55 @@
 //! # Output capture
 //!
 //! stdout, stderr, and the runtime-observed combined multiplex are captured
-//! separately. Full output is spooled to the conversation artifact store
-//! while bounded previews (head/tail with an explicit truncation marker) are
-//! retained for the model; the stored artifact bytes are never corrupted.
+//! separately with bounded previews (head/tail with an explicit truncation
+//! marker). Each byte stream is decoded with its own incremental UTF-8
+//! decoder before multiplexing (invalid sequences become U+FFFD; a
+//! sequence split across read boundaries is completed by decoder state,
+//! never corrupted by interleaving), so every advertised output path holds
+//! valid UTF-8 text that Read and Grep can inspect.
+//!
+//! Text overflow is not an artifact (Issue #86), and the two execution
+//! modes own deliberately different storage lifecycles:
+//!
+//! - **Foreground**: only when the combined output crosses its preview
+//!   bound does the capture lazily allocate one result spill in the
+//!   conversation's managed tool-output store, write the retained complete
+//!   prefix, and stream every subsequent fragment into it; the absolute
+//!   spill path is runtime-owned typed metadata
+//!   (`ToolExecutionResult::managed_output`, never a magic JSON key and
+//!   never a `FileReference`), and Bash presents it to the model as an
+//!   ordinary tool-owned text block inside the foreground result.
+//!   Foreground output at or below the bound creates no file at all, and
+//!   a spill write failure is an explicit invocation failure.
+//! - **Background**: the live-output file (`tasks/exec_N.output`) is
+//!   allocated by the background registry at the dispatch commit point and
+//!   advertised in the accepted result; this executor appends every
+//!   decoded fragment to it from the first byte on, so the model can
+//!   Read/Grep the output while the execution runs. Settlement reuses the
+//!   same path as the typed complete-output continuation — no second file
+//!   is created for the same payload — and an output-storage failure
+//!   settles the invocation as an explicit failure whose typed
+//!   continuation is honestly partial, never a false complete-output
+//!   claim.
+//! - Every post-accept settlement retains the advertised locator in the
+//!   typed continuation — execution status and output completeness are
+//!   independent axes, and no early return path escapes with
+//!   `managed_output: None` once the background dispatch committed. A
+//!   settlement whose storage was healthy and whose subprocess never
+//!   started (input parse failure, non-unix refusal, supervisor spawn
+//!   failure) settles Failed with the locator as COMPLETE EMPTY output;
+//!   a settlement whose sink could not be opened settles Failed with the
+//!   locator as explicitly PARTIAL and a diagnostic naming the storage
+//!   failure.
+//!
 //! Non-zero exits are failed tool results with the exit code preserved —
 //! never attempt-level runtime failures.
 //!
-//! Artifact capture failures (pipe reads, artifact allocation, artifact
-//! open, writes, or the combined multiplex) are never silently discarded:
-//! when no cancellation/timeout owns the outcome, a capture failure is an
-//! explicit failed tool result, so the runtime never reports ordinary
-//! success while silently losing the promised retained output. During a
+//! Capture failures (pipe reads, spill allocation, spill writes, or the
+//! combined multiplex) are never silently discarded: when no
+//! cancellation/timeout owns the outcome, a capture failure is an explicit
+//! failed tool result, so the runtime never reports ordinary success while
+//! silently losing the promised retained output. During a
 //! cancellation/timeout settlement the terminated-process capture is
 //! inherently partial, so the cancellation/timeout status wins.
 //!
@@ -113,6 +151,7 @@
 mod capture;
 mod executor;
 mod input;
+mod text;
 // The supervisor is not a separate tool: it is an implementation detail of
 // Bash execution ownership, owned by this module.
 #[cfg(unix)]
@@ -163,7 +202,9 @@ pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistrati
             "tool-bash",
             NAME,
             "Run one non-interactive /bin/bash command inside the workspace. No shell state \
-             survives between calls. The optional timeout is in seconds.",
+             survives between calls. The optional timeout is in seconds. A background execution \
+             immediately returns its live output file's absolute path; use Read or Grep on it to \
+             inspect the output while the command runs.",
             policy,
         ),
         std::sync::Arc::new(BashTool::new()),

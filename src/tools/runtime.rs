@@ -24,6 +24,19 @@
 //! artifact root that equals the workspace root, nests inside it, or
 //! contains it (including symlink-resolved overlap).
 //!
+//! The managed tool-output root lives in a dedicated `tool-output/`
+//! directory below the runtime-private artifact root. Only that directory —
+//! never its enclosing runtime-private parent, which also holds the durable
+//! conversation database and semantic artifact internals — is authorized
+//! for the model-facing read-only filesystem operations.
+//!
+//! Root composition is validated here, where the runtime composes those
+//! resources: the canonical managed-output root must be a strict dedicated
+//! descendant of the canonical artifact root and must stay disjoint from
+//! the canonical workspace root, and a pre-existing symlink at the
+//! `tool-output/` root is rejected. No authorized root can therefore alias
+//! another, and the locator authority can rely on valid, disjoint roots.
+//!
 //! # Durable authority binding
 //!
 //! A `ConversationToolRuntime` composes one [`ConversationStoreBinding`]. The
@@ -56,6 +69,7 @@ use crate::tools::background::{
     BackgroundOwnershipClaimError, BackgroundResources, ConversationBackgroundRegistry,
 };
 use crate::tools::environment::ToolEnvironment;
+use crate::tools::managed_output::{ManagedOutputError, ManagedToolOutput};
 use crate::tools::workspace::{Workspace, WorkspaceError};
 
 /// A conversation tool runtime construction failure.
@@ -65,6 +79,8 @@ pub enum ConversationRuntimeError {
     Workspace(WorkspaceError),
     /// The artifact root cannot be prepared.
     Artifacts(ArtifactError),
+    /// The managed tool-output root cannot be prepared.
+    ManagedOutput(ManagedOutputError),
     /// The artifact store and the model workspace overlap; the artifact
     /// root equals the workspace root, nests inside it, or contains it.
     OverlappingStorage {
@@ -72,6 +88,17 @@ pub enum ConversationRuntimeError {
         workspace: PathBuf,
         /// The canonical artifact root.
         artifacts: PathBuf,
+    },
+    /// The managed tool-output root is not a strict dedicated descendant
+    /// of the canonical artifact root, or it aliases the workspace root:
+    /// no authorized filesystem root may alias another.
+    ManagedOutputRootAlias {
+        /// The canonical managed tool-output root.
+        root: PathBuf,
+        /// The canonical artifact/runtime-private root.
+        artifacts: PathBuf,
+        /// The canonical workspace root.
+        workspace: PathBuf,
     },
     /// The durable conversation store could not be opened.
     DurableConversation(String),
@@ -89,6 +116,7 @@ impl core::fmt::Display for ConversationRuntimeError {
         match self {
             Self::Workspace(error) => write!(f, "{error}"),
             Self::Artifacts(error) => write!(f, "{error}"),
+            Self::ManagedOutput(error) => write!(f, "{error}"),
             Self::OverlappingStorage {
                 workspace,
                 artifacts,
@@ -96,6 +124,18 @@ impl core::fmt::Display for ConversationRuntimeError {
                 f,
                 "the artifact root {} and the workspace root {} must be disjoint \
                  filesystem regions",
+                artifacts.display(),
+                workspace.display()
+            ),
+            Self::ManagedOutputRootAlias {
+                root,
+                artifacts,
+                workspace,
+            } => write!(
+                f,
+                "the managed tool-output root {} must be a strict dedicated descendant of the \
+                 artifact root {} and must not alias the workspace root {}",
+                root.display(),
                 artifacts.display(),
                 workspace.display()
             ),
@@ -204,6 +244,7 @@ pub struct ConversationToolRuntime {
     conversation_id: ConversationId,
     workspace: Workspace,
     artifacts: ArtifactStore,
+    tool_output: ManagedToolOutput,
     environment: ToolEnvironment,
     background: ConversationBackgroundRegistry,
     /// The one composition-time binding shared by the runtime and its narrow
@@ -266,7 +307,8 @@ impl ConversationToolRuntime {
     /// Returns [`ConversationRuntimeError::Workspace`] when the workspace
     /// root is missing, not a directory, or cannot be canonicalized,
     /// [`ConversationRuntimeError::Artifacts`] when the artifact root cannot
-    /// be prepared, and
+    /// be prepared, [`ConversationRuntimeError::ManagedOutput`] when the
+    /// managed tool-output root cannot be prepared, and
     /// [`ConversationRuntimeError::OverlappingStorage`] when the artifact
     /// root and the workspace root overlap.
     pub fn new(
@@ -338,6 +380,16 @@ impl ConversationToolRuntime {
         );
         let artifacts = ArtifactStore::new(conversation_id.clone(), &artifacts_root)
             .map_err(ConversationRuntimeError::Artifacts)?;
+        // The managed tool-output root is a *dedicated* region below the
+        // runtime-private root: textual spill files must be model-readable
+        // through the read-only filesystem tools, but the enclosing
+        // runtime-private region (the durable conversation database, the
+        // semantic artifact internals) must not. The locator authority
+        // therefore authorizes exactly this root, never its parent.
+        let tool_output =
+            ManagedToolOutput::new(conversation_id.clone(), artifacts_root.join("tool-output"))
+                .map_err(ConversationRuntimeError::ManagedOutput)?;
+        validate_managed_output_root(workspace.root(), &artifacts_root, tool_output.root())?;
         let clock = config
             .clock
             .unwrap_or_else(|| Arc::new(SystemClock) as Arc<dyn RuntimeClock>);
@@ -348,6 +400,7 @@ impl ConversationToolRuntime {
                 mailbox: mailbox.clone(),
                 workspace: workspace.clone(),
                 artifacts: artifacts.clone(),
+                tool_output: tool_output.clone(),
                 clock,
                 event_sink: config.event_sink,
             },
@@ -356,6 +409,7 @@ impl ConversationToolRuntime {
             conversation_id,
             workspace,
             artifacts,
+            tool_output,
             environment,
             background,
             durable_binding,
@@ -507,6 +561,13 @@ impl ConversationToolRuntime {
         &self.artifacts
     }
 
+    /// The conversation-owned managed tool-output store: the dedicated
+    /// read-only region oversized textual tool output spills into.
+    #[must_use]
+    pub fn tool_output(&self) -> &ManagedToolOutput {
+        &self.tool_output
+    }
+
     /// The base authorized tool environment of the conversation.
     ///
     /// M6: this is the construction-time base authorized environment. It is
@@ -566,38 +627,63 @@ fn validate_disjoint_storage(
     Ok(())
 }
 
+/// Validates the managed tool-output root composition invariant: the
+/// canonical managed root must be a strict dedicated descendant of the
+/// canonical artifact root and must stay disjoint from the canonical
+/// workspace root, so no authorized filesystem root aliases another.
+///
+/// All three roots are canonical at this point, and
+/// [`ManagedToolOutput::new`] has already rejected a pre-existing symlink
+/// at the dedicated root itself; this check is the composition-level
+/// guarantee the locator authority relies on.
+fn validate_managed_output_root(
+    workspace_root: &Path,
+    artifacts_root: &Path,
+    tool_output_root: &Path,
+) -> Result<(), ConversationRuntimeError> {
+    let alias = || ConversationRuntimeError::ManagedOutputRootAlias {
+        root: tool_output_root.to_path_buf(),
+        artifacts: artifacts_root.to_path_buf(),
+        workspace: workspace_root.to_path_buf(),
+    };
+    // A strict dedicated descendant of the artifact root: neither equal to
+    // it nor escaped from it.
+    if tool_output_root == artifacts_root || !tool_output_root.starts_with(artifacts_root) {
+        return Err(alias());
+    }
+    // Disjoint from the workspace in both directions.
+    if tool_output_root == workspace_root
+        || tool_output_root.starts_with(workspace_root)
+        || workspace_root.starts_with(tool_output_root)
+    {
+        return Err(alias());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ConversationRuntimeConfig, ConversationRuntimeError, ConversationToolRuntime};
     use crate::runtime::identity::ConversationId;
     use std::fs;
 
-    fn unique_dir(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "rustx-crt-{}-{}-{}",
-            name,
-            std::process::id(),
-            std::thread::current().name().unwrap_or("t")
-        ))
-    }
-
     #[test]
     fn construction_validates_the_workspace_root() {
-        let dir = unique_dir("ws-root");
+        let dir = tempfile::tempdir().expect("temp dir");
         let runtime = ConversationToolRuntime::new(
             ConversationId::new("conv-1"),
             &dir,
-            dir.join("artifacts"),
+            dir.path().join("artifacts"),
         );
         assert!(
             runtime.is_err(),
             "a missing workspace root must be rejected"
         );
-        fs::create_dir_all(dir.join("workspace")).expect("create");
+        fs::create_dir_all(dir.path().join("workspace")).expect("create");
         let runtime = ConversationToolRuntime::new(
             ConversationId::new("conv-1"),
-            dir.join("workspace"),
-            dir.join("artifacts"),
+            dir.path().join("workspace"),
+            dir.path().join("artifacts"),
         )
         .expect("runtime");
         assert_eq!(runtime.conversation_id(), &ConversationId::new("conv-1"));
@@ -607,12 +693,11 @@ mod tests {
             runtime.mailbox().conversation_id(),
             &ConversationId::new("conv-1")
         );
-        fs::remove_dir_all(&dir).expect("remove");
     }
 
     #[test]
     fn artifact_root_equal_to_workspace_is_rejected() {
-        let dir = unique_dir("overlap-equal");
+        let dir = tempfile::tempdir().expect("temp dir");
         fs::create_dir_all(&dir).expect("create");
         let error = ConversationToolRuntime::new(ConversationId::new("conv-1"), &dir, &dir)
             .expect_err("equal roots must be rejected");
@@ -620,76 +705,249 @@ mod tests {
             error,
             ConversationRuntimeError::OverlappingStorage { .. }
         ));
-        fs::remove_dir_all(&dir).expect("remove");
     }
 
     #[test]
     fn artifact_root_nested_inside_workspace_is_rejected() {
-        let dir = unique_dir("overlap-nested");
-        fs::create_dir_all(dir.join("workspace")).expect("create");
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(dir.path().join("workspace")).expect("create");
         let error = ConversationToolRuntime::new(
             ConversationId::new("conv-1"),
-            dir.join("workspace"),
-            dir.join("workspace/artifacts"),
+            dir.path().join("workspace"),
+            dir.path().join("workspace/artifacts"),
         )
         .expect_err("nested artifact root must be rejected");
         assert!(matches!(
             error,
             ConversationRuntimeError::OverlappingStorage { .. }
         ));
-        fs::remove_dir_all(&dir).expect("remove");
     }
 
     #[test]
     fn workspace_root_nested_inside_artifact_root_is_rejected() {
-        let dir = unique_dir("overlap-reverse");
-        fs::create_dir_all(dir.join("artifacts/workspace")).expect("create");
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(dir.path().join("artifacts/workspace")).expect("create");
         let error = ConversationToolRuntime::new(
             ConversationId::new("conv-1"),
-            dir.join("artifacts/workspace"),
-            dir.join("artifacts"),
+            dir.path().join("artifacts/workspace"),
+            dir.path().join("artifacts"),
         )
         .expect_err("the workspace root inside the artifact root must be rejected");
         assert!(matches!(
             error,
             ConversationRuntimeError::OverlappingStorage { .. }
         ));
-        fs::remove_dir_all(&dir).expect("remove");
     }
 
     #[cfg(unix)]
     #[test]
     fn symlinked_artifact_root_resolving_inside_workspace_is_rejected() {
         use std::os::unix::fs::symlink;
-        let dir = unique_dir("overlap-symlink");
-        fs::create_dir_all(dir.join("workspace/real")).expect("create");
-        symlink(dir.join("workspace/real"), dir.join("linked-artifacts")).expect("symlink");
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(dir.path().join("workspace/real")).expect("create");
+        symlink(
+            dir.path().join("workspace/real"),
+            dir.path().join("linked-artifacts"),
+        )
+        .expect("symlink");
         let error = ConversationToolRuntime::new(
             ConversationId::new("conv-1"),
-            dir.join("workspace"),
-            dir.join("linked-artifacts"),
+            dir.path().join("workspace"),
+            dir.path().join("linked-artifacts"),
         )
         .expect_err("a symlinked artifact root inside the workspace must be rejected");
         assert!(matches!(
             error,
             ConversationRuntimeError::OverlappingStorage { .. }
         ));
-        fs::remove_dir_all(&dir).expect("remove");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_tool_output_symlink_to_the_workspace_is_rejected() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(dir.path().join("workspace")).expect("create");
+        fs::create_dir_all(dir.path().join("artifacts")).expect("create");
+        symlink(
+            dir.path().join("workspace"),
+            dir.path().join("artifacts/tool-output"),
+        )
+        .expect("symlink");
+        let error = ConversationToolRuntime::new(
+            ConversationId::new("conv-1"),
+            dir.path().join("workspace"),
+            dir.path().join("artifacts"),
+        )
+        .expect_err("a tool-output symlink to the workspace must be rejected");
+        assert!(
+            matches!(
+                error,
+                ConversationRuntimeError::ManagedOutput(
+                    crate::tools::managed_output::ManagedOutputError::SymlinkRoot(_)
+                )
+            ),
+            "got {error:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_tool_output_symlink_to_the_artifact_root_is_rejected() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(dir.path().join("workspace")).expect("create");
+        fs::create_dir_all(dir.path().join("artifacts")).expect("create");
+        symlink(
+            dir.path().join("artifacts"),
+            dir.path().join("artifacts/tool-output"),
+        )
+        .expect("symlink");
+        let error = ConversationToolRuntime::new(
+            ConversationId::new("conv-1"),
+            dir.path().join("workspace"),
+            dir.path().join("artifacts"),
+        )
+        .expect_err("a tool-output symlink to the artifact root must be rejected");
+        assert!(
+            matches!(
+                error,
+                ConversationRuntimeError::ManagedOutput(
+                    crate::tools::managed_output::ManagedOutputError::SymlinkRoot(_)
+                )
+            ),
+            "got {error:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_tool_output_symlink_to_an_external_directory_is_rejected() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(dir.path().join("workspace")).expect("create");
+        fs::create_dir_all(dir.path().join("artifacts")).expect("create");
+        fs::create_dir_all(dir.path().join("external")).expect("create");
+        symlink(
+            dir.path().join("external"),
+            dir.path().join("artifacts/tool-output"),
+        )
+        .expect("symlink");
+        let error = ConversationToolRuntime::new(
+            ConversationId::new("conv-1"),
+            dir.path().join("workspace"),
+            dir.path().join("artifacts"),
+        )
+        .expect_err("a tool-output symlink to an external directory must be rejected");
+        assert!(
+            matches!(
+                error,
+                ConversationRuntimeError::ManagedOutput(
+                    crate::tools::managed_output::ManagedOutputError::SymlinkRoot(_)
+                )
+            ),
+            "got {error:?}"
+        );
+    }
+
+    /// A normal real `tool-output/` directory satisfies the composition
+    /// invariant: construction succeeds, the managed root is a strict
+    /// descendant of the canonical artifact root, and the locator authority
+    /// enforces it read-only.
+    #[test]
+    fn a_real_tool_output_directory_is_accepted_and_read_only() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(dir.path().join("workspace")).expect("create");
+        let runtime = ConversationToolRuntime::new(
+            ConversationId::new("conv-1"),
+            dir.path().join("workspace"),
+            dir.path().join("artifacts"),
+        )
+        .expect("a real tool-output directory is accepted");
+        let managed = runtime.tool_output().root().to_path_buf();
+        assert!(managed.is_dir());
+        assert!(
+            managed.starts_with(runtime.artifacts().root())
+                && managed != runtime.artifacts().root(),
+            "the managed root is a strict descendant of the artifact root"
+        );
+        let spill = runtime.tool_output().open_spill().expect("spill");
+        let locator = spill.path().to_str().expect("utf8 path").to_owned();
+        drop(spill);
+        crate::tools::locator::resolve(
+            runtime.workspace(),
+            runtime.tool_output(),
+            &locator,
+            crate::tools::locator::LocatorOperation::Read,
+        )
+        .expect("the managed root is readable");
+        assert!(
+            matches!(
+                crate::tools::locator::resolve(
+                    runtime.workspace(),
+                    runtime.tool_output(),
+                    &locator,
+                    crate::tools::locator::LocatorOperation::Mutate,
+                ),
+                Err(crate::tools::locator::LocatorError::ManagedOutputReadOnly(
+                    _
+                ))
+            ),
+            "the managed root is read-only"
+        );
+    }
+
+    /// A pre-existing real `tool-output/` directory with retained spills is
+    /// accepted: reconstruction over the same storage root works.
+    #[test]
+    fn reconstruction_over_a_retained_tool_output_root_is_accepted() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(dir.path().join("workspace")).expect("create");
+        let first = ConversationToolRuntime::new(
+            ConversationId::new("conv-1"),
+            dir.path().join("workspace"),
+            dir.path().join("artifacts"),
+        )
+        .expect("first runtime");
+        let mut spill = first.tool_output().open_spill().expect("first spill");
+        spill.write_all("old bytes").expect("write");
+        let old_path = spill.path().to_path_buf();
+        drop(spill);
+        drop(first);
+
+        let second = ConversationToolRuntime::new(
+            ConversationId::new("conv-1"),
+            dir.path().join("workspace"),
+            dir.path().join("artifacts"),
+        )
+        .expect("reconstruction over the retained root");
+        let mut spill = second.tool_output().open_spill().expect("second spill");
+        spill.write_all("new bytes").expect("write");
+        let new_path = spill.path().to_path_buf();
+        drop(spill);
+        assert_ne!(old_path, new_path);
+        assert_eq!(
+            std::fs::read_to_string(&old_path).expect("old spill"),
+            "old bytes"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&new_path).expect("new spill"),
+            "new bytes"
+        );
     }
 
     #[test]
     fn sibling_storage_layout_is_accepted() {
-        let dir = unique_dir("sibling");
-        fs::create_dir_all(dir.join("workspace")).expect("create");
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(dir.path().join("workspace")).expect("create");
         let runtime = ConversationToolRuntime::new(
             ConversationId::new("conv-1"),
-            dir.join("workspace"),
-            dir.join("artifacts"),
+            dir.path().join("workspace"),
+            dir.path().join("artifacts"),
         )
         .expect("sibling roots are disjoint");
         assert!(runtime.workspace().root().is_dir());
         assert!(runtime.artifacts().root().is_dir());
-        fs::remove_dir_all(&dir).expect("remove");
     }
 
     #[test]
@@ -697,8 +955,8 @@ mod tests {
         use crate::durable::{
             ConversationStore, ConversationStoreBinding, SqliteConversationStore,
         };
-        let dir = unique_dir("binding");
-        fs::create_dir_all(dir.join("workspace")).expect("create");
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(dir.path().join("workspace")).expect("create");
         let store = std::sync::Arc::new(
             SqliteConversationStore::in_memory(ConversationId::new("conv-A")).expect("store"),
         );
@@ -707,7 +965,10 @@ mod tests {
             ConversationId::new("conv-A"),
             ConversationRuntimeConfig {
                 durable_binding: Some(binding),
-                ..ConversationRuntimeConfig::new(dir.join("workspace"), dir.join("artifacts"))
+                ..ConversationRuntimeConfig::new(
+                    dir.path().join("workspace"),
+                    dir.path().join("artifacts"),
+                )
             },
         )
         .expect("runtime");
@@ -729,14 +990,13 @@ mod tests {
             .expect("accept through derived mailbox");
         assert_eq!(accepted.get(), 1);
         assert_eq!(store.load_pending().expect("pending").len(), 1);
-        fs::remove_dir_all(&dir).expect("remove");
     }
 
     #[test]
     fn a_binding_for_another_conversation_is_rejected_before_background_setup() {
         use crate::durable::{ConversationStoreBinding, SqliteConversationStore};
-        let dir = unique_dir("binding-mismatch");
-        fs::create_dir_all(dir.join("workspace")).expect("create");
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(dir.path().join("workspace")).expect("create");
         let store = std::sync::Arc::new(
             SqliteConversationStore::in_memory(ConversationId::new("conv-B")).expect("store"),
         );
@@ -744,7 +1004,10 @@ mod tests {
             ConversationId::new("conv-A"),
             ConversationRuntimeConfig {
                 durable_binding: Some(ConversationStoreBinding::new(store)),
-                ..ConversationRuntimeConfig::new(dir.join("workspace"), dir.join("artifacts"))
+                ..ConversationRuntimeConfig::new(
+                    dir.path().join("workspace"),
+                    dir.path().join("artifacts"),
+                )
             },
         )
         .expect_err("a binding for another conversation must be rejected");
@@ -752,19 +1015,18 @@ mod tests {
             error,
             ConversationRuntimeError::DurableConversationMismatch { .. }
         ));
-        fs::remove_dir_all(&dir).expect("remove");
     }
 
     /// An omitted binding constructs the canonical file-backed authority and
     /// derives its mailbox from that same authority.
     #[test]
     fn omitted_mailbox_constructs_the_canonical_conversation_mailbox() {
-        let dir = unique_dir("mailbox-omitted");
-        fs::create_dir_all(dir.join("workspace")).expect("create");
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(dir.path().join("workspace")).expect("create");
         let runtime = ConversationToolRuntime::new(
             ConversationId::new("conv-A"),
-            dir.join("workspace"),
-            dir.join("artifacts"),
+            dir.path().join("workspace"),
+            dir.path().join("artifacts"),
         )
         .expect("runtime");
         assert_eq!(
@@ -772,6 +1034,5 @@ mod tests {
             &ConversationId::new("conv-A"),
             "the canonical mailbox belongs to the runtime's own conversation"
         );
-        fs::remove_dir_all(&dir).expect("remove");
     }
 }

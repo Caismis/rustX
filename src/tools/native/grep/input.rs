@@ -16,8 +16,9 @@ pub(super) struct GrepInput {
     /// The pattern to search for. A regular expression unless `literal` is
     /// true.
     pub pattern: String,
-    /// The workspace-relative directory to search. Defaults to the whole
-    /// workspace.
+    /// The absolute directory (or single file) to search. It must resolve
+    /// inside the workspace root or the read-only managed tool-output
+    /// root. Omit it to search the workspace root.
     pub path: Option<String>,
     /// A glob restricting which files are searched, matched against paths
     /// relative to the search root. Defaults to searching every file.
@@ -56,10 +57,16 @@ impl GrepInput {
         Ok(input)
     }
 
-    /// The tool-specific semantic rules of the two bounded numeric fields.
-    /// The generated schema states the same bounds, so they also hold for a
-    /// direct executor call that bypasses the registry preflight.
+    /// The tool-specific semantic rules of the two bounded numeric fields
+    /// and the locator. The generated schema states the same bounds, so
+    /// they also hold for a direct executor call that bypasses the registry
+    /// preflight.
     fn validate(&self) -> Result<(), String> {
+        if let Some(path) = &self.path
+            && !std::path::Path::new(path).is_absolute()
+        {
+            return Err("grep requires an absolute path when one is supplied".to_owned());
+        }
         if let Some(context) = self.context
             && context > MAX_GREP_CONTEXT_LINES
         {

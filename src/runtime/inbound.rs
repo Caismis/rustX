@@ -1368,6 +1368,7 @@ mod tests {
                 exit_code: None,
                 artifacts: Vec::new(),
                 truncation: None,
+                managed_output: None,
             },
         });
         let turn = FreshInboundTurn::new(vec![MessageId::new("tool-1")]).expect("valid ids");

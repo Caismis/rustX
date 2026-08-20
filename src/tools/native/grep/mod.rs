@@ -81,7 +81,10 @@ pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistrati
         native_definition::<GrepInput>(
             "tool-grep",
             NAME,
-            "Search workspace files for lines matching a pattern. Returns matches ordered by \
+            "Search files for lines matching a pattern. The optional path is an absolute \
+             locator inside the workspace root or the read-only managed tool-output root \
+             (a directory, or a single file such as a spilled output log); omit it to search \
+             the workspace root. Returns matches ordered by \
              path, line, and column. Hidden files are included and ignore files such as \
              .gitignore are not applied.",
             policy,
@@ -152,7 +155,11 @@ fn run_grep(
             Err(error) => return failed_result(format!("invalid glob {glob:?}: {error}")),
         },
     };
-    let root = match SearchRoot::resolve(context.workspace, input.path.as_deref()) {
+    let root = match SearchRoot::resolve(
+        context.workspace,
+        context.tool_output,
+        input.path.as_deref(),
+    ) {
         Ok(root) => root,
         Err(error) => return failed_result(error),
     };

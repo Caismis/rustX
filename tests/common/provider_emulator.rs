@@ -57,6 +57,17 @@ impl ProviderEmulator {
     /// Panics when the process cannot be launched, does not print its
     /// readiness record, or reports a scenario the caller did not ask for.
     pub async fn start(scenario: &str) -> Option<Self> {
+        Self::start_with_workspace(scenario, None).await
+    }
+
+    /// Starts the scenario with the absolute workspace root of the runtime
+    /// under test, substituting the `{workspace}` placeholder of scripted
+    /// tool-call arguments (rustX native filesystem tools require absolute
+    /// locators, Issue #86).
+    pub async fn start_with_workspace(
+        scenario: &str,
+        workspace: Option<&std::path::Path>,
+    ) -> Option<Self> {
         let required = std::env::var_os(REQUIRE_VARIABLE).is_some();
         if which("uv").is_none() {
             assert!(
@@ -72,7 +83,8 @@ impl ProviderEmulator {
         }
 
         let project = project_root();
-        let mut child = Command::new("uv")
+        let mut command = Command::new("uv");
+        command
             .arg("run")
             .arg("--project")
             .arg(&project)
@@ -81,7 +93,13 @@ impl ProviderEmulator {
             .arg("--scenario")
             .arg(scenario)
             .arg("--port")
-            .arg("0")
+            .arg("0");
+        if let Some(workspace) = workspace {
+            command
+                .arg("--workspace")
+                .arg(workspace.canonicalize().expect("workspace exists"));
+        }
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

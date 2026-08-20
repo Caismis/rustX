@@ -55,7 +55,9 @@ pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistrati
         native_definition::<GlobInput>(
             "tool-glob",
             NAME,
-            "Find workspace files whose path matches a glob pattern. Returns paths relative to \
+            "Find files whose path matches a glob pattern. The optional path is an absolute \
+             directory locator inside the workspace root or the read-only managed tool-output \
+             root; omit it to search the workspace root. Returns paths relative to \
              the search root in lexical order. Hidden files are included and ignore files such as \
              .gitignore are not applied.",
             policy,
@@ -94,10 +96,17 @@ fn run_glob(
         Ok(matcher) => matcher,
         Err(error) => return failed_result(format!("invalid glob pattern {pattern:?}: {error}")),
     };
-    let root = match SearchRoot::resolve(context.workspace, input.path.as_deref()) {
+    let root = match SearchRoot::resolve(
+        context.workspace,
+        context.tool_output,
+        input.path.as_deref(),
+    ) {
         Ok(root) => root,
         Err(error) => return failed_result(error),
     };
+    if root.is_file() {
+        return failed_result("glob searches a directory; the path names a single file");
+    }
     let files = match root.files() {
         Ok(files) => files,
         Err(error) => return failed_result(error),

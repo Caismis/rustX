@@ -148,6 +148,7 @@ mod unix_tests {
                 workspace: bundle.workspace(),
                 progress: &NoProgress,
                 artifacts: bundle.artifacts(),
+                tool_output: bundle.tool_output(),
                 environment: bundle.environment(),
             },
         )

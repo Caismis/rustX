@@ -9,8 +9,9 @@ use crate::tools::native::input::decode;
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct EditInput {
-    /// The workspace-relative path of the file to edit.
-    pub path: String,
+    /// The absolute path of the file to edit. It must resolve inside the
+    /// workspace root; the managed tool-output root is read-only.
+    pub file_path: String,
     /// The replacements to apply. Every replacement is matched against the
     /// file as it was before this call, and all of them are applied together
     /// as one change.
@@ -56,6 +57,9 @@ impl EditInput {
     /// An empty edit set describes no transformation at all, and an empty
     /// `oldText` has no exact-match semantics at all.
     fn validate(&self) -> Result<(), String> {
+        if !std::path::Path::new(&self.file_path).is_absolute() {
+            return Err("edit requires an absolute file_path".to_owned());
+        }
         if self.edits.is_empty() {
             return Err("edit requires at least one replacement".to_owned());
         }

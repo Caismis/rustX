@@ -33,9 +33,13 @@ fn json_content(result: &ToolExecutionResult) -> serde_json::Value {
     panic!("expected a JSON result content block");
 }
 
-/// The workspace-relative path of an artifact id.
-fn artifact_path(fixture: &common::NativeFixture, id: &str) -> std::path::PathBuf {
-    fixture.runtime.artifacts().root().join(format!("{id}.bin"))
+/// The number of result spill files in the conversation's managed
+/// tool-output root (the `results/` directory; `tasks/` holds background
+/// live output, a deliberately separate lifecycle).
+fn spill_count(fixture: &common::NativeFixture) -> usize {
+    std::fs::read_dir(fixture.runtime.tool_output().root().join("results"))
+        .expect("managed tool-output results root")
+        .count()
 }
 
 #[tokio::test]
@@ -489,13 +493,49 @@ fn bash_parent_secrets_are_absent_and_authorized_variables_are_visible() {
     );
 }
 
+/// Small output stays fully in memory: ordinary bounded text, no spill
+/// file, no artifact, no truncation.
 #[tokio::test]
-async fn bash_large_previews_are_bounded_with_full_artifacts_retained() {
+async fn bash_small_output_creates_no_spill() {
     let fixture = native_fixture();
     let result = run_tool(
         &fixture,
         "bash",
-        serde_json::json!({"command": "yes x | head -c 200000"}),
+        serde_json::json!({"command": "echo hello"}),
+    )
+    .await;
+    assert_eq!(result.status, ToolExecutionStatus::Success);
+    assert!(
+        result.artifacts.is_empty(),
+        "textual output never becomes a semantic artifact"
+    );
+    assert!(result.truncation.is_none());
+    assert!(
+        result.managed_output.is_none(),
+        "no spill continuation metadata exists"
+    );
+    assert!(
+        json_content(&result).get("full_output").is_none(),
+        "the tool-owned JSON carries no continuation keys"
+    );
+    assert_eq!(spill_count(&fixture), 0, "no spill file exists");
+}
+
+/// Oversized textual output stays textual: the model-facing previews stay
+/// bounded, the complete combined output spills into exactly one managed
+/// tool-output file addressed by its absolute path inside the ordinary
+/// textual result, and the file is readable and searchable through the
+/// ordinary native Read/Grep tools.
+#[allow(clippy::too_many_lines)] // one scenario: spill, then prove read/search access
+#[tokio::test]
+async fn bash_large_output_spills_to_managed_output() {
+    let fixture = native_fixture();
+    let result = run_tool(
+        &fixture,
+        "bash",
+        serde_json::json!({
+            "command": "for i in $(seq 1 1500); do echo line-$i; done; echo spill-boundary-marker; for i in $(seq 1501 3000); do echo line-$i; done"
+        }),
     )
     .await;
     assert_eq!(result.status, ToolExecutionStatus::Success);
@@ -505,46 +545,221 @@ async fn bash_large_previews_are_bounded_with_full_artifacts_retained() {
             <= rustx::tools::limits::BASH_STREAM_PREVIEW_BYTES,
         "the model-facing preview stays bounded"
     );
+    assert!(
+        result.artifacts.is_empty(),
+        "oversized text never becomes a semantic artifact"
+    );
     let truncation = result.truncation.expect("truncation metadata");
     assert!(truncation.truncated);
-    // The full raw output artifact retains every byte beyond the preview.
-    let stdout_artifact = result
-        .artifacts
+    assert!(truncation.original_bytes.is_some());
+    // The spill locator is typed runtime-owned metadata: absolute and
+    // under the managed root. The tool-owned JSON carries no magic keys.
+    assert!(
+        content.get("full_output").is_none() && content.get("note").is_none(),
+        "the tool-owned JSON carries no continuation keys: {content}"
+    );
+    let Some(rustx::tools::ManagedOutputContinuation::Complete { locator }) =
+        &result.managed_output
+    else {
+        panic!(
+            "a complete spill is typed Complete, got {:?}",
+            result.managed_output
+        );
+    };
+    let full_output = locator.to_str().expect("utf8 spill locator").to_owned();
+    let full_output = full_output.as_str();
+    assert!(std::path::Path::new(full_output).is_absolute());
+    assert!(
+        std::path::Path::new(full_output).starts_with(fixture.runtime.tool_output().root()),
+        "the spill lives in the managed tool-output root: {full_output}"
+    );
+    // The foreground result presents the locator plus the Read/Grep
+    // continuation guidance to the model as ordinary tool-owned text.
+    let continuation_text = result
+        .content
         .iter()
-        .find(|reference| reference.name.as_deref() == Some("stdout.log"))
-        .expect("stdout artifact reference");
-    let bytes = std::fs::read(artifact_path(
+        .find_map(|block| match block {
+            ToolResultContent::Text(text) => Some(text.text.clone()),
+            _ => None,
+        })
+        .expect("the foreground continuation text block");
+    assert!(
+        continuation_text.contains(&format!("Complete output: {full_output}")),
+        "the model-facing text carries the exact locator: {continuation_text}"
+    );
+    assert!(
+        continuation_text.contains("Read or Grep"),
+        "the bounded text states how to reach the complete output"
+    );
+    assert_eq!(spill_count(&fixture), 1, "exactly one combined spill file");
+
+    // The spill retains the complete output from byte zero; the middle
+    // marker line is absent from the bounded head/tail preview but present
+    // in the file.
+    let spilled = std::fs::read_to_string(full_output).expect("spill text");
+    assert!(spilled.starts_with("line-1\n"));
+    assert!(spilled.ends_with("line-3000\n"));
+    assert!(
+        !content["combined"]
+            .as_str()
+            .expect("combined")
+            .contains("spill-boundary-marker"),
+        "the middle marker line is beyond the bounded head/tail preview"
+    );
+
+    // Ordinary native Read with offset/limit reads the spill file.
+    let marker_line = 1501_u64;
+    let read = run_tool(
         &fixture,
-        stdout_artifact.artifact_id.as_str(),
-    ))
-    .expect("artifact bytes");
-    assert_eq!(bytes.len(), 200_000, "full output is retained verbatim");
-    assert!(bytes.iter().all(|byte| *byte == b'x' || *byte == b'\n'));
+        "read",
+        serde_json::json!({
+            "file_path": full_output,
+            "offset": marker_line,
+            "limit": 1,
+        }),
+    )
+    .await;
+    assert_eq!(read.status, ToolExecutionStatus::Success);
+    let read_text = read
+        .content
+        .iter()
+        .find_map(|block| match block {
+            ToolResultContent::Text(text) => Some(text.text.clone()),
+            _ => None,
+        })
+        .expect("text content");
+    assert_eq!(read_text, "spill-boundary-marker");
+
+    // Ordinary native Grep searches the single spill file and the managed
+    // root directory.
+    let grep_file = run_tool(
+        &fixture,
+        "grep",
+        serde_json::json!({"pattern": "spill-boundary-marker", "path": full_output}),
+    )
+    .await;
+    assert_eq!(grep_file.status, ToolExecutionStatus::Success);
+    assert!(
+        json_content(&grep_file)["matches"]
+            .as_array()
+            .expect("matches")
+            .len()
+            == 1,
+        "Grep finds the spilled text in the single file"
+    );
+    let grep_root = run_tool(
+        &fixture,
+        "grep",
+        serde_json::json!({
+            "pattern": "spill-boundary-marker",
+            "path": fixture.runtime.tool_output().root().to_str().expect("utf8"),
+        }),
+    )
+    .await;
+    assert_eq!(grep_root.status, ToolExecutionStatus::Success);
+    assert_eq!(
+        json_content(&grep_root)["matches"]
+            .as_array()
+            .expect("matches")
+            .len(),
+        1,
+        "Grep finds the spilled text through the managed root"
+    );
+
+    // The managed root is read-only: Write and Edit reject it.
+    let write = run_tool(
+        &fixture,
+        "write",
+        serde_json::json!({"file_path": full_output, "content": "x"}),
+    )
+    .await;
+    assert!(
+        matches!(write.status, ToolExecutionStatus::Failed { .. }),
+        "Write must reject the managed tool-output root"
+    );
+    let edit = run_tool(
+        &fixture,
+        "edit",
+        serde_json::json!({
+            "file_path": full_output,
+            "edits": [{"oldText": "marker", "newText": "x"}],
+        }),
+    )
+    .await;
+    assert!(
+        matches!(edit.status, ToolExecutionStatus::Failed { .. }),
+        "Edit must reject the managed tool-output root"
+    );
 }
 
+/// Every advertised Read/Grep path holds valid UTF-8 text (Issue #86):
+/// raw non-UTF-8 output decodes deterministically to U+FFFD replacement
+/// characters — never raw bytes — so the spilled file is always readable
+/// by Read and searchable by Grep. The decoded text is identical to the
+/// one-shot lossy decoding of the same bytes.
 #[tokio::test]
-async fn bash_raw_non_utf8_output_is_preserved_in_the_artifact() {
+async fn bash_non_utf8_output_spills_as_deterministic_text() {
     let fixture = native_fixture();
+    // Deterministic invalid bytes (never /dev/urandom): 20000 'x' bytes
+    // cross the bound, then an invalid tail.
     let result = run_tool(
         &fixture,
         "bash",
-        serde_json::json!({"command": "printf '\\377\\376\\001\\002'"}),
+        serde_json::json!({"command": "printf 'x%.0s' {1..20000}; printf '\\377\\376\\001\\002end\\n'"}),
     )
     .await;
     assert_eq!(result.status, ToolExecutionStatus::Success);
-    // The preview is lossy-converted but the stored artifact is raw.
-    let stdout_artifact = result
-        .artifacts
-        .iter()
-        .find(|reference| reference.name.as_deref() == Some("stdout.log"))
-        .expect("stdout artifact reference");
-    let bytes = std::fs::read(artifact_path(
+    let Some(rustx::tools::ManagedOutputContinuation::Complete { locator }) =
+        &result.managed_output
+    else {
+        panic!(
+            "the spill is typed Complete, got {:?}",
+            result.managed_output
+        );
+    };
+    let full_output = locator.to_str().expect("utf8 spill locator");
+    let text = std::fs::read_to_string(full_output)
+        .expect("the advertised spill path is always valid UTF-8 text");
+    assert!(text.starts_with(&"x".repeat(100)));
+    // \377 \376 are invalid UTF-8 and decode to exactly two U+FFFD
+    // replacement characters; \001 \002 are valid control bytes and pass
+    // through unchanged.
+    assert!(
+        text.ends_with("\u{FFFD}\u{FFFD}\u{1}\u{2}end\n"),
+        "invalid bytes decode deterministically to U+FFFD: {:?}",
+        &text[text.len() - 16..]
+    );
+
+    // The advertised path is genuinely inspectable: Read and Grep succeed.
+    let read = run_tool(
         &fixture,
-        stdout_artifact.artifact_id.as_str(),
-    ))
-    .expect("artifact bytes");
-    assert_eq!(bytes, vec![0xff, 0xfe, 0x01, 0x02], "raw bytes preserved");
-    assert!(result.truncation.is_none(), "small output is not truncated");
+        "read",
+        serde_json::json!({"file_path": full_output}),
+    )
+    .await;
+    assert_eq!(
+        read.status,
+        ToolExecutionStatus::Success,
+        "Read inspects the decoded-text spill"
+    );
+    let grep = run_tool(
+        &fixture,
+        "grep",
+        serde_json::json!({"pattern": "end", "path": full_output}),
+    )
+    .await;
+    assert_eq!(
+        grep.status,
+        ToolExecutionStatus::Success,
+        "Grep searches the decoded-text spill"
+    );
+    assert_eq!(
+        json_content(&grep)["matches"]
+            .as_array()
+            .expect("matches")
+            .len(),
+        1
+    );
 }
 
 /// A shell parent that exits while a descendant stays in the owned process
