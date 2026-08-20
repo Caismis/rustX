@@ -2846,18 +2846,143 @@ contracts and provider protocols. These invariants are frozen by M2:
   and refusal remain distinct presentation types and are never flattened into
   assistant text.
 
-- **Generic tool lifecycle.** Tool presentation consumes call identity, tool
-  identity, arguments, state, progress, and result. A tool's name or origin
-  may affect a label or icon only; there is no semantic branch keyed to
-  either, because execution semantics are Rust-owned.
+- **Tool identity chooses presentation; runtime facts choose semantics.** A
+  stable tool identity or origin may select *presentation* — a label, a group
+  heading, or a specialized renderer — and may never select or infer execution
+  semantics. So
+  Bash renders as `$ cargo test --all` rather than as argument JSON. A
+  renderer formats already-authoritative facts and nothing else: running,
+  success, failure, denial, cancellation, timeout, interruption, progress,
+  duration, exit code, and truncation come exclusively from the Runtime
+  Client, and no renderer receives the lifecycle it would need in order to
+  contradict one. Status is never read out of output text, never inferred
+  from an absent result, and never inferred from a missing output. Every
+  tool — native, MCP, Python, or unknown — has a generic fallback renderer,
+  and a specialized renderer that does not recognise a shape degrades to it.
+
+- **One tool call is one visual entity.** The assistant `tool_call` block,
+  the attempt's foreground execution lifecycle, and the committed canonical
+  result message are three different runtime facts about one logical call.
+  Their semantic ownership stays separate; presentation joins them into one
+  card keyed by `ToolCallId`. Correlation never uses a tool name, argument
+  equality, list position, timing, or textual adjacency, so two concurrent
+  identical calls stay two entities.
+
+- **A folded result never reorders canonical content.** rustX's canonical
+  model constrains very little about where a tool result sits.
+  `AssistantMessageBlock` is a plain block vector, so a `tool_call` need not
+  be the last block of its message; and `StructuralIndex::build` rejects only
+  duplicate calls, duplicate results, and orphan results, so a result message
+  need not immediately follow the message that requested it. Both
+  `text A, tool_call X, text B` before a result for `X`, and
+  `Assistant(tool_call X), User(U), ToolResult(X)`, are shapes the client
+  renders rather than assumes away. A committed tool result is folded into its
+  call's card **only if every canonical fact it would be moved across belongs
+  to the same foldable batch** — so fold eligibility is a property of the
+  **complete canonical interval between the call anchor and the result
+  position**, never of the owning assistant message's block tail alone. A
+  batch (an assistant message's trailing unbroken run of `tool_call` blocks)
+  folds only when nothing but `tool_call` blocks follow its first call *and*
+  every transcript entry from the anchor through the batch's last committed
+  result is a result of that same batch. Any `User`, `System`, or unrelated
+  `Assistant` message in that interval unfolds the whole batch: the decision
+  is per batch and all-or-nothing, because folding only the calls whose
+  results happen to be adjacent would move results across their own siblings.
+  A batch that does not fold is drawn as two fragments per call of one entity
+  — the call at its `tool_call` block, its terminal continuation at the
+  canonical result message. One identity, canonical order, and never the
+  pre-#79 duplication of a raw call block, a running card, and a result block.
+  The fold plan is a pure derivation of the ordered transcript, with no
+  incremental render memory, so a fresh authoritative snapshot reaches the
+  same decision.
+
+- **Client visual collapse is not runtime truncation.** Every
+  externally-derived display band of a collapsed tool card has a finite
+  presentation budget in **both** dimensions — a line count *and* a content
+  length. One dimension is not a bound: `{"payload": "<100 kB>"}` is three
+  pretty-printed lines, a 50 kB path or Grep pattern is one line, and a 50 kB
+  denial reason is one line, so a height-only preview shows all of them in
+  full. The bound covers the subject, both detail bands, the failure/denial
+  reason, and the runtime-published summary, and each detail band has its own
+  budget so a verbose call never starves its result. The card shell owns the
+  bound and no renderer receives the collapse context, so no present or future
+  renderer can forget it or route arbitrary prose through `summary` to escape
+  it. The status header names the settlement the runtime published — `failed`,
+  `denied` — and never carries the runtime's prose explaining it: that lives
+  once, in the bounded reason band, so an unbounded string can never reach an
+  always-visible, never-collapsed header. Only the runtime's own
+  `TruncationState` and the small typed `CancellationReason` are unbounded
+  header facts. Expanding re-renders facts the client already holds; it never
+  re-executes a tool, re-reads a file, fetches anything, or issues a runtime
+  request, and it does not undo the runtime's own truncation, which is
+  reported separately and unconditionally.
+
+- **Client collapse is finite *and* reversible; runtime truncation is
+  authoritative and irreversible.** Every band the client bounds is a band the
+  client can restore, because restoring it spends nothing but
+  `PresentationState`. This holds for foreground tool cards, for background
+  execution settlements, and for pending interactions alike: one expansion
+  state per entity governs *every* expandable band of that entity, so a card
+  can never expand its body while leaving its failure or denial reason
+  permanently clipped. The runtime's own `TruncationState` is the opposite kind
+  of fact — those bytes never reached the client — and no preference undoes it.
+
+- **A pending interaction's decision-relevant facts stay inspectable.** The
+  runtime publishes an approval's reason and its validated arguments in full.
+  The client may collapse both for default presentation, and must be able to
+  reveal both, completely, from already-held state before the user responds —
+  a reader must never have to answer allow or deny about arguments the client
+  holds but will not show. Revealing them performs no runtime request, no
+  re-execution, and no read, and it neither edits the arguments nor
+  reconstructs a `ToolCall`: the runtime resumes the operation it already
+  validated. This is disclosure, not a second approval gate; nothing requires
+  a card to be expanded before it can be answered.
+
+- **Presentation identity preserves runtime identity domains.** `ToolCallId`
+  (a logical model-issued call), `ToolExecutionId` (a detached background
+  execution), and `InteractionId` (one runtime-owned pending interaction) are
+  distinct rustX identities that all happen to serialize as transparent
+  strings. Client expansion state keeps them in three separate sets, so equal
+  wire strings in different domains can never alias or cross-toggle. No naming
+  convention (`call_*`, `exec_*`) is relied on anywhere. `/expand all` and
+  `/expand none` mean all three domains; `latest` stays scoped to the
+  `ToolCallId` domain, because "the latest" across three unrelated identity
+  domains would name whichever entity a tie-break rule picked rather than the
+  one on screen. A bare id addresses the `ToolCallId` domain, and a background
+  execution or a pending interaction is addressed explicitly, so no parser
+  searches one string across the namespaces.
+
+- **A displayed duration never rolls past its own unit.** The unit is chosen
+  from the rounded value, not the raw one, so a seconds component is always
+  0–59 and a sub-minute rendering never reaches `60.0s`. Choosing the bucket
+  first and rounding independently inside it printed 119,999 ms as `1m60s`.
+
+- **Reasoning visibility is not reasoning configuration.** Whether reasoning
+  content is drawn is a client display preference. What rustX asks a provider
+  for is `SessionModelConfig.reasoningProfile` / `reasoningEnabled`, and it is
+  changeable only through `model_set`. Hidden reasoning collapses to a marker;
+  it never becomes assistant text and never disappears silently.
+
+- **Display preferences stay out of runtime state.** Reasoning visibility,
+  expanded cards in either identity domain, search text, selection, and focus
+  live in the client and may reset on a full rebuild. None is written into
+  `PresentationState`, and none changes a semantic fact.
+
+- **Working status is proven, never timed.** A phase is shown only when a
+  projection fact proves it — a pending interaction, a running or assembled
+  foreground execution, the latest streamed block kind, the attempt phase.
+  There is no timer, no inactivity threshold, and no state invented for a
+  lifecycle rustX does not publish.
 
 - **Background work is runtime-owned.** A background unit is alive because
   the runtime says it exists. Removing or collapsing a UI card cancels
   nothing and is never evidence of settlement. Cancellation is a request:
   acceptance and terminal settlement stay distinct.
 
-- **Model presentation is runtime-published.** `/model` uses
-  `model_catalog_get`, `model_get`, and `model_set` only. The client never
+- **Model presentation is runtime-published.** `/model` opens a searchable
+  selector over `model_catalog_get` and applies a choice through `model_set`;
+  `/model show` renders `model_get`'s projection. The selector filters and
+  formats the published catalog and nothing more. The client never
   reads `models.json`, instantiates a provider SDK, resolves an API key, or
   interprets provider protocol semantics. Only *effective* capability is
   advertised. Reasoning profiles are shown exactly as published: a
@@ -2865,6 +2990,25 @@ contracts and provider protocols. These invariants are frozen by M2:
   no selectable profile, and no universal off/low/medium/high scale is
   invented. `requestParams` stays opaque provider-owned JSON — displayed and
   passed, never interpreted.
+
+- **Configured, effective, and attempt-frozen models stay three facts.**
+  `SessionModelView.configured` is what the session asks for,
+  `SessionModelView.effective` is what the runtime would actually use, and
+  `AttemptModelView.primary` is what an admitted attempt froze. All three can
+  differ at once and none may be dropped, collapsed into a single "current",
+  or truncated into a shorter identity naming a different model. When they
+  coincide the presentation may compress; the moment any two differ every one
+  is labelled. Nothing may imply that a running attempt already moved to the
+  configured model.
+
+- **Catalog metadata is not runtime model configuration.** A `CatalogModelView`
+  describes what a model *offers*, including `defaultReasoningProfile`, which
+  is the catalog's fallback. What the session asked for
+  (`SessionModelConfig.reasoningProfile`) and what the runtime resolved
+  (`ModelInvocationView.reasoningProfile` / `reasoningEnabled`) are separate
+  facts, presented separately. A catalog default is never labelled as the
+  current configuration, and an absent configured profile is reported as
+  absent rather than borrowing the catalog's.
 
 - **No bypass of rustX.** There is no client-side shell, no filesystem read
   that injects content into a prompt, no client-side Skill execution, no

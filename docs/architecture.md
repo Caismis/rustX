@@ -3421,8 +3421,104 @@ PresentationProjection  the ephemeral render cache.
 
 CommandDispatcher       UI intent -> one canonical Runtime Client operation.
 
-RustxTuiApp             the Pi components.
+RustxTuiApp             the Pi components, and the only owner of the client's
+                        own display preferences.
 ```
+
+**The semantic component model (Issue #79).** The presentation layer is a
+grammar of semantic components rather than a log of protocol records:
+
+```text
+PresentationState
+        |
+        +-- presentation/tools.ts        ToolCallId correlation
+        |
+        +-- transcript components        UserMessage, AssistantText, Reasoning,
+        |                                Refusal, system/compaction, ToolCard
+        |
+        +-- activity components          background, interactions, orphaned
+        |                                executions, WorkingStatus
+        |
+        +-- model/session components     ModelSelector, footer/status
+                |
+                v
+          Pi primitives
+```
+
+Three rules hold the layer together.
+
+*One tool call is one visual entity.* rustX publishes three different facts
+about one logical call — the assistant `tool_call` block, the attempt's
+foreground execution lifecycle, and the committed canonical `role: "tool"`
+result. Their semantic ownership stays separate; `presentation/tools.ts` joins
+them for display only, keyed by `ToolCallId`. Correlation uses no tool name,
+argument equality, list position, timing, or adjacency, so two concurrent
+identical calls remain two cards. The card renders at the assistant block that
+requested it, which is why the same call never appears simultaneously as
+transcript JSON, a running card, and a separate result block.
+
+*A folded result never reorders canonical content.* rustX's canonical model
+permits a `tool_call` that is not the last block of its assistant message, and
+does not require a result message to immediately follow the message that
+requested it, so a committed result is folded into its call's card **only if
+every canonical fact it would be moved across belongs to the same foldable
+batch**. Fold eligibility is a property of the complete canonical interval
+between the call anchor and the result position, not of the owning assistant
+message's block tail: a batch (the message's trailing unbroken run of
+`tool_call` blocks) folds only when nothing but `tool_call` blocks follow its
+first call *and* every transcript entry from the anchor through the batch's
+last committed result is a result of that same batch. An intervening `User`,
+`System`, or unrelated `Assistant` message unfolds the whole batch, all-or-
+nothing, and each of its calls is drawn as two fragments of one entity: the
+call at its `tool_call` block and its terminal continuation at the canonical
+result message. The plan is a pure derivation of the ordered transcript, so a
+fresh snapshot reaches the same decision as an incrementally folded state.
+
+*Tool identity chooses presentation; runtime facts choose semantics.* A stable
+`ToolId` selects a specialized renderer — Bash, Read, Grep, Glob, Edit, Write
+today — so a shell call reads as `$ cargo test --all` instead of argument
+JSON. A renderer formats already-authoritative facts and is never handed the
+lifecycle: running, success, failure, denial, cancellation, timeout,
+interruption, progress, duration, exit code, and truncation all come from the
+Runtime Client and are rendered by the card shell. A renderer that does not
+recognise a shape returns nothing and the generic renderer takes over, so
+unknown, MCP, and Python tools are always fully usable.
+
+*Display preferences are not runtime state.* Reasoning visibility and which
+cards are expanded live in the app, not in `PresentationState`. Every
+externally-derived band of a collapsed card — subject, both detail bands, the
+failure/denial reason, and the runtime-published summary — is finite in *both*
+line count and content length, because one dimension is not a bound: a 100 kB
+JSON string is three pretty-printed lines and a 50 kB path is one. The two
+detail bands keep separate budgets, and the card shell owns the bound so no
+renderer can forget it or bypass it through `summary`. The status header names
+the settlement (`failed`, `denied`) while the runtime's prose explaining it
+lives once in the bounded reason band; only the runtime's own
+`TruncationState` and the typed `CancellationReason` are unbounded header
+facts. Expanding a card re-renders facts the client already holds — it never
+re-executes a tool or fetches anything — and it is unrelated to the runtime's
+own `TruncationState`, which is always reported.
+
+Client collapse is therefore **finite and reversible**, while runtime
+truncation is authoritative and irreversible. One expansion state per entity
+governs every expandable band of that entity, so a background settlement never
+expands its body while leaving its failure reason clipped, and a pending
+approval's runtime-published reason and validated arguments are inspectable in
+full — from already-held state, before the user answers allow or deny. That is
+disclosure, not a second approval gate: nothing requires a card to be opened
+before it can be answered, and expanding never edits the arguments the runtime
+validated.
+
+Expansion state is kept in three sets, one per runtime identity domain
+(`ToolCallId` for foreground cards, `ToolExecutionId` for background ones,
+`InteractionId` for pending approvals), so equal wire strings in different
+domains cannot alias. `/expand all` and `/expand none` cover all three;
+`latest` stays scoped to the `ToolCallId` domain. Reasoning *visibility* is
+likewise unrelated to the `reasoningProfile` / `reasoningEnabled` request
+configuration, which only `model_set` changes — and neither is the catalog's
+`defaultReasoningProfile`, which describes what a model offers rather than what
+this session configured. `configured`, `effective`, and the attempt's frozen
+model stay three separately displayed facts.
 
 **The projection is not a second runtime state machine.** Two total functions
 define the whole model — `replaceFromSnapshot(snapshot, cursor)` and
@@ -3443,8 +3539,9 @@ resync_required -> snapshot_get -> replace the projection -> subscribe after
 **What the client must never do**, and does not: construct ModelAdapters or
 provider HTTP clients, parse `models.json`, resolve credentials or endpoints,
 build context engines or summarizers, register tools, read `SKILL.md`,
-compose an Agent Status, infer a mailbox drain, execute a tool, or branch on a
-tool's name or origin for anything but a label. Several of those are reachable
+compose an Agent Status, infer a mailbox drain, execute a tool, or let a tool's
+name or origin decide an execution semantic. Tool identity may choose a
+*renderer*; it may never choose a lifecycle. Several of those are reachable
 only through the canonical operations this client calls.
 
 **Validation.** Most correctness is proven without a terminal, without
@@ -3460,11 +3557,12 @@ clean exit. The TUI owns no provider protocol: it launches the same
 a launcher that knows only about process mechanics and the control API.
 
 The layering is checkable rather than asserted: `@earendil-works/pi-tui` is
-imported by exactly two files, and eight of the nine client suites — framing,
-RPC, presentation projection, session lifecycle, the model invariant,
-rendering, the process owner, and the real-binary integration — never reach it
-directly or transitively. Replacing the terminal library would leave every one
-of them valid.
+imported by four files — the app, the autocomplete provider, the model selector
+component, and the transcript module's one type import — and every suite below
+`ui/` runs without a terminal. Framing, RPC, presentation projection, session
+lifecycle, the model invariant, tool correlation, the process owner, and the
+real-binary integration never reach Pi at all. Replacing the terminal library
+would leave every one of them valid.
 
 Both jobs install Python 3.12 and uv for the provider emulator; the Rust job
 additionally sets `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`, so a missing toolchain

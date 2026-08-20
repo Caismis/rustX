@@ -48,15 +48,16 @@ rustX Runtime semantics
 > presentation reduction, model state, tool state, background state, and
 > command semantics remain valid?
 
-Yes. Pi is imported by exactly two files: `src/ui/app.ts`, and
-`src/commands/autocomplete.ts` for the `AutocompleteProvider` interface it
-implements. Everything below that is plain TypeScript over protocol values.
+Yes. Pi is imported by four files, all of them presentation: `src/ui/app.ts`,
+`src/ui/components/model-selector.ts` (a `Component`), `src/ui/components/
+transcript.ts` (one type import), and `src/commands/autocomplete.ts` for the
+`AutocompleteProvider` interface it implements. Everything below `src/ui/` is
+plain TypeScript over protocol values.
 
-Eight of the nine test suites — framing, RPC, presentation projection, session
-lifecycle, the model invariant, rendering, the process owner, and the real
-`rustx` integration — do not reach `@earendil-works/pi-tui` at all, directly or
-transitively. The ninth (`commands.test.ts`) touches it only through the
-autocomplete interface and `fuzzyFilter`. No suite needs a terminal.
+No suite needs a terminal. Framing, RPC, presentation projection, session
+lifecycle, the model invariant, tool correlation, the process owner, and the
+real `rustx` integration never reach `@earendil-works/pi-tui` at all, directly
+or transitively; the presentation suites reach it only to render strings.
 
 ## Requirements
 
@@ -120,20 +121,36 @@ spawn rustx
 | `runtime/connection.ts` | request ids, the pending RPC map, correlation, event delivery, ordered writes, terminal settlement | conversation state |
 | `runtime/session.ts` | attach, snapshot install, subscribe, resync repair, shutdown | agent semantics |
 | `presentation/projection.ts` | the ephemeral render cache | canonical history, authority of any kind |
+| `presentation/tools.ts` | the `ToolCallId` correlation used for display | tool lifecycle, which it only reads |
 | `commands/` | slash-command parsing, dispatch to canonical operations | parallel runtime semantics |
+| `ui/components/` | the semantic presentation grammar | every fact it displays |
+| `ui/preferences.ts` | reasoning visibility and expanded cards | anything the runtime owns |
 | `ui/` | Pi components and rendering | every fact it displays |
 
 ## Commands
 
-`/help` `/model` `/tools` `/skills` `/status` `/debug` `/cancel` `/approve` `/quit`
+`/help` `/model` `/tools` `/skills` `/status` `/debug` `/reasoning` `/expand`
+`/cancel` `/approve` `/quit`
 
-Each either renders projection state or invokes exactly one canonical Runtime
-Client operation. `/model` goes through `model_catalog_get` and `model_set`;
+Each either renders projection state, changes a client display preference, or
+invokes exactly one canonical Runtime Client operation. `/model` opens the
+searchable selector over `model_catalog_get` and applies a choice through
+`model_set`, while `/model show` renders the projection's own model view;
 `/tools` and `/skills` read the capability projection; `/status` prints the
 runtime's own Agent Status rendering; `/debug` shows bounded diagnostics and
 never a credential; `/approve` sends a finite typed response to one
 runtime-owned Approval interaction. The TUI never edits the displayed tool
 arguments or keeps a local approval outcome.
+
+`/reasoning [on|off]` and `/expand [latest|all|none|<tool-call-id>|background
+<exec-id>|interaction <interaction-id>]` are the two commands that touch
+nothing but the screen. They send no request, and they are also bound to keys:
+
+| Key | Effect |
+| --- | --- |
+| `ctrl+c` | cancellation intent for the active attempt, or quit when idle |
+| `ctrl+o` | expand or collapse the most recent tool card |
+| `ctrl+t` | show or hide model reasoning |
 
 There is deliberately **no** `!bash`, no `@file` attachment, no client-side
 file read, and no client-side Skill execution. Shell, file, and Skill behaviour
@@ -152,6 +169,26 @@ validated arguments. `/approve <interaction-id> allow` or
 `interaction_respond` request. It never invokes a tool, mutates arguments,
 infers an outcome from detach/EOF, or callbacks into the Agent Loop.
 
+## The model selector
+
+`/model` opens a searchable overlay over the catalog `model_catalog_get`
+published. It searches the model reference *and* the useful metadata the
+catalog publishes about a row — the protocol (by wire spelling and by display
+label), the input and output modalities, the tool and reasoning capabilities,
+the reasoning profile ids, and the context/output limits — marks the
+configured model as current, and shows the highlighted entry's effective
+capability, context window, output limit, and reasoning profiles, each exactly
+as the catalog published it. The reference is matched fuzzily; the metadata
+terms are a short closed vocabulary and are matched by containment, because
+`image` is a fuzzy subsequence of `anthropic_messages` and a text-only row
+must not answer a query about image input. Session state is not searchable
+row metadata, and there is no `claude`- or `gpt`-shaped alias: the client is
+not an authority on what a model is. A reasoning-capable model that declares no profiles is shown as
+exactly that: there is no universal off/low/medium/high, and inventing one
+would make this client a second model-configuration authority. The overlay also
+states the configured/effective pair and, while an attempt is running, that the
+running attempt keeps the model it froze.
+
 ## The model invariant
 
 `snapshot.model` is the session's *desired* configuration.
@@ -164,14 +201,255 @@ This is proven in `test/model-invariant.test.ts` through the pure reducer and
 end to end over the transport, and again against the real binary in
 `test/integration.test.ts`.
 
-## Reasoning presentation
+## The semantic presentation model
+
+The transcript is a grammar of semantic components, not a log of protocol
+records:
+
+```text
+user            ▌ the question, verbatim
+assistant text  ordinary Markdown, no banner
+reasoning       dimmed, or one `Thinking…` marker when hidden
+refusal         explicitly a refusal, never an answer
+tool_call       one correlated tool card
+tool result     folded into that card when folding preserves canonical
+                order, otherwise that card's continuation in place
+```
+
+Canonical block order is preserved exactly: `reasoning, text, tool_call, text`
+renders in that sequence, streaming and committed alike, and streaming text
+renders identically to the committed text so nothing reflows on commit.
+
+### One tool call is one visual entity
+
+rustX publishes three different facts about one logical call:
+
+```text
+assistant tool_call block   committed conversation content
+foreground execution        attempt-scoped execution lifecycle
+tool result message         committed conversation content
+```
+
+Their semantic ownership stays separate. `presentation/tools.ts` joins them for
+*display*, keyed by the runtime's own `ToolCallId` — never by tool name,
+argument equality, list position, timing, or adjacency, so two concurrent calls
+of the same tool with the same arguments stay two cards. The card renders at
+the assistant block that asked for the call and evolves in place:
+
+```text
+◇ Bash · preparing        ->  ◐ Bash · running · 40/900  ->  ✓ Bash · ok · 2.8s · exit 0
+```
+
+### One entity, canonical order
+
+rustX's canonical model permits a `tool_call` that is *not* the last block of
+its assistant message: `AssistantMessageBlock` holds a plain block vector, and
+`StructuralIndex::build` rejects only duplicate calls, duplicate results, and
+orphan results. So `text A, tool_call X, text B` followed by a result for `X`
+is a shape the TUI must render, not one it may assume away — and drawing that
+result inside the earlier `X` card would move it before `text B`.
+
+Nor does it require a result message to immediately follow the message that
+requested it, so `Assistant(tool_call X)`, `User(U)`, `ToolResult(X)` is
+representable too — and folding *that* result would move it before the user's
+turn.
+
+> **A committed tool result folds into its call's card only if every canonical
+> fact it would be moved across belongs to the same foldable batch.**
+
+Fold eligibility is therefore a property of the **complete canonical interval
+between the call anchor and the result position**, not of the owning
+assistant message's block tail. A batch — an assistant message's trailing
+unbroken run of `tool_call` blocks — folds only when both hold:
+
+```text
+inside the message   nothing but tool_calls follows the batch's first call
+across the interval  every entry from the anchor through the batch's last
+                     committed result is a result of that same batch
+```
+
+Any `User`, `System`, or unrelated `Assistant` message in that interval
+unfolds the batch. The decision is per batch and all-or-nothing: folding only
+the calls whose results happen to be adjacent would move results across their
+own siblings. The plan is derived fresh from the ordered transcript every
+time — no `alreadyFolded` memory — so a resync agrees with itself.
+
+When a batch does not fold, each of its calls is drawn as two fragments of one
+entity:
+
+```text
+A
+
+◇ Bash · result below
+  $ cargo test
+
+B
+
+↳ ✓ Bash · ok · 2.8s · exit 0
+  $ cargo test
+  test result: ok. 842 passed
+```
+
+One identity, canonical order intact, and never the pre-#79 duplication of a
+raw call block plus a running card plus a separate result block. Expanding
+either fragment expands both: they are one card.
+
+### Renderers may format, never decide
+
+> **Tool identity may select a presentation renderer.
+> Tool identity may never select or infer execution semantics.**
+
+A stable `ToolId` picks a specialized renderer — Bash, Read, Grep, Glob, Edit,
+Write — so a shell call reads as `$ cargo test --all` instead of argument JSON.
+A renderer formats already-authoritative facts and is never handed the
+lifecycle, so it cannot express an opinion about it: running, success, failure,
+denial, cancellation, timeout, interruption, progress, duration, exit code, and
+truncation all come from the Runtime Client. Nothing reads a status out of
+output text, infers running from an absent result, or infers cancellation from
+missing output. A renderer that does not recognise a shape returns nothing and
+the generic renderer takes over, so unknown, MCP, and Python tools stay fully
+usable.
+
+### Visual collapse is not runtime truncation
+
+> **Every externally-derived band of a collapsed card is finite in both line
+> count and content length.**
+
+One dimension is not a bound. `{"payload": "<100 kB>"}` is three
+pretty-printed lines; a 50 kB path, Grep pattern, or Bash command is one line;
+a 50 kB denial reason is one line. A "show the first 8 lines" rule prints all
+of them in full. So every band carries a two-dimensional budget:
+
+```text
+header         glyph, title, runtime lifecycle    clipped, always visible
+subject        the one-line identity of the call  bounded, always visible
+call detail    argument JSON, a diff, a command   bounded when collapsed
+reason         failure / denial prose             bounded when collapsed
+result summary runtime-published counts           bounded, always visible
+result detail  the body                           bounded when collapsed
+truncation     the runtime's own TruncationState  always visible
+```
+
+The card shell owns the bound, not the renderers — a renderer never receives
+the collapse context, so a huge MCP argument object, a large Edit diff, a
+forty-line Bash command, and a partially streamed fragment are all bounded
+without any renderer having to remember to do it, including renderers written
+later, and including one that puts arbitrary prose in `summary`. The two
+detail bands have separate budgets, so a verbose call never squeezes its
+result off the screen. An elision marker names both dimensions when both
+apply: `… 2 more lines · 49016 more characters · ctrl+o to expand`.
+
+The status header names the settlement the runtime published — `failed`,
+`denied` — and stops there. The runtime's prose explaining it appears once, in
+the bounded reason band, because an always-visible header that no collapse can
+shrink is the wrong home for an unbounded string. `cancelled (user_requested)`
+keeps its reason: a `CancellationReason` is a small typed enum, not prose.
+
+Expanding re-renders facts the client already holds: no re-execution, no
+filesystem access, no network, no runtime request. The subject stays one line
+either way; expanded, it is the complete published value.
+
+### Collapse is finite *and* reversible
+
+```text
+client collapse    finite, and reversible from facts already held
+runtime truncation authoritative, and irreversible
+```
+
+Every band the client bounds is a band the client can restore, because
+restoring it spends nothing but `PresentationState`. That is what makes a
+bound safe to apply to text a decision is made from. **One expansion state per
+entity governs every expandable band of that entity** — a background card
+never expands its result body while leaving its failure reason permanently
+clipped, and a pending approval's runtime-published reason and validated
+arguments are both revealed together.
+
+The runtime's own `TruncationState` is the opposite kind of fact: those bytes
+never reached the client. It is reported separately and always, and expanding
+never undoes it.
+
+### Pending approvals are bounded but never hidden
+
+A 50 kB approval reason or a `Write` request carrying 50 kB of content is
+collapsed by default, because an approval prompt that scrolls its own question
+off the screen is one nobody can answer. `/expand interaction <id>` reveals
+the complete reason and the complete validated arguments, rendered from the
+interaction the client already holds — no runtime request, no re-execution, no
+read.
+
+This is disclosure, not a second approval gate. Nothing requires the card to
+be opened before `/approve`, and expanding cannot edit what is being approved:
+the arguments are drawn exactly as the runtime validated them, and the runtime
+resumes the operation it already holds.
+
+### Three identity domains, three preference sets
+
+```text
+ToolCallId       a logical model-issued tool call    foreground cards
+ToolExecutionId  a detached background execution     background cards
+InteractionId    one runtime-owned pending approval  interaction cards
+```
+
+All three serialize as transparent strings and nothing forbids the same string
+appearing in all three, so expansion state is kept in **three** sets rather
+than one string-keyed set. No naming convention (`call_*`, `exec_*`) is relied
+on anywhere — a wire spelling is not a type.
+
+```text
+/expand                               toggle the latest tool call
+/expand latest                        the same
+/expand all                           expand every tool, background, and
+                                      interaction card
+/expand none                          collapse all three domains
+/expand <tool-call-id>                toggle one foreground card
+/expand background <exec-id>          toggle one background card
+/expand interaction <interaction-id>  toggle one pending approval card
+```
+
+A bare id addresses the `ToolCallId` domain, always: there is no search across
+the namespaces and no "first match wins". `latest` stays scoped to the
+`ToolCallId` domain too — "the latest" across three unrelated identity domains
+would name whichever entity a tie-break rule picked, not the one on screen.
+
+### Configured, effective, and attempt-frozen are three model facts
+
+```text
+configured   what the session asks for            SessionModelView.configured
+effective    what the runtime would actually use  SessionModelView.effective
+attempt      what the running attempt froze       AttemptModelView.primary
+```
+
+All three can differ at once and the UI never loses one. When they coincide the
+footer shows one bare model name; the moment any two differ every one of them
+is labelled — `cfg A · eff B · attempt C` — and all three are undroppable, so a
+narrow terminal wraps rather than omitting or truncating a model identity into
+a different, shorter, wrong one. The selector labels rows `configured`,
+`effective`, and `attempt` for the same reason, and uses the word `current`
+only when there is exactly one thing it can mean.
+
+Catalog metadata and live configuration are likewise never merged. A catalog
+row states what a model *offers*, including the profile the catalog would fall
+back to (`catalog default medium`). What the session asked for and what the
+runtime resolved are separate lines (`configured reasoning`, `effective
+reasoning`). A catalog default is never presented as current configuration, and
+no reasoning scale is invented for a capable model that declares no profiles.
+
+### Reasoning visibility is not reasoning configuration
 
 The TUI consumes only canonical Runtime Client reasoning blocks. Provider
 spellings such as `reasoning` and `reasoning_content` never enter the
-TypeScript protocol or presentation layer. Reasoning, visible answer,
-refusal, and tool blocks remain distinct presentation blocks in both
-streaming and committed rendering; the TUI is a downstream projection, not a
-second runtime state machine.
+TypeScript protocol or presentation layer. Whether reasoning is *drawn* is a
+client preference (`/reasoning`, `ctrl+t`); when hidden it collapses to a
+`Thinking…` marker rather than becoming assistant text. What rustX *asks a
+provider for* is `SessionModelConfig.reasoningProfile` / `reasoningEnabled`,
+which only `model_set` changes.
+
+### Working status is proven, never timed
+
+The spinner names a phase only when a projection fact proves it — a pending
+interaction, a running or assembled foreground execution, the kind of the
+latest streamed block, the attempt phase. There is no timer and no inactivity
+threshold, and no state is invented for a lifecycle rustX does not publish.
 
 ## Testing
 
@@ -182,7 +460,11 @@ pnpm --dir tui test
 
 Everything is deterministic: scripted byte and record sequences, a data
 barrier rather than a delay for readiness, and no `setTimeout` used to
-establish an ordering.
+establish an ordering. The presentation suites drive projection facts directly
+and assert on normalized strings — `transcript.test.ts`,
+`tool-correlation.test.ts`, `tool-card.test.ts`, `model-selector.test.ts`,
+`status.test.ts`, `identity-domains.test.ts`, and `reconstruction.test.ts`,
+which rebuilds the whole visible UI from one fresh snapshot.
 
 `test/integration.test.ts` drives the **real** `rustx` binary over the real
 stdio/JSONL transport against a local SSE provider fixture (no credentials, no

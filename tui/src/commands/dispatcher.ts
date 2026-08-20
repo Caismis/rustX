@@ -25,7 +25,7 @@ import { RuntimeRequestError } from "../runtime/connection.ts";
 import {
   activeBackground,
   capabilitySummary,
-  catalogRows,
+  describeConfiguredReasoning,
   describeReasoning,
   originLabel,
   outcomeLabel,
@@ -38,19 +38,52 @@ import { COMMANDS, parseCommandLine } from "./registry.ts";
 import type {
   ApprovalDecision,
   CatalogModelView,
+  InteractionId,
   InteractionResponse,
+  ToolCallId,
+  ToolExecutionId,
 } from "../protocol/types.ts";
 
 /** What the dispatcher wants the UI to do next. */
 export type CommandOutcome =
   | { kind: "none" }
   | { kind: "message"; level: "info" | "error"; text: string }
+  | { kind: "choose_model"; models: CatalogModelView[] }
   | {
-      kind: "choose_model";
-      models: CatalogModelView[];
-      rows: Array<{ value: string; label: string; description: string }>;
+      /** A client display preference. Never a runtime request. */
+      kind: "preference";
+      preference: PreferenceChange;
     }
   | { kind: "quit" };
+
+/**
+ * One change to a client presentation preference.
+ *
+ * These never reach the runtime. `reasoning` here is *display* of reasoning
+ * content, which is a different thing from the `reasoningProfile` /
+ * `reasoningEnabled` model request configuration `/model` shows.
+ */
+export type PreferenceChange =
+  | { type: "reasoning"; visible?: boolean }
+  | { type: "expand"; target: ExpandTarget }
+  /** One foreground card, addressed by its `ToolCallId`. */
+  | { type: "expand_call"; callId: ToolCallId }
+  /** One background card, addressed by its `ToolExecutionId`. */
+  | { type: "expand_background"; executionId: ToolExecutionId }
+  /** One pending approval card, addressed by its `InteractionId`. */
+  | { type: "expand_interaction"; interactionId: InteractionId };
+
+/**
+ * A bulk expansion target.
+ *
+ * `all` and `none` mean every identity domain — every renderable tool card,
+ * every renderable background card, and every pending interaction card —
+ * because that is what the words say. `latest` deliberately does not: it stays
+ * the latest *tool call*, because "the latest" across three unrelated identity
+ * domains would name whichever entity a rule picked rather than the one the
+ * reader is looking at.
+ */
+export type ExpandTarget = "all" | "none" | "latest";
 
 export interface DispatcherContext {
   session: RuntimeClientSession;
@@ -128,6 +161,10 @@ export class CommandDispatcher {
           return info(renderStatus(state));
         case "/debug":
           return info(renderDebug(state, this.#context.diagnostics()));
+        case "/reasoning":
+          return reasoningPreference(argument);
+        case "/expand":
+          return expandPreference(argument);
         case "/cancel":
           return await this.#cancel(argument);
         case "/approve":
@@ -150,23 +187,26 @@ export class CommandDispatcher {
    * `/model` — a presentation over the runtime's authoritative model
    * operations.
    *
-   * With no argument it renders `model_get`. With one it reads the catalog
-   * through `model_catalog_get`, then replaces the whole session
-   * configuration through `model_set`. It never parses a provider catalog
-   * file, never touches a provider SDK, and never resolves an API key.
+   * With no argument it opens the searchable selector over the runtime's
+   * `model_catalog_get` result. With `show` it renders the projection's own
+   * model view. With a model reference it reads the catalog and replaces the
+   * whole session configuration through `model_set`. It never parses a
+   * provider catalog file, never touches a provider SDK, and never resolves
+   * an API key.
    */
   async #model(
     state: PresentationState,
     argument: string,
   ): Promise<CommandOutcome> {
-    if (argument.length === 0) {
+    // `show` is answered from the projection alone; every other spelling
+    // needs the runtime's authoritative catalog.
+    if (argument === "show") {
       return info(renderModel(state));
     }
-
     const catalog = await this.#context.session.modelCatalog();
     const models = catalog.models ?? [];
-    if (argument === "list") {
-      return { kind: "choose_model", models, rows: catalogRows(models) };
+    if (argument.length === 0 || argument === "list") {
+      return { kind: "choose_model", models };
     }
 
     const chosen = models.find((model) => model.model === argument);
@@ -261,6 +301,95 @@ export class CommandDispatcher {
   }
 }
 
+/**
+ * `/reasoning [on|off]` — a display preference, applied by the UI.
+ *
+ * It changes what is drawn and nothing else. The model's reasoning request
+ * configuration lives in `SessionModelConfig.reasoningProfile` and is only
+ * changeable through `model_set`.
+ */
+function reasoningPreference(argument: string): CommandOutcome {
+  switch (argument) {
+    case "":
+      return { kind: "preference", preference: { type: "reasoning" } };
+    case "on":
+      return {
+        kind: "preference",
+        preference: { type: "reasoning", visible: true },
+      };
+    case "off":
+      return {
+        kind: "preference",
+        preference: { type: "reasoning", visible: false },
+      };
+    default:
+      return {
+        kind: "message",
+        level: "error",
+        text: "usage: /reasoning [on|off]",
+      };
+  }
+}
+
+/**
+ * `/expand` — a visual collapse preference over all three identity domains.
+ *
+ * ```text
+ * /expand                          toggle the latest tool call
+ * /expand latest                   the same
+ * /expand all                      expand every tool, background, and
+ *                                  interaction card
+ * /expand none                     collapse all three domains
+ * /expand <tool-call-id>           toggle one foreground card
+ * /expand background <exec-id>     toggle one background card
+ * /expand interaction <interaction-id>  toggle one pending approval card
+ * ```
+ *
+ * A bare id addresses the `ToolCallId` domain, always. There is no search
+ * across the namespaces and no "first match wins": the three domains are
+ * distinct rustX identities, so addressing a background execution or a pending
+ * interaction says so.
+ *
+ * Expanding shows more of a call, a result, or a pending approval request the
+ * client already holds. It never re-executes a tool, never re-reads anything,
+ * never re-queries the runtime, and never undoes the runtime's own result
+ * truncation, which is a separate fact the card always reports.
+ */
+function expandPreference(argument: string): CommandOutcome {
+  if (argument === "" || argument === "latest") {
+    return { kind: "preference", preference: { type: "expand", target: "latest" } };
+  }
+  if (argument === "all" || argument === "none") {
+    return { kind: "preference", preference: { type: "expand", target: argument } };
+  }
+  const [head, ...rest] = argument.split(/\s+/);
+  if (head === "background" || head === "bg") {
+    const executionId = rest.join(" ");
+    if (executionId.length === 0) {
+      return usage("/expand background <execution-id>");
+    }
+    return {
+      kind: "preference",
+      preference: { type: "expand_background", executionId },
+    };
+  }
+  if (head === "interaction") {
+    const interactionId = rest.join(" ");
+    if (interactionId.length === 0) {
+      return usage("/expand interaction <interaction-id>");
+    }
+    return {
+      kind: "preference",
+      preference: { type: "expand_interaction", interactionId },
+    };
+  }
+  return { kind: "preference", preference: { type: "expand_call", callId: argument } };
+}
+
+function usage(spelling: string): CommandOutcome {
+  return { kind: "message", level: "error", text: `usage: ${spelling}` };
+}
+
 function info(text: string): CommandOutcome {
   return { kind: "message", level: "info", text };
 }
@@ -298,7 +427,20 @@ export function renderHelp(): string {
 
 /**
  * `/model` — the authoritative session model, and the running attempt's
- * frozen model when they differ.
+ * frozen model.
+ *
+ * Three model identities and two reasoning facts, each named for what it is:
+ *
+ * ```text
+ * configured            SessionModelView.configured.model
+ * effective             SessionModelView.effective.model
+ * attempt               AttemptModelView.primary.model
+ * configured reasoning  SessionModelConfig.reasoningProfile
+ * effective reasoning   ModelInvocationView.reasoningProfile/reasoningEnabled
+ * ```
+ *
+ * They are always all printed, even when they coincide, because `/model show`
+ * is the place a user goes to find out whether they do.
  */
 export function renderModel(state: PresentationState): string {
   const session = state.sessionModel;
@@ -308,7 +450,10 @@ export function renderModel(state: PresentationState): string {
     `- effective: \`${session.effective.model}\` via ${session.effective.protocol}`,
     `- context window: ${session.effective.contextWindow}`,
     `- max output tokens: ${session.effective.maxOutputTokens} (model maximum ${session.effective.modelMaxOutputTokens})`,
-    `- reasoning: ${describeReasoning(session.effective)}`,
+    // Configured and effective reasoning are separate facts: the session asks,
+    // the runtime resolves, and a catalog default is neither of them.
+    `- configured reasoning: ${describeConfiguredReasoning(session.configured)}`,
+    `- effective reasoning: ${describeReasoning(session.effective)}`,
     `- capabilities: ${capabilitySummary(session.effective)}`,
   ];
 
@@ -347,15 +492,24 @@ export function renderModel(state: PresentationState): string {
       "### Active attempt model (frozen at admission)",
       `- attempt: \`${attempt.attemptId}\` (${attempt.phase.type})`,
       `- model: \`${attempt.model.primary.model}\``,
+      `- reasoning: ${describeReasoning(attempt.model.primary)}`,
     );
     if (attempt.model.primary.model !== session.effective.model) {
       lines.push(
-        `- the session moved to \`${session.effective.model}\`; this attempt keeps the model it froze.`,
+        `- the session's effective model is \`${session.effective.model}\`; this attempt keeps the model it froze.`,
+      );
+    }
+    if (session.configured.model !== session.effective.model) {
+      lines.push(
+        `- the session is configured for \`${session.configured.model}\`, which is not what it would use today.`,
       );
     }
   }
 
-  lines.push("", "Use `/model <provider/model>` or `/model list` to change it.");
+  lines.push(
+    "",
+    "Use `/model` for the searchable selector, or `/model <provider/model>` to select directly.",
+  );
   return lines.join("\n");
 }
 

@@ -29,8 +29,8 @@ export const COMMANDS: readonly CommandSpec[] = [
   {
     name: "/model",
     description:
-      "Inspect the session model, or select one; selection resets primary overrides and preserves summary policy.",
-    argumentHint: "[provider/model]",
+      "Open the searchable model selector, or select one directly; selection resets primary overrides and preserves summary policy.",
+    argumentHint: "[show|provider/model]",
   },
   {
     name: "/tools",
@@ -47,6 +47,19 @@ export const COMMANDS: readonly CommandSpec[] = [
   {
     name: "/debug",
     description: "Show bounded presentation and protocol diagnostics.",
+  },
+  {
+    name: "/reasoning",
+    description:
+      "Show or hide model reasoning. A client display preference; it never changes what rustX requests.",
+    argumentHint: "[on|off]",
+  },
+  {
+    name: "/expand",
+    description:
+      "Expand or collapse foreground tool, background execution, and pending interaction detail. Purely visual: nothing is re-executed or re-fetched.",
+    argumentHint:
+      "[latest|all|none|<tool-call-id>|background <execution-id>|interaction <interaction-id>]",
   },
   {
     name: "/cancel",

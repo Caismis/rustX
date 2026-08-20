@@ -274,7 +274,13 @@ describe("real rustx child integration", { skip: SKIP }, () => {
         resyncCount: session.resyncCount,
       }),
     });
-    for (const command of ["/model", "/tools", "/skills", "/status", "/debug"]) {
+    for (const command of [
+      "/model show",
+      "/tools",
+      "/skills",
+      "/status",
+      "/debug",
+    ]) {
       const outcome = await dispatcher.submit(command);
       assert.equal(outcome.kind, "message", command);
       if (outcome.kind === "message") {
@@ -284,6 +290,17 @@ describe("real rustx child integration", { skip: SKIP }, () => {
           `${command} must never render a credential`,
         );
       }
+    }
+
+    // `/model` with no argument opens the selector over the real catalog the
+    // runtime published; it renders no message and sends no model_set.
+    const chooser = await dispatcher.submit("/model");
+    assert.equal(chooser.kind, "choose_model");
+    if (chooser.kind === "choose_model") {
+      assert.ok(
+        chooser.models.length > 0,
+        "the runtime catalog reached the selector",
+      );
     }
 
     // --- resync repairs from the real authoritative snapshot ---------------

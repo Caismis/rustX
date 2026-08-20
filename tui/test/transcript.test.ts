@@ -1,0 +1,279 @@
+/**
+ * The semantic transcript contract.
+ *
+ * These assertions are about *meaning*, not about spacing: that an answer is
+ * an answer, that reasoning stays reasoning whether or not it is shown, that
+ * a refusal is never dressed up as a reply, and that canonical block order
+ * survives the trip to the screen.
+ */
+
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import { Markdown } from "@earendil-works/pi-tui";
+
+import { reduce } from "../src/presentation/projection.ts";
+import { renderTranscript } from "../src/ui/components/transcript.ts";
+import { markdownTheme } from "../src/ui/theme.ts";
+import {
+  assistantBlocks,
+  assistantMessage,
+  attemptModel,
+  runtimeInbound,
+  toolCallBlock,
+  userMessage,
+} from "./support/fixtures.ts";
+import {
+  blockText,
+  plain,
+  prefs,
+  stateOf,
+  transcriptString,
+  transcriptText,
+} from "./support/render.ts";
+
+describe("assistant text", () => {
+  it("renders as ordinary Markdown with no repeated banner", () => {
+    const state = stateOf({
+      messages: [assistantMessage("m1", "# Heading\n\nthe answer")],
+    });
+    const blocks = renderTranscript(state, prefs());
+
+    assert.equal(blocks.length, 1);
+    assert.equal(blocks[0]?.kind, "markdown");
+    // The old debug grammar prefixed every text block with `▌ answer`.
+    assert.equal(blockText(blocks[0]!), "# Heading\n\nthe answer");
+    assert.ok(!transcriptString(state).includes("answer\n"));
+    assert.ok(!/▌\s*answer/.test(transcriptString(state)));
+  });
+
+  it("renders streaming and committed assistant text identically", () => {
+    let streaming = stateOf();
+    for (const event of [
+      {
+        type: "attempt_started" as const,
+        attempt_id: "a1",
+        model: attemptModel("alpha/model-a"),
+      },
+      {
+        type: "assistant_message_started" as const,
+        attempt_id: "a1",
+        message_id: "m1",
+      },
+      {
+        type: "assistant_text_delta" as const,
+        attempt_id: "a1",
+        message_id: "m1",
+        block_index: 0,
+        delta: "final answer",
+      },
+    ]) {
+      streaming = reduce(streaming, { cursor: streaming.cursor + 1, event });
+    }
+    const committed = stateOf({
+      messages: [assistantMessage("m1", "final answer")],
+    });
+
+    // Nothing reflows when the message commits: the same text, the same kind.
+    assert.deepEqual(transcriptText(streaming), ["final answer"]);
+    assert.deepEqual(transcriptText(committed), ["final answer"]);
+  });
+});
+
+describe("reasoning", () => {
+  const message = assistantBlocks("m1", [
+    { type: "reasoning", text: "step one" },
+    { type: "reasoning", text: "step two" },
+    { type: "text", text: "the answer" },
+  ]);
+
+  it("stays a distinct presentation type, dimmed below the answer", () => {
+    const state = stateOf({ messages: [message] });
+    const blocks = renderTranscript(state, prefs());
+
+    assert.equal(blocks.length, 2, "the reasoning run groups into one block");
+    const [reasoning, answer] = blocks;
+    assert.equal(blockText(reasoning!), "step one\n\nstep two");
+    assert.equal(blockText(answer!), "the answer");
+    assert.equal(
+      reasoning?.kind === "markdown"
+        ? reasoning.defaultTextStyle?.color?.("x")
+        : undefined,
+      "[90mx[0m",
+      "reasoning carries the muted role",
+    );
+    assert.equal(
+      answer?.kind === "markdown" ? answer.defaultTextStyle : "not markdown",
+      undefined,
+      "the answer is primary content and carries no muted style",
+    );
+  });
+
+  it("reapplies the reasoning style after nested Markdown resets ANSI", () => {
+    const state = stateOf({
+      messages: [
+        assistantBlocks("m1", [
+          { type: "reasoning", text: "before **bold** after `code` tail" },
+        ]),
+      ],
+    });
+    const block = renderTranscript(state, prefs())[0];
+    assert.equal(block?.kind, "markdown");
+
+    const rendered = new Markdown(
+      block.markdown,
+      0,
+      0,
+      markdownTheme,
+      block.defaultTextStyle,
+    )
+      .render(100)
+      .join("\n");
+
+    assert.match(rendered, /\[90m after/);
+    assert.match(rendered, /\[90m tail/);
+  });
+
+  it("collapses to a marker when hidden, and never becomes answer text", () => {
+    const state = stateOf({ messages: [message] });
+    const hidden = renderTranscript(state, prefs({ reasoningVisible: false }));
+
+    assert.equal(hidden.length, 2);
+    assert.equal(blockText(hidden[0]!), "✻ Thinking…");
+    assert.equal(blockText(hidden[1]!), "the answer");
+    // The reasoning body is gone from the screen but was never promoted.
+    assert.ok(!transcriptString(state, prefs({ reasoningVisible: false })).includes("step one"));
+  });
+
+  it("is a display preference that leaves the projection untouched", () => {
+    const state = stateOf({ messages: [message] });
+    const before = structuredClone(state);
+
+    renderTranscript(state, prefs({ reasoningVisible: false }));
+    renderTranscript(state, prefs({ reasoningVisible: true }));
+
+    // Rendering with either preference mutates nothing the runtime owns.
+    assert.deepEqual(state, before);
+  });
+
+  it("never invents reasoning the provider did not expose", () => {
+    const state = stateOf({
+      messages: [assistantBlocks("m1", [{ type: "reasoning" }])],
+    });
+    assert.match(
+      transcriptString(state),
+      /the provider exposed no reasoning text/,
+    );
+  });
+});
+
+describe("block ordering", () => {
+  it("preserves the canonical sequence of a mixed assistant message", () => {
+    const state = stateOf({
+      messages: [
+        assistantBlocks("m1", [
+          { type: "reasoning", text: "thinking" },
+          { type: "text", text: "first" },
+          toolCallBlock("call-1", "tool-bash", "bash", { command: "ls" }),
+          { type: "text", text: "second" },
+        ]),
+      ],
+    });
+    const rendered = transcriptText(state);
+
+    assert.equal(rendered.length, 4);
+    assert.equal(rendered[0], "thinking");
+    assert.equal(rendered[1], "first");
+    assert.match(rendered[2] ?? "", /Bash/);
+    assert.equal(rendered[3], "second");
+  });
+
+  it("does not merge reasoning across an intervening block", () => {
+    const state = stateOf({
+      messages: [
+        assistantBlocks("m1", [
+          { type: "reasoning", text: "a" },
+          { type: "text", text: "middle" },
+          { type: "reasoning", text: "b" },
+        ]),
+      ],
+    });
+    assert.deepEqual(transcriptText(state), ["a", "middle", "b"]);
+  });
+});
+
+describe("refusal", () => {
+  it("stays distinct from an answer", () => {
+    const state = stateOf({
+      messages: [
+        assistantBlocks("m1", [
+          { type: "refusal", text: "I cannot help with that" },
+        ]),
+      ],
+    });
+    const rendered = transcriptString(state);
+
+    assert.match(rendered, /refusal/);
+    assert.match(rendered, /I cannot help with that/);
+    const block = renderTranscript(state, prefs())[0];
+    assert.equal(block?.kind, "text", "a refusal is not laid out as an answer");
+  });
+});
+
+describe("inbound provenance", () => {
+  it("labels a runtime-originated turn and leaves a human turn unlabelled", () => {
+    const state = stateOf({
+      messages: [
+        userMessage("m1", "a human turn"),
+        runtimeInbound("m2", "a runtime turn"),
+      ],
+    });
+    const [human, runtime] = transcriptText(state);
+
+    assert.equal(human, "▌ a human turn");
+    assert.match(runtime ?? "", /^▌ runtime\n/);
+    assert.match(runtime ?? "", /a runtime turn/);
+  });
+
+  it("marks a compaction summary as one", () => {
+    const state = stateOf({
+      messages: [
+        {
+          role: "user",
+          id: "m1",
+          content: [{ type: "text", text: "summary body" }],
+          source: "runtime",
+          kind: "compaction_summary",
+        },
+      ],
+    });
+    assert.match(transcriptString(state), /compaction summary/);
+  });
+
+  it("marks an unacknowledged local echo as not yet canonical", () => {
+    const state = {
+      ...stateOf(),
+      pendingSubmissions: [{ key: "local-1", text: "just typed" }],
+    };
+    assert.match(
+      transcriptString(state),
+      /awaiting runtime acknowledgement[\s\S]*just typed/,
+    );
+  });
+});
+
+describe("system messages", () => {
+  it("shows the authority that produced them", () => {
+    const state = stateOf({
+      messages: [
+        {
+          role: "system",
+          id: "m1",
+          authority: "platform",
+          content: [{ text: "a platform note" }],
+        },
+      ],
+    });
+    assert.match(plain(transcriptString(state)), /system · platform/);
+    assert.match(transcriptString(state), /a platform note/);
+  });
+});

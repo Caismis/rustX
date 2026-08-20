@@ -1,25 +1,38 @@
 /**
  * The rustX terminal application.
  *
- * This is the **outermost** layer, and the only file that imports Pi. Pi
- * supplies terminal mechanics — a differential renderer, a multiline editor
- * with history and autocomplete, Markdown layout, overlays, a spinner. rustX
- * supplies every semantic: what a message means, which model an attempt is
- * on, what a tool is doing, what is still running in the background.
+ * This is the **outermost** layer. Pi supplies terminal mechanics — a
+ * differential renderer, a multiline editor with history and autocomplete,
+ * Markdown layout, overlays, a spinner. rustX supplies every semantic: what a
+ * message means, which model an attempt is on, what a tool is doing, what is
+ * still running in the background.
  *
  * ```text
- * PresentationProjection -> selectors/renderers -> rustX components
- *                                                        |
- *                                                        v
- *                                                  Pi primitives
+ * PresentationProjection
+ *        |
+ *        +-- correlation/selectors
+ *        |
+ *        +-- rustX semantic components
+ *                  |
+ *                  v
+ *            Pi primitives
  * ```
  *
- * No Pi class holds authoritative rustX state. Pi components here are
- * disposable render targets rebuilt from the projection, so a fresh
+ * No Pi class holds authoritative rustX state. Every component here is a
+ * disposable render target rebuilt wholesale from the projection, so a fresh
  * `RuntimeClientSnapshot` reconstructs the entire UI without consulting
- * anything Pi remembers. Nothing resembling Pi's `AgentSession`,
+ * anything Pi remembers, and component instance continuity is never a
+ * correctness requirement. Nothing resembling Pi's `AgentSession`,
  * `SessionManager`, model runtime, provider registry, tool registry, or
  * `InteractiveMode` exists here or anywhere in this package.
+ *
+ * The one thing the app owns that the projection does not is
+ * {@link PresentationPreferences} — reasoning visibility, and which cards are
+ * expanded in each of the three runtime identity domains (`ToolCallId` for
+ * foreground tool cards, `ToolExecutionId` for background ones, `InteractionId`
+ * for pending approvals). Those are display choices, they are deliberately not
+ * written into runtime state, and losing them on a rebuild costs nothing
+ * semantic: every collapsed band is restored from `PresentationState` alone.
  */
 
 import {
@@ -28,7 +41,6 @@ import {
   Loader,
   Markdown,
   ProcessTerminal,
-  SelectList,
   Spacer,
   Text,
   TUI,
@@ -40,25 +52,40 @@ import { SlashCommandAutocompleteProvider } from "../commands/autocomplete.ts";
 import {
   CommandDispatcher,
   type DebugDiagnostics,
+  type ExpandTarget,
+  type PreferenceChange,
 } from "../commands/dispatcher.ts";
 import {
   withNotice,
   withPendingSubmission,
 } from "../presentation/projection.ts";
-import { workingLabel } from "../presentation/selectors.ts";
+import { correlateTools } from "../presentation/tools.ts";
 import type { PresentationState } from "../presentation/state.ts";
 import type { ChildRuntimeProcess } from "../runtime/child-process.ts";
 import type { RuntimeClientConnection } from "../runtime/connection.ts";
 import type { RuntimeClientSession } from "../runtime/session.ts";
-import type { CatalogModelView } from "../protocol/types.ts";
+import type { CatalogModelView, ToolCallId } from "../protocol/types.ts";
 import {
   renderBackgroundSection,
-  renderEntryBlocks,
-  renderFooter,
-  renderForegroundTool,
   renderInteractionSection,
-} from "./render.ts";
-import { editorTheme, markdownTheme, selectListTheme, style } from "./theme.ts";
+  renderOrphanExecutions,
+} from "./components/activity.ts";
+import { ModelSelector } from "./components/model-selector.ts";
+import { renderFooter, workingStatus } from "./components/status.ts";
+import { renderTranscript } from "./components/transcript.ts";
+import {
+  type PresentationPreferences,
+  defaultPreferences,
+  withAllCollapsed,
+  withExpandedBackgroundExecutions,
+  withExpandedInteractions,
+  withExpandedToolCalls,
+  withReasoningVisible,
+  withToggledBackgroundExecution,
+  withToggledInteraction,
+  withToggledToolCall,
+} from "./preferences.ts";
+import { editorTheme, markdownTheme, style } from "./theme.ts";
 
 export interface RustxTuiAppOptions {
   session: RuntimeClientSession;
@@ -83,6 +110,7 @@ export class RustxTuiApp {
   readonly #editor: Editor;
   readonly #loader: Loader;
 
+  #preferences: PresentationPreferences = defaultPreferences();
   #overlay: OverlayHandle | undefined;
   #quitting = false;
   #exitCode = 0;
@@ -151,11 +179,21 @@ export class RustxTuiApp {
       if (state !== undefined) {
         this.#renderState(state);
       }
-      // Ctrl+C is a cancellation *intent*, routed through the protocol like any
-      // other; it never kills the runtime behind the runtime's back.
       this.#tui.addInputListener((data) => {
+        // Ctrl+C is a cancellation *intent*, routed through the protocol like
+        // any other; it never kills the runtime behind the runtime's back.
         if (matchesKey(data, "ctrl+c")) {
           void this.#onInterrupt();
+          return { consume: true };
+        }
+        // Ctrl+O and Ctrl+T are presentation only. They change what is drawn
+        // and send nothing to the runtime.
+        if (matchesKey(data, "ctrl+o")) {
+          this.#applyPreference({ type: "expand", target: "latest" });
+          return { consume: true };
+        }
+        if (matchesKey(data, "ctrl+t")) {
+          this.#applyPreference({ type: "reasoning" });
           return { consume: true };
         }
         return undefined;
@@ -187,7 +225,10 @@ export class RustxTuiApp {
         this.#note(outcome.level, outcome.text);
         break;
       case "choose_model":
-        this.#showModelChooser(outcome.models, outcome.rows);
+        this.#showModelSelector(outcome.models);
+        break;
+      case "preference":
+        this.#applyPreference(outcome.preference);
         break;
       case "quit":
         await this.quit();
@@ -265,14 +306,25 @@ export class RustxTuiApp {
     this.#finish(this.#exitCode);
   }
 
-  #showModelChooser(
-    models: CatalogModelView[],
-    rows: Array<{ value: string; label: string; description: string }>,
-  ): void {
-    const list = new SelectList(rows, 12, selectListTheme);
-    const handle = this.#tui.showOverlay(list, {
+  /**
+   * Opens the model selector over the editor.
+   *
+   * The overlay owns focus while it is up and hands it straight back to the
+   * editor on select or cancel, so the editor is never left unfocused.
+   */
+  #showModelSelector(models: CatalogModelView[]): void {
+    const state = this.#session.state;
+    if (state === undefined) {
+      return;
+    }
+    const selector = new ModelSelector({
+      models,
+      sessionModel: state.sessionModel,
+      attempt: state.attempt,
+    });
+    const handle = this.#tui.showOverlay(selector, {
       width: "80%",
-      maxHeight: "60%",
+      maxHeight: "70%",
       anchor: "center",
     });
     this.#overlay = handle;
@@ -284,14 +336,11 @@ export class RustxTuiApp {
       this.#tui.requestRender();
     };
 
-    list.onCancel = close;
-    list.onSelect = (item) => {
+    selector.onChange = () => this.#tui.requestRender();
+    selector.onCancel = close;
+    selector.onSelect = (model) => {
       close();
-      const chosen = models.find((model) => model.model === item.value);
-      if (chosen === undefined) {
-        return;
-      }
-      void this.#dispatcher.selectModel(chosen).then((outcome) => {
+      void this.#dispatcher.selectModel(model).then((outcome) => {
         if (outcome.kind === "message") {
           this.#note(outcome.level, outcome.text);
         }
@@ -300,6 +349,91 @@ export class RustxTuiApp {
 
     handle.focus();
     this.#tui.requestRender();
+  }
+
+  /**
+   * Applies one presentation preference and redraws.
+   *
+   * Nothing here touches `PresentationState`, sends a request, or changes what
+   * rustX was asked to do.
+   */
+  #applyPreference(change: PreferenceChange): void {
+    switch (change.type) {
+      case "reasoning":
+        this.#preferences = withReasoningVisible(
+          this.#preferences,
+          change.visible ?? !this.#preferences.reasoningVisible,
+        );
+        break;
+      case "expand_call":
+        this.#preferences = withToggledToolCall(this.#preferences, change.callId);
+        break;
+      case "expand_background":
+        this.#preferences = withToggledBackgroundExecution(
+          this.#preferences,
+          change.executionId,
+        );
+        break;
+      case "expand_interaction":
+        this.#preferences = withToggledInteraction(
+          this.#preferences,
+          change.interactionId,
+        );
+        break;
+      case "expand":
+        this.#preferences = this.#expandTarget(change.target);
+        break;
+      default:
+        break;
+    }
+    const state = this.#session.state;
+    if (state !== undefined) {
+      this.#renderState(state);
+    }
+  }
+
+  /**
+   * The bulk expansion targets.
+   *
+   * `all` and `none` cover *every* identity domain — each renderable tool card
+   * keyed by `ToolCallId`, each renderable background card keyed by
+   * `ToolExecutionId`, and each pending approval keyed by `InteractionId`.
+   * The three sets are kept separate so ids that happen to serialize alike
+   * never cross-toggle.
+   *
+   * `all` names only entities the projection currently renders, so it never
+   * seeds a preference for something already settled.
+   */
+  #expandTarget(target: ExpandTarget): PresentationPreferences {
+    const state = this.#session.state;
+    if (target === "none" || state === undefined) {
+      return withAllCollapsed(this.#preferences);
+    }
+    const calls = [...correlateTools(state).byCallId.keys()];
+    if (target === "all") {
+      const executions = state.background.map(
+        (execution) => execution.execution_id,
+      );
+      const interactions = state.pendingInteractions.map(
+        (interaction) => interaction.id,
+      );
+      return withExpandedInteractions(
+        withExpandedBackgroundExecutions(
+          withExpandedToolCalls(this.#preferences, calls),
+          executions,
+        ),
+        interactions,
+      );
+    }
+    // "latest" is the most recently correlated *tool call*, which is the one a
+    // user pressing ctrl+o is looking at. Correlation order follows the
+    // transcript, never screen position. It deliberately stays scoped to one
+    // domain: "the latest" across three unrelated identity domains would name
+    // whichever entity a tie-break rule picked, not the one on screen.
+    const latest: ToolCallId | undefined = calls[calls.length - 1];
+    return latest === undefined
+      ? this.#preferences
+      : withToggledToolCall(this.#preferences, latest);
   }
 
   #note(level: "info" | "error", text: string): void {
@@ -316,55 +450,41 @@ export class RustxTuiApp {
    * no Pi component carries state the projection does not have.
    */
   #renderState(state: PresentationState): void {
-    this.#transcript.clear();
-    for (const entry of state.transcript) {
-      const blocks = renderEntryBlocks(entry);
-      if (blocks.length === 0) {
-        continue;
-      }
-      for (const block of blocks) {
-        this.#transcript.addChild(
-          new Markdown(
-            block.markdown,
-            1,
-            0,
-            markdownTheme,
-            block.defaultTextStyle,
-          ),
-        );
-        this.#transcript.addChild(new Spacer(1));
-      }
-    }
+    // Correlated once per render and shared: the transcript and the activity
+    // area must agree on which calls have a transcript anchor.
+    const correlation = correlateTools(state);
 
-    for (const pending of state.pendingSubmissions) {
-      // Marked as unacknowledged so it can never read as canonical history.
+    this.#transcript.clear();
+    for (const block of renderTranscript(state, this.#preferences, correlation)) {
       this.#transcript.addChild(
-        new Markdown(
-          `${style.dim("▌ you (awaiting runtime acknowledgement)")}\n${pending.text}`,
-          1,
-          0,
-          markdownTheme,
-        ),
+        block.kind === "markdown"
+          ? new Markdown(
+              block.markdown,
+              1,
+              0,
+              markdownTheme,
+              block.defaultTextStyle,
+            )
+          : new Text(block.text, 1, 0),
       );
       this.#transcript.addChild(new Spacer(1));
     }
 
+    // The activity area holds only what is *not* conversation content. A
+    // foreground tool call renders inside the assistant message that asked
+    // for it, which is what keeps one call to one card.
     this.#activity.clear();
-    for (const execution of state.attempt?.foreground ?? []) {
-      this.#activity.addChild(
-        new Markdown(renderForegroundTool(execution), 1, 0, markdownTheme),
-      );
-    }
-    const background = renderBackgroundSection(state);
-    if (background.length > 0) {
-      this.#activity.addChild(new Text(background, 1, 0));
-    }
-    const interactions = renderInteractionSection(state);
-    if (interactions.length > 0) {
-      this.#activity.addChild(new Text(interactions, 1, 0));
+    for (const section of [
+      renderOrphanExecutions(correlation, this.#preferences),
+      renderBackgroundSection(state, this.#preferences),
+      renderInteractionSection(state, this.#preferences),
+    ]) {
+      if (section.length > 0) {
+        this.#activity.addChild(new Text(section, 1, 0));
+      }
     }
 
-    const working = workingLabel(state);
+    const working = workingStatus(state);
     if (working === undefined) {
       this.#loader.stop();
     } else {
@@ -387,7 +507,13 @@ export class RustxTuiApp {
       );
     }
 
-    this.#footer.setText(renderFooter(state, this.#connectionLabel()));
+    this.#footer.setText(
+      renderFooter(
+        state,
+        this.#connectionLabel(),
+        this.#tui.terminal.columns,
+      ),
+    );
     this.#tui.requestRender();
   }
 
