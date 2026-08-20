@@ -1147,9 +1147,13 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   regions: construction rejects an artifact root that equals the workspace
   root, nests inside it, or contains it — including symlink-resolved
   overlap — so Glob/Grep/Bash cannot surface runtime-private output files.
-  The conversation's managed tool-output root (a child of the artifact
-  root) inherits the same disjointness and is additionally read-only for
-  every native tool.
+  The conversation's managed tool-output root inherits the same
+  disjointness and is additionally read-only for every native tool, and
+  its composition is validated where the runtime composes it: construction
+  rejects a pre-existing symlink at the `tool-output/` root and requires
+  the canonical managed root to be a strict dedicated descendant of the
+  canonical artifact root, disjoint from the canonical workspace root, so
+  no authorized filesystem root can ever alias another.
 - All progress entering runtime state and events passes through one shared
   UTF-8-safe bound (`bound_tool_progress`); the foreground reporter and the
   background registry produce the same normalized value, and an oversized
@@ -1167,9 +1171,13 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
 
 ## Native tools and Bash (M5)
 
-- Native filesystem tools and Bash operate only inside the canonical
-  workspace: relative UTF-8 paths, no absolute paths, no lexical `..`
-  escape, and symlinks resolving only to targets inside the canonical root.
+- Native filesystem tools and Bash operate only inside explicitly
+  authorized filesystem roots: the canonical workspace (read and mutate)
+  and the conversation's managed tool-output root (read-only), with Bash
+  running inside the canonical workspace. Model-facing locators are
+  absolute paths, authority is decided on the canonical target, and a
+  symlink can never resolve authority outside its owning root. The full
+  locator contract follows in the absolute-locators bullet below.
 - The model-facing contracts of the six ordinary native tools follow
   established Pi coding-agent conventions — `read {file_path, offset?,
   limit?}`, `write {file_path, content}`, `edit {file_path,

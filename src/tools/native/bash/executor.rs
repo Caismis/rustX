@@ -428,6 +428,10 @@ async fn run_bash_unix(
         ProcessOutcomeIntent::ProcessControlFailed(message) => Some(message.clone()),
         _ => None,
     };
+    // Whether the capture settled completely: every output byte provably
+    // reached the capture. Only a complete capture may advertise a spill
+    // locator as the complete output.
+    let mut capture_error: Option<String> = None;
     if let Err(error) = *capture {
         // The outcome is already owned (failure or cancellation/
         // timeout): the capture of a terminated process tree is
@@ -448,6 +452,7 @@ async fn run_bash_unix(
         if !outcome_owned {
             return failed_result(format!("bash output capture failed: {error}"));
         }
+        capture_error = Some(error);
     }
 
     let stdout = stdout_capture
@@ -464,7 +469,7 @@ async fn run_bash_unix(
         &mut *combined_capture.lock().expect("combined capture lock"),
         SpillCapture::new(BASH_STREAM_PREVIEW_BYTES),
     )
-    .finish();
+    .finish(capture_error.is_none());
 
     // Outcome precedence: an explicit process-control/runtime failure wins
     // over cancellation/timeout intent, which wins over the natural shell
@@ -506,15 +511,32 @@ async fn run_bash_unix(
         }
     }
 
-    let truncated = stdout.1 || stderr.1 || combined.truncated;
+    // An incomplete capture is partial data, never a complete record: it
+    // always counts as truncated, and the complete byte count is unknown.
+    let truncated = stdout.1 || stderr.1 || combined.truncated || !combined.complete;
     // Textual overflow stays textual: the bounded previews are the
     // canonical record, and the complete combined output — when it crossed
-    // the preview bound — is one managed spill file addressed by its
-    // absolute path inside this ordinary textual result. No `FileReference`
-    // is ever produced for execution output.
+    // the preview bound AND the capture settled completely — is one managed
+    // spill file addressed by its absolute path inside this ordinary
+    // textual result. No `FileReference` is ever produced for execution
+    // output, and a partial spill is never advertised as complete.
     let spill_path = combined
         .spill_path
         .map(|path| path.to_string_lossy().into_owned());
+    let note = if spill_path.is_some() {
+        Some(
+            "Output was truncated for context. The complete output is at the absolute \
+             path in full_output; use Read or Grep if you need the complete output."
+                .to_owned(),
+        )
+    } else {
+        capture_error.as_ref().map(|error| {
+            format!(
+                "The output capture did not complete ({error}); the preview is partial and no \
+                 complete output file is available."
+            )
+        })
+    };
     ToolExecutionResult {
         status,
         content: vec![ToolResultContent::Json {
@@ -524,10 +546,7 @@ async fn run_bash_unix(
                 "stderr": stderr.0,
                 "combined": combined.preview,
                 "full_output": spill_path,
-                "note": spill_path.as_ref().map(|_| {
-                    "Output was truncated for context. The complete output is at the absolute \
-                     path in full_output; use Read or Grep if you need the complete output."
-                }),
+                "note": note,
             }),
         }],
         duration_ms: 0,
@@ -535,7 +554,7 @@ async fn run_bash_unix(
         artifacts: Vec::new(),
         truncation: truncated.then_some(TruncationState {
             truncated: true,
-            original_bytes: Some(combined.total_bytes),
+            original_bytes: combined.complete.then_some(combined.total_bytes),
         }),
     }
 }

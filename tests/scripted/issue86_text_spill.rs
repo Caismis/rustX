@@ -42,8 +42,10 @@ use rustx::tools::types::{
 };
 
 /// A background Bash command whose combined output provably crosses the
-/// 16 KiB preview bound (3000 lines of ~13 bytes).
-const BIG_OUTPUT_COMMAND: &str = "for i in $(seq 1 3000); do echo line-$i; done";
+/// 16 KiB preview bound by two orders of magnitude (300000 lines of ~13
+/// bytes, ~4 MB), so the canonical terminal record staying small proves
+/// the complete output is never duplicated into it.
+const BIG_OUTPUT_COMMAND: &str = "for i in $(seq 1 300000); do echo line-$i; done";
 
 /// One conversation runtime with the native tool plane registered under a
 /// model-selectable policy, so a scripted call can choose background Bash.
@@ -187,10 +189,13 @@ async fn oversized_background_bash_publishes_a_text_only_terminal_inbound() {
     );
     let spilled = std::fs::read_to_string(full_output).expect("spill text");
     assert!(spilled.starts_with("line-1\n"));
-    assert!(spilled.ends_with("line-3000\n"));
+    assert!(spilled.ends_with("line-300000\n"));
 
-    // The terminal inbound message is text-only.
+    // The terminal inbound message is text-only AND carries the exact
+    // absolute spill locator plus the Read/Grep continuation instruction:
+    // the canonical next-turn input lets the model inspect the spill.
     let message = terminal_message(&fixture);
+    let mut saw_locator = false;
     for block in &message.content {
         let UserContentBlock::Text(text) = block else {
             panic!("textual overflow must never publish a non-text block: {block:?}");
@@ -202,7 +207,30 @@ async fn oversized_background_bash_publishes_a_text_only_terminal_inbound() {
             "the compact terminal summary: {}",
             text.text
         );
+        if text.text.contains(full_output) {
+            saw_locator = true;
+            assert!(
+                text.text.contains("Read or Grep"),
+                "the continuation instruction travels with the locator: {}",
+                text.text
+            );
+            // The terminal inbound is canonical conversation state and
+            // must stay bounded against the ~4 MB complete output: only
+            // the bounded projection enters it, never the full text (the
+            // historical Claude Code JSONL-duplication bug is the
+            // negative reference here).
+            assert!(
+                text.text.len() <= rustx::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES + 256,
+                "the canonical inbound is the bounded projection ({} bytes), never the complete {}-byte output",
+                text.text.len(),
+                spilled.len()
+            );
+        }
     }
+    assert!(
+        saw_locator,
+        "the terminal inbound text carries the exact absolute spill path {full_output}"
+    );
 }
 
 /// After the text-only terminal inbound is adopted into the canonical
@@ -220,10 +248,31 @@ async fn oversized_background_bash_publishes_a_text_only_terminal_inbound() {
 async fn adopted_textual_terminal_inbound_reaches_the_provider_for_a_text_only_model() {
     let fixture = fixture();
     let execution_id = dispatch_big_background_bash(&fixture).await;
+    // The exact absolute spill locator of the settled result.
+    let snapshot = fixture
+        .runtime
+        .background()
+        .snapshot(&execution_id)
+        .expect("terminal snapshot");
+    let result = snapshot.result.expect("terminal result");
+    let full_output = result
+        .content
+        .iter()
+        .find_map(|block| match block {
+            rustx::tools::types::ToolResultContent::Json { value } => {
+                value["full_output"].as_str().map(str::to_owned)
+            }
+            _ => None,
+        })
+        .expect("the absolute spill locator");
     let terminal_text = match &terminal_message(&fixture).content[0] {
         UserContentBlock::Text(text) => text.text.clone(),
         other => panic!("text-only terminal inbound: {other:?}"),
     };
+    assert!(
+        terminal_text.contains(&full_output),
+        "the terminal inbound text itself carries the exact spill path"
+    );
 
     let server = common::FixtureServer::start(|_attempt, _head| {
         common::sse_fixture("openai_chat", "plain_text.sse")
@@ -306,10 +355,17 @@ async fn adopted_textual_terminal_inbound_reaches_the_provider_for_a_text_only_m
         "both model turns reached the provider boundary"
     );
     assert!(
-        server
-            .request_body(1)
-            .contains(&terminal_text.replace('\\', "\\\\").replace('"', "\\\"")),
+        server.request_body(1).contains(
+            &terminal_text
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+        ),
         "the second provider request carries the adopted text-only terminal message"
+    );
+    assert!(
+        server.request_body(1).contains(&full_output),
+        "the exact absolute spill path reaches the provider boundary"
     );
     assert!(
         !server.request_body(0).contains(execution_id.as_str()),

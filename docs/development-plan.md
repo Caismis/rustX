@@ -308,9 +308,11 @@ Bash requirements:
   separate capture deadline may force-finalize wedged readers. The outer
   supervisor un-wedges a `SIGSTOP`-frozen inner anchor with `SIGKILL`
 - Explicit spill-capture failures instead of silent success
-- Large-output truncation with durable full-output spill files in the
-  conversation's managed tool-output store (absolute path in ordinary
-  textual output — never a semantic artifact)
+- Large-output truncation with auxiliary managed tool-output spill files
+  in the conversation's managed tool-output store (absolute path in
+  ordinary textual output — never a semantic artifact and never durable
+  output authority; the bounded model-visible text is the canonical
+  replayable record and the spill file may disappear)
 - Explicit execution environment instead of inherited process environment
 
 Exit criteria:

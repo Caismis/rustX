@@ -1277,7 +1277,7 @@ impl ConversationBackgroundRegistry {
             execution_id,
             &state.records[index].tool_name,
             settled,
-            &stored.artifacts,
+            &stored,
             self.resources.clock.now(),
         );
         // The background terminal notification uses the same durable
@@ -1442,7 +1442,7 @@ impl ConversationBackgroundRegistry {
             execution_id,
             &state.records[index].tool_name,
             candidate.settled,
-            &candidate.result.artifacts,
+            &candidate.result,
             self.resources.clock.now(),
         );
         let correlation = format!("background-terminal:{}", execution_id.as_str());
@@ -1781,27 +1781,37 @@ fn accepted_result(execution_id: &ToolExecutionId, tool_name: &str) -> ToolExecu
     }
 }
 
-/// The timestamped compact terminal inbound message of one settlement.
+/// The timestamped terminal inbound message of one settlement.
 ///
-/// The message contains a compact deterministic terminal summary; full
-/// output is never dumped into the inbound message (detailed inspection
-/// remains `background_task(status)`). Artifact references are included
-/// where useful.
+/// The message carries a compact deterministic terminal summary plus a
+/// **bounded** model-visible textual projection of the terminal result
+/// (see [`terminal_result_projection`]): the model receives the bounded
+/// result — including the advisory absolute spill locator and the
+/// Read/Grep continuation instruction when the result spilled — inside
+/// ordinary canonical text. Full oversized output is never dumped into the
+/// inbound message: the bounded canonical text remains replayable even if
+/// the auxiliary spill file later disappears, and detailed inspection
+/// remains `background_task(status)`. Genuine semantic artifact
+/// references publish as their own `UserContentBlock::File` blocks; a
+/// textual result never becomes a File block.
 fn terminal_inbound_message(
     execution_id: &ToolExecutionId,
     tool_name: &str,
     state: BackgroundLifecycle,
-    artifacts: &[crate::message::content::FileReference],
+    result: &ToolExecutionResult,
     timestamp: chrono::DateTime<chrono::Utc>,
 ) -> UserMessageBlock {
-    let mut content = vec![UserContentBlock::Text(TextBlock {
-        text: format!(
-            "Background execution {} ({tool_name}) settled: {}",
-            execution_id.as_str(),
-            state.name()
-        ),
-    })];
-    for artifact in artifacts {
+    let mut text = format!(
+        "Background execution {} ({tool_name}) settled: {}",
+        execution_id.as_str(),
+        state.name()
+    );
+    if let Some(projection) = terminal_result_projection(result) {
+        text.push_str("\n\nResult:\n");
+        text.push_str(&projection);
+    }
+    let mut content = vec![UserContentBlock::Text(TextBlock { text })];
+    for artifact in &result.artifacts {
         content.push(UserContentBlock::File(artifact.clone()));
     }
     UserMessageBlock {
@@ -1811,6 +1821,71 @@ fn terminal_inbound_message(
         kind: InboundKind::Message,
         timestamp: Some(timestamp),
     }
+}
+
+/// The deterministic bounded textual projection of one terminal tool
+/// result for the canonical background terminal inbound message.
+///
+/// Text blocks publish verbatim, JSON blocks publish compactly serialized
+/// (the same model-facing representation a provider adapter produces), and
+/// file/image content blocks publish as a short textual mention — genuine
+/// semantic artifacts publish separately as `UserContentBlock::File`
+/// blocks, so the textual projection stays text-only. The projection of a
+/// spilled result contains the exact absolute `full_output` locator and
+/// the Read/Grep continuation instruction from the bounded result itself.
+///
+/// The projection becomes canonical conversation state, so it is bounded
+/// as one payload to [`MAX_MODEL_TOOL_RESULT_BYTES`](crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES)
+/// with an explicit truncation marker: an unbounded executor result can
+/// never dump unbounded text into canonical inbound history. A `None`
+/// result (no status detail and no content) projects to nothing.
+fn terminal_result_projection(result: &ToolExecutionResult) -> Option<String> {
+    /// The explicit marker appended when the projection crosses its bound.
+    const PROJECTION_TRUNCATED_MARKER: &str = "\n...[terminal result projection truncated]";
+    let mut parts: Vec<String> = Vec::new();
+    match &result.status {
+        ToolExecutionStatus::Failed { error } => parts.push(format!("Error: {error}")),
+        ToolExecutionStatus::Denied { reason } => parts.push(format!("Denied: {reason}")),
+        ToolExecutionStatus::Success
+        | ToolExecutionStatus::Cancelled { .. }
+        | ToolExecutionStatus::TimedOut
+        | ToolExecutionStatus::Interrupted => {}
+    }
+    for block in &result.content {
+        parts.push(match block {
+            ToolResultContent::Text(text) => text.text.clone(),
+            ToolResultContent::Json { value } => serde_json::to_string(value)
+                .unwrap_or_else(|_| "<unserializable JSON result>".to_owned()),
+            ToolResultContent::File(reference) => format!(
+                "[file artifact: {}]",
+                reference
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| reference.artifact_id.as_str().to_owned())
+            ),
+            ToolResultContent::Image(_) => "[image content]".to_owned(),
+        });
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    let bound = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES;
+    let mut projection = String::new();
+    for part in parts {
+        if !projection.is_empty() {
+            projection.push('\n');
+        }
+        if projection.len() + part.len() + PROJECTION_TRUNCATED_MARKER.len() > bound {
+            let budget = bound
+                .saturating_sub(projection.len())
+                .saturating_sub(PROJECTION_TRUNCATED_MARKER.len());
+            projection.push_str(&crate::tools::limits::bound_utf8_text(part, budget));
+            projection.push_str(PROJECTION_TRUNCATED_MARKER);
+            return Some(projection);
+        }
+        projection.push_str(&part);
+    }
+    Some(projection)
 }
 
 fn inbound_draft(notification: UserMessageBlock, correlation: String) -> InboundDraft {

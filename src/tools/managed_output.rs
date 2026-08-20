@@ -22,10 +22,19 @@
 //! # Allocation
 //!
 //! Spill files are allocated lazily, only at the moment a capture crosses
-//! its textual bound, under one monotonic per-conversation sequence
-//! (`output_1.log`, `output_2.log`, ...). Small output never touches the
-//! filesystem. Writes stream through an open file handle, so a large output
-//! is never buffered in memory.
+//! its textual bound, under one monotonic sequence (`output_1.log`,
+//! `output_2.log`, ...). Small output never touches the filesystem. Writes
+//! stream through an open file handle, so a large output is never buffered
+//! in memory.
+//!
+//! The sequence is **restart safe** without being durable semantic state:
+//! construction seeds the process-local high-water mark from the existing
+//! `output_N.log` names in the managed root, and every allocation opens
+//! with `create_new`, advancing past any name that already exists. A
+//! reconstructed runtime over a retained storage root therefore never
+//! fails merely because older spill files exist, and a spill is never
+//! truncated or overwritten. The sequence itself is auxiliary storage
+//! identity, not conversation state; nothing about it is persisted.
 
 use std::fs::File;
 use std::io::Write;
@@ -39,6 +48,11 @@ use crate::runtime::identity::ConversationId;
 pub enum ManagedOutputError {
     /// The managed-output root cannot be created or canonicalized.
     RootUnavailable(String),
+    /// The managed-output root already exists as a symlink. The dedicated
+    /// root must be a real owned directory, never an alias of another
+    /// region (the workspace, the artifact root, or an arbitrary host
+    /// directory), because its canonical path is an authorized read root.
+    SymlinkRoot(String),
     /// The output sequence space is exhausted.
     SequenceExhausted,
     /// A spill file cannot be opened.
@@ -51,6 +65,10 @@ impl core::fmt::Display for ManagedOutputError {
             Self::RootUnavailable(message) => {
                 write!(f, "managed tool-output root unavailable: {message}")
             }
+            Self::SymlinkRoot(message) => write!(
+                f,
+                "the managed tool-output root must be a real directory, not a symlink: {message}"
+            ),
             Self::SequenceExhausted => {
                 write!(f, "the managed tool-output sequence space is exhausted")
             }
@@ -70,6 +88,11 @@ struct ManagedOutputState {
     /// `#[cfg(test)]`.
     #[cfg(test)]
     force_open_failures: bool,
+    /// Test-only seam: when set, spill writes fail after this many bytes,
+    /// so tests can prove a partial spill is never advertised as complete.
+    /// Never set outside `#[cfg(test)]`.
+    #[cfg(test)]
+    fail_writes_after: Option<u64>,
 }
 
 /// The conversation-owned managed tool-output store.
@@ -89,30 +112,47 @@ impl ManagedToolOutput {
     ///
     /// The root directory is created when missing and canonicalized once,
     /// so the locator authority compares every managed-output locator
-    /// against one canonical root.
+    /// against one canonical root. A pre-existing symlink at the root is
+    /// rejected: the dedicated root must be a real owned directory, never
+    /// an alias of another filesystem region, because its canonical target
+    /// becomes an authorized model-readable root.
+    ///
+    /// The allocation sequence is seeded from the existing `output_N.log`
+    /// names in the root, so reconstructing a store over a retained
+    /// storage root continues monotonically instead of colliding with
+    /// older spill files.
     ///
     /// # Errors
     ///
-    /// Returns [`ManagedOutputError::RootUnavailable`] when the root cannot
-    /// be created or canonicalized.
+    /// Returns [`ManagedOutputError::SymlinkRoot`] when the root already
+    /// exists as a symlink and [`ManagedOutputError::RootUnavailable`] when
+    /// the root cannot be created, read, or canonicalized.
     pub fn new(
         conversation_id: ConversationId,
         root: impl AsRef<Path>,
     ) -> Result<Self, ManagedOutputError> {
         let root = root.as_ref();
+        if let Ok(metadata) = std::fs::symlink_metadata(root)
+            && metadata.file_type().is_symlink()
+        {
+            return Err(ManagedOutputError::SymlinkRoot(root.display().to_string()));
+        }
         std::fs::create_dir_all(root).map_err(|error| {
             ManagedOutputError::RootUnavailable(format!("{}: {error}", root.display()))
         })?;
         let canonical = std::fs::canonicalize(root).map_err(|error| {
             ManagedOutputError::RootUnavailable(format!("{}: {error}", root.display()))
         })?;
+        let next = spill_high_water(&canonical)?;
         Ok(Self {
             conversation_id,
             root: canonical,
             state: Arc::new(Mutex::new(ManagedOutputState {
-                next: 0,
+                next,
                 #[cfg(test)]
                 force_open_failures: false,
+                #[cfg(test)]
+                fail_writes_after: None,
             })),
         })
     }
@@ -126,6 +166,18 @@ impl ManagedToolOutput {
             .lock()
             .expect("managed tool-output lock poisoned")
             .force_open_failures = enabled;
+    }
+
+    /// Test-only seam: spill writes fail after `bytes` successfully written
+    /// bytes, so tests can fail a spill *after* allocation and prove a
+    /// partial spill is never advertised as complete. Only available under
+    /// `#[cfg(test)]`.
+    #[cfg(test)]
+    pub(crate) fn fail_spill_writes_after(&self, bytes: u64) {
+        self.state
+            .lock()
+            .expect("managed tool-output lock poisoned")
+            .fail_writes_after = Some(bytes);
     }
 
     /// Test-only seam: exhausts the output sequence so the next allocation
@@ -156,50 +208,100 @@ impl ManagedToolOutput {
 
     /// Allocates and opens one spill file for streaming complete output.
     ///
-    /// Allocation is collision-safe by construction: names come from one
-    /// monotonic per-conversation sequence and the file is opened with
-    /// `create_new`, so two stores sharing a root can never silently
-    /// truncate each other's spill.
+    /// Allocation never overwrites an existing spill: the file is opened
+    /// with `create_new`, and when the name already exists — stale spill of
+    /// an earlier runtime lifetime over this retained root, or a second
+    /// store momentarily sharing the root — the sequence advances to the
+    /// next name instead of failing or truncating. The high-water seeding
+    /// at construction makes the common restart case collision-free.
     ///
     /// # Errors
     ///
     /// Returns [`ManagedOutputError::SequenceExhausted`] when the sequence
     /// space is exhausted and [`ManagedOutputError::OpenFailed`] when the
-    /// file cannot be opened.
+    /// file cannot be opened for any reason other than a name collision.
     ///
     /// # Panics
     ///
     /// Panics only if the allocation lock is poisoned, which would mean a
     /// previous operation panicked while holding the lock.
     pub fn open_spill(&self) -> Result<ToolOutputSpill, ManagedOutputError> {
-        let sequence = {
-            let mut state = self
-                .state
-                .lock()
-                .expect("managed tool-output allocation lock poisoned");
-            let next = state
-                .next
-                .checked_add(1)
-                .ok_or(ManagedOutputError::SequenceExhausted)?;
-            #[cfg(test)]
-            if state.force_open_failures {
-                return Err(ManagedOutputError::OpenFailed(
-                    "test-forced spill open failure".to_owned(),
-                ));
+        #[cfg(test)]
+        let fail_writes_after = self
+            .state
+            .lock()
+            .expect("managed tool-output allocation lock poisoned")
+            .fail_writes_after;
+        loop {
+            let sequence = {
+                let mut state = self
+                    .state
+                    .lock()
+                    .expect("managed tool-output allocation lock poisoned");
+                let next = state
+                    .next
+                    .checked_add(1)
+                    .ok_or(ManagedOutputError::SequenceExhausted)?;
+                #[cfg(test)]
+                if state.force_open_failures {
+                    return Err(ManagedOutputError::OpenFailed(
+                        "test-forced spill open failure".to_owned(),
+                    ));
+                }
+                state.next = next;
+                next
+            };
+            let path = self.root.join(format!("output_{sequence}.log"));
+            match File::options().create_new(true).write(true).open(&path) {
+                Ok(file) => {
+                    return Ok(ToolOutputSpill {
+                        file,
+                        path,
+                        #[cfg(test)]
+                        fail_writes_after,
+                    });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    // The name is already owned by an older spill: the loop
+                    // advances past it and never overwrites it.
+                }
+                Err(error) => {
+                    return Err(ManagedOutputError::OpenFailed(format!(
+                        "{}: {error}",
+                        path.display()
+                    )));
+                }
             }
-            state.next = next;
-            next
-        };
-        let path = self.root.join(format!("output_{sequence}.log"));
-        let file = File::options()
-            .create_new(true)
-            .write(true)
-            .open(&path)
-            .map_err(|error| {
-                ManagedOutputError::OpenFailed(format!("{}: {error}", path.display()))
-            })?;
-        Ok(ToolOutputSpill { file, path })
+        }
     }
+}
+
+/// The high-water mark of the existing `output_N.log` spill names in one
+/// canonical managed root, so a reconstructed store continues the sequence
+/// monotonically instead of colliding with spills of an earlier runtime
+/// lifetime.
+fn spill_high_water(root: &Path) -> Result<u64, ManagedOutputError> {
+    let mut high = 0u64;
+    let entries = std::fs::read_dir(root).map_err(|error| {
+        ManagedOutputError::RootUnavailable(format!("{}: {error}", root.display()))
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            ManagedOutputError::RootUnavailable(format!("{}: {error}", root.display()))
+        })?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some(number) = name
+            .strip_prefix("output_")
+            .and_then(|rest| rest.strip_suffix(".log"))
+        else {
+            continue;
+        };
+        if let Ok(number) = number.parse::<u64>() {
+            high = high.max(number);
+        }
+    }
+    Ok(high)
 }
 
 /// One open spill file: the complete output of one textual capture streams
@@ -208,6 +310,10 @@ impl ManagedToolOutput {
 pub struct ToolOutputSpill {
     file: File,
     path: PathBuf,
+    /// Test-only write-failure allowance: once exhausted, every further
+    /// write fails. Never set outside `#[cfg(test)]`.
+    #[cfg(test)]
+    fail_writes_after: Option<u64>,
 }
 
 impl ToolOutputSpill {
@@ -224,6 +330,14 @@ impl ToolOutputSpill {
     /// Returns the underlying I/O error; a failed spill write is an explicit
     /// capture failure, never silently lost output.
     pub fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        #[cfg(test)]
+        if let Some(remaining) = &mut self.fail_writes_after {
+            let len = bytes.len() as u64;
+            if len > *remaining {
+                return Err(std::io::Error::other("test-forced spill write failure"));
+            }
+            *remaining -= len;
+        }
         self.file.write_all(bytes)
     }
 }
@@ -282,5 +396,108 @@ mod tests {
         drop(spill);
         let bytes = std::fs::read(store.root().join("output_1.log")).expect("read");
         assert_eq!(bytes, b"hello\n\xff\x00x");
+    }
+
+    /// Restart safety: reconstructing a store over a retained managed root
+    /// never collides with or overwrites the spills of the earlier runtime
+    /// lifetime; the new allocation succeeds with a distinct path and its
+    /// own complete bytes.
+    #[test]
+    fn reconstruction_over_a_retained_root_never_collides_or_overwrites() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path().join("tool-output");
+        let first_store =
+            ManagedToolOutput::new(ConversationId::new("conv-1"), &root).expect("first store");
+        let mut first = first_store.open_spill().expect("first spill");
+        first.write_all(b"first complete bytes").expect("write");
+        let first_path = first.path().to_path_buf();
+        drop(first);
+        drop(first_store);
+
+        // A fresh store over the SAME directory: the in-memory sequence
+        // restarts, but allocation must not fail or overwrite the old file.
+        let second_store =
+            ManagedToolOutput::new(ConversationId::new("conv-1"), &root).expect("second store");
+        let mut second = second_store.open_spill().expect("second spill");
+        second.write_all(b"second complete bytes").expect("write");
+        let second_path = second.path().to_path_buf();
+        drop(second);
+
+        assert_ne!(first_path, second_path, "spill paths are distinct");
+        assert_eq!(
+            std::fs::read(&first_path).expect("first spill"),
+            b"first complete bytes",
+            "the old spill was not overwritten"
+        );
+        assert_eq!(
+            std::fs::read(&second_path).expect("second spill"),
+            b"second complete bytes",
+            "the new spill holds its own complete bytes"
+        );
+    }
+
+    /// Two stores momentarily sharing one root can never truncate each
+    /// other's spill: a name collision advances the sequence instead.
+    #[test]
+    fn concurrent_stores_sharing_one_root_never_overwrite() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path().join("tool-output");
+        let first =
+            ManagedToolOutput::new(ConversationId::new("conv-1"), &root).expect("first store");
+        let second =
+            ManagedToolOutput::new(ConversationId::new("conv-1"), &root).expect("second store");
+        let mut a = first.open_spill().expect("spill a");
+        a.write_all(b"a").expect("write a");
+        // `second` was constructed before `output_1.log` existed, so its
+        // high-water mark is stale; the collision must advance, never
+        // truncate.
+        let mut b = second.open_spill().expect("spill b");
+        b.write_all(b"b").expect("write b");
+        assert_ne!(a.path(), b.path());
+        assert_eq!(std::fs::read(a.path()).expect("read a"), b"a");
+        assert_eq!(std::fs::read(b.path()).expect("read b"), b"b");
+    }
+
+    /// A pre-existing symlink at the managed-output root is rejected: the
+    /// dedicated root must be a real owned directory, never an alias of
+    /// another filesystem region.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_root_is_rejected() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().expect("temp dir");
+        let target = dir.path().join("target");
+        std::fs::create_dir_all(&target).expect("target");
+        let link = dir.path().join("tool-output");
+        symlink(&target, &link).expect("symlink");
+        let error = ManagedToolOutput::new(ConversationId::new("conv-1"), &link)
+            .expect_err("a symlinked managed root is rejected");
+        assert!(
+            matches!(error, ManagedOutputError::SymlinkRoot(_)),
+            "got {error:?}"
+        );
+    }
+
+    /// The test-only write-failure seam fails writes after the allowance
+    /// without failing the open itself.
+    #[test]
+    fn the_write_failure_seam_fails_writes_after_allocation() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = ManagedToolOutput::new(
+            ConversationId::new("conv-1"),
+            dir.path().join("tool-output"),
+        )
+        .expect("store");
+        store.fail_spill_writes_after(4);
+        let mut spill = store.open_spill().expect("the open itself succeeds");
+        spill.write_all(b"abcd").expect("within the allowance");
+        assert!(
+            spill.write_all(b"e").is_err(),
+            "a write past the allowance fails"
+        );
+        assert!(
+            spill.write_all(b"f").is_err(),
+            "every later write keeps failing"
+        );
     }
 }

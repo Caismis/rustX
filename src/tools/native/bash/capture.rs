@@ -205,8 +205,13 @@ pub(super) struct CapturedOutput {
     pub truncated: bool,
     /// The complete output size in bytes.
     pub total_bytes: u64,
-    /// The absolute managed spill locator, when the output crossed the
-    /// bound.
+    /// Whether the capture settled completely: every observed byte was
+    /// captured and a present spill holds the complete output. An
+    /// incomplete capture (a failed stream read, a failed spill write, a
+    /// force-finalized reader) never advertises a spill locator.
+    pub complete: bool,
+    /// The absolute managed spill locator, present only when the capture
+    /// is complete and the output crossed the bound.
     pub spill_path: Option<PathBuf>,
 }
 
@@ -237,13 +242,19 @@ impl SpillCapture {
         let complete = self.complete.as_mut().expect("prefix retained pre-spill");
         complete.extend_from_slice(bytes);
         if self.preview.total > self.preview.limit as u64 {
-            let mut spill = store
+            let spill = store
                 .open_spill()
                 .map_err(|error| format!("cannot allocate the combined output spill: {error}"))?;
-            spill
-                .write_all(complete)
-                .map_err(|error| format!("cannot write the combined output spill: {error}"))?;
+            // The capture retains the spill handle before the prefix write:
+            // a failed prefix write leaves a partial file, and the settled
+            // capture must own it so it is never advertised as complete.
             self.spill = Some(spill);
+            let prefix = std::mem::take(complete);
+            self.spill
+                .as_mut()
+                .expect("spill retained")
+                .write_all(&prefix)
+                .map_err(|error| format!("cannot write the combined output spill: {error}"))?;
             self.complete = None;
         }
         Ok(())
@@ -251,15 +262,37 @@ impl SpillCapture {
 
     /// The settled capture: bounded preview, truncation state, complete
     /// byte count, and the absolute spill locator when one exists.
-    pub(super) fn finish(self) -> CapturedOutput {
+    ///
+    /// `complete` is the executor's settlement fact — whether every output
+    /// byte provably reached the capture (all readers and the combined
+    /// multiplex drained without error). A locator is published only for a
+    /// complete capture: an incomplete capture discards the partial spill
+    /// (best-effort removal of the file) and never advertises it as the
+    /// complete output.
+    pub(super) fn finish(self, complete: bool) -> CapturedOutput {
         let Self { preview, spill, .. } = self;
         let total_bytes = preview.total;
         let (preview, truncated) = preview.finish();
+        let spill_path = match (complete, spill) {
+            (true, Some(spill)) => Some(spill.path().to_path_buf()),
+            (false, Some(spill)) => {
+                // A partial spill is auxiliary residue, never an advertised
+                // complete result: drop the handle and remove the file
+                // best-effort. The bounded preview remains the canonical
+                // record either way.
+                let path = spill.path().to_path_buf();
+                drop(spill);
+                let _ = std::fs::remove_file(&path);
+                None
+            }
+            (_, None) => None,
+        };
         CapturedOutput {
             preview,
             truncated,
             total_bytes,
-            spill_path: spill.map(|spill| spill.path().to_path_buf()),
+            complete,
+            spill_path,
         }
     }
 }
@@ -377,7 +410,7 @@ mod tests {
         let mut capture = SpillCapture::new(16);
         capture.push(b"first\n", &store()).expect("push");
         capture.push(b"second\n", &store()).expect("push");
-        let settled = capture.finish();
+        let settled = capture.finish(true);
         assert_eq!(settled.preview, "first\nsecond\n");
         assert!(!settled.truncated);
         assert_eq!(settled.total_bytes, 13);
@@ -391,7 +424,7 @@ mod tests {
         let mut capture = SpillCapture::new(64);
         let exact: Vec<u8> = (0u8..64).collect();
         capture.push(&exact, &store()).expect("push");
-        let settled = capture.finish();
+        let settled = capture.finish(true);
         assert_eq!(settled.preview.as_bytes(), exact.as_slice());
         assert!(!settled.truncated);
         assert!(settled.spill_path.is_none());
@@ -412,7 +445,7 @@ mod tests {
             "the crossing allocated the spill"
         );
         capture.push(b"-after", &store()).expect("push after spill");
-        let settled = capture.finish();
+        let settled = capture.finish(true);
         assert!(settled.truncated);
         assert_eq!(settled.total_bytes, 71);
         let spill = settled.spill_path.expect("the spill locator");
@@ -441,5 +474,31 @@ mod tests {
         assert!(settled.preview.starts_with("aaaa"));
         assert!(settled.preview.ends_with("cross-after"));
         assert!(settled.preview.len() <= 64);
+    }
+
+    /// An incomplete capture never advertises its partial spill as the
+    /// complete output: the locator is discarded and the partial file is
+    /// removed best-effort, while the bounded preview remains the
+    /// canonical record.
+    #[test]
+    fn an_incomplete_capture_never_advertises_a_partial_spill() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path().join("tool-output");
+        let store =
+            ManagedToolOutput::new(ConversationId::new("conv"), &root).expect("managed store");
+        let mut capture = SpillCapture::new(16);
+        capture.push(&[b'x'; 32], &store).expect("crossing push");
+        let partial = root.join("output_1.log");
+        assert!(partial.exists(), "the spill was allocated");
+        // The capture settles incompletely (a reader failed after the
+        // spill was allocated): no locator is published and the partial
+        // file is removed.
+        let settled = capture.finish(false);
+        assert!(!settled.complete);
+        assert!(settled.spill_path.is_none());
+        assert!(
+            !partial.exists(),
+            "the partial spill was removed best-effort"
+        );
     }
 }

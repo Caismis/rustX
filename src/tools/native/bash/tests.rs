@@ -307,6 +307,117 @@ async fn spill_allocation_failure_fails_the_invocation_explicitly() {
     );
 }
 
+/// A spill WRITE failure after the spill was already allocated (the
+/// deterministic `fail_spill_writes_after` seam, not an open failure) is
+/// represented explicitly: a successful process can never become a lossy
+/// success, and no `full_output` locator is advertised.
+#[tokio::test]
+async fn spill_write_failure_after_allocation_fails_the_invocation_explicitly() {
+    let (_dir, artifacts, tool_output, workspace) = fixture();
+    tool_output.fail_spill_writes_after(0);
+    let result = run_with(
+        "yes x | head -c 40000",
+        &artifacts,
+        &tool_output,
+        &workspace,
+    )
+    .await;
+    let ToolExecutionStatus::Failed { error } = &result.status else {
+        panic!(
+            "a post-allocation spill write failure must be an explicit failed result, got {:?}",
+            result.status
+        );
+    };
+    assert!(
+        error.contains("output capture"),
+        "the failure names the capture: {error}"
+    );
+    for block in &result.content {
+        let text = format!("{block:?}");
+        assert!(
+            !text.contains("full_output"),
+            "no complete-output locator is advertised: {text}"
+        );
+    }
+}
+
+/// Cancellation owns the terminal outcome even when the capture later
+/// fails: the semantic terminal winner stays `Cancelled`, the bounded
+/// diagnostic is retained, and the partial spill is never advertised as
+/// complete — no `full_output` locator and no "complete output" claim.
+#[cfg(unix)]
+#[tokio::test]
+async fn cancellation_owns_the_outcome_and_a_failed_spill_is_never_advertised() {
+    let (_dir, artifacts, tool_output, workspace) = fixture();
+    // The spill opens at the crossing and its very first (prefix) write
+    // fails: the partial file exists while the process keeps running.
+    tool_output.fail_spill_writes_after(0);
+    let cancellation = CancellationSignal::new();
+    let task = tokio::spawn(run_with_control(
+        "yes x".to_owned(),
+        BashTestControl::new(),
+        cancellation.clone(),
+        artifacts.clone(),
+        tool_output.clone(),
+        workspace.clone(),
+        None,
+    ));
+    // Wait until the spill provably opened (and its write provably
+    // failed), then cancel: cancellation owns settlement.
+    let partial = tool_output.root().join("output_1.log");
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while !partial.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the spill was never allocated"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    cancellation.cancel();
+    let result = tokio::time::timeout(Duration::from_secs(30), task)
+        .await
+        .expect("the invocation settles")
+        .expect("executor task");
+    assert!(
+        matches!(result.status, ToolExecutionStatus::Cancelled { .. }),
+        "cancellation remains the semantic terminal winner, got {:?}",
+        result.status
+    );
+    let content = result
+        .content
+        .iter()
+        .find_map(|block| match block {
+            crate::tools::types::ToolResultContent::Json { value } => Some(value.clone()),
+            _ => None,
+        })
+        .expect("json content");
+    assert!(
+        content["full_output"].is_null(),
+        "a partial spill is never advertised as complete: {content}"
+    );
+    let note = content["note"].as_str().expect("partial-capture note");
+    assert!(
+        note.contains("did not complete"),
+        "the bounded capture diagnostic is retained: {note}"
+    );
+    assert!(
+        !note.contains("complete output is at"),
+        "no complete-retention claim survives a failed spill: {note}"
+    );
+    assert!(
+        !partial.exists(),
+        "the partial spill file was removed best-effort"
+    );
+    let truncation = result
+        .truncation
+        .expect("an incomplete capture is truncated");
+    assert!(truncation.truncated);
+    assert_eq!(
+        truncation.original_bytes, None,
+        "the complete byte count is unknown for a partial capture"
+    );
+}
+
 /// Small output never touches the managed tool-output store: the lazy
 /// spill is not merely absent from the result, no file exists.
 #[tokio::test]
