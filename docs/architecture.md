@@ -488,11 +488,16 @@ tools/workspace.rs         Workspace: the canonical runtime-owned workspace
 tools/locator.rs           the one locator-authority boundary of the native
                            filesystem tools: absolute locators, two authorized
                            roots (workspace read/mutate, managed tool-output
-                           read-only), canonical-target authority, no symlink
-                           escape
+                           read-only), lexical owning-root determination
+                           before canonicalization, same-root canonical-target
+                           authority, no symlink escape and no cross-root
+                           authority transfer
 tools/managed_output.rs    ManagedToolOutput: the conversation-owned managed
-                           tool-output store (lazy textual spill files,
-                           monotonic `output_N.log` sequence, `create_new`)
+                           tool-output store: lazy foreground result spills
+                           (`results/result_N.txt`, monotonic sequence,
+                           `create_new`) and the dispatch-allocated
+                           background live-output channel
+                           (`tasks/exec_N.output`)
 tools/artifacts.rs         ArtifactStore: conversation-owned opaque monotonic
                            artifact ids with streaming spooling (genuine
                            semantic artifacts only — never textual overflow)
@@ -1371,9 +1376,12 @@ identity and its execution records are stable and can never be replaced
 or reset by a configuration change. The runtime owns the canonical
 `Workspace` boundary (canonicalized root), the `ArtifactStore` (opaque
 monotonic `artifact_N` ids, streaming spooling of genuine semantic
-artifacts), and the `ManagedToolOutput` store (`tool-output/output_N.log`
-spill files of oversized textual tool output — auxiliary runtime-owned
-storage addressed by absolute path, never a semantic artifact). The
+artifacts), and the `ManagedToolOutput` store (auxiliary runtime-owned
+textual output storage addressed by absolute path, never a semantic
+artifact: `tool-output/results/result_N.txt` lazy spill files of oversized
+foreground textual tool output, and `tool-output/tasks/exec_N.output`
+live-output files allocated at the background dispatch commit point and
+reused by the terminal settlement message). The
 artifact root and the workspace root must be disjoint filesystem regions:
 equal roots, nested roots, and symlink-resolved overlap are rejected at
 construction, so runtime-private output files are never observable through
@@ -1459,10 +1467,13 @@ Read/Write/Edit must be absolute, and Glob/Grep's optional `path` is
 absolute when supplied (omitted means the workspace root). One
 locator-authority boundary (`tools/locator.rs`) admits exactly two roots —
 the workspace (read and mutate) and the conversation's managed tool-output
-root (read-only) — canonicalizes the existing target (Read) or the deepest
-existing ancestor (Mutate), and rejects every other location, including
-runtime-private regions. A symlink can therefore never escape an
-authorized root, and path shape never decides authority.
+root (read-only) — determines the locator's lexical owning root BEFORE any
+symlink traversal, canonicalizes the existing target (Read) or the deepest
+existing ancestor (Mutate), requires the canonical target to remain inside
+that same owning root, and rejects every other location, including
+runtime-private regions. A symlink can therefore neither escape its owning
+root nor transfer authority between the two roots, and path shape never
+decides authority.
 
 Adopting those conventions is a *schema* decision only. It does not import
 Pi's runtime, subprocess model, permission system, ignore behavior, result
@@ -1580,11 +1591,16 @@ is settled — shell-parent exit is not by itself the Bash settlement
 boundary, so a descendant that remains in the owned group after the shell
 exits (holding the pipes or having redirected them away) can never escape
 the timeout/cancellation contract. The child runs with an explicit
-`env_clear()`-based environment, bounded head/tail previews per stream,
-a lazy complete spill of the combined output into the conversation's
-managed tool-output store once the preview bound is crossed (the absolute
-spill path is published inside ordinary textual output as `full_output`;
-the result's `artifacts` stay empty — text overflow is not an artifact),
+`env_clear()`-based environment, per-stream incremental UTF-8 decoding
+before multiplexing (every advertised output path holds valid text for
+Read/Grep), bounded head/tail previews per stream, and mode-dependent
+output storage in the conversation's managed tool-output store: foreground
+output spills lazily into `results/result_N.txt` only once the preview
+bound is crossed, while a background execution streams into its
+dispatch-allocated live-output file `tasks/exec_N.output` from the first
+byte on (the absolute path is published inside ordinary textual output as
+`full_output`/`output_path`; the result's `artifacts` stay empty — text
+overflow is not an artifact),
 `TERM -> BASH_TERM_GRACE -> KILL` cancellation driven by the supervisor,
 typed result semantics (zero exit success, non-zero exit failed with the
 code preserved, timeout as `TimedOut`, cancellation as `Cancelled`),

@@ -1198,12 +1198,16 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   and mutate) and the conversation's managed tool-output root (read-only —
   the model reads spilled tool output but can never mutate runtime-owned
   storage). Every other absolute location — including runtime-private
-  regions such as the durable store — is rejected. Authority is enforced
-  against the *canonical* target (Read canonicalizes the existing file;
-  Mutate canonicalizes the deepest existing ancestor), so a symlink can
-  never escape an authorized root, and path shape never decides authority.
-  An invalid locator is a normal failed result, never an agent-loop
-  failure.
+  regions such as the durable store — is rejected. The locator's **owning
+  root** is determined lexically (after `.`/`..` normalization) BEFORE any
+  symlink traversal, and the canonicalized target must remain inside that
+  same owning root (Read canonicalizes the existing file; Mutate
+  canonicalizes the deepest existing ancestor): a symlink can never escape
+  its owning root and can never transfer authority between the two roots —
+  `managed-output/link -> workspace` and `workspace/link ->
+  managed-output` are both rejected even though both targets are otherwise
+  authorized. Path shape never decides authority. An invalid locator is a
+  normal failed result, never an agent-loop failure.
 - **One Edit invocation is one atomic transformation from one original file
   snapshot to one final file snapshot.** Every `oldText` is resolved against
   that same original snapshot — never against the result of an earlier edit
@@ -1270,16 +1274,36 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   native tool directory look uniform.
 - Model-facing output is bounded by named limits. Text overflow is not an
   artifact (Issue #86): Bash output is *text*, and the bounded head/tail
-  preview is the canonical replayable record. Only when the combined output
-  crosses its preview bound does the capture lazily allocate one file in
-  the conversation's managed tool-output store (`tool-output/output_N.log`,
+  preview is the canonical replayable record. The managed tool-output
+  store owns two deliberately distinct lifecycles over one authorized
+  read-only root. Foreground output is context-overflow storage: only
+  when the combined text crosses its preview bound does the capture
+  lazily allocate one result spill (`tool-output/results/result_N.txt`,
   monotonic per-conversation sequence, `create_new`), write the retained
-  complete prefix, and stream every subsequent byte into it; the absolute
-  spill path appears inside the ordinary textual output (`full_output`),
-  never as a `FileReference`, never as a semantic artifact, and never as a
-  model `File` modality. Output at or below the bound creates no file at
-  all; a spill allocation or write failure is an explicit invocation
-  failure, never silently lost output. Genuine semantic artifacts
+  complete prefix, and stream every subsequent fragment into it; the
+  absolute spill path appears inside the ordinary textual output
+  (`full_output`), never as a `FileReference`, never as a semantic
+  artifact, and never as a model `File` modality. **Foreground** output
+  at or below the bound creates no file at all; a spill allocation or
+  write failure is an explicit invocation failure, never silently lost
+  output. A **background** execution instead owns a live-output channel
+  from the dispatch commit point on (`tool-output/tasks/exec_N.output`):
+  the file is allocated before the accepted result advertises its
+  absolute path (`output_path`) with Read/Grep continuation guidance,
+  decoded output is appended from the first byte on so the model can
+  Read/Grep it while the execution runs, and the settlement notification
+  reuses the exact same path when it already represents the complete
+  textual output — no second file is created for the same payload. A
+  distinct settled-result spill is legitimate only when the final logical
+  result is a different oversized payload than the live execution output.
+  An output-storage failure of an already-advertised background path
+  settles the execution as an explicit failure that names the file as
+  partial output — never as a false "complete output" claim. Every
+  advertised path holds valid UTF-8 text: each byte stream is decoded
+  with its own incremental UTF-8 decoder (invalid sequences become
+  U+FFFD) before fragments are multiplexed, so a sequence split across
+  read boundaries can never be corrupted by interleaving and Read/Grep
+  always work on advertised paths. Genuine semantic artifacts
   (real files a tool produces for the user) keep the existing
   `ArtifactStore`/`FileReference` publication path.
 - Bash owns a distinct process group per invocation inside a dedicated

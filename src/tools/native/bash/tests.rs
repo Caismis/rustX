@@ -308,13 +308,13 @@ async fn spill_allocation_failure_fails_the_invocation_explicitly() {
 }
 
 /// A spill WRITE failure after the spill was already allocated (the
-/// deterministic `fail_spill_writes_after` seam, not an open failure) is
+/// deterministic `fail_writes_after` seam, not an open failure) is
 /// represented explicitly: a successful process can never become a lossy
 /// success, and no `full_output` locator is advertised.
 #[tokio::test]
 async fn spill_write_failure_after_allocation_fails_the_invocation_explicitly() {
     let (_dir, artifacts, tool_output, workspace) = fixture();
-    tool_output.fail_spill_writes_after(0);
+    tool_output.fail_writes_after(0);
     let result = run_with(
         "yes x | head -c 40000",
         &artifacts,
@@ -339,6 +339,16 @@ async fn spill_write_failure_after_allocation_fails_the_invocation_explicitly() 
             "no complete-output locator is advertised: {text}"
         );
     }
+    // The incomplete spill reached exactly one terminal storage state: the
+    // failed invocation settled AFTER the capture cleanup, so no partial
+    // file survives in the managed store.
+    assert!(
+        std::fs::read_dir(tool_output.root().join("results"))
+            .expect("results dir")
+            .next()
+            .is_none(),
+        "a failed foreground spill leaves no partial file behind"
+    );
 }
 
 /// Cancellation owns the terminal outcome even when the capture later
@@ -351,11 +361,13 @@ async fn cancellation_owns_the_outcome_and_a_failed_spill_is_never_advertised() 
     let (_dir, artifacts, tool_output, workspace) = fixture();
     // The spill opens at the crossing and its very first (prefix) write
     // fails: the partial file exists while the process keeps running.
-    tool_output.fail_spill_writes_after(0);
+    tool_output.fail_writes_after(0);
     let cancellation = CancellationSignal::new();
+    let control = BashTestControl::new();
+    let mut spill_started = control.spill_started_watcher();
     let task = tokio::spawn(run_with_control(
         "yes x".to_owned(),
-        BashTestControl::new(),
+        control,
         cancellation.clone(),
         artifacts.clone(),
         tool_output.clone(),
@@ -363,16 +375,17 @@ async fn cancellation_owns_the_outcome_and_a_failed_spill_is_never_advertised() 
         None,
     ));
     // Wait until the spill provably opened (and its write provably
-    // failed), then cancel: cancellation owns settlement.
-    let partial = tool_output.root().join("output_1.log");
-    let deadline = std::time::Instant::now() + Duration::from_secs(15);
-    while !partial.exists() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the spill was never allocated"
-        );
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    // failed) at the exact overflow transition, then cancel: cancellation
+    // owns settlement. No filesystem polling, no timing assumption.
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        spill_started.wait_for(|started| *started),
+    )
+    .await
+    .expect("the spill transition happens (liveness guard)")
+    .expect("the spill watch stays open");
+    let partial = tool_output.root().join("results/result_1.txt");
+    assert!(partial.exists(), "the spill was allocated at the crossing");
     cancellation.cancel();
     let result = tokio::time::timeout(Duration::from_secs(30), task)
         .await
@@ -428,11 +441,18 @@ async fn small_output_creates_no_spill_file() {
     assert!(result.artifacts.is_empty(), "no semantic artifact exists");
     assert!(result.truncation.is_none(), "small output is not truncated");
     assert!(
-        std::fs::read_dir(tool_output.root())
-            .expect("managed root")
+        std::fs::read_dir(tool_output.root().join("results"))
+            .expect("managed results root")
             .next()
             .is_none(),
-        "small output creates no spill file"
+        "small foreground output creates no result spill"
+    );
+    assert!(
+        std::fs::read_dir(tool_output.root().join("tasks"))
+            .expect("managed tasks root")
+            .next()
+            .is_none(),
+        "a foreground execution owns no background live-output file"
     );
 }
 
@@ -492,8 +512,8 @@ async fn large_output_spills_lazily_with_an_absolute_locator() {
         "the complete output is retained verbatim from byte zero"
     );
     assert_eq!(
-        std::fs::read_dir(tool_output.root())
-            .expect("managed root")
+        std::fs::read_dir(tool_output.root().join("results"))
+            .expect("managed results root")
             .count(),
         1,
         "exactly one spill file exists"

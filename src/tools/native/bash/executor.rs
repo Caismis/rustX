@@ -11,8 +11,8 @@ use futures_util::future::BoxFuture;
 #[cfg(test)]
 use super::capture::CaptureHold;
 use super::capture::{
-    BashProcessControlError, CapturePark, PreviewCapture, SpillCapture, await_drain,
-    capture_stream, consume_combined,
+    AppendWatch, BackgroundOutputCapture, BashProcessControlError, CapturePark, PreviewCapture,
+    SpillCapture, await_drain, capture_stream, consume_background, consume_combined,
 };
 use super::input::BashInput;
 #[cfg(all(test, target_os = "linux"))]
@@ -106,6 +106,17 @@ pub(crate) struct BashTestControl {
     runner: RunnerTestControl,
     #[cfg(test)]
     capture_hold: Option<CaptureHold>,
+    /// The background output-append observation seam: after every
+    /// committed append to the live-output file, the cumulative appended
+    /// byte count is published, so a test synchronizes on "this fragment
+    /// is observable through the advertised path" without polling.
+    #[cfg(test)]
+    background_appends: tokio::sync::watch::Sender<u64>,
+    /// The foreground spill-transition observation seam: signaled the
+    /// moment the lazy result spill is allocated, so a test synchronizes
+    /// on the exact overflow boundary without polling the filesystem.
+    #[cfg(test)]
+    spill_started: tokio::sync::watch::Sender<bool>,
 }
 
 /// One attempted process-group signal, recorded by the test seam.
@@ -125,6 +136,8 @@ impl BashTestControl {
         Self {
             runner: RunnerTestControl::new(),
             capture_hold: None,
+            background_appends: tokio::sync::watch::channel(0).0,
+            spill_started: tokio::sync::watch::channel(false).0,
         }
     }
 
@@ -246,6 +259,25 @@ impl BashTestControl {
         self
     }
 
+    /// Subscribes to the background output-append observation seam: every
+    /// published value is the cumulative byte count provably appended to
+    /// the live-output file (the append linearization point), so a test
+    /// can Read the advertised path while the execution is still running
+    /// without a timing assumption.
+    #[must_use]
+    pub(crate) fn background_append_watcher(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.background_appends.subscribe()
+    }
+
+    /// Subscribes to the foreground spill-transition observation seam: the
+    /// published `true` proves the lazy result spill was allocated (the
+    /// exact overflow boundary), so a test can act on the transition
+    /// without a timing assumption.
+    #[must_use]
+    pub(crate) fn spill_started_watcher(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.spill_started.subscribe()
+    }
+
     /// The armed capture-hold seam handle (test side).
     #[must_use]
     pub(crate) fn capture_hold(&self) -> Option<&CaptureHold> {
@@ -308,7 +340,7 @@ async fn run_bash(
         return failed_result("bash requires a Unix platform with /bin/bash");
     }
     #[cfg(unix)]
-    run_bash_unix(command, timeout, context, control).await
+    run_bash_unix(command, timeout, invocation.mode, context, control).await
 }
 
 /// The Unix-only half of [`run_bash`]: spawns the invocation supervisor
@@ -319,11 +351,44 @@ async fn run_bash(
 async fn run_bash_unix(
     command: &str,
     timeout: Option<Duration>,
+    mode: ToolInvocationMode,
     context: &ToolExecutionContext<'_>,
     control: Option<&BashTestControl>,
 ) -> ToolExecutionResult {
     #[cfg(not(test))]
     let _ = control;
+    // Background executions own a live-output file from the dispatch commit
+    // point on (Issue #86): the file was allocated and advertised before
+    // this executor began, and every decoded output fragment is appended
+    // from the first byte on, so the model can Read/Grep the output while
+    // the execution runs. The sink is opened before the process spawns: if
+    // the advertised path cannot be written, the invocation fails
+    // explicitly without starting unobservable work.
+    let background = matches!(mode, ToolInvocationMode::Background);
+    let background_sink = if background {
+        let Some(execution_id) = context.execution_id else {
+            return failed_result(
+                "a background bash invocation requires the runtime execution identity of its \
+                 dispatch; background dispatch goes through the conversation background registry",
+            );
+        };
+        match context
+            .tool_output
+            .open_background_output_sink(execution_id)
+        {
+            Ok(sink) => Some(sink),
+            Err(error) => {
+                let path = context.tool_output.background_output_path(execution_id);
+                return failed_result(format!(
+                    "the background output file {} cannot be opened for appending ({error}); the \
+                     command was not started and no complete output is available",
+                    path.display()
+                ));
+            }
+        }
+    } else {
+        None
+    };
     // The process-ownership half of the invocation (supervisor spawn, the
     // control protocol, cancellation/timeout settlement, catastrophic
     // containment, and the direct-child reap) lives in the shared internal
@@ -350,14 +415,41 @@ async fn run_bash_unix(
 
     let stdout_capture = Arc::new(Mutex::new(PreviewCapture::new(BASH_STREAM_PREVIEW_BYTES)));
     let stderr_capture = Arc::new(Mutex::new(PreviewCapture::new(BASH_STREAM_PREVIEW_BYTES)));
-    let combined_capture = Arc::new(Mutex::new(SpillCapture::new(BASH_STREAM_PREVIEW_BYTES)));
-    let (combined_tx, combined_rx) = tokio::sync::mpsc::channel::<(u8, Vec<u8>)>(32);
+    let (combined_tx, combined_rx) = tokio::sync::mpsc::channel::<(u8, String)>(32);
 
-    let mut combined_task = tokio::spawn(consume_combined(
-        combined_rx,
-        context.tool_output.clone(),
-        combined_capture.clone(),
-    ));
+    // The combined multiplex storage policy is mode-dependent: foreground
+    // output spills lazily only on overflow (small output creates no
+    // file); background output streams into the live-output file that the
+    // dispatch allocated and advertised, from the first fragment on.
+    let mut foreground_capture = None;
+    let mut background_capture = None;
+    let mut combined_task = if let Some(sink) = background_sink {
+        #[cfg(test)]
+        let append_watch: AppendWatch = control.map(|control| control.background_appends.clone());
+        #[cfg(not(test))]
+        let append_watch: AppendWatch = None;
+        let capture = Arc::new(Mutex::new(BackgroundOutputCapture::new(
+            BASH_STREAM_PREVIEW_BYTES,
+            sink,
+            append_watch,
+        )));
+        background_capture = Some(capture.clone());
+        tokio::spawn(consume_background(combined_rx, capture))
+    } else {
+        let spill_capture = SpillCapture::new(BASH_STREAM_PREVIEW_BYTES);
+        #[cfg(test)]
+        let spill_capture = match control {
+            Some(control) => spill_capture.with_spill_started_watch(control.spill_started.clone()),
+            None => spill_capture,
+        };
+        let capture = Arc::new(Mutex::new(spill_capture));
+        foreground_capture = Some(capture.clone());
+        tokio::spawn(consume_combined(
+            combined_rx,
+            context.tool_output.clone(),
+            capture,
+        ))
+    };
     let mut stdout_task = None;
     let mut stderr_task = None;
     if let Some(pipe) = stdout_pipe {
@@ -428,10 +520,14 @@ async fn run_bash_unix(
         ProcessOutcomeIntent::ProcessControlFailed(message) => Some(message.clone()),
         _ => None,
     };
-    // Whether the capture settled completely: every output byte provably
-    // reached the capture. Only a complete capture may advertise a spill
-    // locator as the complete output.
+    // Whether the capture settled completely: every output fragment
+    // provably reached the capture. Only a complete capture may advertise
+    // an output locator as the complete output; a background output file
+    // whose storage failed is honestly labelled partial, never complete.
     let mut capture_error: Option<String> = None;
+    // The deferred foreground capture failure (see below): the failed
+    // result is returned only after the capture settled and cleaned up.
+    let mut foreground_unowned_failure: Option<String> = None;
     if let Err(error) = *capture {
         // The outcome is already owned (failure or cancellation/
         // timeout): the capture of a terminated process tree is
@@ -450,7 +546,19 @@ async fn run_bash_unix(
             || capture_failure.is_some()
             || !matches!(termination.intent, ProcessOutcomeIntent::Completed);
         if !outcome_owned {
-            return failed_result(format!("bash output capture failed: {error}"));
+            if background {
+                // The output sink of an already-advertised background path
+                // failed while the process itself succeeded: the execution
+                // still settles as an explicit failure — a zero exit code
+                // never papers over lost output storage — and the settled
+                // result below names the partial file honestly.
+                capture_failure = Some(format!("bash output capture failed: {error}"));
+            } else {
+                // Defer the failed result until the capture has settled
+                // below: `finish(false)` owns the partial spill cleanup, so
+                // a failed foreground capture never leaks a partial file.
+                foreground_unowned_failure = Some(format!("bash output capture failed: {error}"));
+            }
         }
         capture_error = Some(error);
     }
@@ -465,11 +573,29 @@ async fn run_bash_unix(
         .expect("preview lock")
         .clone()
         .finish();
-    let combined = std::mem::replace(
-        &mut *combined_capture.lock().expect("combined capture lock"),
-        SpillCapture::new(BASH_STREAM_PREVIEW_BYTES),
-    )
-    .finish(capture_error.is_none());
+    let combined = match (foreground_capture, background_capture) {
+        (Some(capture), None) => {
+            // The consume task already settled (the drain above), so the
+            // executor holds the only reference.
+            Arc::try_unwrap(capture)
+                .expect("the combined capture task settled")
+                .into_inner()
+                .expect("combined capture lock")
+                .finish(capture_error.is_none())
+        }
+        (None, Some(capture)) => Arc::try_unwrap(capture)
+            .expect("the background capture task settled")
+            .into_inner()
+            .expect("background capture lock")
+            .finish(capture_error.is_none()),
+        _ => unreachable!("exactly one combined capture exists per invocation"),
+    };
+    if let Some(message) = foreground_unowned_failure {
+        // The capture has settled and `finish(false)` discarded the partial
+        // spill best-effort: the failure is explicit and no partial file or
+        // locator survives.
+        return failed_result(message);
+    }
 
     // Outcome precedence: an explicit process-control/runtime failure wins
     // over cancellation/timeout intent, which wins over the natural shell
@@ -514,28 +640,61 @@ async fn run_bash_unix(
     // An incomplete capture is partial data, never a complete record: it
     // always counts as truncated, and the complete byte count is unknown.
     let truncated = stdout.1 || stderr.1 || combined.truncated || !combined.complete;
-    // Textual overflow stays textual: the bounded previews are the
-    // canonical record, and the complete combined output — when it crossed
-    // the preview bound AND the capture settled completely — is one managed
-    // spill file addressed by its absolute path inside this ordinary
-    // textual result. No `FileReference` is ever produced for execution
-    // output, and a partial spill is never advertised as complete.
-    let spill_path = combined
-        .spill_path
+    // Textual output stays textual in both modes (Issue #86): the bounded
+    // previews are the canonical record and no `FileReference` is ever
+    // produced for execution output. The locator contract differs by mode:
+    // a foreground spill exists only when the output crossed the preview
+    // bound and the capture is complete; a background live-output file was
+    // advertised at dispatch, so it is always named — as the complete
+    // output when the capture settled completely, or as honestly partial
+    // running output when output storage failed.
+    let locator = combined
+        .output_locator
         .map(|path| path.to_string_lossy().into_owned());
-    let note = if spill_path.is_some() {
-        Some(
-            "Output was truncated for context. The complete output is at the absolute \
-             path in full_output; use Read or Grep if you need the complete output."
-                .to_owned(),
-        )
-    } else {
-        capture_error.as_ref().map(|error| {
-            format!(
-                "The output capture did not complete ({error}); the preview is partial and no \
-                 complete output file is available."
-            )
-        })
+    let (full_output, partial_output, note) = match (background, combined.complete, locator) {
+        (true, true, Some(path)) => (
+            Some(path),
+            None,
+            Some(
+                "The complete output is at the absolute path in full_output; use Read or Grep \
+                 with this absolute path if you need the complete output."
+                    .to_owned(),
+            ),
+        ),
+        (true, false, Some(path)) => (
+            None,
+            Some(path),
+            Some(format!(
+                "The output capture did not complete ({}); the file at partial_output holds \
+                 only partial output, not the complete output.",
+                capture_error
+                    .as_deref()
+                    .unwrap_or("unknown capture failure")
+            )),
+        ),
+        (false, true, Some(path)) => (
+            Some(path),
+            None,
+            Some(
+                "Output was truncated for context. The complete output is at the absolute \
+                 path in full_output; use Read or Grep if you need the complete output."
+                    .to_owned(),
+            ),
+        ),
+        (false, _, None) => (
+            None,
+            None,
+            capture_error.as_ref().map(|error| {
+                format!(
+                    "The output capture did not complete ({error}); the preview is partial and no \
+                     complete output file is available."
+                )
+            }),
+        ),
+        (false, false, Some(_)) => {
+            unreachable!("a foreground capture never advertises a partial spill")
+        }
+        (true, _, None) => unreachable!("a background capture always owns its live-output file"),
     };
     ToolExecutionResult {
         status,
@@ -545,7 +704,8 @@ async fn run_bash_unix(
                 "stdout": stdout.0,
                 "stderr": stderr.0,
                 "combined": combined.preview,
-                "full_output": spill_path,
+                "full_output": full_output,
+                "partial_output": partial_output,
                 "note": note,
             }),
         }],

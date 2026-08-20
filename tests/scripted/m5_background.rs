@@ -377,6 +377,22 @@ async fn ownership_commit_wins_over_later_attempt_cancellation() {
     assert_eq!(accepted["execution_id"], "exec_1");
     assert_eq!(accepted["state"], "starting");
     assert_eq!(accepted["tool"], "bash");
+    // Issue #86: the accepted result advertises the stable read-only
+    // live-output locator, allocated at dispatch time.
+    let output_path = accepted["output_path"].as_str().expect("output_path");
+    assert!(std::path::Path::new(output_path).is_absolute());
+    assert!(
+        output_path.ends_with("tasks/exec_1.output"),
+        "{output_path}"
+    );
+    assert!(std::path::Path::new(output_path).exists());
+    assert!(
+        accepted["note"]
+            .as_str()
+            .expect("note")
+            .contains("Read or Grep"),
+        "the continuation guidance travels with the locator"
+    );
 }
 
 /// Natural completion before cancel: completion wins, and a later cancel is

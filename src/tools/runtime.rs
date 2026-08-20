@@ -912,7 +912,7 @@ mod tests {
         )
         .expect("first runtime");
         let mut spill = first.tool_output().open_spill().expect("first spill");
-        spill.write_all(b"old bytes").expect("write");
+        spill.write_all("old bytes").expect("write");
         let old_path = spill.path().to_path_buf();
         drop(spill);
         drop(first);
@@ -924,12 +924,18 @@ mod tests {
         )
         .expect("reconstruction over the retained root");
         let mut spill = second.tool_output().open_spill().expect("second spill");
-        spill.write_all(b"new bytes").expect("write");
+        spill.write_all("new bytes").expect("write");
         let new_path = spill.path().to_path_buf();
         drop(spill);
         assert_ne!(old_path, new_path);
-        assert_eq!(std::fs::read(&old_path).expect("old spill"), b"old bytes");
-        assert_eq!(std::fs::read(&new_path).expect("new spill"), b"new bytes");
+        assert_eq!(
+            std::fs::read_to_string(&old_path).expect("old spill"),
+            "old bytes"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&new_path).expect("new spill"),
+            "new bytes"
+        );
         fs::remove_dir_all(&dir).expect("remove");
     }
 

@@ -88,7 +88,9 @@ pub struct ToolExecutionContext<'a> {
     /// artifacts (never for oversized textual output).
     pub artifacts: &'a ArtifactStore,
     /// The conversation-owned managed tool-output store: the read-only
-    /// spill region for oversized textual output.
+    /// region of auxiliary textual output — lazy result spills of oversized
+    /// foreground output, and the dispatch-allocated live-output channel of
+    /// background executions.
     pub tool_output: &'a ManagedToolOutput,
     /// The explicit authorized tool environment.
     pub environment: &'a ToolEnvironment,

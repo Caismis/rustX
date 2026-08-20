@@ -33,11 +33,12 @@ fn json_content(result: &ToolExecutionResult) -> serde_json::Value {
     panic!("expected a JSON result content block");
 }
 
-/// The number of spill files in the conversation's managed tool-output
-/// root.
+/// The number of result spill files in the conversation's managed
+/// tool-output root (the `results/` directory; `tasks/` holds background
+/// live output, a deliberately separate lifecycle).
 fn spill_count(fixture: &common::NativeFixture) -> usize {
-    std::fs::read_dir(fixture.runtime.tool_output().root())
-        .expect("managed tool-output root")
+    std::fs::read_dir(fixture.runtime.tool_output().root().join("results"))
+        .expect("managed tool-output results root")
         .count()
 }
 
@@ -664,15 +665,20 @@ async fn bash_large_output_spills_to_managed_output() {
     );
 }
 
-/// Raw non-UTF-8 output is lossy in the bounded preview but preserved
-/// verbatim in the complete spill file once the output crosses the bound.
+/// Every advertised Read/Grep path holds valid UTF-8 text (Issue #86):
+/// raw non-UTF-8 output decodes deterministically to U+FFFD replacement
+/// characters — never raw bytes — so the spilled file is always readable
+/// by Read and searchable by Grep. The decoded text is identical to the
+/// one-shot lossy decoding of the same bytes.
 #[tokio::test]
-async fn bash_raw_non_utf8_output_is_preserved_in_the_spill() {
+async fn bash_non_utf8_output_spills_as_deterministic_text() {
     let fixture = native_fixture();
+    // Deterministic invalid bytes (never /dev/urandom): 20000 'x' bytes
+    // cross the bound, then an invalid tail.
     let result = run_tool(
         &fixture,
         "bash",
-        serde_json::json!({"command": "head -c 20000 /dev/urandom; printf '\\377\\376\\001\\002'"}),
+        serde_json::json!({"command": "printf 'x%.0s' {1..20000}; printf '\\377\\376\\001\\002end\\n'"}),
     )
     .await;
     assert_eq!(result.status, ToolExecutionStatus::Success);
@@ -680,12 +686,47 @@ async fn bash_raw_non_utf8_output_is_preserved_in_the_spill() {
     let full_output = content["full_output"]
         .as_str()
         .expect("the absolute spill locator");
-    let bytes = std::fs::read(full_output).expect("spill bytes");
-    assert_eq!(bytes.len(), 20_004, "full output is retained verbatim");
+    let text = std::fs::read_to_string(full_output)
+        .expect("the advertised spill path is always valid UTF-8 text");
+    assert!(text.starts_with(&"x".repeat(100)));
+    // \377 \376 are invalid UTF-8 and decode to exactly two U+FFFD
+    // replacement characters; \001 \002 are valid control bytes and pass
+    // through unchanged.
+    assert!(
+        text.ends_with("\u{FFFD}\u{FFFD}\u{1}\u{2}end\n"),
+        "invalid bytes decode deterministically to U+FFFD: {:?}",
+        &text[text.len() - 16..]
+    );
+
+    // The advertised path is genuinely inspectable: Read and Grep succeed.
+    let read = run_tool(
+        &fixture,
+        "read",
+        serde_json::json!({"file_path": full_output}),
+    )
+    .await;
     assert_eq!(
-        &bytes[20_000..],
-        &[0xff, 0xfe, 0x01, 0x02],
-        "raw bytes preserved at the tail"
+        read.status,
+        ToolExecutionStatus::Success,
+        "Read inspects the decoded-text spill"
+    );
+    let grep = run_tool(
+        &fixture,
+        "grep",
+        serde_json::json!({"pattern": "end", "path": full_output}),
+    )
+    .await;
+    assert_eq!(
+        grep.status,
+        ToolExecutionStatus::Success,
+        "Grep searches the decoded-text spill"
+    );
+    assert_eq!(
+        json_content(&grep)["matches"]
+            .as_array()
+            .expect("matches")
+            .len(),
+        1
     );
 }
 

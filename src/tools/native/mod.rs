@@ -53,6 +53,10 @@ mod write;
 
 #[cfg(test)]
 pub(crate) use bash::{BashTestControl, BashTool};
+#[cfg(test)]
+pub(crate) use grep::GrepTool;
+#[cfg(test)]
+pub(crate) use read::ReadTool;
 
 use registration::NativeToolRegistration;
 

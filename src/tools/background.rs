@@ -37,6 +37,29 @@
 //! There is no unchecked window between the deciding observations and the
 //! prepared→owned registry transition.
 //!
+//! # Background live output (Issue #86)
+//!
+//! Every accepted background execution owns a stable read-only live-output
+//! locator in the conversation's managed tool-output store
+//! (`tasks/exec_N.output`). This is an asynchronous execution observation
+//! channel, NOT context-overflow storage: the file is allocated by
+//! [`ConversationBackgroundRegistry::prepare_dispatch`], strictly before
+//! the ownership commit, so the accepted result can advertise the absolute
+//! path (`output_path`) with Read/Grep continuation guidance only because
+//! the path already exists. A failed allocation refuses the dispatch
+//! ([`BackgroundDispatchError::Output`]); a rolled-back dispatch discards
+//! the file. Streaming executors (Bash) append decoded UTF-8 text from the
+//! first byte on, so the model can Read/Grep the output while the
+//! execution runs, and the terminal settlement message reuses the exact
+//! same path when the file already represents the complete textual output
+//! — no second file is created for the same payload. A distinct settled
+//! result spill (`results/result_N.txt`) is legitimate only when a tool's
+//! final logical result is a different oversized payload than its live
+//! execution output. The locator is ordinary textual metadata in both
+//! messages, never a `File` modality, and the terminal canonical message
+//! stays bounded while structurally retaining the locator and its
+//! continuation guidance.
+//!
 //! # Conversation runtime ownership transfer
 //!
 //! A standalone `ConversationToolRuntime` may be claimed by a
@@ -390,6 +413,16 @@ pub enum BackgroundDispatchError {
     },
     /// An internal dispatch failure.
     Internal(String),
+    /// The live-output file of the background execution could not be
+    /// allocated, so the dispatch must not commit: an accepted background
+    /// execution with an invalid output locator must never exist
+    /// (Issue #86). The prepared dispatch rolls back completely — no
+    /// published record, no accepted result, no orphan output file, and
+    /// the runner never begins.
+    Output {
+        /// The bounded allocation failure diagnostic.
+        detail: String,
+    },
 }
 
 impl core::fmt::Display for BackgroundDispatchError {
@@ -413,6 +446,11 @@ impl core::fmt::Display for BackgroundDispatchError {
                 "the conversation runtime's durable authority has failed; no new background ownership may begin: {detail}"
             ),
             Self::Internal(message) => write!(f, "background dispatch failed: {message}"),
+            Self::Output { detail } => write!(
+                f,
+                "the live-output file of the background execution could not be allocated, so no \
+                 detached execution was started: {detail}"
+            ),
         }
     }
 }
@@ -463,7 +501,9 @@ pub struct BackgroundResources {
     pub workspace: Workspace,
     /// The conversation artifact store for detached executors.
     pub artifacts: ArtifactStore,
-    /// The conversation managed tool-output store for detached executors.
+    /// The conversation managed tool-output store: the registry allocates
+    /// the live-output file of every dispatch here, and detached executors
+    /// stream output into it.
     pub tool_output: crate::tools::managed_output::ManagedToolOutput,
     /// The runtime clock stamping terminal inbound messages.
     pub clock: Arc<dyn RuntimeClock>,
@@ -818,8 +858,22 @@ impl ConversationBackgroundRegistry {
             .next_execution_sequence
             .checked_add(1)
             .ok_or(BackgroundDispatchError::SequenceExhausted)?;
-        state.next_execution_sequence = next;
         let execution_id = ToolExecutionId::background(next);
+        // Issue #86: the live-output file is allocated at dispatch time,
+        // strictly BEFORE the ownership commit, so the accepted result may
+        // advertise the absolute locator only because the path already
+        // exists and is owned by this execution. The sequence advances
+        // only after the allocation succeeds: a failed allocation consumes
+        // no execution identity and leaves no orphan file behind. A
+        // rollback (drop of the prepared dispatch, or any refused commit)
+        // discards the allocated file best-effort.
+        self.resources
+            .tool_output
+            .allocate_background_output(&execution_id)
+            .map_err(|error| BackgroundDispatchError::Output {
+                detail: error.to_string(),
+            })?;
+        state.next_execution_sequence = next;
         let cancellation = CancellationSignal::new();
         let gate = Arc::new(Notify::new());
         // The effective attempt environment is captured here, at prepare
@@ -869,8 +923,11 @@ impl ConversationBackgroundRegistry {
     /// reclaim conversation-owned execution or discard a terminal fact.
     pub(crate) fn abort_prepared_for_drain(&self) {
         let mut state = self.state();
-        for (_, prepared) in state.prepared.drain() {
+        for (execution_id, prepared) in state.prepared.drain() {
             prepared.runner.abort();
+            self.resources
+                .tool_output
+                .discard_background_output(&execution_id);
         }
         drop(state);
         self.notify_state_change();
@@ -947,9 +1004,7 @@ impl ConversationBackgroundRegistry {
             // Reject: roll the prepared dispatch back completely — the
             // runner is aborted while still parked behind its start gate —
             // and report the runtime-owned health diagnostic.
-            if let Some(prepared_record) = state.prepared.remove(&prepared.execution_id) {
-                prepared_record.runner.abort();
-            }
+            self.discard_prepared_record(&mut state, &prepared.execution_id);
             prepared.committed = true;
             drop(state);
             self.notify_state_change();
@@ -982,9 +1037,7 @@ impl ConversationBackgroundRegistry {
         // closure is refused; the closure wins first and drain follows it.
         let commit_result = self.resources.mailbox.with_running_commit(|| {
             if self.resources.mailbox.is_bound_inactive() {
-                if let Some(prepared_record) = state.prepared.remove(&prepared.execution_id) {
-                    prepared_record.runner.abort();
-                }
+                self.discard_prepared_record(&mut state, &prepared.execution_id);
                 prepared.committed = true;
                 return Err(BackgroundDispatchError::ConversationInactive {
                     conversation_id: self.conversation_id.clone(),
@@ -996,9 +1049,7 @@ impl ConversationBackgroundRegistry {
                 // removed and the runner aborted here, and the prepared
                 // handle's drop semantics are neutralized so no second
                 // rollback path exists.
-                if let Some(prepared_record) = state.prepared.remove(&prepared.execution_id) {
-                    prepared_record.runner.abort();
-                }
+                self.discard_prepared_record(&mut state, &prepared.execution_id);
                 prepared.committed = true;
                 return Ok(BackgroundDispatchOutcome::RolledBack);
             }
@@ -1026,12 +1077,22 @@ impl ConversationBackgroundRegistry {
                 .commit_background_ownership(ownership)
             {
                 prepared_record.runner.abort();
+                self.resources
+                    .tool_output
+                    .discard_background_output(&prepared.execution_id);
                 prepared.committed = true;
                 return Err(BackgroundDispatchError::Durable {
                     detail: error.to_string(),
                 });
             }
-            let result = accepted_result(&prepared.execution_id, &prepared_record.record.tool_name);
+            let result = accepted_result(
+                &prepared.execution_id,
+                &prepared_record.record.tool_name,
+                &self
+                    .resources
+                    .tool_output
+                    .background_output_path(&prepared.execution_id),
+            );
             let execution_id = prepared.execution_id.clone();
             let gate = prepared_record.gate.clone();
             let next_index = state.records.len();
@@ -1050,9 +1111,7 @@ impl ConversationBackgroundRegistry {
             // record private. Roll it back before the counted admission is
             // released, so quiescence cannot become visible with a stale
             // prepared runner still owned by this dispatch.
-            if let Some(prepared_record) = state.prepared.remove(&prepared.execution_id) {
-                prepared_record.runner.abort();
-            }
+            self.discard_prepared_record(&mut state, &prepared.execution_id);
             prepared.committed = true;
         }
         // `ownership_permission` (the gate guard) drops with this scope,
@@ -1672,12 +1731,29 @@ impl ConversationBackgroundRegistry {
         }
     }
 
-    /// Rolls a prepared dispatch back: the runner is aborted and the private
-    /// record is dropped. No detached execution exists afterwards.
+    /// Rolls a prepared dispatch back: the runner is aborted, the private
+    /// record is dropped, and the live-output file allocated at prepare
+    /// time is discarded best-effort, so a failed pre-commit dispatch
+    /// leaves no orphan file behind. No detached execution exists
+    /// afterwards.
     fn rollback_prepared(&self, execution_id: &ToolExecutionId) {
         let mut state = self.state();
+        self.discard_prepared_record(&mut state, execution_id);
+    }
+
+    /// The shared prepared-dispatch rollback under the held registry lock:
+    /// aborts the parked runner and discards its allocated live-output
+    /// file.
+    fn discard_prepared_record(
+        &self,
+        state: &mut BackgroundRegistryState,
+        execution_id: &ToolExecutionId,
+    ) {
         if let Some(prepared) = state.prepared.remove(execution_id) {
             prepared.runner.abort();
+            self.resources
+                .tool_output
+                .discard_background_output(execution_id);
         }
     }
 
@@ -1764,7 +1840,17 @@ fn snapshot_of(record: &BackgroundRecord) -> BackgroundExecutionSnapshot {
 }
 
 /// The deterministic accepted result of a successful background dispatch.
-fn accepted_result(execution_id: &ToolExecutionId, tool_name: &str) -> ToolExecutionResult {
+///
+/// The accepted result advertises the stable read-only live-output locator
+/// of the execution (Issue #86): the file was allocated at dispatch time
+/// and the executor appends decoded textual output to it from the first
+/// byte on, so the model may Read/Grep it while the execution runs. The
+/// locator is ordinary textual metadata, never a `File` modality.
+fn accepted_result(
+    execution_id: &ToolExecutionId,
+    tool_name: &str,
+    output_path: &std::path::Path,
+) -> ToolExecutionResult {
     ToolExecutionResult {
         status: ToolExecutionStatus::Success,
         content: vec![ToolResultContent::Json {
@@ -1772,6 +1858,12 @@ fn accepted_result(execution_id: &ToolExecutionId, tool_name: &str) -> ToolExecu
                 "execution_id": execution_id.as_str(),
                 "state": "starting",
                 "tool": tool_name,
+                "output_path": output_path.to_string_lossy(),
+                "note": format!(
+                    "Background execution {execution_id} started. Output is being written to the \
+                     absolute path in output_path; use Read or Grep with this absolute path to \
+                     inspect the output while the execution is running."
+                ),
             }),
         }],
         duration_ms: 0,
@@ -1830,19 +1922,32 @@ fn terminal_inbound_message(
 /// (the same model-facing representation a provider adapter produces), and
 /// file/image content blocks publish as a short textual mention — genuine
 /// semantic artifacts publish separately as `UserContentBlock::File`
-/// blocks, so the textual projection stays text-only. The projection of a
-/// spilled result contains the exact absolute `full_output` locator and
-/// the Read/Grep continuation instruction from the bounded result itself.
+/// blocks, so the textual projection stays text-only.
 ///
-/// The projection becomes canonical conversation state, so it is bounded
-/// as one payload to [`MAX_MODEL_TOOL_RESULT_BYTES`](crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES)
-/// with an explicit truncation marker: an unbounded executor result can
-/// never dump unbounded text into canonical inbound history. A `None`
-/// result (no status detail and no content) projects to nothing.
+/// # Continuation metadata is structural, never bounded away
+///
+/// Result bounding must never truncate away the metadata the model needs
+/// to continue: a `full_output` / `partial_output` locator and the `note`
+/// guidance/diagnostic of a JSON result block are extracted from the
+/// serialized body into a dedicated continuation section that is appended
+/// AFTER the bounded body and never participates in truncation. The body
+/// budget is the projection bound minus the exact continuation length, so
+/// the whole projection stays within
+/// [`MAX_MODEL_TOOL_RESULT_BYTES`](crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES)
+/// even when the body text is escape-expensive (many JSON control
+/// characters). A result carrying `full_output` therefore always projects
+/// the exact absolute locator plus the Read/Grep continuation instruction.
+///
+/// A `None` result (no status detail and no content) projects to nothing.
 fn terminal_result_projection(result: &ToolExecutionResult) -> Option<String> {
-    /// The explicit marker appended when the projection crosses its bound.
+    /// The explicit marker appended when the body crosses its bound.
     const PROJECTION_TRUNCATED_MARKER: &str = "\n...[terminal result projection truncated]";
+    // The boundable projection parts: status detail and content bodies.
     let mut parts: Vec<String> = Vec::new();
+    // The continuation metadata, structurally retained and never
+    // truncated: output locators and their Read/Grep guidance, plus any
+    // advisory `note` (including output-storage failure diagnostics).
+    let mut continuation: Vec<String> = Vec::new();
     match &result.status {
         ToolExecutionStatus::Failed { error } => parts.push(format!("Error: {error}")),
         ToolExecutionStatus::Denied { reason } => parts.push(format!("Denied: {reason}")),
@@ -1852,24 +1957,60 @@ fn terminal_result_projection(result: &ToolExecutionResult) -> Option<String> {
         | ToolExecutionStatus::Interrupted => {}
     }
     for block in &result.content {
-        parts.push(match block {
-            ToolResultContent::Text(text) => text.text.clone(),
-            ToolResultContent::Json { value } => serde_json::to_string(value)
-                .unwrap_or_else(|_| "<unserializable JSON result>".to_owned()),
-            ToolResultContent::File(reference) => format!(
+        match block {
+            ToolResultContent::Text(text) => parts.push(text.text.clone()),
+            ToolResultContent::Json { value } => {
+                let mut value = value.clone();
+                if let Some(object) = value.as_object_mut() {
+                    if let Some(path) = object.remove("full_output")
+                        && let Some(path) = path.as_str()
+                    {
+                        continuation.push(format!(
+                            "Complete output: {path}\nUse Read or Grep with this absolute path \
+                             to inspect the complete output."
+                        ));
+                    }
+                    if let Some(path) = object.remove("partial_output")
+                        && let Some(path) = path.as_str()
+                    {
+                        continuation.push(format!(
+                            "Partial output only: {path}\nThe output storage did not complete; \
+                             this file does NOT hold the complete output."
+                        ));
+                    }
+                    if let Some(note) = object.remove("note")
+                        && let Some(note) = note.as_str()
+                    {
+                        continuation.push(note.to_owned());
+                    }
+                }
+                parts.push(
+                    serde_json::to_string(&value)
+                        .unwrap_or_else(|_| "<unserializable JSON result>".to_owned()),
+                );
+            }
+            ToolResultContent::File(reference) => parts.push(format!(
                 "[file artifact: {}]",
                 reference
                     .name
                     .clone()
                     .unwrap_or_else(|| reference.artifact_id.as_str().to_owned())
-            ),
-            ToolResultContent::Image(_) => "[image content]".to_owned(),
-        });
+            )),
+            ToolResultContent::Image(_) => parts.push("[image content]".to_owned()),
+        }
     }
-    if parts.is_empty() {
+    if parts.is_empty() && continuation.is_empty() {
         return None;
     }
-    let bound = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES;
+    let suffix = if continuation.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n{}", continuation.join("\n"))
+    };
+    // The body is bounded against the projection bound MINUS the exact
+    // continuation length: the continuation section is appended after the
+    // bounded body and can never be truncated away.
+    let bound = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES.saturating_sub(suffix.len());
     let mut projection = String::new();
     for part in parts {
         if !projection.is_empty() {
@@ -1881,10 +2022,12 @@ fn terminal_result_projection(result: &ToolExecutionResult) -> Option<String> {
                 .saturating_sub(PROJECTION_TRUNCATED_MARKER.len());
             projection.push_str(&crate::tools::limits::bound_utf8_text(part, budget));
             projection.push_str(PROJECTION_TRUNCATED_MARKER);
+            projection.push_str(&suffix);
             return Some(projection);
         }
         projection.push_str(&part);
     }
+    projection.push_str(&suffix);
     Some(projection)
 }
 
@@ -3100,5 +3243,613 @@ mod tests {
     #[test]
     fn background_cancel_reason_is_user_requested() {
         assert_eq!(BACKGROUND_CANCEL_REASON, CancellationReason::UserRequested);
+    }
+
+    // -------------------------------------------------------------------
+    // Issue #86: the background live-output channel
+    // -------------------------------------------------------------------
+
+    /// A no-op progress reporter for direct native-tool invocations.
+    struct NoopProgress;
+
+    impl crate::tools::executor::ProgressReporter for NoopProgress {
+        fn report(&self, _progress: ToolProgress) {}
+    }
+
+    /// An executor that returns its fixed result immediately.
+    struct InstantExecutor(ToolExecutionResult);
+
+    impl ToolExecutor for InstantExecutor {
+        fn execute<'a>(
+            &'a self,
+            _invocation: ToolInvocation,
+            _context: ToolExecutionContext<'a>,
+        ) -> BoxFuture<'a, ToolExecutionResult> {
+            let result = self.0.clone();
+            Box::pin(async move { result })
+        }
+    }
+
+    /// The live-output file is allocated at prepare time — strictly before
+    /// the ownership commit — and a rollback discards it: no accepted
+    /// execution ever advertises a nonexistent path, and no failed
+    /// pre-commit dispatch leaves an orphan file behind.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_live_output_file_exists_from_prepare_and_rolls_back_cleanly() {
+        let fixture = registry("conv-live-alloc");
+        let executor: Arc<dyn ToolExecutor> = Arc::new(InstantExecutor(success()));
+        let execution_id = ToolExecutionId::background(1);
+        let output_path = fixture
+            .registry
+            .resources()
+            .tool_output
+            .background_output_path(&execution_id);
+        assert!(!output_path.exists(), "no file before prepare");
+
+        let prepared = prepare(&fixture, &executor);
+        assert!(
+            output_path.exists() && std::fs::read(&output_path).expect("read").is_empty(),
+            "the live-output file exists, empty, from the prepare stage on"
+        );
+        // Rollback (drop without commit): the allocated file is discarded.
+        drop(prepared);
+        assert!(
+            !output_path.exists(),
+            "a rolled-back dispatch leaves no orphan output file"
+        );
+
+        // A fresh prepare gets the next identity (the sequence never
+        // reuses a prepared id) and allocates its own live-output file.
+        let prepared = prepare(&fixture, &executor);
+        assert_eq!(prepared.execution_id.as_str(), "exec_2");
+        let output_path = fixture
+            .registry
+            .resources()
+            .tool_output
+            .background_output_path(&prepared.execution_id);
+        assert!(output_path.exists(), "re-allocation after rollback");
+        let outcome = fixture
+            .registry
+            .commit_dispatch(
+                prepared,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .expect("commit");
+        let BackgroundDispatchOutcome::Accepted {
+            execution_id,
+            result,
+        } = outcome
+        else {
+            panic!("accepted");
+        };
+        assert_eq!(execution_id.as_str(), "exec_2");
+        let accepted = match &result.content[0] {
+            crate::tools::types::ToolResultContent::Json { value } => value.clone(),
+            other => panic!("expected JSON, got {other:?}"),
+        };
+        let advertised = accepted["output_path"].as_str().expect("output_path");
+        assert_eq!(advertised, output_path.to_str().expect("utf8 path"));
+        assert!(std::path::Path::new(advertised).is_absolute());
+        assert!(
+            advertised.ends_with("tasks/exec_2.output"),
+            "the live-output locator shape: {advertised}"
+        );
+        assert!(
+            accepted["note"]
+                .as_str()
+                .expect("note")
+                .contains("Read or Grep"),
+            "the accepted result carries the Read/Grep continuation guidance"
+        );
+        // A non-streaming executor produces no output; the file exists and
+        // stays empty, and the execution still settles normally.
+        let terminal = wait_for_terminal(&fixture, &execution_id).await;
+        assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
+        assert_eq!(std::fs::read(&output_path).expect("read"), b"");
+    }
+
+    /// An output-allocation failure refuses the dispatch before any commit:
+    /// no record, no runner, no orphan file, and no consumed execution
+    /// identity.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_output_allocation_failure_refuses_the_dispatch_pre_commit() {
+        let fixture = registry("conv-alloc-fail");
+        fixture
+            .registry
+            .resources()
+            .tool_output
+            .set_force_open_failures(true);
+        let executor: Arc<dyn ToolExecutor> = Arc::new(InstantExecutor(success()));
+        let error = fixture
+            .registry
+            .prepare_dispatch(
+                &background_invocation("bash"),
+                &executor,
+                ToolEnvironment::new(),
+            )
+            .expect_err("the allocation failure refuses the dispatch");
+        assert!(
+            matches!(error, super::BackgroundDispatchError::Output { .. }),
+            "typed output-allocation refusal: {error}"
+        );
+        let output_path = fixture
+            .registry
+            .resources()
+            .tool_output
+            .background_output_path(&ToolExecutionId::background(1));
+        assert!(!output_path.exists(), "no orphan output file");
+        assert!(
+            fixture.registry.all_snapshots().is_empty(),
+            "no execution record exists"
+        );
+        // The failure consumed no identity: after the failure condition is
+        // lifted, the next dispatch is still exec_1.
+        fixture
+            .registry
+            .resources()
+            .tool_output
+            .set_force_open_failures(false);
+        let prepared = prepare(&fixture, &executor);
+        let outcome = fixture
+            .registry
+            .commit_dispatch(
+                prepared,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .expect("commit");
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
+            panic!("accepted");
+        };
+        assert_eq!(execution_id.as_str(), "exec_1");
+        let terminal = wait_for_terminal(&fixture, &execution_id).await;
+        assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
+    }
+
+    /// The deterministic Issue #86 end-to-end regression: a background Bash
+    /// execution advertises its absolute live-output path in the accepted
+    /// result, the committed output is observable through the ordinary
+    /// native Read tool WHILE the process is still running, and the
+    /// terminal settlement reuses the exact same path as the complete
+    /// output — one file, one identity, no duplicate output authority.
+    #[cfg(unix)]
+    #[allow(clippy::too_many_lines)] // one deterministic end-to-end lifecycle
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn background_live_output_is_readable_while_running_and_reused_at_settlement() {
+        use crate::tools::types::ToolResultContent;
+
+        let fixture = registry("conv-live-read");
+        let workspace = fixture.registry.resources().workspace.clone();
+        let tool_output = fixture.registry.resources().tool_output.clone();
+        // The deterministic barrier: the command prints line A, then blocks
+        // on a FIFO read until the test releases it, then prints line B.
+        let fifo = workspace.root().join("control.fifo");
+        nix::unistd::mkfifo(
+            &fifo,
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )
+        .expect("mkfifo");
+        let command = format!(
+            "printf 'line-A\\n'; read -r _ < '{}'; printf 'line-B\\n'",
+            fifo.display()
+        );
+        let control = crate::tools::native::BashTestControl::new();
+        let mut appends = control.background_append_watcher();
+        let executor: Arc<dyn ToolExecutor> =
+            Arc::new(crate::tools::native::BashTool::with_test_control(control));
+        let invocation = ToolInvocation {
+            call_id: ToolCallId::new("call-live"),
+            tool_id: ToolId::new("tool-bash"),
+            tool_name: "bash".to_owned(),
+            mode: ToolInvocationMode::Background,
+            arguments: serde_json::json!({"command": command}),
+        };
+        let prepared = fixture
+            .registry
+            .prepare_dispatch(&invocation, &executor, ToolEnvironment::new())
+            .expect("prepare");
+        let outcome = fixture
+            .registry
+            .commit_dispatch(
+                prepared,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .expect("commit");
+        let BackgroundDispatchOutcome::Accepted {
+            execution_id,
+            result,
+        } = outcome
+        else {
+            panic!("accepted");
+        };
+        let accepted = match &result.content[0] {
+            ToolResultContent::Json { value } => value.clone(),
+            other => panic!("expected JSON, got {other:?}"),
+        };
+        let output_path = accepted["output_path"]
+            .as_str()
+            .expect("the advertised live-output locator")
+            .to_owned();
+
+        // The append linearization point: once the sink committed
+        // "line-A\n" (7 bytes), the fragment is observable through the
+        // advertised path — while the process is still blocked on the FIFO.
+        tokio::time::timeout(
+            TEST_LIVENESS_GUARD,
+            appends.wait_for(|appended| *appended >= 7),
+        )
+        .await
+        .expect("the first fragment commits (liveness guard)")
+        .expect("append watch stays open");
+        let snapshot = fixture.registry.snapshot(&execution_id).expect("snapshot");
+        assert!(
+            snapshot.state.is_active(),
+            "the execution is still running behind the FIFO barrier"
+        );
+
+        // The ordinary native Read tool inspects the live output.
+        let reporter = NoopProgress;
+        let read_invocation = ToolInvocation {
+            call_id: ToolCallId::new("call-read"),
+            tool_id: ToolId::new("tool-read"),
+            tool_name: "read".to_owned(),
+            mode: ToolInvocationMode::Foreground,
+            arguments: serde_json::json!({"file_path": output_path}),
+        };
+        let read = crate::tools::native::ReadTool
+            .execute(
+                read_invocation,
+                ToolExecutionContext {
+                    conversation_id: fixture.registry.conversation_id(),
+                    execution_id: None,
+                    cancellation: crate::runtime::cancellation::ExecutionCancellation::detached(
+                        crate::runtime::cancellation::CancellationSignal::new(),
+                        CancellationReason::UserRequested,
+                    ),
+                    workspace: &workspace,
+                    progress: &reporter,
+                    artifacts: &fixture.registry.resources().artifacts,
+                    tool_output: &tool_output,
+                    environment: &ToolEnvironment::new(),
+                },
+            )
+            .await;
+        assert_eq!(read.status, ToolExecutionStatus::Success);
+        let read_text = match &read.content[0] {
+            ToolResultContent::Text(text) => text.text.clone(),
+            other => panic!("read returns text, got {other:?}"),
+        };
+        assert_eq!(
+            read_text, "line-A",
+            "Read observes the committed prefix while the execution runs"
+        );
+
+        // Grep searches the same live file while the execution runs.
+        let grep_invocation = ToolInvocation {
+            call_id: ToolCallId::new("call-grep"),
+            tool_id: ToolId::new("tool-grep"),
+            tool_name: "grep".to_owned(),
+            mode: ToolInvocationMode::Foreground,
+            arguments: serde_json::json!({
+                "pattern": "line-A",
+                "literal": true,
+                "path": output_path,
+            }),
+        };
+        let grep = crate::tools::native::GrepTool
+            .execute(
+                grep_invocation,
+                ToolExecutionContext {
+                    conversation_id: fixture.registry.conversation_id(),
+                    execution_id: None,
+                    cancellation: crate::runtime::cancellation::ExecutionCancellation::detached(
+                        crate::runtime::cancellation::CancellationSignal::new(),
+                        CancellationReason::UserRequested,
+                    ),
+                    workspace: &workspace,
+                    progress: &reporter,
+                    artifacts: &fixture.registry.resources().artifacts,
+                    tool_output: &tool_output,
+                    environment: &ToolEnvironment::new(),
+                },
+            )
+            .await;
+        assert_eq!(grep.status, ToolExecutionStatus::Success);
+        let grep_json = match &grep.content[0] {
+            ToolResultContent::Json { value } => value.clone(),
+            other => panic!("grep returns JSON, got {other:?}"),
+        };
+        assert_eq!(
+            grep_json["matches"].as_array().expect("matches").len(),
+            1,
+            "Grep finds the committed prefix in the live file while the execution runs"
+        );
+
+        // Release the barrier; the execution completes and its terminal
+        // message reuses the SAME locator as the complete output.
+        let fifo_path = fifo.clone();
+        tokio::task::spawn_blocking(move || std::fs::write(fifo_path, "go\n"))
+            .await
+            .expect("fifo writer")
+            .expect("release the barrier");
+        let terminal = wait_for_terminal(&fixture, &execution_id).await;
+        assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
+        let result = terminal.result.expect("terminal result");
+        let content = match &result.content[0] {
+            ToolResultContent::Json { value } => value.clone(),
+            other => panic!("expected JSON, got {other:?}"),
+        };
+        assert_eq!(
+            content["full_output"].as_str().expect("full_output"),
+            output_path,
+            "settlement reuses the dispatch-time live-output locator"
+        );
+        assert!(content["partial_output"].is_null());
+        assert!(
+            std::fs::read_to_string(&output_path).expect("final output") == "line-A\nline-B\n",
+            "the settled file holds the complete output"
+        );
+        // No foreground-style result spill was created for the same payload.
+        assert!(
+            std::fs::read_dir(tool_output.root().join("results"))
+                .expect("results dir")
+                .next()
+                .is_none(),
+            "background output never becomes a second result spill"
+        );
+        // The canonical terminal inbound message carries the same locator
+        // and the Read/Grep guidance, and stays text-only.
+        let batch = fixture
+            .mailbox
+            .select_pending_batch()
+            .expect("select")
+            .expect("terminal batch");
+        let message = batch.items()[0].message();
+        let text = match &message.content[..] {
+            [crate::message::types::UserContentBlock::Text(text)] => text.text.clone(),
+            blocks => panic!("the terminal inbound is text-only: {blocks:?}"),
+        };
+        assert!(text.contains("settled: succeeded"), "{text}");
+        assert!(
+            text.contains(&format!("Complete output: {output_path}")),
+            "{text}"
+        );
+        assert!(text.contains("Read or Grep"), "{text}");
+    }
+
+    /// A background execution with tiny output still owns its live-output
+    /// file from dispatch on: the "small output creates no file" contract
+    /// applies to foreground overflow storage, never to the background
+    /// live-output channel.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn small_background_output_still_owns_a_live_output_file() {
+        use crate::tools::types::ToolResultContent;
+
+        let fixture = registry("conv-tiny");
+        let executor: Arc<dyn ToolExecutor> =
+            Arc::new(crate::tools::native::BashTool::with_test_control(
+                crate::tools::native::BashTestControl::new(),
+            ));
+        let invocation = ToolInvocation {
+            call_id: ToolCallId::new("call-tiny"),
+            tool_id: ToolId::new("tool-bash"),
+            tool_name: "bash".to_owned(),
+            mode: ToolInvocationMode::Background,
+            arguments: serde_json::json!({"command": "echo hello"}),
+        };
+        let prepared = fixture
+            .registry
+            .prepare_dispatch(&invocation, &executor, ToolEnvironment::new())
+            .expect("prepare");
+        let outcome = fixture
+            .registry
+            .commit_dispatch(
+                prepared,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .expect("commit");
+        let BackgroundDispatchOutcome::Accepted {
+            execution_id,
+            result,
+        } = outcome
+        else {
+            panic!("accepted");
+        };
+        let accepted = match &result.content[0] {
+            ToolResultContent::Json { value } => value.clone(),
+            other => panic!("expected JSON, got {other:?}"),
+        };
+        let output_path = accepted["output_path"].as_str().expect("output_path");
+        let terminal = wait_for_terminal(&fixture, &execution_id).await;
+        assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
+        let result = terminal.result.expect("terminal result");
+        let content = match &result.content[0] {
+            ToolResultContent::Json { value } => value.clone(),
+            other => panic!("expected JSON, got {other:?}"),
+        };
+        // Tiny output is not truncated, yet the live-output locator is the
+        // same one the dispatch advertised.
+        assert!(result.truncation.is_none());
+        assert_eq!(
+            content["full_output"].as_str().expect("full_output"),
+            output_path,
+            "even tiny background output reuses the dispatch-time locator"
+        );
+        assert_eq!(
+            std::fs::read_to_string(output_path).expect("output"),
+            "hello\n"
+        );
+        assert!(
+            std::fs::read_dir(
+                fixture
+                    .registry
+                    .resources()
+                    .tool_output
+                    .root()
+                    .join("results")
+            )
+            .expect("results dir")
+            .next()
+            .is_none(),
+            "no result spill exists for tiny background output"
+        );
+    }
+
+    /// A background output-storage failure after the dispatch advertised
+    /// the path is never papered over by a zero exit code: the execution
+    /// settles Failed, the result names the file as honestly PARTIAL
+    /// output, and no "complete output" claim exists anywhere.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_background_output_write_failure_is_truthful_at_settlement() {
+        use crate::tools::types::ToolResultContent;
+
+        let fixture = registry("conv-sink-fail");
+        let tool_output = fixture.registry.resources().tool_output.clone();
+        // Every append to the live-output file fails.
+        tool_output.fail_writes_after(0);
+        let executor: Arc<dyn ToolExecutor> =
+            Arc::new(crate::tools::native::BashTool::with_test_control(
+                crate::tools::native::BashTestControl::new(),
+            ));
+        let invocation = ToolInvocation {
+            call_id: ToolCallId::new("call-sink-fail"),
+            tool_id: ToolId::new("tool-bash"),
+            tool_name: "bash".to_owned(),
+            mode: ToolInvocationMode::Background,
+            arguments: serde_json::json!({"command": "printf 'partial-line\n'"}),
+        };
+        let prepared = fixture
+            .registry
+            .prepare_dispatch(&invocation, &executor, ToolEnvironment::new())
+            .expect("prepare");
+        let outcome = fixture
+            .registry
+            .commit_dispatch(
+                prepared,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .expect("commit");
+        let BackgroundDispatchOutcome::Accepted {
+            execution_id,
+            result,
+        } = outcome
+        else {
+            panic!("accepted");
+        };
+        let advertised = match &result.content[0] {
+            ToolResultContent::Json { value } => value["output_path"]
+                .as_str()
+                .expect("output_path")
+                .to_owned(),
+            other => panic!("expected JSON, got {other:?}"),
+        };
+
+        let terminal = wait_for_terminal(&fixture, &execution_id).await;
+        assert_eq!(
+            terminal.state,
+            BackgroundLifecycle::Failed,
+            "a zero exit code never papers over output-storage failure"
+        );
+        let result = terminal.result.expect("terminal result");
+        let ToolExecutionStatus::Failed { error } = &result.status else {
+            panic!("the execution settles Failed, got {:?}", result.status);
+        };
+        assert!(error.contains("output capture"), "{error}");
+        let content = match &result.content[0] {
+            ToolResultContent::Json { value } => value.clone(),
+            other => panic!("expected JSON, got {other:?}"),
+        };
+        assert!(
+            content["full_output"].is_null(),
+            "no complete-output locator: {content}"
+        );
+        assert_eq!(
+            content["partial_output"].as_str().expect("partial_output"),
+            advertised,
+            "the partial file is the same advertised path"
+        );
+        let note = content["note"].as_str().expect("note");
+        assert!(note.contains("NOT") || note.contains("partial"), "{note}");
+        assert!(!note.contains("complete output is at"), "{note}");
+
+        // The canonical terminal message is truthful too: it names the
+        // partial file and never claims complete output.
+        let batch = fixture
+            .mailbox
+            .select_pending_batch()
+            .expect("select")
+            .expect("terminal batch");
+        let message = batch.items()[0].message();
+        let text = match &message.content[..] {
+            [crate::message::types::UserContentBlock::Text(text)] => text.text.clone(),
+            blocks => panic!("the terminal inbound is text-only: {blocks:?}"),
+        };
+        assert!(text.contains("settled: failed"), "{text}");
+        assert!(
+            text.contains(&format!("Partial output only: {advertised}")),
+            "the partial locator survives bounding: {text}"
+        );
+        assert!(!text.contains("Complete output:"), "{text}");
+    }
+
+    /// Result bounding never truncates away the continuation metadata: an
+    /// escape-expensive oversized body (JSON control characters cost six
+    /// bytes each) stays within the projection bound, and the exact output
+    /// locator plus the Read/Grep guidance survive in the canonical
+    /// terminal message.
+    #[test]
+    fn the_terminal_projection_retains_the_locator_under_bounding() {
+        let path = "/tmp/rustx-test/tool-output/tasks/exec_9.output";
+        // \u0001 serializes as \u0001 in JSON (6 chars per byte): an
+        // escape-expensive body that crosses the projection bound many
+        // times over.
+        let expensive = "\u{1}".repeat(crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES / 2);
+        let result = ToolExecutionResult {
+            status: ToolExecutionStatus::Success,
+            content: vec![crate::tools::types::ToolResultContent::Json {
+                value: serde_json::json!({
+                    "exit_code": 0,
+                    "stdout": "",
+                    "stderr": "",
+                    "combined": expensive,
+                    "full_output": path,
+                    "partial_output": serde_json::Value::Null,
+                    "note": "The complete output is at the absolute path in full_output; use Read or Grep with this absolute path if you need the complete output.",
+                }),
+            }],
+            duration_ms: 0,
+            exit_code: Some(0),
+            artifacts: Vec::new(),
+            truncation: None,
+        };
+        let message = super::terminal_inbound_message(
+            &ToolExecutionId::background(9),
+            "bash",
+            BackgroundLifecycle::Succeeded,
+            &result,
+            chrono::Utc::now(),
+        );
+        let text = match &message.content[..] {
+            [crate::message::types::UserContentBlock::Text(text)] => text.text.clone(),
+            blocks => panic!("text-only: {blocks:?}"),
+        };
+        assert!(
+            text.len() <= crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES + 256,
+            "the terminal message stays bounded: {} bytes",
+            text.len()
+        );
+        assert!(
+            text.contains(&format!("Complete output: {path}")),
+            "the exact locator survives bounding"
+        );
+        assert!(
+            text.contains("Read or Grep"),
+            "the continuation guidance survives bounding"
+        );
+        assert!(
+            !text.contains(&"\u{1}".repeat(4096)),
+            "the full oversized body is never duplicated into canonical history"
+        );
     }
 }

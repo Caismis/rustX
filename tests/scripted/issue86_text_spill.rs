@@ -86,11 +86,12 @@ fn fixture() -> IssueFixture {
 }
 
 /// Dispatches one background Bash call with the oversized-output command
-/// through the real preflight/dispatch path and waits for its terminal
-/// settlement.
+/// through the real preflight/dispatch path, waits for its terminal
+/// settlement, and returns the execution identity plus the live-output
+/// locator the accepted result advertised at dispatch time.
 async fn dispatch_big_background_bash(
     fixture: &IssueFixture,
-) -> rustx::runtime::identity::ToolExecutionId {
+) -> (rustx::runtime::identity::ToolExecutionId, String) {
     let call = ToolCall {
         id: ToolCallId::new("call-big"),
         tool_id: ToolId::new("tool-bash"),
@@ -119,11 +120,28 @@ async fn dispatch_big_background_bash(
         .background()
         .commit_dispatch(prepared_dispatch, &CancellationSignal::new())
         .expect("dispatch committed");
-    let rustx::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
-        committed
+    let rustx::tools::background::BackgroundDispatchOutcome::Accepted {
+        execution_id,
+        result,
+    } = committed
     else {
         panic!("the dispatch is accepted");
     };
+    // The accepted result advertises the live-output locator immediately,
+    // before the process completes (Issue #86).
+    let advertised = match &result.content[0] {
+        rustx::tools::types::ToolResultContent::Json { value } => value["output_path"]
+            .as_str()
+            .expect("the accepted result advertises the live-output locator")
+            .to_owned(),
+        other => panic!("the accepted result is JSON: {other:?}"),
+    };
+    assert!(std::path::Path::new(&advertised).is_absolute());
+    assert!(advertised.ends_with("tasks/exec_1.output"), "{advertised}");
+    assert!(
+        std::path::Path::new(&advertised).exists(),
+        "the advertised path exists from the dispatch commit point on"
+    );
     let terminal = fixture
         .runtime
         .background()
@@ -134,7 +152,7 @@ async fn dispatch_big_background_bash(
         terminal.state,
         rustx::tools::background::BackgroundLifecycle::Succeeded
     );
-    execution_id
+    (execution_id, advertised)
 }
 
 /// The one pending terminal inbound message of the mailbox.
@@ -156,7 +174,7 @@ fn terminal_message(fixture: &IssueFixture) -> UserMessageBlock {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn oversized_background_bash_publishes_a_text_only_terminal_inbound() {
     let fixture = fixture();
-    let execution_id = dispatch_big_background_bash(&fixture).await;
+    let (execution_id, advertised) = dispatch_big_background_bash(&fixture).await;
 
     // The settled result is ordinary bounded text plus the absolute spill
     // locator; it carries no semantic artifact.
@@ -181,13 +199,26 @@ async fn oversized_background_bash_publishes_a_text_only_terminal_inbound() {
         .expect("json content");
     let full_output = content["full_output"]
         .as_str()
-        .expect("the absolute spill locator");
+        .expect("the absolute output locator");
     assert!(std::path::Path::new(full_output).is_absolute());
+    assert_eq!(
+        full_output, advertised,
+        "settlement reuses the dispatch-time live-output locator: no second file for the same payload"
+    );
     assert!(
         std::path::Path::new(full_output).starts_with(fixture.runtime.tool_output().root()),
-        "the spill lives in the managed tool-output root: {full_output}"
+        "the output lives in the managed tool-output root: {full_output}"
     );
-    let spilled = std::fs::read_to_string(full_output).expect("spill text");
+    // A very large background output is exactly one file: no duplicate
+    // result spill was created for the same payload.
+    assert!(
+        std::fs::read_dir(fixture.runtime.tool_output().root().join("results"))
+            .expect("results dir")
+            .next()
+            .is_none(),
+        "background execution output never becomes a second result spill"
+    );
+    let spilled = std::fs::read_to_string(full_output).expect("output text");
     assert!(spilled.starts_with("line-1\n"));
     assert!(spilled.ends_with("line-300000\n"));
 
@@ -247,7 +278,7 @@ async fn oversized_background_bash_publishes_a_text_only_terminal_inbound() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn adopted_textual_terminal_inbound_reaches_the_provider_for_a_text_only_model() {
     let fixture = fixture();
-    let execution_id = dispatch_big_background_bash(&fixture).await;
+    let (execution_id, _) = dispatch_big_background_bash(&fixture).await;
     // The exact absolute spill locator of the settled result.
     let snapshot = fixture
         .runtime
@@ -370,6 +401,238 @@ async fn adopted_textual_terminal_inbound_reaches_the_provider_for_a_text_only_m
     assert!(
         !server.request_body(0).contains(execution_id.as_str()),
         "turn one predates the adoption"
+    );
+}
+
+/// The provider-boundary regression of the background live-output contract
+/// (Issue #86): the model requests a background Bash execution; the rustX
+/// tool result of that tool call — sent into the NEXT provider turn —
+/// carries the exact absolute live-output path plus the Read/Grep
+/// continuation guidance while the process is still running behind a FIFO
+/// barrier. After the barrier releases, the terminal runtime message
+/// references the exact same path.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_background_live_output_path_reaches_the_provider_before_completion() {
+    let fixture = fixture();
+    // The deterministic barrier: the command prints marker A, blocks on a
+    // FIFO read, and prints marker B only after the test releases it.
+    let fifo = fixture.runtime.workspace().root().join("turn.fifo");
+    nix::unistd::mkfifo(
+        &fifo,
+        nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+    )
+    .expect("mkfifo");
+    let command = format!(
+        "printf 'turn-marker-A\\n'; read -r _ < '{}'; printf 'turn-marker-B\\n'",
+        fifo.display()
+    );
+    let arguments = serde_json::json!({
+        "__rustx_execution": "background",
+        "command": command,
+    })
+    .to_string();
+    // A dynamically built SSE turn-one reply: one background Bash tool
+    // call, then the tool_calls finish reason.
+    let chunk = |delta: serde_json::Value, finish: serde_json::Value| {
+        serde_json::json!({
+            "id": "chatcmpl-bg",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-test",
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+        })
+    };
+    let turn_one_body = [
+        chunk(
+            serde_json::json!({"role": "assistant", "content": null, "tool_calls": [{
+                "index": 0, "id": "call_bg", "type": "function",
+                "function": {"name": "bash", "arguments": ""},
+            }]}),
+            serde_json::Value::Null,
+        ),
+        chunk(
+            serde_json::json!({"tool_calls": [{
+                "index": 0, "function": {"arguments": arguments},
+            }]}),
+            serde_json::Value::Null,
+        ),
+        chunk(serde_json::json!({}), serde_json::json!("tool_calls")),
+    ]
+    .into_iter()
+    .map(|event| format!("data: {}\n", serde_json::to_string(&event).expect("sse")))
+    .collect::<Vec<_>>()
+    .join("\n")
+        + "\ndata: [DONE]\n";
+    let server = common::FixtureServer::start(move |attempt, _head| {
+        if attempt == 0 {
+            common::FixtureReply::body(200, "OK", "text/event-stream", turn_one_body.clone())
+        } else {
+            common::sse_fixture("openai_chat", "plain_text.sse")
+        }
+    })
+    .await;
+    let adapter: Arc<dyn rustx::model::ModelAdapter> = Arc::new(OpenAiChatCompletionsAdapter::new(
+        OpenAiAdapterConfig::new("k", server.url("/v1")),
+    ));
+    let model = support::attempt_model(adapter, "background-model");
+    let capability = common::capability_lease(fixture.registry.clone(), &fixture.runtime).await;
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let context_runtime = rustx::context::ContextRuntime::for_attempt(
+        rustx::context::SessionContextPolicy {
+            reserve_tokens: 0,
+            keep_recent_tokens: 0,
+            summary_output_cap: None,
+        },
+        Arc::new(rustx::context::DefaultTokenEstimator),
+        rustx::context::AgentStatusComposer::default(),
+        &model,
+    )
+    .expect("context runtime");
+    let result = AgentExecution::new(
+        AgentExecutionRequest {
+            agent_id: AgentId::new("agent-issue86-bg"),
+            conversation_id: fixture.runtime.conversation_id().clone(),
+            attempt_id: AttemptId::new("attempt-background"),
+            conversation: rustx::conversation::ConversationState::from_messages(vec![
+                MessageBlock::User(UserMessageBlock {
+                    id: MessageId::new("msg-user-bg"),
+                    content: vec![UserContentBlock::Text(TextBlock {
+                        text: "run it in the background".to_owned(),
+                    })],
+                    source: UserSource::Human,
+                    kind: rustx::message::types::InboundKind::Message,
+                    timestamp: None,
+                }),
+            ])
+            .expect("bootstrap conversation"),
+            initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
+            timezone: None,
+            model,
+        },
+        capability.into_lease(),
+        &cancellation,
+        context_runtime,
+        &fixture.runtime,
+        rustx::agent::AttemptLifecycle::inert(),
+    )
+    .expect("conversation identity matches the tool runtime")
+    .run()
+    .await;
+    assert!(
+        matches!(result.outcome, AttemptOutcome::Completed { .. }),
+        "the attempt completes while the background execution runs: {:?}",
+        result.outcome
+    );
+    assert_eq!(server.attempt_count(), 2, "exactly two provider turns");
+
+    // The tool result rustX sent into the second provider turn.
+    let tool_message = result
+        .messages()
+        .iter()
+        .find_map(|message| match message {
+            MessageBlock::Tool(tool) => Some(tool),
+            _ => None,
+        })
+        .expect("the background dispatch tool message");
+    let accepted = tool_message
+        .result
+        .content
+        .iter()
+        .find_map(|block| match block {
+            rustx::tools::types::ToolResultContent::Json { value } => Some(value.clone()),
+            _ => None,
+        })
+        .expect("the accepted result JSON");
+    let output_path = accepted["output_path"]
+        .as_str()
+        .expect("the accepted result advertises the live-output locator")
+        .to_owned();
+    assert!(std::path::Path::new(&output_path).is_absolute());
+    assert!(
+        output_path.ends_with("tasks/exec_1.output"),
+        "{output_path}"
+    );
+    assert!(
+        std::path::Path::new(&output_path).exists(),
+        "the advertised path exists before the process completes"
+    );
+    assert!(
+        accepted["note"]
+            .as_str()
+            .expect("note")
+            .contains("Read or Grep"),
+        "the continuation guidance travels with the locator"
+    );
+
+    // The exact absolute path and the Read/Grep guidance are in the SECOND
+    // provider request — the model turn immediately after the dispatch —
+    // while the process is still running behind the FIFO barrier.
+    let second_request = server.request_body(1);
+    assert!(
+        second_request.contains(&output_path),
+        "the provider request of the next turn carries the live-output path"
+    );
+    assert!(
+        second_request.contains("Read or Grep"),
+        "the provider request carries the continuation guidance"
+    );
+    let execution_id = rustx::runtime::identity::ToolExecutionId::new("exec_1");
+    let running = fixture
+        .runtime
+        .background()
+        .snapshot(&execution_id)
+        .expect("snapshot");
+    assert!(
+        running.state.is_active(),
+        "the execution is still running: {:?}",
+        running.state
+    );
+
+    // Release the barrier; the terminal runtime message references the
+    // EXACT same path as the complete output.
+    let fifo_path = fifo.clone();
+    tokio::task::spawn_blocking(move || std::fs::write(fifo_path, "go\n"))
+        .await
+        .expect("fifo writer")
+        .expect("release the barrier");
+    let terminal = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        fixture
+            .runtime
+            .background()
+            .wait_until_terminal(&execution_id),
+    )
+    .await
+    .expect("the execution settles (liveness guard)")
+    .expect("terminal snapshot");
+    assert_eq!(
+        terminal.state,
+        rustx::tools::background::BackgroundLifecycle::Succeeded
+    );
+    let batch = fixture
+        .runtime
+        .mailbox()
+        .select_pending_batch()
+        .expect("select")
+        .expect("one pending terminal batch");
+    let terminal_message = batch.items()[0].message();
+    let terminal_text = match &terminal_message.content[..] {
+        [UserContentBlock::Text(text)] => text.text.clone(),
+        blocks => panic!("the terminal inbound is text-only: {blocks:?}"),
+    };
+    assert!(
+        terminal_text.contains(&format!("Complete output: {output_path}")),
+        "the terminal message reuses the dispatch-time locator: {terminal_text}"
+    );
+    assert!(
+        terminal_text.contains("Read or Grep"),
+        "the terminal guidance survives: {terminal_text}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&output_path).expect("final output"),
+        "turn-marker-A\nturn-marker-B\n",
+        "the settled file holds the complete output"
     );
 }
 

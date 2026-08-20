@@ -37,7 +37,7 @@ pub use executor::{
     ToolExecutionContext, ToolExecutor, ToolPreflightError, ToolRegistry, ToolRegistryError,
 };
 pub use locator::{LocatorError, LocatorOperation};
-pub use managed_output::{ManagedOutputError, ManagedToolOutput, ToolOutputSpill};
+pub use managed_output::{BackgroundOutput, ManagedOutputError, ManagedToolOutput, ResultSpill};
 pub use runtime::ConversationToolRuntime;
 pub use schema::{
     EXECUTION_FIELD, EXECUTION_FIELD_VALUES, RUNTIME_PROPERTY_PREFIX, SchemaError,

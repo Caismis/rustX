@@ -96,13 +96,33 @@
 //!
 //! stdout, stderr, and the runtime-observed combined multiplex are captured
 //! separately with bounded previews (head/tail with an explicit truncation
-//! marker). Text overflow is not an artifact (Issue #86): only when the
-//! combined output crosses its preview bound does the capture lazily
-//! allocate one file in the conversation's managed tool-output store, write
-//! the retained complete prefix, and stream every subsequent byte into it;
-//! the absolute spill path appears inside ordinary textual output as
-//! `full_output`, never as a `FileReference`. Output at or below the bound
-//! creates no file at all, and the stored spill bytes are never corrupted.
+//! marker). Each byte stream is decoded with its own incremental UTF-8
+//! decoder before multiplexing (invalid sequences become U+FFFD; a
+//! sequence split across read boundaries is completed by decoder state,
+//! never corrupted by interleaving), so every advertised output path holds
+//! valid UTF-8 text that Read and Grep can inspect.
+//!
+//! Text overflow is not an artifact (Issue #86), and the two execution
+//! modes own deliberately different storage lifecycles:
+//!
+//! - **Foreground**: only when the combined output crosses its preview
+//!   bound does the capture lazily allocate one result spill in the
+//!   conversation's managed tool-output store, write the retained complete
+//!   prefix, and stream every subsequent fragment into it; the absolute
+//!   spill path appears inside ordinary textual output as `full_output`,
+//!   never as a `FileReference`. Foreground output at or below the bound
+//!   creates no file at all, and a spill write failure is an explicit
+//!   invocation failure.
+//! - **Background**: the live-output file (`tasks/exec_N.output`) is
+//!   allocated by the background registry at the dispatch commit point and
+//!   advertised in the accepted result; this executor appends every
+//!   decoded fragment to it from the first byte on, so the model can
+//!   Read/Grep the output while the execution runs. Settlement reuses the
+//!   same path as the complete output — no second file is created for the
+//!   same payload — and an output-storage failure settles the invocation
+//!   as an explicit failure that names the file as partial output, never
+//!   as a false complete-output claim.
+//!
 //! Non-zero exits are failed tool results with the exit code preserved —
 //! never attempt-level runtime failures.
 //!
@@ -118,6 +138,7 @@
 mod capture;
 mod executor;
 mod input;
+mod text;
 // The supervisor is not a separate tool: it is an implementation detail of
 // Bash execution ownership, owned by this module.
 #[cfg(unix)]
@@ -168,7 +189,9 @@ pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistrati
             "tool-bash",
             NAME,
             "Run one non-interactive /bin/bash command inside the workspace. No shell state \
-             survives between calls. The optional timeout is in seconds.",
+             survives between calls. The optional timeout is in seconds. A background execution \
+             immediately returns its live output file's absolute path; use Read or Grep on it to \
+             inspect the output while the command runs.",
             policy,
         ),
         std::sync::Arc::new(BashTool::new()),

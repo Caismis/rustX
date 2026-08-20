@@ -18,11 +18,38 @@
 //!
 //! # Canonicalization
 //!
-//! Authority is decided on canonicalized paths, never on lexical prefix
-//! matching of the model-supplied string: an existing target is
-//! canonicalized directly, and a not-yet-existing mutation target (Write)
-//! is resolved through its deepest existing ancestor, so a symlink can
-//! never turn an authorized locator into access outside its owning root.
+//! Authorized roots are not one interchangeable union: a locator retains
+//! its **lexical owning root**, determined before any symlink traversal.
+//! The algorithm is:
+//!
+//! ```text
+//! absolute locator
+//!     |
+//!     v
+//! lexical normalization (`.` / `..` resolved lexically)
+//!     |
+//!     v
+//! determine the owning root lexically: workspace, managed output,
+//!     or none -> reject
+//!     |
+//!     v
+//! canonicalize (Read: the target itself; Mutate: the deepest existing
+//!     ancestor plus the remaining components)
+//!     |
+//!     v
+//! the canonical result must remain inside the SAME owning root
+//!     |
+//!     v
+//! apply that owner's permissions
+//! ```
+//!
+//! A symlink can therefore never transfer authority between roots:
+//! `managed-output/link -> workspace` and `workspace/link ->
+//! managed-output` are both rejected even though both targets are
+//! otherwise authorized roots. A locator without a lexical owner (an
+//! arbitrary host path, or one that reaches an authorized root only
+//! through a symlinked ancestor outside both roots) is rejected: the
+//! canonical model-visible roots are the locators the runtime advertises.
 
 use std::path::{Path, PathBuf};
 
@@ -83,15 +110,26 @@ pub enum LocatorOperation {
     Mutate,
 }
 
+/// The one owning root of a locator, determined lexically before any
+/// symlink traversal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OwningRoot {
+    /// The model workspace root (Read/Grep/Glob/Write/Edit).
+    Workspace,
+    /// The read-only managed tool-output root (Read/Grep/Glob only).
+    ManagedOutput,
+}
+
 /// Resolves one absolute model-facing locator for `operation`.
 ///
-/// The locator must be absolute; the resolved canonical path must be
-/// contained in an authorized root for the operation (see the module
-/// matrix). For [`LocatorOperation::Read`] the target must exist and is
+/// The locator must be absolute; its lexical owning root is determined
+/// first, the locator is canonicalized, and the canonical result must
+/// remain inside that same owning root (see the module documentation).
+/// For [`LocatorOperation::Read`] the target must exist and is
 /// canonicalized directly; for [`LocatorOperation::Mutate`] the target may
-/// not exist yet, so the deepest existing ancestor is canonicalized and the
-/// remaining components are appended — a symlinked parent can never escape
-/// the workspace.
+/// not exist yet, so the deepest existing ancestor is canonicalized and
+/// the remaining components are appended — a symlinked parent can never
+/// escape the workspace.
 ///
 /// # Errors
 ///
@@ -106,23 +144,72 @@ pub fn resolve(
     if !path.is_absolute() {
         return Err(LocatorError::NotAbsolute(locator.to_owned()));
     }
+    // The owning root is determined lexically, BEFORE any symlink
+    // traversal: authority never transfers between roots through a
+    // symlink, and a path that reaches a root only through a symlinked
+    // ancestor outside both roots has no owner at all.
+    let normalized = normalize_lexical(path);
+    let owner = if normalized.starts_with(workspace.root()) {
+        OwningRoot::Workspace
+    } else if normalized.starts_with(tool_output.root()) {
+        OwningRoot::ManagedOutput
+    } else {
+        return Err(LocatorError::OutsideAuthorizedRoots(locator.to_owned()));
+    };
     let canonical = match operation {
         LocatorOperation::Read => std::fs::canonicalize(path),
         LocatorOperation::Mutate => canonicalize_deepest_existing(path),
     }
     .map_err(|error| LocatorError::Unresolvable(locator.to_owned(), error.to_string()))?;
-    if canonical.starts_with(workspace.root()) {
-        return Ok(canonical);
-    }
-    if canonical.starts_with(tool_output.root()) {
-        return match operation {
-            LocatorOperation::Read => Ok(canonical),
-            LocatorOperation::Mutate => {
-                Err(LocatorError::ManagedOutputReadOnly(locator.to_owned()))
+    match owner {
+        OwningRoot::Workspace => {
+            if canonical.starts_with(workspace.root()) {
+                Ok(canonical)
+            } else {
+                // A workspace locator escaped its owning root through a
+                // symlink — including into the managed tool-output root,
+                // which would be an authority transfer.
+                Err(LocatorError::OutsideAuthorizedRoots(locator.to_owned()))
             }
-        };
+        }
+        OwningRoot::ManagedOutput => {
+            if !canonical.starts_with(tool_output.root()) {
+                // A managed-output locator escaped its owning root through
+                // a symlink — including into the workspace, which would
+                // turn the read-only region into mutation authority.
+                return Err(LocatorError::OutsideAuthorizedRoots(locator.to_owned()));
+            }
+            match operation {
+                LocatorOperation::Read => Ok(canonical),
+                LocatorOperation::Mutate => {
+                    Err(LocatorError::ManagedOutputReadOnly(locator.to_owned()))
+                }
+            }
+        }
     }
-    Err(LocatorError::OutsideAuthorizedRoots(locator.to_owned()))
+}
+
+/// Lexically normalizes an absolute path: `.` components are dropped and
+/// `..` components are resolved against the preceding lexical components
+/// without touching the filesystem, so the owning-root determination
+/// cannot be fooled by `/workspace/../tool-output/x`-style locators. A
+/// `..` at the filesystem root stays at the root (`/..` is `/`).
+fn normalize_lexical(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::RootDir => normalized.push(component.as_os_str()),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                // Pop the last normal component; at the root a parent
+                // directory is the root itself.
+                normalized.pop();
+            }
+            std::path::Component::Normal(part) => normalized.push(part),
+            std::path::Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+        }
+    }
+    normalized
 }
 
 /// Canonicalizes the deepest existing ancestor of `path` and appends the
@@ -225,7 +312,7 @@ mod tests {
     #[test]
     fn managed_output_is_read_only() {
         let roots = roots();
-        let spill = roots.tool_output.root().join("output_1.log");
+        let spill = roots.tool_output.root().join("results/result_1.txt");
         let locator = absolute(&spill);
         resolve(
             &roots.workspace,
@@ -339,5 +426,132 @@ mod tests {
             ),
             Err(LocatorError::OutsideAuthorizedRoots(_))
         ));
+    }
+
+    /// Authority never transfers between authorized roots: a symlink
+    /// inside the managed-output root that points INTO the workspace is
+    /// rejected, and so is a workspace symlink that points INTO the
+    /// managed-output root. Both targets are otherwise authorized roots;
+    /// the owning root of a locator is lexical and never changes through
+    /// symlink traversal.
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_cannot_transfer_authority_between_authorized_roots() {
+        use std::os::unix::fs::symlink;
+        let roots = roots();
+
+        // managed descendant symlink -> workspace file: Read rejected even
+        // though the workspace target is readable.
+        symlink(
+            roots.workspace.root(),
+            roots.tool_output.root().join("workspace-alias"),
+        )
+        .expect("managed -> workspace symlink");
+        let locator = absolute(&roots.tool_output.root().join("workspace-alias/file.txt"));
+        assert!(
+            matches!(
+                resolve(
+                    &roots.workspace,
+                    &roots.tool_output,
+                    &locator,
+                    LocatorOperation::Read
+                ),
+                Err(LocatorError::OutsideAuthorizedRoots(_))
+            ),
+            "managed -> workspace transfers no read authority"
+        );
+        // managed descendant symlink -> workspace new mutation target:
+        // Mutate rejected (it would escape the read-only region AND
+        // cross roots).
+        let locator = absolute(&roots.tool_output.root().join("workspace-alias/new.txt"));
+        assert!(
+            matches!(
+                resolve(
+                    &roots.workspace,
+                    &roots.tool_output,
+                    &locator,
+                    LocatorOperation::Mutate
+                ),
+                Err(LocatorError::OutsideAuthorizedRoots(_))
+            ),
+            "managed -> workspace transfers no mutation authority"
+        );
+
+        // workspace descendant symlink -> managed file: Read rejected even
+        // though the managed target is readable.
+        let spill = roots.tool_output.open_spill().expect("spill");
+        let spill_path = spill.path().to_path_buf();
+        drop(spill);
+        let results_alias = roots.workspace.root().join("results-alias");
+        symlink(roots.tool_output.root().join("results"), &results_alias)
+            .expect("workspace -> managed symlink");
+        let locator = absolute(&results_alias.join(spill_path.file_name().expect("spill name")));
+        assert!(
+            matches!(
+                resolve(
+                    &roots.workspace,
+                    &roots.tool_output,
+                    &locator,
+                    LocatorOperation::Read
+                ),
+                Err(LocatorError::OutsideAuthorizedRoots(_))
+            ),
+            "workspace -> managed transfers no read authority"
+        );
+        // workspace descendant symlink -> managed mutation target:
+        // rejected by the same-root invariant before the read-only rule
+        // even applies.
+        let locator = absolute(&results_alias.join("forged.txt"));
+        assert!(
+            matches!(
+                resolve(
+                    &roots.workspace,
+                    &roots.tool_output,
+                    &locator,
+                    LocatorOperation::Mutate
+                ),
+                Err(LocatorError::OutsideAuthorizedRoots(_))
+            ),
+            "workspace -> managed transfers no mutation authority"
+        );
+    }
+
+    /// A same-root internal symlink stays coherent: a workspace symlink
+    /// whose target remains inside the workspace resolves and is readable,
+    /// and a managed-root-internal symlink to a real managed file is
+    /// readable but never mutable.
+    #[cfg(unix)]
+    #[test]
+    fn same_root_internal_symlinks_stay_coherent() {
+        use std::os::unix::fs::symlink;
+        let roots = roots();
+
+        symlink(
+            roots.workspace.root().join("file.txt"),
+            roots.workspace.root().join("internal.txt"),
+        )
+        .expect("workspace internal symlink");
+        let locator = absolute(&roots.workspace.root().join("internal.txt"));
+        let resolved = resolve(
+            &roots.workspace,
+            &roots.tool_output,
+            &locator,
+            LocatorOperation::Read,
+        )
+        .expect("a same-root workspace symlink resolves");
+        assert!(resolved.starts_with(roots.workspace.root()));
+
+        // Lexical `..` / `.` normalization: the owning root is determined
+        // after lexical normalization, so `/workspace/sub/../file.txt`
+        // keeps its workspace owner and `/workspace/../<managed>` can
+        // never impersonate the workspace.
+        let locator = format!("{}/sub/../file.txt", absolute(roots.workspace.root()));
+        resolve(
+            &roots.workspace,
+            &roots.tool_output,
+            &locator,
+            LocatorOperation::Read,
+        )
+        .expect("a lexically normalized workspace locator resolves");
     }
 }

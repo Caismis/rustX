@@ -307,12 +307,17 @@ Bash requirements:
   intent but never bypasses process terminality. After terminality, the
   separate capture deadline may force-finalize wedged readers. The outer
   supervisor un-wedges a `SIGSTOP`-frozen inner anchor with `SIGKILL`
-- Explicit spill-capture failures instead of silent success
-- Large-output truncation with auxiliary managed tool-output spill files
+- Explicit output-capture failures instead of silent success
+- Large-output truncation with auxiliary managed tool-output files
   in the conversation's managed tool-output store (absolute path in
   ordinary textual output — never a semantic artifact and never durable
   output authority; the bounded model-visible text is the canonical
-  replayable record and the spill file may disappear)
+  replayable record and the output file may disappear): lazy result
+  spills for oversized foreground output (`results/result_N.txt`, no file
+  at or below the bound), and the dispatch-allocated live-output channel
+  of background executions (`tasks/exec_N.output`), advertised in the
+  accepted result, readable while the execution runs, and reused by the
+  terminal settlement message
 - Explicit execution environment instead of inherited process environment
 
 Exit criteria:
