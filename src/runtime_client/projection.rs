@@ -387,12 +387,18 @@ impl RuntimeClientProjection {
                 upsert_subagent(&mut self.snapshot.subagents, view.clone());
                 vec![RuntimeClientEvent::SubagentUpdated { subagent: view }]
             }
-            ConversationObservation::Capability(snapshot) => {
+            ConversationObservation::Capability {
+                snapshot,
+                availability,
+            } => {
                 // The projection owns the translation of the authoritative
-                // capability snapshot into the client capability view.
-                let capabilities = capability_view(&snapshot);
+                // capability snapshot and availability into the client
+                // capability view. One event covers both an executable
+                // revision swap and an availability-only change; the view's
+                // revision discriminates them.
+                let capabilities = capability_view(&snapshot, &availability);
                 self.snapshot.capabilities = capabilities.clone();
-                vec![RuntimeClientEvent::CapabilityPublished { capabilities }]
+                vec![RuntimeClientEvent::CapabilityUpdated { capabilities }]
             }
             ConversationObservation::AttemptAdmitted { attempt_id } => {
                 // The model is folded by the `AttemptModelFrozen`
@@ -1272,14 +1278,17 @@ pub(crate) fn background_view(
 }
 
 /// Builds the deterministic active capability projection from the
-/// authoritative capability snapshot.
+/// authoritative capability snapshot and the coordinator-owned
+/// availability state (Issue #81).
 ///
 /// The tool catalog preserves registry order; the Skill catalog is
 /// ordered by Skill name (the two snapshot lists derive from one sorted
-/// package order). No executors, environment paths, or dependency
-/// internals ever appear.
+/// package order); the source list preserves the deterministic
+/// source-identity order of the authoritative availability map. No
+/// executors, environment paths, or dependency internals ever appear.
 pub(crate) fn capability_view(
     snapshot: &crate::capabilities::CapabilitySnapshot,
+    availability: &crate::capabilities::CapabilityAvailability,
 ) -> CapabilityView {
     let tools = snapshot
         .tool_registry()
@@ -1307,10 +1316,36 @@ pub(crate) fn capability_view(
             description: entry.description.clone(),
         })
         .collect();
+    let sources = availability
+        .iter()
+        .map(|(source, state)| super::snapshot::CapabilitySourceView {
+            source: match source {
+                crate::capabilities::CapabilitySourceId::Python => {
+                    super::snapshot::CapabilitySourceDescriptor::Python
+                }
+                crate::capabilities::CapabilitySourceId::Mcp(server_id) => {
+                    super::snapshot::CapabilitySourceDescriptor::Mcp {
+                        server_id: server_id.clone(),
+                    }
+                }
+            },
+            state: match state {
+                crate::capabilities::CapabilitySourceState::Ready => {
+                    super::snapshot::CapabilitySourceStateView::Ready
+                }
+                crate::capabilities::CapabilitySourceState::Unavailable { reason } => {
+                    super::snapshot::CapabilitySourceStateView::Unavailable {
+                        reason: reason.clone(),
+                    }
+                }
+            },
+        })
+        .collect();
     CapabilityView {
         revision: snapshot.revision(),
         tools,
         skills,
+        sources,
     }
 }
 
@@ -1486,6 +1521,7 @@ mod tests {
                 revision: crate::runtime::identity::CapabilityRevision::new(1),
                 tools: Vec::new(),
                 skills: Vec::new(),
+                sources: Vec::new(),
             },
             model_view(),
             64,
@@ -1544,6 +1580,7 @@ mod tests {
                     revision: crate::runtime::identity::CapabilityRevision::new(1),
                     tools: Vec::new(),
                     skills: Vec::new(),
+                    sources: Vec::new(),
                 },
                 model_view(),
                 64,
@@ -2422,6 +2459,7 @@ mod tests {
                 revision: crate::runtime::identity::CapabilityRevision::new(1),
                 tools: Vec::new(),
                 skills: Vec::new(),
+                sources: Vec::new(),
             },
             model_view(),
             4,
@@ -2491,6 +2529,7 @@ mod tests {
                 revision: crate::runtime::identity::CapabilityRevision::new(1),
                 tools: Vec::new(),
                 skills: Vec::new(),
+                sources: Vec::new(),
             },
             model_view(),
             limit,

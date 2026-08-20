@@ -742,11 +742,21 @@ observed only at the next quiescent re-discovery.
   documentation.
 - **MCP protocol-revision negotiation.** rustX offers the resolved rmcp
   build's complete `ProtocolVersion::KNOWN_VERSIONS`, newest first, through
-  `ClientLifecycleMode::Auto`, and connects on whichever revision the peer
-  and rustX actually share. rustX validates the negotiated revision against
-  that offered set, because the legacy `initialize` handshake lets a server
-  echo any revision; a peer sharing no revision fails with a bounded
-  `McpError::ProtocolCompatibility`. The negotiated revision also selects the
+  `ClientLifecycleMode::Auto`, and connects on the highest revision the peer
+  and rustX actually share. rmcp (>= 3.1.3) probes the 2026-07-28 inline
+  lifecycle (`server/discover`), walks the offered revisions down on
+  `UNSUPPORTED_PROTOCOL_VERSION`, and classifies any other correlated
+  non-modern JSON-RPC probe rejection — legacy peers variously answer an
+  unknown pre-`initialize` request with `METHOD_NOT_FOUND`,
+  `INVALID_REQUEST`, or session-middleware errors — as a legacy peer,
+  falling back to the `initialize` handshake on the same connection with
+  the newest pre-inline revision; a probe the peer silently ignores hits a
+  bounded timeout and takes the same fallback. rustX validates the
+  negotiated revision against that offered set, because the legacy
+  `initialize` handshake lets a server echo any revision; a peer sharing no
+  revision fails with a bounded `McpError::ProtocolCompatibility`, which
+  the capability plane records as that server's unavailable state — never a
+  runtime-fatal error. The negotiated revision also selects the
   invalidation mechanism — `subscriptions/listen` from 2026-07-28 onwards,
   the plain `notifications/tools/list_changed` callback before it. At most
   one invalidation mechanism is installed per connection; when the server
@@ -796,12 +806,40 @@ observed only at the next quiescent re-discovery.
   retention task exists in M7.
 - **Python ToolVersion publication.** The published shape is
   `tool-versions/<ToolVersionId>/source/` plus
-  `RUSTX_TOOL_VERSION.json`; the executor and every uv command use exactly
-  `.../source/` as their root. On reuse the published `source/` content
+  `RUSTX_TOOL_VERSION.json`; every uv preparation command uses exactly
+  `.../source/` as its root. On reuse the published `source/` content
   digest is recomputed and compared against the claimed identity — a marker
   string alone never validates a ToolVersion — and a corrupt publication
   fails preparation explicitly; a valid published ToolVersion is never
   mutated.
+- **Python ToolVersion execution immutability.** The published `source/`
+  directory is the immutable canonical authority and is never an execution
+  working directory. One `CapabilityCoordinator` lazily owns one stable
+  `PythonToolStore` identity for its lifetime — lazy because Python is
+  optional (a failed initialization is retryable and never poisons the
+  slot), stable because the store is the single process-local coordination
+  domain for environment/build coalescing and invocation allocation. Each
+  invocation claims a unique execution bundle
+  `python-invocations/execution-N/` from the store's monotonic allocator —
+  strictly increasing, never reused, exhaustion fails the invocation
+  explicitly — and materializes three separated ownership domains:
+  `execution-N/source/` (the writable copy of the canonical ToolVersion
+  bytes, module root and cwd), `execution-N/harness.py` (runtime-owned
+  harness bytes, written per invocation so no shared writable executable
+  path exists across capability generations), and `execution-N/input.json`
+  (runtime-owned arguments). Package-owned files named `input.json` or
+  `harness.py` are canonical content inside `source/` and are never
+  overwritten. The bundle is removed only by its own invocation at
+  settlement; a live invocation's bundle is never reused or deleted by
+  another invocation or a later capability revision (a detached background
+  execution holds its executor across refresh safely). An already-existing
+  `execution-N/` is stale scratch from a previous process lifetime: the
+  allocator skips it and it is never deleted or reused — there is no
+  scratch GC. Ordinary tool writes — relative paths or
+  `__file__` — land in the invocation-private `source/` copy, so the
+  canonical bytes cannot drift across executions or restarts (the harness
+  additionally disables bytecode caches so imports never write
+  `__pycache__` into any runtime-owned directory).
 - **Environment identity input lock.** A published Python environment is
   reusable only when its ready marker matches every deterministic input that
   derives the identity: format domain, OS, architecture, digest, lock

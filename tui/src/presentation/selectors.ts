@@ -27,6 +27,7 @@
 
 import type {
   BackgroundLifecycle,
+  CapabilitySourceView,
   ModelInvocationView,
   SessionModelConfig,
   RuntimeClientBackgroundExecution,
@@ -107,6 +108,17 @@ export function toolsByOrigin(
 /** The Skill catalog as the runtime published it. */
 export function skills(state: PresentationState): RuntimeClientSkill[] {
   return state.capabilities.skills ?? [];
+}
+
+/** The optional capability sources the runtime reports as unavailable
+ * (Issue #81). The typed reason travels with each source; the footer only
+ * renders the count. */
+export function unavailableCapabilities(
+  state: PresentationState,
+): CapabilitySourceView[] {
+  return (state.capabilities.sources ?? []).filter(
+    (source) => source.state.type === "unavailable",
+  );
 }
 
 /** A compact capability summary line for one resolved invocation. */

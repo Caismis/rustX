@@ -60,9 +60,32 @@
 //!
 //! Composition follows a fixed order, and the initial capability candidate
 //! is **prepared and committed before any protocol input is served**. A
-//! capability startup failure therefore never leaves a partially
-//! initialized protocol server: composition returns an error and the process
-//! exits before a single protocol byte is written.
+//! *core* startup failure therefore never leaves a partially initialized
+//! protocol server: composition returns an error and the process exits
+//! before a single protocol byte is written.
+//!
+//! # Fatal vs isolated startup failures (Issue #81)
+//!
+//! The boundary is ownership. Failures that prove the core runtime itself
+//! cannot be constructed remain fatal composition errors: unreadable or
+//! invalid startup files, model catalog/credential/binding failures, an
+//! invalid session configuration, workspace/private-store ownership
+//! violations, native tool plane construction, and structurally invalid
+//! capability-plane configuration (a workspace-overlapping environment
+//! store, a malformed Skill, a dependency conflict, shared environment
+//! materialization).
+//!
+//! Failures of **optional external capability sources** — the custom
+//! Python tool plane and each configured MCP server independently — are
+//! isolated by the capability plane itself (`prepare_candidate` records
+//! them as typed [`CapabilitySourceState::Unavailable`](crate::capabilities::CapabilitySourceState)
+//! state instead of failing the candidate). The runtime therefore starts
+//! with, e.g., native tools ready, Python unavailable, one MCP server
+//! unavailable and another ready; the base/native capability set is never
+//! conditional on an optional source, and one optional source's failure
+//! never suppresses another. The Runtime Client projection carries the
+//! typed availability state, so a client observes the reason instead of an
+//! opaque transport EOF.
 //!
 //! The conversation runtime is constructed **inactive** inside the core;
 //! the optional Runtime Client host binds over the inert runtime, and the
@@ -293,6 +316,10 @@ impl LocalConversationCore {
         // anything can serve protocol input. This is the startup capability
         // commit: it happens *before* the conversation runtime exists, so
         // it is not subject to the runtime's lifecycle gate (Issue #61).
+        // Optional-source failures (Python tools, any one MCP server) are
+        // already isolated into typed availability state inside
+        // `prepare_candidate` (Issue #81); an error here is a *base*
+        // capability-plane failure and stays fatal.
         let candidate = capability.prepare_candidate().await.map_err(|error| {
             LocalRuntimeError::Capability {
                 detail: format!("{error:?}"),
@@ -346,7 +373,9 @@ impl LocalConversationCore {
     ///   [`register_subagent_child_tools`];
     /// - the capability plane is **base-only**: no Skill discovery, no
     ///   Python/Node environments, no MCP servers, and no `subagent` tool
-    ///   (recursive delegation is structurally absent);
+    ///   (recursive delegation is structurally absent); it never opens or
+    ///   creates Python tool storage (Issue #81), so a broken Python store
+    ///   location cannot fail child composition;
     /// - the profile persona enters the canonical history as one bootstrap
     ///   `SystemMessageBlock` (authority `Platform`), never as a forged
     ///   user message;
@@ -692,7 +721,12 @@ pub enum LocalRuntimeError {
         /// The failure detail.
         detail: String,
     },
-    /// The capability plane could not be prepared or committed.
+    /// The base capability plane could not be constructed, prepared, or
+    /// committed.
+    ///
+    /// This never carries an optional-source failure: the custom Python
+    /// tool plane and each configured MCP server fail into typed
+    /// availability state instead (Issue #81).
     Capability {
         /// The failure detail.
         detail: String,

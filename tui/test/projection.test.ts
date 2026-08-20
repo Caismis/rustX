@@ -482,7 +482,7 @@ describe("presentation projection", () => {
 
   it("folds a capability revision swap", () => {
     const state = fold(initial(), [
-      { type: "capability_published", capabilities: capabilities(7) },
+      { type: "capability_updated", capabilities: capabilities(7) },
     ]);
     assert.equal(state.capabilities.revision, 7);
     assert.equal(state.capabilities.tools?.length, 2);

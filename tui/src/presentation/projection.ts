@@ -430,7 +430,7 @@ export function reduce(
       next.subagents = upsertSubagent(state.subagents, event.subagent);
       return next;
 
-    case "capability_published":
+    case "capability_updated":
       next.capabilities = event.capabilities;
       return next;
 

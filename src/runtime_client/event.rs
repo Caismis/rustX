@@ -304,8 +304,20 @@ pub enum RuntimeClientEvent {
         subagent: RuntimeClientSubagent,
     },
 
-    /// The active capability set was activated (a revision swap).
-    CapabilityPublished {
+    /// The externally visible capability read model changed (Issue #81).
+    ///
+    /// This is the one capability observation, published for **both**
+    /// kinds of authoritative capability commit:
+    ///
+    /// - an executable capability activation (a revision swap), and
+    /// - an availability-only change (a source became ready or
+    ///   unavailable without any change to the committed executable set).
+    ///
+    /// The carried [`CapabilityView`] is the complete folded projection
+    /// after the commit; its `revision` tells the client whether the
+    /// executable capability identity changed. A client never needs to
+    /// poll `snapshot_get` to discover an availability transition.
+    CapabilityUpdated {
         /// The deterministic active capability projection.
         capabilities: CapabilityView,
     },

@@ -52,6 +52,15 @@ pub const PAGE_SIZE_ENV: &str = "RUSTX_M7_FIXTURE_PAGE_SIZE";
 /// bounds `server/discover` advertisement, `initialize` negotiation, and
 /// per-request version validation alike.
 pub const PROTOCOL_VERSIONS_ENV: &str = "RUSTX_M7_FIXTURE_PROTOCOL_VERSIONS";
+/// The environment variable making the fixture's `tools/list` fail with a
+/// correlated error message of exactly the given byte length
+/// (self-spawned stdio fixtures).
+///
+/// This is the deterministic oversized-diagnostic seam (Issue #81): an
+/// external MCP peer can produce an arbitrarily large failure payload, and
+/// the capability availability contract must bound it before the
+/// diagnostic enters authoritative state.
+pub const LIST_TOOLS_ERROR_BYTES_ENV: &str = "RUSTX_M7_FIXTURE_LIST_TOOLS_ERROR_BYTES";
 /// Parses a comma-separated protocol revision list.
 ///
 /// Every MCP revision string is accepted, including ones no SDK knows: that
@@ -83,6 +92,9 @@ impl FixtureServer {
             supported_versions: std::env::var(PROTOCOL_VERSIONS_ENV)
                 .ok()
                 .map(|value| parse_protocol_versions(&value)),
+            list_tools_error_bytes: std::env::var(LIST_TOOLS_ERROR_BYTES_ENV)
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok()),
             ..Self::default()
         }
     }
@@ -149,6 +161,9 @@ pub struct FixtureServer {
     /// A client that installed more than one invalidation mechanism per
     /// connection shows up here as a count above one.
     pub listen_calls: Arc<std::sync::atomic::AtomicUsize>,
+    /// When set, `tools/list` fails with a correlated error message of
+    /// exactly this many bytes (the oversized-diagnostic seam).
+    pub list_tools_error_bytes: Option<usize>,
 }
 
 impl FixtureServer {
@@ -204,6 +219,10 @@ impl ServerHandler for FixtureServer {
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<rmcp::model::ListToolsResult, rmcp::ErrorData>> + Send
     {
+        if let Some(bytes) = self.list_tools_error_bytes {
+            let message = format!("catalog unavailable: {}", "x".repeat(bytes));
+            return std::future::ready(Err(rmcp::ErrorData::internal_error(message, None)));
+        }
         let tools = self.catalog();
         let Some(page_size) = self.page_size else {
             let result = rmcp::model::ListToolsResult {

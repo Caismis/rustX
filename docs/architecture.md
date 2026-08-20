@@ -2026,8 +2026,8 @@ uses the current rmcp client transport with explicit static headers and no
 Custom Python packages are discovered only from
 `<workspace>/.agents/tools/<tool-name>/`. Candidate preparation reads a finite
 package snapshot, computes `ToolVersionId`, publishes it immutably as
-`tool-versions/<ToolVersionId>/source/` plus a version marker (the executor
-and every uv command use exactly the `source/` root; reuse validates the
+`tool-versions/<ToolVersionId>/source/` plus a version marker (every uv
+preparation command uses exactly the `source/` root; reuse validates the
 published source content digest against the claimed identity), validates
 the existing `uv.lock`, and materializes a distinct immutable
 `PythonToolEnvironmentDigest` environment whose ready marker locks every
@@ -2037,10 +2037,28 @@ identity are separate: source/description/schema changes can change the
 former without changing the latter, and each ToolVersion -> environment
 binding is recorded deterministically outside the environment's immutable
 dependency identity. The environment isolates dependencies, not filesystem,
-network, or security permissions. The interpreter whose identity enters the
-digest is pinned to uv via `UV_PYTHON`, managed Python downloads stay
-disabled, and every preparation command has a finite deadline (a timeout is
-an explicit preparation failure). A harness uses a private input file and
+network, or security permissions. The `PythonToolStore` is initialized
+lazily — Python is optional, so construction belongs to Python preparation
+and a failure degrades availability without poisoning anything — but once
+initialized it is owned for the `CapabilityCoordinator` lifetime and is the
+single process-local coordination domain for Python environment/build
+coalescing and invocation allocation; it is never reconstructed per
+preparation. Execution never uses the published
+source as a working directory: each invocation claims a unique execution
+bundle `python-invocations/execution-N/` from the store's monotonic
+allocation domain (two executor generations can never collide; an
+identifier is never reused, and exhaustion fails the invocation explicitly),
+materializes its own `source/` copy plus the runtime-owned `harness.py` and
+`input.json` beside it — ToolVersion-owned source and runtime-owned
+invocation files never share a namespace — runs the harness with `source/`
+as module root and working directory, and removes exactly its own bundle
+when the invocation settles. A live invocation's bundle is never reused or
+deleted by another invocation or capability generation; scratch left behind
+by a crash is skipped by the allocator and never destroyed (no scratch GC
+exists). The interpreter whose
+identity enters the digest is pinned to uv via `UV_PYTHON`, managed Python
+downloads stay disabled, and every preparation command has a finite
+deadline (a timeout is an explicit preparation failure). A harness uses a private input file and
 one bounded JSON result envelope; the Python subprocess uses the shared
 supervised short-lived runner. Same-digest in-flight builds coalesce behind
 one store-owned owner task (callers only wait; owner failure publishes a
@@ -3068,6 +3086,45 @@ returning already-active runtimes and both activating through the one
 `ConversationRuntime::activate` boundary. The startup capability commit
 happens *before* the conversation runtime is constructed, so it is not
 subject to the runtime's lifecycle gate.
+
+Startup failure ownership (Issue #81): failures that prove the core runtime
+itself cannot be constructed — startup files, model catalog/credentials/
+bindings, session configuration, workspace/private-store ownership, native
+tool plane construction, or the base capability plane (environment-store
+layout, malformed Skills, dependency conflicts, shared environment
+materialization) — remain fatal composition errors. Failures of **optional
+external capability sources** — the custom Python tool plane and each
+configured MCP server independently — are isolated by the capability plane
+into typed availability state (`CapabilitySourceState::Unavailable { reason }`
+keyed by `CapabilitySourceId`), and composition continues: the base/native
+capability set is never conditional on an optional source, one MCP server's
+failure never suppresses another, and only successfully prepared capability
+objects enter the committed active snapshot. Opening/creating the
+Python-private store itself (`<environment store>/m7-tools`) is part of the
+optional Python preparation — the coordinator constructor owns only the
+store location plus one lazy slot — so a broken Python store degrades
+Python availability and can never fail core construction, and the base-only
+subagent capability path (`prepare_base_only_candidate`) never touches
+Python storage at all. A failed initialization leaves the slot empty so the
+next preparation retries; the first successful initialization is published
+as the one coordinator-lifetime-stable `PythonToolStore` identity (the
+single allocation/build-coalescing domain), never reconstructed per
+preparation.
+Each `reason` is normalized at the capability-owning boundary before it
+enters the authoritative state: valid UTF-8, deterministic, at most
+1024 bytes (`CAPABILITY_FAILURE_REASON_MAX_BYTES`, truncation marked with
+`…[truncated]`), so an external peer can never make the committed state
+unbounded and the Runtime Client projects the already-bounded value
+verbatim. The Runtime Client capability
+projection (`CapabilityView.sources`) carries the typed state, so a client
+observes *why* a source is unavailable instead of inferring failure from a
+dead transport. `CapabilityRevision` advances only when the effective
+committed executable capability set changes; an availability-only change
+never fabricates a revision but is still observed: both kinds of commit
+publish the one `CapabilityUpdated` Runtime Client event carrying the
+complete folded `CapabilityView`, whose `revision` tells the client
+whether the executable capability identity changed.
+
 The governing invariant:
 
 > One local runtime process owns one conversation session. That session owns

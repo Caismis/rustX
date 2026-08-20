@@ -113,12 +113,12 @@ pub use host::{
 // the type never lives under the projection read model.
 pub use crate::runtime::request_history::{RequestHistory, RequestHistoryError};
 pub use snapshot::{
-    AgentStatusView, CapabilityView, ForegroundToolExecution, ForegroundToolState,
-    InFlightAssistantMessage, InFlightBlock, InboundDiagnostics, InboundDrainView, InboundItemView,
-    RuntimeClientAttempt, RuntimeClientAttemptPhase, RuntimeClientBackgroundExecution,
-    RuntimeClientCompactionView, RuntimeClientContextView, RuntimeClientSkill,
-    RuntimeClientSnapshot, RuntimeClientStatusFact, RuntimeClientStatusSection, RuntimeClientTool,
-    RuntimeDurabilityFailure,
+    AgentStatusView, CapabilitySourceDescriptor, CapabilitySourceStateView, CapabilitySourceView,
+    CapabilityView, ForegroundToolExecution, ForegroundToolState, InFlightAssistantMessage,
+    InFlightBlock, InboundDiagnostics, InboundDrainView, InboundItemView, RuntimeClientAttempt,
+    RuntimeClientAttemptPhase, RuntimeClientBackgroundExecution, RuntimeClientCompactionView,
+    RuntimeClientContextView, RuntimeClientSkill, RuntimeClientSnapshot, RuntimeClientStatusFact,
+    RuntimeClientStatusSection, RuntimeClientTool, RuntimeDurabilityFailure,
 };
 pub use types::{
     AttachmentId, RUNTIME_CLIENT_PROTOCOL_VERSION_V1, RequestId, RuntimeClientCursor,

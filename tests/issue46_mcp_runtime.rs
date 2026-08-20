@@ -444,6 +444,163 @@ mod unix_tests {
         journal.iter().filter(|line| *line == entry).count()
     }
 
+    /// **The Issue #81 production peer shape.** A genuine pre-2026 peer
+    /// whose session middleware rejects the unknown pre-`initialize`
+    /// `server/discover` probe with a correlated `-32600`
+    /// (`INVALID_REQUEST`) "Unsupported protocol version" error — not the
+    /// `-32601` rmcp 3.1.2's `Auto` mode required for the legacy fallback.
+    ///
+    /// ```text
+    /// server/discover            -> -32600 Unsupported protocol version
+    ///                               (connection stays open)
+    /// ClientLifecycleMode::Auto  -> classifies the peer as legacy
+    /// initialize                 -> legacy_handshake_version() offered
+    ///                            <- InitializeResult(2025-06-18)
+    /// tools/list                 -> canonical catalog published
+    /// ```
+    ///
+    /// The client must not abort after the newest revision is rejected:
+    /// the negotiated revision is the highest revision both sides speak
+    /// (2025-06-18), and discovery succeeds over it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_legacy_server_rejecting_the_probe_with_a_non_modern_error_falls_back() {
+        use rustx::tools::mcp::fixture::legacy;
+
+        if legacy::serve_if_legacy_fixture_mode().await {
+            return;
+        }
+        let workspace_dir = tempfile::tempdir().expect("workspace");
+        let journal_dir = tempfile::tempdir().expect("journal");
+        let journal = journal_dir.path().join("legacy-journal");
+        let workspace = rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace");
+        let server_id = McpServerId::new("legacy-invalid-request");
+        let binding = McpServerBinding {
+            transport: McpTransportConfig::Stdio {
+                program: std::env::current_exe()
+                    .expect("test executable")
+                    .display()
+                    .to_string(),
+                args: fixture::fixture_spawn_args(
+                    "unix_tests::a_legacy_server_rejecting_the_probe_with_a_non_modern_error_falls_back",
+                ),
+                cwd: None,
+                environment: BTreeMap::from([
+                    (legacy::LEGACY_FIXTURE_MODE_ENV.to_owned(), "1".to_owned()),
+                    (
+                        legacy::LEGACY_JOURNAL_ENV.to_owned(),
+                        journal.display().to_string(),
+                    ),
+                    (
+                        legacy::LEGACY_DISCOVER_ERROR_ENV.to_owned(),
+                        legacy::DISCOVER_ERROR_INVALID_REQUEST.to_owned(),
+                    ),
+                ]),
+            },
+            policy: ToolInvocationPolicy::default(),
+        };
+
+        let runtime = McpServerRuntime::connect(
+            &server_id,
+            &binding,
+            &workspace,
+            Arc::new(McpInvalidationState::new()),
+        )
+        .await
+        .expect("a non-modern probe rejection must fall back to the legacy handshake");
+        assert_eq!(
+            runtime.protocol_version(),
+            &legacy::LEGACY_FIXTURE_REVISION,
+            "the highest revision both sides speak wins after the fallback"
+        );
+        let expected_legacy_offer = rustx::tools::mcp::supported_protocol_versions()
+            .into_iter()
+            .find(|version| version.as_str() < ProtocolVersion::V_2026_07_28.as_str())
+            .expect("rustX offers at least one pre-inline revision");
+        let journal = legacy::read_journal(&journal);
+        assert_eq!(
+            count(&journal, legacy::JOURNAL_DISCOVER),
+            1,
+            "exactly one server/discover probe: {journal:?}"
+        );
+        assert_eq!(
+            journal
+                .iter()
+                .filter(|entry| entry.starts_with(legacy::JOURNAL_INITIALIZE_PREFIX))
+                .collect::<Vec<_>>(),
+            [&format!(
+                "{}{expected_legacy_offer}",
+                legacy::JOURNAL_INITIALIZE_PREFIX
+            )],
+            "exactly one legacy initialize on the same connection, offering \
+             legacy_handshake_version(): {journal:?}"
+        );
+        assert_eq!(
+            runtime
+                .list_tools()
+                .await
+                .expect("tools/list over the fallback connection")
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            ["echo", "mutate"],
+            "discovery succeeds over the negotiated legacy revision"
+        );
+        runtime
+            .close()
+            .await
+            .expect("the owned stdio unit must publish physical settlement");
+    }
+
+    /// A legacy peer that echoes a revision no MCP SDK knows shares no
+    /// revision with rustX: the post-handshake membership validation
+    /// rejects it with a bounded [`McpError::ProtocolCompatibility`], and
+    /// the spawned stdio unit is still physically settled.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_legacy_server_with_no_shared_revision_is_a_compatibility_error() {
+        use rustx::tools::mcp::fixture::legacy;
+
+        if legacy::serve_if_legacy_fixture_mode().await {
+            return;
+        }
+        let workspace_dir = tempfile::tempdir().expect("workspace");
+        let workspace = rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace");
+        let binding = McpServerBinding {
+            transport: McpTransportConfig::Stdio {
+                program: std::env::current_exe()
+                    .expect("test executable")
+                    .display()
+                    .to_string(),
+                args: fixture::fixture_spawn_args(
+                    "unix_tests::a_legacy_server_with_no_shared_revision_is_a_compatibility_error",
+                ),
+                cwd: None,
+                environment: BTreeMap::from([
+                    (legacy::LEGACY_FIXTURE_MODE_ENV.to_owned(), "1".to_owned()),
+                    (
+                        legacy::LEGACY_REVISION_ENV.to_owned(),
+                        "1999-01-01".to_owned(),
+                    ),
+                ]),
+            },
+            policy: ToolInvocationPolicy::default(),
+        };
+        let error = McpServerRuntime::connect(
+            &McpServerId::new("legacy-no-overlap"),
+            &binding,
+            &workspace,
+            Arc::new(McpInvalidationState::new()),
+        )
+        .await
+        .expect_err("a legacy peer with no shared revision must not connect");
+        let McpError::ProtocolCompatibility(detail) = &error else {
+            panic!("expected a protocol compatibility failure, got: {error:?}");
+        };
+        assert!(
+            detail.contains("1999-01-01"),
+            "the failure must name the revision the server echoed: {detail}"
+        );
+    }
+
     /// A server that speaks only a revision no MCP SDK knows shares no
     /// revision with rustX, and the failure is a bounded, precise
     /// compatibility error rather than a generic transport failure.

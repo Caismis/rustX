@@ -166,6 +166,36 @@ describe("footer", () => {
     assert.match(rendered, /connected/);
   });
 
+  it("surfaces unavailable optional capabilities without dying (Issue #81)", () => {
+    const healthy = footer(
+      stateOf({ capabilities: { revision: 3, sources: [] } }),
+      "connected",
+    );
+    assert.doesNotMatch(healthy, /unavailable/);
+
+    const degraded = footer(
+      stateOf({
+        capabilities: {
+          revision: 3,
+          sources: [
+            { source: { type: "python" }, state: { type: "ready" } },
+            {
+              source: { type: "mcp", server_id: "exa" },
+              state: { type: "unavailable", reason: "spawn failed" },
+            },
+            {
+              source: { type: "mcp", server_id: "filesystem" },
+              state: { type: "ready" },
+            },
+          ],
+        },
+      }),
+      "connected",
+    );
+    assert.match(degraded, /cap r3/);
+    assert.match(degraded, /1 cap unavailable \(mcp exa\)/);
+  });
+
   it("shows the attempt's frozen model when the session moved on", () => {
     const rendered = footer(
       stateOf({

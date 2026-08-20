@@ -59,7 +59,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::agent::observer::AgentStatusObservation;
-use crate::capabilities::CapabilitySnapshot;
+use crate::capabilities::{CapabilityAvailability, CapabilitySnapshot};
 use crate::events::types::RuntimeEvent;
 use crate::message::types::MessageBlock;
 use crate::model::session::{AttemptModelView, SessionModelView};
@@ -103,8 +103,17 @@ pub(crate) enum ConversationObservation {
     Background(BackgroundExecutionSnapshot),
     /// One subagent registry transition snapshot (Issue #60).
     Subagent(crate::runtime::subagent::SubagentSnapshot),
-    /// One activated authoritative capability snapshot.
-    Capability(Arc<CapabilitySnapshot>),
+    /// One activated authoritative capability snapshot, together with the
+    /// authoritative per-source availability state at that commit (Issue
+    /// #81). The availability may change without a revision swap (a
+    /// diagnostic-only change); the snapshot never changes without one.
+    Capability {
+        /// The activated immutable capability snapshot.
+        snapshot: Arc<CapabilitySnapshot>,
+        /// The authoritative availability of every evaluated optional
+        /// capability source.
+        availability: CapabilityAvailability,
+    },
     /// The coordinator admitted an attempt (before the loop started).
     AttemptAdmitted {
         /// The admitted attempt.

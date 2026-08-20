@@ -598,6 +598,23 @@ export interface CapabilityView {
   revision: CapabilityRevision;
   tools?: RuntimeClientTool[];
   skills?: RuntimeClientSkill[];
+  /** Typed availability of every evaluated optional capability source. */
+  sources?: CapabilitySourceView[];
+}
+
+/** The identity of one optional capability source (Issue #81). */
+export type CapabilitySourceDescriptor =
+  | { type: "python" }
+  | { type: "mcp"; server_id: McpServerId };
+
+/** The availability of one optional capability source. */
+export type CapabilitySourceStateView =
+  | { type: "ready" }
+  | { type: "unavailable"; reason: string };
+
+export interface CapabilitySourceView {
+  source: CapabilitySourceDescriptor;
+  state: CapabilitySourceStateView;
 }
 
 export type TokenMeasurementSource = "provider_reported" | "estimated";
@@ -784,7 +801,7 @@ export type RuntimeClientEvent =
       type: "subagent_updated";
       subagent: RuntimeClientSubagent;
     }
-  | { type: "capability_published"; capabilities: CapabilityView }
+  | { type: "capability_updated"; capabilities: CapabilityView }
   | { type: "session_model_changed"; model: SessionModelView }
   | { type: "runtime_shutdown" };
 
@@ -982,7 +999,7 @@ export function isKnownRuntimeClientEvent(
     case "inbound_drained":
     case "background_execution_updated":
     case "subagent_updated":
-    case "capability_published":
+    case "capability_updated":
     case "session_model_changed":
     case "runtime_shutdown":
       return true;

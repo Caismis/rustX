@@ -941,7 +941,7 @@ impl RuntimeClientHost {
         let mut projection = RuntimeClientProjection::new(
             seed.conversation_id.clone(),
             seed.messages.clone(),
-            super::projection::capability_view(&seed.capabilities),
+            super::projection::capability_view(&seed.capabilities, &seed.capability_availability),
             seed.model.clone(),
             replay_limit,
         );
@@ -3543,6 +3543,88 @@ mod tests {
         );
     }
 
+    /// Issue #81 follow-up: an availability-only capability commit — the
+    /// Python plane becomes unavailable while the committed executable set
+    /// is unchanged — never advances `CapabilityRevision`, yet a
+    /// continuously attached client still observes it as one
+    /// `CapabilityUpdated` event whose view reports the unchanged revision.
+    /// No `snapshot_get` polling is needed to discover the transition.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn an_availability_only_commit_publishes_a_capability_update_without_a_revision_swap() {
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
+        let (attachment, _) = fixture
+            .host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .expect("attach");
+        let (_, cursor) = fixture.host.snapshot().expect("snapshot");
+        let subscription = attachment
+            .subscribe_events(cursor)
+            .expect("subscribe from the snapshot cursor");
+        let revision_before = fixture.coordinator.current_snapshot().revision();
+
+        // Break the Python plane *without* changing the executable set:
+        // the workspace had no Python tools, and a malformed package can
+        // never contribute one.
+        let workspace = fixture
+            .runtime
+            .tool_runtime()
+            .workspace()
+            .root()
+            .to_path_buf();
+        let package = workspace.join(".agents").join("tools").join("broken-tool");
+        std::fs::create_dir_all(&package).expect("package dir");
+        std::fs::write(
+            package.join("TOOL.toml"),
+            "schema_version = 1\nname = \"other-name\"\ndescription = \"Broken\"\nentrypoint = \"tool:main\"\nexecution = \"foreground_only\"\nconcurrency = \"sequential\"\n",
+        )
+        .expect("broken manifest");
+        let candidate = fixture
+            .coordinator
+            .prepare_candidate()
+            .await
+            .expect("prepare the availability-only candidate");
+        let committed = fixture
+            .coordinator
+            .commit(candidate)
+            .expect("an availability-only commit succeeds");
+        assert_eq!(
+            committed.revision(),
+            revision_before,
+            "an availability-only change never fabricates a revision"
+        );
+
+        let events = receive_until(&subscription, |event| {
+            matches!(event.event, RuntimeClientEvent::CapabilityUpdated { .. })
+        })
+        .await;
+        let Some(RuntimeClientEvent::CapabilityUpdated { capabilities }) =
+            events.last().map(|event| &event.event)
+        else {
+            panic!("the capability update event is published: {events:?}");
+        };
+        assert_eq!(
+            capabilities.revision, revision_before,
+            "the event reports the unchanged executable revision"
+        );
+        assert!(
+            capabilities.sources.iter().any(|source| {
+                matches!(
+                    source,
+                    crate::runtime_client::snapshot::CapabilitySourceView {
+                        source: crate::runtime_client::snapshot::CapabilitySourceDescriptor::Python,
+                        state: crate::runtime_client::snapshot::CapabilitySourceStateView::Unavailable { .. },
+                    }
+                )
+            }),
+            "the event carries the typed unavailable state: {:?}",
+            capabilities.sources
+        );
+        // The folded snapshot agrees with the event stream.
+        let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
+        assert_eq!(snapshot.capabilities.revision, revision_before);
+        assert_eq!(snapshot.capabilities.sources, capabilities.sources);
+    }
+
     /// The exact snapshot/cursor race, interleaving A (snapshot wins): the
     /// snapshot linearizes first and the concurrent transition is observed
     /// by a resume after the snapshot's cursor.
@@ -5313,10 +5395,7 @@ mod tests {
         assert_eq!(
             events
                 .iter()
-                .filter(|event| matches!(
-                    event.event,
-                    RuntimeClientEvent::CapabilityPublished { .. }
-                ))
+                .filter(|event| matches!(event.event, RuntimeClientEvent::CapabilityUpdated { .. }))
                 .count(),
             1,
             "the post-activation capability commit is published exactly once"
