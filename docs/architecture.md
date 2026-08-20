@@ -2037,12 +2037,25 @@ identity are separate: source/description/schema changes can change the
 former without changing the latter, and each ToolVersion -> environment
 binding is recorded deterministically outside the environment's immutable
 dependency identity. The environment isolates dependencies, not filesystem,
-network, or security permissions. Execution never uses the published
-source as a working directory: each invocation materializes a private copy
-of it under `python-invocations/execution-N/`, runs the harness with that
-copy as module root and working directory, and deletes the copy when the
-invocation settles, so ordinary tool writes (relative paths, `__file__`)
-can never mutate the canonical ToolVersion bytes. The interpreter whose
+network, or security permissions. The `PythonToolStore` is initialized
+lazily — Python is optional, so construction belongs to Python preparation
+and a failure degrades availability without poisoning anything — but once
+initialized it is owned for the `CapabilityCoordinator` lifetime and is the
+single process-local coordination domain for Python environment/build
+coalescing and invocation allocation; it is never reconstructed per
+preparation. Execution never uses the published
+source as a working directory: each invocation claims a unique execution
+bundle `python-invocations/execution-N/` from the store's monotonic
+allocation domain (two executor generations can never collide; an
+identifier is never reused, and exhaustion fails the invocation explicitly),
+materializes its own `source/` copy plus the runtime-owned `harness.py` and
+`input.json` beside it — ToolVersion-owned source and runtime-owned
+invocation files never share a namespace — runs the harness with `source/`
+as module root and working directory, and removes exactly its own bundle
+when the invocation settles. A live invocation's bundle is never reused or
+deleted by another invocation or capability generation; scratch left behind
+by a crash is skipped by the allocator and never destroyed (no scratch GC
+exists). The interpreter whose
 identity enters the digest is pinned to uv via `UV_PYTHON`, managed Python
 downloads stay disabled, and every preparation command has a finite
 deadline (a timeout is an explicit preparation failure). A harness uses a private input file and
@@ -3089,9 +3102,14 @@ failure never suppresses another, and only successfully prepared capability
 objects enter the committed active snapshot. Opening/creating the
 Python-private store itself (`<environment store>/m7-tools`) is part of the
 optional Python preparation — the coordinator constructor owns only the
-store location — so a broken Python store degrades Python availability and
-can never fail core construction, and the base-only subagent capability
-path (`prepare_base_only_candidate`) never touches Python storage at all.
+store location plus one lazy slot — so a broken Python store degrades
+Python availability and can never fail core construction, and the base-only
+subagent capability path (`prepare_base_only_candidate`) never touches
+Python storage at all. A failed initialization leaves the slot empty so the
+next preparation retries; the first successful initialization is published
+as the one coordinator-lifetime-stable `PythonToolStore` identity (the
+single allocation/build-coalescing domain), never reconstructed per
+preparation.
 Each `reason` is normalized at the capability-owning boundary before it
 enters the authoritative state: valid UTF-8, deterministic, at most
 1024 bytes (`CAPABILITY_FAILURE_REASON_MAX_BYTES`, truncation marked with

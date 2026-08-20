@@ -11,19 +11,21 @@
 //! ```text
 //! <store-root>/
 //! ├── tool-versions/<ToolVersionId>/
-//! │   ├── source/                     # executor source root (immutable)
+//! │   ├── source/                     # canonical ToolVersion source (immutable)
 //! │   │   ├── TOOL.toml
 //! │   │   ├── input.schema.json
 //! │   │   ├── pyproject.toml
 //! │   │   ├── uv.lock
-//! │   │   └── ...
+//! │   │   └── ...                     # may include package-owned input.json/harness.py
 //! │   └── RUSTX_TOOL_VERSION.json     # format + claimed ToolVersionId
 //! ├── python-tool-envs/<PythonToolEnvironmentDigest>/
 //! │   └── RUSTX_ENV_MANIFEST.json     # exact deterministic input lock
 //! ├── python-tool-bindings/<ToolVersionId>/<PythonToolEnvironmentDigest>.json
 //! ├── uv-cache/                       # store-private uv cache (scratch state)
-//! └── python-invocations/execution-N/ # per-invocation writable execution
-//!                                     # materialization (deleted at settlement)
+//! └── python-invocations/execution-N/ # one invocation-private execution bundle
+//!     ├── source/                     # writable copy of the canonical source
+//!     ├── harness.py                  # runtime-owned harness bytes
+//!     └── input.json                  # runtime-owned invocation arguments
 //! ```
 //!
 //! On reuse a published `ToolVersion` is validated by recomputing the
@@ -34,14 +36,22 @@
 //! `ToolVersionId` is derived once from the canonical source bytes
 //! (sorted package-relative paths, lengths, and raw bytes). The published
 //! `source/` directory is the **immutable canonical authority**: no
-//! execution ever uses it as a working directory. Each invocation
-//! materializes a private copy under `python-invocations/execution-N/`,
-//! runs the harness against that copy with the copy as its working
-//! directory, and deletes the copy when the invocation settles (the
+//! execution ever uses it as a working directory. Each invocation claims a
+//! unique execution bundle from the store's monotonic allocation domain —
+//! the store is a coordinator-lifetime-stable identity, so two executor
+//! generations can never collide — and materializes its own `source/`
+//! copy, `harness.py`, and `input.json` inside it. The three ownership
+//! domains never share a namespace: runtime-owned invocation files live
+//! outside `source/`, so package-owned files named `input.json` or
+//! `harness.py` are copied and preserved like any other canonical byte.
+//! The Python process runs with the bundle's `source/` as module root and
+//! working directory, and the bundle is removed when that invocation — and
+//! only that invocation — settles; a bundle left behind by a crash is
+//! stale scratch that is never reused or deleted (no GC exists). The
 //! harness additionally disables bytecode caches so imports never write
-//! `__pycache__` into any runtime-owned directory). Ordinary tool writes
-//! — relative paths or `__file__` — therefore land in the
-//! invocation-private materialization and can never drift the canonical
+//! `__pycache__` into any runtime-owned directory. Ordinary
+//! tool writes — relative paths or `__file__` — therefore land in the
+//! invocation-private `source/` copy and can never drift the canonical
 //! bytes, so the persisted representation always validates identically
 //! across executions and restarts. The environment marker records
 //! every deterministic input that derives the environment identity
@@ -109,11 +119,13 @@ input_path = pathlib.Path(sys.argv[3]).resolve()
 sys.path.insert(0, str(source_root))
 
 # The source root the harness receives is the invocation-private
-# materialization of the immutable ToolVersion, and it is also the process
-# working directory: ordinary tool writes may mutate the private copy but
-# can never reach the canonical published source. Bytecode caches stay
-# disabled so imports additionally never write `__pycache__` into the
-# private copy or the immutable dependency environment.
+# `source/` copy inside this invocation's own execution bundle, and it is
+# also the process working directory: ordinary tool writes may mutate the
+# private copy but can never reach the canonical published source. The
+# harness itself is runtime-owned code materialized per invocation beside
+# (never inside) `source/`. Bytecode caches stay disabled so imports never
+# write `__pycache__` into the private copy or the immutable dependency
+# environment.
 sys.dont_write_bytecode = True
 
 def emit(value):
@@ -603,6 +615,7 @@ impl PythonToolStore {
         std::fs::create_dir_all(root.join("tool-versions")).map_err(io_error)?;
         std::fs::create_dir_all(root.join("python-tool-envs")).map_err(io_error)?;
         std::fs::create_dir_all(root.join("python-tool-bindings")).map_err(io_error)?;
+        std::fs::create_dir_all(root.join("python-invocations")).map_err(io_error)?;
         Ok(Self {
             inner: Arc::new(PythonToolStoreInner {
                 root,
@@ -625,6 +638,7 @@ impl PythonToolStore {
         std::fs::create_dir_all(root.join("tool-versions")).map_err(io_error)?;
         std::fs::create_dir_all(root.join("python-tool-envs")).map_err(io_error)?;
         std::fs::create_dir_all(root.join("python-tool-bindings")).map_err(io_error)?;
+        std::fs::create_dir_all(root.join("python-invocations")).map_err(io_error)?;
         Ok(Self {
             inner: Arc::new(PythonToolStoreInner {
                 root,
@@ -635,6 +649,48 @@ impl PythonToolStore {
                 next_invocation: Arc::new(AtomicU64::new(0)),
             }),
         })
+    }
+
+    /// Test-only identity token of this store's process-local coordination
+    /// domain: two handles over the same coordination identity return the
+    /// same token.
+    #[cfg(test)]
+    pub(crate) fn identity_token(&self) -> usize {
+        Arc::as_ptr(&self.inner) as usize
+    }
+
+    /// Allocates one unique, freshly claimed execution bundle directory for
+    /// one invocation: `python-invocations/execution-N/`.
+    ///
+    /// The store is the single process-local allocation domain (Issue #81):
+    /// one coordinator-lifetime-stable store hands out strictly monotonically
+    /// increasing identifiers, so two executors from different capability
+    /// generations can never claim the same bundle. The claim is the
+    /// atomic `create_dir` itself: an already-existing path is **never
+    /// deleted or reused** — it is stale scratch from a previous process
+    /// lifetime (there is deliberately no scratch GC), so the allocator
+    /// skips it. Identifier exhaustion fails the invocation explicitly
+    /// instead of silently wrapping onto a possibly live bundle.
+    fn allocate_execution_bundle(&self) -> Result<PathBuf, PythonToolError> {
+        let root = self.inner.root.join("python-invocations");
+        loop {
+            let number = self.inner.next_invocation.fetch_add(1, Ordering::Relaxed);
+            if number == u64::MAX {
+                return Err(PythonToolError::Storage(
+                    "the Python invocation identifier space is exhausted".to_owned(),
+                ));
+            }
+            let bundle = root.join(format!("execution-{number}"));
+            match std::fs::create_dir(&bundle) {
+                Ok(()) => return Ok(bundle),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    // Stale scratch from a previous process lifetime:
+                    // unknown ownership, never destroyed — skip to the next
+                    // monotonic identifier.
+                }
+                Err(error) => return Err(io_error(error)),
+            }
+        }
     }
 
     /// Publishes exact package bytes by content identity.
@@ -1156,16 +1212,14 @@ fn lock_digest_bytes(lock: &[u8]) -> String {
 /// environment handles captured at candidate preparation.
 ///
 /// The canonical published source is the immutable authority and is never
-/// a working directory: every invocation first materializes a private copy
-/// of it (see [`materialize_invocation_source`]) and executes against that
-/// copy.
+/// a working directory: every invocation claims a unique execution bundle
+/// from the stable store's allocation domain and materializes its own
+/// private source copy, harness, and input there (see
+/// [`PythonToolStore::allocate_execution_bundle`]).
 pub struct PythonToolExecutor {
     tool: PublishedPythonTool,
     environment: PythonToolEnvironment,
-    runner: Arc<dyn SupervisedProcessRunner>,
-    harness: PathBuf,
-    invocation_root: PathBuf,
-    next_invocation: Arc<AtomicU64>,
+    store: PythonToolStore,
 }
 
 impl std::fmt::Debug for PythonToolExecutor {
@@ -1181,30 +1235,22 @@ impl std::fmt::Debug for PythonToolExecutor {
 impl PythonToolExecutor {
     /// Creates an executor from published immutable handles.
     ///
-    /// # Errors
-    ///
-    /// Returns an error if the harness or invocation directory cannot be
-    /// installed.
+    /// The constructor performs no filesystem writes: the harness is
+    /// runtime-owned executable code materialized into each invocation's
+    /// own execution bundle, so preparing a new executor generation can
+    /// never rewrite executable bytes an older detached execution is about
+    /// to launch.
+    #[must_use]
     pub fn new(
         store: &PythonToolStore,
         tool: PublishedPythonTool,
         environment: PythonToolEnvironment,
-    ) -> Result<Self, PythonToolError> {
-        let harness = store.inner.root.join("python-tool-harness.py");
-        // The harness is runtime-owned executable code, never ToolVersion
-        // content: it is (re)written idempotently so every store always runs
-        // the current harness.
-        std::fs::write(&harness, PYTHON_HARNESS).map_err(io_error)?;
-        let invocation_root = store.inner.root.join("python-invocations");
-        std::fs::create_dir_all(&invocation_root).map_err(io_error)?;
-        Ok(Self {
+    ) -> Self {
+        Self {
             tool,
             environment,
-            runner: store.inner.runner.clone(),
-            harness,
-            invocation_root,
-            next_invocation: store.inner.next_invocation.clone(),
-        })
+            store: store.clone(),
+        }
     }
 }
 
@@ -1216,41 +1262,63 @@ impl ToolExecutor for PythonToolExecutor {
     ) -> BoxFuture<'a, ToolExecutionResult> {
         Box::pin(async move {
             let started = Instant::now();
-            let number = self.next_invocation.fetch_add(1, Ordering::Relaxed);
-            // The invocation-private execution materialization: a writable
-            // copy of the immutable canonical source. The Python process
-            // runs with this copy as its module root *and* its working
-            // directory, so ordinary tool writes (relative paths,
-            // `__file__`) can never mutate the published ToolVersion. The
-            // copy and the private input file are deleted when the
-            // invocation settles; an abandoned copy is scratch state only
-            // and never participates in any identity.
-            let invocation_dir = self.invocation_root.join(format!("execution-{number}"));
-            if let Err(error) = materialize_invocation_source(&self.tool.root, &invocation_dir) {
-                return failed_python(&error.to_string(), started);
-            }
-            let input_path = invocation_dir.join("input.json");
-            if let Err(error) = write_private_input(&input_path, &invocation.arguments) {
-                let _ = std::fs::remove_dir_all(&invocation_dir);
+            // The invocation-private execution bundle:
+            //
+            //   python-invocations/execution-N/
+            //       source/     the writable copy of the immutable
+            //                   canonical ToolVersion source — the module
+            //                   root *and* the working directory
+            //       harness.py  the runtime-owned harness bytes
+            //       input.json  the runtime-owned invocation arguments
+            //
+            // The three ownership domains never share a namespace: a
+            // package-owned `input.json` or `harness.py` inside the
+            // ToolVersion source is copied into `source/` like any other
+            // canonical file and is never overwritten by runtime-owned
+            // invocation files. Ordinary tool writes (relative paths,
+            // `__file__`) land in `source/` and can never mutate the
+            // published ToolVersion. The bundle is this invocation's own
+            // claim; it is removed when the invocation settles, and no
+            // other invocation or capability generation can reuse or
+            // delete it while it is live.
+            let bundle = match self.store.allocate_execution_bundle() {
+                Ok(bundle) => bundle,
+                Err(error) => return failed_python(&error.to_string(), started),
+            };
+            let source_dir = bundle.join("source");
+            let harness_path = bundle.join("harness.py");
+            let input_path = bundle.join("input.json");
+            let materialization = (|| -> Result<(), PythonToolError> {
+                materialize_invocation_source(&self.tool.root, &source_dir)?;
+                std::fs::write(&harness_path, PYTHON_HARNESS).map_err(io_error)?;
+                write_private_input(&input_path, &invocation.arguments)?;
+                Ok(())
+            })();
+            if let Err(error) = materialization {
+                // The bundle is this invocation's own freshly claimed
+                // directory, so settling it is always safe.
+                let _ = std::fs::remove_dir_all(&bundle);
                 return failed_python(&error.to_string(), started);
             }
             let python = self.environment.root.join("bin/python");
             let command = format!(
                 "{} {} {} {}",
                 shell_quote(&python),
-                shell_quote(&self.harness),
-                shell_quote(&invocation_dir),
+                shell_quote(&harness_path),
+                shell_quote(&source_dir),
                 shell_quote_str(&self.tool.package.entrypoint),
             ) + &format!(" {}", shell_quote(&input_path));
             let runtime_environment = context
                 .environment
                 .with_replacement_overlay(&ToolEnvironmentOverlay::python(&self.environment.root));
             let result = self
+                .store
+                .inner
                 .runner
                 .run(
                     SupervisedCommandSpec {
                         command,
-                        cwd: invocation_dir.clone(),
+                        cwd: source_dir,
                         environment: runtime_environment
                             .child_environment(context.workspace.root()),
                         timeout: None,
@@ -1259,7 +1327,7 @@ impl ToolExecutor for PythonToolExecutor {
                     None,
                 )
                 .await;
-            let _ = std::fs::remove_dir_all(&invocation_dir);
+            let _ = std::fs::remove_dir_all(&bundle);
             match result {
                 Ok(result) => {
                     translate_python_result(result, started, context.cancellation.reason())
@@ -1270,9 +1338,14 @@ impl ToolExecutor for PythonToolExecutor {
     }
 }
 
-/// Materializes the invocation-private execution copy of one immutable
-/// published `ToolVersion` source: a deterministic recursive copy of every
-/// regular file, preserving the package-relative layout.
+/// Materializes the invocation-private source copy of one immutable
+/// published `ToolVersion`: a deterministic recursive copy of every regular
+/// file, preserving the package-relative layout.
+///
+/// The destination is the `source/` directory inside the caller's freshly
+/// claimed execution bundle, so it is expected not to exist; an unexpected
+/// pre-existing destination is a storage failure, never a reason to delete
+/// unknown state.
 ///
 /// The published source was validated at discovery to contain only
 /// directories and regular non-symlink files; anything else here means the
@@ -1282,33 +1355,39 @@ fn materialize_invocation_source(
     source_root: &Path,
     destination: &Path,
 ) -> Result<(), PythonToolError> {
-    fn copy_tree(source: &Path, destination: &Path) -> Result<(), PythonToolError> {
-        std::fs::create_dir_all(destination).map_err(io_error)?;
-        let mut entries = std::fs::read_dir(source)
-            .map_err(io_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(io_error)?;
-        entries.sort_by_key(std::fs::DirEntry::file_name);
-        for entry in entries {
-            let metadata = std::fs::symlink_metadata(entry.path()).map_err(io_error)?;
-            let target = destination.join(entry.file_name());
-            if metadata.is_dir() {
-                copy_tree(&entry.path(), &target)?;
-            } else if metadata.is_file() && !metadata.file_type().is_symlink() {
-                std::fs::copy(entry.path(), &target).map_err(io_error)?;
-            } else {
-                return Err(PythonToolError::Storage(format!(
-                    "the published ToolVersion source contains a non-regular entry: {}",
-                    entry.path().display()
-                )));
-            }
-        }
-        Ok(())
-    }
     if destination.exists() {
-        std::fs::remove_dir_all(destination).map_err(io_error)?;
+        return Err(PythonToolError::Storage(format!(
+            "the invocation source directory already exists: {}",
+            destination.display()
+        )));
     }
-    copy_tree(source_root, destination)
+    copy_invocation_tree(source_root, destination)
+}
+
+/// The deterministic recursive copy behind
+/// [`materialize_invocation_source`].
+fn copy_invocation_tree(source: &Path, destination: &Path) -> Result<(), PythonToolError> {
+    std::fs::create_dir_all(destination).map_err(io_error)?;
+    let mut entries = std::fs::read_dir(source)
+        .map_err(io_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(io_error)?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        let metadata = std::fs::symlink_metadata(entry.path()).map_err(io_error)?;
+        let target = destination.join(entry.file_name());
+        if metadata.is_dir() {
+            copy_invocation_tree(&entry.path(), &target)?;
+        } else if metadata.is_file() && !metadata.file_type().is_symlink() {
+            std::fs::copy(entry.path(), &target).map_err(io_error)?;
+        } else {
+            return Err(PythonToolError::Storage(format!(
+                "the published ToolVersion source contains a non-regular entry: {}",
+                entry.path().display()
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn write_private_input(path: &Path, arguments: &serde_json::Value) -> Result<(), PythonToolError> {
@@ -2257,6 +2336,7 @@ mod tests {
         assert!(store.inner.root.join("tool-versions").is_dir());
         assert!(store.inner.root.join("python-tool-envs").is_dir());
         assert!(store.inner.root.join("python-tool-bindings").is_dir());
+        assert!(store.inner.root.join("python-invocations").is_dir());
         let _ = PythonToolStoreInner {
             root: dir.path().join("other"),
             runner: Arc::new(ScriptedRunner::new(Vec::new())),
@@ -2334,8 +2414,7 @@ mod tests {
             root: dir.path().join("env"),
         };
         let executor =
-            crate::tools::python::PythonToolExecutor::new(&store, published.clone(), environment)
-                .expect("executor");
+            crate::tools::python::PythonToolExecutor::new(&store, published.clone(), environment);
         std::fs::create_dir_all(dir.path().join("workspace")).expect("workspace");
         let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
             crate::runtime::identity::ConversationId::new("conv-python-immutability"),
@@ -2413,13 +2492,31 @@ mod tests {
         assert_eq!(recorded.len(), 1, "exactly one execution command ran");
         let (command, cwd) = &recorded[0];
         let invocation_root = store.inner.root.join("python-invocations");
+        let bundle = cwd.parent().expect("the source directory's bundle");
+        assert_eq!(
+            cwd.file_name().expect("source dir name"),
+            "source",
+            "the execution cwd is the bundle's private source copy: {cwd:?}"
+        );
         assert!(
-            cwd.starts_with(&invocation_root) && *cwd != published.root,
-            "the execution cwd is invocation-private: {cwd:?}"
+            bundle.starts_with(&invocation_root) && *cwd != published.root,
+            "the execution bundle is invocation-private: {bundle:?}"
         );
         assert!(
             command.contains(&cwd.display().to_string()),
-            "the harness received the private materialization as its source root"
+            "the harness received the private source copy as its source root"
+        );
+        assert!(
+            command.contains(&bundle.join("harness.py").display().to_string()),
+            "each invocation executes its own bundle-private harness"
+        );
+        assert!(
+            command.contains(&bundle.join("input.json").display().to_string()),
+            "the runtime-owned input lives outside the source namespace"
+        );
+        assert!(
+            !store.inner.root.join("python-tool-harness.py").exists(),
+            "no shared writable harness path exists across executor generations"
         );
         drop(recorded);
 
@@ -2451,6 +2548,268 @@ mod tests {
         );
     }
 
+    /// A gated execution runner: the first invocation records its command
+    /// and cwd, signals that its execution bundle is live, then parks until
+    /// the test releases it; every later invocation passes through. Both
+    /// answer a valid success envelope. All synchronization is explicit —
+    /// no sleeps.
+    #[derive(Default)]
+    struct FirstParkingRunner {
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+        seen: std::sync::atomic::AtomicUsize,
+        commands: Mutex<Vec<(String, PathBuf)>>,
+    }
+
+    impl SupervisedProcessRunner for FirstParkingRunner {
+        fn run(
+            &self,
+            spec: SupervisedCommandSpec,
+            _control: Option<crate::runtime::process_runner::RunnerTestControl>,
+        ) -> BoxFuture<'_, Result<CapturedProcessResult, String>> {
+            self.commands
+                .lock()
+                .expect("recorded commands lock")
+                .push((spec.command.clone(), spec.cwd.clone()));
+            let first = self.seen.fetch_add(1, std::sync::atomic::Ordering::AcqRel) == 0;
+            Box::pin(async move {
+                if first {
+                    self.entered.notify_one();
+                    self.release.notified().await;
+                }
+                Ok(CapturedProcessResult {
+                    exit_code: Some(0),
+                    intent: ProcessOutcomeIntent::Completed,
+                    stdout: br#"{"ok":true,"value":"ok"}"#.to_vec(),
+                    stderr: Vec::new(),
+                })
+            })
+        }
+    }
+
+    /// Invocation ownership across executor generations (Issue #81): an
+    /// invocation from an older executor generation stays live — the exact
+    /// condition of a detached background execution outliving its
+    /// attempt's capability revision — while a new generation (what a
+    /// capability refresh derives from the coordinator's one stable store)
+    /// executes concurrently.
+    ///
+    /// This is the same lifetime condition as the
+    /// `ConversationBackgroundRegistry` path — a detached execution holds
+    /// its `Arc<dyn ToolExecutor>` beyond the attempt, and the next
+    /// preparation constructs new executors — exercised here at the level
+    /// where the ownership domain lives (the store's allocation domain),
+    /// without mocking the ownership away: both executors allocate real
+    /// bundles from the real store.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_live_older_generation_bundle_is_never_reused_or_deleted() {
+        let runner = Arc::new(FirstParkingRunner::default());
+        let dir = tempfile::tempdir().expect("temp dir");
+        let package = test_package();
+        let store =
+            PythonToolStore::with_runner(dir.path().join("store"), runner.clone()).expect("store");
+        let published = store.publish(&package).expect("publish");
+        let environment = crate::tools::python::PythonToolEnvironment {
+            digest: crate::runtime::identity::PythonToolEnvironmentDigest::new(
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                    .to_owned(),
+            ),
+            root: dir.path().join("env"),
+        };
+        std::fs::create_dir_all(dir.path().join("workspace")).expect("workspace");
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+            crate::runtime::identity::ConversationId::new("conv-python-generations"),
+            dir.path().join("workspace"),
+            dir.path().join("artifacts"),
+        )
+        .expect("tool runtime");
+
+        // R1: the older executor generation; its invocation is parked with
+        // its execution bundle live.
+        let executor_r1 = crate::tools::python::PythonToolExecutor::new(
+            &store,
+            published.clone(),
+            environment.clone(),
+        );
+        let r1_runtime = tool_runtime.clone();
+        let r1_task = tokio::spawn(async move { execute_once(&executor_r1, &r1_runtime).await });
+        tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            runner.entered.notified(),
+        )
+        .await
+        .expect("the R1 execution bundle is live");
+        let r1_cwd = runner.commands.lock().expect("commands lock")[0].1.clone();
+        let r1_bundle = r1_cwd.parent().expect("R1 bundle").to_path_buf();
+        assert!(r1_bundle.join("source/tool.py").is_file());
+        assert!(r1_bundle.join("harness.py").is_file());
+        assert!(r1_bundle.join("input.json").is_file());
+
+        // R2: a new executor generation over the same stable store — what
+        // the next capability preparation derives while R1 runs.
+        let executor_r2 =
+            crate::tools::python::PythonToolExecutor::new(&store, published.clone(), environment);
+        let r2 = execute_once(&executor_r2, &tool_runtime).await;
+        assert!(
+            matches!(r2.status, crate::tools::types::ToolExecutionStatus::Success),
+            "R2 executed: {:?}",
+            r2.status
+        );
+        let r2_cwd = runner.commands.lock().expect("commands lock")[1].1.clone();
+        let r2_bundle = r2_cwd.parent().expect("R2 bundle").to_path_buf();
+        assert_ne!(
+            r1_bundle, r2_bundle,
+            "two executor generations never claim the same bundle"
+        );
+        assert!(
+            r1_bundle.join("source/tool.py").is_file(),
+            "R2 never deleted R1's live bundle"
+        );
+        assert!(!r2_bundle.exists(), "R2 settled its own bundle");
+
+        // Releasing R1 settles it independently and removes only its own
+        // bundle; the canonical published source is untouched throughout.
+        runner.release.notify_one();
+        let r1 = tokio::time::timeout(std::time::Duration::from_secs(60), r1_task)
+            .await
+            .expect("R1 settles")
+            .expect("R1 task");
+        assert!(matches!(
+            r1.status,
+            crate::tools::types::ToolExecutionStatus::Success
+        ));
+        assert!(!r1_bundle.exists(), "R1 settled its own bundle");
+        assert_eq!(
+            super::published_source_digest(&published.root).expect("canonical digest"),
+            package.tool_version_id,
+            "the canonical ToolVersion identity is unchanged across both generations"
+        );
+    }
+
+    /// Namespace separation (Issue #81): a package-owned `input.json` and
+    /// `harness.py` are canonical `ToolVersion` content copied into the
+    /// bundle's `source/`; the runtime-owned harness and arguments live
+    /// outside `source/` and never overwrite package content.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn package_owned_runtime_named_files_are_never_overwritten() {
+        /// Inspects the live execution bundle during the run: the
+        /// package-owned files must be intact inside `source/`, and the
+        /// runtime-owned files must exist beside it with runtime content.
+        struct BundleInspector;
+        impl SupervisedProcessRunner for BundleInspector {
+            fn run(
+                &self,
+                spec: SupervisedCommandSpec,
+                _control: Option<crate::runtime::process_runner::RunnerTestControl>,
+            ) -> BoxFuture<'_, Result<CapturedProcessResult, String>> {
+                let source = spec.cwd.clone();
+                let bundle = source.parent().expect("bundle").to_path_buf();
+                assert_eq!(
+                    std::fs::read(source.join("input.json")).expect("packaged input"),
+                    br#"{"packaged": true}"#,
+                    "the package-owned input.json reached the invocation source copy intact"
+                );
+                assert_eq!(
+                    std::fs::read(source.join("harness.py")).expect("packaged harness"),
+                    b"# package-owned harness\n",
+                    "the package-owned harness.py reached the invocation source copy intact"
+                );
+                let runtime_input =
+                    std::fs::read(bundle.join("input.json")).expect("runtime arguments");
+                assert_ne!(
+                    runtime_input, br#"{"packaged": true}"#,
+                    "the runtime-owned arguments are a different file outside source/"
+                );
+                let runtime_harness =
+                    std::fs::read_to_string(bundle.join("harness.py")).expect("runtime harness");
+                assert!(
+                    runtime_harness.contains("dont_write_bytecode"),
+                    "the runtime-owned harness is the current harness bytes"
+                );
+                assert!(
+                    spec.command
+                        .contains(&bundle.join("harness.py").display().to_string()),
+                    "the executed harness is the bundle's runtime-owned one"
+                );
+                Box::pin(async move {
+                    Ok(CapturedProcessResult {
+                        exit_code: Some(0),
+                        intent: ProcessOutcomeIntent::Completed,
+                        stdout: br#"{"ok":true,"value":"ok"}"#.to_vec(),
+                        stderr: Vec::new(),
+                    })
+                })
+            }
+        }
+
+        let mut package = test_package();
+        package.files.push((
+            PathBuf::from("input.json"),
+            br#"{"packaged": true}"#.to_vec(),
+        ));
+        package.files.push((
+            PathBuf::from("harness.py"),
+            b"# package-owned harness\n".to_vec(),
+        ));
+        package.files.sort_by(|left, right| left.0.cmp(&right.0));
+        package.tool_version_id = super::tool_version_id(&package.files);
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (store, published, executor, tool_runtime) =
+            executor_fixture(&dir, Arc::new(BundleInspector), &package);
+
+        let result = execute_once(&executor, &tool_runtime).await;
+        assert!(matches!(
+            result.status,
+            crate::tools::types::ToolExecutionStatus::Success
+        ));
+        // The canonical published package-owned files are byte-identical
+        // and the identity still validates.
+        assert_eq!(
+            std::fs::read(published.root.join("input.json")).expect("canonical input"),
+            br#"{"packaged": true}"#
+        );
+        assert_eq!(
+            std::fs::read(published.root.join("harness.py")).expect("canonical harness"),
+            b"# package-owned harness\n"
+        );
+        assert_eq!(
+            super::published_source_digest(&published.root).expect("canonical digest"),
+            package.tool_version_id
+        );
+        let _ = store;
+    }
+
+    /// Stale scratch safety (Issue #81): after a process restart the
+    /// allocator may start from zero while unknown `execution-N/`
+    /// directories remain. An existing path is stale scratch of unknown
+    /// ownership — the allocator skips it and never deletes or reuses it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stale_scratch_from_a_previous_process_is_never_reused_or_deleted() {
+        let runner = Arc::new(ToolWriteSimulatingRunner::default());
+        let dir = tempfile::tempdir().expect("temp dir");
+        let package = test_package();
+        let (store, _published, executor, tool_runtime) =
+            executor_fixture(&dir, runner.clone(), &package);
+        let stale = store.inner.root.join("python-invocations/execution-0");
+        std::fs::create_dir_all(&stale).expect("stale scratch");
+        std::fs::write(stale.join("marker.txt"), b"unknown ownership").expect("marker");
+
+        let result = execute_once(&executor, &tool_runtime).await;
+        assert!(matches!(
+            result.status,
+            crate::tools::types::ToolExecutionStatus::Success
+        ));
+        let (_, cwd) = runner.commands.lock().expect("commands lock")[0].clone();
+        assert!(
+            !cwd.starts_with(&stale),
+            "the allocator skipped the stale scratch directory: {cwd:?}"
+        );
+        assert!(
+            stale.join("marker.txt").is_file(),
+            "the unknown stale scratch was never deleted"
+        );
+    }
+
     /// Reopen/restart validation (Issue #81): after a real execution the
     /// store instance is dropped, a fresh store over the same root
     /// revalidates the persisted `ToolVersion` from its bytes alone, and
@@ -2475,8 +2834,7 @@ mod tests {
                 &store,
                 published.clone(),
                 environment,
-            )
-            .expect("executor");
+            );
             std::fs::create_dir_all(dir.path().join("workspace")).expect("workspace");
             let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
                 crate::runtime::identity::ConversationId::new("conv-python-reopen"),
@@ -2546,8 +2904,7 @@ mod tests {
                 ),
                 root: environment_root,
             },
-        )
-        .expect("executor");
+        );
         std::fs::create_dir_all(dir.path().join("workspace")).expect("workspace");
         let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
             crate::runtime::identity::ConversationId::new("conv-python-real"),
@@ -2578,6 +2935,89 @@ mod tests {
             super::published_source_digest(&published.root).expect("canonical digest"),
             package.tool_version_id,
             "the canonical ToolVersion identity survived a real mutating execution"
+        );
+    }
+
+    /// The end-to-end namespace separation with a real interpreter (Issue
+    /// #81): a tool whose package ships its own `input.json` reads exactly
+    /// its packaged bytes from its working directory, while the
+    /// runtime-owned invocation arguments live outside `source/`.
+    ///
+    /// Opt-in by availability, mirroring the `m7_uv` pattern: without a
+    /// real `python3` the acceptance is not exercised.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_real_execution_reads_the_packaged_input_json_from_source() {
+        let python = super::resolve_executable("python3");
+        if !python.is_file() {
+            eprintln!("python3 unavailable; the packaged-input acceptance is not exercised");
+            return;
+        }
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut package = test_package();
+        let tool_source = b"from pathlib import Path\n\ndef main(arguments):\n    return {\"packaged\": Path(\"input.json\").read_text(), \"arguments\": arguments}\n".to_vec();
+        for (path, bytes) in &mut package.files {
+            if path == &PathBuf::from("tool.py") {
+                *bytes = tool_source.clone();
+            }
+        }
+        package.files.push((
+            PathBuf::from("input.json"),
+            br#"{"packaged": true}"#.to_vec(),
+        ));
+        package.files.sort_by(|left, right| left.0.cmp(&right.0));
+        package.tool_version_id = super::tool_version_id(&package.files);
+        let store = PythonToolStore::new(dir.path().join("store")).expect("store");
+        let published = store.publish(&package).expect("publish");
+        let environment_root = dir.path().join("env");
+        std::fs::create_dir_all(environment_root.join("bin")).expect("env bin");
+        std::os::unix::fs::symlink(&python, environment_root.join("bin/python"))
+            .expect("interpreter link");
+        let executor = crate::tools::python::PythonToolExecutor::new(
+            &store,
+            published.clone(),
+            crate::tools::python::PythonToolEnvironment {
+                digest: crate::runtime::identity::PythonToolEnvironmentDigest::new(
+                    "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                        .to_owned(),
+                ),
+                root: environment_root,
+            },
+        );
+        std::fs::create_dir_all(dir.path().join("workspace")).expect("workspace");
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+            crate::runtime::identity::ConversationId::new("conv-python-packaged-input"),
+            dir.path().join("workspace"),
+            dir.path().join("artifacts"),
+        )
+        .expect("tool runtime");
+
+        let result = execute_once(&executor, &tool_runtime).await;
+        let crate::tools::types::ToolExecutionStatus::Success = result.status else {
+            panic!("the real tool executed: {:?}", result.status);
+        };
+        let Some(crate::tools::types::ToolResultContent::Json { value }) = result.content.first()
+        else {
+            panic!("the tool returned a JSON result: {:?}", result.content);
+        };
+        assert_eq!(
+            value.get("packaged").and_then(serde_json::Value::as_str),
+            Some(r#"{"packaged": true}"#),
+            "the tool read its own packaged input.json, not the runtime arguments: {value}"
+        );
+        assert_eq!(
+            value.get("arguments"),
+            Some(&serde_json::json!({})),
+            "the runtime-owned arguments arrived separately: {value}"
+        );
+        assert_eq!(
+            std::fs::read(published.root.join("input.json")).expect("canonical input"),
+            br#"{"packaged": true}"#,
+            "the canonical package-owned input.json is byte-identical"
+        );
+        assert_eq!(
+            super::published_source_digest(&published.root).expect("canonical digest"),
+            package.tool_version_id
         );
     }
 

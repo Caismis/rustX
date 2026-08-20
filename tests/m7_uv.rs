@@ -75,8 +75,7 @@ async fn production_uv_materializes_a_local_tool_environment() {
     impl rustx::tools::executor::ProgressReporter for NoProgress {
         fn report(&self, _progress: rustx::tools::types::ToolProgress) {}
     }
-    let executor = rustx::tools::python::PythonToolExecutor::new(&store, published, environment)
-        .expect("executor");
+    let executor = rustx::tools::python::PythonToolExecutor::new(&store, published, environment);
     let artifacts = tempfile::tempdir().expect("artifacts");
     let runtime = rustx::tools::runtime::ConversationToolRuntime::new(
         rustx::runtime::identity::ConversationId::new("m7-python"),
@@ -271,8 +270,7 @@ async fn conflicting_local_dependencies_isolate_versions_and_materialize_offline
             store,
             published.clone(),
             environment.clone(),
-        )
-        .expect("executor");
+        );
         let result = rustx::tools::executor::ToolExecutor::execute(
             &executor,
             rustx::tools::types::ToolInvocation {

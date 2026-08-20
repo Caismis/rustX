@@ -108,6 +108,24 @@ struct CoordinatorInner {
     /// fail core coordinator construction — and a base-only/subagent
     /// coordinator never touches Python storage at all.
     python_store_root: PathBuf,
+    /// The lazily initialized, coordinator-lifetime-stable Python tool
+    /// store (Issue #81).
+    ///
+    /// Initialization timing is not lifetime ownership: the slot starts
+    /// empty because Python is optional and its storage may fail, a failed
+    /// initialization leaves the slot empty so the next preparation retries,
+    /// and the first *successful* initialization publishes the one stable
+    /// process-local store identity every later Python preparation — and
+    /// every executor derived from it — reuses. The store owns the
+    /// process-local coordination domains (in-flight environment build
+    /// coalescing, invocation bundle allocation), so it must never be
+    /// reconstructed per preparation: that would silently restart the
+    /// invocation identifier allocation and let two executor generations
+    /// claim the same execution bundle.
+    ///
+    /// The mutex is held only across the synchronous store construction
+    /// (a bounded `create_dir_all` sequence) — never across `.await`.
+    python_store: Mutex<Option<PythonToolStore>>,
     base_environment: ToolEnvironment,
     environment_store: EnvironmentStore,
     state: Mutex<CoordinatorState>,
@@ -310,6 +328,7 @@ impl CapabilityCoordinator {
                 connect_ownership_pause: Mutex::new(None),
                 mcp_invalidation: Arc::new(McpInvalidationState::new()),
                 python_store_root,
+                python_store: Mutex::new(None),
                 base_environment: config.base_environment,
                 environment_store,
                 state: Mutex::new(CoordinatorState {
@@ -599,8 +618,7 @@ impl CapabilityCoordinator {
         )>,
         String,
     > {
-        let store = PythonToolStore::new(self.inner.python_store_root.clone())
-            .map_err(|error| error.to_string())?;
+        let store = self.python_store().map_err(|error| error.to_string())?;
         let python_packages = PythonToolDiscovery::new(&self.inner.workspace)
             .discover()
             .map_err(|error| error.to_string())?;
@@ -611,10 +629,7 @@ impl CapabilityCoordinator {
                 .ensure_environment(&published)
                 .await
                 .map_err(|error| error.to_string())?;
-            let executor = Arc::new(
-                PythonToolExecutor::new(&store, published, environment)
-                    .map_err(|error| error.to_string())?,
-            );
+            let executor = Arc::new(PythonToolExecutor::new(&store, published, environment));
             python_tools.push((
                 crate::tools::types::ToolDefinition {
                     id: crate::runtime::identity::ToolId::new(
@@ -634,6 +649,33 @@ impl CapabilityCoordinator {
             ));
         }
         Ok(python_tools)
+    }
+
+    /// Returns the coordinator-lifetime-stable Python tool store,
+    /// initializing it on first use.
+    ///
+    /// The slot starts empty because Python is optional: a construction
+    /// failure leaves it empty (the caller records `Python` unavailable and
+    /// the next preparation retries); the first successful construction is
+    /// published into the slot under the mutex, so concurrent first
+    /// preparations converge to exactly one store identity — the single
+    /// process-local coordination domain for environment build coalescing
+    /// and invocation bundle allocation. The mutex is never held across
+    /// `.await`: construction is a bounded synchronous `create_dir_all`
+    /// sequence.
+    fn python_store(&self) -> Result<PythonToolStore, crate::tools::python::PythonToolError> {
+        let mut slot = self
+            .inner
+            .python_store
+            .lock()
+            .expect("python store lock poisoned");
+        if let Some(store) = &*slot {
+            return Ok(store.clone());
+        }
+        let store = PythonToolStore::new(self.inner.python_store_root.clone())?;
+        *slot = Some(store.clone());
+        drop(slot);
+        Ok(store)
     }
 
     /// Prepares one configured MCP server: connect (or reuse the retained
@@ -1201,6 +1243,19 @@ impl CapabilityCoordinator {
         *self.inner.commit_hook.lock().expect("commit hook lock") = Some(hook);
     }
 
+    /// Test-only observation of the lazy Python store slot: `None` when no
+    /// Python preparation has successfully initialized the store yet,
+    /// otherwise the identity token of the one stable coordination domain.
+    #[cfg(test)]
+    pub(crate) fn python_store_identity_token(&self) -> Option<usize> {
+        self.inner
+            .python_store
+            .lock()
+            .expect("python store lock poisoned")
+            .as_ref()
+            .map(PythonToolStore::identity_token)
+    }
+
     /// Installs the observer and captures the active snapshot and the
     /// authoritative availability state as one atomic coordinator section.
     ///
@@ -1589,6 +1644,89 @@ body
             result,
             Err(CapabilityCommitError::StaleCandidate { .. })
         ));
+    }
+
+    /// Lazy Python store ownership (Issue #81): store initialization is
+    /// optional and retryable, but once it succeeds the coordinator retains
+    /// one stable process-local store identity for its lifetime.
+    ///
+    /// Phase 1: the Python store path is a conflicting regular file —
+    /// preparation degrades Python to `Unavailable` and the lazy slot stays
+    /// empty (no permanently poisoned state). Phase 2: the filesystem is
+    /// repaired and the next preparation retries, initializes the store,
+    /// and Python becomes `Ready`. Phase 3: later preparations reuse the
+    /// same store identity instead of constructing a new coordination
+    /// domain (which would restart invocation bundle allocation).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn python_store_initialization_is_lazy_retryable_and_stable() {
+        use crate::capabilities::{CapabilitySourceId, CapabilitySourceState};
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let workspace_root = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace_root).expect("workspace");
+        let store_root = dir.path().join("skill-env");
+        std::fs::create_dir_all(&store_root).expect("environment store root");
+        let conflict = store_root.join("m7-tools");
+        std::fs::write(&conflict, b"not a directory").expect("conflicting regular file");
+        let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
+            conversation_id: crate::runtime::identity::ConversationId::new("conv-lazy-store"),
+            workspace: Workspace::new(&workspace_root).expect("workspace"),
+            base_tool_registry: Arc::new(ToolRegistry::new()),
+            mcp_servers: std::collections::BTreeMap::new(),
+            base_environment: ToolEnvironment::new(),
+            environment_store_root: store_root,
+        })
+        .expect("coordinator construction never touches Python storage");
+
+        // Phase 1: initialization fails, the slot stays empty, preparation
+        // itself succeeds with Python unavailable.
+        assert_eq!(coordinator.python_store_identity_token(), None);
+        let candidate = coordinator.prepare_candidate().await.expect("prepare");
+        assert!(
+            matches!(
+                candidate.availability().get(&CapabilitySourceId::Python),
+                Some(CapabilitySourceState::Unavailable { .. })
+            ),
+            "the store-opening failure degrades Python availability: {:?}",
+            candidate.availability()
+        );
+        assert_eq!(
+            coordinator.python_store_identity_token(),
+            None,
+            "a failed initialization must not poison the lazy slot"
+        );
+
+        // Phase 2: the filesystem is repaired; the next preparation retries
+        // and publishes the one stable store identity.
+        std::fs::remove_file(&conflict).expect("repair the filesystem");
+        let candidate = coordinator
+            .prepare_candidate()
+            .await
+            .expect("retry prepare");
+        assert_eq!(
+            candidate.availability().get(&CapabilitySourceId::Python),
+            Some(&CapabilitySourceState::Ready),
+            "the retry initializes the store and Python becomes ready"
+        );
+        let first = coordinator
+            .python_store_identity_token()
+            .expect("the store is initialized after the successful retry");
+
+        // Phase 3: a later preparation reuses the same coordination
+        // identity rather than constructing a fresh store.
+        let candidate = coordinator
+            .prepare_candidate()
+            .await
+            .expect("third prepare");
+        assert_eq!(
+            candidate.availability().get(&CapabilitySourceId::Python),
+            Some(&CapabilitySourceState::Ready)
+        );
+        assert_eq!(
+            coordinator.python_store_identity_token(),
+            Some(first),
+            "the coordinator retains one stable PythonToolStore identity"
+        );
     }
 
     /// The lease RAII release makes the next commit legal immediately; no

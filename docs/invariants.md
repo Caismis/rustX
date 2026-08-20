@@ -814,11 +814,29 @@ observed only at the next quiescent re-discovery.
   mutated.
 - **Python ToolVersion execution immutability.** The published `source/`
   directory is the immutable canonical authority and is never an execution
-  working directory: each invocation materializes a private copy of it
-  under `python-invocations/execution-N/`, runs the harness against that
-  copy with the copy as its working directory, and deletes the copy when
-  the invocation settles. Ordinary tool writes — relative paths or
-  `__file__` — land in the invocation-private materialization, so the
+  working directory. One `CapabilityCoordinator` lazily owns one stable
+  `PythonToolStore` identity for its lifetime — lazy because Python is
+  optional (a failed initialization is retryable and never poisons the
+  slot), stable because the store is the single process-local coordination
+  domain for environment/build coalescing and invocation allocation. Each
+  invocation claims a unique execution bundle
+  `python-invocations/execution-N/` from the store's monotonic allocator —
+  strictly increasing, never reused, exhaustion fails the invocation
+  explicitly — and materializes three separated ownership domains:
+  `execution-N/source/` (the writable copy of the canonical ToolVersion
+  bytes, module root and cwd), `execution-N/harness.py` (runtime-owned
+  harness bytes, written per invocation so no shared writable executable
+  path exists across capability generations), and `execution-N/input.json`
+  (runtime-owned arguments). Package-owned files named `input.json` or
+  `harness.py` are canonical content inside `source/` and are never
+  overwritten. The bundle is removed only by its own invocation at
+  settlement; a live invocation's bundle is never reused or deleted by
+  another invocation or a later capability revision (a detached background
+  execution holds its executor across refresh safely). An already-existing
+  `execution-N/` is stale scratch from a previous process lifetime: the
+  allocator skips it and it is never deleted or reused — there is no
+  scratch GC. Ordinary tool writes — relative paths or
+  `__file__` — land in the invocation-private `source/` copy, so the
   canonical bytes cannot drift across executions or restarts (the harness
   additionally disables bytecode caches so imports never write
   `__pycache__` into any runtime-owned directory).
