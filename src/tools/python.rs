@@ -669,17 +669,33 @@ impl PythonToolStore {
     /// atomic `create_dir` itself: an already-existing path is **never
     /// deleted or reused** — it is stale scratch from a previous process
     /// lifetime (there is deliberately no scratch GC), so the allocator
-    /// skips it. Identifier exhaustion fails the invocation explicitly
-    /// instead of silently wrapping onto a possibly live bundle.
+    /// skips it. Identifier exhaustion is an **absorbing terminal state**
+    /// for this store identity: the counter is never allowed to transition
+    /// `MAX -> 0`, so no later invocation can wrap, reuse an identifier, or
+    /// create a lower-numbered bundle — every later allocation attempt
+    /// fails with the same explicit exhaustion error.
+    ///
+    /// The atomic counter only allocates unique, monotonically increasing
+    /// names within this process-local store domain — `Ordering::Relaxed`
+    /// is sufficient for that; the actual bundle-ownership claim is the
+    /// filesystem `create_dir`.
     fn allocate_execution_bundle(&self) -> Result<PathBuf, PythonToolError> {
         let root = self.inner.root.join("python-invocations");
+        let exhausted = || {
+            PythonToolError::Storage(
+                "the Python invocation identifier space is exhausted".to_owned(),
+            )
+        };
         loop {
-            let number = self.inner.next_invocation.fetch_add(1, Ordering::Relaxed);
-            if number == u64::MAX {
-                return Err(PythonToolError::Storage(
-                    "the Python invocation identifier space is exhausted".to_owned(),
-                ));
-            }
+            // Checked claim: at `u64::MAX` the counter stays at `MAX`
+            // (absorbing) and allocation fails; it never wraps to 0.
+            let number = self
+                .inner
+                .next_invocation
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                    current.checked_add(1)
+                })
+                .map_err(|_| exhausted())?;
             let bundle = root.join(format!("execution-{number}"));
             match std::fs::create_dir(&bundle) {
                 Ok(()) => return Ok(bundle),
@@ -2807,6 +2823,144 @@ mod tests {
         assert!(
             stale.join("marker.txt").is_file(),
             "the unknown stale scratch was never deleted"
+        );
+    }
+
+    /// Terminal exhaustion (Issue #81): once the allocator reaches
+    /// exhaustion it remains exhausted forever for this store identity —
+    /// the counter never transitions `MAX -> 0`, so no later call can
+    /// succeed, wrap, or recreate `execution-0`.
+    #[test]
+    fn allocator_exhaustion_is_absorbing() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = PythonToolStore::new(dir.path().join("store")).expect("store");
+        store
+            .inner
+            .next_invocation
+            .store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
+
+        for attempt in ["first", "second"] {
+            let Err(super::PythonToolError::Storage(reason)) = store.allocate_execution_bundle()
+            else {
+                panic!("the {attempt} allocation must fail as exhausted");
+            };
+            assert!(
+                reason.contains("identifier space is exhausted"),
+                "the {attempt} allocation reports exhaustion: {reason}"
+            );
+        }
+        assert_eq!(
+            store
+                .inner
+                .next_invocation
+                .load(std::sync::atomic::Ordering::Relaxed),
+            u64::MAX,
+            "the counter stays at MAX: exhaustion is absorbing"
+        );
+        assert!(
+            !store
+                .inner
+                .root
+                .join("python-invocations/execution-0")
+                .exists(),
+            "no lower-numbered bundle was ever created"
+        );
+    }
+
+    /// The last valid identifier still allocates, then every later attempt
+    /// fails — the terminal transition is `MAX - 1 -> MAX`, never a wrap.
+    #[test]
+    fn last_identifier_then_exhaustion_never_wraps() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = PythonToolStore::new(dir.path().join("store")).expect("store");
+        store
+            .inner
+            .next_invocation
+            .store(u64::MAX - 1, std::sync::atomic::Ordering::Relaxed);
+
+        let bundle = store
+            .allocate_execution_bundle()
+            .expect("the last valid identifier still allocates");
+        assert_eq!(
+            bundle,
+            store
+                .inner
+                .root
+                .join("python-invocations/execution-18446744073709551614"),
+            "the final identifier names its bundle"
+        );
+
+        for attempt in ["second", "third"] {
+            let Err(super::PythonToolError::Storage(reason)) = store.allocate_execution_bundle()
+            else {
+                panic!("the {attempt} allocation must fail as exhausted");
+            };
+            assert!(
+                reason.contains("identifier space is exhausted"),
+                "the {attempt} allocation reports exhaustion: {reason}"
+            );
+        }
+        assert_eq!(
+            store
+                .inner
+                .next_invocation
+                .load(std::sync::atomic::Ordering::Relaxed),
+            u64::MAX
+        );
+        assert!(
+            !store
+                .inner
+                .root
+                .join("python-invocations/execution-0")
+                .exists(),
+            "the allocator never wrapped to execution-0"
+        );
+        std::fs::remove_dir_all(&bundle).expect("remove the bundle this test owns");
+    }
+
+    /// Stale scratch and terminal exhaustion compose: skipping an
+    /// already-existing final identifier consumes the last claim, and the
+    /// next checked claim observes `MAX` and fails — never a wrap.
+    #[test]
+    fn stale_last_identifier_does_not_wrap() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = PythonToolStore::new(dir.path().join("store")).expect("store");
+        let stale = store
+            .inner
+            .root
+            .join("python-invocations/execution-18446744073709551614");
+        std::fs::create_dir_all(&stale).expect("stale final-identifier scratch");
+        std::fs::write(stale.join("marker.txt"), b"unknown ownership").expect("marker");
+        store
+            .inner
+            .next_invocation
+            .store(u64::MAX - 1, std::sync::atomic::Ordering::Relaxed);
+
+        let Err(super::PythonToolError::Storage(reason)) = store.allocate_execution_bundle() else {
+            panic!("allocation past the stale final identifier must fail as exhausted");
+        };
+        assert!(
+            reason.contains("identifier space is exhausted"),
+            "the skip loop ends in explicit exhaustion: {reason}"
+        );
+        assert_eq!(
+            store
+                .inner
+                .next_invocation
+                .load(std::sync::atomic::Ordering::Relaxed),
+            u64::MAX
+        );
+        assert!(
+            !store
+                .inner
+                .root
+                .join("python-invocations/execution-0")
+                .exists(),
+            "stale-scratch skipping never wrapped to execution-0"
+        );
+        assert!(
+            stale.join("marker.txt").is_file(),
+            "the stale scratch was never deleted"
         );
     }
 
