@@ -26,9 +26,7 @@
  */
 
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 
@@ -37,6 +35,7 @@ import { RuntimeClientConnection } from "../src/runtime/connection.ts";
 import { RuntimeClientSession } from "../src/runtime/session.ts";
 import { CommandDispatcher } from "../src/commands/dispatcher.ts";
 import { ProviderEmulator } from "./support/provider-emulator.ts";
+import { TempFixture } from "./support/temp-fixture.ts";
 import { until } from "./support/scripted-peer.ts";
 
 /** The cargo target directory, overridable for a non-default layout. */
@@ -111,22 +110,23 @@ interface Harness {
 
 describe("real rustx child integration", { skip: SKIP }, () => {
   let harness: Harness | undefined;
+  let fixture: TempFixture | undefined;
 
   before(async () => {
     const provider = await ProviderEmulator.start("tui_integration");
-    const root = mkdtempSync(join(tmpdir(), "rustx-tui-"));
-    const workspace = join(root, "workspace");
+    fixture = TempFixture.create("rustx-tui-");
+    const workspace = fixture.path("workspace");
     mkdirSync(workspace, { recursive: true });
-    writeFileSync(join(root, "models.json"), modelsJson(provider.url("/v1")));
-    writeFileSync(join(root, "session.json"), SESSION_JSON);
+    writeFileSync(fixture.path("models.json"), modelsJson(provider.url("/v1")));
+    writeFileSync(fixture.path("session.json"), SESSION_JSON);
 
     const child = ChildRuntimeProcess.spawn({
       binary: BINARY,
       paths: {
-        models: join(root, "models.json"),
-        session: join(root, "session.json"),
+        models: fixture.path("models.json"),
+        session: fixture.path("session.json"),
         workspace,
-        runtimeRoot: join(root, "private"),
+        runtimeRoot: fixture.path("private"),
       },
       // The child performs its own credential resolution from this
       // environment.
@@ -148,14 +148,16 @@ describe("real rustx child integration", { skip: SKIP }, () => {
   });
 
   after(async () => {
-    if (harness === undefined) {
-      return;
+    if (harness !== undefined) {
+      harness.child.closeStdin();
+      await harness.child.waitOrTerminate(10_000);
+      // The scenario is asserted on the provider side too: every declared
+      // step consumed, in order, with no unexpected request.
+      await harness.provider.finish();
     }
-    harness.child.closeStdin();
-    await harness.child.waitOrTerminate(10_000);
-    // The scenario is asserted on the provider side too: every declared
-    // step consumed, in order, with no unexpected request.
-    await harness.provider.finish();
+    // The owned root is removed after the child process is gone — on pass
+    // AND failure, because the `after` hook always runs.
+    fixture?.cleanup();
   });
 
   it("completes the whole lifecycle against the real binary", async () => {
@@ -404,25 +406,26 @@ function compactionModelsJson(baseUrl: string): string {
 
 describe("real rustx child repeated compaction", { skip: SKIP }, () => {
   let harness: Harness | undefined;
+  let fixture: TempFixture | undefined;
 
   before(async () => {
     const provider = await ProviderEmulator.start("tui_compaction");
-    const root = mkdtempSync(join(tmpdir(), "rustx-tui-compaction-"));
-    const workspace = join(root, "workspace");
+    fixture = TempFixture.create("rustx-tui-compaction-");
+    const workspace = fixture.path("workspace");
     mkdirSync(workspace, { recursive: true });
     writeFileSync(
-      join(root, "models.json"),
+      fixture.path("models.json"),
       compactionModelsJson(provider.url("/v1")),
     );
-    writeFileSync(join(root, "session.json"), COMPACTION_SESSION_JSON);
+    writeFileSync(fixture.path("session.json"), COMPACTION_SESSION_JSON);
 
     const child = ChildRuntimeProcess.spawn({
       binary: BINARY,
       paths: {
-        models: join(root, "models.json"),
-        session: join(root, "session.json"),
+        models: fixture.path("models.json"),
+        session: fixture.path("session.json"),
         workspace,
-        runtimeRoot: join(root, "private"),
+        runtimeRoot: fixture.path("private"),
       },
       env: { ...process.env, [CREDENTIAL_VARIABLE]: CREDENTIAL_VALUE },
     });
@@ -442,12 +445,12 @@ describe("real rustx child repeated compaction", { skip: SKIP }, () => {
   });
 
   after(async () => {
-    if (harness === undefined) {
-      return;
+    if (harness !== undefined) {
+      harness.child.closeStdin();
+      await harness.child.waitOrTerminate(10_000);
+      await harness.provider.finish();
     }
-    harness.child.closeStdin();
-    await harness.child.waitOrTerminate(10_000);
-    await harness.provider.finish();
+    fixture?.cleanup();
   });
 
   it("commits two compactions across three turns, observed over real stdio", async () => {
