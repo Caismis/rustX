@@ -332,7 +332,7 @@ function reasoningPreference(argument: string): CommandOutcome {
 }
 
 /**
- * `/expand` — a visual collapse preference over both identity domains.
+ * `/expand` — a visual collapse preference over all three identity domains.
  *
  * ```text
  * /expand                          toggle the latest tool call
