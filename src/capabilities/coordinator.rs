@@ -98,7 +98,16 @@ struct CoordinatorInner {
     /// mutation (`tools/list_changed`) and epoch validation + snapshot swap
     /// (commit) serialize through the same guard.
     mcp_invalidation: Arc<McpInvalidationState>,
-    python_store: PythonToolStore,
+    /// The configured location of the Python tool store
+    /// (`<environment store>/m7-tools`).
+    ///
+    /// The coordinator owns the *location* only. Opening/creating the
+    /// Python-specific storage is part of the optional Python capability
+    /// preparation ([`CapabilityCoordinator::prepare_python_tools`]), so a
+    /// Python storage failure degrades Python availability and can never
+    /// fail core coordinator construction — and a base-only/subagent
+    /// coordinator never touches Python storage at all.
+    python_store_root: PathBuf,
     base_environment: ToolEnvironment,
     environment_store: EnvironmentStore,
     state: Mutex<CoordinatorState>,
@@ -273,8 +282,10 @@ impl CapabilityCoordinator {
             ));
         }
         let mcp_servers = config.mcp_servers;
-        let python_store = PythonToolStore::new(environment_store.root().join("m7-tools"))
-            .map_err(|error| CapabilityPreparationError::Python(error.to_string()))?;
+        // Only the Python store *location* is computed here; the store
+        // itself is opened inside the optional Python preparation
+        // boundary (Issue #81), never in core construction.
+        let python_store_root = environment_store.root().join("m7-tools");
         let initial_skills = Arc::new(SkillSnapshot::new(Vec::new()));
         let initial_snapshot = Arc::new(CapabilitySnapshot::new(
             config.conversation_id.clone(),
@@ -298,7 +309,7 @@ impl CapabilityCoordinator {
                 #[cfg(test)]
                 connect_ownership_pause: Mutex::new(None),
                 mcp_invalidation: Arc::new(McpInvalidationState::new()),
-                python_store,
+                python_store_root,
                 base_environment: config.base_environment,
                 environment_store,
                 state: Mutex::new(CoordinatorState {
@@ -525,7 +536,7 @@ impl CapabilityCoordinator {
             Err(reason) => {
                 availability.insert(
                     CapabilitySourceId::Python,
-                    CapabilitySourceState::Unavailable { reason },
+                    CapabilitySourceState::unavailable(reason),
                 );
                 Vec::new()
             }
@@ -546,7 +557,7 @@ impl CapabilityCoordinator {
                 Err(reason) => {
                     availability.insert(
                         CapabilitySourceId::Mcp(server_id.clone()),
-                        CapabilitySourceState::Unavailable { reason },
+                        CapabilitySourceState::unavailable(reason),
                     );
                 }
             }
@@ -570,13 +581,15 @@ impl CapabilityCoordinator {
         })
     }
 
-    /// Prepares the complete custom Python tool plane: discovery,
-    /// publication, environment materialization, and executor construction
-    /// for every discovered package.
+    /// Prepares the complete custom Python tool plane: store opening,
+    /// discovery, publication, environment materialization, and executor
+    /// construction for every discovered package.
     ///
-    /// The plane is one optional capability source: any failure rejects the
-    /// whole plane (the caller records `Python` unavailable) so a partial
-    /// Python executor set can never enter the candidate.
+    /// The plane is one optional capability source: any failure —
+    /// including opening/creating the Python-private store itself —
+    /// rejects the whole plane (the caller records `Python` unavailable)
+    /// so a partial Python executor set can never enter the candidate and
+    /// Python storage can never fail core coordinator construction.
     async fn prepare_python_tools(
         &self,
     ) -> Result<
@@ -586,24 +599,20 @@ impl CapabilityCoordinator {
         )>,
         String,
     > {
+        let store = PythonToolStore::new(self.inner.python_store_root.clone())
+            .map_err(|error| error.to_string())?;
         let python_packages = PythonToolDiscovery::new(&self.inner.workspace)
             .discover()
             .map_err(|error| error.to_string())?;
         let mut python_tools = Vec::new();
         for package in python_packages {
-            let published = self
-                .inner
-                .python_store
-                .publish(&package)
-                .map_err(|error| error.to_string())?;
-            let environment = self
-                .inner
-                .python_store
+            let published = store.publish(&package).map_err(|error| error.to_string())?;
+            let environment = store
                 .ensure_environment(&published)
                 .await
                 .map_err(|error| error.to_string())?;
             let executor = Arc::new(
-                PythonToolExecutor::new(&self.inner.python_store, published, environment)
+                PythonToolExecutor::new(&store, published, environment)
                     .map_err(|error| error.to_string())?,
             );
             python_tools.push((

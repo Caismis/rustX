@@ -373,7 +373,9 @@ impl LocalConversationCore {
     ///   [`register_subagent_child_tools`];
     /// - the capability plane is **base-only**: no Skill discovery, no
     ///   Python/Node environments, no MCP servers, and no `subagent` tool
-    ///   (recursive delegation is structurally absent);
+    ///   (recursive delegation is structurally absent); it never opens or
+    ///   creates Python tool storage (Issue #81), so a broken Python store
+    ///   location cannot fail child composition;
     /// - the profile persona enters the canonical history as one bootstrap
     ///   `SystemMessageBlock` (authority `Platform`), never as a forged
     ///   user message;

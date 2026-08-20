@@ -801,7 +801,7 @@ export type RuntimeClientEvent =
       type: "subagent_updated";
       subagent: RuntimeClientSubagent;
     }
-  | { type: "capability_published"; capabilities: CapabilityView }
+  | { type: "capability_updated"; capabilities: CapabilityView }
   | { type: "session_model_changed"; model: SessionModelView }
   | { type: "runtime_shutdown" };
 
@@ -999,7 +999,7 @@ export function isKnownRuntimeClientEvent(
     case "inbound_drained":
     case "background_execution_updated":
     case "subagent_updated":
-    case "capability_published":
+    case "capability_updated":
     case "session_model_changed":
     case "runtime_shutdown":
       return true;

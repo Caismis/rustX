@@ -2026,8 +2026,8 @@ uses the current rmcp client transport with explicit static headers and no
 Custom Python packages are discovered only from
 `<workspace>/.agents/tools/<tool-name>/`. Candidate preparation reads a finite
 package snapshot, computes `ToolVersionId`, publishes it immutably as
-`tool-versions/<ToolVersionId>/source/` plus a version marker (the executor
-and every uv command use exactly the `source/` root; reuse validates the
+`tool-versions/<ToolVersionId>/source/` plus a version marker (every uv
+preparation command uses exactly the `source/` root; reuse validates the
 published source content digest against the claimed identity), validates
 the existing `uv.lock`, and materializes a distinct immutable
 `PythonToolEnvironmentDigest` environment whose ready marker locks every
@@ -2037,10 +2037,15 @@ identity are separate: source/description/schema changes can change the
 former without changing the latter, and each ToolVersion -> environment
 binding is recorded deterministically outside the environment's immutable
 dependency identity. The environment isolates dependencies, not filesystem,
-network, or security permissions. The interpreter whose identity enters the
-digest is pinned to uv via `UV_PYTHON`, managed Python downloads stay
-disabled, and every preparation command has a finite deadline (a timeout is
-an explicit preparation failure). A harness uses a private input file and
+network, or security permissions. Execution never uses the published
+source as a working directory: each invocation materializes a private copy
+of it under `python-invocations/execution-N/`, runs the harness with that
+copy as module root and working directory, and deletes the copy when the
+invocation settles, so ordinary tool writes (relative paths, `__file__`)
+can never mutate the canonical ToolVersion bytes. The interpreter whose
+identity enters the digest is pinned to uv via `UV_PYTHON`, managed Python
+downloads stay disabled, and every preparation command has a finite
+deadline (a timeout is an explicit preparation failure). A harness uses a private input file and
 one bounded JSON result envelope; the Python subprocess uses the shared
 supervised short-lived runner. Same-digest in-flight builds coalesce behind
 one store-owned owner task (callers only wait; owner failure publishes a
@@ -3081,12 +3086,26 @@ into typed availability state (`CapabilitySourceState::Unavailable { reason }`
 keyed by `CapabilitySourceId`), and composition continues: the base/native
 capability set is never conditional on an optional source, one MCP server's
 failure never suppresses another, and only successfully prepared capability
-objects enter the committed active snapshot. The Runtime Client capability
+objects enter the committed active snapshot. Opening/creating the
+Python-private store itself (`<environment store>/m7-tools`) is part of the
+optional Python preparation — the coordinator constructor owns only the
+store location — so a broken Python store degrades Python availability and
+can never fail core construction, and the base-only subagent capability
+path (`prepare_base_only_candidate`) never touches Python storage at all.
+Each `reason` is normalized at the capability-owning boundary before it
+enters the authoritative state: valid UTF-8, deterministic, at most
+1024 bytes (`CAPABILITY_FAILURE_REASON_MAX_BYTES`, truncation marked with
+`…[truncated]`), so an external peer can never make the committed state
+unbounded and the Runtime Client projects the already-bounded value
+verbatim. The Runtime Client capability
 projection (`CapabilityView.sources`) carries the typed state, so a client
 observes *why* a source is unavailable instead of inferring failure from a
 dead transport. `CapabilityRevision` advances only when the effective
 committed executable capability set changes; an availability-only change
-never fabricates a revision but is still observed.
+never fabricates a revision but is still observed: both kinds of commit
+publish the one `CapabilityUpdated` Runtime Client event carrying the
+complete folded `CapabilityView`, whose `revision` tells the client
+whether the executable capability identity changed.
 
 The governing invariant:
 

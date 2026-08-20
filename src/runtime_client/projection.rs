@@ -393,10 +393,12 @@ impl RuntimeClientProjection {
             } => {
                 // The projection owns the translation of the authoritative
                 // capability snapshot and availability into the client
-                // capability view.
+                // capability view. One event covers both an executable
+                // revision swap and an availability-only change; the view's
+                // revision discriminates them.
                 let capabilities = capability_view(&snapshot, &availability);
                 self.snapshot.capabilities = capabilities.clone();
-                vec![RuntimeClientEvent::CapabilityPublished { capabilities }]
+                vec![RuntimeClientEvent::CapabilityUpdated { capabilities }]
             }
             ConversationObservation::AttemptAdmitted { attempt_id } => {
                 // The model is folded by the `AttemptModelFrozen`

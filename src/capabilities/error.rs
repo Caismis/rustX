@@ -20,8 +20,6 @@ pub enum CapabilityPreparationError {
     Environment(EnvironmentPreparationError),
     /// An MCP server could not be discovered or its catalog was unstable.
     Mcp(String),
-    /// A custom Python `ToolVersion` could not be discovered, published, or prepared.
-    Python(String),
     /// The composed canonical registry was rejected as invalid or colliding.
     ToolRegistry(String),
     /// Preparation was requested after the owning conversation runtime
@@ -41,7 +39,6 @@ impl core::fmt::Display for CapabilityPreparationError {
             ),
             Self::Environment(error) => write!(f, "{error}"),
             Self::Mcp(error) => write!(f, "MCP preparation failed: {error}"),
-            Self::Python(error) => write!(f, "Python tool preparation failed: {error}"),
             Self::ToolRegistry(error) => write!(f, "tool registry composition failed: {error}"),
             Self::ConversationInactive => write!(
                 f,

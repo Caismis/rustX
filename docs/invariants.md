@@ -806,12 +806,22 @@ observed only at the next quiescent re-discovery.
   retention task exists in M7.
 - **Python ToolVersion publication.** The published shape is
   `tool-versions/<ToolVersionId>/source/` plus
-  `RUSTX_TOOL_VERSION.json`; the executor and every uv command use exactly
-  `.../source/` as their root. On reuse the published `source/` content
+  `RUSTX_TOOL_VERSION.json`; every uv preparation command uses exactly
+  `.../source/` as its root. On reuse the published `source/` content
   digest is recomputed and compared against the claimed identity — a marker
   string alone never validates a ToolVersion — and a corrupt publication
   fails preparation explicitly; a valid published ToolVersion is never
   mutated.
+- **Python ToolVersion execution immutability.** The published `source/`
+  directory is the immutable canonical authority and is never an execution
+  working directory: each invocation materializes a private copy of it
+  under `python-invocations/execution-N/`, runs the harness against that
+  copy with the copy as its working directory, and deletes the copy when
+  the invocation settles. Ordinary tool writes — relative paths or
+  `__file__` — land in the invocation-private materialization, so the
+  canonical bytes cannot drift across executions or restarts (the harness
+  additionally disables bytecode caches so imports never write
+  `__pycache__` into any runtime-owned directory).
 - **Environment identity input lock.** A published Python environment is
   reusable only when its ready marker matches every deterministic input that
   derives the identity: format domain, OS, architecture, digest, lock

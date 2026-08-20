@@ -20,7 +20,9 @@
 //! │   └── RUSTX_TOOL_VERSION.json     # format + claimed ToolVersionId
 //! ├── python-tool-envs/<PythonToolEnvironmentDigest>/
 //! │   └── RUSTX_ENV_MANIFEST.json     # exact deterministic input lock
-//! └── python-tool-bindings/<ToolVersionId>/<PythonToolEnvironmentDigest>.json
+//! ├── python-tool-bindings/<ToolVersionId>/<PythonToolEnvironmentDigest>.json
+//! └── python-invocations/execution-N/ # per-invocation writable execution
+//!                                     # materialization (deleted at settlement)
 //! ```
 //!
 //! On reuse a published `ToolVersion` is validated by recomputing the
@@ -29,10 +31,18 @@
 //! A corrupt published `ToolVersion` fails preparation explicitly and is
 //! never mutated. There is exactly one identity authority:
 //! `ToolVersionId` is derived once from the canonical source bytes
-//! (sorted package-relative paths, lengths, and raw bytes) and the
-//! executor never writes into the published source root (the harness
-//! disables bytecode caches), so the persisted representation always
-//! validates identically across restarts. The environment marker records
+//! (sorted package-relative paths, lengths, and raw bytes). The published
+//! `source/` directory is the **immutable canonical authority**: no
+//! execution ever uses it as a working directory. Each invocation
+//! materializes a private copy under `python-invocations/execution-N/`,
+//! runs the harness against that copy with the copy as its working
+//! directory, and deletes the copy when the invocation settles (the
+//! harness additionally disables bytecode caches so imports never write
+//! `__pycache__` into any runtime-owned directory). Ordinary tool writes
+//! — relative paths or `__file__` — therefore land in the
+//! invocation-private materialization and can never drift the canonical
+//! bytes, so the persisted representation always validates identically
+//! across executions and restarts. The environment marker records
 //! every deterministic input that derives the environment identity
 //! (format, OS, architecture, digest, lock digest, Python runtime
 //! identity, uv identity); each `ToolVersion -> environment digest`
@@ -97,10 +107,12 @@ entrypoint = sys.argv[2]
 input_path = pathlib.Path(sys.argv[3]).resolve()
 sys.path.insert(0, str(source_root))
 
-# The published source root is immutable ToolVersion content: importing the
-# tool module must never write `__pycache__` bytecode caches into it, or the
-# next startup's persisted-source revalidation would (correctly) reject the
-# ToolVersion as corrupt.
+# The source root the harness receives is the invocation-private
+# materialization of the immutable ToolVersion, and it is also the process
+# working directory: ordinary tool writes may mutate the private copy but
+# can never reach the canonical published source. Bytecode caches stay
+# disabled so imports additionally never write `__pycache__` into the
+# private copy or the immutable dependency environment.
 sys.dont_write_bytecode = True
 
 def emit(value):
@@ -493,8 +505,11 @@ fn io_error(error: impl std::fmt::Display) -> PythonToolError {
 pub struct PublishedPythonTool {
     /// Original package metadata and identity.
     pub package: PythonToolPackage,
-    /// Private immutable source root (`tool-versions/<id>/source/`), the
-    /// exact directory the executor and every uv command use as their root.
+    /// Private immutable source root (`tool-versions/<id>/source/`): the
+    /// canonical authority. Every uv preparation command uses it as its
+    /// root; the executor reads it only to materialize each
+    /// invocation-private execution copy — it is never an execution
+    /// working directory.
     pub root: PathBuf,
 }
 
@@ -1130,6 +1145,11 @@ fn lock_digest_bytes(lock: &[u8]) -> String {
 
 /// Canonical Python executor using the immutable `ToolVersion` source and
 /// environment handles captured at candidate preparation.
+///
+/// The canonical published source is the immutable authority and is never
+/// a working directory: every invocation first materializes a private copy
+/// of it (see [`materialize_invocation_source`]) and executes against that
+/// copy.
 pub struct PythonToolExecutor {
     tool: PublishedPythonTool,
     environment: PythonToolEnvironment,
@@ -1188,8 +1208,21 @@ impl ToolExecutor for PythonToolExecutor {
         Box::pin(async move {
             let started = Instant::now();
             let number = self.next_invocation.fetch_add(1, Ordering::Relaxed);
-            let input_path = self.invocation_root.join(format!("input-{number}.json"));
+            // The invocation-private execution materialization: a writable
+            // copy of the immutable canonical source. The Python process
+            // runs with this copy as its module root *and* its working
+            // directory, so ordinary tool writes (relative paths,
+            // `__file__`) can never mutate the published ToolVersion. The
+            // copy and the private input file are deleted when the
+            // invocation settles; an abandoned copy is scratch state only
+            // and never participates in any identity.
+            let invocation_dir = self.invocation_root.join(format!("execution-{number}"));
+            if let Err(error) = materialize_invocation_source(&self.tool.root, &invocation_dir) {
+                return failed_python(&error.to_string(), started);
+            }
+            let input_path = invocation_dir.join("input.json");
             if let Err(error) = write_private_input(&input_path, &invocation.arguments) {
+                let _ = std::fs::remove_dir_all(&invocation_dir);
                 return failed_python(&error.to_string(), started);
             }
             let python = self.environment.root.join("bin/python");
@@ -1197,7 +1230,7 @@ impl ToolExecutor for PythonToolExecutor {
                 "{} {} {} {}",
                 shell_quote(&python),
                 shell_quote(&self.harness),
-                shell_quote(&self.tool.root),
+                shell_quote(&invocation_dir),
                 shell_quote_str(&self.tool.package.entrypoint),
             ) + &format!(" {}", shell_quote(&input_path));
             let runtime_environment = context
@@ -1208,7 +1241,7 @@ impl ToolExecutor for PythonToolExecutor {
                 .run(
                     SupervisedCommandSpec {
                         command,
-                        cwd: self.tool.root.clone(),
+                        cwd: invocation_dir.clone(),
                         environment: runtime_environment
                             .child_environment(context.workspace.root()),
                         timeout: None,
@@ -1217,7 +1250,7 @@ impl ToolExecutor for PythonToolExecutor {
                     None,
                 )
                 .await;
-            let _ = std::fs::remove_file(&input_path);
+            let _ = std::fs::remove_dir_all(&invocation_dir);
             match result {
                 Ok(result) => {
                     translate_python_result(result, started, context.cancellation.reason())
@@ -1226,6 +1259,47 @@ impl ToolExecutor for PythonToolExecutor {
             }
         })
     }
+}
+
+/// Materializes the invocation-private execution copy of one immutable
+/// published `ToolVersion` source: a deterministic recursive copy of every
+/// regular file, preserving the package-relative layout.
+///
+/// The published source was validated at discovery to contain only
+/// directories and regular non-symlink files; anything else here means the
+/// canonical store was tampered with and fails the invocation explicitly
+/// rather than following a link outside the store.
+fn materialize_invocation_source(
+    source_root: &Path,
+    destination: &Path,
+) -> Result<(), PythonToolError> {
+    fn copy_tree(source: &Path, destination: &Path) -> Result<(), PythonToolError> {
+        std::fs::create_dir_all(destination).map_err(io_error)?;
+        let mut entries = std::fs::read_dir(source)
+            .map_err(io_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(io_error)?;
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
+            let metadata = std::fs::symlink_metadata(entry.path()).map_err(io_error)?;
+            let target = destination.join(entry.file_name());
+            if metadata.is_dir() {
+                copy_tree(&entry.path(), &target)?;
+            } else if metadata.is_file() && !metadata.file_type().is_symlink() {
+                std::fs::copy(entry.path(), &target).map_err(io_error)?;
+            } else {
+                return Err(PythonToolError::Storage(format!(
+                    "the published ToolVersion source contains a non-regular entry: {}",
+                    entry.path().display()
+                )));
+            }
+        }
+        Ok(())
+    }
+    if destination.exists() {
+        std::fs::remove_dir_all(destination).map_err(io_error)?;
+    }
+    copy_tree(source_root, destination)
 }
 
 fn write_private_input(path: &Path, arguments: &serde_json::Value) -> Result<(), PythonToolError> {
@@ -2184,6 +2258,320 @@ mod tests {
         };
     }
 
+    /// A scripted execution runner that reproduces the tool's own
+    /// filesystem behavior at whatever writable working directory the
+    /// executor gave it — one relative write and one self-modification of
+    /// the module file — then answers with a valid success envelope. It
+    /// records every command with its cwd.
+    #[derive(Clone, Default)]
+    struct ToolWriteSimulatingRunner {
+        commands: Arc<Mutex<Vec<(String, PathBuf)>>>,
+    }
+
+    impl SupervisedProcessRunner for ToolWriteSimulatingRunner {
+        fn run(
+            &self,
+            spec: SupervisedCommandSpec,
+            _control: Option<crate::runtime::process_runner::RunnerTestControl>,
+        ) -> BoxFuture<'_, Result<CapturedProcessResult, String>> {
+            self.commands
+                .lock()
+                .expect("recorded commands lock")
+                .push((spec.command.clone(), spec.cwd.clone()));
+            // The tool's ordinary writes land wherever its working
+            // directory and module root are.
+            std::fs::write(spec.cwd.join("runtime-cache.txt"), b"changed")
+                .expect("the simulated relative write");
+            std::fs::write(
+                spec.cwd.join("tool.py"),
+                b"def main(arguments):\n    return 'tampered'\n",
+            )
+            .expect("the simulated self-modification");
+            Box::pin(async move {
+                Ok(CapturedProcessResult {
+                    exit_code: Some(0),
+                    intent: ProcessOutcomeIntent::Completed,
+                    stdout: br#"{"ok":true,"value":"ok"}"#.to_vec(),
+                    stderr: Vec::new(),
+                })
+            })
+        }
+    }
+
+    struct NoProgress;
+    impl crate::tools::executor::ProgressReporter for NoProgress {
+        fn report(&self, _progress: crate::tools::types::ToolProgress) {}
+    }
+
+    /// Builds an executor over a store with the given runner plus the
+    /// conversation tool runtime the execution context borrows from.
+    fn executor_fixture(
+        dir: &tempfile::TempDir,
+        runner: Arc<dyn SupervisedProcessRunner>,
+        package: &PythonToolPackage,
+    ) -> (
+        PythonToolStore,
+        PublishedPythonTool,
+        crate::tools::python::PythonToolExecutor,
+        crate::tools::runtime::ConversationToolRuntime,
+    ) {
+        let store = PythonToolStore::with_runner(dir.path().join("store"), runner).expect("store");
+        let published = store.publish(package).expect("publish");
+        let environment = crate::tools::python::PythonToolEnvironment {
+            digest: crate::runtime::identity::PythonToolEnvironmentDigest::new(
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                    .to_owned(),
+            ),
+            root: dir.path().join("env"),
+        };
+        let executor =
+            crate::tools::python::PythonToolExecutor::new(&store, published.clone(), environment)
+                .expect("executor");
+        std::fs::create_dir_all(dir.path().join("workspace")).expect("workspace");
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+            crate::runtime::identity::ConversationId::new("conv-python-immutability"),
+            dir.path().join("workspace"),
+            dir.path().join("artifacts"),
+        )
+        .expect("tool runtime");
+        (store, published, executor, tool_runtime)
+    }
+
+    async fn execute_once(
+        executor: &crate::tools::python::PythonToolExecutor,
+        tool_runtime: &crate::tools::runtime::ConversationToolRuntime,
+    ) -> crate::tools::types::ToolExecutionResult {
+        crate::tools::executor::ToolExecutor::execute(
+            executor,
+            crate::tools::types::ToolInvocation {
+                call_id: crate::runtime::identity::ToolCallId::new("call-1"),
+                tool_id: crate::runtime::identity::ToolId::new("tool-alpha"),
+                tool_name: "alpha".to_owned(),
+                mode: crate::tools::types::ToolInvocationMode::Foreground,
+                arguments: serde_json::json!({}),
+            },
+            crate::tools::executor::ToolExecutionContext {
+                conversation_id: tool_runtime.conversation_id(),
+                execution_id: None,
+                cancellation: crate::runtime::ExecutionCancellation::detached(
+                    crate::runtime::CancellationSignal::new(),
+                    crate::runtime::types::CancellationReason::UserRequested,
+                ),
+                workspace: tool_runtime.workspace(),
+                progress: &NoProgress,
+                artifacts: tool_runtime.artifacts(),
+                environment: tool_runtime.environment(),
+            },
+        )
+        .await
+    }
+
+    /// `ToolVersion` immutability at execution (Issue #81): a tool that
+    /// performs ordinary filesystem writes — a relative `cwd` write and a
+    /// self-modification through `__file__`'s location — mutates only its
+    /// invocation-private materialization. The canonical published source
+    /// keeps its exact bytes, no extra file appears in it, the recomputed
+    /// content digest still matches the committed `ToolVersionId`, and the
+    /// invocation-private directory is settled after the execution.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn tool_execution_cannot_mutate_the_canonical_published_source() {
+        let runner = Arc::new(ToolWriteSimulatingRunner::default());
+        let dir = tempfile::tempdir().expect("temp dir");
+        let package = test_package();
+        let original_tool_bytes = package
+            .files
+            .iter()
+            .find(|(path, _)| path == &PathBuf::from("tool.py"))
+            .expect("tool.py")
+            .1
+            .clone();
+        let (store, published, executor, tool_runtime) =
+            executor_fixture(&dir, runner.clone(), &package);
+
+        let result = execute_once(&executor, &tool_runtime).await;
+        assert!(
+            matches!(
+                result.status,
+                crate::tools::types::ToolExecutionStatus::Success
+            ),
+            "the tool executed: {:?}",
+            result.status
+        );
+
+        // The execution ran against an invocation-private materialization,
+        // never against the canonical published root.
+        let recorded = runner.commands.lock().expect("recorded commands lock");
+        assert_eq!(recorded.len(), 1, "exactly one execution command ran");
+        let (command, cwd) = &recorded[0];
+        let invocation_root = store.inner.root.join("python-invocations");
+        assert!(
+            cwd.starts_with(&invocation_root) && *cwd != published.root,
+            "the execution cwd is invocation-private: {cwd:?}"
+        );
+        assert!(
+            command.contains(&cwd.display().to_string()),
+            "the harness received the private materialization as its source root"
+        );
+        drop(recorded);
+
+        // The relative write never reached the canonical source.
+        assert!(
+            !published.root.join("runtime-cache.txt").exists(),
+            "no tool-created file appears in the canonical published source"
+        );
+        // The self-modification never reached the canonical source.
+        assert_eq!(
+            std::fs::read(published.root.join("tool.py")).expect("canonical tool.py"),
+            original_tool_bytes,
+            "the canonical tool.py bytes are unchanged"
+        );
+        // The recomputed canonical digest still matches the committed
+        // identity.
+        assert_eq!(
+            super::published_source_digest(&published.root).expect("canonical digest"),
+            package.tool_version_id,
+            "the published ToolVersion identity is stable after execution"
+        );
+        // The invocation-private materialization was settled.
+        assert_eq!(
+            std::fs::read_dir(&invocation_root)
+                .expect("invocation root")
+                .count(),
+            0,
+            "the invocation-private directory is removed after the execution"
+        );
+    }
+
+    /// Reopen/restart validation (Issue #81): after a real execution the
+    /// store instance is dropped, a fresh store over the same root
+    /// revalidates the persisted `ToolVersion` from its bytes alone, and
+    /// the identity is unchanged — execution left no drift.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn execution_then_store_reopen_revalidates_the_same_tool_version_identity() {
+        let runner = Arc::new(ToolWriteSimulatingRunner::default());
+        let dir = tempfile::tempdir().expect("temp dir");
+        let package = test_package();
+        let root = dir.path().join("store");
+        let published_root = {
+            let store = PythonToolStore::with_runner(root.clone(), runner).expect("first store");
+            let published = store.publish(&package).expect("publish");
+            let environment = crate::tools::python::PythonToolEnvironment {
+                digest: crate::runtime::identity::PythonToolEnvironmentDigest::new(
+                    "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                        .to_owned(),
+                ),
+                root: dir.path().join("env"),
+            };
+            let executor = crate::tools::python::PythonToolExecutor::new(
+                &store,
+                published.clone(),
+                environment,
+            )
+            .expect("executor");
+            std::fs::create_dir_all(dir.path().join("workspace")).expect("workspace");
+            let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+                crate::runtime::identity::ConversationId::new("conv-python-reopen"),
+                dir.path().join("workspace"),
+                dir.path().join("artifacts"),
+            )
+            .expect("tool runtime");
+            let result = execute_once(&executor, &tool_runtime).await;
+            assert!(matches!(
+                result.status,
+                crate::tools::types::ToolExecutionStatus::Success
+            ));
+            published.root
+            // `store` and `executor` drop here: no in-memory handle remains.
+        };
+        let reopened =
+            PythonToolStore::with_runner(root, Arc::new(ToolWriteSimulatingRunner::default()))
+                .expect("reopened store");
+        let republished = reopened
+            .publish(&package)
+            .expect("reuse must revalidate the persisted source after execution");
+        assert_eq!(republished.root, published_root);
+        assert_eq!(
+            republished.package.tool_version_id, package.tool_version_id,
+            "the persisted ToolVersion identity is unchanged across execution and reopen"
+        );
+    }
+
+    /// The end-to-end execution architecture with a real interpreter
+    /// (Issue #81): a tool that writes `runtime-cache.txt` relative to its
+    /// cwd and rewrites `__file__` executes successfully against its
+    /// invocation-private materialization while the canonical published
+    /// source stays byte-identical.
+    ///
+    /// Opt-in by availability, mirroring the `m7_uv` pattern: without a
+    /// real `python3` the acceptance is not exercised.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_real_execution_materializes_an_invocation_private_copy() {
+        let python = super::resolve_executable("python3");
+        if !python.is_file() {
+            eprintln!("python3 unavailable; the real execution materialization is not exercised");
+            return;
+        }
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut package = test_package();
+        let tool_source = b"from pathlib import Path\n\ndef main(arguments):\n    Path(\"runtime-cache.txt\").write_text(\"changed\")\n    Path(__file__).write_text(\"def main(arguments):\\n    return 'tampered'\\n\")\n    return \"ok\"\n".to_vec();
+        for (path, bytes) in &mut package.files {
+            if path == &PathBuf::from("tool.py") {
+                *bytes = tool_source.clone();
+            }
+        }
+        package.tool_version_id = super::tool_version_id(&package.files);
+        let store = PythonToolStore::new(dir.path().join("store")).expect("store");
+        let published = store.publish(&package).expect("publish");
+        let environment_root = dir.path().join("env");
+        std::fs::create_dir_all(environment_root.join("bin")).expect("env bin");
+        std::os::unix::fs::symlink(&python, environment_root.join("bin/python"))
+            .expect("interpreter link");
+        let executor = crate::tools::python::PythonToolExecutor::new(
+            &store,
+            published.clone(),
+            crate::tools::python::PythonToolEnvironment {
+                digest: crate::runtime::identity::PythonToolEnvironmentDigest::new(
+                    "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                        .to_owned(),
+                ),
+                root: environment_root,
+            },
+        )
+        .expect("executor");
+        std::fs::create_dir_all(dir.path().join("workspace")).expect("workspace");
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+            crate::runtime::identity::ConversationId::new("conv-python-real"),
+            dir.path().join("workspace"),
+            dir.path().join("artifacts"),
+        )
+        .expect("tool runtime");
+
+        let result = execute_once(&executor, &tool_runtime).await;
+        assert!(
+            matches!(
+                result.status,
+                crate::tools::types::ToolExecutionStatus::Success
+            ),
+            "the real tool executed: {:?}",
+            result.status
+        );
+        assert!(
+            !published.root.join("runtime-cache.txt").exists(),
+            "the relative write stayed inside the invocation-private copy"
+        );
+        assert_eq!(
+            std::fs::read(published.root.join("tool.py")).expect("canonical tool.py"),
+            tool_source,
+            "the __file__ self-modification stayed inside the invocation-private copy"
+        );
+        assert_eq!(
+            super::published_source_digest(&published.root).expect("canonical digest"),
+            package.tool_version_id,
+            "the canonical ToolVersion identity survived a real mutating execution"
+        );
+    }
+
     /// A timeout on a package-manager command is an explicit preparation
     /// failure.
     #[tokio::test]
@@ -2265,10 +2653,12 @@ mod tests {
         assert_eq!(second.package.tool_version_id, package.tool_version_id);
     }
 
-    /// The executor harness never mutates the immutable published source
-    /// root (Issue #81 root cause): importing the tool module must not
-    /// write `__pycache__` bytecode caches into it, or the next startup's
-    /// persisted-source revalidation would reject the `ToolVersion`.
+    /// The harness never mutates the source root it is given (Issue #81):
+    /// importing the tool module must not write `__pycache__` bytecode
+    /// caches. The executor additionally never hands the harness the
+    /// canonical published root — it passes an invocation-private
+    /// materialization — so this test is the second line of defense: even
+    /// the copy must stay free of interpreter cache writes.
     ///
     /// Opt-in by availability, mirroring the `m7_uv` pattern: without a
     /// real `python3` the acceptance is not exercised.

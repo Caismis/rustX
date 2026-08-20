@@ -262,6 +262,127 @@ async fn a_python_capability_failure_is_isolated_from_runtime_startup() {
     prove_native_tool_executes(&runtime).await;
 }
 
+/// Python store initialization itself fails (Issue #81 follow-up): the
+/// core environment store is valid, but a conflicting regular file sits
+/// exactly where the Python-private store must create its directories.
+/// The runtime composes, the Python source is observably unavailable with
+/// the storage diagnostic, the native tools are committed and really
+/// execute, and Runtime Client `initialize` succeeds. This exercises the
+/// exact constructor/store-opening failure that previously escaped the
+/// optional boundary — deterministically, without permission bits.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn python_store_initialization_failure_is_isolated_from_runtime_startup() {
+    let root = tempfile::tempdir().expect("temp root");
+    let (canonical, paths) = startup(&root, SESSION_JSON);
+    // A valid Python package exists, so the failure cannot be attributed
+    // to discovery: only opening the Python store can fail.
+    write_python_package(&paths.workspace, "fixture-tool");
+    // The deterministic filesystem conflict: a regular file where
+    // `PythonToolStore` must create `m7-tools/tool-versions`.
+    let environments = canonical.join("private/environments");
+    std::fs::create_dir_all(&environments).expect("environments root");
+    std::fs::write(environments.join("m7-tools"), b"not a directory")
+        .expect("conflicting regular file");
+
+    let runtime = LocalConversationRuntime::compose(&paths, &dependencies())
+        .await
+        .expect("a Python store initialization failure must not terminate composition");
+    let snapshot = attach_snapshot(&runtime);
+
+    let Some(CapabilitySourceStateView::Unavailable { reason }) =
+        source_state(&snapshot, &CapabilitySourceDescriptor::Python)
+    else {
+        panic!(
+            "the Python source must be observably unavailable: {:?}",
+            snapshot.capabilities.sources
+        );
+    };
+    assert!(
+        reason.contains("Python tool storage failed"),
+        "the reason is the store-opening diagnostic: {reason}"
+    );
+    // The authoritative coordinator state carries exactly the projected,
+    // already-bounded value.
+    let authoritative = runtime.capability().availability();
+    let Some(rustx::capabilities::CapabilitySourceState::Unavailable {
+        reason: authoritative_reason,
+    }) = authoritative.get(&rustx::capabilities::CapabilitySourceId::Python)
+    else {
+        panic!("the coordinator owns the unavailable state: {authoritative:?}");
+    };
+    assert_eq!(
+        *authoritative_reason, reason,
+        "the projection carries the authoritative value verbatim"
+    );
+    let names = tool_names(&snapshot);
+    assert!(names.contains(&"bash"), "native tools survive: {names:?}");
+    assert!(
+        !names.contains(&"fixture-tool"),
+        "no Python executor enters the committed registry: {names:?}"
+    );
+    prove_native_tool_executes(&runtime).await;
+}
+
+/// The base-only capability path of a subagent child (Issue #60) is
+/// structurally independent of Python storage (Issue #81 follow-up): with
+/// a deliberately unusable Python store location *and* a broken Python
+/// package in the workspace, coordinator construction, base-only
+/// preparation, and commit all succeed without touching Python storage.
+///
+/// This drives the exact production ownership sequence
+/// `LocalConversationCore::compose_subagent_child` performs
+/// (`CapabilityCoordinator::new` -> `prepare_base_only_candidate` ->
+/// `commit`), not an isolated helper.
+#[test]
+fn base_only_capability_setup_is_structurally_independent_of_python_storage() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let workspace_root = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace_root).expect("workspace");
+    // A broken Python package: base-only preparation must not even
+    // discover it.
+    let package = workspace_root.join(".agents/tools/broken-tool");
+    std::fs::create_dir_all(&package).expect("package directory");
+    std::fs::write(
+        package.join("TOOL.toml"),
+        "schema_version = 1\nname = \"other-name\"\ndescription = \"Broken\"\nentrypoint = \"tool:main\"\nexecution = \"foreground_only\"\nconcurrency = \"sequential\"\n",
+    )
+    .expect("manifest");
+    // The Python store location is a conflicting regular file.
+    let store_root = dir.path().join("skill-env");
+    std::fs::create_dir_all(&store_root).expect("environment store root");
+    let python_store_conflict = store_root.join("m7-tools");
+    std::fs::write(&python_store_conflict, b"not a directory").expect("conflicting file");
+
+    let coordinator = rustx::capabilities::CapabilityCoordinator::new(
+        rustx::capabilities::CapabilityCoordinatorConfig {
+            conversation_id: rustx::runtime::identity::ConversationId::new("conv-81-base-only"),
+            workspace: rustx::tools::Workspace::new(&workspace_root).expect("workspace"),
+            base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
+            mcp_servers: std::collections::BTreeMap::new(),
+            base_environment: rustx::tools::environment::ToolEnvironment::new(),
+            environment_store_root: store_root,
+        },
+    )
+    .expect("coordinator construction must not depend on Python storage");
+    let candidate = coordinator
+        .prepare_base_only_candidate()
+        .expect("base-only preparation must not depend on Python storage");
+    let snapshot = coordinator.commit(candidate).expect("base-only commit");
+    assert_eq!(snapshot.revision().get(), 0, "an empty base set is a no-op");
+    assert!(
+        coordinator.availability().is_empty(),
+        "base-only preparation evaluates no optional source"
+    );
+    assert!(
+        python_store_conflict.is_file(),
+        "the conflicting file was never replaced by Python storage"
+    );
+    assert!(
+        !dir.path().join("skill-env/m7-tools/tool-versions").exists(),
+        "no Python ToolVersion storage was created"
+    );
+}
+
 /// A corrupt persisted `ToolVersion` (Issue #81 root-cause regression):
 /// storage recomputes the identity from the persisted source, detects the
 /// mismatch, and the Python capability becomes unavailable — while the
@@ -531,6 +652,91 @@ mod mcp {
             !names.contains(&"echo"),
             "no tool of the incompatible server is committed: {names:?}"
         );
+        prove_native_tool_executes(&runtime).await;
+    }
+
+    /// An external MCP peer can emit an arbitrarily large diagnostic
+    /// (Issue #81 follow-up): the fixture fails `tools/list` with a huge
+    /// correlated error message, and the stored availability reason is
+    /// bounded at the capability-owning boundary before it enters the
+    /// authoritative state — the Runtime Client projection carries exactly
+    /// that bounded value, and the runtime stays alive.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn an_oversized_mcp_diagnostic_is_bounded_before_authoritative_state() {
+        if fixture::serve_if_fixture_mode(FixtureServer::from_env()).await {
+            return;
+        }
+        let root = tempfile::tempdir().expect("temp root");
+        let program = std::env::current_exe()
+            .expect("test executable")
+            .display()
+            .to_string();
+        let args = fixture::fixture_spawn_args(
+            "mcp::an_oversized_mcp_diagnostic_is_bounded_before_authoritative_state",
+        );
+        let session = serde_json::json!({
+            "conversationId": "conv-81-bounded",
+            "agentId": "agent-81",
+            "model": {"model": "local/composed-model"},
+            "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
+            "mcpServers": {
+                "loud": {
+                    "type": "stdio",
+                    "command": program,
+                    "args": args,
+                    "env": {
+                        fixture::FIXTURE_MODE_ENV: "1",
+                        fixture::LIST_TOOLS_ERROR_BYTES_ENV: "65536",
+                    },
+                },
+            },
+        })
+        .to_string();
+        let (_canonical, paths) = startup(&root, &session);
+
+        let runtime = super::LocalConversationRuntime::compose(&paths, &dependencies())
+            .await
+            .expect("a loud MCP peer must not terminate composition");
+        let snapshot = attach_snapshot(&runtime);
+
+        let loud = CapabilitySourceDescriptor::Mcp {
+            server_id: rustx::runtime::identity::McpServerId::new("loud"),
+        };
+        let Some(CapabilitySourceStateView::Unavailable { reason }) =
+            source_state(&snapshot, &loud)
+        else {
+            panic!(
+                "the loud server is observably unavailable: {:?}",
+                snapshot.capabilities.sources
+            );
+        };
+        assert!(
+            reason.len() <= rustx::capabilities::CAPABILITY_FAILURE_REASON_MAX_BYTES,
+            "the projected reason respects the documented bound: {} bytes",
+            reason.len()
+        );
+        assert!(
+            reason.contains("catalog unavailable"),
+            "the bounded reason keeps the peer's diagnostic prefix: {reason}"
+        );
+        // Projection consistency: the Runtime Client snapshot carries
+        // exactly the authoritative coordinator value; nothing downstream
+        // re-truncates.
+        let authoritative = runtime.capability().availability();
+        let Some(rustx::capabilities::CapabilitySourceState::Unavailable {
+            reason: authoritative_reason,
+        }) = authoritative.get(&rustx::capabilities::CapabilitySourceId::Mcp(
+            rustx::runtime::identity::McpServerId::new("loud"),
+        ))
+        else {
+            panic!("the coordinator owns the unavailable state: {authoritative:?}");
+        };
+        assert_eq!(
+            *authoritative_reason, reason,
+            "the projection carries the authoritative bounded value verbatim"
+        );
+        let names = tool_names(&snapshot);
+        assert!(names.contains(&"bash"), "native tools survive: {names:?}");
         prove_native_tool_executes(&runtime).await;
     }
 }

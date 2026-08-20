@@ -50,7 +50,10 @@ mod coordinator;
 mod error;
 mod snapshot;
 
-pub use availability::{CapabilityAvailability, CapabilitySourceId, CapabilitySourceState};
+pub use availability::{
+    CAPABILITY_FAILURE_REASON_MAX_BYTES, CapabilityAvailability, CapabilitySourceId,
+    CapabilitySourceState, capability_failure_reason,
+};
 pub use coordinator::{
     AttemptCapabilityLease, CapabilityCoordinator, CapabilityCoordinatorConfig, CapabilityObserver,
     PreparedCapabilityCandidate,
