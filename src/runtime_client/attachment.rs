@@ -78,11 +78,13 @@ impl RuntimeAttachment {
         if self.detached.load(Ordering::SeqCst) {
             return Self::error_response(id, RuntimeClientError::NotAttached);
         }
-        if matches!(request, RuntimeClientRequest::Shutdown { .. }) {
+        if matches!(request, RuntimeClientRequest::Shutdown { .. }) || request.is_session_request()
+        {
             return Self::error_response(
                 id,
                 RuntimeClientError::InvalidRequest {
-                    message: "shutdown must be awaited through handle_request_async".to_owned(),
+                    message: "this control request must be awaited through handle_request_async"
+                        .to_owned(),
                 },
             );
         }
@@ -121,6 +123,17 @@ impl RuntimeAttachment {
             RuntimeClientRequest::ModelCatalogGet { .. } => self.inner.model_catalog(),
             RuntimeClientRequest::ModelGet { .. } => self.inner.model_get(),
             RuntimeClientRequest::ModelSet { config, .. } => self.inner.model_set(*config),
+            RuntimeClientRequest::SessionList { .. }
+            | RuntimeClientRequest::SessionGet { .. }
+            | RuntimeClientRequest::SessionTreeGet { .. }
+            | RuntimeClientRequest::SessionName { .. }
+            | RuntimeClientRequest::SessionNew { .. }
+            | RuntimeClientRequest::SessionSelect { .. }
+            | RuntimeClientRequest::SessionClone { .. }
+            | RuntimeClientRequest::SessionFork { .. }
+            | RuntimeClientRequest::SessionTreeBranch { .. } => {
+                unreachable!("native Session requests are handled asynchronously")
+            }
             RuntimeClientRequest::BackgroundStatus { execution_id, .. } => {
                 self.inner.background_status(&execution_id)
             }
@@ -161,6 +174,17 @@ impl RuntimeAttachment {
             return Self::error_response(id, RuntimeClientError::NotAttached);
         }
         if !matches!(request, RuntimeClientRequest::Shutdown { .. }) {
+            if let Some(session_request) = request.session_request() {
+                let result = self.inner.session_request(session_request).await;
+                return match result {
+                    Ok(result) => RuntimeClientResponse {
+                        id,
+                        result: Some(result),
+                        error: None,
+                    },
+                    Err(error) => Self::error_response(id, error),
+                };
+            }
             return self.handle_request(request);
         }
         let result = self.inner.shutdown().await;

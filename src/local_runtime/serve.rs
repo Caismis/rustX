@@ -17,7 +17,7 @@
 //! # Exit semantics
 //!
 //! - clean input EOF at a record boundary, or a peer broken pipe, ends this
-//!   one-session process **successfully**;
+//!   one-active-lineage process **successfully**;
 //! - malformed framing or any other transport error writes a diagnostic to
 //!   stderr and exits **non-zero**;
 //! - semantic `shutdown` responds only after the conversation runtime reaches
@@ -35,7 +35,7 @@ use std::io::Write;
 use crate::runtime_client::transport::stdio::{StdioSessionEnd, serve_stdio_jsonl};
 
 use super::cli::{USAGE, parse_arguments};
-use super::composition::{LocalConversationRuntime, LocalRuntimeDependencies};
+use super::composition::{LocalRuntimeDependencies, LocalSessionProduct};
 
 /// The deterministic terminal outcome of the local runtime process.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,8 +83,7 @@ pub async fn serve(arguments: impl IntoIterator<Item = String>) -> ProcessOutcom
     // before the transport exists, so a startup failure can never leave a
     // partially initialized protocol server.
     let runtime =
-        match LocalConversationRuntime::compose(&paths, &LocalRuntimeDependencies::default()).await
-        {
+        match LocalSessionProduct::compose(&paths, &LocalRuntimeDependencies::default()).await {
             Ok(runtime) => runtime,
             Err(error) => return ProcessOutcome::StartupFailed(error.to_string()),
         };

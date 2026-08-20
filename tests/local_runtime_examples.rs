@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use rustx::local_runtime::LocalSessionConfig;
+use rustx::local_runtime::LocalConversationConfig;
 use rustx::model::catalog::{
     ChatReasoningReplay, MapCredentialEnvironment, ModelCatalog, ModelRef, ReasoningProfileId,
 };
@@ -69,8 +69,8 @@ fn committed_model_example_uses_the_production_catalog_contract() {
 fn committed_baseline_session_selects_a_catalog_model_and_configures_runtime_policy() {
     let catalog = ModelCatalog::from_json_slice(&read_example("models.json"))
         .expect("models.json must parse through ModelCatalog");
-    let session = LocalSessionConfig::from_json_slice(&read_example("session.json"))
-        .expect("session.json must parse through LocalSessionConfig");
+    let session = LocalConversationConfig::from_json_slice(&read_example("session.json"))
+        .expect("session.json must parse through LocalConversationConfig");
 
     assert_eq!(session.model.model.to_string(), "example/demo-model");
     catalog

@@ -649,6 +649,38 @@ impl ConversationStore for SqliteConversationStore {
             .map_err(|error| storage(format!("initialize commit: {error}")))
     }
 
+    fn load_bootstrap_history(&self) -> Result<Vec<MessageBlock>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let count: Option<i64> = connection
+            .query_row(
+                "SELECT message_count FROM bootstrap_identity WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| storage(format!("bootstrap history count: {error}")))?;
+        let Some(count) = count else {
+            // A low-level non-session composition may be opening a fresh
+            // store. ConversationRuntime::initialize will establish the
+            // empty bootstrap identity; no historical seed exists yet.
+            return Ok(Vec::new());
+        };
+        let mut statement = connection
+            .prepare(
+                "SELECT message_json FROM message_ledger
+                 ORDER BY position LIMIT ?1",
+            )
+            .map_err(|error| storage(format!("bootstrap history query: {error}")))?;
+        let rows = statement
+            .query_map([count], |row| row.get::<_, String>(0))
+            .map_err(|error| storage(format!("bootstrap history rows: {error}")))?;
+        rows.map(|row| {
+            let json = row.map_err(|error| storage(format!("bootstrap history row: {error}")))?;
+            decode(&json, "bootstrap history")
+        })
+        .collect()
+    }
+
     fn load_head(&self) -> Result<DurableConversationHead, ConversationStoreError> {
         let connection = self.lock()?;
         load_head(&connection)
@@ -668,6 +700,15 @@ impl ConversationStore for SqliteConversationStore {
     ) -> Result<Vec<MessageId>, ConversationStoreError> {
         let connection = self.lock()?;
         reconstruct_surface(&connection, revision)
+    }
+
+    fn load_surface_snapshot(
+        &self,
+        revision: SurfaceRevision,
+    ) -> Result<Vec<MessageBlock>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let ids = reconstruct_surface(&connection, revision)?;
+        ids.iter().map(|id| load_message(&connection, id)).collect()
     }
 
     fn append_canonical(&self, message: &MessageBlock) -> Result<(), ConversationStoreError> {

@@ -22,6 +22,7 @@
  */
 
 import type { PresentationState } from "../../presentation/state.ts";
+import type { SessionView } from "../../protocol/types.ts";
 import { correlateTools, runningTools } from "../../presentation/tools.ts";
 import {
   activeBackground,
@@ -164,8 +165,9 @@ export function renderFooter(
   state: PresentationState,
   connectionState: string,
   width = 120,
+  session?: SessionView,
 ): string {
-  const segments = footerSegments(state, connectionState);
+  const segments = footerSegments(state, connectionState, session);
   return layout(segments, width).join("\n");
 }
 
@@ -173,11 +175,18 @@ export function renderFooter(
 export function footerSegments(
   state: PresentationState,
   connectionState: string,
+  session?: SessionView,
 ): Segment[] {
   const segments: Segment[] = [];
   const attempt = state.attempt;
 
   segments.push(...modelSegments(state));
+  if (session !== undefined) {
+    segments.push({
+      text: role.chrome(`session ${session.name} · node ${session.active_node}`),
+      priority: 1,
+    });
+  }
 
   if (attempt !== undefined) {
     segments.push({

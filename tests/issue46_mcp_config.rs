@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use rustx::local_runtime::config::{LocalSessionConfig, LocalSessionConfigError};
+use rustx::local_runtime::config::{LocalConversationConfig, LocalConversationConfigError};
 use rustx::runtime::identity::McpServerId;
 use rustx::tools::mcp::{McpServerBinding, McpServerBindings, McpTransportConfig};
 use rustx::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy};
@@ -26,14 +26,14 @@ fn session_json(fragment: &str) -> String {
 }
 
 fn bindings(fragment: &str) -> McpServerBindings {
-    LocalSessionConfig::from_json_slice(session_json(fragment).as_bytes())
+    LocalConversationConfig::from_json_slice(session_json(fragment).as_bytes())
         .expect("the configuration must parse")
         .mcp_bindings()
         .expect("the configuration must normalize")
 }
 
-fn rejection(fragment: &str) -> LocalSessionConfigError {
-    LocalSessionConfig::from_json_slice(session_json(fragment).as_bytes())
+fn rejection(fragment: &str) -> LocalConversationConfigError {
+    LocalConversationConfig::from_json_slice(session_json(fragment).as_bytes())
         .expect_err("the configuration must be rejected")
 }
 
@@ -258,7 +258,7 @@ fn unsupported_transport_types_are_rejected_with_the_accepted_set() {
         ));
         let message = error.to_string();
         assert!(
-            matches!(error, LocalSessionConfigError::Syntax { .. }),
+            matches!(error, LocalConversationConfigError::Syntax { .. }),
             "unexpected error kind for {transport_type}: {message}"
         );
         assert!(
@@ -273,7 +273,7 @@ fn unsupported_transport_types_are_rejected_with_the_accepted_set() {
 fn unknown_entry_fields_are_rejected() {
     let error = rejection(r#""mcpServers": {"exa": {"url": "https://x", "timeoutMs": 5000}}"#);
     assert!(
-        matches!(error, LocalSessionConfigError::Syntax { .. }),
+        matches!(error, LocalConversationConfigError::Syntax { .. }),
         "unexpected error: {error}"
     );
 }
@@ -285,7 +285,7 @@ fn the_obsolete_array_schema_is_rejected() {
         r#""mcpServers": [{"serverId": "exa", "transport": {"type": "streamable_http", "endpoint": "https://x"}}]"#,
     );
     assert!(
-        matches!(error, LocalSessionConfigError::Syntax { .. }),
+        matches!(error, LocalConversationConfigError::Syntax { .. }),
         "unexpected error: {error}"
     );
 }
@@ -296,7 +296,7 @@ fn the_obsolete_array_schema_is_rejected() {
 fn the_obsolete_server_id_field_is_rejected() {
     let error = rejection(r#""mcpServers": {"exa": {"serverId": "exa", "url": "https://x"}}"#);
     assert!(
-        matches!(error, LocalSessionConfigError::Syntax { .. }),
+        matches!(error, LocalConversationConfigError::Syntax { .. }),
         "unexpected error: {error}"
     );
 }
@@ -308,7 +308,7 @@ fn the_obsolete_nested_transport_field_is_rejected() {
         r#""mcpServers": {"exa": {"transport": {"type": "streamable_http", "endpoint": "https://x"}}}"#,
     );
     assert!(
-        matches!(error, LocalSessionConfigError::Syntax { .. }),
+        matches!(error, LocalConversationConfigError::Syntax { .. }),
         "unexpected error: {error}"
     );
 }
@@ -321,7 +321,7 @@ fn embedded_policy_inside_a_connection_entry_is_rejected() {
         r#""mcpServers": {"exa": {"url": "https://x", "policy": {"execution": "foreground_only"}}}"#,
     );
     assert!(
-        matches!(error, LocalSessionConfigError::Syntax { .. }),
+        matches!(error, LocalConversationConfigError::Syntax { .. }),
         "unexpected error: {error}"
     );
 }

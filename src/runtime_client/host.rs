@@ -25,7 +25,8 @@
 //! - the Runtime Client projection (snapshot read model, cursor allocation,
 //!   bounded replay, subscribers) and its linearization boundary;
 //! - protocol adaptation: request dispatch, `model_set`/`shutdown`/
-//!   `cancel_current_attempt` forwarding, inbound publish forwarding;
+//!   `cancel_current_attempt` forwarding, native Session intent forwarding,
+//!   and inbound publish forwarding;
 //! - transport-independent client subscriptions.
 //!
 //! The host does **not** own:
@@ -38,6 +39,8 @@
 //! - mailbox semantic sequencing (the coordinator owns the
 //!   mailbox/admission relationship);
 //! - `ConversationToolRuntime` / `CapabilityCoordinator` semantic ownership;
+//! - SessionCatalog/SessionGraph ownership (the optional native Session
+//!   control seam forwards to `LocalSessionSupervisor`);
 //! - cancellation terminal settlement (`AgentExecution` remains the attempt
 //!   execution/terminal authority);
 //! - background/subagent lifecycle.
@@ -108,6 +111,8 @@
 //! attempt, conversation-owned background executions, mailbox contents,
 //! canonical conversation state, and capability state are untouched.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg_attr(not(test), allow(unused_imports))]
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
@@ -115,7 +120,7 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use super::projection::{RuntimeClientProjection, SubscriberPoll, background_view, subagent_view};
 use super::types::{
     AttachmentId, RUNTIME_CLIENT_PROTOCOL_VERSION_V1, RuntimeClientCursor, RuntimeClientError,
-    RuntimeClientProtocolEvent, RuntimeClientResult,
+    RuntimeClientProtocolEvent, RuntimeClientResult, RuntimeClientSessionRequest,
 };
 use crate::model::session::SessionModelConfig;
 use crate::model::{ModelRequest, RequestIdentity};
@@ -192,6 +197,28 @@ impl core::fmt::Display for HostConstructionError {
 
 impl std::error::Error for HostConstructionError {}
 
+/// The typed native Session control seam installed by the local product
+/// composition. Runtime Client owns only protocol adaptation; the
+/// implementation remains in `LocalSessionSupervisor`.
+pub type SessionControlFuture =
+    Pin<Box<dyn Future<Output = Result<RuntimeClientResult, RuntimeClientError>> + Send>>;
+
+pub trait RuntimeClientSessionControl: Send + Sync {
+    /// Handles one native Session intent. The returned future owns any
+    /// quiescence await; no host lock is held across it.
+    fn handle(&self, request: RuntimeClientSessionRequest) -> SessionControlFuture;
+
+    /// Persists a successfully applied live model configuration for the
+    /// active local Session. This records product configuration only; the
+    /// `ConversationRuntime` remains the live model authority.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed Runtime Client error when the product metadata cannot
+    /// be durably updated.
+    fn persist_model(&self, config: SessionModelConfig) -> Result<(), RuntimeClientError>;
+}
+
 /// The host-owned attachment state.
 pub(crate) struct AttachmentState {
     /// The attachment identity.
@@ -226,6 +253,10 @@ pub(crate) struct ClientInner {
     agent_id: crate::runtime::identity::AgentId,
     /// The conversation runtime this host observes and controls.
     runtime: ConversationRuntime,
+    /// Optional native product Session owner. Low-level conversation hosts
+    /// intentionally leave this absent; the local product installs exactly
+    /// one supervisor here.
+    session_control: Option<Arc<dyn RuntimeClientSessionControl>>,
     /// The one projection synchronization boundary.
     state: Mutex<ClientState>,
     /// The observation queue shared with the conversation runtime (the
@@ -674,6 +705,7 @@ impl ClientInner {
         let state = self.lock_state();
         state.projection.snapshot_ref_checked()?;
         drop(state);
+        let persisted_config = config.clone();
         let view = self
             .runtime
             .model_set(config)
@@ -688,6 +720,9 @@ impl ClientInner {
                     RuntimeClientError::InvalidState { message }
                 }
             })?;
+        if let Some(control) = self.session_control.as_ref() {
+            control.persist_model(persisted_config)?;
+        }
         Ok(RuntimeClientResult::ModelSet {
             model: Box::new(view),
         })
@@ -803,6 +838,21 @@ impl ClientInner {
         })?;
         Ok(RuntimeClientResult::ShutdownCompleted)
     }
+
+    /// Forwards native Session control to the product owner. This adapter
+    /// owns no catalog, graph, or selection state itself.
+    pub(crate) async fn session_request(
+        &self,
+        request: RuntimeClientSessionRequest,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        let Some(control) = self.session_control.as_ref() else {
+            return Err(RuntimeClientError::InvalidState {
+                message: "this Runtime Client host is not attached to a local Session product"
+                    .to_owned(),
+            });
+        };
+        control.handle(request).await
+    }
 }
 
 /// The Runtime Client host of one conversation.
@@ -884,6 +934,27 @@ impl RuntimeClientHost {
     /// headless observation bridge already exists over the runtime, or
     /// [`HostConstructionError::Durable`] when native durable bootstrap fails.
     pub fn new(config: RuntimeClientHostConfig) -> Result<Self, HostConstructionError> {
+        Self::construct(config, None)
+    }
+
+    /// Creates a host over one runtime and installs the native Session
+    /// control seam used by the local product composition.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HostConstructionError`] when the runtime is already bound,
+    /// activated, or cannot provide a coherent observation bootstrap.
+    pub fn new_with_session_control(
+        config: RuntimeClientHostConfig,
+        session_control: Arc<dyn RuntimeClientSessionControl>,
+    ) -> Result<Self, HostConstructionError> {
+        Self::construct(config, Some(session_control))
+    }
+
+    fn construct(
+        config: RuntimeClientHostConfig,
+        session_control: Option<Arc<dyn RuntimeClientSessionControl>>,
+    ) -> Result<Self, HostConstructionError> {
         // ---- Ownership commit: the one-time binding claim. ----
         //
         // The claim is the linearization point that gates every later
@@ -950,6 +1021,7 @@ impl RuntimeClientHost {
             conversation_id: seed.conversation_id,
             agent_id: config.runtime.agent_id().clone(),
             runtime: config.runtime,
+            session_control,
             state: Mutex::new(ClientState {
                 projection,
                 attachment: None,

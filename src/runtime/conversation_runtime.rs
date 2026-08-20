@@ -278,7 +278,8 @@ use crate::capabilities::{CapabilityCoordinator, CapabilityObserver, CapabilityS
 use crate::context::tokens::TokenEstimator;
 use crate::context::{AgentStatusComposer, ContextRuntime, SessionContextPolicy};
 use crate::conversation::ConversationState;
-use crate::durable::{ConversationStore, InboundDraft};
+use crate::conversation::SurfaceRevision;
+use crate::durable::{ConversationStore, ConversationStoreError, InboundDraft};
 use crate::events::types::RuntimeEvent;
 use crate::message::types::{InboundKind, MessageBlock, UserContentBlock, UserSource};
 use crate::model::catalog::ModelCatalogView;
@@ -3129,6 +3130,43 @@ impl ConversationRuntime {
     #[must_use]
     pub fn request_history(&self) -> RequestHistory {
         RequestHistory::new(self.inner.store.clone())
+    }
+
+    /// Reads one exact historical canonical Surface revision through the
+    /// durable `ConversationStore`. This is a materialization seam for the
+    /// native Session layer: it returns evidence of the selected revision and
+    /// never recomputes history with today's context or provider rules.
+    ///
+    /// The returned messages are a snapshot of the selected linear lineage;
+    /// they carry no runtime lifecycle facts such as attempts, requests, or
+    /// Event Journal ownership.
+    ///
+    /// # Errors
+    ///
+    /// Returns the durable store error when the requested revision is not
+    /// retained or its canonical facts cannot be read.
+    pub fn historical_surface_snapshot(
+        &self,
+        revision: SurfaceRevision,
+    ) -> Result<Vec<MessageBlock>, ConversationStoreError> {
+        self.inner.store.load_surface_snapshot(revision)
+    }
+
+    /// Selects the current committed Surface head and materializes that exact
+    /// revision. The head read is the clone linearization point; a later
+    /// append or compaction creates a later revision and cannot mutate this
+    /// selected historical meaning.
+    ///
+    /// # Errors
+    ///
+    /// Returns the durable store error when the head or selected Surface
+    /// facts cannot be read.
+    pub fn historical_head_snapshot(
+        &self,
+    ) -> Result<(SurfaceRevision, Vec<MessageBlock>), ConversationStoreError> {
+        let head = self.inner.store.load_head()?;
+        let messages = self.inner.store.load_surface_snapshot(head.revision)?;
+        Ok((head.revision, messages))
     }
 
     /// Reconstructs one retained provider-neutral request from its durable

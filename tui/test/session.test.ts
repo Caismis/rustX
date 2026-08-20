@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { RuntimeClientConnection } from "../src/runtime/connection.ts";
-import { RuntimeClientSession, isResyncRequired } from "../src/runtime/session.ts";
+import { RuntimeClientAttachment, isResyncRequired } from "../src/runtime/attachment.ts";
 import { RuntimeRequestError } from "../src/runtime/connection.ts";
 import {
   assistantMessage,
@@ -25,20 +25,20 @@ import { ScriptedPeer, until } from "./support/scripted-peer.ts";
 function connect(): {
   peer: ScriptedPeer;
   connection: RuntimeClientConnection;
-  session: RuntimeClientSession;
+  session: RuntimeClientAttachment;
 } {
   const peer = new ScriptedPeer();
   const connection = new RuntimeClientConnection({
     input: peer.runtimeOutput,
     output: peer.clientOutput,
   });
-  return { peer, connection, session: new RuntimeClientSession({ connection }) };
+  return { peer, connection, session: new RuntimeClientAttachment({ connection }) };
 }
 
 /** Completes the attach handshake with a given snapshot and cursor. */
 async function attach(
   peer: ScriptedPeer,
-  session: RuntimeClientSession,
+  session: RuntimeClientAttachment,
   initial = snapshot(),
   cursor = 0,
 ): Promise<void> {
@@ -57,7 +57,7 @@ async function attach(
   await attaching;
 }
 
-describe("RuntimeClientSession", () => {
+describe("RuntimeClientAttachment", () => {
   it("negotiates v1, installs the snapshot, and subscribes from its cursor", async () => {
     const { peer, session } = connect();
     await attach(peer, session, snapshot({ conversation_id: "conv-7" }), 12);

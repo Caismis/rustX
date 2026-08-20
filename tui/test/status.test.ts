@@ -166,6 +166,24 @@ describe("footer", () => {
     assert.match(rendered, /connected/);
   });
 
+  it("shows the native active Session and node when published", () => {
+    const rendered = footer(
+      stateOf(),
+      "connected",
+      120,
+      {
+        id: "session-7",
+        name: "review branch",
+        created_at: "2026-08-21T00:00:00Z",
+        updated_at: "2026-08-21T00:00:00Z",
+        active_node: "node-3",
+        nodes: [],
+      },
+    );
+    assert.match(rendered, /session review branch/);
+    assert.match(rendered, /node node-3/);
+  });
+
   it("surfaces unavailable optional capabilities without dying (Issue #81)", () => {
     const healthy = footer(
       stateOf({ capabilities: { revision: 3, sources: [] } }),

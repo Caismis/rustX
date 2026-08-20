@@ -2953,7 +2953,7 @@ contracts and provider protocols. These invariants are frozen by M2:
   and leaves zero bytes on stdout.
 
 - Clean input EOF at a record boundary or a peer broken pipe terminates the
-  one-session process successfully; malformed framing or another transport
+  one-active-lineage process successfully; malformed framing or another transport
   error exits non-zero. Semantic `shutdown` waits for runtime quiescence but
   does not close the transport. Transport EOF remains a detach, never an
   Agent Loop cancellation primitive.

@@ -3110,34 +3110,103 @@ domain.
 ```text
 explicit startup arguments (--models --session --workspace --runtime-root)
         |
-ModelCatalog + LocalSessionConfig
+ModelCatalog + bootstrap LocalConversationConfig
         |
-        +--> SessionModelState (authoritative session model)
-        +--> ConversationToolRuntime  (workspace, artifacts, mailbox,
-        |                              background registry, base environment)
-        +--> base ToolRegistry + register_native_tools(...)
-        +--> CapabilityCoordinator    (same conversation and workspace)
-        +--> prepare_candidate() -> commit()   <-- before serving
-        +--> context policy / Surface / status pieces
+        +--> SessionCatalog / SessionGraph (native product authority)
+        +--> active SessionNode -> one ConversationId
+        +--> LocalConversationCore (one linear runtime composition)
+        |       +--> SessionModelState (authoritative session model)
+        |       +--> ConversationToolRuntime (workspace, artifacts, mailbox,
+        |       |                              background registry)
+        |       +--> CapabilityCoordinator / context / Surface / status
+        |       +--> RuntimeClientHost + LocalSessionSupervisor control
+        |       +--> exactly one active ConversationRuntime
         |
-LocalConversationCore  (the one shared semantic composition, inactive)
-        |
-        +-- into_interactive(): RuntimeClientHost (projection/control/
-        |                       attachment adapter), then activate
-        |       -> LocalConversationRuntime -> RuntimeClientEndpoint
-        |          -> stdio JSONL (Issue #38)
-        |
-        +-- into_headless(): activate, no Runtime Client host
-                -> HeadlessConversationRuntime (Issue #60 subagents)
+        +-- session switch: quiesce old runtime -> publish selection
+                -> process attachment restart -> ordinary lineage recovery
 ```
 
-`LocalConversationCore::compose` is the one Rust-side semantic composition
-owner; `LocalConversationRuntime::compose` and
-`HeadlessConversationRuntime::compose` are the two final paths over it, both
-returning already-active runtimes and both activating through the one
-`ConversationRuntime::activate` boundary. The startup capability commit
-happens *before* the conversation runtime is constructed, so it is not
-subject to the runtime's lifecycle gate.
+`LocalSessionProduct::compose` is the native local product composition owner.
+It loads the durable `SessionCatalog`, resolves its active `SessionNode`, and
+composes exactly one linear `ConversationRuntime` for that node. The lower
+`LocalConversationRuntime::compose` and `HeadlessConversationRuntime::compose`
+paths remain available for non-session composition callers. A product session
+switch reaches native quiescence before catalog publication; the TUI then
+restarts its process attachment and the new process performs ordinary
+per-conversation recovery. The startup capability commit still happens
+*before* the conversation runtime is constructed, so it is not subject to the
+runtime's lifecycle gate.
+
+#### Native Session lifecycle and branching (M9.4 / Issue #88)
+
+`LocalSessionSupervisor` is the only native user-level Session owner. It owns
+the persisted `SessionCatalog`, Session metadata, the Session graph, the
+active Session/SessionNode selection, and the one live runtime handle:
+
+```text
+Runtime Client / TUI intent
+          |
+          v
+LocalSessionSupervisor
+  +-- SessionCatalog + SessionGraph
+  +-- active SessionId / SessionNodeId
+  +-- SessionNode -> ConversationId
+  +-- one active ConversationRuntime
+          |
+          v
+linear Conversation Ledger + ConversationSurface + snapshots + journal
+```
+
+The graph is not a ConversationSurface graph. Every node has a distinct
+`ConversationId`, and every ConversationSurface remains linear. Inactive
+sessions are durable state only; they do not retain a live runtime, attempt,
+tool runner, background registry, pending inbound queue, or cancellation
+state. The catalog is stored under the native runtime root, while every node's
+SQLite conversation database is independently bound to its own
+`ConversationId`.
+
+`/new` prepares an empty private destination and publishes a new Session and
+root node only after its durable conversation seed is valid. `/name` commits
+metadata only. `/resume` selects persisted metadata, `/tree` selects a node or
+prepares a new node, and both replace the active process attachment only after
+`ConversationRuntime::shutdown()` has returned successfully. The TUI renders
+typed projections and owns only picker query/focus/editor state; it never
+opens the catalog or a conversation database.
+
+Historical materialization is an explicit durable boundary:
+
+```text
+snapshot_at_surface_revision(R)
+snapshot_before_user_message(R, M)
+        -> HistoricalConversationSnapshot / ConversationSeed
+        -> destination-owned canonical identities
+        -> private SQLite seed
+        -> catalog/graph publication
+```
+
+The snapshot reads retained Message Ledger and Surface facts. It does not run
+current Context Assembly, Skills, capability discovery, workflow/goal logic,
+provider code, or model invocation. `/clone` selects the current committed
+Surface revision before seeding; `/fork` selects an exact historical revision
+and user message, seeds the prefix before that message, and returns the
+original content as uncommitted editor text. Source changes after selection
+cannot change the destination seed.
+
+Destination seeds remap `MessageId` and `ToolCallId` once, preserving internal
+tool-result correlations. They do not copy AttemptIds, Request Snapshots,
+Event Journal lifecycle facts, Pending Inbound, cancellation state, active or
+background executions, or live interactions. A destination becomes visible
+only after private seed creation and atomic catalog publication both succeed;
+failed preparation leaves at most an unreferenced private directory.
+
+The linearization points are explicit: clone/fork choose the durable source
+revision at the historical read; runtime replacement is the successful
+quiescence result; active-node/session publication is the catalog atomic
+rename after quiescence; destination publication is the same catalog commit
+after seed validation. Session recovery then opens the selected ConversationId
+and uses the ordinary ConversationRuntime recovery path. Session metadata never
+proves that old work is still live, and ambiguous old provider/tool work is
+not silently replayed.
 
 Startup failure ownership (Issue #81): failures that prove the core runtime
 itself cannot be constructed — startup files, model catalog/credentials/
@@ -3177,16 +3246,18 @@ publish the one `CapabilityUpdated` Runtime Client event carrying the
 complete folded `CapabilityView`, whose `revision` tells the client
 whether the executable capability identity changed.
 
-The governing invariant:
+The governing invariant for the active node is:
 
-> One local runtime process owns one conversation session. That session owns
-> one authoritative mutable session-model configuration, one
+> One local runtime process owns one active linear ConversationRuntime. That
+> runtime owns one authoritative mutable session-model configuration, one
 > `ConversationToolRuntime` identity, one `CapabilityCoordinator`, one context
-> policy/Surface domain, and one `ConversationRuntime`. Runtime Client
-> attachments may come and go without replacing those semantic owners, and
-> the conversation executes identically with zero attachments (Issue #61:
+> policy/Surface domain, and one ConversationId. Runtime Client attachments
+> may come and go without replacing those semantic owners, and the
+> conversation executes identically with zero attachments (Issue #61:
 > headless composition is the same coordinator, admission, `AgentExecution`,
-> Context Assembly, tool, and provider path).
+> Context Assembly, tool, and provider path). The user-level Session graph
+> lives above this runtime and branches only by selecting another independent
+> linear ConversationId.
 
 A client — including the Issue #39 TUI — owns the child-process lifecycle and
 nothing else. It never assembles provider adapters, model parameters, context
@@ -3441,7 +3512,7 @@ server; a server without an entry gets the deterministic default
 does not declare fails startup. Keeping it outside the connection object is
 what keeps `mcpServers` recognizable as ordinary MCP configuration.
 
-Normalization happens exactly once, at this boundary: `LocalSessionConfig`
+Normalization happens exactly once, at this boundary: `LocalConversationConfig`
 validates each entry and turns it into a typed
 `BTreeMap<McpServerId, McpServerBinding>`. The shorthand spellings never
 reach `McpServerRuntime`, the `CapabilityCoordinator`, the Agent Loop, or the
@@ -3465,7 +3536,7 @@ bounded stderr diagnostic, exits non-zero, and leaves **zero bytes** on
 stdout. `println!` is never used for diagnostics anywhere in the process.
 
 **Exit semantics.** A clean input EOF at a record boundary or a peer broken
-pipe ends this one-session process successfully. Malformed framing or any
+pipe ends this one-active-lineage process successfully. Malformed framing or any
 other transport error reports to stderr and exits non-zero. Semantic
 `shutdown` responds only after the conversation runtime reaches quiescence,
 but does **not** close the transport — a controlling client closes it
@@ -3522,9 +3593,9 @@ RuntimeClientConnection the single owner of JSONL framing, request-id
                         Every pending request settles exactly once; after
                         terminal failure new requests fail immediately.
 
-RuntimeClientSession    attach, snapshot/cursor installation, subscribe,
-                        resync repair, shutdown sequencing. No agent
-                        semantics.
+RuntimeClientAttachment attach, snapshot/cursor installation, subscribe,
+                        resync repair, native Session projection reads,
+                        shutdown sequencing. No agent/session semantics.
 
 PresentationProjection  the ephemeral render cache.
 

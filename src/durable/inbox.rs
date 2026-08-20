@@ -517,6 +517,13 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// without its bootstrap identity.
     fn initialize(&self, messages: &[MessageBlock]) -> Result<(), ConversationStoreError>;
 
+    /// Loads the immutable bootstrap history originally supplied to
+    /// [`ConversationStore::initialize`]. Reopening a lineage must validate
+    /// against this prefix, not against its later canonical transcript.
+    fn load_bootstrap_history(&self) -> Result<Vec<MessageBlock>, ConversationStoreError> {
+        self.load_canonical()
+    }
+
     /// Loads the current Surface head and checkpoint metadata without
     /// materializing historical revisions.
     fn load_head(&self) -> Result<DurableConversationHead, ConversationStoreError>;
@@ -531,6 +538,21 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         revision: SurfaceRevision,
     ) -> Result<Vec<MessageId>, ConversationStoreError>;
+
+    /// Materializes one exact historical Surface revision from durable
+    /// facts. Implementations must not invoke Context Assembly, compaction,
+    /// provider code, or any runtime execution while answering this read.
+    ///
+    /// The default is deliberately expressed in terms of the two primitive
+    /// durable reads so backend implementations remain small; `SQLite`
+    /// overrides it with one connection-locked read section.
+    fn load_surface_snapshot(
+        &self,
+        revision: SurfaceRevision,
+    ) -> Result<Vec<MessageBlock>, ConversationStoreError> {
+        let ids = self.reconstruct_surface(revision)?;
+        self.load_messages(&ids)
+    }
 
     /// Appends one canonical [`MessageBlock`] to the durable Message Ledger.
     ///

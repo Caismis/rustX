@@ -8,7 +8,7 @@
  * parse arguments
  *   -> spawn the rustx binary        (ChildRuntimeProcess)
  *   -> open the JSONL transport      (RuntimeClientConnection)
- *   -> initialize + snapshot + subscribe (RuntimeClientSession)
+ *   -> initialize + snapshot + subscribe (RuntimeClientAttachment)
  *   -> run the terminal projection   (RustxTuiApp)
  * ```
  *
@@ -20,8 +20,38 @@
 import { ArgumentError, USAGE, parseArguments } from "./cli.ts";
 import { ChildRuntimeProcess } from "./runtime/child-process.ts";
 import { RuntimeClientConnection } from "./runtime/connection.ts";
-import { RuntimeClientSession } from "./runtime/session.ts";
-import { RustxTuiApp } from "./ui/app.ts";
+import { RuntimeClientAttachment } from "./runtime/attachment.ts";
+import { RustxTuiApp, type RuntimeAttachmentHandle } from "./ui/app.ts";
+import type { TuiArguments } from "./cli.ts";
+
+async function startRuntime(parsed: TuiArguments): Promise<RuntimeAttachmentHandle> {
+  const child = ChildRuntimeProcess.spawn({
+    binary: parsed.binary,
+    paths: parsed.paths,
+  });
+
+  const connection = new RuntimeClientConnection({
+    input: child.stdout,
+    output: child.stdin,
+  });
+  void child.wait().then((exit) => {
+    connection.reportProcessExit(exit.code, exit.signal, exit.spawnError);
+  });
+
+  const session = new RuntimeClientAttachment({ connection });
+  try {
+    await session.attach();
+  } catch (error) {
+    const stderr = child.stderrTail().text.trim();
+    child.closeStdin();
+    await child.waitOrTerminate();
+    const detail = stderr.length > 0 ? `\n${stderr}` : "";
+    throw new Error(
+      `could not attach to the runtime: ${(error as Error).message}${detail}`,
+    );
+  }
+  return { session, connection, child };
+}
 
 async function main(argv: readonly string[]): Promise<number> {
   let parsed;
@@ -35,42 +65,18 @@ async function main(argv: readonly string[]): Promise<number> {
     throw error;
   }
 
-  // The child inherits this process's environment so rustX performs its own
-  // credential resolution.
-  const child = ChildRuntimeProcess.spawn({
-    binary: parsed.binary,
-    paths: parsed.paths,
-  });
-
-  const connection = new RuntimeClientConnection({
-    input: child.stdout,
-    output: child.stdin,
-  });
-  // A process that dies mid-request must fail that request with the real
-  // cause rather than a bare EOF.
-  void child.wait().then((exit) => {
-    connection.reportProcessExit(exit.code, exit.signal, exit.spawnError);
-  });
-
-  const session = new RuntimeClientSession({ connection });
+  let runtime: RuntimeAttachmentHandle;
   try {
-    await session.attach();
+    runtime = await startRuntime(parsed);
   } catch (error) {
-    process.stderr.write(
-      `rustx-tui: could not attach to the runtime: ${(error as Error).message}\n`,
-    );
-    // The runtime's own bounded startup diagnostic is usually the real cause,
-    // and it already carries its own `rustx: ` prefix.
-    const stderr = child.stderrTail().text.trim();
-    if (stderr.length > 0) {
-      process.stderr.write(`${stderr}\n`);
-    }
-    child.closeStdin();
-    await child.waitOrTerminate();
+    process.stderr.write(`rustx-tui: ${(error as Error).message}\n`);
     return 1;
   }
 
-  const app = new RustxTuiApp({ session, connection, child });
+  const app = new RustxTuiApp({
+    ...runtime,
+    restartRuntime: () => startRuntime(parsed),
+  });
   return app.run();
 }
 

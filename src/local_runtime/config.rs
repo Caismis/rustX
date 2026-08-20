@@ -1,4 +1,4 @@
-//! The bounded explicit local session configuration (Issue #42).
+//! The bounded explicit local conversation configuration (Issue #42).
 //!
 //! This is deliberately **not** M10 configuration discovery. There is no
 //! global/project search path, no precedence chain, no named product
@@ -23,14 +23,14 @@ use crate::tools::mcp::{McpServerBinding, McpServerBindings, McpTransportConfig}
 use crate::tools::native::NativeToolPolicies;
 use crate::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy, ToolInvocationPolicy};
 
-/// The only local session schema version this runtime accepts.
-pub const LOCAL_SESSION_SCHEMA_VERSION: u32 = 1;
+/// The only local conversation schema version this runtime accepts.
+pub const LOCAL_CONVERSATION_SCHEMA_VERSION: u32 = 1;
 
-/// The explicit local session configuration of one conversation runtime.
+/// The explicit local conversation configuration of one conversation runtime.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct LocalSessionConfig {
-    /// The session schema version.
+pub struct LocalConversationConfig {
+    /// The conversation schema version.
     #[serde(default = "default_schema_version")]
     pub schema_version: u32,
     /// The conversation identity this process owns.
@@ -64,21 +64,22 @@ pub struct LocalSessionConfig {
 }
 
 const fn default_schema_version() -> u32 {
-    LOCAL_SESSION_SCHEMA_VERSION
+    LOCAL_CONVERSATION_SCHEMA_VERSION
 }
 
-impl LocalSessionConfig {
+impl LocalConversationConfig {
     /// Parses and validates a session configuration from JSON bytes.
     ///
     /// # Errors
     ///
-    /// Returns [`LocalSessionConfigError::Syntax`] for malformed JSON or
+    /// Returns [`LocalConversationConfigError::Syntax`] for malformed JSON or
     /// unknown fields, and a specific validation error otherwise.
-    pub fn from_json_slice(bytes: &[u8]) -> Result<Self, LocalSessionConfigError> {
-        let config: Self =
-            serde_json::from_slice(bytes).map_err(|error| LocalSessionConfigError::Syntax {
+    pub fn from_json_slice(bytes: &[u8]) -> Result<Self, LocalConversationConfigError> {
+        let config: Self = serde_json::from_slice(bytes).map_err(|error| {
+            LocalConversationConfigError::Syntax {
                 detail: error.to_string(),
-            })?;
+            }
+        })?;
         config.validate()?;
         Ok(config)
     }
@@ -88,20 +89,20 @@ impl LocalSessionConfig {
     /// # Errors
     ///
     /// Returns the first validation failure.
-    pub fn validate(&self) -> Result<(), LocalSessionConfigError> {
-        if self.schema_version != LOCAL_SESSION_SCHEMA_VERSION {
-            return Err(LocalSessionConfigError::UnsupportedSchemaVersion {
-                supported: LOCAL_SESSION_SCHEMA_VERSION,
+    pub fn validate(&self) -> Result<(), LocalConversationConfigError> {
+        if self.schema_version != LOCAL_CONVERSATION_SCHEMA_VERSION {
+            return Err(LocalConversationConfigError::UnsupportedSchemaVersion {
+                supported: LOCAL_CONVERSATION_SCHEMA_VERSION,
                 found: self.schema_version,
             });
         }
         if self.conversation_id.as_str().is_empty() || self.agent_id.as_str().is_empty() {
-            return Err(LocalSessionConfigError::Invalid {
+            return Err(LocalConversationConfigError::Invalid {
                 detail: "conversationId and agentId must be non-empty".to_owned(),
             });
         }
         if self.context.summary_output_cap == Some(0) {
-            return Err(LocalSessionConfigError::Invalid {
+            return Err(LocalConversationConfigError::Invalid {
                 detail: "context.summaryOutputCap must be positive when present".to_owned(),
             });
         }
@@ -127,15 +128,15 @@ impl LocalSessionConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`LocalSessionConfigError::Environment`] when an entry is
+    /// Returns [`LocalConversationConfigError::Environment`] when an entry is
     /// malformed or claims a runtime-owned key.
-    pub fn tool_environment(&self) -> Result<ToolEnvironment, LocalSessionConfigError> {
+    pub fn tool_environment(&self) -> Result<ToolEnvironment, LocalConversationConfigError> {
         ToolEnvironment::from_authorized(
             self.environment
                 .iter()
                 .map(|(key, value)| (key.clone(), value.clone())),
         )
-        .map_err(LocalSessionConfigError::Environment)
+        .map_err(LocalConversationConfigError::Environment)
     }
 
     /// The typed MCP runtime bindings this configuration expresses.
@@ -147,13 +148,13 @@ impl LocalSessionConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`LocalSessionConfigError::Invalid`] when an entry is
+    /// Returns [`LocalConversationConfigError::Invalid`] when an entry is
     /// ambiguous, contradictory, or incomplete, or when the policy overlay
     /// names a server that `mcpServers` does not declare.
-    pub fn mcp_bindings(&self) -> Result<McpServerBindings, LocalSessionConfigError> {
+    pub fn mcp_bindings(&self) -> Result<McpServerBindings, LocalConversationConfigError> {
         for server_id in self.mcp_tool_policies.keys() {
             if !self.mcp_servers.contains_key(server_id) {
-                return Err(LocalSessionConfigError::Invalid {
+                return Err(LocalConversationConfigError::Invalid {
                     detail: format!(
                         "mcpToolPolicies names {server_id}, which mcpServers does not declare"
                     ),
@@ -164,16 +165,15 @@ impl LocalSessionConfig {
             .iter()
             .map(|(server_id, document)| {
                 if server_id.as_str().is_empty() {
-                    return Err(LocalSessionConfigError::Invalid {
+                    return Err(LocalConversationConfigError::Invalid {
                         detail: "mcpServers keys must be non-empty server identities".to_owned(),
                     });
                 }
-                let transport =
-                    document
-                        .to_transport()
-                        .map_err(|detail| LocalSessionConfigError::Invalid {
-                            detail: format!("mcpServers.{server_id}: {detail}"),
-                        })?;
+                let transport = document.to_transport().map_err(|detail| {
+                    LocalConversationConfigError::Invalid {
+                        detail: format!("mcpServers.{server_id}: {detail}"),
+                    }
+                })?;
                 Ok((
                     server_id.clone(),
                     McpServerBinding {
@@ -440,10 +440,10 @@ impl McpServerDocument {
     }
 }
 
-/// A local session configuration failure.
+/// A local conversation configuration failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LocalSessionConfigError {
-    /// The document is not valid JSON for the session schema.
+pub enum LocalConversationConfigError {
+    /// The document is not valid JSON for the conversation schema.
     Syntax {
         /// The parser detail.
         detail: String,
@@ -464,15 +464,19 @@ pub enum LocalSessionConfigError {
     Environment(ToolEnvironmentError),
 }
 
-impl std::fmt::Display for LocalSessionConfigError {
+impl std::fmt::Display for LocalConversationConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Syntax { detail } => write!(f, "malformed local session config: {detail}"),
+            Self::Syntax { detail } => {
+                write!(f, "malformed local conversation config: {detail}")
+            }
             Self::UnsupportedSchemaVersion { supported, found } => write!(
                 f,
-                "unsupported local session schemaVersion {found}; this runtime speaks {supported}"
+                "unsupported local conversation schemaVersion {found}; this runtime speaks {supported}"
             ),
-            Self::Invalid { detail } => write!(f, "invalid local session config: {detail}"),
+            Self::Invalid { detail } => {
+                write!(f, "invalid local conversation config: {detail}")
+            }
             Self::Environment(error) => {
                 write!(f, "invalid base tool environment: {error:?}")
             }
@@ -480,11 +484,11 @@ impl std::fmt::Display for LocalSessionConfigError {
     }
 }
 
-impl std::error::Error for LocalSessionConfigError {}
+impl std::error::Error for LocalConversationConfigError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{LocalSessionConfig, LocalSessionConfigError};
+    use super::{LocalConversationConfig, LocalConversationConfigError};
 
     const MINIMAL: &str = r#"{
         "conversationId": "conv-1",
@@ -496,7 +500,7 @@ mod tests {
     /// The minimal configuration parses and derives its policy pieces.
     #[test]
     fn minimal_configuration_parses() {
-        let config = LocalSessionConfig::from_json_slice(MINIMAL.as_bytes()).expect("valid");
+        let config = LocalConversationConfig::from_json_slice(MINIMAL.as_bytes()).expect("valid");
         assert_eq!(config.conversation_id.as_str(), "conv-1");
         assert_eq!(config.context_policy().reserve_tokens, 1024);
         assert!(config.mcp_bindings().expect("bindings").is_empty());
@@ -519,8 +523,8 @@ mod tests {
             "futureKnob": true
         }"#;
         assert!(matches!(
-            LocalSessionConfig::from_json_slice(json.as_bytes()).expect_err("must fail"),
-            LocalSessionConfigError::Syntax { .. }
+            LocalConversationConfig::from_json_slice(json.as_bytes()).expect_err("must fail"),
+            LocalConversationConfigError::Syntax { .. }
         ));
     }
 
@@ -534,8 +538,8 @@ mod tests {
             "context": {"reserveTokens": 0, "keepRecentTokens": 0}
         }"#;
         assert!(matches!(
-            LocalSessionConfig::from_json_slice(json.as_bytes()).expect_err("must fail"),
-            LocalSessionConfigError::UnsupportedSchemaVersion { .. }
+            LocalConversationConfig::from_json_slice(json.as_bytes()).expect_err("must fail"),
+            LocalConversationConfigError::UnsupportedSchemaVersion { .. }
         ));
     }
 
@@ -551,8 +555,8 @@ mod tests {
             ]
         }"#;
         assert!(matches!(
-            LocalSessionConfig::from_json_slice(json.as_bytes()).expect_err("must fail"),
-            LocalSessionConfigError::Syntax { .. }
+            LocalConversationConfig::from_json_slice(json.as_bytes()).expect_err("must fail"),
+            LocalConversationConfigError::Syntax { .. }
         ));
     }
 
@@ -564,8 +568,12 @@ mod tests {
             r#""keepRecentTokens": 4096"#,
             r#""keepRecentTokens": 0, "summaryOutputCap": 0"#,
         );
-        let error = LocalSessionConfig::from_json_slice(json.as_bytes()).expect_err("must fail");
-        assert!(matches!(error, LocalSessionConfigError::Invalid { .. }));
+        let error =
+            LocalConversationConfig::from_json_slice(json.as_bytes()).expect_err("must fail");
+        assert!(matches!(
+            error,
+            LocalConversationConfigError::Invalid { .. }
+        ));
         assert!(
             error
                 .to_string()

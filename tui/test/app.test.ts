@@ -14,7 +14,7 @@ import { RustxTuiApp } from "../src/ui/app.ts";
 import { ConnectionClosedError } from "../src/runtime/connection.ts";
 import type { ChildRuntimeProcess } from "../src/runtime/child-process.ts";
 import type { RuntimeClientConnection } from "../src/runtime/connection.ts";
-import type { RuntimeClientSession } from "../src/runtime/session.ts";
+import type { RuntimeClientAttachment } from "../src/runtime/attachment.ts";
 
 function fakeConnection(
   onClose?: (listener: (error: ConnectionClosedError) => void) => void,
@@ -32,7 +32,7 @@ function fakeConnection(
 
 function fakeSession(
   waitForSettlement: (attemptId: string) => Promise<unknown>,
-): RuntimeClientSession {
+): RuntimeClientAttachment {
   return {
     state: {
       attempt: {
@@ -44,7 +44,7 @@ function fakeSession(
     updateState: () => {},
     shutdown: async () => {},
     waitForAttemptSettlement: waitForSettlement,
-  } as unknown as RuntimeClientSession;
+  } as unknown as RuntimeClientAttachment;
 }
 
 function fakeChild(log: string[]): ChildRuntimeProcess {

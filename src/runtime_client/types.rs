@@ -49,6 +49,7 @@ use serde::{Deserialize, Serialize};
 
 use super::event::RuntimeClientEvent;
 use super::snapshot::{CapabilityView, RuntimeClientSnapshot};
+use crate::conversation::SurfaceRevision;
 use crate::message::types::UserContentBlock;
 use crate::model::catalog::ModelCatalogView;
 use crate::model::session::{SessionModelConfig, SessionModelView};
@@ -56,6 +57,127 @@ use crate::runtime::identity::InteractionId;
 use crate::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolExecutionId};
 use crate::runtime::inbound::InboundSequence;
 use crate::runtime::interaction::InteractionResponse;
+
+/// The protocol view of one native Session graph node.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionNodeView {
+    /// Node identity.
+    pub id: String,
+    /// Parent node in the same Session graph.
+    pub parent: Option<String>,
+    /// The independent linear `ConversationId` of this node.
+    pub conversation_id: ConversationId,
+    /// Product-level origin metadata.
+    pub origin: SessionNodeOriginView,
+}
+
+/// The protocol view of a `SessionNode` origin.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SessionNodeOriginView {
+    /// A new empty lineage.
+    New,
+    /// A clone selected at one exact source revision.
+    Clone {
+        /// Source Session identity.
+        source_session: String,
+        /// Source node identity.
+        source_node: String,
+        /// Source revision selected for the seed.
+        source_surface_revision: SurfaceRevision,
+    },
+    /// A fork selected immediately before one source user message.
+    Fork {
+        /// Source Session identity.
+        source_session: String,
+        /// Source node identity.
+        source_node: String,
+        /// Source revision selected for the seed.
+        source_surface_revision: SurfaceRevision,
+        /// Selected source user message.
+        source_user_message: MessageId,
+    },
+}
+
+/// The bounded authoritative Runtime Client view of one Session.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionView {
+    /// Session identity.
+    pub id: String,
+    /// User-facing name.
+    pub name: String,
+    /// Creation instant.
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Last metadata/active-node publication instant.
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    /// Active node identity.
+    pub active_node: String,
+    /// All persisted graph nodes.
+    pub nodes: Vec<SessionNodeView>,
+}
+
+/// One bounded row in the `/resume` selector.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionSummaryView {
+    /// Session identity.
+    pub id: String,
+    /// User-facing name.
+    pub name: String,
+    /// Last metadata/active-node publication instant.
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    /// Active node identity.
+    pub active_node: String,
+    /// Whether this is the currently active Session.
+    pub active: bool,
+}
+
+/// One historical user-message boundary exposed by `/fork` and `/tree`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionUserMessageBoundaryView {
+    /// Exact source Surface revision.
+    pub surface_revision: SurfaceRevision,
+    /// Canonical source user message to restore into the editor if selected.
+    pub message: crate::message::types::UserMessageBlock,
+}
+
+/// Native Session control intent carried from the Runtime Client boundary to
+/// the Rust-owned `LocalSessionSupervisor`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RuntimeClientSessionRequest {
+    /// Read bounded persisted session metadata.
+    List,
+    /// Read the active Session metadata.
+    Get,
+    /// Read the active Session graph and branchable historical boundaries.
+    Tree,
+    /// Change metadata only.
+    Name(String),
+    /// Create a new empty Session.
+    New,
+    /// Select an existing Session/node.
+    Select {
+        /// Session identity.
+        session_id: String,
+        /// Optional node; absent selects the Session's active node.
+        node_id: Option<String>,
+    },
+    /// Clone the committed current Surface head.
+    Clone,
+    /// Fork at an exact historical user boundary into a new Session.
+    Fork {
+        /// Exact source revision.
+        surface_revision: SurfaceRevision,
+        /// Source user-message identity.
+        message_id: MessageId,
+    },
+    /// Create a new node inside the active Session at a historical boundary.
+    TreeBranch {
+        /// Exact source revision.
+        surface_revision: SurfaceRevision,
+        /// Source user-message identity.
+        message_id: MessageId,
+    },
+}
 
 /// The current Runtime Client Protocol version.
 ///
@@ -259,6 +381,66 @@ pub enum RuntimeClientRequest {
         /// The complete desired session model configuration.
         config: Box<SessionModelConfig>,
     },
+    /// List persisted native Sessions for `/resume`.
+    SessionList {
+        /// Attachment-scoped request id.
+        id: RequestId,
+    },
+    /// Read the active native Session metadata for `/session`.
+    SessionGet {
+        /// Attachment-scoped request id.
+        id: RequestId,
+    },
+    /// Read the active Session graph and historical branch boundaries.
+    SessionTreeGet {
+        /// Attachment-scoped request id.
+        id: RequestId,
+    },
+    /// Rename active Session metadata.
+    SessionName {
+        /// Attachment-scoped request id.
+        id: RequestId,
+        /// New bounded display name.
+        name: String,
+    },
+    /// Create and activate a new empty Session.
+    SessionNew {
+        /// Attachment-scoped request id.
+        id: RequestId,
+    },
+    /// Select and activate an existing Session/node.
+    SessionSelect {
+        /// Attachment-scoped request id.
+        id: RequestId,
+        /// Session identity.
+        session_id: String,
+        /// Optional node; absent means that Session's active node.
+        node_id: Option<String>,
+    },
+    /// Clone the exact current committed canonical Surface head.
+    SessionClone {
+        /// Attachment-scoped request id.
+        id: RequestId,
+    },
+    /// Fork at an exact historical user-message boundary.
+    SessionFork {
+        /// Attachment-scoped request id.
+        id: RequestId,
+        /// Exact source Surface revision.
+        surface_revision: SurfaceRevision,
+        /// Source user-message identity.
+        message_id: MessageId,
+    },
+    /// Create a new node in the active Session at an exact historical
+    /// user-message boundary.
+    SessionTreeBranch {
+        /// Attachment-scoped request id.
+        id: RequestId,
+        /// Exact source Surface revision.
+        surface_revision: SurfaceRevision,
+        /// Source user-message identity.
+        message_id: MessageId,
+    },
     /// Inspect one background execution.
     BackgroundStatus {
         /// Attachment-scoped request id.
@@ -326,6 +508,15 @@ impl RuntimeClientRequest {
             | Self::ModelCatalogGet { id, .. }
             | Self::ModelGet { id, .. }
             | Self::ModelSet { id, .. }
+            | Self::SessionList { id, .. }
+            | Self::SessionGet { id, .. }
+            | Self::SessionTreeGet { id, .. }
+            | Self::SessionName { id, .. }
+            | Self::SessionNew { id, .. }
+            | Self::SessionSelect { id, .. }
+            | Self::SessionClone { id, .. }
+            | Self::SessionFork { id, .. }
+            | Self::SessionTreeBranch { id, .. }
             | Self::BackgroundStatus { id, .. }
             | Self::BackgroundCancel { id, .. }
             | Self::SubagentStatus { id, .. }
@@ -349,12 +540,79 @@ impl RuntimeClientRequest {
             Self::ModelCatalogGet { .. } => "model_catalog_get",
             Self::ModelGet { .. } => "model_get",
             Self::ModelSet { .. } => "model_set",
+            Self::SessionList { .. } => "session_list",
+            Self::SessionGet { .. } => "session_get",
+            Self::SessionTreeGet { .. } => "session_tree_get",
+            Self::SessionName { .. } => "session_name",
+            Self::SessionNew { .. } => "session_new",
+            Self::SessionSelect { .. } => "session_select",
+            Self::SessionClone { .. } => "session_clone",
+            Self::SessionFork { .. } => "session_fork",
+            Self::SessionTreeBranch { .. } => "session_tree_branch",
             Self::BackgroundStatus { .. } => "background_status",
             Self::BackgroundCancel { .. } => "background_cancel",
             Self::SubagentStatus { .. } => "subagent_status",
             Self::SubagentCancel { .. } => "subagent_cancel",
             Self::Detach { .. } => "detach",
             Self::Shutdown { .. } => "shutdown",
+        }
+    }
+
+    /// Whether this request crosses the native Session supervisor boundary
+    /// and therefore must use the async semantic endpoint.
+    #[must_use]
+    pub fn is_session_request(&self) -> bool {
+        matches!(
+            self,
+            Self::SessionList { .. }
+                | Self::SessionGet { .. }
+                | Self::SessionTreeGet { .. }
+                | Self::SessionName { .. }
+                | Self::SessionNew { .. }
+                | Self::SessionSelect { .. }
+                | Self::SessionClone { .. }
+                | Self::SessionFork { .. }
+                | Self::SessionTreeBranch { .. }
+        )
+    }
+
+    /// Converts the wire request into the typed native Session control
+    /// intent. The request id is intentionally absent from the intent: the
+    /// Runtime Client endpoint remains the sole correlation owner.
+    #[must_use]
+    pub fn session_request(&self) -> Option<RuntimeClientSessionRequest> {
+        match self {
+            Self::SessionList { .. } => Some(RuntimeClientSessionRequest::List),
+            Self::SessionGet { .. } => Some(RuntimeClientSessionRequest::Get),
+            Self::SessionTreeGet { .. } => Some(RuntimeClientSessionRequest::Tree),
+            Self::SessionName { name, .. } => Some(RuntimeClientSessionRequest::Name(name.clone())),
+            Self::SessionNew { .. } => Some(RuntimeClientSessionRequest::New),
+            Self::SessionSelect {
+                session_id,
+                node_id,
+                ..
+            } => Some(RuntimeClientSessionRequest::Select {
+                session_id: session_id.clone(),
+                node_id: node_id.clone(),
+            }),
+            Self::SessionClone { .. } => Some(RuntimeClientSessionRequest::Clone),
+            Self::SessionFork {
+                surface_revision,
+                message_id,
+                ..
+            } => Some(RuntimeClientSessionRequest::Fork {
+                surface_revision: *surface_revision,
+                message_id: message_id.clone(),
+            }),
+            Self::SessionTreeBranch {
+                surface_revision,
+                message_id,
+                ..
+            } => Some(RuntimeClientSessionRequest::TreeBranch {
+                surface_revision: *surface_revision,
+                message_id: message_id.clone(),
+            }),
+            _ => None,
         }
     }
 }
@@ -440,6 +698,33 @@ pub enum RuntimeClientResult {
     Model {
         /// The redacted session model view.
         model: Box<SessionModelView>,
+    },
+    /// Bounded persisted sessions for `/resume`.
+    SessionList {
+        /// Session metadata rows.
+        sessions: Vec<SessionSummaryView>,
+    },
+    /// Active native Session metadata for `/session`.
+    Session {
+        /// The authoritative Session snapshot.
+        session: SessionView,
+    },
+    /// Active Session graph plus historical branch boundaries.
+    SessionTree {
+        /// The authoritative graph snapshot.
+        session: SessionView,
+        /// Branchable user-message boundaries.
+        branchable_messages: Vec<SessionUserMessageBoundaryView>,
+    },
+    /// A metadata change or a newly selected/created lineage.
+    SessionChanged {
+        /// The newly authoritative Session snapshot.
+        session: SessionView,
+        /// Optional uncommitted editor content restored by fork/tree branch.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        editor_content: Option<Vec<UserContentBlock>>,
+        /// Whether the client must reattach to compose the selected lineage.
+        restart_required: bool,
     },
     /// `model_set` succeeded: the update was applied and published.
     ///
@@ -565,6 +850,12 @@ pub enum RuntimeClientError {
         /// Human-readable detail.
         message: String,
     },
+    /// A native Session operation failed without changing the authoritative
+    /// active selection.
+    SessionFailure {
+        /// Bounded product-level diagnostic.
+        message: String,
+    },
 }
 
 /// One Runtime Client event pushed on the observation stream.
@@ -632,6 +923,19 @@ mod tests {
         assert_eq!(value["id"], 7);
         let decoded: RuntimeClientRequest =
             serde_json::from_str(&first).expect("deserialize request");
+        assert_eq!(decoded, request);
+
+        let request = RuntimeClientRequest::SessionTreeBranch {
+            id: super::RequestId::new(12),
+            surface_revision: crate::conversation::SurfaceRevision::new(7),
+            message_id: crate::runtime::identity::MessageId::new("user-c"),
+        };
+        let value = serde_json::to_value(&request).expect("serialize session request");
+        assert_eq!(value["method"], "session_tree_branch");
+        assert_eq!(value["surface_revision"], 7);
+        assert!(request.is_session_request());
+        let decoded: RuntimeClientRequest =
+            serde_json::from_value(value).expect("deserialize session request");
         assert_eq!(decoded, request);
 
         let request = RuntimeClientRequest::SubmitInbound {
@@ -787,6 +1091,9 @@ mod tests {
                 earliest_serviceable: RuntimeClientCursor::new(100),
             },
             RuntimeClientError::RuntimeShutdown,
+            RuntimeClientError::SessionFailure {
+                message: "destination publication failed".to_owned(),
+            },
         ];
         for error in cases {
             let value = serde_json::to_value(&error).expect("serialize");

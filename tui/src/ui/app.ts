@@ -63,8 +63,20 @@ import { correlateTools } from "../presentation/tools.ts";
 import type { PresentationState } from "../presentation/state.ts";
 import type { ChildRuntimeProcess } from "../runtime/child-process.ts";
 import type { RuntimeClientConnection } from "../runtime/connection.ts";
-import type { RuntimeClientSession } from "../runtime/session.ts";
-import type { CatalogModelView, ToolCallId } from "../protocol/types.ts";
+import type { SessionSwitch } from "../runtime/attachment.ts";
+import type { RuntimeClientAttachment } from "../runtime/attachment.ts";
+import type {
+  CatalogModelView,
+  SessionSummaryView,
+  SessionUserMessageBoundaryView,
+  SessionView,
+  ToolCallId,
+} from "../protocol/types.ts";
+import {
+  BoundarySelector,
+  SessionSelector,
+} from "./components/session-selector.ts";
+import { TreeSelector, type TreeSelection } from "./components/tree-selector.ts";
 import {
   renderBackgroundSection,
   renderInteractionSection,
@@ -88,18 +100,27 @@ import {
 import { editorTheme, markdownTheme, style } from "./theme.ts";
 
 export interface RustxTuiAppOptions {
-  session: RuntimeClientSession;
+  session: RuntimeClientAttachment;
   connection: RuntimeClientConnection;
   child: ChildRuntimeProcess;
+  /** Re-spawns and re-attaches after Rust publishes a lineage switch. */
+  restartRuntime?: () => Promise<RuntimeAttachmentHandle>;
   /** How long the child gets to exit after the shutdown sequence. */
   terminationGraceMs?: number;
 }
 
+export interface RuntimeAttachmentHandle {
+  session: RuntimeClientAttachment;
+  connection: RuntimeClientConnection;
+  child: ChildRuntimeProcess;
+}
+
 export class RustxTuiApp {
-  readonly #session: RuntimeClientSession;
-  readonly #connection: RuntimeClientConnection;
-  readonly #child: ChildRuntimeProcess;
+  #session: RuntimeClientAttachment;
+  #connection: RuntimeClientConnection;
+  #child: ChildRuntimeProcess;
   readonly #dispatcher: CommandDispatcher;
+  readonly #restartRuntime: (() => Promise<RuntimeAttachmentHandle>) | undefined;
   readonly #terminationGraceMs: number | undefined;
 
   readonly #tui: TUI;
@@ -116,12 +137,16 @@ export class RustxTuiApp {
   #exitCode = 0;
   #finished = false;
   #started = false;
+  #restarting = false;
+  #removeStateListener: (() => void) | undefined;
+  #removeCloseListener: (() => void) | undefined;
   #resolveExit: ((code: number) => void) | undefined;
 
   constructor(options: RustxTuiAppOptions) {
     this.#session = options.session;
     this.#connection = options.connection;
     this.#child = options.child;
+    this.#restartRuntime = options.restartRuntime;
     this.#terminationGraceMs = options.terminationGraceMs;
 
     this.#tui = new TUI(new ProcessTerminal());
@@ -144,8 +169,23 @@ export class RustxTuiApp {
     this.#tui.addChild(this.#editor);
     this.#tui.addChild(this.#footer);
 
-    this.#session.onState((state) => this.#renderState(state));
-    this.#connection.onClose((error) => {
+    this.#bindRuntime(this.#session, this.#connection, this.#child);
+  }
+
+  #bindRuntime(
+    session: RuntimeClientAttachment,
+    connection: RuntimeClientConnection,
+    child: ChildRuntimeProcess,
+  ): void {
+    this.#removeStateListener?.();
+    this.#removeCloseListener?.();
+    this.#session = session;
+    this.#connection = connection;
+    this.#child = child;
+    this.#dispatcher.setSession(session);
+    this.#removeStateListener = session.onState((state) => this.#renderState(state));
+    this.#removeCloseListener = connection.onClose((error) => {
+      if (this.#restarting) return;
       // Transport loss is not cancellation. It only ends observation, so the
       // client says exactly that and stops accepting input.
       this.#note(
@@ -153,9 +193,7 @@ export class RustxTuiApp {
         `${error.message}\nThe runtime is no longer observable from this client.`,
       );
       this.#editor.disableSubmit = true;
-      if (!this.#quitting) {
-        this.#finish(1);
-      }
+      if (!this.#quitting) this.#finish(1);
     });
   }
 
@@ -179,11 +217,36 @@ export class RustxTuiApp {
       if (state !== undefined) {
         this.#renderState(state);
       }
+      // Session metadata is a separate native product projection from the
+      // conversation snapshot. Refresh it after the attachment handshake so
+      // startup remains the same initialize/subscribe cut used by existing
+      // Runtime Client consumers, while the footer still becomes session-aware
+      // as soon as the authoritative read returns.
+      const refreshSession = (
+        this.#session as unknown as {
+          refreshSession?: () => Promise<unknown>;
+        }
+      ).refreshSession;
+      if (refreshSession !== undefined) {
+        void refreshSession.call(this.#session).then(
+          () => {
+            const refreshed = this.#session.state;
+            if (refreshed !== undefined) this.#renderState(refreshed);
+          },
+          (error: unknown) => {
+            this.#note("error", `session metadata unavailable: ${(error as Error).message}`);
+          },
+        );
+      }
       this.#tui.addInputListener((data) => {
         // Ctrl+C is a cancellation *intent*, routed through the protocol like
         // any other; it never kills the runtime behind the runtime's back.
         if (matchesKey(data, "ctrl+c")) {
           void this.#onInterrupt();
+          return { consume: true };
+        }
+        if (matchesKey(data, "escape")) {
+          void this.#onEscape();
           return { consume: true };
         }
         // Ctrl+O and Ctrl+T are presentation only. They change what is drawn
@@ -219,7 +282,12 @@ export class RustxTuiApp {
       );
     }
 
-    const outcome = await this.#dispatcher.submit(text);
+    await this.#handleOutcome(await this.#dispatcher.submit(text));
+  }
+
+  async #handleOutcome(
+    outcome: Awaited<ReturnType<CommandDispatcher["submit"]>>,
+  ): Promise<void> {
     switch (outcome.kind) {
       case "message":
         this.#note(outcome.level, outcome.text);
@@ -227,14 +295,42 @@ export class RustxTuiApp {
       case "choose_model":
         this.#showModelSelector(outcome.models);
         break;
+      case "choose_session":
+        this.#showSessionSelector(outcome.sessions);
+        break;
+      case "choose_fork":
+        this.#showBoundarySelector(
+          outcome.boundaries,
+          "Fork from user message",
+          "fork",
+        );
+        break;
+      case "choose_tree":
+        this.#showTreeSelector(outcome.session, outcome.boundaries);
+        break;
+      case "session_switch":
+        await this.#applySessionSwitch(outcome.change);
+        break;
       case "preference":
         this.#applyPreference(outcome.preference);
         break;
       case "quit":
         await this.quit();
         break;
-      default:
+      case "none":
         break;
+    }
+  }
+
+  async #onEscape(): Promise<void> {
+    if (this.#overlay !== undefined) {
+      this.#closeOverlay();
+      return;
+    }
+    if (this.#restarting) return;
+    const attempt = this.#session.state?.attempt;
+    if (attempt !== undefined && attempt.phase.type !== "settled") {
+      await this.#handleOutcome(await this.#dispatcher.submit("/cancel"));
     }
   }
 
@@ -349,6 +445,139 @@ export class RustxTuiApp {
 
     handle.focus();
     this.#tui.requestRender();
+  }
+
+  #showSessionSelector(sessions: SessionSummaryView[]): void {
+    if (sessions.length === 0) {
+      this.#note("info", "no persisted sessions are available");
+      return;
+    }
+    const selector = new SessionSelector({ sessions });
+    const handle = this.#tui.showOverlay(selector, {
+      width: "80%",
+      maxHeight: "70%",
+      anchor: "center",
+    });
+    this.#overlay = handle;
+    selector.onChange = () => this.#tui.requestRender();
+    selector.onCancel = () => this.#closeOverlay();
+    selector.onSelect = (session) => {
+      this.#closeOverlay();
+      void this.#dispatcher.selectSession(session.id).then((outcome) =>
+        this.#handleOutcome(outcome),
+      );
+    };
+    handle.focus();
+    this.#tui.requestRender();
+  }
+
+  #showBoundarySelector(
+    boundaries: SessionUserMessageBoundaryView[],
+    title: string,
+    operation: "fork" | "tree",
+  ): void {
+    if (boundaries.length === 0) {
+      this.#note(
+        "info",
+        "the active lineage has no committed user-message boundary",
+      );
+      return;
+    }
+    const selector = new BoundarySelector({ boundaries, title });
+    const handle = this.#tui.showOverlay(selector, {
+      width: "80%",
+      maxHeight: "70%",
+      anchor: "center",
+    });
+    this.#overlay = handle;
+    selector.onChange = () => this.#tui.requestRender();
+    selector.onCancel = () => this.#closeOverlay();
+    selector.onSelect = (boundary) => {
+      this.#closeOverlay();
+      const request = operation === "fork"
+        ? this.#dispatcher.forkAt(boundary)
+        : this.#dispatcher.branchAt(boundary);
+      void request.then((outcome) => this.#handleOutcome(outcome));
+    };
+    handle.focus();
+    this.#tui.requestRender();
+  }
+
+  #showTreeSelector(
+    session: SessionView,
+    boundaries: SessionUserMessageBoundaryView[],
+  ): void {
+    const selector = new TreeSelector({ session, boundaries });
+    const handle = this.#tui.showOverlay(selector, {
+      width: "80%",
+      maxHeight: "70%",
+      anchor: "center",
+    });
+    this.#overlay = handle;
+    selector.onChange = () => this.#tui.requestRender();
+    selector.onCancel = () => this.#closeOverlay();
+    selector.onSelect = (selection: TreeSelection) => {
+      this.#closeOverlay();
+      const request = selection.kind === "node"
+        ? this.#dispatcher.selectTreeNode(session.id, selection.node.id)
+        : this.#dispatcher.branchAt(selection.boundary);
+      void request.then((outcome) => this.#handleOutcome(outcome));
+    };
+    handle.focus();
+    this.#tui.requestRender();
+  }
+
+  #closeOverlay(): void {
+    const handle = this.#overlay;
+    if (handle === undefined) return;
+    handle.hide();
+    this.#overlay = undefined;
+    this.#tui.setFocus(this.#editor);
+    this.#tui.requestRender();
+  }
+
+  async #applySessionSwitch(change: SessionSwitch): Promise<void> {
+    if (!change.restartRequired) {
+      this.#note(
+        "info",
+        `active session: ${change.session.name} · node ${change.session.active_node}`,
+      );
+      return;
+    }
+    const restart = this.#restartRuntime;
+    if (restart === undefined) {
+      this.#note("error", "the runtime cannot be replaced by this attachment");
+      return;
+    }
+
+    this.#restarting = true;
+    this.#editor.disableSubmit = true;
+    this.#note("info", `switching to session ${change.session.name}…`);
+    const oldConnection = this.#connection;
+    const oldChild = this.#child;
+    try {
+      // Rust has already reached its semantic quiescence point before it
+      // returned this result. Closing here only releases the old process
+      // attachment; it is never the cancellation operation.
+      oldConnection.close();
+      oldChild.closeStdin();
+      await oldChild.waitOrTerminate(this.#terminationGraceMs);
+
+      const next = await restart();
+      this.#bindRuntime(next.session, next.connection, next.child);
+      await next.session.refreshSession();
+      if (change.editorContent !== undefined) {
+        this.#editor.setText(editorText(change.editorContent));
+      }
+      this.#note("info", `active session: ${change.session.name}`);
+      const state = this.#session.state;
+      if (state !== undefined) this.#renderState(state);
+    } catch (error) {
+      this.#note("error", `session switch failed: ${(error as Error).message}`);
+    } finally {
+      this.#restarting = false;
+      this.#editor.disableSubmit = this.#quitting;
+    }
   }
 
   /**
@@ -512,6 +741,7 @@ export class RustxTuiApp {
         state,
         this.#connectionLabel(),
         this.#tui.terminal.columns,
+        this.#session.sessionInfo,
       ),
     );
     this.#tui.requestRender();
@@ -560,4 +790,10 @@ export class RustxTuiApp {
     }
     resolve(code);
   }
+}
+
+function editorText(content: SessionSwitch["editorContent"]): string {
+  return (content ?? [])
+    .map((block) => block.type === "text" ? block.text : `[${block.type}]`)
+    .join("\n");
 }

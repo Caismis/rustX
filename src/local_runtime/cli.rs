@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use super::composition::LocalRuntimePaths;
 
 /// The usage text printed to **stderr** for an argument failure.
-pub const USAGE: &str = "usage: rustx --models <models.json> --session <session.json> \
+pub const USAGE: &str = "usage: rustx --models <models.json> --session <bootstrap-config.json> \
                          --workspace <dir> --runtime-root <dir>";
 
 /// Parses the bounded startup arguments.

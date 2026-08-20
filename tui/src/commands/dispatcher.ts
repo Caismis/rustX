@@ -20,7 +20,7 @@
  * only through operations this file calls.
  */
 
-import type { RuntimeClientSession } from "../runtime/session.ts";
+import type { RuntimeClientAttachment, SessionSwitch } from "../runtime/attachment.ts";
 import { RuntimeRequestError } from "../runtime/connection.ts";
 import {
   activeBackground,
@@ -40,6 +40,9 @@ import type {
   CatalogModelView,
   InteractionId,
   InteractionResponse,
+  SessionSummaryView,
+  SessionUserMessageBoundaryView,
+  SessionView,
   ToolCallId,
   ToolExecutionId,
 } from "../protocol/types.ts";
@@ -49,6 +52,14 @@ export type CommandOutcome =
   | { kind: "none" }
   | { kind: "message"; level: "info" | "error"; text: string }
   | { kind: "choose_model"; models: CatalogModelView[] }
+  | { kind: "choose_session"; sessions: SessionSummaryView[] }
+  | { kind: "choose_fork"; boundaries: SessionUserMessageBoundaryView[] }
+  | {
+      kind: "choose_tree";
+      session: SessionView;
+      boundaries: SessionUserMessageBoundaryView[];
+    }
+  | { kind: "session_switch"; change: SessionSwitch }
   | {
       /** A client display preference. Never a runtime request. */
       kind: "preference";
@@ -86,7 +97,7 @@ export type PreferenceChange =
 export type ExpandTarget = "all" | "none" | "latest";
 
 export interface DispatcherContext {
-  session: RuntimeClientSession;
+  session: RuntimeClientAttachment;
   /** Bounded diagnostics the UI owns, surfaced by `/debug`. */
   diagnostics: () => DebugDiagnostics;
 }
@@ -111,10 +122,15 @@ export interface DebugDiagnostics {
 }
 
 export class CommandDispatcher {
-  readonly #context: DispatcherContext;
+  #context: DispatcherContext;
 
   constructor(context: DispatcherContext) {
     this.#context = context;
+  }
+
+  /** Rebinds routing after a native process-boundary session switch. */
+  setSession(session: RuntimeClientAttachment): void {
+    this.#context.session = session;
   }
 
   /**
@@ -153,6 +169,20 @@ export class CommandDispatcher {
           return info(renderHelp());
         case "/model":
           return await this.#model(state, argument);
+        case "/new":
+          return { kind: "session_switch", change: await this.#context.session.newSession() };
+        case "/resume":
+          return await this.#resume(argument);
+        case "/session":
+          return await this.#sessionInfo();
+        case "/name":
+          return await this.#name(argument);
+        case "/clone":
+          return { kind: "session_switch", change: await this.#context.session.cloneSession() };
+        case "/fork":
+          return await this.#fork();
+        case "/tree":
+          return await this.#tree();
         case "/tools":
           return info(renderTools(state));
         case "/skills":
@@ -181,6 +211,83 @@ export class CommandDispatcher {
     } catch (error) {
       return failure(error);
     }
+  }
+
+  /** Selection seams used by the native-data overlays. */
+  async selectSession(sessionId: string): Promise<CommandOutcome> {
+    return {
+      kind: "session_switch",
+      change: await this.#context.session.selectSession(sessionId),
+    };
+  }
+
+  async selectTreeNode(sessionId: string, nodeId: string): Promise<CommandOutcome> {
+    return {
+      kind: "session_switch",
+      change: await this.#context.session.selectSession(sessionId, nodeId),
+    };
+  }
+
+  async forkAt(boundary: SessionUserMessageBoundaryView): Promise<CommandOutcome> {
+    return {
+      kind: "session_switch",
+      change: await this.#context.session.forkSession(
+        boundary.surface_revision,
+        boundary.message.id,
+      ),
+    };
+  }
+
+  async branchAt(boundary: SessionUserMessageBoundaryView): Promise<CommandOutcome> {
+    return {
+      kind: "session_switch",
+      change: await this.#context.session.branchTree(
+        boundary.surface_revision,
+        boundary.message.id,
+      ),
+    };
+  }
+
+  async #resume(argument: string): Promise<CommandOutcome> {
+    if (argument.length > 0) return this.selectSession(argument);
+    return {
+      kind: "choose_session",
+      sessions: await this.#context.session.listSessions(),
+    };
+  }
+
+  async #sessionInfo(): Promise<CommandOutcome> {
+    const session = await this.#context.session.refreshSession();
+    const active = session.nodes.find((node) => node.id === session.active_node);
+    return info(
+      [
+        `session ${session.name} (${session.id})`,
+        `active node ${session.active_node}`,
+        `conversation ${active?.conversation_id ?? "unknown"}`,
+        `parent ${active?.parent ?? "root"} · origin ${active?.origin.type ?? "unknown"}`,
+        `nodes ${session.nodes.length}`,
+      ].join("\n"),
+    );
+  }
+
+  async #name(argument: string): Promise<CommandOutcome> {
+    if (argument.trim().length === 0) return info("usage: /name <text>");
+    const session = await this.#context.session.nameSession(argument);
+    return info(`session renamed to ${session.name}`);
+  }
+
+  async #fork(): Promise<CommandOutcome> {
+    const tree = await this.#context.session.sessionTree();
+    return { kind: "choose_fork", boundaries: tree.branchableMessages };
+  }
+
+  async #tree(): Promise<CommandOutcome> {
+    const tree = await this.#context.session.sessionTree();
+    return {
+      kind: "choose_tree",
+      session: tree.session,
+      boundaries: tree.branchableMessages,
+    };
   }
 
   /**

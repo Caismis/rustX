@@ -8,15 +8,15 @@
  *
  * The four runtime paths are passed straight through to the Rust binary. This
  * client never opens, parses, validates, or defaults any of them: `models.json`
- * is a runtime-owned model authority, and reading it here would create a
- * second one. Explicit arguments only — no search path, no precedence, no
- * profile discovery.
+ * and the bootstrap conversation config are Rust-owned authorities, and
+ * reading them here would create a second one. Explicit arguments only — no
+ * search path, no precedence, no profile discovery.
  */
 
 import type { RuntimePaths } from "./runtime/child-process.ts";
 
 export const USAGE = `usage: rustx-tui --binary <rustx> --models <models.json> \\
-                 --session <session.json> --workspace <dir> --runtime-root <dir>`;
+                 --session <bootstrap-config.json> --workspace <dir> --runtime-root <dir>`;
 
 export interface TuiArguments {
   binary: string;
