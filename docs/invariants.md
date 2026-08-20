@@ -1281,9 +1281,11 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   lazily allocate one result spill (`tool-output/results/result_N.txt`,
   monotonic per-conversation sequence, `create_new`), write the retained
   complete prefix, and stream every subsequent fragment into it; the
-  absolute spill path appears inside the ordinary textual output
-  (`full_output`), never as a `FileReference`, never as a semantic
-  artifact, and never as a model `File` modality. **Foreground** output
+  absolute spill path is runtime-owned typed continuation metadata
+  (`ToolExecutionResult::managed_output`, never a magic tool-JSON key,
+  never a `FileReference`, never a semantic artifact, and never a model
+  `File` modality), which the producer presents inside its ordinary
+  textual result content so the model can Read/Grep it explicitly. **Foreground** output
   at or below the bound creates no file at all; a spill allocation or
   write failure is an explicit invocation failure, never silently lost
   output. A **background** execution instead owns a live-output channel
@@ -1306,6 +1308,25 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   always work on advertised paths. Genuine semantic artifacts
   (real files a tool produces for the user) keep the existing
   `ArtifactStore`/`FileReference` publication path.
+- Tool-owned structured content and runtime-owned managed-output metadata
+  are different domains with different typed fields.
+  `ToolResultContent::Json` is arbitrary tool-owned structured data:
+  rustX reserves NO ordinary JSON field names, and no generic runtime
+  code may infer semantics from properties that happen to be named
+  `full_output`, `partial_output`, or `note` — an MCP, Python, or future
+  plugin tool may legally return such properties as ordinary business
+  data, and they project verbatim. Managed textual-output continuation
+  (the absolute read-only locator, the typed complete-vs-partial state,
+  and any output-storage diagnostic) is explicit rustX-owned metadata on
+  `ToolExecutionResult::managed_output` — one typed source of truth,
+  never encoded as magic tool-JSON keys and never a semantic artifact.
+  The generic background terminal publication consumes only that typed
+  metadata: the absolute locator and its fixed Read/Grep guidance are
+  structurally retained under bounding, advisory diagnostics are bounded
+  to `MAX_OUTPUT_CONTINUATION_DIAGNOSTIC_BYTES`, and the complete
+  terminal result projection — body plus continuation — never exceeds
+  `MAX_MODEL_TOOL_RESULT_BYTES`. The bounded textual record remains the
+  canonical replayable history; managed output files are auxiliary.
 - Bash owns a distinct process group per invocation inside a dedicated
   invocation session created by a small per-invocation supervisor;
   cancellation/timeout signals the owned group (`TERM`, then a bounded

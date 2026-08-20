@@ -1580,7 +1580,18 @@ input contract, while workspace permission, filesystem existence, pattern
 compilation, and process lifecycle rules remain execution concerns.
 Outputs are deliberately untyped: the canonical `ToolExecutionResult` stays
 the only tool result contract, so the agent loop never learns tool-specific
-result types.
+result types. Within it, ownership is explicit: `content` is tool-owned
+(`ToolResultContent::Json` is arbitrary tool-owned structured data — rustX
+reserves no ordinary JSON field names and no generic runtime code infers
+semantics from property names such as `full_output`, `partial_output`, or
+`note`), `artifacts` holds genuine semantic artifacts, and
+`managed_output` is the rustX-owned typed continuation metadata of managed
+textual output (absolute read-only locator plus typed complete/partial
+state). The generic background terminal publication consumes only the
+typed metadata; tool-owned JSON projects verbatim, and the complete
+terminal result projection — bounded body plus structurally retained
+continuation with bounded diagnostics — never exceeds
+`MAX_MODEL_TOOL_RESULT_BYTES`.
 
 Bash treats one invocation as one complete lifecycle:
 spawn one per-invocation supervisor, capture stdout/stderr/combined, let
@@ -1598,9 +1609,10 @@ output storage in the conversation's managed tool-output store: foreground
 output spills lazily into `results/result_N.txt` only once the preview
 bound is crossed, while a background execution streams into its
 dispatch-allocated live-output file `tasks/exec_N.output` from the first
-byte on (the absolute path is published inside ordinary textual output as
-`full_output`/`output_path`; the result's `artifacts` stay empty — text
-overflow is not an artifact),
+byte on (the absolute path is runtime-owned typed continuation metadata —
+`ToolExecutionResult::managed_output` — which the producer presents inside
+its ordinary textual result content; the result's `artifacts` stay empty —
+text overflow is not an artifact),
 `TERM -> BASH_TERM_GRACE -> KILL` cancellation driven by the supervisor,
 typed result semantics (zero exit success, non-zero exit failed with the
 code preserved, timeout as `TimedOut`, cancellation as `Cancelled`),

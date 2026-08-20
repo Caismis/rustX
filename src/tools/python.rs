@@ -1454,6 +1454,7 @@ fn translate_python_result(
                         exit_code: result.exit_code,
                         artifacts: Vec::new(),
                         truncation: None,
+                        managed_output: None,
                     };
                 }
                 Ok(value) => ToolExecutionStatus::Failed {
@@ -1476,6 +1477,7 @@ fn translate_python_result(
         exit_code: result.exit_code,
         artifacts: Vec::new(),
         truncation: None,
+        managed_output: None,
     }
 }
 
@@ -1489,6 +1491,7 @@ fn failed_python(message: &str, started: Instant) -> ToolExecutionResult {
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        managed_output: None,
     }
 }
 

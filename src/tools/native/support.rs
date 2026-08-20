@@ -96,6 +96,7 @@ pub fn failed_result(error: impl Into<String>) -> ToolExecutionResult {
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        managed_output: None,
     }
 }
 
@@ -109,6 +110,7 @@ pub fn success_json(value: serde_json::Value) -> ToolExecutionResult {
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        managed_output: None,
     }
 }
 
@@ -127,5 +129,6 @@ pub fn success_json_with(
         exit_code: None,
         artifacts,
         truncation,
+        managed_output: None,
     }
 }

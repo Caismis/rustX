@@ -109,19 +109,22 @@
 //!   bound does the capture lazily allocate one result spill in the
 //!   conversation's managed tool-output store, write the retained complete
 //!   prefix, and stream every subsequent fragment into it; the absolute
-//!   spill path appears inside ordinary textual output as `full_output`,
-//!   never as a `FileReference`. Foreground output at or below the bound
-//!   creates no file at all, and a spill write failure is an explicit
-//!   invocation failure.
+//!   spill path is runtime-owned typed metadata
+//!   (`ToolExecutionResult::managed_output`, never a magic JSON key and
+//!   never a `FileReference`), and Bash presents it to the model as an
+//!   ordinary tool-owned text block inside the foreground result.
+//!   Foreground output at or below the bound creates no file at all, and
+//!   a spill write failure is an explicit invocation failure.
 //! - **Background**: the live-output file (`tasks/exec_N.output`) is
 //!   allocated by the background registry at the dispatch commit point and
 //!   advertised in the accepted result; this executor appends every
 //!   decoded fragment to it from the first byte on, so the model can
 //!   Read/Grep the output while the execution runs. Settlement reuses the
-//!   same path as the complete output — no second file is created for the
-//!   same payload — and an output-storage failure settles the invocation
-//!   as an explicit failure that names the file as partial output, never
-//!   as a false complete-output claim.
+//!   same path as the typed complete-output continuation — no second file
+//!   is created for the same payload — and an output-storage failure
+//!   settles the invocation as an explicit failure whose typed
+//!   continuation is honestly partial, never a false complete-output
+//!   claim.
 //!
 //! Non-zero exits are failed tool results with the exit code preserved —
 //! never attempt-level runtime failures.

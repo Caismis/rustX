@@ -1037,6 +1037,7 @@ impl McpServerRuntime {
                             },
                             content: Vec::new(), duration_ms: duration_ms(started),
                             exit_code: None, artifacts: Vec::new(), truncation: None,
+                            managed_output: None,
                         },
                         Err(error) => failed_mcp(&format!("MCP cancellation failed: {}", bound_error(&error.to_string())), started),
                     };
@@ -1473,6 +1474,7 @@ fn translate_result(
             truncated: true,
             original_bytes: u64::try_from(original_bytes).ok(),
         }),
+        managed_output: None,
     }
 }
 
@@ -1501,6 +1503,7 @@ fn failed_mcp(message: &str, started: Instant) -> ToolExecutionResult {
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        managed_output: None,
     }
 }
 

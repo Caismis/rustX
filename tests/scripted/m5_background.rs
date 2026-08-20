@@ -146,6 +146,7 @@ impl ToolExecutor for ControlledExecutor {
                             exit_code: None,
                             artifacts: Vec::new(),
                             truncation: None,
+                            managed_output: None,
                         };
                     }
                     released = release.wait_for(|released| *released) => {
@@ -219,6 +220,7 @@ fn success() -> ToolExecutionResult {
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        managed_output: None,
     }
 }
 
@@ -232,6 +234,7 @@ fn cancelled() -> ToolExecutionResult {
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        managed_output: None,
     }
 }
 
@@ -386,12 +389,18 @@ async fn ownership_commit_wins_over_later_attempt_cancellation() {
         "{output_path}"
     );
     assert!(std::path::Path::new(output_path).exists());
+    let note = accepted["note"].as_str().expect("note");
     assert!(
-        accepted["note"]
-            .as_str()
-            .expect("note")
-            .contains("Read or Grep"),
+        note.contains("Read or Grep"),
         "the continuation guidance travels with the locator"
+    );
+    assert!(
+        note.contains("when produced"),
+        "the wording is precise: only streaming executors append live output: {note}"
+    );
+    assert!(
+        !note.contains("is being written"),
+        "no blanket streaming promise for non-streaming executors: {note}"
     );
 }
 

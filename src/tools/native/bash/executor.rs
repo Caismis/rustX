@@ -33,8 +33,8 @@ use crate::tools::limits::{
 };
 use crate::tools::native::support::failed_result;
 use crate::tools::types::{
-    ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode,
-    ToolResultContent, TruncationState,
+    ManagedOutputContinuation, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
+    ToolInvocationMode, ToolResultContent, TruncationState,
 };
 
 /// The native Bash executor.
@@ -642,73 +642,54 @@ async fn run_bash_unix(
     let truncated = stdout.1 || stderr.1 || combined.truncated || !combined.complete;
     // Textual output stays textual in both modes (Issue #86): the bounded
     // previews are the canonical record and no `FileReference` is ever
-    // produced for execution output. The locator contract differs by mode:
-    // a foreground spill exists only when the output crossed the preview
-    // bound and the capture is complete; a background live-output file was
-    // advertised at dispatch, so it is always named — as the complete
-    // output when the capture settled completely, or as honestly partial
-    // running output when output storage failed.
-    let locator = combined
-        .output_locator
-        .map(|path| path.to_string_lossy().into_owned());
-    let (full_output, partial_output, note) = match (background, combined.complete, locator) {
-        (true, true, Some(path)) => (
-            Some(path),
-            None,
-            Some(
-                "The complete output is at the absolute path in full_output; use Read or Grep \
-                 with this absolute path if you need the complete output."
-                    .to_owned(),
-            ),
-        ),
-        (true, false, Some(path)) => (
-            None,
-            Some(path),
-            Some(format!(
-                "The output capture did not complete ({}); the file at partial_output holds \
-                 only partial output, not the complete output.",
-                capture_error
-                    .as_deref()
-                    .unwrap_or("unknown capture failure")
-            )),
-        ),
-        (false, true, Some(path)) => (
-            Some(path),
-            None,
-            Some(
-                "Output was truncated for context. The complete output is at the absolute \
-                 path in full_output; use Read or Grep if you need the complete output."
-                    .to_owned(),
-            ),
-        ),
-        (false, _, None) => (
-            None,
-            None,
-            capture_error.as_ref().map(|error| {
-                format!(
-                    "The output capture did not complete ({error}); the preview is partial and no \
-                     complete output file is available."
-                )
-            }),
-        ),
+    // produced for execution output. The complete-vs-partial output truth
+    // is runtime-owned typed metadata (`managed_output`), never magic
+    // properties of the tool-owned JSON: a foreground result references
+    // its lazy spill only when the output crossed the preview bound and
+    // the capture is complete; a background result always names its
+    // dispatch-allocated live-output file — as the complete output when
+    // the capture settled completely, or as honestly partial running
+    // output when output storage failed.
+    let managed_output = match (background, combined.complete, combined.output_locator) {
+        (_, true, Some(path)) => Some(ManagedOutputContinuation::Complete { locator: path }),
+        (true, false, Some(path)) => Some(ManagedOutputContinuation::Partial {
+            locator: path,
+            diagnostic: capture_error
+                .clone()
+                .unwrap_or_else(|| "unknown capture failure".to_owned()),
+        }),
+        (false, _, None) => capture_error
+            .clone()
+            .map(|diagnostic| ManagedOutputContinuation::Unavailable { diagnostic }),
         (false, false, Some(_)) => {
             unreachable!("a foreground capture never advertises a partial spill")
         }
         (true, _, None) => unreachable!("a background capture always owns its live-output file"),
     };
+    // The model must be able to locate the managed output of a FOREGROUND
+    // result from the result content itself, so Bash presents its own
+    // continuation as an ordinary tool-owned text block. A background
+    // result needs no such block: the accepted dispatch result already
+    // advertised the live-output path, and the generic background terminal
+    // publication renders the typed continuation structurally.
+    let mut result_content = vec![ToolResultContent::Json {
+        value: serde_json::json!({
+            "exit_code": exit_code,
+            "stdout": stdout.0,
+            "stderr": stderr.0,
+            "combined": combined.preview,
+        }),
+    }];
+    if !background && let Some(continuation) = &managed_output {
+        result_content.push(ToolResultContent::Text(
+            crate::message::content::TextBlock {
+                text: continuation.render(),
+            },
+        ));
+    }
     ToolExecutionResult {
         status,
-        content: vec![ToolResultContent::Json {
-            value: serde_json::json!({
-                "exit_code": exit_code,
-                "stdout": stdout.0,
-                "stderr": stderr.0,
-                "combined": combined.preview,
-                "full_output": full_output,
-                "partial_output": partial_output,
-                "note": note,
-            }),
-        }],
+        content: result_content,
         duration_ms: 0,
         exit_code,
         artifacts: Vec::new(),
@@ -716,6 +697,7 @@ async fn run_bash_unix(
             truncated: true,
             original_bytes: combined.complete.then_some(combined.total_bytes),
         }),
+        managed_output,
     }
 }
 

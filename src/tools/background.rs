@@ -1860,9 +1860,10 @@ fn accepted_result(
                 "tool": tool_name,
                 "output_path": output_path.to_string_lossy(),
                 "note": format!(
-                    "Background execution {execution_id} started. Output is being written to the \
-                     absolute path in output_path; use Read or Grep with this absolute path to \
-                     inspect the output while the execution is running."
+                    "Background execution {execution_id} started. Live textual output, when \
+                     produced, is appended to the absolute path in output_path as the execution \
+                     runs; use Read or Grep with this absolute path to inspect committed output \
+                     while the execution is running."
                 ),
             }),
         }],
@@ -1870,22 +1871,29 @@ fn accepted_result(
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        managed_output: None,
     }
 }
 
 /// The timestamped terminal inbound message of one settlement.
 ///
-/// The message carries a compact deterministic terminal summary plus a
-/// **bounded** model-visible textual projection of the terminal result
-/// (see [`terminal_result_projection`]): the model receives the bounded
-/// result — including the advisory absolute spill locator and the
-/// Read/Grep continuation instruction when the result spilled — inside
-/// ordinary canonical text. Full oversized output is never dumped into the
-/// inbound message: the bounded canonical text remains replayable even if
-/// the auxiliary spill file later disappears, and detailed inspection
-/// remains `background_task(status)`. Genuine semantic artifact
-/// references publish as their own `UserContentBlock::File` blocks; a
-/// textual result never becomes a File block.
+/// The message is a compact fixed-format outer header (`Background
+/// execution <id> (<tool>) settled: <state>` plus the `Result:` section
+/// marker) followed by the **bounded** model-visible textual projection
+/// of the terminal result (see [`terminal_result_projection`]), which
+/// never exceeds
+/// [`MAX_MODEL_TOOL_RESULT_BYTES`](crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES):
+/// the model receives the bounded result — including the runtime-owned
+/// managed-output continuation (the absolute output locator and its
+/// Read/Grep continuation guidance, rendered from the typed
+/// `managed_output` metadata, never inferred from tool-owned JSON keys) —
+/// inside ordinary canonical text. Full oversized output is never dumped
+/// into the inbound message: the bounded canonical text remains
+/// replayable even if the auxiliary output file later disappears, and
+/// detailed inspection remains `background_task(status)`. Genuine
+/// semantic artifact references publish as their own
+/// `UserContentBlock::File` blocks; a textual result never becomes a File
+/// block.
 fn terminal_inbound_message(
     execution_id: &ToolExecutionId,
     tool_name: &str,
@@ -1924,30 +1932,41 @@ fn terminal_inbound_message(
 /// semantic artifacts publish separately as `UserContentBlock::File`
 /// blocks, so the textual projection stays text-only.
 ///
-/// # Continuation metadata is structural, never bounded away
+/// # Tool-owned content is never interpreted
 ///
-/// Result bounding must never truncate away the metadata the model needs
-/// to continue: a `full_output` / `partial_output` locator and the `note`
-/// guidance/diagnostic of a JSON result block are extracted from the
-/// serialized body into a dedicated continuation section that is appended
-/// AFTER the bounded body and never participates in truncation. The body
-/// budget is the projection bound minus the exact continuation length, so
-/// the whole projection stays within
-/// [`MAX_MODEL_TOOL_RESULT_BYTES`](crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES)
-/// even when the body text is escape-expensive (many JSON control
-/// characters). A result carrying `full_output` therefore always projects
-/// the exact absolute locator plus the Read/Grep continuation instruction.
+/// [`ToolResultContent::Json`] is arbitrary tool-owned structured data:
+/// the projection serializes it verbatim and NEVER infers runtime
+/// semantics from property names. No ordinary JSON key (`full_output`,
+/// `partial_output`, `note`, or any other) is removed, reserved, or
+/// reinterpreted — a business-domain payload of the same names projects
+/// unchanged.
 ///
-/// A `None` result (no status detail and no content) projects to nothing.
+/// # Runtime-owned continuation metadata is structural, never bounded away
+///
+/// The runtime-owned [`ManagedOutputContinuation`] metadata
+/// (`result.managed_output`) is rendered into a dedicated continuation
+/// section appended AFTER the bounded body, so result bounding can never
+/// truncate away the absolute managed-output locator or its Read/Grep
+/// continuation guidance. The advisory continuation diagnostic is itself
+/// bounded (see [`ManagedOutputContinuation::render`]), and the rendered
+/// continuation is capped at the projection bound, so the COMPLETE
+/// projection — body plus continuation — always stays within
+/// [`MAX_MODEL_TOOL_RESULT_BYTES`](crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES):
+/// the body budget is the projection bound minus the exact continuation
+/// length, and an oversized continuation can never push the total past
+/// the bound or shrink the body budget below zero.
+///
+/// A `None` result (no status detail, no content, no continuation)
+/// projects to nothing.
+///
+/// [`ManagedOutputContinuation`]: crate::tools::types::ManagedOutputContinuation
 fn terminal_result_projection(result: &ToolExecutionResult) -> Option<String> {
     /// The explicit marker appended when the body crosses its bound.
     const PROJECTION_TRUNCATED_MARKER: &str = "\n...[terminal result projection truncated]";
-    // The boundable projection parts: status detail and content bodies.
+    let bound = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES;
+    // The boundable projection parts: status detail and tool-owned content
+    // bodies, projected verbatim.
     let mut parts: Vec<String> = Vec::new();
-    // The continuation metadata, structurally retained and never
-    // truncated: output locators and their Read/Grep guidance, plus any
-    // advisory `note` (including output-storage failure diagnostics).
-    let mut continuation: Vec<String> = Vec::new();
     match &result.status {
         ToolExecutionStatus::Failed { error } => parts.push(format!("Error: {error}")),
         ToolExecutionStatus::Denied { reason } => parts.push(format!("Denied: {reason}")),
@@ -1959,36 +1978,10 @@ fn terminal_result_projection(result: &ToolExecutionResult) -> Option<String> {
     for block in &result.content {
         match block {
             ToolResultContent::Text(text) => parts.push(text.text.clone()),
-            ToolResultContent::Json { value } => {
-                let mut value = value.clone();
-                if let Some(object) = value.as_object_mut() {
-                    if let Some(path) = object.remove("full_output")
-                        && let Some(path) = path.as_str()
-                    {
-                        continuation.push(format!(
-                            "Complete output: {path}\nUse Read or Grep with this absolute path \
-                             to inspect the complete output."
-                        ));
-                    }
-                    if let Some(path) = object.remove("partial_output")
-                        && let Some(path) = path.as_str()
-                    {
-                        continuation.push(format!(
-                            "Partial output only: {path}\nThe output storage did not complete; \
-                             this file does NOT hold the complete output."
-                        ));
-                    }
-                    if let Some(note) = object.remove("note")
-                        && let Some(note) = note.as_str()
-                    {
-                        continuation.push(note.to_owned());
-                    }
-                }
-                parts.push(
-                    serde_json::to_string(&value)
-                        .unwrap_or_else(|_| "<unserializable JSON result>".to_owned()),
-                );
-            }
+            ToolResultContent::Json { value } => parts.push(
+                serde_json::to_string(value)
+                    .unwrap_or_else(|_| "<unserializable JSON result>".to_owned()),
+            ),
             ToolResultContent::File(reference) => parts.push(format!(
                 "[file artifact: {}]",
                 reference
@@ -1999,35 +1992,58 @@ fn terminal_result_projection(result: &ToolExecutionResult) -> Option<String> {
             ToolResultContent::Image(_) => parts.push("[image content]".to_owned()),
         }
     }
-    if parts.is_empty() && continuation.is_empty() {
+    // The runtime-owned continuation section: rendered from the typed
+    // metadata only, structurally retained, and itself capped at the
+    // projection bound. A managed locator is a short runtime-generated
+    // path, so the cap only engages for a pathological over-long
+    // rendering; that case is bounded deterministically rather than
+    // silently breaking the canonical bounded-record invariant.
+    let continuation = result.managed_output.as_ref().map(|continuation| {
+        // The "\n\n" separator prepended below is part of the capped
+        // budget, so the whole continuation section never exceeds the
+        // projection bound.
+        crate::tools::limits::bound_utf8_text(continuation.render(), bound.saturating_sub(2))
+    });
+    if parts.is_empty() && continuation.is_none() {
         return None;
     }
-    let suffix = if continuation.is_empty() {
-        String::new()
-    } else {
-        format!("\n\n{}", continuation.join("\n"))
-    };
+    let suffix = continuation.map_or_else(String::new, |text| format!("\n\n{text}"));
+    debug_assert!(
+        suffix.len() <= bound,
+        "the continuation rendering is capped at the projection bound"
+    );
     // The body is bounded against the projection bound MINUS the exact
     // continuation length: the continuation section is appended after the
-    // bounded body and can never be truncated away.
-    let bound = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES.saturating_sub(suffix.len());
+    // bounded body and can never be truncated away, and the total
+    // projection never exceeds the bound.
+    let body_bound = bound - suffix.len();
     let mut projection = String::new();
     for part in parts {
         if !projection.is_empty() {
             projection.push('\n');
         }
-        if projection.len() + part.len() + PROJECTION_TRUNCATED_MARKER.len() > bound {
-            let budget = bound
-                .saturating_sub(projection.len())
-                .saturating_sub(PROJECTION_TRUNCATED_MARKER.len());
-            projection.push_str(&crate::tools::limits::bound_utf8_text(part, budget));
-            projection.push_str(PROJECTION_TRUNCATED_MARKER);
+        if projection.len() + part.len() + PROJECTION_TRUNCATED_MARKER.len() > body_bound {
+            let remaining = body_bound.saturating_sub(projection.len());
+            if remaining > PROJECTION_TRUNCATED_MARKER.len() {
+                let budget = remaining - PROJECTION_TRUNCATED_MARKER.len();
+                projection.push_str(&crate::tools::limits::bound_utf8_text(part, budget));
+                projection.push_str(PROJECTION_TRUNCATED_MARKER);
+            } else {
+                // The budget is nearly exhausted (an oversized continuation
+                // section claimed almost the whole bound): fill what
+                // remains without the marker, so the total projection —
+                // body, marker, and continuation — never exceeds the
+                // bound.
+                projection.push_str(&crate::tools::limits::bound_utf8_text(part, remaining));
+            }
             projection.push_str(&suffix);
+            debug_assert!(projection.len() <= bound);
             return Some(projection);
         }
         projection.push_str(&part);
     }
     projection.push_str(&suffix);
+    debug_assert!(projection.len() <= bound);
     Some(projection)
 }
 
@@ -2260,7 +2276,7 @@ mod tests {
     use super::test_sync::CommitBoundaryHook;
     use super::{
         BACKGROUND_CANCEL_REASON, BackgroundDispatchOutcome, BackgroundLifecycle,
-        BackgroundResources, ConversationBackgroundRegistry,
+        BackgroundResources, ConversationBackgroundRegistry, terminal_result_projection,
     };
     use crate::durable::inbox::ConversationStore;
     use crate::events::{RecordingEventSink, RuntimeEvent};
@@ -2283,6 +2299,7 @@ mod tests {
             exit_code: None,
             artifacts: Vec::new(),
             truncation: None,
+            managed_output: None,
         }
     }
 
@@ -3574,16 +3591,19 @@ mod tests {
         let terminal = wait_for_terminal(&fixture, &execution_id).await;
         assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
         let result = terminal.result.expect("terminal result");
-        let content = match &result.content[0] {
-            ToolResultContent::Json { value } => value.clone(),
-            other => panic!("expected JSON, got {other:?}"),
+        // The complete-vs-partial output truth is the typed runtime-owned
+        // continuation metadata; the tool-owned JSON carries no magic keys.
+        let Some(ToolResultContent::Json { value: content }) = result.content.first() else {
+            panic!("expected JSON content, got {:?}", result.content);
         };
+        assert!(content.get("full_output").is_none(), "{content}");
         assert_eq!(
-            content["full_output"].as_str().expect("full_output"),
-            output_path,
+            result.managed_output,
+            Some(crate::tools::types::ManagedOutputContinuation::Complete {
+                locator: std::path::PathBuf::from(&output_path),
+            }),
             "settlement reuses the dispatch-time live-output locator"
         );
-        assert!(content["partial_output"].is_null());
         assert!(
             std::fs::read_to_string(&output_path).expect("final output") == "line-A\nline-B\n",
             "the settled file holds the complete output"
@@ -3663,16 +3683,14 @@ mod tests {
         let terminal = wait_for_terminal(&fixture, &execution_id).await;
         assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
         let result = terminal.result.expect("terminal result");
-        let content = match &result.content[0] {
-            ToolResultContent::Json { value } => value.clone(),
-            other => panic!("expected JSON, got {other:?}"),
-        };
-        // Tiny output is not truncated, yet the live-output locator is the
-        // same one the dispatch advertised.
+        // Tiny output is not truncated, yet the typed live-output locator is
+        // the same one the dispatch advertised.
         assert!(result.truncation.is_none());
         assert_eq!(
-            content["full_output"].as_str().expect("full_output"),
-            output_path,
+            result.managed_output,
+            Some(crate::tools::types::ManagedOutputContinuation::Complete {
+                locator: std::path::PathBuf::from(output_path),
+            }),
             "even tiny background output reuses the dispatch-time locator"
         );
         assert_eq!(
@@ -3756,22 +3774,27 @@ mod tests {
             panic!("the execution settles Failed, got {:?}", result.status);
         };
         assert!(error.contains("output capture"), "{error}");
-        let content = match &result.content[0] {
-            ToolResultContent::Json { value } => value.clone(),
-            other => panic!("expected JSON, got {other:?}"),
+        // The typed continuation is honestly Partial: the partial file is
+        // the same advertised path, never a complete-output claim.
+        let Some(crate::tools::types::ManagedOutputContinuation::Partial {
+            locator,
+            diagnostic,
+        }) = &result.managed_output
+        else {
+            panic!(
+                "the continuation is explicitly partial, got {:?}",
+                result.managed_output
+            );
         };
-        assert!(
-            content["full_output"].is_null(),
-            "no complete-output locator: {content}"
-        );
         assert_eq!(
-            content["partial_output"].as_str().expect("partial_output"),
+            locator.to_str().expect("utf8 path"),
             advertised,
             "the partial file is the same advertised path"
         );
-        let note = content["note"].as_str().expect("note");
-        assert!(note.contains("NOT") || note.contains("partial"), "{note}");
-        assert!(!note.contains("complete output is at"), "{note}");
+        assert!(
+            diagnostic.contains("background output file"),
+            "the diagnostic names the output-storage failure: {diagnostic}"
+        );
 
         // The canonical terminal message is truthful too: it names the
         // partial file and never claims complete output.
@@ -3793,11 +3816,12 @@ mod tests {
         assert!(!text.contains("Complete output:"), "{text}");
     }
 
-    /// Result bounding never truncates away the continuation metadata: an
-    /// escape-expensive oversized body (JSON control characters cost six
-    /// bytes each) stays within the projection bound, and the exact output
-    /// locator plus the Read/Grep guidance survive in the canonical
-    /// terminal message.
+    /// Result bounding never truncates away the runtime-owned continuation
+    /// metadata: an escape-expensive oversized body (JSON control
+    /// characters cost six bytes each) stays within the projection bound,
+    /// and the exact output locator plus the Read/Grep guidance — rendered
+    /// from the TYPED metadata, not from tool-owned JSON keys — survive in
+    /// the canonical terminal message.
     #[test]
     fn the_terminal_projection_retains_the_locator_under_bounding() {
         let path = "/tmp/rustx-test/tool-output/tasks/exec_9.output";
@@ -3813,16 +3837,28 @@ mod tests {
                     "stdout": "",
                     "stderr": "",
                     "combined": expensive,
-                    "full_output": path,
-                    "partial_output": serde_json::Value::Null,
-                    "note": "The complete output is at the absolute path in full_output; use Read or Grep with this absolute path if you need the complete output.",
                 }),
             }],
             duration_ms: 0,
             exit_code: Some(0),
             artifacts: Vec::new(),
             truncation: None,
+            managed_output: Some(crate::tools::types::ManagedOutputContinuation::Complete {
+                locator: std::path::PathBuf::from(path),
+            }),
         };
+        // The exact, directly testable bound: the result PROJECTION never
+        // exceeds MAX_MODEL_TOOL_RESULT_BYTES, continuation included.
+        let projection = terminal_result_projection(&result).expect("the result projects to text");
+        assert!(
+            projection.len() <= crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES,
+            "the projection — body plus continuation — stays within the exact bound: {} bytes",
+            projection.len()
+        );
+        // The canonical message is the fixed-format outer header plus the
+        // bounded projection; the header's only variable parts are the
+        // runtime-generated execution id and the registry-resolved tool
+        // name.
         let message = super::terminal_inbound_message(
             &ToolExecutionId::background(9),
             "bash",
@@ -3834,10 +3870,15 @@ mod tests {
             [crate::message::types::UserContentBlock::Text(text)] => text.text.clone(),
             blocks => panic!("text-only: {blocks:?}"),
         };
+        let header = "Background execution exec_9 (bash) settled: succeeded\n\nResult:\n";
         assert!(
-            text.len() <= crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES + 256,
-            "the terminal message stays bounded: {} bytes",
-            text.len()
+            text.starts_with(header),
+            "the fixed-format outer header frames the projection: {text}"
+        );
+        assert_eq!(
+            text.len(),
+            header.len() + projection.len(),
+            "the canonical message is exactly the header plus the bounded projection"
         );
         assert!(
             text.contains(&format!("Complete output: {path}")),
@@ -3850,6 +3891,157 @@ mod tests {
         assert!(
             !text.contains(&"\u{1}".repeat(4096)),
             "the full oversized body is never duplicated into canonical history"
+        );
+    }
+
+    /// Arbitrary tool-owned JSON is NEVER reinterpreted as runtime
+    /// managed-output metadata: a result whose tool-owned JSON happens to
+    /// contain properties named `full_output`, `partial_output`, or `note`
+    /// (ordinary business-domain data an MCP/Python/plugin tool may legally
+    /// return) projects those properties verbatim inside the body, and no
+    /// synthetic continuation section is created from them.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn arbitrary_tool_json_is_never_reinterpreted_as_continuation_metadata() {
+        let fixture = registry("conv-json-collision");
+        let business = serde_json::json!({
+            "full_output": "business-full-output",
+            "partial_output": 123,
+            "note": "business-owned-note",
+            "nested": { "full_output": "nested-business-value" },
+            "score": 0.91,
+        });
+        let executor: Arc<dyn ToolExecutor> = Arc::new(InstantExecutor(ToolExecutionResult {
+            status: ToolExecutionStatus::Success,
+            content: vec![crate::tools::types::ToolResultContent::Json {
+                value: business.clone(),
+            }],
+            duration_ms: 0,
+            exit_code: None,
+            artifacts: Vec::new(),
+            truncation: None,
+            managed_output: None,
+        }));
+        let prepared = prepare(&fixture, &executor);
+        let outcome = fixture
+            .registry
+            .commit_dispatch(
+                prepared,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .expect("commit");
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
+            panic!("accepted");
+        };
+        let terminal = wait_for_terminal(&fixture, &execution_id).await;
+        assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
+
+        // The generic terminal publication owner itself: the canonical
+        // terminal inbound preserves every tool-owned property verbatim.
+        let batch = fixture
+            .mailbox
+            .select_pending_batch()
+            .expect("select")
+            .expect("terminal batch");
+        let message = batch.items()[0].message();
+        let text = match &message.content[..] {
+            [crate::message::types::UserContentBlock::Text(text)] => text.text.clone(),
+            blocks => panic!("the terminal inbound is text-only: {blocks:?}"),
+        };
+        let compact = serde_json::to_string(&business).expect("compact json");
+        assert!(
+            text.contains(&compact),
+            "no tool-owned property is removed or converted: {text}"
+        );
+        assert!(
+            text.contains("business-owned-note"),
+            "a tool-owned `note` stays ordinary JSON content: {text}"
+        );
+        // No synthetic continuation section was created from the
+        // business-domain keys: neither a locator line nor a Read/Grep
+        // guidance sentence references them.
+        assert!(
+            !text.contains("Complete output:"),
+            "no synthetic complete-output section: {text}"
+        );
+        assert!(
+            !text.contains("Partial output only:"),
+            "no synthetic partial-output section: {text}"
+        );
+        assert!(
+            !text.contains("Complete output: business-full-output"),
+            "the business value is never rendered as an output locator: {text}"
+        );
+    }
+
+    /// The continuation itself can never exceed the projection bound: even
+    /// an enormous, byte-expensive continuation diagnostic (many times
+    /// `MAX_MODEL_TOOL_RESULT_BYTES`) is bounded, while the exact absolute
+    /// locator and the Partial/Complete labelling survive.
+    #[test]
+    fn the_continuation_cannot_exceed_the_projection_bound() {
+        let bound = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES;
+        let path = "/tmp/rustx-test/tool-output/tasks/exec_7.output";
+        // A byte-expensive diagnostic: every 'é' costs two bytes, and the
+        // payload is many times the projection bound.
+        let enormous = "é".repeat(bound * 4);
+        let result = ToolExecutionResult {
+            status: ToolExecutionStatus::Failed {
+                error: "output capture failed".to_owned(),
+            },
+            content: vec![crate::tools::types::ToolResultContent::Json {
+                value: serde_json::json!({ "combined": "tail preview" }),
+            }],
+            duration_ms: 0,
+            exit_code: Some(0),
+            artifacts: Vec::new(),
+            truncation: None,
+            managed_output: Some(crate::tools::types::ManagedOutputContinuation::Partial {
+                locator: std::path::PathBuf::from(path),
+                diagnostic: enormous.clone(),
+            }),
+        };
+        let projection = terminal_result_projection(&result).expect("projection");
+        assert!(
+            projection.len() <= bound,
+            "the complete projection stays inside the exact bound: {} bytes",
+            projection.len()
+        );
+        assert!(
+            projection.contains(&format!("Partial output only: {path}")),
+            "the exact absolute locator remains present"
+        );
+        assert!(
+            projection.contains("does NOT hold the complete output"),
+            "the partial labelling survives"
+        );
+        // The oversized diagnostic is bounded at the continuation
+        // diagnostic cap — no unbounded duplication enters canonical
+        // history.
+        let cap = crate::tools::limits::MAX_OUTPUT_CONTINUATION_DIAGNOSTIC_BYTES;
+        assert!(
+            !projection.contains(&"é".repeat(cap)),
+            "the diagnostic is bounded: at most {cap} bytes of it survive"
+        );
+        assert!(
+            projection.contains("Diagnostic: "),
+            "the bounded diagnostic is still presented"
+        );
+
+        // A pathological over-long locator (longer than the whole bound)
+        // is handled explicitly and deterministically: the projection is
+        // still bounded rather than silently breaking the invariant.
+        let giant_locator = format!("/{}", "a".repeat(bound * 2));
+        let pathological = ToolExecutionResult {
+            managed_output: Some(crate::tools::types::ManagedOutputContinuation::Complete {
+                locator: std::path::PathBuf::from(&giant_locator),
+            }),
+            ..result.clone()
+        };
+        let projection = terminal_result_projection(&pathological).expect("projection");
+        assert!(
+            projection.len() <= bound,
+            "even a pathological locator never breaks the bound: {} bytes",
+            projection.len()
         );
     }
 }

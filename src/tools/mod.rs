@@ -45,8 +45,8 @@ pub use schema::{
     validate_business_arguments, validate_canonical_schema,
 };
 pub use types::{
-    ModelToolDefinition, ToolCall, ToolCallStart, ToolConcurrencyPolicy, ToolDefinition,
-    ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
+    ManagedOutputContinuation, ModelToolDefinition, ToolCall, ToolCallStart, ToolConcurrencyPolicy,
+    ToolDefinition, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
     ToolInvocationMode, ToolInvocationPolicy, ToolOrigin, ToolProgress, ToolReplayPolicy,
     ToolResultContent, TruncationState,
 };

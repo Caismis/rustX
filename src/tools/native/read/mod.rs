@@ -105,6 +105,7 @@ fn run_read(
             truncated: true,
             original_bytes: Some(output.len() as u64),
         }),
+        managed_output: None,
     }
 }
 
@@ -136,5 +137,6 @@ fn failed(error: impl Into<String>) -> ToolExecutionResult {
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        managed_output: None,
     }
 }

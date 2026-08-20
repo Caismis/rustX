@@ -310,7 +310,7 @@ async fn spill_allocation_failure_fails_the_invocation_explicitly() {
 /// A spill WRITE failure after the spill was already allocated (the
 /// deterministic `fail_writes_after` seam, not an open failure) is
 /// represented explicitly: a successful process can never become a lossy
-/// success, and no `full_output` locator is advertised.
+/// success, and no complete-output locator is advertised.
 #[tokio::test]
 async fn spill_write_failure_after_allocation_fails_the_invocation_explicitly() {
     let (_dir, artifacts, tool_output, workspace) = fixture();
@@ -339,6 +339,10 @@ async fn spill_write_failure_after_allocation_fails_the_invocation_explicitly() 
             "no complete-output locator is advertised: {text}"
         );
     }
+    assert!(
+        result.managed_output.is_none(),
+        "the failed invocation carries no continuation metadata"
+    );
     // The incomplete spill reached exactly one terminal storage state: the
     // failed invocation settled AFTER the capture cleanup, so no partial
     // file survives in the managed store.
@@ -354,7 +358,7 @@ async fn spill_write_failure_after_allocation_fails_the_invocation_explicitly() 
 /// Cancellation owns the terminal outcome even when the capture later
 /// fails: the semantic terminal winner stays `Cancelled`, the bounded
 /// diagnostic is retained, and the partial spill is never advertised as
-/// complete — no `full_output` locator and no "complete output" claim.
+/// complete — no complete-output locator and no "complete output" claim.
 #[cfg(unix)]
 #[tokio::test]
 async fn cancellation_owns_the_outcome_and_a_failed_spill_is_never_advertised() {
@@ -396,6 +400,9 @@ async fn cancellation_owns_the_outcome_and_a_failed_spill_is_never_advertised() 
         "cancellation remains the semantic terminal winner, got {:?}",
         result.status
     );
+    // The tool-owned JSON carries no magic output keys; the
+    // complete-vs-partial truth is typed runtime-owned metadata, and the
+    // removed partial spill means no locator exists at all.
     let content = result
         .content
         .iter()
@@ -405,16 +412,37 @@ async fn cancellation_owns_the_outcome_and_a_failed_spill_is_never_advertised() 
         })
         .expect("json content");
     assert!(
-        content["full_output"].is_null(),
-        "a partial spill is never advertised as complete: {content}"
+        content.get("full_output").is_none() && content.get("note").is_none(),
+        "no magic continuation keys exist in tool-owned JSON: {content}"
     );
-    let note = content["note"].as_str().expect("partial-capture note");
+    let Some(crate::tools::types::ManagedOutputContinuation::Unavailable { diagnostic }) =
+        &result.managed_output
+    else {
+        panic!(
+            "a partial spill removed best-effort is typed Unavailable, got {:?}",
+            result.managed_output
+        );
+    };
+    assert!(
+        diagnostic.contains("capture"),
+        "the bounded capture diagnostic is retained: {diagnostic}"
+    );
+    // The foreground result presents its own continuation as ordinary
+    // tool-owned text so the model learns the truth from the result.
+    let note = result
+        .content
+        .iter()
+        .find_map(|block| match block {
+            crate::tools::types::ToolResultContent::Text(text) => Some(text.text.clone()),
+            _ => None,
+        })
+        .expect("the foreground continuation text block");
     assert!(
         note.contains("did not complete"),
-        "the bounded capture diagnostic is retained: {note}"
+        "the capture diagnostic reaches the model: {note}"
     );
     assert!(
-        !note.contains("complete output is at"),
+        !note.contains("Complete output:"),
         "no complete-retention claim survives a failed spill: {note}"
     );
     assert!(
@@ -489,7 +517,19 @@ async fn large_output_spills_lazily_with_an_absolute_locator() {
             <= crate::tools::limits::BASH_STREAM_PREVIEW_BYTES,
         "the model-facing preview stays bounded"
     );
-    let full_output = content["full_output"].as_str().expect("spill locator");
+    assert!(
+        content.get("full_output").is_none() && content.get("note").is_none(),
+        "the tool-owned JSON carries no magic continuation keys: {content}"
+    );
+    let Some(crate::tools::types::ManagedOutputContinuation::Complete { locator }) =
+        &result.managed_output
+    else {
+        panic!(
+            "a complete foreground spill is typed Complete, got {:?}",
+            result.managed_output
+        );
+    };
+    let full_output = locator.to_str().expect("utf8 spill locator");
     assert!(
         std::path::Path::new(full_output).is_absolute(),
         "the spill locator is absolute: {full_output}"
@@ -497,6 +537,24 @@ async fn large_output_spills_lazily_with_an_absolute_locator() {
     assert!(
         full_output.starts_with(tool_output.root().to_str().expect("utf8 managed root")),
         "the spill locator lives under the managed root: {full_output}"
+    );
+    // The foreground result presents the locator to the model as ordinary
+    // tool-owned text, including the Read/Grep continuation guidance.
+    let continuation_text = result
+        .content
+        .iter()
+        .find_map(|block| match block {
+            crate::tools::types::ToolResultContent::Text(text) => Some(text.text.clone()),
+            _ => None,
+        })
+        .expect("the foreground continuation text block");
+    assert!(
+        continuation_text.contains(&format!("Complete output: {full_output}")),
+        "the model-facing text carries the exact locator: {continuation_text}"
+    );
+    assert!(
+        continuation_text.contains("Read or Grep"),
+        "the model-facing text carries the continuation guidance: {continuation_text}"
     );
     let spilled = std::fs::read(full_output).expect("spill bytes");
     assert_eq!(spilled.len() as u64, original_bytes);

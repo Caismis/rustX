@@ -511,8 +511,12 @@ async fn bash_small_output_creates_no_spill() {
     );
     assert!(result.truncation.is_none());
     assert!(
-        json_content(&result)["full_output"].is_null(),
-        "no spill locator exists"
+        result.managed_output.is_none(),
+        "no spill continuation metadata exists"
+    );
+    assert!(
+        json_content(&result).get("full_output").is_none(),
+        "the tool-owned JSON carries no continuation keys"
     );
     assert_eq!(spill_count(&fixture), 0, "no spill file exists");
 }
@@ -548,20 +552,43 @@ async fn bash_large_output_spills_to_managed_output() {
     let truncation = result.truncation.expect("truncation metadata");
     assert!(truncation.truncated);
     assert!(truncation.original_bytes.is_some());
-    // The spill locator is absolute and lives under the managed root.
-    let full_output = content["full_output"]
-        .as_str()
-        .expect("the absolute spill locator");
+    // The spill locator is typed runtime-owned metadata: absolute and
+    // under the managed root. The tool-owned JSON carries no magic keys.
+    assert!(
+        content.get("full_output").is_none() && content.get("note").is_none(),
+        "the tool-owned JSON carries no continuation keys: {content}"
+    );
+    let Some(rustx::tools::ManagedOutputContinuation::Complete { locator }) =
+        &result.managed_output
+    else {
+        panic!(
+            "a complete spill is typed Complete, got {:?}",
+            result.managed_output
+        );
+    };
+    let full_output = locator.to_str().expect("utf8 spill locator").to_owned();
+    let full_output = full_output.as_str();
     assert!(std::path::Path::new(full_output).is_absolute());
     assert!(
         std::path::Path::new(full_output).starts_with(fixture.runtime.tool_output().root()),
         "the spill lives in the managed tool-output root: {full_output}"
     );
+    // The foreground result presents the locator plus the Read/Grep
+    // continuation guidance to the model as ordinary tool-owned text.
+    let continuation_text = result
+        .content
+        .iter()
+        .find_map(|block| match block {
+            ToolResultContent::Text(text) => Some(text.text.clone()),
+            _ => None,
+        })
+        .expect("the foreground continuation text block");
     assert!(
-        content["note"]
-            .as_str()
-            .expect("advisory note")
-            .contains("Read or Grep"),
+        continuation_text.contains(&format!("Complete output: {full_output}")),
+        "the model-facing text carries the exact locator: {continuation_text}"
+    );
+    assert!(
+        continuation_text.contains("Read or Grep"),
         "the bounded text states how to reach the complete output"
     );
     assert_eq!(spill_count(&fixture), 1, "exactly one combined spill file");
@@ -682,10 +709,15 @@ async fn bash_non_utf8_output_spills_as_deterministic_text() {
     )
     .await;
     assert_eq!(result.status, ToolExecutionStatus::Success);
-    let content = json_content(&result);
-    let full_output = content["full_output"]
-        .as_str()
-        .expect("the absolute spill locator");
+    let Some(rustx::tools::ManagedOutputContinuation::Complete { locator }) =
+        &result.managed_output
+    else {
+        panic!(
+            "the spill is typed Complete, got {:?}",
+            result.managed_output
+        );
+    };
+    let full_output = locator.to_str().expect("utf8 spill locator");
     let text = std::fs::read_to_string(full_output)
         .expect("the advertised spill path is always valid UTF-8 text");
     assert!(text.starts_with(&"x".repeat(100)));

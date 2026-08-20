@@ -99,6 +99,7 @@ fn history_request(protocol: ModelProtocol, model: &str) -> ModelRequest {
                 exit_code: Some(0),
                 artifacts: Vec::new(),
                 truncation: None,
+                managed_output: None,
             },
         }),
         MessageBlock::User(UserMessageBlock {

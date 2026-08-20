@@ -612,6 +612,7 @@ impl RecoveryEvidence {
                                     exit_code: None,
                                     artifacts: Vec::new(),
                                     truncation: None,
+                                    managed_output: None,
                                 },
                             )),
                         },
@@ -1244,6 +1245,7 @@ impl RecoveryPlan {
                             exit_code: None,
                             artifacts: Vec::new(),
                             truncation: None,
+                            managed_output: None,
                         },
                     },
                 });
@@ -1823,6 +1825,7 @@ fn interrupted_result() -> ToolExecutionResult {
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        managed_output: None,
     }
 }
 

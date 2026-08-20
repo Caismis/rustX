@@ -3451,6 +3451,7 @@ fn failed_result(error: &str) -> ToolExecutionResult {
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        managed_output: None,
     }
 }
 
@@ -3467,6 +3468,7 @@ fn denied_result(reason: &str) -> ToolExecutionResult {
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        managed_output: None,
     }
 }
 
@@ -3479,6 +3481,7 @@ fn cancelled_result(reason: CancellationReason) -> ToolExecutionResult {
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        managed_output: None,
     }
 }
 
@@ -4089,6 +4092,7 @@ mod tests {
                     exit_code: None,
                     artifacts: Vec::new(),
                     truncation: None,
+                    managed_output: None,
                 }
             })
         }
@@ -4261,6 +4265,7 @@ mod tests {
                     exit_code: None,
                     artifacts: Vec::new(),
                     truncation: None,
+                    managed_output: None,
                 },
             },
             RuntimeEvent::ToolMessageCommitted {
@@ -5782,6 +5787,7 @@ mod tests {
                     exit_code: None,
                     artifacts: Vec::new(),
                     truncation: None,
+                    managed_output: None,
                 }
             })
         }

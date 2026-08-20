@@ -188,18 +188,27 @@ async fn oversized_background_bash_publishes_a_text_only_terminal_inbound() {
         result.artifacts.is_empty(),
         "textual overflow never enters the semantic artifact domain"
     );
-    let content = result
-        .content
-        .iter()
-        .map(|block| match block {
-            rustx::tools::types::ToolResultContent::Json { value } => value.clone(),
-            other => panic!("the bash result is ordinary structured text, got {other:?}"),
-        })
-        .next()
-        .expect("json content");
-    let full_output = content["full_output"]
-        .as_str()
-        .expect("the absolute output locator");
+    // The complete-vs-partial output truth is typed runtime-owned
+    // continuation metadata; the tool-owned JSON carries no magic keys.
+    for block in &result.content {
+        if let rustx::tools::types::ToolResultContent::Json { value } = block {
+            assert!(
+                value.get("full_output").is_none()
+                    && value.get("partial_output").is_none()
+                    && value.get("note").is_none(),
+                "the tool-owned JSON carries no continuation keys: {value}"
+            );
+        }
+    }
+    let Some(rustx::tools::ManagedOutputContinuation::Complete { locator }) =
+        &result.managed_output
+    else {
+        panic!(
+            "the settled background output is typed Complete, got {:?}",
+            result.managed_output
+        );
+    };
+    let full_output = locator.to_str().expect("utf8 output locator");
     assert!(std::path::Path::new(full_output).is_absolute());
     assert_eq!(
         full_output, advertised,
@@ -286,16 +295,15 @@ async fn adopted_textual_terminal_inbound_reaches_the_provider_for_a_text_only_m
         .snapshot(&execution_id)
         .expect("terminal snapshot");
     let result = snapshot.result.expect("terminal result");
-    let full_output = result
-        .content
-        .iter()
-        .find_map(|block| match block {
-            rustx::tools::types::ToolResultContent::Json { value } => {
-                value["full_output"].as_str().map(str::to_owned)
-            }
-            _ => None,
-        })
-        .expect("the absolute spill locator");
+    let Some(rustx::tools::ManagedOutputContinuation::Complete { locator }) =
+        &result.managed_output
+    else {
+        panic!(
+            "the settled background output is typed Complete, got {:?}",
+            result.managed_output
+        );
+    };
+    let full_output = locator.to_str().expect("utf8 output locator").to_owned();
     let terminal_text = match &terminal_message(&fixture).content[0] {
         UserContentBlock::Text(text) => text.text.clone(),
         other => panic!("text-only terminal inbound: {other:?}"),
@@ -742,6 +750,7 @@ async fn genuine_artifacts_still_publish_as_file_blocks_in_the_terminal_inbound(
                         description: None,
                     }],
                     truncation: None,
+                    managed_output: None,
                 }
             })
         }
