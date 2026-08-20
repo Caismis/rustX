@@ -2368,6 +2368,7 @@ while True:
                 BashTestControl::new().anchor_pid_file(anchor_pid_path.clone()),
                 CancellationSignal::new(),
                 artifacts,
+                tool_output,
                 workspace,
                 Some(10),
             ),
