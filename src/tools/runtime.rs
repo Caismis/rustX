@@ -24,6 +24,12 @@
 //! artifact root that equals the workspace root, nests inside it, or
 //! contains it (including symlink-resolved overlap).
 //!
+//! The managed tool-output root lives in a dedicated `tool-output/`
+//! directory below the runtime-private artifact root. Only that directory —
+//! never its enclosing runtime-private parent, which also holds the durable
+//! conversation database and semantic artifact internals — is authorized
+//! for the model-facing read-only filesystem operations.
+//!
 //! # Durable authority binding
 //!
 //! A `ConversationToolRuntime` composes one [`ConversationStoreBinding`]. The
@@ -56,6 +62,7 @@ use crate::tools::background::{
     BackgroundOwnershipClaimError, BackgroundResources, ConversationBackgroundRegistry,
 };
 use crate::tools::environment::ToolEnvironment;
+use crate::tools::managed_output::{ManagedOutputError, ManagedToolOutput};
 use crate::tools::workspace::{Workspace, WorkspaceError};
 
 /// A conversation tool runtime construction failure.
@@ -65,6 +72,8 @@ pub enum ConversationRuntimeError {
     Workspace(WorkspaceError),
     /// The artifact root cannot be prepared.
     Artifacts(ArtifactError),
+    /// The managed tool-output root cannot be prepared.
+    ManagedOutput(ManagedOutputError),
     /// The artifact store and the model workspace overlap; the artifact
     /// root equals the workspace root, nests inside it, or contains it.
     OverlappingStorage {
@@ -89,6 +98,7 @@ impl core::fmt::Display for ConversationRuntimeError {
         match self {
             Self::Workspace(error) => write!(f, "{error}"),
             Self::Artifacts(error) => write!(f, "{error}"),
+            Self::ManagedOutput(error) => write!(f, "{error}"),
             Self::OverlappingStorage {
                 workspace,
                 artifacts,
@@ -204,6 +214,7 @@ pub struct ConversationToolRuntime {
     conversation_id: ConversationId,
     workspace: Workspace,
     artifacts: ArtifactStore,
+    tool_output: ManagedToolOutput,
     environment: ToolEnvironment,
     background: ConversationBackgroundRegistry,
     /// The one composition-time binding shared by the runtime and its narrow
@@ -266,7 +277,8 @@ impl ConversationToolRuntime {
     /// Returns [`ConversationRuntimeError::Workspace`] when the workspace
     /// root is missing, not a directory, or cannot be canonicalized,
     /// [`ConversationRuntimeError::Artifacts`] when the artifact root cannot
-    /// be prepared, and
+    /// be prepared, [`ConversationRuntimeError::ManagedOutput`] when the
+    /// managed tool-output root cannot be prepared, and
     /// [`ConversationRuntimeError::OverlappingStorage`] when the artifact
     /// root and the workspace root overlap.
     pub fn new(
@@ -338,6 +350,15 @@ impl ConversationToolRuntime {
         );
         let artifacts = ArtifactStore::new(conversation_id.clone(), &artifacts_root)
             .map_err(ConversationRuntimeError::Artifacts)?;
+        // The managed tool-output root is a *dedicated* region below the
+        // runtime-private root: textual spill files must be model-readable
+        // through the read-only filesystem tools, but the enclosing
+        // runtime-private region (the durable conversation database, the
+        // semantic artifact internals) must not. The locator authority
+        // therefore authorizes exactly this root, never its parent.
+        let tool_output =
+            ManagedToolOutput::new(conversation_id.clone(), artifacts_root.join("tool-output"))
+                .map_err(ConversationRuntimeError::ManagedOutput)?;
         let clock = config
             .clock
             .unwrap_or_else(|| Arc::new(SystemClock) as Arc<dyn RuntimeClock>);
@@ -348,6 +369,7 @@ impl ConversationToolRuntime {
                 mailbox: mailbox.clone(),
                 workspace: workspace.clone(),
                 artifacts: artifacts.clone(),
+                tool_output: tool_output.clone(),
                 clock,
                 event_sink: config.event_sink,
             },
@@ -356,6 +378,7 @@ impl ConversationToolRuntime {
             conversation_id,
             workspace,
             artifacts,
+            tool_output,
             environment,
             background,
             durable_binding,
@@ -505,6 +528,13 @@ impl ConversationToolRuntime {
     #[must_use]
     pub fn artifacts(&self) -> &ArtifactStore {
         &self.artifacts
+    }
+
+    /// The conversation-owned managed tool-output store: the dedicated
+    /// read-only region oversized textual tool output spills into.
+    #[must_use]
+    pub fn tool_output(&self) -> &ManagedToolOutput {
+        &self.tool_output
     }
 
     /// The base authorized tool environment of the conversation.

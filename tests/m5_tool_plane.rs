@@ -87,6 +87,7 @@ async fn run_tool_unchecked(
         workspace: fixture.runtime.workspace(),
         progress: &reporter,
         artifacts: fixture.runtime.artifacts(),
+        tool_output: fixture.runtime.tool_output(),
         environment: fixture.runtime.environment(),
     };
     executor
@@ -125,6 +126,18 @@ fn stray_temp_files(fixture: &NativeFixture) -> Vec<String> {
     found
 }
 
+/// The absolute model-facing locator of a workspace-relative fixture path.
+fn abs(fixture: &NativeFixture, relative: &str) -> String {
+    fixture
+        .runtime
+        .workspace()
+        .root()
+        .join(relative)
+        .to_str()
+        .expect("utf8 workspace path")
+        .to_owned()
+}
+
 // ---------------------------------------------------------------------------
 // Read: the 1-based offset/limit line window
 // ---------------------------------------------------------------------------
@@ -140,7 +153,12 @@ async fn read_defaults_to_the_documented_line_window() {
         format!("{}\n", lines.join("\n")),
     )
     .expect("write sample");
-    let result = run_tool(&fixture, "read", serde_json::json!({"path": "many.txt"})).await;
+    let result = run_tool(
+        &fixture,
+        "read",
+        serde_json::json!({"file_path": abs(&fixture, "many.txt")}),
+    )
+    .await;
     let returned: Vec<String> = text_content(&result).lines().map(str::to_owned).collect();
     assert_eq!(returned.len(), 200, "the default limit is 200 lines");
     assert_eq!(returned[0], "line-001", "the default offset is line 1");
@@ -157,13 +175,18 @@ async fn read_offset_is_one_based_and_limit_bounds_the_window() {
         "one\ntwo\nthree\nfour\nfive\n",
     )
     .expect("write sample");
-    let full = run_tool(&fixture, "read", serde_json::json!({"path": "sample.txt"})).await;
+    let full = run_tool(
+        &fixture,
+        "read",
+        serde_json::json!({"file_path": abs(&fixture, "sample.txt")}),
+    )
+    .await;
     assert_eq!(text_content(&full), "one\ntwo\nthree\nfour\nfive");
 
     let first = run_tool(
         &fixture,
         "read",
-        serde_json::json!({"path": "sample.txt", "offset": 1, "limit": 1}),
+        serde_json::json!({"file_path": abs(&fixture, "sample.txt"), "offset": 1, "limit": 1}),
     )
     .await;
     assert_eq!(
@@ -175,7 +198,7 @@ async fn read_offset_is_one_based_and_limit_bounds_the_window() {
     let middle = run_tool(
         &fixture,
         "read",
-        serde_json::json!({"path": "sample.txt", "offset": 2, "limit": 2}),
+        serde_json::json!({"file_path": abs(&fixture, "sample.txt"), "offset": 2, "limit": 2}),
     )
     .await;
     assert_eq!(text_content(&middle), "two\nthree");
@@ -183,7 +206,7 @@ async fn read_offset_is_one_based_and_limit_bounds_the_window() {
     let to_eof = run_tool(
         &fixture,
         "read",
-        serde_json::json!({"path": "sample.txt", "offset": 4, "limit": 1000}),
+        serde_json::json!({"file_path": abs(&fixture, "sample.txt"), "offset": 4, "limit": 1000}),
     )
     .await;
     assert_eq!(
@@ -205,7 +228,7 @@ async fn read_offset_past_the_end_is_an_empty_window() {
     let past_end = run_tool(
         &fixture,
         "read",
-        serde_json::json!({"path": "sample.txt", "offset": 99}),
+        serde_json::json!({"file_path": abs(&fixture, "sample.txt"), "offset": 99}),
     )
     .await;
     assert_eq!(past_end.status, ToolExecutionStatus::Success);
@@ -224,8 +247,8 @@ async fn read_rejects_a_zero_offset_or_limit_at_the_executor_boundary() {
     )
     .expect("write sample");
     for arguments in [
-        serde_json::json!({"path": "sample.txt", "offset": 0}),
-        serde_json::json!({"path": "sample.txt", "limit": 0}),
+        serde_json::json!({"file_path": abs(&fixture, "sample.txt"), "offset": 0}),
+        serde_json::json!({"file_path": abs(&fixture, "sample.txt"), "limit": 0}),
     ] {
         assert_failed(&run_tool_unchecked(&fixture, "read", arguments).await);
     }
@@ -240,7 +263,7 @@ async fn read_output_is_bounded_and_truncated() {
     let result = run_tool(
         &fixture,
         "read",
-        serde_json::json!({"path": "big.txt", "limit": 1000}),
+        serde_json::json!({"file_path": abs(&fixture, "big.txt"), "limit": 1000}),
     )
     .await;
     assert!(
@@ -261,17 +284,32 @@ async fn read_rejects_binary_input() {
     let fixture = native_fixture();
     let file = fixture.runtime.workspace().root().join("binary.bin");
     std::fs::write(&file, [0xff, 0xfe, 0x00, 0x01]).expect("write binary");
-    assert_failed(&run_tool(&fixture, "read", serde_json::json!({"path": "binary.bin"})).await);
-}
-
-#[tokio::test]
-async fn read_rejects_absolute_and_escaping_paths() {
-    let fixture = native_fixture();
     assert_failed(
         &run_tool(
             &fixture,
             "read",
-            serde_json::json!({"path": "/etc/hostname"}),
+            serde_json::json!({"file_path": abs(&fixture, "binary.bin")}),
+        )
+        .await,
+    );
+}
+
+/// A relative locator is rejected outright, and an absolute locator is not
+/// authority: an absolute host path outside every authorized root is
+/// rejected as well.
+#[tokio::test]
+async fn read_rejects_relative_and_unauthorized_locators() {
+    let fixture = native_fixture();
+    std::fs::write(
+        fixture.runtime.workspace().root().join("sample.txt"),
+        "one\n",
+    )
+    .expect("write sample");
+    assert_failed(
+        &run_tool(
+            &fixture,
+            "read",
+            serde_json::json!({"file_path": "sample.txt"}),
         )
         .await,
     );
@@ -279,7 +317,28 @@ async fn read_rejects_absolute_and_escaping_paths() {
         &run_tool(
             &fixture,
             "read",
-            serde_json::json!({"path": "../escape.txt"}),
+            serde_json::json!({"file_path": "/etc/hostname"}),
+        )
+        .await,
+    );
+    // The enclosing runtime-private root of the managed tool-output root is
+    // not implicitly readable either.
+    let private = fixture
+        .runtime
+        .tool_output()
+        .root()
+        .parent()
+        .expect("the managed root has a parent")
+        .join("conversation.sqlite");
+    assert!(
+        private.exists(),
+        "the fixture composes the durable store next to the managed root"
+    );
+    assert_failed(
+        &run_tool(
+            &fixture,
+            "read",
+            serde_json::json!({"file_path": private.to_str().expect("utf8")}),
         )
         .await,
     );
@@ -296,11 +355,18 @@ async fn read_rejects_symlinks_escaping_the_workspace() {
         fixture.runtime.workspace().root().join("linked.txt"),
     )
     .expect("symlink");
-    assert_failed(&run_tool(&fixture, "read", serde_json::json!({"path": "linked.txt"})).await);
+    assert_failed(
+        &run_tool(
+            &fixture,
+            "read",
+            serde_json::json!({"file_path": abs(&fixture, "linked.txt")}),
+        )
+        .await,
+    );
 }
 
 // ---------------------------------------------------------------------------
-// Write: unchanged `path` + `content` mutation guarantees
+// Write: absolute `file_path` + `content` mutation guarantees
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -310,7 +376,7 @@ async fn write_creates_and_replaces_atomically() {
     let created = run_tool(
         &fixture,
         "write",
-        serde_json::json!({"path": "dir/file.txt", "content": "hello"}),
+        serde_json::json!({"file_path": abs(&fixture, "dir/file.txt"), "content": "hello"}),
     )
     .await;
     assert_eq!(created.status, ToolExecutionStatus::Success);
@@ -323,7 +389,7 @@ async fn write_creates_and_replaces_atomically() {
     let replaced = run_tool(
         &fixture,
         "write",
-        serde_json::json!({"path": "dir/file.txt", "content": "world"}),
+        serde_json::json!({"file_path": abs(&fixture, "dir/file.txt"), "content": "world"}),
     )
     .await;
     assert_eq!(replaced.status, ToolExecutionStatus::Success);
@@ -346,7 +412,7 @@ async fn write_requires_an_existing_parent_directory() {
     let result = run_tool(
         &fixture,
         "write",
-        serde_json::json!({"path": "missing/deep/file.txt", "content": "x"}),
+        serde_json::json!({"file_path": abs(&fixture, "missing/deep/file.txt"), "content": "x"}),
     )
     .await;
     assert_failed(&result);
@@ -356,15 +422,23 @@ async fn write_requires_an_existing_parent_directory() {
     );
 }
 
+/// Relative locators, absolute host paths outside the workspace, and the
+/// read-only managed tool-output root are all rejected for mutation.
 #[tokio::test]
-async fn write_rejects_absolute_and_escaping_paths() {
+async fn write_rejects_relative_unauthorized_and_managed_output_paths() {
     let fixture = native_fixture();
-    for path in ["/tmp/rustx-escape.txt", "../escape.txt"] {
+    let managed = fixture.runtime.tool_output().root().join("blocked.txt");
+    let managed = managed.to_str().expect("utf8").to_owned();
+    for path in [
+        "../escape.txt".to_owned(),
+        "/tmp/rustx-escape.txt".to_owned(),
+        managed,
+    ] {
         assert_failed(
             &run_tool(
                 &fixture,
                 "write",
-                serde_json::json!({"path": path, "content": "x"}),
+                serde_json::json!({"file_path": path, "content": "x"}),
             )
             .await,
         );
@@ -409,7 +483,7 @@ async fn edit_applies_a_single_unambiguous_replacement() {
     let applied = run_tool(
         &fixture,
         "edit",
-        serde_json::json!({"path": "edit.txt", "edits": [replacement("beta", "GAMMA")]}),
+        serde_json::json!({"file_path": abs(&fixture, "edit.txt"), "edits": [replacement("beta", "GAMMA")]}),
     )
     .await;
     assert_eq!(applied.status, ToolExecutionStatus::Success);
@@ -432,7 +506,7 @@ async fn edit_rejects_an_empty_edit_set_and_an_empty_old_text() {
     let empty_set = run_tool_unchecked(
         &fixture,
         "edit",
-        serde_json::json!({"path": "edit.txt", "edits": []}),
+        serde_json::json!({"file_path": abs(&fixture, "edit.txt"), "edits": []}),
     )
     .await;
     assert_failed(&empty_set);
@@ -441,7 +515,7 @@ async fn edit_rejects_an_empty_edit_set_and_an_empty_old_text() {
     let empty_anchor = run_tool_unchecked(
         &fixture,
         "edit",
-        serde_json::json!({"path": "edit.txt", "edits": [replacement("", "x")]}),
+        serde_json::json!({"file_path": abs(&fixture, "edit.txt"), "edits": [replacement("", "x")]}),
     )
     .await;
     assert_failed(&empty_anchor);
@@ -451,7 +525,7 @@ async fn edit_rejects_an_empty_edit_set_and_an_empty_old_text() {
         &fixture,
         "edit",
         serde_json::json!({
-            "path": "edit.txt",
+            "file_path": abs(&fixture, "edit.txt"),
             "edits": [replacement("orig", "X"), replacement("", "y")]
         }),
     )
@@ -470,7 +544,7 @@ async fn edit_fails_on_zero_matches_without_mutating() {
     let only = run_tool(
         &fixture,
         "edit",
-        serde_json::json!({"path": "edit.txt", "edits": [replacement("absent", "x")]}),
+        serde_json::json!({"file_path": abs(&fixture, "edit.txt"), "edits": [replacement("absent", "x")]}),
     )
     .await;
     assert_failed(&only);
@@ -480,7 +554,7 @@ async fn edit_fails_on_zero_matches_without_mutating() {
         &fixture,
         "edit",
         serde_json::json!({
-            "path": "edit.txt",
+            "file_path": abs(&fixture, "edit.txt"),
             "edits": [replacement("alpha", "A"), replacement("absent", "x")]
         }),
     )
@@ -498,7 +572,7 @@ async fn edit_fails_on_an_ambiguous_match_without_mutating() {
     let ambiguous = run_tool(
         &fixture,
         "edit",
-        serde_json::json!({"path": "edit.txt", "edits": [replacement("a", "z")]}),
+        serde_json::json!({"file_path": abs(&fixture, "edit.txt"), "edits": [replacement("a", "z")]}),
     )
     .await;
     assert_failed(&ambiguous);
@@ -520,7 +594,7 @@ async fn edit_matches_every_replacement_against_the_original_snapshot() {
         &fixture,
         "edit",
         serde_json::json!({
-            "path": "edit.txt",
+            "file_path": abs(&fixture, "edit.txt"),
             "edits": [replacement("A", "B"), replacement("B", "C")]
         }),
     )
@@ -547,7 +621,7 @@ async fn edit_applies_disjoint_edits_independently_of_input_order() {
         let applied = run_tool(
             &fixture,
             "edit",
-            serde_json::json!({"path": "edit.txt", "edits": edits}),
+            serde_json::json!({"file_path": abs(&fixture, "edit.txt"), "edits": edits}),
         )
         .await;
         assert_eq!(applied.status, ToolExecutionStatus::Success);
@@ -592,7 +666,7 @@ async fn edit_rejects_conflicting_replacement_ranges() {
         let rejected = run_tool(
             &fixture,
             "edit",
-            serde_json::json!({"path": "edit.txt", "edits": edits}),
+            serde_json::json!({"file_path": abs(&fixture, "edit.txt"), "edits": edits}),
         )
         .await;
         assert!(
@@ -630,7 +704,7 @@ async fn edit_rejects_an_anchor_with_overlapping_candidate_placements() {
         let rejected = run_tool(
             &fixture,
             "edit",
-            serde_json::json!({"path": "edit.txt", "edits": [replacement(anchor, "REPLACED")]}),
+            serde_json::json!({"file_path": abs(&fixture, "edit.txt"), "edits": [replacement(anchor, "REPLACED")]}),
         )
         .await;
         assert!(
@@ -654,7 +728,7 @@ async fn an_ambiguous_overlapping_anchor_blocks_every_edit_of_the_invocation() {
         &fixture,
         "edit",
         serde_json::json!({
-            "path": "edit.txt",
+            "file_path": abs(&fixture, "edit.txt"),
             // The first edit is perfectly valid on its own; the second one
             // can be placed at two overlapping ranges.
             "edits": [replacement("unique", "UNIQUE"), replacement("aa", "X")]
@@ -687,7 +761,7 @@ async fn edit_still_accepts_an_anchor_with_one_possible_placement() {
         let applied = run_tool(
             &fixture,
             "edit",
-            serde_json::json!({"path": "edit.txt", "edits": [replacement(anchor, new_text)]}),
+            serde_json::json!({"file_path": abs(&fixture, "edit.txt"), "edits": [replacement(anchor, new_text)]}),
         )
         .await;
         assert_eq!(
@@ -709,7 +783,7 @@ async fn edit_accepts_adjacent_replacement_ranges() {
         &fixture,
         "edit",
         serde_json::json!({
-            "path": "edit.txt",
+            "file_path": abs(&fixture, "edit.txt"),
             "edits": [replacement("abc", "X"), replacement("def", "Y")]
         }),
     )
@@ -726,7 +800,7 @@ async fn edit_rejects_absolute_and_escaping_paths() {
             &run_tool(
                 &fixture,
                 "edit",
-                serde_json::json!({"path": path, "edits": [replacement("a", "b")]}),
+                serde_json::json!({"file_path": path, "edits": [replacement("a", "b")]}),
             )
             .await,
         );
@@ -745,7 +819,7 @@ async fn edit_rejects_binary_input() {
         &run_tool(
             &fixture,
             "edit",
-            serde_json::json!({"path": "binary.bin", "edits": [replacement("a", "b")]}),
+            serde_json::json!({"file_path": abs(&fixture, "binary.bin"), "edits": [replacement("a", "b")]}),
         )
         .await,
     );
@@ -894,7 +968,7 @@ async fn search_tools_share_one_explicit_search_root() {
     let glob = run_tool(
         &fixture,
         "glob",
-        serde_json::json!({"pattern": "**/*", "path": "nested"}),
+        serde_json::json!({"pattern": "**/*", "path": abs(&fixture, "nested")}),
     )
     .await;
     assert_eq!(
@@ -905,22 +979,27 @@ async fn search_tools_share_one_explicit_search_root() {
     let grep = run_tool(
         &fixture,
         "grep",
-        serde_json::json!({"pattern": "needle", "path": "nested"}),
+        serde_json::json!({"pattern": "needle", "path": abs(&fixture, "nested")}),
     )
     .await;
     assert_eq!(grep_paths(&grep), vec!["deep.txt".to_owned()]);
 }
 
-/// The search root is contained by the workspace boundary, for both tools.
+/// The search root contract of both tools: an omitted root means the
+/// workspace, a supplied root must be absolute and contained in the
+/// workspace root or the read-only managed tool-output root, and a
+/// single-file root is a Grep-only spelling (Glob searches directories).
 #[tokio::test]
-async fn search_root_containment_is_enforced_for_both_tools() {
+async fn search_root_locator_contract_is_enforced_for_both_tools() {
     let fixture = native_fixture();
     std::fs::write(
         fixture.runtime.workspace().root().join("file.txt"),
-        "content",
+        "content hit",
     )
     .expect("write");
-    for path in ["..", "/etc", "missing-directory", "file.txt"] {
+    // Relative locators and absolute paths outside every authorized root
+    // are rejected by both tools.
+    for path in ["..", "missing-directory", "file.txt", "/etc"] {
         assert_failed(
             &run_tool(
                 &fixture,
@@ -938,6 +1017,24 @@ async fn search_root_containment_is_enforced_for_both_tools() {
             .await,
         );
     }
+    // A single absolute file is a legal Grep root but not a Glob root.
+    let file = abs(&fixture, "file.txt");
+    let grep = run_tool(
+        &fixture,
+        "grep",
+        serde_json::json!({"pattern": "hit", "path": file}),
+    )
+    .await;
+    assert_eq!(grep.status, ToolExecutionStatus::Success);
+    assert_eq!(grep_paths(&grep), vec!["file.txt".to_owned()]);
+    assert_failed(
+        &run_tool(
+            &fixture,
+            "glob",
+            serde_json::json!({"pattern": "**/*", "path": abs(&fixture, "file.txt")}),
+        )
+        .await,
+    );
 }
 
 /// Neither search tool ever spawns a process: there is no `rg` executable
@@ -1584,7 +1681,7 @@ fn native_tools_register_under_every_legal_execution_policy() {
         let read_mode = match execution {
             ToolExecutionPolicy::ForegroundOnly => {
                 let outcome = registry
-                    .preflight(&read_call(serde_json::json!({"path": "a.txt"})))
+                    .preflight(&read_call(serde_json::json!({"file_path": "a.txt"})))
                     .expect("preflight");
                 let PreflightOutcome::Ready(prepared) = outcome else {
                     panic!("foreground-only read must preflight as ready");
@@ -1593,7 +1690,7 @@ fn native_tools_register_under_every_legal_execution_policy() {
             }
             ToolExecutionPolicy::BackgroundOnly => {
                 let outcome = registry
-                    .preflight(&read_call(serde_json::json!({"path": "a.txt"})))
+                    .preflight(&read_call(serde_json::json!({"file_path": "a.txt"})))
                     .expect("preflight");
                 let PreflightOutcome::Ready(prepared) = outcome else {
                     panic!("background-only read must preflight as ready");
@@ -1604,7 +1701,7 @@ fn native_tools_register_under_every_legal_execution_policy() {
                 let outcome = registry
                     .preflight(&read_call(serde_json::json!({
                         "__rustx_execution": "foreground",
-                        "path": "a.txt"
+                        "file_path": "a.txt"
                     })))
                     .expect("preflight");
                 let PreflightOutcome::Ready(prepared) = outcome else {
@@ -1823,7 +1920,7 @@ fn mixed_native_policies_coexist_and_preflight_independently() {
             "call-read",
             "read",
             "tool-read",
-            serde_json::json!({"path": "a.txt"}),
+            serde_json::json!({"file_path": "a.txt"}),
         )),
         ToolInvocationMode::Foreground
     );
@@ -1833,7 +1930,7 @@ fn mixed_native_policies_coexist_and_preflight_independently() {
             "call-write",
             "write",
             "tool-write",
-            serde_json::json!({"path": "a.txt", "content": "x"}),
+            serde_json::json!({"file_path": "a.txt", "content": "x"}),
         )),
         ToolInvocationMode::Background
     );

@@ -3002,6 +3002,7 @@ impl<'a> AgentExecution<'a> {
             workspace: self.tool_runtime.workspace(),
             progress: &buffer,
             artifacts: self.tool_runtime.artifacts(),
+            tool_output: self.tool_runtime.tool_output(),
             environment: self.capability.snapshot().effective_environment(),
         };
         let future = executor.execute(invocation.clone(), context);

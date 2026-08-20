@@ -95,17 +95,22 @@
 //! # Output capture
 //!
 //! stdout, stderr, and the runtime-observed combined multiplex are captured
-//! separately. Full output is spooled to the conversation artifact store
-//! while bounded previews (head/tail with an explicit truncation marker) are
-//! retained for the model; the stored artifact bytes are never corrupted.
+//! separately with bounded previews (head/tail with an explicit truncation
+//! marker). Text overflow is not an artifact (Issue #86): only when the
+//! combined output crosses its preview bound does the capture lazily
+//! allocate one file in the conversation's managed tool-output store, write
+//! the retained complete prefix, and stream every subsequent byte into it;
+//! the absolute spill path appears inside ordinary textual output as
+//! `full_output`, never as a `FileReference`. Output at or below the bound
+//! creates no file at all, and the stored spill bytes are never corrupted.
 //! Non-zero exits are failed tool results with the exit code preserved —
 //! never attempt-level runtime failures.
 //!
-//! Artifact capture failures (pipe reads, artifact allocation, artifact
-//! open, writes, or the combined multiplex) are never silently discarded:
-//! when no cancellation/timeout owns the outcome, a capture failure is an
-//! explicit failed tool result, so the runtime never reports ordinary
-//! success while silently losing the promised retained output. During a
+//! Capture failures (pipe reads, spill allocation, spill writes, or the
+//! combined multiplex) are never silently discarded: when no
+//! cancellation/timeout owns the outcome, a capture failure is an explicit
+//! failed tool result, so the runtime never reports ordinary success while
+//! silently losing the promised retained output. During a
 //! cancellation/timeout settlement the terminated-process capture is
 //! inherently partial, so the cancellation/timeout status wins.
 //!

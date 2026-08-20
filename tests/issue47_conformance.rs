@@ -207,10 +207,6 @@ impl Driver {
         self.runtime.host()
     }
 
-    fn workspace(&self) -> std::path::PathBuf {
-        self.runtime.tool_runtime().workspace().root().to_path_buf()
-    }
-
     /// Submits one fixed user turn.
     fn submit(&self, text: &str) {
         self.host()
@@ -477,15 +473,24 @@ fn model_id(reference: &str) -> &str {
 /// real tool result. The emulator never touches the file.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_tool_call_runs_the_real_tool_and_continues() {
-    let Some(emulator) = ProviderEmulator::start("tool_call_continuation").await else {
+    // The workspace exists before the emulator starts: the scripted tool
+    // call carries the absolute locator of the note (Issue #86), so the
+    // emulator substitutes the concrete root at scenario build time.
+    let root = tempfile::tempdir().expect("temp root");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    std::fs::write(workspace.join(NOTE_PATH), format!("{NOTE_MARKER}\n")).expect("workspace note");
+    let Some(emulator) =
+        ProviderEmulator::start_with_workspace("tool_call_continuation", Some(&workspace)).await
+    else {
         return;
     };
-    let driver = Driver::start(&emulator, &Setup::new(&format!("emulator/{CHAT_MODEL}"))).await;
-    std::fs::write(
-        driver.workspace().join(NOTE_PATH),
-        format!("{NOTE_MARKER}\n"),
+    let driver = Driver::start_in(
+        root,
+        &emulator,
+        &Setup::new(&format!("emulator/{CHAT_MODEL}")),
     )
-    .expect("workspace note");
+    .await;
 
     driver.submit(READ_PROMPT);
     let (events, outcome) = driver.settle().await;
@@ -525,11 +530,11 @@ async fn a_tool_call_runs_the_real_tool_and_continues() {
 /// Skill's own `SKILL.md`. Python implements no part of that.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_real_skill_reaches_the_provider_and_is_read_by_the_real_tool() {
-    let Some(emulator) = ProviderEmulator::start("skill_read_turn").await else {
-        return;
-    };
     // The Skill must exist before composition: the capability candidate is
-    // prepared and committed during `compose`.
+    // prepared and committed during `compose`. The workspace also exists
+    // before the emulator starts: the scripted Read call carries the
+    // absolute locator of the SKILL.md (Issue #86), substituted by the
+    // emulator at scenario build time.
     let root = tempfile::tempdir().expect("temp root");
     let workspace = root.path().join("workspace");
     let package = workspace.join(".agents/skills").join(SKILL_NAME);
@@ -541,6 +546,11 @@ async fn a_real_skill_reaches_the_provider_and_is_read_by_the_real_tool() {
         ),
     )
     .expect("SKILL.md");
+    let Some(emulator) =
+        ProviderEmulator::start_with_workspace("skill_read_turn", Some(&workspace)).await
+    else {
+        return;
+    };
     let driver = Driver::start_in(
         root,
         &emulator,

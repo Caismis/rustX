@@ -759,6 +759,7 @@ pub async fn run_tool_with_cancellation(
         workspace: fixture.runtime.workspace(),
         progress: &reporter,
         artifacts: fixture.runtime.artifacts(),
+        tool_output: fixture.runtime.tool_output(),
         environment: fixture.runtime.environment(),
     };
     executor.execute(prepared.invocation, context).await
@@ -801,6 +802,7 @@ pub async fn run_tool(
         workspace: fixture.runtime.workspace(),
         progress: &reporter,
         artifacts: fixture.runtime.artifacts(),
+        tool_output: fixture.runtime.tool_output(),
         environment: fixture.runtime.environment(),
     };
     executor.execute(prepared.invocation, context).await

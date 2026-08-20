@@ -405,7 +405,7 @@ const bashRenderer: ToolPresentationRenderer = {
 const readRenderer: ToolPresentationRenderer = {
   renderCall(args) {
     const fields = record(args);
-    const path = text(fields?.["path"]);
+    const path = text(fields?.["file_path"]);
     if (path === undefined) {
       return undefined;
     }
@@ -525,7 +525,7 @@ const globRenderer: ToolPresentationRenderer = {
 const editRenderer: ToolPresentationRenderer = {
   renderCall(args) {
     const fields = record(args);
-    const path = text(fields?.["path"]);
+    const path = text(fields?.["file_path"]);
     const edits = fields?.["edits"];
     if (path === undefined || !Array.isArray(edits)) {
       return undefined;
@@ -571,7 +571,7 @@ const editRenderer: ToolPresentationRenderer = {
 const writeRenderer: ToolPresentationRenderer = {
   renderCall(args) {
     const fields = record(args);
-    const path = text(fields?.["path"]);
+    const path = text(fields?.["file_path"]);
     const content = text(fields?.["content"]);
     if (path === undefined || content === undefined) {
       return undefined;

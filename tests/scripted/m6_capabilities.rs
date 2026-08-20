@@ -84,6 +84,11 @@ fn conversation() -> Conversation {
             mailbox,
             workspace: workspace.clone(),
             artifacts,
+            tool_output: rustx::tools::managed_output::ManagedToolOutput::new(
+                conversation_id.clone(),
+                dir.path().join("artifacts/tool-output"),
+            )
+            .expect("managed tool output"),
             clock: Arc::new(rustx::runtime::SystemClock),
             event_sink: None,
         },
@@ -305,6 +310,11 @@ async fn absolute_store_path_does_not_change_the_digest() {
                     dir.path().join("artifacts"),
                 )
                 .expect("artifacts"),
+                tool_output: rustx::tools::managed_output::ManagedToolOutput::new(
+                    ConversationId::new("conv-m6-two"),
+                    dir.path().join("artifacts/tool-output"),
+                )
+                .expect("managed tool output"),
                 clock: Arc::new(rustx::runtime::SystemClock),
                 event_sink: None,
             },

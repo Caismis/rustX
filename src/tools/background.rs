@@ -463,6 +463,8 @@ pub struct BackgroundResources {
     pub workspace: Workspace,
     /// The conversation artifact store for detached executors.
     pub artifacts: ArtifactStore,
+    /// The conversation managed tool-output store for detached executors.
+    pub tool_output: crate::tools::managed_output::ManagedToolOutput,
     /// The runtime clock stamping terminal inbound messages.
     pub clock: Arc<dyn RuntimeClock>,
     /// The narrow non-durable execution-fact sink, when attached.
@@ -1713,6 +1715,7 @@ impl ConversationBackgroundRegistry {
                 workspace: &resources.workspace,
                 progress: &reporter,
                 artifacts: &resources.artifacts,
+                tool_output: &resources.tool_output,
                 environment: &environment,
             };
             let result = executor.execute(invocation, context).await;
@@ -2093,7 +2096,12 @@ mod tests {
             BackgroundResources {
                 mailbox: mailbox.clone(),
                 workspace: Workspace::new(&workspace_root).expect("workspace"),
-                artifacts: ArtifactStore::new(conversation, &artifacts).expect("artifacts"),
+                artifacts: ArtifactStore::new(conversation.clone(), &artifacts).expect("artifacts"),
+                tool_output: crate::tools::managed_output::ManagedToolOutput::new(
+                    conversation,
+                    artifacts.join("tool-output"),
+                )
+                .expect("managed tool output"),
                 clock: Arc::new(crate::runtime::SystemClock),
                 event_sink: None,
             },
@@ -2138,7 +2146,12 @@ mod tests {
             BackgroundResources {
                 mailbox,
                 workspace: Workspace::new(&workspace_root).expect("workspace"),
-                artifacts: ArtifactStore::new(conversation, &artifacts).expect("artifacts"),
+                artifacts: ArtifactStore::new(conversation.clone(), &artifacts).expect("artifacts"),
+                tool_output: crate::tools::managed_output::ManagedToolOutput::new(
+                    conversation,
+                    artifacts.join("tool-output"),
+                )
+                .expect("managed tool output"),
                 clock: Arc::new(crate::runtime::SystemClock),
                 event_sink: None,
             },
@@ -2920,7 +2933,12 @@ mod tests {
             BackgroundResources {
                 mailbox: mailbox.clone(),
                 workspace: Workspace::new(&workspace_root).expect("workspace"),
-                artifacts: ArtifactStore::new(conversation, &artifacts).expect("artifacts"),
+                artifacts: ArtifactStore::new(conversation.clone(), &artifacts).expect("artifacts"),
+                tool_output: crate::tools::managed_output::ManagedToolOutput::new(
+                    conversation,
+                    artifacts.join("tool-output"),
+                )
+                .expect("managed tool output"),
                 clock: Arc::new(crate::runtime::SystemClock),
                 event_sink: Some(sink_dyn),
             },

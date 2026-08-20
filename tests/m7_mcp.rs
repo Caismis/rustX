@@ -115,6 +115,7 @@ mod unix_tests {
                 workspace: runtime_bundle.workspace(),
                 progress: &progress,
                 artifacts: runtime_bundle.artifacts(),
+                tool_output: runtime_bundle.tool_output(),
                 environment: runtime_bundle.environment(),
             },
         )
@@ -159,6 +160,7 @@ mod unix_tests {
                 workspace: runtime_bundle.workspace(),
                 progress: &slow_progress,
                 artifacts: runtime_bundle.artifacts(),
+                tool_output: runtime_bundle.tool_output(),
                 environment: runtime_bundle.environment(),
             },
         );
@@ -286,6 +288,7 @@ mod unix_tests {
                 workspace: runtime_bundle.workspace(),
                 progress: &progress,
                 artifacts: runtime_bundle.artifacts(),
+                tool_output: runtime_bundle.tool_output(),
                 environment: runtime_bundle.environment(),
             },
         )
@@ -340,6 +343,7 @@ mod unix_tests {
                 workspace: runtime_bundle.workspace(),
                 progress: &progress,
                 artifacts: runtime_bundle.artifacts(),
+                tool_output: runtime_bundle.tool_output(),
                 environment: runtime_bundle.environment(),
             },
         );

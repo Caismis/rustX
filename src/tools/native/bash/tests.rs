@@ -8,6 +8,7 @@ use crate::runtime::types::CancellationReason;
 use crate::tools::artifacts::ArtifactStore;
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::executor::{ProgressReporter, ToolExecutionContext, ToolExecutor};
+use crate::tools::managed_output::ManagedToolOutput;
 use crate::tools::types::{
     ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolProgress,
 };
@@ -22,14 +23,24 @@ impl ProgressReporter for NoopProgress {
     fn report(&self, _progress: ToolProgress) {}
 }
 
-fn fixture() -> (tempfile::TempDir, ArtifactStore, Workspace) {
+fn fixture() -> (
+    tempfile::TempDir,
+    ArtifactStore,
+    ManagedToolOutput,
+    Workspace,
+) {
     let dir = tempfile::tempdir().expect("temp dir");
     let workspace_root = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
     let artifacts = ArtifactStore::new(ConversationId::new("conv-1"), dir.path().join("artifacts"))
         .expect("artifacts");
+    let tool_output = ManagedToolOutput::new(
+        ConversationId::new("conv-1"),
+        dir.path().join("tool-output"),
+    )
+    .expect("managed tool output");
     let workspace = Workspace::new(&workspace_root).expect("workspace");
-    (dir, artifacts, workspace)
+    (dir, artifacts, tool_output, workspace)
 }
 
 fn invocation(command: &str) -> ToolInvocation {
@@ -57,6 +68,7 @@ fn invocation_with_timeout(command: &str, timeout_seconds: u64) -> ToolInvocatio
 async fn run_with(
     command: &str,
     artifacts: &ArtifactStore,
+    tool_output: &ManagedToolOutput,
     workspace: &Workspace,
 ) -> ToolExecutionResult {
     run_with_control(
@@ -64,6 +76,7 @@ async fn run_with(
         BashTestControl::new(),
         CancellationSignal::new(),
         artifacts.clone(),
+        tool_output.clone(),
         workspace.clone(),
         None,
     )
@@ -79,6 +92,7 @@ async fn run_with_control(
     control: BashTestControl,
     cancellation: CancellationSignal,
     artifacts: ArtifactStore,
+    tool_output: ManagedToolOutput,
     workspace: Workspace,
     timeout_seconds: Option<u64>,
 ) -> ToolExecutionResult {
@@ -94,6 +108,7 @@ async fn run_with_control(
         workspace: &workspace,
         progress: &reporter,
         artifacts: &artifacts,
+        tool_output: &tool_output,
         environment: &ToolEnvironment::new(),
     };
     let invocation = match timeout_seconds {
@@ -157,7 +172,7 @@ async fn start_supervisor_loss_fixture(
     i32,
     i32,
 ) {
-    let (dir, artifacts, workspace) = fixture();
+    let (dir, artifacts, tool_output, workspace) = fixture();
     let root = workspace.root().to_path_buf();
     let shell_pid_file = root.join("shell.pid");
     let inner_pid_file = root.join("inner.pid");
@@ -179,6 +194,7 @@ async fn start_supervisor_loss_fixture(
         control,
         cancellation,
         artifacts,
+        tool_output,
         workspace,
         None,
     ));
@@ -241,17 +257,24 @@ async fn wait_for_group_death(pgid: i32) {
     panic!("process group {pgid} is still alive after the deadline");
 }
 
-/// An artifact write failure is represented explicitly: the invocation
-/// fails instead of reporting ordinary success while losing the
-/// promised retained output.
+/// A spill write failure is represented explicitly: the invocation fails
+/// instead of reporting ordinary success while losing the promised retained
+/// output. The command provably crosses the preview bound, so the lazy
+/// spill allocation is actually reached.
 #[tokio::test]
-async fn artifact_write_failure_fails_the_invocation_explicitly() {
-    let (_dir, artifacts, workspace) = fixture();
-    artifacts.set_force_write_failures(true);
-    let result = run_with("echo hello", &artifacts, &workspace).await;
+async fn spill_write_failure_fails_the_invocation_explicitly() {
+    let (_dir, artifacts, tool_output, workspace) = fixture();
+    tool_output.set_force_open_failures(true);
+    let result = run_with(
+        "yes x | head -c 40000",
+        &artifacts,
+        &tool_output,
+        &workspace,
+    )
+    .await;
     assert!(
         matches!(result.status, ToolExecutionStatus::Failed { .. }),
-        "an artifact capture failure must be an explicit failed result, got {:?}",
+        "a spill capture failure must be an explicit failed result, got {:?}",
         result.status
     );
     assert!(
@@ -260,21 +283,109 @@ async fn artifact_write_failure_fails_the_invocation_explicitly() {
     );
 }
 
-/// An artifact allocation failure (sequence exhaustion) is represented
+/// A spill allocation failure (sequence exhaustion) is represented
 /// explicitly as well.
 #[tokio::test]
-async fn artifact_allocation_failure_fails_the_invocation_explicitly() {
-    let (_dir, artifacts, workspace) = fixture();
-    artifacts.exhaust_sequence();
-    let result = run_with("echo hello", &artifacts, &workspace).await;
+async fn spill_allocation_failure_fails_the_invocation_explicitly() {
+    let (_dir, artifacts, tool_output, workspace) = fixture();
+    tool_output.exhaust_sequence();
+    let result = run_with(
+        "yes x | head -c 40000",
+        &artifacts,
+        &tool_output,
+        &workspace,
+    )
+    .await;
     assert!(
         matches!(result.status, ToolExecutionStatus::Failed { .. }),
-        "an artifact allocation failure must be an explicit failed result, got {:?}",
+        "a spill allocation failure must be an explicit failed result, got {:?}",
         result.status
     );
     assert!(
         !matches!(result.status, ToolExecutionStatus::Success),
         "successful retention must never be reported while full output is lost"
+    );
+}
+
+/// Small output never touches the managed tool-output store: the lazy
+/// spill is not merely absent from the result, no file exists.
+#[tokio::test]
+async fn small_output_creates_no_spill_file() {
+    let (_dir, artifacts, tool_output, workspace) = fixture();
+    let result = run_with("echo hello", &artifacts, &tool_output, &workspace).await;
+    assert_eq!(result.status, ToolExecutionStatus::Success);
+    assert!(result.artifacts.is_empty(), "no semantic artifact exists");
+    assert!(result.truncation.is_none(), "small output is not truncated");
+    assert!(
+        std::fs::read_dir(tool_output.root())
+            .expect("managed root")
+            .next()
+            .is_none(),
+        "small output creates no spill file"
+    );
+}
+
+/// Output crossing the preview bound spills exactly once: the model-facing
+/// result stays bounded and carries the absolute spill locator, and the
+/// spill file retains the complete output from byte zero.
+#[tokio::test]
+async fn large_output_spills_lazily_with_an_absolute_locator() {
+    let (_dir, artifacts, tool_output, workspace) = fixture();
+    let result = run_with(
+        "seq 1 9000; printf done",
+        &artifacts,
+        &tool_output,
+        &workspace,
+    )
+    .await;
+    assert_eq!(result.status, ToolExecutionStatus::Success);
+    assert!(result.artifacts.is_empty(), "no semantic artifact exists");
+    let truncation = result.truncation.expect("truncation state");
+    assert!(truncation.truncated);
+    let Some(original_bytes) = truncation.original_bytes else {
+        panic!("the complete byte count is known");
+    };
+    let content = result
+        .content
+        .iter()
+        .find_map(|block| match block {
+            crate::tools::types::ToolResultContent::Json { value } => Some(value.clone()),
+            _ => None,
+        })
+        .expect("json content");
+    assert!(
+        content["combined"].as_str().expect("combined").len()
+            <= crate::tools::limits::BASH_STREAM_PREVIEW_BYTES,
+        "the model-facing preview stays bounded"
+    );
+    let full_output = content["full_output"].as_str().expect("spill locator");
+    assert!(
+        std::path::Path::new(full_output).is_absolute(),
+        "the spill locator is absolute: {full_output}"
+    );
+    assert!(
+        full_output.starts_with(tool_output.root().to_str().expect("utf8 managed root")),
+        "the spill locator lives under the managed root: {full_output}"
+    );
+    let spilled = std::fs::read(full_output).expect("spill bytes");
+    assert_eq!(spilled.len() as u64, original_bytes);
+    let mut expected = String::new();
+    for n in 1..=9000 {
+        expected.push_str(&n.to_string());
+        expected.push('\n');
+    }
+    expected.push_str("done");
+    assert_eq!(
+        spilled,
+        expected.as_bytes(),
+        "the complete output is retained verbatim from byte zero"
+    );
+    assert_eq!(
+        std::fs::read_dir(tool_output.root())
+            .expect("managed root")
+            .count(),
+        1,
+        "exactly one spill file exists"
     );
 }
 
@@ -287,7 +398,7 @@ async fn artifact_allocation_failure_fails_the_invocation_explicitly() {
 #[cfg(unix)]
 #[tokio::test]
 async fn redirected_descendant_does_not_escape_the_owned_domain() {
-    let (dir, artifacts, workspace) = fixture();
+    let (dir, artifacts, tool_output, workspace) = fixture();
     let root = workspace.root().to_path_buf();
     let shell_pid_file = root.join("shell.pid");
     let desc_pid_file = root.join("desc.pid");
@@ -304,6 +415,7 @@ async fn redirected_descendant_does_not_escape_the_owned_domain() {
             BashTestControl::new().anchor_pid_file(anchor_pid_file.clone()),
             CancellationSignal::new(),
             artifacts,
+            tool_output,
             workspace,
             Some(1),
         ),
@@ -340,7 +452,7 @@ async fn redirected_descendant_does_not_escape_the_owned_domain() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn cancellation_after_exact_shell_exit_boundary_terminates_the_owned_group() {
-    let (dir, artifacts, workspace) = fixture();
+    let (dir, artifacts, tool_output, workspace) = fixture();
     let root = workspace.root().to_path_buf();
     let shell_pid_file = root.join("shell.pid");
     let desc_pid_file = root.join("desc.pid");
@@ -361,6 +473,7 @@ async fn cancellation_after_exact_shell_exit_boundary_terminates_the_owned_group
         control,
         cancellation,
         artifacts.clone(),
+        tool_output.clone(),
         workspace.clone(),
         None,
     ));
@@ -412,7 +525,7 @@ async fn cancellation_after_exact_shell_exit_boundary_terminates_the_owned_group
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn natural_success_requires_terminal_child_ownership() {
-    let (dir, artifacts, workspace) = fixture();
+    let (dir, artifacts, tool_output, workspace) = fixture();
     let root = workspace.root().to_path_buf();
     let shell_pid_file = root.join("shell.pid");
     let desc_pid_file = root.join("desc.pid");
@@ -431,6 +544,7 @@ async fn natural_success_requires_terminal_child_ownership() {
         control,
         CancellationSignal::new(),
         artifacts.clone(),
+        tool_output.clone(),
         workspace.clone(),
         None,
     ));
@@ -494,7 +608,7 @@ async fn natural_success_requires_terminal_child_ownership() {
 #[cfg(unix)]
 #[tokio::test]
 async fn signal_failure_settles_as_an_explicit_failed_result() {
-    let (dir, artifacts, workspace) = fixture();
+    let (dir, artifacts, tool_output, workspace) = fixture();
     let root = workspace.root().to_path_buf();
     let shell_pid_file = root.join("shell.pid");
     let desc_pid_file = root.join("desc.pid");
@@ -516,6 +630,7 @@ async fn signal_failure_settles_as_an_explicit_failed_result() {
         control.clone(),
         cancellation,
         artifacts.clone(),
+        tool_output.clone(),
         workspace.clone(),
         None,
     ));
@@ -584,12 +699,13 @@ async fn signal_failure_settles_as_an_explicit_failed_result() {
 /// invocation never claims a lifecycle it cannot establish.
 #[tokio::test]
 async fn supervisor_setup_failure_settles_as_an_explicit_failed_result() {
-    let (_dir, artifacts, workspace) = fixture();
+    let (_dir, artifacts, tool_output, workspace) = fixture();
     let result = run_with_control(
         "echo hi".to_owned(),
         BashTestControl::new().fail_supervisor_spawn(),
         CancellationSignal::new(),
         artifacts,
+        tool_output,
         workspace,
         None,
     )
@@ -609,12 +725,13 @@ async fn supervisor_setup_failure_settles_as_an_explicit_failed_result() {
 /// result as well.
 #[tokio::test]
 async fn bash_spawn_failure_settles_as_an_explicit_failed_result() {
-    let (_dir, artifacts, workspace) = fixture();
+    let (_dir, artifacts, tool_output, workspace) = fixture();
     let result = run_with_control(
         "echo hi".to_owned(),
         BashTestControl::new().fail_bash_spawn(),
         CancellationSignal::new(),
         artifacts,
+        tool_output,
         workspace,
         None,
     )
@@ -635,12 +752,13 @@ async fn bash_spawn_failure_settles_as_an_explicit_failed_result() {
 /// failed result is the correct settlement.
 #[tokio::test]
 async fn sigterm_handler_setup_failure_settles_as_an_explicit_failed_result() {
-    let (_dir, artifacts, workspace) = fixture();
+    let (_dir, artifacts, tool_output, workspace) = fixture();
     let result = run_with_control(
         "echo hi".to_owned(),
         BashTestControl::new().fail_sigterm_handler(),
         CancellationSignal::new(),
         artifacts,
+        tool_output,
         workspace,
         None,
     )
@@ -666,7 +784,7 @@ async fn sigterm_handler_setup_failure_settles_as_an_explicit_failed_result() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn wait_failure_settles_as_an_explicit_failed_result() {
-    let (dir, artifacts, workspace) = fixture();
+    let (dir, artifacts, tool_output, workspace) = fixture();
     let root = workspace.root().to_path_buf();
     let desc_pid_file = root.join("desc.pid");
     let anchor_pid_file = root.join("anchor.pid");
@@ -685,6 +803,7 @@ async fn wait_failure_settles_as_an_explicit_failed_result() {
                 .anchor_pid_file(anchor_pid_file.clone()),
             CancellationSignal::new(),
             artifacts,
+            tool_output,
             workspace,
             None,
         ),
@@ -727,7 +846,7 @@ async fn wait_failure_settles_as_an_explicit_failed_result() {
 #[cfg(unix)]
 #[tokio::test]
 async fn no_signals_are_issued_after_ownership_loss() {
-    let (dir, artifacts, workspace) = fixture();
+    let (dir, artifacts, tool_output, workspace) = fixture();
     let root = workspace.root().to_path_buf();
     let shell_pid_file = root.join("shell.pid");
     let desc_pid_file = root.join("desc.pid");
@@ -751,6 +870,7 @@ async fn no_signals_are_issued_after_ownership_loss() {
         control.clone(),
         cancellation,
         artifacts.clone(),
+        tool_output.clone(),
         workspace.clone(),
         None,
     ));
@@ -835,7 +955,7 @@ async fn no_signals_are_issued_after_ownership_loss() {
 #[cfg(unix)]
 #[tokio::test]
 async fn control_channel_abandonment_contains_the_owned_tree() {
-    let (dir, artifacts, workspace) = fixture();
+    let (dir, artifacts, tool_output, workspace) = fixture();
     let root = workspace.root().to_path_buf();
     let shell_pid_file = root.join("shell.pid");
     let desc_pid_file = root.join("desc.pid");
@@ -850,6 +970,7 @@ async fn control_channel_abandonment_contains_the_owned_tree() {
         BashTestControl::new().anchor_pid_file(anchor_pid_file.clone()),
         CancellationSignal::new(),
         artifacts,
+        tool_output,
         workspace,
         None,
     ));
@@ -903,7 +1024,7 @@ async fn control_channel_abandonment_contains_the_owned_tree() {
 #[cfg(unix)]
 #[tokio::test]
 async fn fallback_containment_does_not_kill_unrelated_processes() {
-    let (dir, artifacts, workspace) = fixture();
+    let (dir, artifacts, tool_output, workspace) = fixture();
     let root = workspace.root().to_path_buf();
     let shell_pid_file = root.join("shell.pid");
     let anchor_pid_file = root.join("anchor.pid");
@@ -923,6 +1044,7 @@ async fn fallback_containment_does_not_kill_unrelated_processes() {
             .anchor_pid_file(anchor_pid_file.clone()),
         cancellation,
         artifacts.clone(),
+        tool_output.clone(),
         workspace.clone(),
         None,
     ));
@@ -971,7 +1093,7 @@ async fn fallback_containment_does_not_kill_unrelated_processes() {
 #[cfg(unix)]
 #[tokio::test]
 async fn cancellation_signals_only_target_the_owned_group() {
-    let (dir, artifacts, workspace) = fixture();
+    let (dir, artifacts, tool_output, workspace) = fixture();
     let root = workspace.root().to_path_buf();
     let shell_pid_file = root.join("shell.pid");
     let anchor_pid_file = root.join("anchor.pid");
@@ -987,6 +1109,7 @@ async fn cancellation_signals_only_target_the_owned_group() {
         control.clone(),
         cancellation,
         artifacts.clone(),
+        tool_output.clone(),
         workspace.clone(),
         None,
     ));
@@ -1042,7 +1165,7 @@ async fn cancellation_signals_only_target_the_owned_group() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn descendant_replacement_keeps_the_invocation_active_until_reaped() {
-    let (dir, artifacts, workspace) = fixture();
+    let (dir, artifacts, tool_output, workspace) = fixture();
     let root = workspace.root().to_path_buf();
     let a_pid_file = root.join("a.pid");
     let b_pid_file = root.join("b.pid");
@@ -1061,6 +1184,7 @@ async fn descendant_replacement_keeps_the_invocation_active_until_reaped() {
         control,
         CancellationSignal::new(),
         artifacts.clone(),
+        tool_output.clone(),
         workspace.clone(),
         Some(1),
     ));
@@ -1122,7 +1246,7 @@ async fn descendant_replacement_keeps_the_invocation_active_until_reaped() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn setsid_escape_attempt_is_rejected_and_nothing_escapes() {
-    let (dir, artifacts, workspace) = fixture();
+    let (dir, artifacts, tool_output, workspace) = fixture();
     let root = workspace.root().to_path_buf();
     let shell_pid_file = root.join("shell.pid");
     let attempt_pid_file = root.join("attempt.pid");
@@ -1139,6 +1263,7 @@ async fn setsid_escape_attempt_is_rejected_and_nothing_escapes() {
             BashTestControl::new().anchor_pid_file(anchor_pid_file.clone()),
             CancellationSignal::new(),
             artifacts,
+            tool_output,
             workspace,
             Some(10),
         ),
@@ -1183,7 +1308,7 @@ async fn setsid_escape_attempt_is_rejected_and_nothing_escapes() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn setsid_escape_attempt_times_out_with_the_owned_group() {
-    let (dir, artifacts, workspace) = fixture();
+    let (dir, artifacts, tool_output, workspace) = fixture();
     let root = workspace.root().to_path_buf();
     let shell_pid_file = root.join("shell.pid");
     let attempt_pid_file = root.join("attempt.pid");
@@ -1200,6 +1325,7 @@ async fn setsid_escape_attempt_times_out_with_the_owned_group() {
             BashTestControl::new().anchor_pid_file(anchor_pid_file.clone()),
             CancellationSignal::new(),
             artifacts,
+            tool_output,
             workspace,
             Some(1),
         ),
@@ -1240,7 +1366,7 @@ async fn setsid_escape_attempt_times_out_with_the_owned_group() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn setsid_escape_attempt_cancels_with_the_owned_group() {
-    let (dir, artifacts, workspace) = fixture();
+    let (dir, artifacts, tool_output, workspace) = fixture();
     let root = workspace.root().to_path_buf();
     let shell_pid_file = root.join("shell.pid");
     let attempt_pid_file = root.join("attempt.pid");
@@ -1257,6 +1383,7 @@ async fn setsid_escape_attempt_cancels_with_the_owned_group() {
         BashTestControl::new().anchor_pid_file(anchor_pid_file.clone()),
         cancellation,
         artifacts.clone(),
+        tool_output.clone(),
         workspace.clone(),
         None,
     ));
@@ -1303,7 +1430,7 @@ async fn setsid_escape_attempt_cancels_with_the_owned_group() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn hidden_group_descendant_cannot_be_hidden_by_a_setsid_escape_attempt() {
-    let (dir, artifacts, workspace) = fixture();
+    let (dir, artifacts, tool_output, workspace) = fixture();
     let root = workspace.root().to_path_buf();
     let shell_pid_file = root.join("shell.pid");
     let a_pid_file = root.join("a.pid");
@@ -1325,6 +1452,7 @@ async fn hidden_group_descendant_cannot_be_hidden_by_a_setsid_escape_attempt() {
         control,
         CancellationSignal::new(),
         artifacts.clone(),
+        tool_output.clone(),
         workspace.clone(),
         Some(1),
     ));
@@ -1419,7 +1547,7 @@ async fn hidden_group_descendant_cannot_be_hidden_by_a_setsid_escape_attempt() {
 #[cfg(unix)]
 #[tokio::test]
 async fn stuck_capture_settles_boundedly_as_an_explicit_failure() {
-    let (dir, artifacts, workspace) = fixture();
+    let (dir, artifacts, tool_output, workspace) = fixture();
     let control = BashTestControl::new().hold_stdout_capture();
     let hold = control.capture_hold().expect("capture hold seam").clone();
     let task = tokio::spawn(run_with_control(
@@ -1427,6 +1555,7 @@ async fn stuck_capture_settles_boundedly_as_an_explicit_failure() {
         control,
         CancellationSignal::new(),
         artifacts.clone(),
+        tool_output.clone(),
         workspace.clone(),
         None,
     ));
@@ -1454,7 +1583,7 @@ async fn stuck_capture_settles_boundedly_as_an_explicit_failure() {
 #[cfg(unix)]
 #[tokio::test]
 async fn quiescence_watchdog_cannot_bypass_process_terminality() {
-    let (dir, artifacts, workspace) = fixture();
+    let (dir, artifacts, tool_output, workspace) = fixture();
     let ready = workspace.root().join("ready");
     let control = BashTestControl::new().hold_terminal_event();
     let hold = control.terminal_hold().expect("terminal hold seam").clone();
@@ -1464,6 +1593,7 @@ async fn quiescence_watchdog_cannot_bypass_process_terminality() {
         control,
         cancellation.clone(),
         artifacts,
+        tool_output,
         workspace,
         None,
     ));
@@ -1508,7 +1638,7 @@ async fn quiescence_watchdog_cannot_bypass_process_terminality() {
 #[cfg(unix)]
 #[tokio::test]
 async fn stopped_anchor_supervisor_is_contained_by_the_outer() {
-    let (dir, artifacts, workspace) = fixture();
+    let (dir, artifacts, tool_output, workspace) = fixture();
     let root = workspace.root().to_path_buf();
     let shell_pid_file = root.join("shell.pid");
     let anchor_pid_file = root.join("anchor.pid");
@@ -1526,6 +1656,7 @@ async fn stopped_anchor_supervisor_is_contained_by_the_outer() {
         BashTestControl::new().anchor_pid_file(anchor_pid_file.clone()),
         cancellation,
         artifacts.clone(),
+        tool_output.clone(),
         workspace.clone(),
         None,
     ));
@@ -1640,7 +1771,7 @@ async fn timeout_during_supervisor_loss_settles_failed_after_containment() {
 #[cfg(unix)]
 #[tokio::test]
 async fn subreaper_initialization_failure_is_a_pre_ownership_setup_failure() {
-    let (dir, artifacts, workspace) = fixture();
+    let (dir, artifacts, tool_output, workspace) = fixture();
     let root = workspace.root().to_path_buf();
     let ready = root.join("ready");
     let control = BashTestControl::new().fail_subreaper_init();
@@ -1650,6 +1781,7 @@ async fn subreaper_initialization_failure_is_a_pre_ownership_setup_failure() {
         control,
         CancellationSignal::new(),
         artifacts,
+        tool_output,
         workspace,
         None,
     )
@@ -1681,7 +1813,7 @@ async fn subreaper_initialization_failure_is_a_pre_ownership_setup_failure() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn emergency_anchor_unavailable_never_settles_an_owned_invocation() {
-    let (dir, artifacts, workspace) = fixture();
+    let (dir, artifacts, tool_output, workspace) = fixture();
     let root = workspace.root().to_path_buf();
     let shell_pid_file = root.join("shell.pid");
     let inner_pid_file = root.join("inner.pid");
@@ -1712,6 +1844,7 @@ async fn emergency_anchor_unavailable_never_settles_an_owned_invocation() {
         control.clone(),
         CancellationSignal::new(),
         artifacts,
+        tool_output,
         workspace,
         None,
     ));
@@ -1782,7 +1915,7 @@ async fn emergency_anchor_unavailable_never_settles_an_owned_invocation() {
 #[cfg(unix)]
 #[tokio::test]
 async fn terminal_frame_then_eof_never_overrides_terminality() {
-    let (dir, artifacts, workspace) = fixture();
+    let (dir, artifacts, tool_output, workspace) = fixture();
     let control = BashTestControl::new()
         .hold_terminal_event()
         .observe_channel_eof();
@@ -1793,6 +1926,7 @@ async fn terminal_frame_then_eof_never_overrides_terminality() {
         control.clone(),
         CancellationSignal::new(),
         artifacts,
+        tool_output,
         workspace,
         None,
     ));
@@ -1912,7 +2046,7 @@ async fn concurrent_supervisor_loss_containment_is_isolated() {
 async fn bash_catastrophic_containment_does_not_touch_foreign_adopted_child() {
     crate::runtime::process_supervision::ensure_child_subreaper()
         .expect("the runtime process is a child subreaper");
-    let (dir, _artifacts, workspace) = fixture();
+    let (dir, _artifacts, _tool_output, workspace) = fixture();
     let root = workspace.root().to_path_buf();
     let u_pid_file = root.join("u.pid");
     // U: a test-created foreign hierarchy whose parent exits
@@ -2063,7 +2197,7 @@ mod macos_exit_trap_tests {
     /// Runs one trap-replacement fixture and proves the owned background
     /// descendant was terminated, never falsely reported terminal.
     async fn assert_background_descendant_is_contained(trap_line: &str) {
-        let (dir, artifacts, workspace) = fixture();
+        let (dir, artifacts, tool_output, workspace) = fixture();
         let root = workspace.root().to_path_buf();
         let child_pid_file = root.join("child.pid");
         // The shell backgrounds a long-lived descendant, writes its pid,
@@ -2075,7 +2209,7 @@ mod macos_exit_trap_tests {
             "sleep 30 >/dev/null 2>&1 & echo $! > {}; {trap_line}; exit 0",
             child_pid_file.display()
         );
-        let result = run_with(&command, &artifacts, &workspace).await;
+        let result = run_with(&command, &artifacts, &tool_output, &workspace).await;
         assert_eq!(
             result.status,
             crate::tools::types::ToolExecutionStatus::Success,
@@ -2204,7 +2338,7 @@ while True:
     #[tokio::test]
     #[allow(clippy::similar_names)] // pid/pgid/sid are intentionally parallel process identities
     async fn escaped_descendant_is_outside_the_owned_group_and_survives_settlement() {
-        let (dir, artifacts, workspace) = fixture();
+        let (dir, artifacts, tool_output, workspace) = fixture();
         let root = workspace.root().to_path_buf();
         let helper_path = root.join("escape_helper.py");
         let pre_path = root.join("escape.pre");

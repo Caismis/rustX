@@ -322,6 +322,11 @@ async fn bash_cd_cannot_redefine_the_skill_root() {
                         &artifacts,
                     )
                     .expect("artifacts"),
+                    tool_output: rustx::tools::managed_output::ManagedToolOutput::new(
+                        conversation_id.clone(),
+                        artifacts.join("tool-output"),
+                    )
+                    .expect("managed tool output"),
                     clock: std::sync::Arc::new(rustx::runtime::SystemClock),
                     event_sink: None,
                 },
@@ -354,6 +359,11 @@ async fn bash_cd_cannot_redefine_the_skill_root() {
                 &artifacts,
             )
             .expect("artifacts"),
+            tool_output: &rustx::tools::managed_output::ManagedToolOutput::new(
+                conversation_id.clone(),
+                artifacts.join("tool-output"),
+            )
+            .expect("managed tool output"),
             environment: &rustx::tools::environment::ToolEnvironment::new(),
         };
         executor.execute(invocation, context).await

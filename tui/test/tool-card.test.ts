@@ -230,7 +230,7 @@ describe("progressive disclosure bounds call details too", () => {
       toolId: "tool-edit",
       name: "edit",
       argumentsText: JSON.stringify({
-        path: "src/lib.rs",
+        file_path: "/workspace/src/lib.rs",
         edits: [{ oldText, newText }],
       }),
       lifecycle: { type: "assembled" as const },
@@ -356,7 +356,7 @@ describe("progressive disclosure bounds call details too", () => {
       toolId: "tool-write",
       name: "write",
       argumentsText: JSON.stringify({
-        path: `a.rs\n${"b\n".repeat(50)}`,
+        file_path: `a.rs\n${"b\n".repeat(50)}`,
         content: "x",
       }),
     });
@@ -507,7 +507,8 @@ describe("specialized native renderers", () => {
       card({
         toolId: "tool-read",
         name: "read",
-        argumentsText: '{"path":"src/runtime/agent_loop.rs","offset":120,"limit":121}',
+        argumentsText:
+          '{"file_path":"/workspace/src/runtime/agent_loop.rs","offset":120,"limit":121}',
       }),
       /Read[\s\S]*src\/runtime\/agent_loop\.rs[\s\S]*lines 120–240/,
     );
@@ -515,7 +516,7 @@ describe("specialized native renderers", () => {
       card({
         toolId: "tool-read",
         name: "read",
-        argumentsText: '{"path":"a.rs","offset":10}',
+        argumentsText: '{"file_path":"/workspace/a.rs","offset":10}',
       }),
       /from line 10/,
     );
@@ -524,7 +525,7 @@ describe("specialized native renderers", () => {
     const bare = card({
       toolId: "tool-read",
       name: "read",
-      argumentsText: '{"path":"a.rs"}',
+      argumentsText: '{"file_path":"/workspace/a.rs"}',
     });
     assert.ok(!/lines |from line |first /.test(bare));
   });
@@ -579,7 +580,7 @@ describe("specialized native renderers", () => {
       toolId: "tool-edit",
       name: "edit",
       argumentsText: JSON.stringify({
-        path: "src/lib.rs",
+        file_path: "/workspace/src/lib.rs",
         edits: [{ oldText: "let x = 1;", newText: "let x = 2;" }],
       }),
       lifecycle: settled({
@@ -597,7 +598,7 @@ describe("specialized native renderers", () => {
     const rendered = card({
       toolId: "tool-write",
       name: "write",
-      argumentsText: JSON.stringify({ path: "notes.md", content: "a\nb\nc" }),
+      argumentsText: JSON.stringify({ file_path: "/workspace/notes.md", content: "a\nb\nc" }),
       lifecycle: settled({
         content: [
           { type: "json", value: { path: "notes.md", bytes_written: 5 } },
@@ -605,7 +606,7 @@ describe("specialized native renderers", () => {
       }),
     });
     assert.match(rendered, /Write/);
-    assert.match(rendered, /notes\.md/);
+    assert.match(rendered, /\/workspace\/notes\.md/);
     assert.match(rendered, /3 lines/);
     assert.match(rendered, /wrote 5 bytes to notes\.md/);
   });
@@ -618,8 +619,8 @@ describe("specialized native renderers", () => {
       ["tool-read", "read", '{"file":"a.rs"}'],
       ["tool-grep", "grep", '{"regex":"x"}'],
       ["tool-glob", "glob", "[1,2,3]"],
-      ["tool-edit", "edit", '{"path":"a.rs","edits":"not-a-list"}'],
-      ["tool-write", "write", '{"path":"a.rs"}'],
+      ["tool-edit", "edit", '{"file_path":"/workspace/a.rs","edits":"not-a-list"}'],
+      ["tool-write", "write", '{"file_path":"/workspace/a.rs"}'],
     ] as const;
     for (const [toolId, name, argumentsText] of shapes) {
       const rendered = card({ toolId, name, argumentsText });
@@ -710,7 +711,7 @@ describe("boundedness in both dimensions", () => {
       toolId: "tool-edit",
       name: "edit",
       argumentsText: JSON.stringify({
-        path: "src/lib.rs",
+        file_path: "/workspace/src/lib.rs",
         edits: [{ oldText: payload, newText: payload }],
       }),
     });
@@ -743,7 +744,7 @@ describe("boundedness in both dimensions", () => {
     assertBounded("Read", (payload) => ({
       toolId: "tool-read",
       name: "read",
-      argumentsText: JSON.stringify({ path: payload }),
+      argumentsText: JSON.stringify({ file_path: payload }),
     }));
   });
 
@@ -751,7 +752,7 @@ describe("boundedness in both dimensions", () => {
     assertBounded("Write", (payload) => ({
       toolId: "tool-write",
       name: "write",
-      argumentsText: JSON.stringify({ path: payload, content: "hi" }),
+      argumentsText: JSON.stringify({ file_path: payload, content: "hi" }),
     }));
   });
 
@@ -802,7 +803,7 @@ describe("boundedness in both dimensions", () => {
     const build = (payload: string) => ({
       toolId: "tool-write",
       name: "write",
-      argumentsText: JSON.stringify({ path: "out.txt", content: "hi" }),
+      argumentsText: JSON.stringify({ file_path: "/workspace/out.txt", content: "hi" }),
       lifecycle: settled({
         content: [
           { type: "json" as const, value: { bytes_written: 4, path: payload } },

@@ -54,6 +54,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="the bind address; loopback only",
     )
     parser.add_argument(
+        "--workspace",
+        default=None,
+        help="the absolute workspace root of the runtime under test; "
+        "substitutes the {workspace} placeholder of scripted tool-call arguments",
+    )
+    parser.add_argument(
         "--list",
         action="store_true",
         help="print the scenario registry as JSON and exit",
@@ -61,8 +67,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-async def run(scenario_name: str, host: str, port: int) -> int:
-    scenario = build(scenario_name)
+async def run(scenario_name: str, host: str, port: int, workspace: str | None) -> int:
+    scenario = build(scenario_name, workspace)
     state = ScenarioRun(scenario)
     server = ProviderServer(state)
     bound_host, bound_port = await server.start(host, port)
@@ -159,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
-    return asyncio.run(run(args.scenario, args.host, args.port))
+    return asyncio.run(run(args.scenario, args.host, args.port, args.workspace))
 
 
 if __name__ == "__main__":

@@ -2,16 +2,28 @@
 //!
 //! The supervised process-ownership half of a Bash invocation lives in the
 //! shared runner (`crate::runtime::process_runner`); this module owns the
-//! capture half: the bounded head/tail previews, the artifact spooling of
-//! stdout, stderr, and the runtime-observed combined multiplex, the drain
-//! of the reader tasks, and the bounded capture settlement failure.
+//! capture half: the bounded head/tail previews, the lazy spill of the
+//! runtime-observed combined multiplex into the conversation's managed
+//! tool-output store, the drain of the reader tasks, and the bounded
+//! capture settlement failure.
+//!
+//! # Text overflow is not an artifact
+//!
+//! Bash output is *text*. The bounded preview is the canonical replayable
+//! record; only when the combined output crosses its preview bound does the
+//! capture allocate one managed spill file, write the retained complete
+//! prefix, and stream every subsequent byte into it. The spill file is
+//! auxiliary runtime-owned storage addressed by its absolute path inside
+//! ordinary textual tool output — never a [`FileReference`], never a
+//! semantic artifact, and never a model `File` modality. Small output
+//! creates no file at all.
 
-use std::io::Write;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use tokio::io::AsyncReadExt;
 
-use crate::message::content::FileReference;
+use crate::tools::managed_output::{ManagedToolOutput, ToolOutputSpill};
 
 /// The test-only seam that holds one output reader task open: the stdout
 /// reader parks after EOF until the invocation's bounded settlement path
@@ -35,7 +47,7 @@ impl CaptureHold {
         }
     }
 
-    /// The reader-side handle handed to the stdout spool task.
+    /// The reader-side handle handed to the stdout capture task.
     pub(super) fn reader(&self) -> CaptureHoldReader {
         CaptureHoldReader {
             parked: self.parked_tx.clone(),
@@ -51,7 +63,7 @@ impl CaptureHold {
     }
 }
 
-/// The reader-side capture-hold handle: parks the stdout spool task after
+/// The reader-side capture-hold handle: parks the stdout capture task after
 /// EOF until the bounded settlement path aborts it.
 #[cfg(test)]
 #[derive(Clone)]
@@ -100,19 +112,11 @@ impl core::fmt::Display for BashProcessControlError {
     }
 }
 
-/// The three captured stream references of one invocation.
-pub(super) type StreamReferences = (
-    Option<FileReference>,
-    Option<FileReference>,
-    Option<FileReference>,
-);
-
 /// The bounded streaming preview capture of one output stream.
 ///
 /// The capture retains a deterministic head/tail preview without holding
-/// unbounded output in memory: the full stream is spooled to the artifact
-/// store by the reader, and the preview is bounded by
-/// [`BASH_STREAM_PREVIEW_BYTES`].
+/// unbounded output in memory: at most `limit * 3 / 2` bytes of preview
+/// state plus one in-flight chunk are ever retained.
 #[derive(Clone)]
 pub(super) struct PreviewCapture {
     head: Vec<u8>,
@@ -134,8 +138,12 @@ impl PreviewCapture {
     pub(super) fn push(&mut self, bytes: &[u8]) {
         self.total += bytes.len() as u64;
         let half = self.limit / 2;
-        if self.head.len() < half {
-            let take = (half - self.head.len()).min(bytes.len());
+        // The head keeps up to `limit` bytes: while the output stays within
+        // the bound the head *is* the complete output, and `finish` must
+        // return it verbatim. Capping at half here would silently truncate
+        // every complete output larger than half without a marker.
+        if self.head.len() < self.limit {
+            let take = (self.limit - self.head.len()).min(bytes.len());
             self.head.extend_from_slice(&bytes[..take]);
         }
         if bytes.len() >= half {
@@ -170,32 +178,113 @@ impl PreviewCapture {
     }
 }
 
+/// The combined-multiplex capture: a bounded preview plus the lazy complete
+/// spill into the managed tool-output store.
+///
+/// Before the combined output crosses `limit`, the *complete* output is
+/// retained in memory (bounded by `limit` plus one in-flight chunk) and no
+/// file exists. The first push that crosses the bound allocates one managed
+/// spill file, writes the retained prefix verbatim, and streams every later
+/// chunk directly into it; the retained prefix is then dropped, so memory
+/// use returns to the bounded preview state. The complete file therefore
+/// always contains the full output from byte zero, with no lost prefix and
+/// no duplicated chunk.
+pub(super) struct SpillCapture {
+    preview: PreviewCapture,
+    /// The complete retained prefix; `Some` until the spill starts.
+    complete: Option<Vec<u8>>,
+    /// The open spill file once the bound has been crossed.
+    spill: Option<ToolOutputSpill>,
+}
+
+/// The settled state of one combined capture.
+pub(super) struct CapturedOutput {
+    /// The deterministic bounded UTF-8 preview.
+    pub preview: String,
+    /// Whether the preview is truncated (equivalently: a spill exists).
+    pub truncated: bool,
+    /// The complete output size in bytes.
+    pub total_bytes: u64,
+    /// The absolute managed spill locator, when the output crossed the
+    /// bound.
+    pub spill_path: Option<PathBuf>,
+}
+
+impl SpillCapture {
+    pub(super) fn new(limit: usize) -> Self {
+        Self {
+            preview: PreviewCapture::new(limit),
+            complete: Some(Vec::new()),
+            spill: None,
+        }
+    }
+
+    /// Pushes one observed chunk: bounds the preview, retains the complete
+    /// prefix until the bound is crossed, and spills from the crossing on.
+    ///
+    /// # Errors
+    ///
+    /// Returns an explicit failure when the spill file cannot be allocated
+    /// or written: the capture never reports successful retention while
+    /// silently losing full output.
+    pub(super) fn push(&mut self, bytes: &[u8], store: &ManagedToolOutput) -> Result<(), String> {
+        self.preview.push(bytes);
+        if let Some(spill) = &mut self.spill {
+            return spill
+                .write_all(bytes)
+                .map_err(|error| format!("cannot write the combined output spill: {error}"));
+        }
+        let complete = self.complete.as_mut().expect("prefix retained pre-spill");
+        complete.extend_from_slice(bytes);
+        if self.preview.total > self.preview.limit as u64 {
+            let mut spill = store
+                .open_spill()
+                .map_err(|error| format!("cannot allocate the combined output spill: {error}"))?;
+            spill
+                .write_all(complete)
+                .map_err(|error| format!("cannot write the combined output spill: {error}"))?;
+            self.spill = Some(spill);
+            self.complete = None;
+        }
+        Ok(())
+    }
+
+    /// The settled capture: bounded preview, truncation state, complete
+    /// byte count, and the absolute spill locator when one exists.
+    pub(super) fn finish(self) -> CapturedOutput {
+        let Self { preview, spill, .. } = self;
+        let total_bytes = preview.total;
+        let (preview, truncated) = preview.finish();
+        CapturedOutput {
+            preview,
+            truncated,
+            total_bytes,
+            spill_path: spill.map(|spill| spill.path().to_path_buf()),
+        }
+    }
+}
+
 /// One output reader task handle.
-pub(super) type StreamHandle = tokio::task::JoinHandle<Result<Option<FileReference>, String>>;
+pub(super) type StreamHandle = tokio::task::JoinHandle<Result<(), String>>;
 
 /// Streams one child pipe into its preview capture and the combined
-/// multiplex, spooling the full raw bytes into the artifact store.
+/// multiplex.
 ///
-/// Any capture failure (pipe read, artifact allocation, artifact open, or
-/// write) is returned explicitly; it is never silently discarded.
-pub(super) async fn spool_stream<R>(
+/// Any capture failure (a pipe read or a lost multiplex) is returned
+/// explicitly; it is never silently discarded.
+pub(super) async fn capture_stream<R>(
     mut pipe: R,
-    store: crate::tools::artifacts::ArtifactStore,
     capture: Arc<Mutex<PreviewCapture>>,
     combined_tx: tokio::sync::mpsc::Sender<(u8, Vec<u8>)>,
     stream_id: u8,
     name: &'static str,
     park: CapturePark,
-) -> Result<Option<FileReference>, String>
+) -> Result<(), String>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
     #[cfg(not(test))]
     let _ = park;
-    let mut artifact: Option<(
-        crate::runtime::identity::ArtifactId,
-        crate::tools::artifacts::ArtifactWriter,
-    )> = None;
     let mut buffer = vec![0u8; 64 * 1024];
     loop {
         let read = match pipe.read(&mut buffer).await {
@@ -208,25 +297,9 @@ where
         let chunk = buffer[..read].to_vec();
         capture.lock().expect("preview lock").push(&chunk);
         combined_tx
-            .send((stream_id, chunk.clone()))
+            .send((stream_id, chunk))
             .await
             .map_err(|_| format!("the combined {name} capture is unavailable"))?;
-        let writer = if let Some(handle) = &mut artifact {
-            handle
-        } else {
-            let id = store
-                .create_artifact()
-                .map_err(|error| format!("cannot allocate the {name} artifact: {error}"))?;
-            let writer = store
-                .open_writer(&id)
-                .map_err(|error| format!("cannot open the {name} artifact: {error}"))?;
-            artifact = Some((id, writer));
-            artifact.as_mut().expect("inserted above")
-        };
-        writer
-            .1
-            .write_all(&chunk)
-            .map_err(|error| format!("cannot write the {name} artifact: {error}"))?;
     }
     drop(combined_tx);
     #[cfg(test)]
@@ -237,50 +310,24 @@ where
         park.parked.send(true).ok();
         std::future::pending::<()>().await;
     }
-    Ok(artifact.map(|(id, _)| FileReference {
-        artifact_id: id,
-        name: Some(format!("{name}.log")),
-        mime_type: Some("application/octet-stream".to_owned()),
-        description: Some(format!("full {name} output of the bash execution")),
-    }))
+    Ok(())
 }
 
-/// Consumes the runtime-observed combined stdout/stderr multiplex and spools
-/// it as one artifact while retaining a bounded preview.
+/// Consumes the runtime-observed combined stdout/stderr multiplex: bounds
+/// its preview and lazily spills the complete combined output into the
+/// managed tool-output store once the preview bound is crossed.
 pub(super) async fn consume_combined(
     mut rx: tokio::sync::mpsc::Receiver<(u8, Vec<u8>)>,
-    store: crate::tools::artifacts::ArtifactStore,
-    capture: Arc<Mutex<PreviewCapture>>,
-) -> Result<Option<FileReference>, String> {
-    let mut artifact: Option<(
-        crate::runtime::identity::ArtifactId,
-        crate::tools::artifacts::ArtifactWriter,
-    )> = None;
+    store: ManagedToolOutput,
+    capture: Arc<Mutex<SpillCapture>>,
+) -> Result<(), String> {
     while let Some((_stream_id, chunk)) = rx.recv().await {
-        capture.lock().expect("preview lock").push(&chunk);
-        let writer = if let Some(handle) = &mut artifact {
-            handle
-        } else {
-            let id = store
-                .create_artifact()
-                .map_err(|error| format!("cannot allocate the combined artifact: {error}"))?;
-            let writer = store
-                .open_writer(&id)
-                .map_err(|error| format!("cannot open the combined artifact: {error}"))?;
-            artifact = Some((id, writer));
-            artifact.as_mut().expect("inserted above")
-        };
-        writer
-            .1
-            .write_all(&chunk)
-            .map_err(|error| format!("cannot write the combined artifact: {error}"))?;
+        capture
+            .lock()
+            .expect("combined capture lock")
+            .push(&chunk, &store)?;
     }
-    Ok(artifact.map(|(id, _)| FileReference {
-        artifact_id: id,
-        name: Some("combined.log".to_owned()),
-        mime_type: Some("application/octet-stream".to_owned()),
-        description: Some("combined stdout/stderr output of the bash execution".to_owned()),
-    }))
+    Ok(())
 }
 
 /// Awaits every output reader task; the handles stay usable after a dropped
@@ -289,20 +336,103 @@ pub(super) async fn await_drain(
     stdout_task: &mut Option<StreamHandle>,
     stderr_task: &mut Option<StreamHandle>,
     combined_task: &mut StreamHandle,
-) -> Result<StreamReferences, String> {
-    let stdout = await_handle(stdout_task).await?;
-    let stderr = await_handle(stderr_task).await?;
-    let combined = combined_task
+) -> Result<(), String> {
+    await_handle(stdout_task).await?;
+    await_handle(stderr_task).await?;
+    combined_task
         .await
-        .map_err(|join| format!("the combined output reader task failed: {join}"))??;
-    Ok((stdout, stderr, combined))
+        .map_err(|join| format!("the combined output reader task failed: {join}"))?
 }
 
-async fn await_handle(handle: &mut Option<StreamHandle>) -> Result<Option<FileReference>, String> {
+async fn await_handle(handle: &mut Option<StreamHandle>) -> Result<(), String> {
     match handle {
         Some(handle) => handle
             .await
             .map_err(|join| format!("the output reader task failed: {join}"))?,
-        None => Ok(None),
+        None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::runtime::identity::ConversationId;
+    use crate::tools::managed_output::ManagedToolOutput;
+
+    use super::SpillCapture;
+
+    /// The exact lazy-spill transition (Issue #86 acceptance 18.2): output
+    /// at or below the preview bound stays fully in memory with no spill
+    /// file at all; one byte past the bound allocates exactly one spill
+    /// that carries the complete content from byte zero, and bounded
+    /// streaming continues after the transition without duplication or a
+    /// lost prefix.
+    #[test]
+    fn the_lazy_spill_transition_is_exact() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path().join("tool-output");
+        let store =
+            || ManagedToolOutput::new(ConversationId::new("conv"), &root).expect("managed store");
+
+        // Below the bound: complete preview, no spill.
+        let mut capture = SpillCapture::new(16);
+        capture.push(b"first\n", &store()).expect("push");
+        capture.push(b"second\n", &store()).expect("push");
+        let settled = capture.finish();
+        assert_eq!(settled.preview, "first\nsecond\n");
+        assert!(!settled.truncated);
+        assert_eq!(settled.total_bytes, 13);
+        assert!(settled.spill_path.is_none());
+        let no_files = |root: &std::path::Path| {
+            std::fs::read_dir(root).is_ok_and(|mut entries| entries.next().is_none())
+        };
+        assert!(no_files(&root), "no spill file was allocated");
+
+        // Exactly at the bound: still no spill.
+        let mut capture = SpillCapture::new(64);
+        let exact: Vec<u8> = (0u8..64).collect();
+        capture.push(&exact, &store()).expect("push");
+        let settled = capture.finish();
+        assert_eq!(settled.preview.as_bytes(), exact.as_slice());
+        assert!(!settled.truncated);
+        assert!(settled.spill_path.is_none());
+        assert!(no_files(&root));
+
+        // One byte past the bound, delivered across several chunks: exactly
+        // one spill file with the complete content from byte zero — the
+        // retained prefix, the crossing chunk, and every later chunk appear
+        // exactly once and in order. The limit comfortably exceeds the
+        // truncation marker, so the bounded preview still shows real head
+        // and tail content.
+        let mut capture = SpillCapture::new(64);
+        capture.push(&[b'a'; 60], &store()).expect("push");
+        assert!(no_files(&root), "still below the bound");
+        capture.push(b"cross", &store()).expect("crossing push");
+        assert!(
+            root.join("output_1.log").exists(),
+            "the crossing allocated the spill"
+        );
+        capture.push(b"-after", &store()).expect("push after spill");
+        let settled = capture.finish();
+        assert!(settled.truncated);
+        assert_eq!(settled.total_bytes, 71);
+        let spill = settled.spill_path.expect("the spill locator");
+        assert_eq!(spill, root.join("output_1.log"));
+        let mut expected = vec![b'a'; 60];
+        expected.extend_from_slice(b"cross-after");
+        assert_eq!(
+            std::fs::read(&spill).expect("spill bytes"),
+            expected,
+            "the spill holds the complete bytes from byte zero"
+        );
+        assert_eq!(
+            std::fs::read_dir(&root).expect("spill root").count(),
+            1,
+            "exactly one spill file was allocated"
+        );
+        // The bounded preview is the deterministic head + tail of the same
+        // complete text.
+        assert!(settled.preview.starts_with("aaaa"));
+        assert!(settled.preview.ends_with("cross-after"));
+        assert!(settled.preview.len() <= 64);
     }
 }

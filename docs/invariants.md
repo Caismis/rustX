@@ -1147,6 +1147,9 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   regions: construction rejects an artifact root that equals the workspace
   root, nests inside it, or contains it — including symlink-resolved
   overlap — so Glob/Grep/Bash cannot surface runtime-private output files.
+  The conversation's managed tool-output root (a child of the artifact
+  root) inherits the same disjointness and is additionally read-only for
+  every native tool.
 - All progress entering runtime state and events passes through one shared
   UTF-8-safe bound (`bound_tool_progress`); the foreground reporter and the
   background registry produce the same normalized value, and an oversized
@@ -1168,17 +1171,31 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   workspace: relative UTF-8 paths, no absolute paths, no lexical `..`
   escape, and symlinks resolving only to targets inside the canonical root.
 - The model-facing contracts of the six ordinary native tools follow
-  established Pi coding-agent conventions — `read {path, offset?, limit?}`,
-  `write {path, content}`, `edit {path, edits:[{oldText, newText}]}`,
-  `glob {pattern, path?}`,
+  established Pi coding-agent conventions — `read {file_path, offset?,
+  limit?}`, `write {file_path, content}`, `edit {file_path,
+  edits:[{oldText, newText}]}`, `glob {pattern, path?}`,
   `grep {pattern, path?, glob?, ignoreCase?, literal?, context?, limit?}`,
   `bash {command, timeout?}` — while execution semantics stay rustX-owned.
   Adopting the schema convention never imports another agent's runtime,
-  subprocess model, permission system, ignore behavior, or result ordering,
-  and `path` is never renamed to `file_path`. There are no legacy aliases:
-  the obsolete `start_line`/`line_count`, `old_text`/`new_text`/
-  `replace_all`, `case_sensitive`, and `timeout_ms` spellings are unknown
-  fields, rejected before dispatch.
+  subprocess model, permission system, ignore behavior, or result ordering.
+  There are no legacy aliases: the obsolete `path` (for `file_path`),
+  `start_line`/`line_count`, `old_text`/`new_text`/`replace_all`,
+  `case_sensitive`, and `timeout_ms` spellings are unknown fields, rejected
+  before dispatch.
+- **Absolute locators, explicit authority.** Every native filesystem tool
+  takes absolute locators with explicit authority: `file_path` of
+  Read/Write/Edit must be absolute, and an omitted `path` of Glob/Grep
+  means the workspace root. One locator-authority boundary
+  (`crate::tools::locator`) admits exactly two roots: the workspace (read
+  and mutate) and the conversation's managed tool-output root (read-only —
+  the model reads spilled tool output but can never mutate runtime-owned
+  storage). Every other absolute location — including runtime-private
+  regions such as the durable store — is rejected. Authority is enforced
+  against the *canonical* target (Read canonicalizes the existing file;
+  Mutate canonicalizes the deepest existing ancestor), so a symlink can
+  never escape an authorized root, and path shape never decides authority.
+  An invalid locator is a normal failed result, never an agent-loop
+  failure.
 - **One Edit invocation is one atomic transformation from one original file
   snapshot to one final file snapshot.** Every `oldText` is resolved against
   that same original snapshot — never against the result of an earlier edit
@@ -1243,10 +1260,20 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   runtime semantics are outside the ordinary-native-tool contract
   alignment, and it is never moved, renamed, or re-schema'd to make the
   native tool directory look uniform.
-- Model-facing output is bounded by named limits; full Bash output is
-  spooled to the conversation artifact store (opaque monotonic
-  `artifact_N` ids outside the model workspace) while bounded head/tail
-  previews are retained, with explicit `TruncationState`.
+- Model-facing output is bounded by named limits. Text overflow is not an
+  artifact (Issue #86): Bash output is *text*, and the bounded head/tail
+  preview is the canonical replayable record. Only when the combined output
+  crosses its preview bound does the capture lazily allocate one file in
+  the conversation's managed tool-output store (`tool-output/output_N.log`,
+  monotonic per-conversation sequence, `create_new`), write the retained
+  complete prefix, and stream every subsequent byte into it; the absolute
+  spill path appears inside the ordinary textual output (`full_output`),
+  never as a `FileReference`, never as a semantic artifact, and never as a
+  model `File` modality. Output at or below the bound creates no file at
+  all; a spill allocation or write failure is an explicit invocation
+  failure, never silently lost output. Genuine semantic artifacts
+  (real files a tool produces for the user) keep the existing
+  `ArtifactStore`/`FileReference` publication path.
 - Bash owns a distinct process group per invocation inside a dedicated
   invocation session created by a small per-invocation supervisor;
   cancellation/timeout signals the owned group (`TERM`, then a bounded

@@ -11,8 +11,8 @@ use futures_util::future::BoxFuture;
 #[cfg(test)]
 use super::capture::CaptureHold;
 use super::capture::{
-    BashProcessControlError, CapturePark, PreviewCapture, await_drain, consume_combined,
-    spool_stream,
+    BashProcessControlError, CapturePark, PreviewCapture, SpillCapture, await_drain,
+    capture_stream, consume_combined,
 };
 use super::input::BashInput;
 #[cfg(all(test, target_os = "linux"))]
@@ -350,13 +350,12 @@ async fn run_bash_unix(
 
     let stdout_capture = Arc::new(Mutex::new(PreviewCapture::new(BASH_STREAM_PREVIEW_BYTES)));
     let stderr_capture = Arc::new(Mutex::new(PreviewCapture::new(BASH_STREAM_PREVIEW_BYTES)));
-    let combined_capture = Arc::new(Mutex::new(PreviewCapture::new(BASH_STREAM_PREVIEW_BYTES)));
+    let combined_capture = Arc::new(Mutex::new(SpillCapture::new(BASH_STREAM_PREVIEW_BYTES)));
     let (combined_tx, combined_rx) = tokio::sync::mpsc::channel::<(u8, Vec<u8>)>(32);
 
-    let store = context.artifacts.clone();
     let mut combined_task = tokio::spawn(consume_combined(
         combined_rx,
-        store,
+        context.tool_output.clone(),
         combined_capture.clone(),
     ));
     let mut stdout_task = None;
@@ -368,9 +367,8 @@ async fn run_bash_unix(
             .map(CaptureHold::reader);
         #[cfg(not(test))]
         let stdout_park: CapturePark = None;
-        stdout_task = Some(tokio::spawn(spool_stream(
+        stdout_task = Some(tokio::spawn(capture_stream(
             pipe,
-            context.artifacts.clone(),
             stdout_capture.clone(),
             combined_tx.clone(),
             0,
@@ -380,9 +378,8 @@ async fn run_bash_unix(
     }
     if let Some(pipe) = stderr_pipe {
         let stderr_park: CapturePark = None;
-        stderr_task = Some(tokio::spawn(spool_stream(
+        stderr_task = Some(tokio::spawn(capture_stream(
             pipe,
-            context.artifacts.clone(),
             stderr_capture.clone(),
             combined_tx.clone(),
             1,
@@ -431,32 +428,27 @@ async fn run_bash_unix(
         ProcessOutcomeIntent::ProcessControlFailed(message) => Some(message.clone()),
         _ => None,
     };
-    let (stdout_reference, stderr_reference, combined_reference) = match *capture {
-        Ok(references) => references,
-        Err(error) => {
-            // The outcome is already owned (failure or cancellation/
-            // timeout): the capture of a terminated process tree is
-            // inherently partial and is never reported as successful
-            // retention. The root-cause failure is never overwritten by the
-            // later capture condition; at most the capture detail is
-            // appended to it.
-            if let Some(message) = process_failure.as_mut() {
-                message.push_str("; output capture: ");
-                message.push_str(&error);
-            } else if let Some(message) = capture_failure.as_mut() {
-                message.push_str("; output capture: ");
-                message.push_str(&error);
-            }
-            let outcome_owned = process_failure.is_some()
-                || capture_failure.is_some()
-                || !matches!(termination.intent, ProcessOutcomeIntent::Completed);
-            if outcome_owned {
-                (None, None, None)
-            } else {
-                return failed_result(format!("bash output capture failed: {error}"));
-            }
+    if let Err(error) = *capture {
+        // The outcome is already owned (failure or cancellation/
+        // timeout): the capture of a terminated process tree is
+        // inherently partial and is never reported as successful
+        // retention. The root-cause failure is never overwritten by the
+        // later capture condition; at most the capture detail is
+        // appended to it.
+        if let Some(message) = process_failure.as_mut() {
+            message.push_str("; output capture: ");
+            message.push_str(&error);
+        } else if let Some(message) = capture_failure.as_mut() {
+            message.push_str("; output capture: ");
+            message.push_str(&error);
         }
-    };
+        let outcome_owned = process_failure.is_some()
+            || capture_failure.is_some()
+            || !matches!(termination.intent, ProcessOutcomeIntent::Completed);
+        if !outcome_owned {
+            return failed_result(format!("bash output capture failed: {error}"));
+        }
+    }
 
     let stdout = stdout_capture
         .lock()
@@ -468,11 +460,11 @@ async fn run_bash_unix(
         .expect("preview lock")
         .clone()
         .finish();
-    let combined = combined_capture
-        .lock()
-        .expect("preview lock")
-        .clone()
-        .finish();
+    let combined = std::mem::replace(
+        &mut *combined_capture.lock().expect("combined capture lock"),
+        SpillCapture::new(BASH_STREAM_PREVIEW_BYTES),
+    )
+    .finish();
 
     // Outcome precedence: an explicit process-control/runtime failure wins
     // over cancellation/timeout intent, which wins over the natural shell
@@ -514,7 +506,15 @@ async fn run_bash_unix(
         }
     }
 
-    let truncated = stdout.1 || stderr.1 || combined.1;
+    let truncated = stdout.1 || stderr.1 || combined.truncated;
+    // Textual overflow stays textual: the bounded previews are the
+    // canonical record, and the complete combined output — when it crossed
+    // the preview bound — is one managed spill file addressed by its
+    // absolute path inside this ordinary textual result. No `FileReference`
+    // is ever produced for execution output.
+    let spill_path = combined
+        .spill_path
+        .map(|path| path.to_string_lossy().into_owned());
     ToolExecutionResult {
         status,
         content: vec![ToolResultContent::Json {
@@ -522,18 +522,20 @@ async fn run_bash_unix(
                 "exit_code": exit_code,
                 "stdout": stdout.0,
                 "stderr": stderr.0,
-                "combined": combined.0,
+                "combined": combined.preview,
+                "full_output": spill_path,
+                "note": spill_path.as_ref().map(|_| {
+                    "Output was truncated for context. The complete output is at the absolute \
+                     path in full_output; use Read or Grep if you need the complete output."
+                }),
             }),
         }],
         duration_ms: 0,
         exit_code,
-        artifacts: vec![stdout_reference, stderr_reference, combined_reference]
-            .into_iter()
-            .flatten()
-            .collect(),
+        artifacts: Vec::new(),
         truncation: truncated.then_some(TruncationState {
             truncated: true,
-            original_bytes: None,
+            original_bytes: Some(combined.total_bytes),
         }),
     }
 }

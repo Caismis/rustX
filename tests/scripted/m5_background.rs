@@ -193,6 +193,11 @@ fn background_fixture_with_sink(conversation_id: &str, with_sink: bool) -> Backg
         mailbox: mailbox.clone(),
         workspace: Workspace::new(&workspace_root).expect("workspace"),
         artifacts: ArtifactStore::new(conversation.clone(), &artifacts).expect("artifacts"),
+        tool_output: rustx::tools::managed_output::ManagedToolOutput::new(
+            conversation.clone(),
+            artifacts.join("tool-output"),
+        )
+        .expect("managed tool output"),
         clock: Arc::new(FixedRuntimeClock(utc("2026-08-09T12:00:00Z"))),
         event_sink: sink
             .clone()

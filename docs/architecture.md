@@ -484,10 +484,18 @@ tools/schema.rs            JSON Schema validation, the reserved __rustx_
                            namespace, the model-facing schema compiler, and
                            reserved invocation metadata extraction
 tools/workspace.rs         Workspace: the canonical runtime-owned workspace
-                           boundary (canonicalized root, relative paths only,
-                           no escape, symlink containment)
+                           boundary (canonicalized root)
+tools/locator.rs           the one locator-authority boundary of the native
+                           filesystem tools: absolute locators, two authorized
+                           roots (workspace read/mutate, managed tool-output
+                           read-only), canonical-target authority, no symlink
+                           escape
+tools/managed_output.rs    ManagedToolOutput: the conversation-owned managed
+                           tool-output store (lazy textual spill files,
+                           monotonic `output_N.log` sequence, `create_new`)
 tools/artifacts.rs         ArtifactStore: conversation-owned opaque monotonic
-                           artifact ids with streaming spooling
+                           artifact ids with streaming spooling (genuine
+                           semantic artifacts only — never textual overflow)
 tools/environment.rs       ToolEnvironment: the explicit authorized child
                            environment (no wholesale parent inheritance)
 tools/background.rs        ConversationBackgroundRegistry: conversation-owned
@@ -1361,12 +1369,15 @@ the clock, the event sink, the environment, the workspace, and the
 artifact store; after construction the conversation background registry
 identity and its execution records are stable and can never be replaced
 or reset by a configuration change. The runtime owns the canonical
-`Workspace` boundary (canonicalized root; relative paths only; no `..`
-escape; symlinks contained) and the `ArtifactStore` (opaque monotonic
-`artifact_N` ids, streaming spooling). The artifact root and the
-workspace root must be disjoint filesystem regions: equal roots, nested
-roots, and symlink-resolved overlap are rejected at construction, so
-runtime-private output files are never observable through Glob/Grep/Bash.
+`Workspace` boundary (canonicalized root), the `ArtifactStore` (opaque
+monotonic `artifact_N` ids, streaming spooling of genuine semantic
+artifacts), and the `ManagedToolOutput` store (`tool-output/output_N.log`
+spill files of oversized textual tool output — auxiliary runtime-owned
+storage addressed by absolute path, never a semantic artifact). The
+artifact root and the workspace root must be disjoint filesystem regions:
+equal roots, nested roots, and symlink-resolved overlap are rejected at
+construction, so runtime-private output files are never observable through
+Glob/Grep/Bash.
 The explicit `ToolEnvironment` and the authoritative
 `ConversationBackgroundRegistry` complete the bundle. Background
 executions own a deterministic `exec_N` `ToolExecutionId`, a lifecycle
@@ -1434,14 +1445,24 @@ parameter vocabulary, so a model trained around modern coding agents
 recognizes the surface immediately:
 
 ```text
-read   { path, offset?, limit? }              offset is 1-based (default 1),
+read   { file_path, offset?, limit? }         offset is 1-based (default 1),
                                               limit defaults to 200 lines
-write  { path, content }
-edit   { path, edits: [{ oldText, newText }] }
-glob   { pattern, path? }
+write  { file_path, content }
+edit   { file_path, edits: [{ oldText, newText }] }
+glob   { pattern, path? }                     omitted path = workspace root
 grep   { pattern, path?, glob?, ignoreCase?, literal?, context?, limit? }
 bash   { command, timeout? }                  timeout is in seconds
 ```
+
+Locators are absolute with explicit authority (Issue #86): `file_path` of
+Read/Write/Edit must be absolute, and Glob/Grep's optional `path` is
+absolute when supplied (omitted means the workspace root). One
+locator-authority boundary (`tools/locator.rs`) admits exactly two roots —
+the workspace (read and mutate) and the conversation's managed tool-output
+root (read-only) — canonicalizes the existing target (Read) or the deepest
+existing ancestor (Mutate), and rejects every other location, including
+runtime-private regions. A symlink can therefore never escape an
+authorized root, and path shape never decides authority.
 
 Adopting those conventions is a *schema* decision only. It does not import
 Pi's runtime, subprocess model, permission system, ignore behavior, result
@@ -1449,11 +1470,7 @@ ordering, or remote-operations abstractions: execution semantics stay
 explicitly rustX-owned, and where a rustX contract and an external
 implementation disagree, the rustX contract wins.
 
-Four consequences are load-bearing:
-
-- **Write is intentionally unchanged.** `path` + `content` was already the
-  right contract, so it does not churn for symmetry. In particular `path` is
-  never renamed to `file_path` anywhere in the plane.
+Three consequences are load-bearing:
 - **Edit is an atomic multi-edit against one original file snapshot.** One
   invocation reads one snapshot, resolves *every* `oldText` against that
   same snapshot (never against the result of an earlier edit in the same
@@ -1466,8 +1483,10 @@ Four consequences are load-bearing:
   unchanged. There is no sequential-application mode and no replace-all
   mode.
 - **Glob and Grep share one search substrate.** `tools/native/search/` owns
-  the single workspace file-universe policy both observe: search-root
-  containment through the `Workspace` boundary, hidden files visible,
+  the single workspace file-universe policy both observe: search roots
+  resolved through the one locator-authority boundary (workspace or the
+  read-only managed tool-output root; a single file is a legal Grep root),
+  hidden files visible,
   ignore files (`.gitignore`, `.ignore`, git global excludes,
   `.git/info/exclude`) deliberately *not* applied, symlinks never followed
   (so neither a directory symlink recursion nor a file symlink target can
@@ -1561,12 +1580,17 @@ is settled — shell-parent exit is not by itself the Bash settlement
 boundary, so a descendant that remains in the owned group after the shell
 exits (holding the pipes or having redirected them away) can never escape
 the timeout/cancellation contract. The child runs with an explicit
-`env_clear()`-based environment, bounded head/tail previews per stream
-with full raw output spooled to artifacts, `TERM -> BASH_TERM_GRACE ->
-KILL` cancellation driven by the supervisor, typed result semantics (zero
-exit success, non-zero exit failed with the code preserved, timeout as
-`TimedOut`, cancellation as `Cancelled`), explicit artifact-capture
-failures, and explicit process-control failures (supervisor setup, shell
+`env_clear()`-based environment, bounded head/tail previews per stream,
+a lazy complete spill of the combined output into the conversation's
+managed tool-output store once the preview bound is crossed (the absolute
+spill path is published inside ordinary textual output as `full_output`;
+the result's `artifacts` stay empty — text overflow is not an artifact),
+`TERM -> BASH_TERM_GRACE -> KILL` cancellation driven by the supervisor,
+typed result semantics (zero exit success, non-zero exit failed with the
+code preserved, timeout as `TimedOut`, cancellation as `Cancelled`),
+explicit spill-capture failures (a spill that cannot be allocated or
+written fails the invocation explicitly rather than silently losing full
+output), and explicit process-control failures (supervisor setup, shell
 spawning, waiting/reaping, signaling, and IPC failures settle as `Failed`,
 never as a silent `Success`, `Cancelled`, or `TimedOut`) — never a silent
 success that lost the retained output.
