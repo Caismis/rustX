@@ -87,13 +87,46 @@ The preferred test order is:
 
 Core correctness must not depend only on live model behavior.
 
-Before merge, the baseline local checks are:
+### Baseline Rust checks
+
+Before merge, the baseline local Rust checks are:
 
 ```bash
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
 ```
+
+### Full pre-PR and CI validation
+
+The baseline commands are only the Rust starting point. The full CI workflow
+also requires the provider emulator, the Issue #47 conformance suite, and the
+TUI checks. Run the following from the repository root with Python 3.12, `uv`,
+and the Node LTS line available:
+
+```bash
+# Provider emulator, used by both Rust and TUI integration checks.
+(cd test-support/fake-provider && uv sync --frozen)
+(cd test-support/fake-provider && uv run --frozen pytest)
+
+# Rust validation with provider-emulator tests required rather than skipped.
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --test issue47_conformance --all-features
+
+# TUI's locked pnpm workflow.
+nvm install --lts
+nvm use --lts
+corepack enable
+(cd tui && corepack install)
+(cd tui && pnpm install --frozen-lockfile)
+(cd tui && pnpm typecheck)
+cargo build --bin rustx
+(cd tui && pnpm test)
+
+git diff --check
+```
+
+The GitHub Actions workflow is authoritative if this list and CI ever differ.
 
 ## Commit style
 

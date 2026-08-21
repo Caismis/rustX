@@ -1,148 +1,63 @@
 # rustX
 
-rustX is a standalone Rust execution runtime for durable, tool-using LLM agents.
+rustX is a standalone Rust execution runtime for durable, tool-using LLM
+agents.
 
-The runtime's native process supervision is supported on Linux and macOS.
-Windows is outside the supported target set.
+> Status: pre-alpha. The architecture may change incompatibly before 1.0 when
+> a cleaner abstraction is the better design.
 
-Linux and macOS do not provide identical kernel guarantees, and rustX does
-not claim they do:
+Supported platforms are Linux and macOS. Windows is currently unsupported.
+Process supervision has platform-specific guarantees; this README summarizes
+the product, while the exact Linux and macOS contracts live in the
+[architecture](docs/architecture.md) and [invariants](docs/invariants.md)
+documents.
 
-- **Linux** — child-subreaper orphan adoption plus an inherited seccomp
-  fixed-membership restriction. Group-scoped `waitid(ECHILD)` is a complete
-  owned-descendant terminal proof, including shell-backgrounded and
-  supervisor-loss descendants.
-- **macOS** — a dedicated session/process group with a native libc `waitid`
-  adapter and direct-child reaping. macOS has no child-subreaper and no
-  seccomp fixed-membership primitive, so rustX owns the invocation
-  process-group domain and proves it absent by actively signaling the
-  retained group and then probing `killpg(pgid, 0)` to `ESRCH`. A descendant
-  that deliberately leaves that group exits rustX's ownership domain: it is
-  not tracked, contained, reaped, or waited for, and settlement of the owned
-  group does not imply it terminated. A lost waitable anchor remains
-  explicitly unproven, never a fabricated terminal result.
+## What works today
 
-> Status: pre-alpha. The architecture is intentionally allowed to break before 1.0 when a cleaner abstraction is available.
+rustX currently supports:
 
-## Goals
+- durable multi-turn conversations with provider-independent canonical
+  messages and history;
+- OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages;
+- a tool-using Agent Loop with context assembly, compaction, and reasoning
+  streams;
+- native Read, Write, Edit, Grep, Glob, and Bash tools, plus Skills, MCP tools,
+  and custom Python tools;
+- cancellation, recovery, runtime supervision, and background tool
+  execution;
+- runtime-owned model selection and switching;
+- native Sessions with resume, rename, clone, fork, and tree workflows;
+- Runtime Client Protocol v1 over stdio/JSONL and the `rustx-tui` reference
+  terminal client.
 
-- Build a deterministic, durable agent execution kernel in Rust.
-- Keep the agent loop independent from provider SDK types, storage implementations, UI protocols, and control-plane schemas.
-- Support multi-turn conversations, tool use, reasoning streams, context compaction, skills, MCP tools, and custom Python tools.
-- Make cancellation, recovery, event ordering, and capability revisions explicit runtime semantics.
-- Optimize for long-term architectural evolution rather than compatibility with previous runtimes.
+These are current capabilities of the pre-alpha repository, not a promise of
+production maturity.
 
-## Non-goals
+## Quick start
 
-- Compatibility with Agno, legacy Python runtimes, old database schemas, or previous internal APIs.
-- Provider-hosted tools.
-- Native Google model protocols in the first implementation.
-- Control-plane concerns such as billing, user management, visual builders, or Fleet UI.
+The runtime takes four explicit startup paths; it does not discover
+configuration from the current directory or from `~/.rustx`. Configure
+`examples/local-runtime/models.json` and
+`examples/local-runtime/session.json` in place, or copy the complete
+`examples/local-runtime/` directory and adjust the paths below.
 
-## Model protocols
-
-The first runtime targets three model interaction protocols:
-
-- OpenAI Chat Completions
-- OpenAI Responses
-- Anthropic Messages
-
-Provider SDKs are implementation details of model adapters. Their types must not cross into the runtime core.
-
-Models are declared in a validated `models.json` catalog. Every provider states an explicit endpoint and an explicit credential source (a literal or `$ENV_VAR`); a provider *name* never implies an official endpoint. Provider request parameters are opaque JSON that reaches the wire unchanged under a documented shallow-overlay contract, protected only against overwriting runtime-owned structural fields, and reasoning is expressed as model-declared named profiles rather than a universal effort enum.
-
-## Running the local runtime
-
-`rustx` is a spawnable single-conversation runtime process. It takes explicit configuration paths and speaks the Runtime Client Protocol over stdio/JSONL:
-
-```text
-rustx --models /path/to/models.json \
-      --session /path/to/session.json \
-      --workspace /path/to/workspace \
-      --runtime-root /path/to/private-runtime
-```
-
-stdout carries protocol records only; every diagnostic goes to stderr, and a startup configuration failure exits non-zero having written zero bytes to stdout. A client owns the child-process lifecycle and nothing else — the process itself owns the session model, tool runtime, capability coordinator, context policy, and the conversation runtime coordinator, with the Runtime Client host as its projection/control adapter.
-
-For a complete copyable model/session/Python-tool configuration, see
-[`examples/local-runtime/README.md`](examples/local-runtime/README.md).
-
-## Capability model
-
-The runtime capability set consists of:
-
-- Native platform tools
-- Skills
-- MCP tools
-- Custom Python tools
-
-A running attempt observes an immutable capability revision for its entire lifetime.
-
-## Core architecture
-
-```text
-Runtime Manifest
-      |
-      v
-Capability Snapshot
-      |
-      v
-Agent Kernel
-  |       |
-  |       +--> Tool Plane
-  |             |- Native tools
-  |             |- MCP
-  |             `- Python tools
-  |
-  +--> Context Engine
-  |       |- Context assembly
-  |       |- Compaction
-  |       `- Provider context compilation
-  |
-  `--> Model Plane
-          |- OpenAI Chat adapter
-          |- OpenAI Responses adapter
-          `- Anthropic Messages adapter
-
-All execution facts
-      |
-      v
-Runtime Event Journal
-      |
-      +--> Local diagnostics
-      `--> External projections such as AG-UI
-```
-
-## Development strategy
-
-The executor is built and validated locally before production integration. The early development loop is:
-
-```text
-Terminal input
-  -> Message blocks
-  -> Context compiler
-  -> Real or mock model
-  -> Agent loop
-  -> Tool execution
-  -> Compaction
-  -> Continued multi-turn conversation
-```
-
-Container integration, production storage, orchestration, and control-plane integration come after the local runtime semantics are stable.
-
-## Reference terminal client
-
-`tui/` holds `rustx-tui`, a TypeScript reference client built on
-[`@earendil-works/pi-tui`](https://www.npmjs.com/package/@earendil-works/pi-tui).
-It spawns the `rustx` binary and communicates with it only through the stdio
-JSONL transport and Runtime Client Protocol v1:
+Set the credential referenced by the example catalog, then build the runtime
+and install the locked TUI dependencies:
 
 ```sh
+export RUSTX_EXAMPLE_API_KEY='replace-me'
+
 cargo build --bin rustx
 
-nvm use --lts && corepack enable
+nvm install --lts
+nvm use --lts
+corepack enable
 pnpm --dir tui install --frozen-lockfile
+```
 
+Launch the reference client with the example paths:
+
+```sh
 pnpm --dir tui start \
   --binary "$PWD/target/debug/rustx" \
   --models "$PWD/examples/local-runtime/models.json" \
@@ -151,18 +66,62 @@ pnpm --dir tui start \
   --runtime-root "$PWD/examples/local-runtime/.rustx"
 ```
 
-Pi TUI is the terminal input/output projection of rustX and nothing more: all
-agent, session, model, tool, capability, and background semantics stay inside
-the Rust runtime. See [`tui/README.md`](tui/README.md) and the
+The example endpoint is a placeholder. Replace it with the endpoint for the
+selected provider before making a model request. The full configuration
+contract and custom Python-tool example are in
 [`examples/local-runtime/README.md`](examples/local-runtime/README.md).
+The example's discovered Python tool also requires `uv` on `PATH`.
 
-See [Architecture](docs/architecture.md), [Development Plan](docs/development-plan.md), [Runtime Invariants](docs/invariants.md), and [Repository Policy](docs/repository-policy.md).
+## Runtime and reference client
 
-## Repository governance
+`rustx` is the runtime. `rustx-tui` is a reference client and presentation
+layer.
 
-All repository content must be written in English. Non-trivial work should use the repository Issue Forms and be linked from a focused pull request. Merge-ready pull requests must pass formatting, Clippy, and test checks. During pre-1.0 development, breaking changes are preferred over compatibility shims when they improve the architecture.
+The TUI spawns `rustx`, communicates with it through Runtime Client Protocol v1
+over stdio/JSONL, and projects runtime snapshots and events into a terminal
+interface. Model, Session, tool, capability, context, and execution semantics
+remain owned by the Rust runtime; the TUI does not implement a parallel
+runtime or session system. See [`tui/README.md`](tui/README.md) for the
+user-visible command surface.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the contributor workflow.
+## Filesystem and native tools
+
+`--workspace` establishes the runtime's authoritative execution cwd and the
+conventional project/source tree. It is not a general filesystem sandbox for
+native Read, Write, Edit, Grep, or Glob.
+
+For those native file tools, relative paths resolve from the execution cwd and
+absolute paths are valid host filesystem paths. `.` and `..` are resolved
+lexically before filesystem or symlink behavior. Runtime-owned
+`ManagedToolOutput` can be inspected through supported read/search paths, but
+model-originated Write/Edit cannot mutate that managed output. Grep and Glob
+remain in-process, and their `.gitignore` behavior is unchanged.
+
+This is a user-facing path model, not a general security-sandbox guarantee.
+See the [architecture](docs/architecture.md) and
+[invariants](docs/invariants.md) documents for the exact native-tool
+contracts.
+
+## Native Sessions
+
+Sessions are runtime-owned. The reference TUI currently exposes `/new`,
+`/resume`, `/session`, `/name`, `/clone`, `/fork`, and `/tree` for creating,
+resuming, inspecting, naming, cloning, forking, and branching Session graphs.
+The TUI invokes the canonical Runtime Client operations; it does not maintain
+a separate Session implementation. See [`tui/README.md`](tui/README.md) for
+argument hints and interaction details.
+
+## Architecture and development
+
+Normative detail remains in the owning documents:
+
+- [Architecture](docs/architecture.md)
+- [Runtime Invariants](docs/invariants.md)
+- [Development Plan](docs/development-plan.md)
+- [Repository Policy](docs/repository-policy.md)
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contributor checks and pull-request
+workflow.
 
 ## License
 

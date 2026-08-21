@@ -21,7 +21,7 @@ examples/local-runtime/
 │               ├── pyproject.toml
 │               ├── uv.lock
 │               └── tool.py
-└── .rustx/        # generated at runtime; normally absent before first run
+└── .rustx/        # runtime-root; generated state, normally absent initially
 ```
 
 ## Who owns each path?
@@ -30,13 +30,22 @@ examples/local-runtime/
 | --- | --- |
 | `models.json` | The runtime's provider/model authority: endpoint, credential source, model limits, capabilities, opaque request parameters, reasoning profiles, and protocol compatibility. |
 | `session.json` | One conversation's initial model selection and overrides, context policy, native-tool policies, MCP bindings, and authorized environment. |
-| `workspace/` | The model-visible working tree, including Skills and editable custom Python tool packages. |
+| `workspace/` | The authoritative execution cwd and conventional project/source tree, including Skills and editable custom Python tool packages. Relative native file-tool paths resolve here. This is not a general filesystem sandbox for Read/Write/Edit/Grep/Glob. |
 | `workspace/.agents/tools/*` | Automatically discovered custom Python tool source packages; there is no separate registration entry in `session.json`. |
-| `.rustx/` | Runtime-private generated artifacts, immutable Python tool versions, and environments. Keep it disjoint from `workspace/` and do not hand-edit it. |
+| `.rustx/` (`runtime-root`) | Runtime-owned generated artifacts, immutable Python tool versions, environments, and Session storage. Keep it disjoint from `workspace/`; it is a separate ownership domain, not a promise that every file under it is unreachable through every filesystem mechanism. |
 
-The model works on files under `workspace/`. The Rust runtime owns private
-state under `runtime-root` (the example uses `examples/local-runtime/.rustx`),
-not inside the model-visible workspace.
+Native Read/Write/Edit/Grep/Glob paths may be relative to the execution cwd or
+absolute host filesystem paths. `.` and `..` are resolved lexically before
+filesystem or symlink behavior. Read/Grep/Glob may inspect an advertised
+`ManagedToolOutput` path; that runtime-owned managed-output namespace is the
+specific native-tool carve-out where model-originated Write/Edit is rejected.
+The runtime root is not a general filesystem-security boundary. See the
+[architecture](../../docs/architecture.md) and
+[invariants](../../docs/invariants.md) documents for the complete contracts.
+
+The runtime owns generated state under `runtime-root` (the example uses
+`examples/local-runtime/.rustx`) separately from the model's conventional
+project tree. Native file-tool paths are not implicitly confined to that tree.
 
 ## `models.json`
 
@@ -182,8 +191,8 @@ the separate `mcpToolPolicies` map, keyed by the same identity, so an
 ```
 
 A server without an entry gets the deterministic default (`foreground_only`
-and `sequential`). An entry naming a server `mcpServers` does not declare
-fails startup.
+and `sequential`). An `mcpToolPolicies` entry naming a server that
+`mcpServers` does not declare is invalid and fails startup.
 
 rustX connects on whichever MCP protocol revision it and the server actually
 share, so there is no protocol-version setting here.
@@ -215,6 +224,20 @@ rustX publishes immutable package versions and private Python environments
 under `runtime-root/environments/`; those generated files are runtime state,
 not workspace source and must not be hand-edited. Do not put a generated
 virtual environment in `workspace/`.
+
+## Native file-tool note
+
+Read, Write, Edit, Grep, and Glob use `path`. Relative paths start at the
+execution cwd established by `--workspace`; absolute paths are ordinary host
+filesystem paths. Grep and Glob use the runtime's in-process
+search implementation, and `.gitignore` behavior is unchanged. The
+runtime-owned managed-output namespace remains readable/searchable through
+supported paths but is not writable by model-originated Write/Edit.
+
+The detailed limits, continuation diagnostics, and search semantics belong in
+the [architecture](../../docs/architecture.md) and
+[invariants](../../docs/invariants.md) documents rather than this copyable
+configuration guide.
 
 ## Run it from the repository root
 
