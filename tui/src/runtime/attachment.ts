@@ -48,8 +48,16 @@ import {
   type RuntimeClientBackgroundExecution,
   type RuntimeClientCursor,
   type RuntimeClientProtocolEvent,
+  type RuntimeClientResult,
   type RuntimeClientSnapshot,
   type RuntimeClientOutcome,
+  type SessionSummaryView,
+  type SessionNodeView,
+  type SessionUserMessageBoundaryView,
+  type SessionView,
+  type SessionNodeId,
+  type SessionId,
+  type SurfaceRevision,
   type InteractionId,
   type InteractionResponse,
   type SessionModelConfig,
@@ -58,7 +66,10 @@ import {
   type UserContentBlock,
 } from "../protocol/types.ts";
 
-export interface RuntimeClientSessionOptions {
+/** Native owner bound for one Session list/tree response. */
+export const SESSION_PROJECTION_PAGE_LIMIT = 32;
+
+export interface RuntimeClientAttachmentOptions {
   connection: RuntimeClientConnection;
 }
 
@@ -69,17 +80,27 @@ export interface AttachmentIdentity {
   agentId: AgentId;
 }
 
+export interface SessionSwitch {
+  session: SessionView;
+  /** Fork/tree content selected before publication; never canonical history. */
+  editorContent?: UserContentBlock[];
+  restartRequired: boolean;
+  /** Present only when visibility committed before durability failed. */
+  restartDiagnostic?: string;
+}
+
 type StateListener = (state: PresentationState) => void;
 
-export class RuntimeClientSession {
+export class RuntimeClientAttachment {
   readonly #connection: RuntimeClientConnection;
   readonly #listeners = new Set<StateListener>();
   #state: PresentationState | undefined;
   #identity: AttachmentIdentity | undefined;
+  #sessionInfo: SessionView | undefined;
   #resyncCount = 0;
   #detachedEvents: (() => void) | undefined;
 
-  constructor(options: RuntimeClientSessionOptions) {
+  constructor(options: RuntimeClientAttachmentOptions) {
     this.#connection = options.connection;
   }
 
@@ -90,6 +111,11 @@ export class RuntimeClientSession {
 
   get identity(): AttachmentIdentity | undefined {
     return this.#identity;
+  }
+
+  /** The native product Session projection, once attached. */
+  get sessionInfo(): SessionView | undefined {
+    return this.#sessionInfo;
   }
 
   /** How many authoritative repairs this attachment has performed. */
@@ -370,6 +396,161 @@ export class RuntimeClientSession {
     for (const event of buffered) {
       this.#applyEvent(event);
     }
+  }
+
+  /** Reads the authoritative active Session metadata. */
+  async refreshSession(): Promise<SessionView> {
+    const result = await this.#connection.request({ method: "session_get" });
+    if (result.type !== "session") {
+      throw new Error(`session_get returned ${result.type}`);
+    }
+    this.#sessionInfo = result.session;
+    return result.session;
+  }
+
+  /** Lists bounded persisted Sessions for `/resume`. */
+  async listSessions(
+    query?: string,
+    offset = 0,
+    limit = SESSION_PROJECTION_PAGE_LIMIT,
+  ): Promise<{ sessions: SessionSummaryView[]; nextOffset?: number }> {
+    const result = await this.#connection.request({
+      method: "session_list",
+      query: query === undefined || query.length === 0 ? undefined : query,
+      offset,
+      limit,
+    });
+    if (result.type !== "session_list") {
+      throw new Error(`session_list returned ${result.type}`);
+    }
+    return { sessions: result.sessions, nextOffset: result.next_offset };
+  }
+
+  /** Reads the active graph and native historical fork boundaries. */
+  async sessionTree(): Promise<{
+    session: SessionView;
+    nodes: SessionNodeView[];
+    nextNodeOffset?: number;
+    branchableMessages: SessionUserMessageBoundaryView[];
+    nextHistoryOffset?: number;
+  }> {
+    return this.sessionTreePage();
+  }
+
+  /** Reads one bounded active graph/history page from the native owner. */
+  async sessionTreePage(
+    nodeOffset = 0,
+    historyOffset = 0,
+    limit = SESSION_PROJECTION_PAGE_LIMIT,
+  ): Promise<{
+    session: SessionView;
+    nodes: SessionNodeView[];
+    nextNodeOffset?: number;
+    branchableMessages: SessionUserMessageBoundaryView[];
+    nextHistoryOffset?: number;
+  }> {
+    const result = await this.#connection.request({
+      method: "session_tree_get",
+      node_offset: nodeOffset,
+      history_offset: historyOffset,
+      limit,
+    });
+    if (result.type !== "session_tree") {
+      throw new Error(`session_tree_get returned ${result.type}`);
+    }
+    this.#sessionInfo = result.session;
+    return {
+      session: result.session,
+      nodes: result.nodes,
+      nextNodeOffset: result.next_node_offset,
+      branchableMessages: result.branchable_messages,
+      nextHistoryOffset: result.next_history_offset,
+    };
+  }
+
+  /** Renames metadata only. */
+  async nameSession(name: string): Promise<SessionView> {
+    const result = await this.#connection.request({ method: "session_name", name });
+    if (result.type !== "session_changed") {
+      throw new Error(`session_name returned ${result.type}`);
+    }
+    this.#sessionInfo = result.session;
+    return result.session;
+  }
+
+  /** Creates a new empty Session and asks the caller to reattach. */
+  async newSession(): Promise<SessionSwitch> {
+    const result = await this.#connection.request({ method: "session_new" });
+    return this.#sessionChanged(result, "session_new");
+  }
+
+  /** Selects a persisted Session/node and asks the caller to reattach. */
+  async selectSession(
+    sessionId: SessionId,
+    nodeId?: SessionNodeId,
+  ): Promise<SessionSwitch> {
+    const result = await this.#connection.request({
+      method: "session_select",
+      session_id: sessionId,
+      node_id: nodeId,
+    });
+    return this.#sessionChanged(result, "session_select");
+  }
+
+  /** Clones the exact committed current canonical head. */
+  async cloneSession(): Promise<SessionSwitch> {
+    const result = await this.#connection.request({ method: "session_clone" });
+    return this.#sessionChanged(result, "session_clone");
+  }
+
+  /** Forks at an exact historical user-message boundary. */
+  async forkSession(
+    surfaceRevision: SurfaceRevision,
+    messageId: string,
+  ): Promise<SessionSwitch> {
+    const result = await this.#connection.request({
+      method: "session_fork",
+      surface_revision: surfaceRevision,
+      message_id: messageId,
+    });
+    return this.#sessionChanged(result, "session_fork");
+  }
+
+  /** Creates a branch node inside the active Session. */
+  async branchTree(
+    surfaceRevision: SurfaceRevision,
+    messageId: string,
+  ): Promise<SessionSwitch> {
+    const result = await this.#connection.request({
+      method: "session_tree_branch",
+      surface_revision: surfaceRevision,
+      message_id: messageId,
+    });
+    return this.#sessionChanged(result, "session_tree_branch");
+  }
+
+  #sessionChanged(
+    result: RuntimeClientResult,
+    method: string,
+  ): SessionSwitch {
+    if (result.type === "session_committed_restart_required") {
+      this.#sessionInfo = result.session;
+      return {
+        session: result.session,
+        editorContent: result.editor_content,
+        restartRequired: true,
+        restartDiagnostic: result.diagnostic,
+      };
+    }
+    if (result.type !== "session_changed") {
+      throw new Error(`${method} returned ${result.type}`);
+    }
+    this.#sessionInfo = result.session;
+    return {
+      session: result.session,
+      editorContent: result.editor_content,
+      restartRequired: result.restart_required,
+    };
   }
 
   #applyEvent(event: RuntimeClientProtocolEvent): void {

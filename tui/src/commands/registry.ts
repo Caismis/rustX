@@ -32,6 +32,30 @@ export const COMMANDS: readonly CommandSpec[] = [
       "Open the searchable model selector, or select one directly; selection resets primary overrides and preserves summary policy.",
     argumentHint: "[show|provider/model]",
   },
+  { name: "/new", description: "Create a new independent local session." },
+  {
+    name: "/resume",
+    description: "Search persisted sessions and activate one.",
+    argumentHint: "[session-id]",
+  },
+  {
+    name: "/session",
+    description: "Show the active session, node, and conversation metadata.",
+  },
+  {
+    name: "/name",
+    description: "Rename the active session without changing conversation history.",
+    argumentHint: "<text>",
+  },
+  { name: "/clone", description: "Clone the committed conversation head into a new session." },
+  {
+    name: "/fork",
+    description: "Select an earlier user message and open an editable fork.",
+  },
+  {
+    name: "/tree",
+    description: "Inspect session lineages or branch from a historical user message.",
+  },
   {
     name: "/tools",
     description: "Show the active tool catalog from the capability projection.",

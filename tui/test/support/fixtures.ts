@@ -19,6 +19,8 @@ import type {
   ModelInvocationView,
   RuntimeClientBackgroundExecution,
   RuntimeClientSnapshot,
+  SessionNodeView,
+  SessionView,
   SessionModelView,
   ToolExecutionResult,
   UserMessageBlock,
@@ -140,6 +142,21 @@ export function snapshot(
     context: { compaction_count: 0 },
     capabilities: capabilities(1),
     model: sessionModel("alpha/model-a"),
+    ...overrides,
+  };
+}
+
+export function sessionView(
+  overrides: Partial<SessionView> = {},
+): SessionView {
+  return {
+    id: "session-1",
+    name: "New session",
+    created_at: "2026-08-21T00:00:00Z",
+    updated_at: "2026-08-21T00:00:00Z",
+    active_node: "node-1",
+    active_conversation_id: "conv-test",
+    node_count: 1,
     ...overrides,
   };
 }

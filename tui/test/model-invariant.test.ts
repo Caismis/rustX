@@ -28,7 +28,7 @@ import { reduce } from "../src/presentation/projection.ts";
 import { replaceFromSnapshot } from "../src/presentation/projection.ts";
 import type { PresentationState } from "../src/presentation/state.ts";
 import { RuntimeClientConnection } from "../src/runtime/connection.ts";
-import { RuntimeClientSession } from "../src/runtime/session.ts";
+import { RuntimeClientAttachment } from "../src/runtime/attachment.ts";
 import type {
   RuntimeClientEvent,
   RuntimeClientProtocolEvent,
@@ -168,7 +168,7 @@ describe("session model A -> B invariant", () => {
       input: peer.runtimeOutput,
       output: peer.clientOutput,
     });
-    const session = new RuntimeClientSession({ connection });
+    const session = new RuntimeClientAttachment({ connection });
 
     const attaching = session.attach();
     await peer.awaitRequests(1);

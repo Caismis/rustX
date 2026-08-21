@@ -5,7 +5,7 @@
 //! explicit startup configuration
 //!         |
 //!         v
-//! ModelCatalog + LocalSessionConfig
+//! ModelCatalog + LocalConversationConfig
 //!         |
 //!         +--> authoritative session model state
 //!         +--> immutable resolved model bindings
@@ -43,13 +43,14 @@
 //!
 //! The governing invariant:
 //!
-//! > One local runtime process owns one conversation session. That session
-//! > owns one authoritative mutable session-model configuration, one
-//! > `ConversationToolRuntime` identity, one `CapabilityCoordinator`, one
-//! > context policy domain, and one `ConversationRuntime`. Runtime
-//! > Client attachments may come and go without replacing those semantic
-//! > owners, and the conversation executes identically with zero
-//! > attachments.
+//! > `LocalSessionProduct` owns the native SessionCatalog/SessionGraph and
+//! > exactly one active linear ConversationRuntime. The active runtime owns
+//! > one ConversationId, one ConversationToolRuntime identity, one
+//! > CapabilityCoordinator, one context policy domain, and one linear
+//! > ConversationSurface. A Session switch quiesces and releases that
+//! > runtime before the product publishes a replacement and reconnects.
+//! > Runtime Client attachments may come and go without replacing the
+//! > semantic owners of the active lineage.
 //!
 //! A client — including the Issue #39 TUI — owns the child process
 //! lifecycle and nothing else. It never assembles provider adapters, model
@@ -114,14 +115,16 @@ use crate::runtime::conversation_runtime::{
 };
 use crate::runtime_client::endpoint::RuntimeClientEndpoint;
 use crate::runtime_client::host::{
-    HostConstructionError, RuntimeClientHost, RuntimeClientHostConfig,
+    HostConstructionError, RuntimeClientHost, RuntimeClientHostConfig, RuntimeClientSessionControl,
 };
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::executor::ToolRegistry;
 use crate::tools::native::{NativeToolResources, register_native_tools};
 use crate::tools::runtime::ConversationToolRuntime;
 
-use super::config::{LocalSessionConfig, LocalSessionConfigError};
+use super::config::{LocalConversationConfig, LocalConversationConfigError};
+use super::session::{SessionCatalog, SessionError};
+use super::supervisor::{LocalSessionSupervisor, SessionSupervisorError};
 
 /// The explicit startup paths of one local runtime process.
 ///
@@ -130,7 +133,8 @@ use super::config::{LocalSessionConfig, LocalSessionConfigError};
 pub struct LocalRuntimePaths {
     /// The model catalog (`models.json`) path.
     pub models: PathBuf,
-    /// The local session configuration path.
+    /// The bootstrap conversation configuration path. Once a native Session
+    /// catalog exists, the catalog and graph are authoritative.
     pub session: PathBuf,
     /// The model-visible workspace root.
     pub workspace: PathBuf,
@@ -150,6 +154,16 @@ impl LocalRuntimePaths {
     #[must_use]
     pub fn environment_store_root(&self) -> PathBuf {
         self.runtime_root.join("environments")
+    }
+
+    /// The capability environment store of one independent conversation
+    /// lineage. Branches do not share mutable environment materialization.
+    #[must_use]
+    pub fn environment_store_root_for(
+        &self,
+        conversation_id: &crate::runtime::identity::ConversationId,
+    ) -> PathBuf {
+        self.environment_store_root().join(conversation_id.as_str())
     }
 }
 
@@ -227,8 +241,24 @@ impl LocalConversationCore {
         dependencies: &LocalRuntimeDependencies,
     ) -> Result<Self, LocalRuntimeError> {
         // 1. Read the explicit startup files.
-        let catalog_bytes = read_file(&paths.models)?;
         let session_bytes = read_file(&paths.session)?;
+        let session = LocalConversationConfig::from_json_slice(&session_bytes)?;
+        Self::compose_from_config(paths, dependencies, session, paths.artifacts_root()).await
+    }
+
+    /// Composes one selected native `SessionNode`'s linear conversation using
+    /// the same semantic runtime stack as the low-level path. The caller
+    /// supplies the node's persisted configuration and private artifact root;
+    /// this method never reads or writes `SessionCatalog` state.
+    pub(crate) async fn compose_from_config(
+        paths: &LocalRuntimePaths,
+        dependencies: &LocalRuntimeDependencies,
+        session: LocalConversationConfig,
+        artifacts_root: PathBuf,
+    ) -> Result<Self, LocalRuntimeError> {
+        // 1. Read the explicit model catalog. Session selection is already
+        // resolved by LocalSessionSupervisor before this composition call.
+        let catalog_bytes = read_file(&paths.models)?;
 
         // 2. Load and validate the model catalog.
         let catalog = ModelCatalog::from_json_slice(&catalog_bytes)?;
@@ -236,9 +266,6 @@ impl LocalConversationCore {
         // 3. Resolve startup credentials and build every model binding.
         let resolved = catalog.resolve(dependencies.credentials.as_ref())?;
         let registry = ModelBindingRegistry::new(resolved)?;
-
-        // 4. Load and validate the local session configuration.
-        let session = LocalSessionConfig::from_json_slice(&session_bytes)?;
 
         // The session model state resolves and validates the initial
         // selection now, so an unusable model fails startup rather than the
@@ -251,7 +278,7 @@ impl LocalConversationCore {
         let base_environment = session.tool_environment()?;
         let mut runtime_config = crate::tools::runtime::ConversationRuntimeConfig::new(
             &paths.workspace,
-            paths.artifacts_root(),
+            artifacts_root.clone(),
         );
         runtime_config.environment = Some(base_environment.clone());
         let tool_runtime =
@@ -277,7 +304,7 @@ impl LocalConversationCore {
                     })?,
                     models: paths.models.clone(),
                     workspace: paths.workspace.clone(),
-                    runtime_root: paths.runtime_root.clone(),
+                    runtime_root: artifacts_root.clone(),
                     model: session.model.clone(),
                     timezone: session.timezone,
                     context: session.context_policy(),
@@ -306,7 +333,7 @@ impl LocalConversationCore {
             base_tool_registry: Arc::new(base_registry),
             mcp_servers: session.mcp_bindings()?,
             base_environment,
-            environment_store_root: paths.environment_store_root(),
+            environment_store_root: paths.environment_store_root_for(&session.conversation_id),
         })
         .map_err(|error| LocalRuntimeError::Capability {
             detail: format!("{error:?}"),
@@ -331,6 +358,17 @@ impl LocalConversationCore {
                 detail: format!("{error:?}"),
             })?;
 
+        // Reopening a selected lineage must re-supply only its immutable
+        // bootstrap prefix to ConversationRuntime. Later canonical turns are
+        // recovered by the runtime itself; passing the whole transcript here
+        // would incorrectly change the store's bootstrap identity.
+        let initial_messages = tool_runtime
+            .durable_store()
+            .load_bootstrap_history()
+            .map_err(|error| LocalRuntimeError::ToolRuntime {
+                detail: error.to_string(),
+            })?;
+
         // 12-13. The context policy/estimator/status pieces and the one
         // authoritative conversation runtime coordinator, constructed
         // **inactive**: the final composition path activates it after the
@@ -347,7 +385,7 @@ impl LocalConversationCore {
             tool_runtime: tool_runtime.clone(),
             capability: capability.clone(),
             clock: None,
-            initial_messages: Vec::new(),
+            initial_messages,
             subagents: Some(subagents),
         })?;
 
@@ -408,7 +446,7 @@ impl LocalConversationCore {
         // read-only workspace and the child-private runtime root. The
         // child authorizes no environment entries.
         let base_environment = ToolEnvironment::from_authorized(std::iter::empty())
-            .map_err(LocalSessionConfigError::Environment)
+            .map_err(LocalConversationConfigError::Environment)
             .map_err(LocalRuntimeError::Session)?;
         let mut runtime_config = crate::tools::runtime::ConversationRuntimeConfig::new(
             &spec.workspace,
@@ -523,15 +561,45 @@ impl LocalConversationCore {
     /// cannot bind (a fresh core leaves no reason: no bridge exists and
     /// the runtime is inactive).
     pub fn into_interactive(self) -> Result<LocalConversationRuntime, LocalRuntimeError> {
+        self.into_interactive_with_control(None)
+    }
+
+    /// Finishes composition with the native Session supervisor installed as
+    /// the typed Runtime Client control seam.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LocalRuntimeError`] when the Runtime Client host cannot be
+    /// bound over the inactive runtime.
+    pub fn into_interactive_with_session_control(
+        self,
+        control: Arc<dyn RuntimeClientSessionControl>,
+    ) -> Result<LocalConversationRuntime, LocalRuntimeError> {
+        self.into_interactive_with_control(Some(control))
+    }
+
+    fn into_interactive_with_control(
+        self,
+        control: Option<Arc<dyn RuntimeClientSessionControl>>,
+    ) -> Result<LocalConversationRuntime, LocalRuntimeError> {
         // 14. The Runtime Client projection/control/attachment adapter over
         // that runtime. Binding is a pre-activation composition decision
         // (Issue #61): the runtime is still inert here, so the host's
         // initial snapshot is the runtime's real state at the activation
         // cut and no bootstrap fact can fabricate a live client event.
-        let host = RuntimeClientHost::new(RuntimeClientHostConfig {
-            runtime: self.runtime.clone(),
-            replay_limit: None,
-        })?;
+        let host = match control {
+            Some(control) => RuntimeClientHost::new_with_session_control(
+                RuntimeClientHostConfig {
+                    runtime: self.runtime.clone(),
+                    replay_limit: None,
+                },
+                control,
+            )?,
+            None => RuntimeClientHost::new(RuntimeClientHostConfig {
+                runtime: self.runtime.clone(),
+                replay_limit: None,
+            })?,
+        };
 
         // 15. Activation: the one shared Inactive -> Running lifecycle
         // transition. The client host-binding decision is now frozen, the
@@ -550,6 +618,87 @@ impl LocalConversationCore {
         // The one explicit lifecycle boundary, without step 14.
         self.runtime.activate();
         HeadlessConversationRuntime { core: self }
+    }
+}
+
+/// The native local product composition: one SessionCatalog/Graph owner plus
+/// exactly one active linear `ConversationRuntime` and its Runtime Client host.
+pub struct LocalSessionProduct {
+    runtime: LocalConversationRuntime,
+    supervisor: Arc<LocalSessionSupervisor>,
+}
+
+impl std::fmt::Debug for LocalSessionProduct {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LocalSessionProduct")
+            .field("conversation_id", self.runtime.runtime().conversation_id())
+            .finish_non_exhaustive()
+    }
+}
+
+impl LocalSessionProduct {
+    /// Loads the native catalog, resolves its active node, composes that
+    /// `ConversationRuntime`, binds typed Session control, and activates the
+    /// runtime before serving protocol input.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LocalRuntimeError`] when startup configuration, catalog
+    /// loading, capability composition, runtime recovery, or host binding
+    /// fails.
+    pub async fn compose(
+        paths: &LocalRuntimePaths,
+        dependencies: &LocalRuntimeDependencies,
+    ) -> Result<Self, LocalRuntimeError> {
+        let bootstrap_bytes = read_file(&paths.session)?;
+        let bootstrap = LocalConversationConfig::from_json_slice(&bootstrap_bytes)?;
+        let catalog = SessionCatalog::open(&paths.runtime_root, &bootstrap)
+            .map_err(LocalRuntimeError::SessionCatalog)?;
+        let (session_id, node, mut config) = catalog
+            .active_lineage()
+            .map_err(LocalRuntimeError::SessionCatalog)?;
+        config.conversation_id = node.conversation_id.clone();
+        let database_path = catalog.database_path(&session_id, &node.conversation_id);
+        let artifacts_root = database_path
+            .parent()
+            .ok_or_else(|| {
+                LocalRuntimeError::SessionCatalog(SessionError::Catalog {
+                    detail: "active conversation database has no parent".to_owned(),
+                })
+            })?
+            .to_path_buf();
+
+        let supervisor = Arc::new(LocalSessionSupervisor::new(catalog));
+        let core =
+            LocalConversationCore::compose_from_config(paths, dependencies, config, artifacts_root)
+                .await?;
+        let runtime = core.into_interactive_with_session_control(supervisor.clone())?;
+        supervisor
+            .install_runtime(runtime.runtime().clone())
+            .await
+            .map_err(LocalRuntimeError::SessionSupervisor)?;
+        Ok(Self {
+            runtime,
+            supervisor,
+        })
+    }
+
+    /// The one active linear `ConversationRuntime`.
+    #[must_use]
+    pub const fn runtime(&self) -> &ConversationRuntime {
+        self.runtime.runtime()
+    }
+
+    /// The native Session supervisor.
+    #[must_use]
+    pub fn supervisor(&self) -> &Arc<LocalSessionSupervisor> {
+        &self.supervisor
+    }
+
+    /// The transport-neutral Runtime Client endpoint.
+    #[must_use]
+    pub fn endpoint(&self) -> RuntimeClientEndpoint {
+        self.runtime.endpoint()
     }
 }
 
@@ -710,7 +859,7 @@ pub enum LocalRuntimeError {
     /// A model binding or the initial session model could not be resolved.
     Model(ModelInvocationError),
     /// The local session configuration is invalid.
-    Session(LocalSessionConfigError),
+    Session(LocalConversationConfigError),
     /// The conversation tool runtime could not be constructed.
     ToolRuntime {
         /// The failure detail.
@@ -735,6 +884,10 @@ pub enum LocalRuntimeError {
     Runtime(ConversationRuntimeError),
     /// The Runtime Client host could not be constructed.
     Host(HostConstructionError),
+    /// The native SessionCatalog/Graph could not be loaded or published.
+    SessionCatalog(SessionError),
+    /// The native Session supervisor could not install or drain a lineage.
+    SessionSupervisor(SessionSupervisorError),
 }
 
 impl std::fmt::Display for LocalRuntimeError {
@@ -749,6 +902,8 @@ impl std::fmt::Display for LocalRuntimeError {
             Self::Capability { detail } => write!(f, "capability plane: {detail}"),
             Self::Runtime(error) => write!(f, "conversation runtime: {error}"),
             Self::Host(error) => write!(f, "runtime client host: {error}"),
+            Self::SessionCatalog(error) => write!(f, "session catalog: {error}"),
+            Self::SessionSupervisor(error) => write!(f, "session supervisor: {error}"),
         }
     }
 }
@@ -767,8 +922,8 @@ impl From<ModelInvocationError> for LocalRuntimeError {
     }
 }
 
-impl From<LocalSessionConfigError> for LocalRuntimeError {
-    fn from(error: LocalSessionConfigError) -> Self {
+impl From<LocalConversationConfigError> for LocalRuntimeError {
+    fn from(error: LocalConversationConfigError) -> Self {
         Self::Session(error)
     }
 }
@@ -782,5 +937,17 @@ impl From<ConversationRuntimeError> for LocalRuntimeError {
 impl From<HostConstructionError> for LocalRuntimeError {
     fn from(error: HostConstructionError) -> Self {
         Self::Host(error)
+    }
+}
+
+impl From<SessionError> for LocalRuntimeError {
+    fn from(error: SessionError) -> Self {
+        Self::SessionCatalog(error)
+    }
+}
+
+impl From<SessionSupervisorError> for LocalRuntimeError {
+    fn from(error: SessionSupervisorError) -> Self {
+        Self::SessionSupervisor(error)
     }
 }

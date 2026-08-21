@@ -51,9 +51,10 @@
 //! fresh attachment identity. Dropping the endpoint detaches.
 //!
 //! No transport, framing, or I/O lives here: this module is semantic
-//! dispatch over the host. Ordinary requests are synchronous; `shutdown`
-//! uses the async entry point because its successful response means runtime
-//! quiescence rather than cancellation-request acceptance.
+//! dispatch over the host. Ordinary requests are synchronous; `shutdown` and
+//! native Session control use the async entry point because their responses
+//! may mean runtime quiescence or active-lineage replacement rather than
+//! cancellation-request acceptance.
 
 use std::sync::{Arc, Mutex};
 
@@ -65,8 +66,9 @@ use super::types::{RequestId, RuntimeClientError, RuntimeClientRequest, RuntimeC
 /// connection.
 ///
 /// Ordinary requests are handled synchronously and serialized against each
-/// other. `shutdown` is handled through [`Self::handle_request_async`] so its
-/// response can await runtime quiescence without holding the attachment lock.
+/// other. `shutdown` and native Session control are handled through
+/// [`Self::handle_request_async`] so their responses can await semantic
+/// quiescence without holding the attachment lock.
 pub struct RuntimeClientEndpoint {
     /// The runtime this endpoint speaks for.
     host: RuntimeClientHost,
@@ -163,7 +165,9 @@ impl RuntimeClientEndpoint {
         &self,
         request: RuntimeClientRequest,
     ) -> RuntimeClientResponse {
-        if !matches!(&request, RuntimeClientRequest::Shutdown { .. }) {
+        if !matches!(&request, RuntimeClientRequest::Shutdown { .. })
+            && !request.is_session_request()
+        {
             return self.handle_request(request);
         }
         let id = request.id();

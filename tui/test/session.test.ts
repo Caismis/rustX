@@ -10,13 +10,14 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { RuntimeClientConnection } from "../src/runtime/connection.ts";
-import { RuntimeClientSession, isResyncRequired } from "../src/runtime/session.ts";
+import { RuntimeClientAttachment, isResyncRequired } from "../src/runtime/attachment.ts";
 import { RuntimeRequestError } from "../src/runtime/connection.ts";
 import {
   assistantMessage,
   attemptModel,
   capabilities,
   sessionModel,
+  sessionView,
   snapshot,
   userMessage,
 } from "./support/fixtures.ts";
@@ -25,20 +26,20 @@ import { ScriptedPeer, until } from "./support/scripted-peer.ts";
 function connect(): {
   peer: ScriptedPeer;
   connection: RuntimeClientConnection;
-  session: RuntimeClientSession;
+  session: RuntimeClientAttachment;
 } {
   const peer = new ScriptedPeer();
   const connection = new RuntimeClientConnection({
     input: peer.runtimeOutput,
     output: peer.clientOutput,
   });
-  return { peer, connection, session: new RuntimeClientSession({ connection }) };
+  return { peer, connection, session: new RuntimeClientAttachment({ connection }) };
 }
 
 /** Completes the attach handshake with a given snapshot and cursor. */
 async function attach(
   peer: ScriptedPeer,
-  session: RuntimeClientSession,
+  session: RuntimeClientAttachment,
   initial = snapshot(),
   cursor = 0,
 ): Promise<void> {
@@ -57,7 +58,7 @@ async function attach(
   await attaching;
 }
 
-describe("RuntimeClientSession", () => {
+describe("RuntimeClientAttachment", () => {
   it("negotiates v1, installs the snapshot, and subscribes from its cursor", async () => {
     const { peer, session } = connect();
     await attach(peer, session, snapshot({ conversation_id: "conv-7" }), 12);
@@ -405,6 +406,35 @@ describe("RuntimeClientSession", () => {
       assert.equal(isResyncRequired(error), false);
       assert.match(error.message, /rejected/);
       return true;
+    });
+  });
+
+  it("preserves a committed transition draft in the typed attachment result", async () => {
+    const { peer, session } = connect();
+    await attach(peer, session);
+
+    const switching = session.forkSession(7, "user-exact-7f3b");
+    await peer.awaitRequests(3);
+    peer.respond(3, {
+      type: "session_committed_restart_required",
+      session: sessionView({
+        id: "session-2",
+        active_node: "node-2",
+        active_conversation_id: "conv-2",
+      }),
+      editor_content: [{ type: "text", text: "fork-draft-exact-7f3b" }],
+      diagnostic: "catalog visibility committed; durability uncertain",
+    });
+
+    assert.deepEqual(await switching, {
+      session: sessionView({
+        id: "session-2",
+        active_node: "node-2",
+        active_conversation_id: "conv-2",
+      }),
+      editorContent: [{ type: "text", text: "fork-draft-exact-7f3b" }],
+      restartRequired: true,
+      restartDiagnostic: "catalog visibility committed; durability uncertain",
     });
   });
 

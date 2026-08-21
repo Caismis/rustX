@@ -7,9 +7,9 @@
  * and never inspects a byte of stdout.
  *
  * The startup paths pass straight through to the binary. This client never
- * reads or interprets `models.json`, `session.json`, the workspace, or the
- * runtime root: those are Rust-owned configuration, and reading them here
- * would create a second model/session authority.
+ * reads or interprets `models.json`, the bootstrap conversation config, the
+ * workspace, or the runtime root: those are Rust-owned configuration, and
+ * reading them here would create a second model/Session authority.
  *
  * Environment: the child inherits the intended parent environment so rustX
  * performs its own credential resolution. No credential is ever read,

@@ -13,12 +13,13 @@ import { SlashCommandAutocompleteProvider, commandPrefix } from "../src/commands
 import { CommandDispatcher } from "../src/commands/dispatcher.ts";
 import { COMMANDS, parseCommandLine } from "../src/commands/registry.ts";
 import { RuntimeClientConnection } from "../src/runtime/connection.ts";
-import { RuntimeClientSession } from "../src/runtime/session.ts";
+import { RuntimeClientAttachment } from "../src/runtime/attachment.ts";
 import { ArgumentError, parseArguments } from "../src/cli.ts";
 import {
   attemptModel,
   capabilities,
   sessionModel,
+  sessionView,
   snapshot,
 } from "./support/fixtures.ts";
 import { ScriptedPeer } from "./support/scripted-peer.ts";
@@ -38,7 +39,7 @@ async function harness(initial = snapshot()) {
     input: peer.runtimeOutput,
     output: peer.clientOutput,
   });
-  const session = new RuntimeClientSession({ connection });
+  const session = new RuntimeClientAttachment({ connection });
   const attaching = session.attach();
   await peer.awaitRequests(1);
   peer.respond(1, {
@@ -67,6 +68,13 @@ describe("command registry", () => {
       [
         "/help",
         "/model",
+        "/new",
+        "/resume",
+        "/session",
+        "/name",
+        "/clone",
+        "/fork",
+        "/tree",
         "/tools",
         "/skills",
         "/status",
@@ -362,6 +370,183 @@ describe("CommandDispatcher", () => {
     }
     // Opening the selector sends no model_set.
     assert.equal(peer.requests.length, 3);
+  });
+
+  it("reads authoritative Session metadata for /session", async () => {
+    const { peer, dispatcher } = await harness();
+    const reading = dispatcher.submit("/session");
+    await peer.awaitRequests(3);
+    assert.equal(peer.requests[2]?.method, "session_get");
+    peer.respond(3, { type: "session", session: sessionView({ name: "review" }) });
+
+    const outcome = await reading;
+    assert.equal(outcome.kind, "message");
+    if (outcome.kind === "message") {
+      assert.match(outcome.text, /session review/);
+      assert.match(outcome.text, /active node node-1/);
+      assert.match(outcome.text, /conversation conv-test/);
+    }
+  });
+
+  it("lists persisted Sessions for /resume and does not choose in the client", async () => {
+    const { peer, dispatcher } = await harness();
+    const resuming = dispatcher.submit("/resume");
+    await peer.awaitRequests(3);
+    assert.equal(peer.requests[2]?.method, "session_list");
+    peer.respond(3, {
+      type: "session_list",
+      sessions: [
+        {
+          id: "session-1",
+          name: "current",
+          updated_at: "2026-08-21T00:00:00Z",
+          active_node: "node-1",
+          active: true,
+        },
+        {
+          id: "session-2",
+          name: "saved review",
+          updated_at: "2026-08-20T00:00:00Z",
+          active_node: "node-2",
+          active: false,
+        },
+      ],
+    });
+
+    const outcome = await resuming;
+    assert.equal(outcome.kind, "choose_session");
+    if (outcome.kind === "choose_session") {
+      assert.deepEqual(outcome.sessions.map((session) => session.id), [
+        "session-1",
+        "session-2",
+      ]);
+    }
+  });
+
+  it("turns native Session selection failures into error outcomes", async () => {
+    const { peer, connection, dispatcher } = await harness();
+    const boundary = {
+      surface_revision: 4,
+      message: {
+        id: "user-c",
+        content: [{ type: "text" as const, text: "try again" }],
+        source: "human" as const,
+        kind: "message" as const,
+      },
+    };
+
+    const selecting = dispatcher.selectSession("missing");
+    await peer.awaitRequests(3);
+    peer.respondError(3, { type: "session_failure", message: "unknown session" });
+    assert.deepEqual(await selecting, {
+      kind: "message",
+      level: "error",
+      text: "session operation failed: unknown session",
+    });
+
+    const selectingNode = dispatcher.selectTreeNode("session-1", "missing-node");
+    await peer.awaitRequests(4);
+    peer.respondError(4, { type: "session_failure", message: "unknown node" });
+    assert.equal((await selectingNode).kind, "message");
+
+    const forking = dispatcher.forkAt(boundary);
+    await peer.awaitRequests(5);
+    peer.respondError(5, { type: "session_failure", message: "stale boundary" });
+    assert.equal((await forking).kind, "message");
+
+    const branching = dispatcher.branchAt(boundary);
+    await peer.awaitRequests(6);
+    peer.respondError(6, { type: "session_failure", message: "catalog failure" });
+    assert.equal((await branching).kind, "message");
+
+    // A semantic Session failure is a healthy protocol response, so the TUI
+    // connection remains usable for the next overlay request.
+    assert.equal(connection.closed, undefined);
+  });
+
+  it("creates a new Session through the native control request", async () => {
+    const { peer, dispatcher } = await harness();
+    const creating = dispatcher.submit("/new");
+    await peer.awaitRequests(3);
+    assert.equal(peer.requests[2]?.method, "session_new");
+    peer.respond(3, {
+      type: "session_changed",
+      session: sessionView({ id: "session-2", name: "New session" }),
+      restart_required: true,
+    });
+
+    const outcome = await creating;
+    assert.equal(outcome.kind, "session_switch");
+    if (outcome.kind === "session_switch") {
+      assert.equal(outcome.change.session.id, "session-2");
+      assert.equal(outcome.change.restartRequired, true);
+    }
+  });
+
+  it("renames Session metadata without emitting a conversation message", async () => {
+    const { peer, dispatcher } = await harness();
+    const renaming = dispatcher.submit("/name design review");
+    await peer.awaitRequests(3);
+    assert.deepEqual(peer.requests[2], {
+      method: "session_name",
+      id: peer.requests[2]?.id,
+      name: "design review",
+    });
+    peer.respond(3, {
+      type: "session_changed",
+      session: sessionView({ name: "design review" }),
+      restart_required: false,
+    });
+
+    const outcome = await renaming;
+    assert.equal(outcome.kind, "message");
+    if (outcome.kind === "message") {
+      assert.match(outcome.text, /session renamed to design review/);
+    }
+    assert.equal(
+      peer.requests.some((request) => request.method === "submit_inbound"),
+      false,
+    );
+  });
+
+  it("returns native fork boundaries for the Pi-style picker", async () => {
+    const { peer, dispatcher } = await harness();
+    const forking = dispatcher.submit("/fork");
+    await peer.awaitRequests(3);
+    assert.equal(peer.requests[2]?.method, "session_tree_get");
+    peer.respond(3, {
+      type: "session_tree",
+      session: sessionView(),
+      nodes: [],
+      branchable_messages: [
+        {
+          surface_revision: 3,
+          message: {
+            id: "user-c",
+            content: [{ type: "text", text: "C" }],
+            source: "human",
+            kind: "message",
+          },
+        },
+      ],
+    });
+
+    const outcome = await forking;
+    assert.deepEqual(outcome, {
+      kind: "choose_fork",
+      boundaries: [
+        {
+          surface_revision: 3,
+          message: {
+            id: "user-c",
+            content: [{ type: "text", text: "C" }],
+            source: "human",
+            kind: "message",
+          },
+        },
+      ],
+      nextOffset: undefined,
+    });
   });
 
   it("treats /reasoning and /expand as client display preferences", async () => {

@@ -2,7 +2,7 @@
  * The real rustX child: TypeScript client -> actual `rustx` binary.
  *
  * ```text
- * RuntimeClientSession
+ * RuntimeClientAttachment
  *   -> RuntimeClientConnection      (real JSONL framing)
  *   -> ChildRuntimeProcess          (real OS process)
  *   -> rustx --models ... --session ... --workspace ... --runtime-root ...
@@ -32,7 +32,7 @@ import { after, before, describe, it } from "node:test";
 
 import { ChildRuntimeProcess } from "../src/runtime/child-process.ts";
 import { RuntimeClientConnection } from "../src/runtime/connection.ts";
-import { RuntimeClientSession } from "../src/runtime/session.ts";
+import { RuntimeClientAttachment } from "../src/runtime/attachment.ts";
 import { CommandDispatcher } from "../src/commands/dispatcher.ts";
 import { ProviderEmulator } from "./support/provider-emulator.ts";
 import { TempFixture } from "./support/temp-fixture.ts";
@@ -104,7 +104,7 @@ const SESSION_JSON = JSON.stringify({
 interface Harness {
   child: ChildRuntimeProcess;
   connection: RuntimeClientConnection;
-  session: RuntimeClientSession;
+  session: RuntimeClientAttachment;
   provider: ProviderEmulator;
 }
 
@@ -143,7 +143,7 @@ describe("real rustx child integration", { skip: SKIP }, () => {
         connection.reportProcessExit(exit.code, exit.signal, exit.spawnError),
       );
 
-    const session = new RuntimeClientSession({ connection });
+    const session = new RuntimeClientAttachment({ connection });
     harness = { child, connection, session, provider };
   });
 
@@ -440,7 +440,7 @@ describe("real rustx child repeated compaction", { skip: SKIP }, () => {
         connection.reportProcessExit(exit.code, exit.signal, exit.spawnError),
       );
 
-    const session = new RuntimeClientSession({ connection });
+    const session = new RuntimeClientAttachment({ connection });
     harness = { child, connection, session, provider };
   });
 

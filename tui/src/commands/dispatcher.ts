@@ -20,7 +20,7 @@
  * only through operations this file calls.
  */
 
-import type { RuntimeClientSession } from "../runtime/session.ts";
+import type { RuntimeClientAttachment, SessionSwitch } from "../runtime/attachment.ts";
 import { RuntimeRequestError } from "../runtime/connection.ts";
 import {
   activeBackground,
@@ -40,6 +40,10 @@ import type {
   CatalogModelView,
   InteractionId,
   InteractionResponse,
+  SessionNodeView,
+  SessionSummaryView,
+  SessionUserMessageBoundaryView,
+  SessionView,
   ToolCallId,
   ToolExecutionId,
 } from "../protocol/types.ts";
@@ -49,6 +53,27 @@ export type CommandOutcome =
   | { kind: "none" }
   | { kind: "message"; level: "info" | "error"; text: string }
   | { kind: "choose_model"; models: CatalogModelView[] }
+  | {
+      kind: "choose_session";
+      sessions: SessionSummaryView[];
+      nextOffset?: number;
+      query: string;
+    }
+  | {
+      kind: "choose_fork";
+      boundaries: SessionUserMessageBoundaryView[];
+      nextOffset?: number;
+    }
+  | {
+      kind: "choose_tree";
+      session: SessionView;
+      nodes: SessionNodeView[];
+      nextNodeOffset?: number;
+      boundaries: SessionUserMessageBoundaryView[];
+      nextHistoryOffset?: number;
+    }
+  | { kind: "session_switch"; change: SessionSwitch }
+  | { kind: "replacement_required"; message: string }
   | {
       /** A client display preference. Never a runtime request. */
       kind: "preference";
@@ -86,7 +111,7 @@ export type PreferenceChange =
 export type ExpandTarget = "all" | "none" | "latest";
 
 export interface DispatcherContext {
-  session: RuntimeClientSession;
+  session: RuntimeClientAttachment;
   /** Bounded diagnostics the UI owns, surfaced by `/debug`. */
   diagnostics: () => DebugDiagnostics;
 }
@@ -111,10 +136,15 @@ export interface DebugDiagnostics {
 }
 
 export class CommandDispatcher {
-  readonly #context: DispatcherContext;
+  #context: DispatcherContext;
 
   constructor(context: DispatcherContext) {
     this.#context = context;
+  }
+
+  /** Rebinds routing after a native process-boundary session switch. */
+  setSession(session: RuntimeClientAttachment): void {
+    this.#context.session = session;
   }
 
   /**
@@ -153,6 +183,20 @@ export class CommandDispatcher {
           return info(renderHelp());
         case "/model":
           return await this.#model(state, argument);
+        case "/new":
+          return { kind: "session_switch", change: await this.#context.session.newSession() };
+        case "/resume":
+          return await this.#resume(argument);
+        case "/session":
+          return await this.#sessionInfo();
+        case "/name":
+          return await this.#name(argument);
+        case "/clone":
+          return { kind: "session_switch", change: await this.#context.session.cloneSession() };
+        case "/fork":
+          return await this.#fork();
+        case "/tree":
+          return await this.#tree();
         case "/tools":
           return info(renderTools(state));
         case "/skills":
@@ -181,6 +225,107 @@ export class CommandDispatcher {
     } catch (error) {
       return failure(error);
     }
+  }
+
+  /** Selection seams used by the native-data overlays. */
+  async selectSession(sessionId: string): Promise<CommandOutcome> {
+    try {
+      return {
+        kind: "session_switch",
+        change: await this.#context.session.selectSession(sessionId),
+      };
+    } catch (error) {
+      return failure(error);
+    }
+  }
+
+  async selectTreeNode(sessionId: string, nodeId: string): Promise<CommandOutcome> {
+    try {
+      return {
+        kind: "session_switch",
+        change: await this.#context.session.selectSession(sessionId, nodeId),
+      };
+    } catch (error) {
+      return failure(error);
+    }
+  }
+
+  async forkAt(boundary: SessionUserMessageBoundaryView): Promise<CommandOutcome> {
+    try {
+      return {
+        kind: "session_switch",
+        change: await this.#context.session.forkSession(
+          boundary.surface_revision,
+          boundary.message.id,
+        ),
+      };
+    } catch (error) {
+      return failure(error);
+    }
+  }
+
+  async branchAt(boundary: SessionUserMessageBoundaryView): Promise<CommandOutcome> {
+    try {
+      return {
+        kind: "session_switch",
+        change: await this.#context.session.branchTree(
+          boundary.surface_revision,
+          boundary.message.id,
+        ),
+      };
+    } catch (error) {
+      return failure(error);
+    }
+  }
+
+  async #resume(argument: string): Promise<CommandOutcome> {
+    if (argument.length > 0) return this.selectSession(argument);
+    const page = await this.#context.session.listSessions();
+    return {
+      kind: "choose_session",
+      sessions: page.sessions,
+      nextOffset: page.nextOffset,
+      query: "",
+    };
+  }
+
+  async #sessionInfo(): Promise<CommandOutcome> {
+    const session = await this.#context.session.refreshSession();
+    return info(
+      [
+        `session ${session.name} (${session.id})`,
+        `active node ${session.active_node}`,
+        `conversation ${session.active_conversation_id}`,
+        `nodes ${session.node_count}`,
+      ].join("\n"),
+    );
+  }
+
+  async #name(argument: string): Promise<CommandOutcome> {
+    if (argument.trim().length === 0) return info("usage: /name <text>");
+    const session = await this.#context.session.nameSession(argument);
+    return info(`session renamed to ${session.name}`);
+  }
+
+  async #fork(): Promise<CommandOutcome> {
+    const tree = await this.#context.session.sessionTree();
+    return {
+      kind: "choose_fork",
+      boundaries: tree.branchableMessages,
+      nextOffset: tree.nextHistoryOffset,
+    };
+  }
+
+  async #tree(): Promise<CommandOutcome> {
+    const tree = await this.#context.session.sessionTree();
+    return {
+      kind: "choose_tree",
+      session: tree.session,
+      nodes: tree.nodes,
+      nextNodeOffset: tree.nextNodeOffset,
+      boundaries: tree.branchableMessages,
+      nextHistoryOffset: tree.nextHistoryOffset,
+    };
   }
 
   /**
@@ -229,33 +374,37 @@ export class CommandDispatcher {
    * simply reports both facts truthfully.
    */
   async selectModel(model: CatalogModelView): Promise<CommandOutcome> {
-    const current = this.#context.session.state?.sessionModel.configured;
-    if (current === undefined) {
-      return { kind: "message", level: "error", text: "not attached yet" };
+    try {
+      const current = this.#context.session.state?.sessionModel.configured;
+      if (current === undefined) {
+        return { kind: "message", level: "error", text: "not attached yet" };
+      }
+
+      // `/model X` is a deliberate whole-state replacement: the selected
+      // primary model gets its own runtime defaults, while the independently
+      // configured summary policy is copied from the authoritative current
+      // configuration unchanged.
+      const replacement = {
+        model: model.model,
+        reasoningProfile: model.defaultReasoningProfile,
+        requestParams: {},
+        summaryModel: current.summaryModel,
+      };
+      const updated = await this.#context.session.modelSet({
+        ...replacement,
+      });
+
+      const attempt = this.#context.session.state?.attempt;
+      const note =
+        attempt !== undefined && attempt.phase.type === "running"
+          ? `\nThe running attempt stays on ${attempt.model.primary.model}; the change applies to the next attempt.`
+          : "";
+      return info(
+        `session model is now ${updated.configured.model}\nprimary overrides reset to the selected model defaults; summary model policy preserved\n${capabilitySummary(updated.effective)}${note}`,
+      );
+    } catch (error) {
+      return failure(error);
     }
-
-    // `/model X` is a deliberate whole-state replacement: the selected
-    // primary model gets its own runtime defaults, while the independently
-    // configured summary policy is copied from the authoritative current
-    // configuration unchanged.
-    const replacement = {
-      model: model.model,
-      reasoningProfile: model.defaultReasoningProfile,
-      requestParams: {},
-      summaryModel: current.summaryModel,
-    };
-    const updated = await this.#context.session.modelSet({
-      ...replacement,
-    });
-
-    const attempt = this.#context.session.state?.attempt;
-    const note =
-      attempt !== undefined && attempt.phase.type === "running"
-        ? `\nThe running attempt stays on ${attempt.model.primary.model}; the change applies to the next attempt.`
-        : "";
-    return info(
-      `session model is now ${updated.configured.model}\nprimary overrides reset to the selected model defaults; summary model policy preserved\n${capabilitySummary(updated.effective)}${note}`,
-    );
   }
 
   async #cancel(argument: string): Promise<CommandOutcome> {
@@ -396,6 +545,9 @@ function info(text: string): CommandOutcome {
 
 function failure(error: unknown): CommandOutcome {
   if (error instanceof RuntimeRequestError) {
+    if (error.error.type === "session_restart_required") {
+      return { kind: "replacement_required", message: error.error.message };
+    }
     return { kind: "message", level: "error", text: error.message };
   }
   return {

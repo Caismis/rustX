@@ -2953,7 +2953,7 @@ contracts and provider protocols. These invariants are frozen by M2:
   and leaves zero bytes on stdout.
 
 - Clean input EOF at a record boundary or a peer broken pipe terminates the
-  one-session process successfully; malformed framing or another transport
+  one-active-lineage process successfully; malformed framing or another transport
   error exits non-zero. Semantic `shutdown` waits for runtime quiescence but
   does not close the transport. Transport EOF remains a detach, never an
   Agent Loop cancellation primitive.
@@ -3184,3 +3184,105 @@ Child processes must receive an explicit environment. Runtime-private secrets mu
 ## Runtime persistence
 
 A stopped runtime may retain a writable filesystem layer as a warm cache, but the writable layer is never the source of truth for durable conversation facts.
+
+## Native local Session lifecycle and branching (M9.4 / Issue #88)
+
+The user-facing `Session` owner is `LocalSessionSupervisor`, not
+`ConversationRuntime`, `RuntimeClient`, or the TUI. It owns the
+`SessionCatalog`, Session graph, active `SessionNode`, and exactly one linear
+`ConversationRuntime` attachment. Each graph node owns a distinct
+`ConversationId`; `ConversationSurface`, the Message Ledger, Request Snapshot,
+Event Journal, and runtime execution remain linear and branch-unaware.
+
+### Publication and replacement linearization
+
+The native replacement sequence has these ordered points:
+
+1. Source preparation selects an exact retained `SurfaceRevision` (or current
+   head) and materializes the immutable seed. The source can mutate after this
+   read without changing the prepared destination.
+2. The old runtime reaches semantic quiescence only when
+   `ConversationRuntime::shutdown().await` returns successfully. Until that
+   happens, no replacement Session/node selection may become catalog-visible.
+3. Catalog visibility commits at `fs::rename(temp, catalog.json)` after the
+   temporary file has been written and fsynced.
+4. The post-rename parent-directory `File::open(parent).sync_all()` is the
+   durability barrier. It strengthens persistence but is after visibility.
+
+`CatalogCommitError::NotCommitted` means the rename did not happen: the old
+catalog file and in-memory document remain authoritative. A
+`CommittedButDurabilityUncertain` outcome means rename did happen. The catalog
+updates its in-memory document to the new document before returning that
+error, and callers must treat the publication as visible but durability
+uncertain. It is never represented as “nothing changed”. For a replacement,
+both outcomes after old-runtime quiescence enter the terminal
+`ReplacementRequired` attachment state; a fresh process must be composed from
+the catalog that is actually on disk. Metadata-only model/name mutations may
+continue after a pre-commit failure, but a post-commit durability uncertainty
+fences the attachment too, so a live runtime cannot silently diverge from
+published metadata.
+
+Session transitions therefore have three distinct product outcomes:
+
+1. **No visibility commit.** The source selection remains authoritative and a
+   prepared destination is not visible. If the old runtime was already
+   quiesced, the attachment is still terminal, but a fork/tree editor prompt
+   is not returned as though the transition succeeded.
+2. **Committed and durable.** `session_changed` carries the newly authoritative
+   Session and, for fork/tree, the selected user content as transient editor
+   content. The prompt is not part of the destination's canonical seed.
+3. **Committed with durability uncertain.**
+   `session_committed_restart_required` carries the committed Session identity,
+   the same transient editor content when applicable, and a diagnostic. It is
+   a typed semantic result, not a generic failure. After restart the TUI reads
+   `session_get` from the new Rust process, verifies the authoritative
+   Session/node selection, and only then restores the carried prompt. The
+   prompt remains non-canonical until the user submits it.
+
+The supervisor attachment state is explicit and absorbing:
+
+```text
+NotInstalled -> Live(runtime) -> ReplacementRequired
+```
+
+Only composition may perform `NotInstalled -> Live`. Replacement operations
+first prepare and preflight privately, then quiesce the old runtime, then
+publish. Once quiescence succeeds, duplicate/stale runtime-dependent requests,
+including selecting the same node, return typed replacement-required failure;
+they cannot treat the missing runtime as a healthy `Option::None`. Read-only
+Session list and active metadata remain available while terminal so the
+restarting owner can inspect authoritative state. Runtime-backed tree/history
+and execution/model operations are fenced.
+
+The Runtime Client preserves this distinction with
+`session_restart_required` beside ordinary `session_failure`. The TUI stops
+input, detaches/closes the stale attachment, waits for the old process to
+exit, restarts through the existing Rust-owned catalog, attaches to the
+lineage selected by the restarted process, refreshes `session_get`, and only
+then resumes presentation. It never derives the destination from stale
+picker/component state. Transport loss and ordinary cancellation remain
+separate lifecycle outcomes.
+
+Fork/tree editor restoration is currently explicitly text-only. A selected
+canonical image or file block is rejected at native seed preparation rather
+than being silently rewritten as `[image]` or `[file]`; the typed payload
+remains a block list so a structured editor can be added by a later
+architecture decision.
+
+### Bounded native projections
+
+The native owner, not TypeScript rendering, enforces the projection bounds.
+`session_list` accepts an optional case-insensitive Session id/name query,
+bounded `limit`, and offset continuation. Rows are ordered by ascending
+Session id. `session_tree_get` returns bounded
+node and historical user-message pages, each with its own continuation offset;
+nodes are deterministic `SessionNodeId` order and boundaries retain their
+canonical first-appearance order. `SessionView` contains active metadata and a
+node count, not the entire graph. Continuations make older Sessions and
+history reachable without imposing a permanent global Session maximum.
+The two tree continuations are independent: once either `next_*_offset` is
+absent, that stream is exhausted for the selector snapshot and is never
+restarted from an earlier offset. The TUI uses the loaded length as the
+monotonic no-op offset for the exhausted side while the other side continues;
+it does not duplicate rows or turn client-side search into a native unbounded
+query.

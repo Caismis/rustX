@@ -63,8 +63,20 @@ import { correlateTools } from "../presentation/tools.ts";
 import type { PresentationState } from "../presentation/state.ts";
 import type { ChildRuntimeProcess } from "../runtime/child-process.ts";
 import type { RuntimeClientConnection } from "../runtime/connection.ts";
-import type { RuntimeClientSession } from "../runtime/session.ts";
-import type { CatalogModelView, ToolCallId } from "../protocol/types.ts";
+import type { SessionSwitch } from "../runtime/attachment.ts";
+import type { RuntimeClientAttachment } from "../runtime/attachment.ts";
+import type {
+  CatalogModelView,
+  SessionSummaryView,
+  SessionUserMessageBoundaryView,
+  SessionView,
+  ToolCallId,
+} from "../protocol/types.ts";
+import {
+  BoundarySelector,
+  SessionSelector,
+} from "./components/session-selector.ts";
+import { TreeSelector, type TreeSelection } from "./components/tree-selector.ts";
 import {
   renderBackgroundSection,
   renderInteractionSection,
@@ -88,18 +100,27 @@ import {
 import { editorTheme, markdownTheme, style } from "./theme.ts";
 
 export interface RustxTuiAppOptions {
-  session: RuntimeClientSession;
+  session: RuntimeClientAttachment;
   connection: RuntimeClientConnection;
   child: ChildRuntimeProcess;
+  /** Re-spawns and re-attaches after Rust publishes a lineage switch. */
+  restartRuntime?: () => Promise<RuntimeAttachmentHandle>;
   /** How long the child gets to exit after the shutdown sequence. */
   terminationGraceMs?: number;
 }
 
+export interface RuntimeAttachmentHandle {
+  session: RuntimeClientAttachment;
+  connection: RuntimeClientConnection;
+  child: ChildRuntimeProcess;
+}
+
 export class RustxTuiApp {
-  readonly #session: RuntimeClientSession;
-  readonly #connection: RuntimeClientConnection;
-  readonly #child: ChildRuntimeProcess;
+  #session: RuntimeClientAttachment;
+  #connection: RuntimeClientConnection;
+  #child: ChildRuntimeProcess;
   readonly #dispatcher: CommandDispatcher;
+  readonly #restartRuntime: (() => Promise<RuntimeAttachmentHandle>) | undefined;
   readonly #terminationGraceMs: number | undefined;
 
   readonly #tui: TUI;
@@ -116,12 +137,16 @@ export class RustxTuiApp {
   #exitCode = 0;
   #finished = false;
   #started = false;
+  #restarting = false;
+  #removeStateListener: (() => void) | undefined;
+  #removeCloseListener: (() => void) | undefined;
   #resolveExit: ((code: number) => void) | undefined;
 
   constructor(options: RustxTuiAppOptions) {
     this.#session = options.session;
     this.#connection = options.connection;
     this.#child = options.child;
+    this.#restartRuntime = options.restartRuntime;
     this.#terminationGraceMs = options.terminationGraceMs;
 
     this.#tui = new TUI(new ProcessTerminal());
@@ -144,8 +169,23 @@ export class RustxTuiApp {
     this.#tui.addChild(this.#editor);
     this.#tui.addChild(this.#footer);
 
-    this.#session.onState((state) => this.#renderState(state));
-    this.#connection.onClose((error) => {
+    this.#bindRuntime(this.#session, this.#connection, this.#child);
+  }
+
+  #bindRuntime(
+    session: RuntimeClientAttachment,
+    connection: RuntimeClientConnection,
+    child: ChildRuntimeProcess,
+  ): void {
+    this.#removeStateListener?.();
+    this.#removeCloseListener?.();
+    this.#session = session;
+    this.#connection = connection;
+    this.#child = child;
+    this.#dispatcher.setSession(session);
+    this.#removeStateListener = session.onState((state) => this.#renderState(state));
+    this.#removeCloseListener = connection.onClose((error) => {
+      if (this.#restarting) return;
       // Transport loss is not cancellation. It only ends observation, so the
       // client says exactly that and stops accepting input.
       this.#note(
@@ -153,9 +193,7 @@ export class RustxTuiApp {
         `${error.message}\nThe runtime is no longer observable from this client.`,
       );
       this.#editor.disableSubmit = true;
-      if (!this.#quitting) {
-        this.#finish(1);
-      }
+      if (!this.#quitting) this.#finish(1);
     });
   }
 
@@ -179,12 +217,43 @@ export class RustxTuiApp {
       if (state !== undefined) {
         this.#renderState(state);
       }
+      // Session metadata is a separate native product projection from the
+      // conversation snapshot. Refresh it after the attachment handshake so
+      // startup remains the same initialize/subscribe cut used by existing
+      // Runtime Client consumers, while the footer still becomes session-aware
+      // as soon as the authoritative read returns.
+      const refreshSession = (
+        this.#session as unknown as {
+          refreshSession?: () => Promise<unknown>;
+        }
+      ).refreshSession;
+      if (refreshSession !== undefined) {
+        void refreshSession.call(this.#session).then(
+          () => {
+            const refreshed = this.#session.state;
+            if (refreshed !== undefined) this.#renderState(refreshed);
+          },
+          (error: unknown) => {
+            this.#note("error", `session metadata unavailable: ${(error as Error).message}`);
+          },
+        );
+      }
       this.#tui.addInputListener((data) => {
         // Ctrl+C is a cancellation *intent*, routed through the protocol like
         // any other; it never kills the runtime behind the runtime's back.
         if (matchesKey(data, "ctrl+c")) {
           void this.#onInterrupt();
           return { consume: true };
+        }
+        if (matchesKey(data, "escape")) {
+          const attempt = this.#session.state?.attempt;
+          const acted = this.#overlay !== undefined || (
+            !this.#restarting &&
+            attempt !== undefined &&
+            attempt.phase.type !== "settled"
+          );
+          void this.#onEscape();
+          return acted ? { consume: true } : undefined;
         }
         // Ctrl+O and Ctrl+T are presentation only. They change what is drawn
         // and send nothing to the runtime.
@@ -202,6 +271,7 @@ export class RustxTuiApp {
   }
 
   async #onSubmit(text: string): Promise<void> {
+    if (this.#restarting || this.#finished) return;
     const line = text.trim();
     if (line.length === 0) {
       return;
@@ -219,7 +289,12 @@ export class RustxTuiApp {
       );
     }
 
-    const outcome = await this.#dispatcher.submit(text);
+    await this.#handleOutcome(await this.#dispatcher.submit(text));
+  }
+
+  async #handleOutcome(
+    outcome: Awaited<ReturnType<CommandDispatcher["submit"]>>,
+  ): Promise<void> {
     switch (outcome.kind) {
       case "message":
         this.#note(outcome.level, outcome.text);
@@ -227,18 +302,57 @@ export class RustxTuiApp {
       case "choose_model":
         this.#showModelSelector(outcome.models);
         break;
+      case "choose_session":
+        this.#showSessionSelector(outcome.sessions, outcome.nextOffset, outcome.query);
+        break;
+      case "choose_fork":
+        this.#showBoundarySelector(
+          outcome.boundaries,
+          "Fork from user message",
+          "fork",
+          outcome.nextOffset,
+        );
+        break;
+      case "choose_tree":
+        this.#showTreeSelector(
+          outcome.session,
+          outcome.nodes,
+          outcome.nextNodeOffset,
+          outcome.boundaries,
+          outcome.nextHistoryOffset,
+        );
+        break;
+      case "session_switch":
+        await this.#applySessionSwitch(outcome.change);
+        break;
+      case "replacement_required":
+        await this.#applyReplacementRequired(outcome.message);
+        break;
       case "preference":
         this.#applyPreference(outcome.preference);
         break;
       case "quit":
         await this.quit();
         break;
-      default:
+      case "none":
         break;
     }
   }
 
+  async #onEscape(): Promise<void> {
+    if (this.#overlay !== undefined) {
+      this.#closeOverlay();
+      return;
+    }
+    if (this.#restarting) return;
+    const attempt = this.#session.state?.attempt;
+    if (attempt !== undefined && attempt.phase.type !== "settled") {
+      await this.#handleOutcome(await this.#dispatcher.submit("/cancel"));
+    }
+  }
+
   async #onInterrupt(): Promise<void> {
+    if (this.#restarting) return;
     const state = this.#session.state;
     if (state?.attempt !== undefined && state.attempt.phase.type !== "settled") {
       const outcome = await this.#dispatcher.submit("/cancel");
@@ -340,15 +454,306 @@ export class RustxTuiApp {
     selector.onCancel = close;
     selector.onSelect = (model) => {
       close();
-      void this.#dispatcher.selectModel(model).then((outcome) => {
-        if (outcome.kind === "message") {
-          this.#note(outcome.level, outcome.text);
-        }
+      void this.#dispatcher.selectModel(model).then((outcome) => this.#handleOutcome(outcome)).catch((error: unknown) => {
+        this.#note("error", `model selection failed: ${errorMessage(error)}`);
       });
     };
 
     handle.focus();
     this.#tui.requestRender();
+  }
+
+  #showSessionSelector(
+    sessions: SessionSummaryView[],
+    nextOffset: number | undefined,
+    query: string,
+  ): void {
+    if (sessions.length === 0) {
+      this.#note("info", "no persisted sessions are available");
+      return;
+    }
+    let currentQuery = query;
+    let currentNextOffset = nextOffset;
+    let requestSerial = 0;
+    const selector = new SessionSelector({ sessions, nextOffset, query });
+    const handle = this.#tui.showOverlay(selector, {
+      width: "80%",
+      maxHeight: "70%",
+      anchor: "center",
+    });
+    this.#overlay = handle;
+    selector.onChange = () => this.#tui.requestRender();
+    selector.onCancel = () => this.#closeOverlay();
+    selector.onQueryChange = (nextQuery) => {
+      currentQuery = nextQuery;
+      currentNextOffset = undefined;
+      const serial = ++requestSerial;
+      void this.#session.listSessions(nextQuery, 0).then((page) => {
+        if (serial !== requestSerial) return;
+        currentNextOffset = page.nextOffset;
+        selector.replacePage(page.sessions, page.nextOffset);
+      }).catch((error: unknown) => {
+        if (serial !== requestSerial) return;
+        this.#note("error", `session search failed: ${errorMessage(error)}`);
+        selector.replacePage([], undefined);
+      });
+    };
+    selector.onLoadMore = () => {
+      const offset = currentNextOffset;
+      if (offset === undefined) return;
+      const serial = requestSerial;
+      void this.#session.listSessions(currentQuery, offset).then((page) => {
+        if (serial !== requestSerial) return;
+        currentNextOffset = page.nextOffset;
+        selector.appendPage(page.sessions, page.nextOffset);
+      }).catch((error: unknown) => {
+        this.#note("error", `session page failed: ${errorMessage(error)}`);
+        selector.appendPage([], currentNextOffset);
+      });
+    };
+    selector.onSelect = (session) => {
+      this.#closeOverlay();
+      void this.#dispatcher.selectSession(session.id)
+        .then((outcome) => this.#handleOutcome(outcome))
+        .catch((error: unknown) => {
+          this.#note("error", `session selection failed: ${errorMessage(error)}`);
+        });
+    };
+    handle.focus();
+    this.#tui.requestRender();
+  }
+
+  #showBoundarySelector(
+    boundaries: SessionUserMessageBoundaryView[],
+    title: string,
+    operation: "fork" | "tree",
+    nextOffset?: number,
+  ): void {
+    if (boundaries.length === 0) {
+      this.#note(
+        "info",
+        "the active lineage has no committed user-message boundary",
+      );
+      return;
+    }
+    let currentNextOffset = nextOffset;
+    const selector = new BoundarySelector({ boundaries, title, nextOffset });
+    const handle = this.#tui.showOverlay(selector, {
+      width: "80%",
+      maxHeight: "70%",
+      anchor: "center",
+    });
+    this.#overlay = handle;
+    selector.onChange = () => this.#tui.requestRender();
+    selector.onCancel = () => this.#closeOverlay();
+    selector.onLoadMore = () => {
+      const offset = currentNextOffset;
+      if (offset === undefined) return;
+      void this.#session.sessionTreePage(0, offset).then((page) => {
+        currentNextOffset = page.nextHistoryOffset;
+        selector.appendPage(page.branchableMessages, page.nextHistoryOffset);
+      }).catch((error: unknown) => {
+        this.#note("error", `history page failed: ${errorMessage(error)}`);
+        selector.appendPage([], currentNextOffset);
+      });
+    };
+    selector.onSelect = (boundary) => {
+      this.#closeOverlay();
+      const request = operation === "fork"
+        ? this.#dispatcher.forkAt(boundary)
+        : this.#dispatcher.branchAt(boundary);
+      void request
+        .then((outcome) => this.#handleOutcome(outcome))
+        .catch((error: unknown) => {
+          this.#note("error", `session switch failed: ${errorMessage(error)}`);
+        });
+    };
+    handle.focus();
+    this.#tui.requestRender();
+  }
+
+  #showTreeSelector(
+    session: SessionView,
+    nodes: import("../protocol/types.ts").SessionNodeView[],
+    nextNodeOffset: number | undefined,
+    boundaries: SessionUserMessageBoundaryView[],
+    nextHistoryOffset: number | undefined,
+  ): void {
+    const selector = new TreeSelector({
+      session,
+      nodes,
+      nextNodeOffset,
+      boundaries,
+      nextHistoryOffset,
+    });
+    const handle = this.#tui.showOverlay(selector, {
+      width: "80%",
+      maxHeight: "70%",
+      anchor: "center",
+    });
+    this.#overlay = handle;
+    selector.onChange = () => this.#tui.requestRender();
+    selector.onCancel = () => this.#closeOverlay();
+    selector.onLoadMore = () => {
+      const request = selector.nextPageRequest();
+      if (request === undefined) return;
+      void this.#session.sessionTreePage(request.nodeOffset, request.historyOffset).then((page) => {
+        selector.appendPage({
+          nodes: page.nodes,
+          nextNodeOffset: page.nextNodeOffset,
+          boundaries: page.branchableMessages,
+          nextHistoryOffset: page.nextHistoryOffset,
+        });
+      }).catch((error: unknown) => {
+        this.#note("error", `tree page failed: ${errorMessage(error)}`);
+        selector.retryPage();
+      });
+    };
+    selector.onSelect = (selection: TreeSelection) => {
+      this.#closeOverlay();
+      const request = selection.kind === "node"
+        ? this.#dispatcher.selectTreeNode(session.id, selection.node.id)
+        : this.#dispatcher.branchAt(selection.boundary);
+      void request
+        .then((outcome) => this.#handleOutcome(outcome))
+        .catch((error: unknown) => {
+          this.#note("error", `session switch failed: ${errorMessage(error)}`);
+        });
+    };
+    handle.focus();
+    this.#tui.requestRender();
+  }
+
+  #closeOverlay(): void {
+    const handle = this.#overlay;
+    if (handle === undefined) return;
+    handle.hide();
+    this.#overlay = undefined;
+    this.#tui.setFocus(this.#editor);
+    this.#tui.requestRender();
+  }
+
+  async #applySessionSwitch(change: SessionSwitch): Promise<void> {
+    if (!change.restartRequired) {
+      this.#note(
+        "info",
+        `active session: ${change.session.name} · node ${change.session.active_node}`,
+      );
+      return;
+    }
+    const restart = this.#restartRuntime;
+    if (restart === undefined) {
+      this.#note("error", "the runtime cannot be replaced by this attachment");
+      this.#editor.disableSubmit = true;
+      this.#finish(1);
+      return;
+    }
+
+    this.#restarting = true;
+    this.#editor.disableSubmit = true;
+    this.#note(
+      change.restartDiagnostic === undefined ? "info" : "error",
+      change.restartDiagnostic === undefined
+        ? `switching to session ${change.session.name}…`
+        : `Session ${change.session.name} committed before durability became uncertain: ${change.restartDiagnostic}`,
+    );
+    const oldSession = this.#session;
+    const oldConnection = this.#connection;
+    const oldChild = this.#child;
+    try {
+      // Rust has already reached its semantic quiescence point before it
+      // returned this result. Closing here only releases the old process
+      // attachment; it is never the cancellation operation.
+      await this.#detachOldAttachment(oldSession, oldConnection);
+      oldChild.closeStdin();
+      await oldChild.waitOrTerminate(this.#terminationGraceMs);
+
+      const next = await restart();
+      this.#bindRuntime(next.session, next.connection, next.child);
+      const authoritative = await next.session.refreshSession();
+      if (change.editorContent !== undefined) {
+        if (!sameSessionLineage(change.session, authoritative)) {
+          throw new Error(
+            "restarted Rust process selected a different Session/node than the committed transition",
+          );
+        }
+        this.#editor.setText(editorText(change.editorContent));
+      }
+      this.#note(
+        "info",
+        `active session: ${authoritative.name} · node ${authoritative.active_node}`,
+      );
+      const state = this.#session.state;
+      if (state !== undefined) this.#renderState(state);
+    } catch (error) {
+      this.#note("error", `session switch failed: ${errorMessage(error)}`);
+      this.#editor.disableSubmit = true;
+      this.#finish(1);
+    } finally {
+      this.#restarting = false;
+      if (!this.#finished) {
+        this.#editor.disableSubmit = this.#quitting;
+      }
+    }
+  }
+
+  /**
+   * Replaces an attachment after Rust reports its terminal Session state.
+   * The restarted process reads the catalog again; this method deliberately
+   * does not infer a destination Session from the failed command.
+   */
+  async #applyReplacementRequired(message: string): Promise<void> {
+    if (this.#restarting || this.#finished) return;
+    const restart = this.#restartRuntime;
+    this.#restarting = true;
+    this.#editor.disableSubmit = true;
+    this.#closeOverlay();
+    this.#note("error", `the active Session attachment must be replaced: ${message}`);
+    if (restart === undefined) {
+      this.#finish(1);
+      return;
+    }
+
+    const oldSession = this.#session;
+    const oldConnection = this.#connection;
+    const oldChild = this.#child;
+    try {
+      await this.#detachOldAttachment(oldSession, oldConnection);
+      oldChild.closeStdin();
+      await oldChild.waitOrTerminate(this.#terminationGraceMs);
+
+      const next = await restart();
+      this.#bindRuntime(next.session, next.connection, next.child);
+      const authoritative = await next.session.refreshSession();
+      this.#note(
+        "info",
+        `attached to authoritative Session ${authoritative.name} · node ${authoritative.active_node}`,
+      );
+      const state = this.#session.state;
+      if (state !== undefined) this.#renderState(state);
+    } catch (error) {
+      this.#note("error", `Session attachment replacement failed: ${errorMessage(error)}`);
+      this.#editor.disableSubmit = true;
+      this.#finish(1);
+    } finally {
+      this.#restarting = false;
+      if (!this.#finished) {
+        this.#editor.disableSubmit = this.#quitting;
+      }
+    }
+  }
+
+  async #detachOldAttachment(
+    session: RuntimeClientAttachment,
+    connection: RuntimeClientConnection,
+  ): Promise<void> {
+    try {
+      await session.detach();
+    } catch {
+      // The transport may already be closing. Closing it still releases the
+      // client-side attachment and never claims semantic cancellation.
+    }
+    connection.close();
   }
 
   /**
@@ -512,6 +917,7 @@ export class RustxTuiApp {
         state,
         this.#connectionLabel(),
         this.#tui.terminal.columns,
+        this.#session.sessionInfo,
       ),
     );
     this.#tui.requestRender();
@@ -560,4 +966,26 @@ export class RustxTuiApp {
     }
     resolve(code);
   }
+}
+
+function editorText(content: SessionSwitch["editorContent"]): string {
+  const nonText = (content ?? []).find((block) => block.type !== "text");
+  if (nonText !== undefined) {
+    throw new Error(
+      `fork/tree editor restoration does not support ${nonText.type} content yet`,
+    );
+  }
+  return (content ?? [])
+    .map((block) => block.text)
+    .join("\n");
+}
+
+function sameSessionLineage(expected: SessionView, actual: SessionView): boolean {
+  return expected.id === actual.id &&
+    expected.active_node === actual.active_node &&
+    expected.active_conversation_id === actual.active_conversation_id;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

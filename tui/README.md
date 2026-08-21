@@ -94,7 +94,10 @@ pnpm --dir tui start \
   --runtime-root "$PWD/examples/local-runtime/.rustx"
 ```
 
-The four runtime paths are passed straight through. **The client never opens,
+The four startup paths are passed straight through. The `--session` path is
+only the bootstrap conversation configuration; after startup the native
+SessionCatalog/SessionGraph under `--runtime-root` owns user sessions and
+lineages. **The client never opens,
 parses, or interprets any of them** — `models.json` is a runtime-owned model
 authority, and reading it here would create a second one. Provider credentials
 are resolved by the Rust process from the environment it inherits. For the
@@ -112,6 +115,16 @@ spawn rustx
   -> interactive
 ```
 
+Session replacement is also native-owned. A successful `/new`, `/resume`,
+`/clone`, `/fork`, or `/tree` result may require replacing the child process;
+the TUI closes the old attachment and the restarted Rust process re-reads the
+authoritative catalog. A committed-but-durability-uncertain fork/tree result
+also carries the selected user content as transient editor data. The TUI
+restores it only after `session_get` confirms the restarted Session/node, and
+it is not canonical until submitted. Tree node and history pages have
+independent bounded continuations; an exhausted stream is never restarted
+from an earlier offset while the other stream continues.
+
 ## Owners
 
 | Module | Owns | Does not own |
@@ -119,7 +132,7 @@ spawn rustx
 | `runtime/child-process.ts` | spawn, stdio, bounded stderr tail, stdin close, wait, fallback termination | anything semantic; it never reads stdout |
 | `protocol/jsonl.ts` | LF framing, CRLF, the 8 MiB bound in encoded bytes | protocol meaning |
 | `runtime/connection.ts` | request ids, the pending RPC map, correlation, event delivery, ordered writes, terminal settlement | conversation state |
-| `runtime/session.ts` | attach, snapshot install, subscribe, resync repair, shutdown | agent semantics |
+| `runtime/attachment.ts` | attach, snapshot install, subscribe, resync repair, shutdown | agent/session semantics |
 | `presentation/projection.ts` | the ephemeral render cache | canonical history, authority of any kind |
 | `presentation/tools.ts` | the `ToolCallId` correlation used for display | tool lifecycle, which it only reads |
 | `commands/` | slash-command parsing, dispatch to canonical operations | parallel runtime semantics |

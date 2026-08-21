@@ -19,6 +19,7 @@ use rustx::local_runtime::composition::{
     LocalConversationRuntime, LocalRuntimeDependencies, LocalRuntimeError, LocalRuntimePaths,
 };
 use rustx::model::catalog::MapCredentialEnvironment;
+use rustx::runtime::identity::ConversationId;
 use rustx::runtime_client::snapshot::{CapabilitySourceDescriptor, CapabilitySourceStateView};
 use rustx::runtime_client::{RUNTIME_CLIENT_PROTOCOL_VERSION_V1, RuntimeClientResult};
 
@@ -108,7 +109,11 @@ fn write_python_package(workspace: &std::path::Path, name: &str) {
         "[project]\nname = \"fixture\"\nversion = \"0.1.0\"\nrequires-python = \">=3.11\"\n",
     )
     .expect("project");
-    std::fs::write(package.join("uv.lock"), "version = 1\nrevision = 1\n").expect("lock");
+    std::fs::write(
+        package.join("uv.lock"),
+        "version = 1\nrevision = 3\nrequires-python = \">=3.11\"\n\n[[package]]\nname = \"fixture\"\nversion = \"0.1.0\"\nsource = { virtual = \".\" }\n",
+    )
+    .expect("lock");
     std::fs::write(
         package.join("tool.py"),
         "def main(arguments):\n    return arguments\n",
@@ -274,13 +279,13 @@ async fn a_python_capability_failure_is_isolated_from_runtime_startup() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn python_store_initialization_failure_is_isolated_from_runtime_startup() {
     let root = tempfile::tempdir().expect("temp root");
-    let (canonical, paths) = startup(&root, SESSION_JSON);
+    let (_, paths) = startup(&root, SESSION_JSON);
     // A valid Python package exists, so the failure cannot be attributed
     // to discovery: only opening the Python store can fail.
     write_python_package(&paths.workspace, "fixture-tool");
     // The deterministic filesystem conflict: a regular file where
     // `PythonToolStore` must create `m7-tools/tool-versions`.
-    let environments = canonical.join("private/environments");
+    let environments = paths.environment_store_root_for(&ConversationId::new("conv-81"));
     std::fs::create_dir_all(&environments).expect("environments root");
     std::fs::write(environments.join("m7-tools"), b"not a directory")
         .expect("conflicting regular file");
@@ -392,7 +397,7 @@ fn base_only_capability_setup_is_structurally_independent_of_python_storage() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_corrupt_published_tool_version_marks_python_unavailable_and_keeps_the_runtime_alive() {
     let root = tempfile::tempdir().expect("temp root");
-    let (canonical, paths) = startup(&root, SESSION_JSON);
+    let (_, paths) = startup(&root, SESSION_JSON);
     write_python_package(&paths.workspace, "fixture-tool");
 
     // Compute the package identity through real discovery, then seed the
@@ -404,8 +409,9 @@ async fn a_corrupt_published_tool_version_marks_python_unavailable_and_keeps_the
         .expect("discover")
         .pop()
         .expect("one package");
-    let published = canonical
-        .join("private/environments/m7-tools/tool-versions")
+    let published = paths
+        .environment_store_root_for(&ConversationId::new("conv-81"))
+        .join("m7-tools/tool-versions")
         .join(package.tool_version_id.as_str());
     std::fs::create_dir_all(published.join("source")).expect("published source");
     std::fs::write(

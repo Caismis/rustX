@@ -45,11 +45,15 @@ export type SkillId = string;
 export type SkillVersionId = string;
 export type McpServerId = string;
 export type ToolVersionId = string;
+export type SessionId = string;
+export type SessionNodeId = string;
 
 /** A monotonic capability revision. */
 export type CapabilityRevision = number;
 /** A position in the Runtime Client observation stream. */
 export type RuntimeClientCursor = number;
+/** An immutable Conversation Surface revision selected for a seed. */
+export type SurfaceRevision = number;
 /** A mailbox-assigned inbound sequence. Not a cursor. */
 export type InboundSequence = number;
 /** An attachment-scoped request id. Allocated by the connection alone. */
@@ -408,6 +412,56 @@ export interface CatalogModelView {
 
 export interface ModelCatalogView {
   models?: CatalogModelView[];
+}
+
+// ---------------------------------------------------------------------------
+// Native Session product view
+// ---------------------------------------------------------------------------
+
+export type SessionNodeOrigin =
+  | { type: "new" }
+  | {
+      type: "clone";
+      source_session: SessionId;
+      source_node: SessionNodeId;
+      source_surface_revision: SurfaceRevision;
+    }
+  | {
+      type: "fork";
+      source_session: SessionId;
+      source_node: SessionNodeId;
+      source_surface_revision: SurfaceRevision;
+      source_user_message: MessageId;
+    };
+
+export interface SessionNodeView {
+  id: SessionNodeId;
+  parent?: SessionNodeId;
+  conversation_id: ConversationId;
+  origin: SessionNodeOrigin;
+}
+
+export interface SessionView {
+  id: SessionId;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  active_node: SessionNodeId;
+  active_conversation_id: ConversationId;
+  node_count: number;
+}
+
+export interface SessionSummaryView {
+  id: SessionId;
+  name: string;
+  updated_at: string;
+  active_node: SessionNodeId;
+  active: boolean;
+}
+
+export interface SessionUserMessageBoundaryView {
+  surface_revision: SurfaceRevision;
+  message: UserMessageBlock;
 }
 
 // ---------------------------------------------------------------------------
@@ -835,6 +889,42 @@ export type RuntimeClientRequest =
   | { method: "model_get"; id: RequestId }
   | { method: "model_set"; id: RequestId; config: SessionModelConfig }
   | {
+      method: "session_list";
+      id: RequestId;
+      query?: string;
+      offset: number;
+      limit: number;
+    }
+  | { method: "session_get"; id: RequestId }
+  | {
+      method: "session_tree_get";
+      id: RequestId;
+      node_offset: number;
+      history_offset: number;
+      limit: number;
+    }
+  | { method: "session_name"; id: RequestId; name: string }
+  | { method: "session_new"; id: RequestId }
+  | {
+      method: "session_select";
+      id: RequestId;
+      session_id: SessionId;
+      node_id?: SessionNodeId;
+    }
+  | { method: "session_clone"; id: RequestId }
+  | {
+      method: "session_fork";
+      id: RequestId;
+      surface_revision: SurfaceRevision;
+      message_id: MessageId;
+    }
+  | {
+      method: "session_tree_branch";
+      id: RequestId;
+      surface_revision: SurfaceRevision;
+      message_id: MessageId;
+    }
+  | {
       method: "background_status";
       id: RequestId;
       execution_id: ToolExecutionId;
@@ -877,6 +967,15 @@ export type RuntimeClientRequestBody =
   | Omit<Extract<RuntimeClientRequest, { method: "model_catalog_get" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "model_get" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "model_set" }>, "id">
+  | Omit<Extract<RuntimeClientRequest, { method: "session_list" }>, "id">
+  | Omit<Extract<RuntimeClientRequest, { method: "session_get" }>, "id">
+  | Omit<Extract<RuntimeClientRequest, { method: "session_tree_get" }>, "id">
+  | Omit<Extract<RuntimeClientRequest, { method: "session_name" }>, "id">
+  | Omit<Extract<RuntimeClientRequest, { method: "session_new" }>, "id">
+  | Omit<Extract<RuntimeClientRequest, { method: "session_select" }>, "id">
+  | Omit<Extract<RuntimeClientRequest, { method: "session_clone" }>, "id">
+  | Omit<Extract<RuntimeClientRequest, { method: "session_fork" }>, "id">
+  | Omit<Extract<RuntimeClientRequest, { method: "session_tree_branch" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "background_status" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "background_cancel" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "subagent_status" }>, "id">
@@ -910,6 +1009,34 @@ export type RuntimeClientResult =
   | { type: "model_catalog"; catalog: ModelCatalogView }
   | { type: "model"; model: SessionModelView }
   | { type: "model_set"; model: SessionModelView }
+  | {
+      type: "session_list";
+      sessions: SessionSummaryView[];
+      next_offset?: number;
+    }
+  | { type: "session"; session: SessionView }
+  | {
+      type: "session_tree";
+      session: SessionView;
+      nodes: SessionNodeView[];
+      next_node_offset?: number;
+      branchable_messages: SessionUserMessageBoundaryView[];
+      next_history_offset?: number;
+    }
+  | {
+      type: "session_changed";
+      session: SessionView;
+      /** Transient fork/tree editor content; not canonical history. */
+      editor_content?: UserContentBlock[];
+      restart_required: boolean;
+    }
+  | {
+      type: "session_committed_restart_required";
+      session: SessionView;
+      /** Restore only after restart confirms this Session/node. */
+      editor_content?: UserContentBlock[];
+      diagnostic: string;
+    }
   | {
       type: "background_status";
       execution: RuntimeClientBackgroundExecution;
@@ -948,7 +1075,9 @@ export type RuntimeClientError =
   | { type: "invalid_state"; message: string }
   | { type: "invalid_model_configuration"; message: string }
   | { type: "projection_exhausted" }
-  | { type: "runtime_failure"; message: string };
+  | { type: "runtime_failure"; message: string }
+  | { type: "session_failure"; message: string }
+  | { type: "session_restart_required"; message: string };
 
 export interface RuntimeClientResponse {
   id: RequestId;
@@ -1072,6 +1201,10 @@ export function describeProtocolError(error: RuntimeClientError): string {
       return "the runtime observation stream is exhausted";
     case "runtime_failure":
       return `runtime failure: ${error.message}`;
+    case "session_failure":
+      return `session operation failed: ${error.message}`;
+    case "session_restart_required":
+      return `the active Session runtime must be replaced: ${error.message}`;
     default:
       // A future runtime may add a category. Report it rather than crash.
       return `unrecognized protocol error: ${JSON.stringify(error)}`;

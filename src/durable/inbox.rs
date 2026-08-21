@@ -107,6 +107,26 @@ pub struct DurableConversationHead {
     pub active_message_ids: Vec<MessageId>,
 }
 
+/// One retained Surface revision in which a canonical user message first
+/// appears. Backends return these boundaries directly so callers do not need
+/// to materialize every historical Surface revision.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SurfaceUserMessageBoundary {
+    /// The first retained Surface revision containing the message.
+    pub surface_revision: SurfaceRevision,
+    /// The canonical user message body.
+    pub message: UserMessageBlock,
+}
+
+/// A bounded page of retained user-message boundaries.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SurfaceUserMessageBoundaryPage {
+    /// The requested boundary rows.
+    pub boundaries: Vec<SurfaceUserMessageBoundary>,
+    /// Offset for the next page, when more rows exist.
+    pub next_offset: Option<usize>,
+}
+
 /// The semantic input to one atomic canonical compaction transition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompactionCommitInput {
@@ -517,6 +537,13 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// without its bootstrap identity.
     fn initialize(&self, messages: &[MessageBlock]) -> Result<(), ConversationStoreError>;
 
+    /// Loads the immutable bootstrap history originally supplied to
+    /// [`ConversationStore::initialize`]. Reopening a lineage must validate
+    /// against this prefix, not against its later canonical transcript.
+    fn load_bootstrap_history(&self) -> Result<Vec<MessageBlock>, ConversationStoreError> {
+        self.load_canonical()
+    }
+
     /// Loads the current Surface head and checkpoint metadata without
     /// materializing historical revisions.
     fn load_head(&self) -> Result<DurableConversationHead, ConversationStoreError>;
@@ -531,6 +558,42 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         revision: SurfaceRevision,
     ) -> Result<Vec<MessageId>, ConversationStoreError>;
+
+    /// Materializes one exact historical Surface revision from durable
+    /// facts. Implementations must not invoke Context Assembly, compaction,
+    /// provider code, or any runtime execution while answering this read.
+    ///
+    /// The default is deliberately expressed in terms of the two primitive
+    /// durable reads so backend implementations remain small; `SQLite`
+    /// overrides it with one connection-locked read section.
+    fn load_surface_snapshot(
+        &self,
+        revision: SurfaceRevision,
+    ) -> Result<Vec<MessageBlock>, ConversationStoreError> {
+        let ids = self.reconstruct_surface(revision)?;
+        self.load_messages(&ids)
+    }
+
+    /// Loads every ordinary inbound user message through one retained Surface
+    /// revision together with the exact first revision in which it appears.
+    /// The result is ordered by that first appearance and does not materialize
+    /// each intermediate Surface snapshot.
+    fn load_user_message_boundaries(
+        &self,
+        through: SurfaceRevision,
+    ) -> Result<Vec<SurfaceUserMessageBoundary>, ConversationStoreError>;
+
+    /// Loads one bounded page of ordinary inbound user-message boundaries.
+    ///
+    /// The page is ordered by first appearance in the selected retained
+    /// Surface history. The offset/limit seam belongs specifically to the
+    /// Session tree projection; it is not a general durable pagination API.
+    fn load_user_message_boundaries_page(
+        &self,
+        through: SurfaceRevision,
+        offset: usize,
+        limit: usize,
+    ) -> Result<SurfaceUserMessageBoundaryPage, ConversationStoreError>;
 
     /// Appends one canonical [`MessageBlock`] to the durable Message Ledger.
     ///

@@ -3110,34 +3110,164 @@ domain.
 ```text
 explicit startup arguments (--models --session --workspace --runtime-root)
         |
-ModelCatalog + LocalSessionConfig
+ModelCatalog + bootstrap LocalConversationConfig
         |
-        +--> SessionModelState (authoritative session model)
-        +--> ConversationToolRuntime  (workspace, artifacts, mailbox,
-        |                              background registry, base environment)
-        +--> base ToolRegistry + register_native_tools(...)
-        +--> CapabilityCoordinator    (same conversation and workspace)
-        +--> prepare_candidate() -> commit()   <-- before serving
-        +--> context policy / Surface / status pieces
+        +--> SessionCatalog / SessionGraph (native product authority)
+        +--> active SessionNode -> one ConversationId
+        +--> LocalConversationCore (one linear runtime composition)
+        |       +--> SessionModelState (authoritative session model)
+        |       +--> ConversationToolRuntime (workspace, artifacts, mailbox,
+        |       |                              background registry)
+        |       +--> CapabilityCoordinator / context / Surface / status
+        |       +--> RuntimeClientHost + LocalSessionSupervisor control
+        |       +--> exactly one active ConversationRuntime
         |
-LocalConversationCore  (the one shared semantic composition, inactive)
-        |
-        +-- into_interactive(): RuntimeClientHost (projection/control/
-        |                       attachment adapter), then activate
-        |       -> LocalConversationRuntime -> RuntimeClientEndpoint
-        |          -> stdio JSONL (Issue #38)
-        |
-        +-- into_headless(): activate, no Runtime Client host
-                -> HeadlessConversationRuntime (Issue #60 subagents)
+        +-- session switch: quiesce old runtime -> publish selection
+                -> process attachment restart -> ordinary lineage recovery
 ```
 
-`LocalConversationCore::compose` is the one Rust-side semantic composition
-owner; `LocalConversationRuntime::compose` and
-`HeadlessConversationRuntime::compose` are the two final paths over it, both
-returning already-active runtimes and both activating through the one
-`ConversationRuntime::activate` boundary. The startup capability commit
-happens *before* the conversation runtime is constructed, so it is not
-subject to the runtime's lifecycle gate.
+`LocalSessionProduct::compose` is the native local product composition owner.
+It loads the durable `SessionCatalog`, resolves its active `SessionNode`, and
+composes exactly one linear `ConversationRuntime` for that node. The lower
+`LocalConversationRuntime::compose` and `HeadlessConversationRuntime::compose`
+paths remain available for non-session composition callers. A product session
+switch reaches native quiescence before catalog publication; the TUI then
+restarts its process attachment and the new process performs ordinary
+per-conversation recovery. The startup capability commit still happens
+*before* the conversation runtime is constructed, so it is not subject to the
+runtime's lifecycle gate.
+
+#### Native Session lifecycle and branching (M9.4 / Issue #88)
+
+`LocalSessionSupervisor` is the only native user-level Session owner. It owns
+the persisted `SessionCatalog`, Session metadata, the Session graph, the
+active Session/SessionNode selection, and the explicit runtime attachment
+state:
+
+```text
+Runtime Client / TUI intent
+          |
+          v
+LocalSessionSupervisor
+  +-- SessionCatalog + SessionGraph
+  +-- active SessionId / SessionNodeId
+  +-- SessionNode -> ConversationId
+  +-- RuntimeAttachmentState: Live(runtime) or ReplacementRequired
+          |
+          v
+linear Conversation Ledger + ConversationSurface + snapshots + journal
+```
+
+The graph is not a ConversationSurface graph. Every node has a distinct
+`ConversationId`, and every ConversationSurface remains linear. Inactive
+sessions are durable state only; they do not retain a live runtime, attempt,
+tool runner, background registry, pending inbound queue, or cancellation
+state. The catalog is stored under the native runtime root, while every node's
+SQLite conversation database is independently bound to its own
+`ConversationId`.
+
+`/new` prepares an empty private destination and publishes a new Session and
+root node only after its durable conversation seed is valid. `/name` commits
+metadata only. `/resume` selects persisted metadata, `/tree` selects a node or
+prepares a new node, and both replace the active process attachment only after
+`ConversationRuntime::shutdown()` has returned successfully. The supervisor's
+runtime attachment is explicit: it is `NotInstalled` during composition,
+`Live(runtime)` while usable, and `ReplacementRequired` after old-runtime
+quiescence or any terminal publication outcome. The last state is absorbing;
+`Option<ConversationRuntime>` is not used as an implicit lifecycle state.
+
+The TUI renders typed projections and owns only picker query/focus/editor
+state; it never opens the catalog or a conversation database. Ordinary
+Session metadata is a bounded native projection: `/resume` accepts an optional
+case-insensitive id/name query and an offset with a native maximum page size,
+and returns a continuation offset. Rows are ordered by Session identity.
+`/session` returns active metadata only,
+not the graph. `/tree` returns independently bounded node and historical
+user-message pages with deterministic continuations. Older Sessions and
+historical boundaries remain reachable by continuation; there is no arbitrary
+global Session cap. The node and history continuations are independent. Once
+one continuation is absent, that stream is exhausted for the selector
+snapshot; later requests use only its loaded-length no-op offset while the
+other stream continues, so an earlier page is never fetched again. Tree search
+remains a presentation filter over the bounded rows already loaded.
+
+Historical materialization is an explicit durable boundary:
+
+```text
+snapshot_at_surface_revision(R)
+snapshot_before_user_message(R, M)
+        -> HistoricalConversationSnapshot / ConversationSeed
+        -> destination-owned canonical identities
+        -> private SQLite seed
+        -> catalog/graph publication
+```
+
+The snapshot reads retained Message Ledger and Surface facts. It does not run
+current Context Assembly, Skills, capability discovery, workflow/goal logic,
+provider code, or model invocation. `/clone` selects the current committed
+Surface revision before seeding; `/fork` selects an exact historical revision
+and user message, seeds the prefix before that message, and returns the
+original content as uncommitted editor text. Source changes after selection
+cannot change the destination seed.
+
+Destination seeds remap `MessageId` and `ToolCallId` once, preserving internal
+tool-result correlations. They do not copy AttemptIds, Request Snapshots,
+Event Journal lifecycle facts, Pending Inbound, cancellation state, active or
+background executions, or live interactions. A prepared destination becomes
+catalog-visible at the rename commit after private seed creation; the
+publication operation reports full success only after the parent-directory
+durability barrier. A pre-rename failure leaves at most an unreferenced
+private directory, while a post-rename barrier failure is the explicit
+visible-but-durability-uncertain outcome described below.
+
+The Runtime Client exposes three different transition outcomes. A
+pre-rename failure has no transition result: the source remains authoritative,
+and a quiesced old attachment still requires replacement. A successful
+publication returns `session_changed`; fork/tree may include the selected user
+content as transient editor data, never as canonical destination history. A
+rename followed by a failed directory barrier returns
+`session_committed_restart_required` with the committed Session snapshot, the
+same transient editor payload, and a bounded diagnostic. The TUI detaches and
+restarts, refreshes `session_get` from the new Rust process, verifies the
+authoritative Session/node selection, and only then restores that payload. A
+prompt in this payload is not canonical until a later user submission.
+
+The current editor contract rejects fork/tree selections containing image or
+file blocks at native preparation. This prevents a placeholder string from
+being mistaken for the selected canonical content; the wire payload is already
+a `UserContentBlock` list for a future structured editor.
+
+The linearization points are explicit and ordered:
+
+1. **Source snapshot selection.** Clone/fork/tree preparation reads an exact
+   retained `SurfaceRevision` (or the current head) and materializes the
+   immutable source messages before destination preparation. Later source
+   mutations cannot change that seed.
+2. **Old-runtime quiescence.** A replacement awaits
+   `ConversationRuntime::shutdown()`. Its successful return is the point at
+   which the old runtime no longer owns unsettled execution. No active
+   Session/node selection is published before this await completes.
+3. **Catalog visibility commit.** `SessionCatalog` writes and fsyncs a
+   temporary document, then `fs::rename(temp, catalog.json)` makes the next
+   document visible. Rename is the publication commit point, not the later
+   directory barrier.
+4. **Catalog durability barrier.** The catalog opens its parent directory and
+   calls `sync_all()` after rename. A failure here is
+   `CommittedButDurabilityUncertain`: the new document is already visible, the
+   in-memory catalog adopts it, and the owning operation returns a typed
+   replacement-required outcome. It is never reported as an ordinary
+   pre-commit failure or as “nothing changed”.
+
+`NotCommitted` means rename did not complete; the previous file and in-memory
+document remain authoritative. Once old-runtime quiescence has succeeded,
+even a `NotCommitted` destination publication failure leaves the process
+attachment `ReplacementRequired`, because the old runtime is gone. Session
+recovery then opens the catalog's actually authoritative selected
+`ConversationId`; the restarted Rust process/native composition is the
+authority, and the TUI refreshes metadata after attaching rather than
+reconstructing the result from stale client assumptions. Historical
+nonterminal provider/tool work is not auto-run merely because its node was
+previously active.
 
 Startup failure ownership (Issue #81): failures that prove the core runtime
 itself cannot be constructed — startup files, model catalog/credentials/
@@ -3177,16 +3307,18 @@ publish the one `CapabilityUpdated` Runtime Client event carrying the
 complete folded `CapabilityView`, whose `revision` tells the client
 whether the executable capability identity changed.
 
-The governing invariant:
+The governing invariant for the active node is:
 
-> One local runtime process owns one conversation session. That session owns
-> one authoritative mutable session-model configuration, one
+> One local runtime process owns one active linear ConversationRuntime. That
+> runtime owns one authoritative mutable session-model configuration, one
 > `ConversationToolRuntime` identity, one `CapabilityCoordinator`, one context
-> policy/Surface domain, and one `ConversationRuntime`. Runtime Client
-> attachments may come and go without replacing those semantic owners, and
-> the conversation executes identically with zero attachments (Issue #61:
+> policy/Surface domain, and one ConversationId. Runtime Client attachments
+> may come and go without replacing those semantic owners, and the
+> conversation executes identically with zero attachments (Issue #61:
 > headless composition is the same coordinator, admission, `AgentExecution`,
-> Context Assembly, tool, and provider path).
+> Context Assembly, tool, and provider path). The user-level Session graph
+> lives above this runtime and branches only by selecting another independent
+> linear ConversationId.
 
 A client — including the Issue #39 TUI — owns the child-process lifecycle and
 nothing else. It never assembles provider adapters, model parameters, context
@@ -3441,7 +3573,7 @@ server; a server without an entry gets the deterministic default
 does not declare fails startup. Keeping it outside the connection object is
 what keeps `mcpServers` recognizable as ordinary MCP configuration.
 
-Normalization happens exactly once, at this boundary: `LocalSessionConfig`
+Normalization happens exactly once, at this boundary: `LocalConversationConfig`
 validates each entry and turns it into a typed
 `BTreeMap<McpServerId, McpServerBinding>`. The shorthand spellings never
 reach `McpServerRuntime`, the `CapabilityCoordinator`, the Agent Loop, or the
@@ -3465,7 +3597,7 @@ bounded stderr diagnostic, exits non-zero, and leaves **zero bytes** on
 stdout. `println!` is never used for diagnostics anywhere in the process.
 
 **Exit semantics.** A clean input EOF at a record boundary or a peer broken
-pipe ends this one-session process successfully. Malformed framing or any
+pipe ends this one-active-lineage process successfully. Malformed framing or any
 other transport error reports to stderr and exits non-zero. Semantic
 `shutdown` responds only after the conversation runtime reaches quiescence,
 but does **not** close the transport — a controlling client closes it
@@ -3522,9 +3654,9 @@ RuntimeClientConnection the single owner of JSONL framing, request-id
                         Every pending request settles exactly once; after
                         terminal failure new requests fail immediately.
 
-RuntimeClientSession    attach, snapshot/cursor installation, subscribe,
-                        resync repair, shutdown sequencing. No agent
-                        semantics.
+RuntimeClientAttachment attach, snapshot/cursor installation, subscribe,
+                        resync repair, native Session projection reads,
+                        shutdown sequencing. No agent/session semantics.
 
 PresentationProjection  the ephemeral render cache.
 
