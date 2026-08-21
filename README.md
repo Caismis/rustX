@@ -41,6 +41,10 @@ configuration from the current directory or from `~/.rustx`. Configure
 `examples/local-runtime/session.json` in place, or copy the complete
 `examples/local-runtime/` directory and adjust the paths below.
 
+The copyable example requires the Rust toolchain, Node LTS with nvm and
+Corepack/pnpm, and `uv` on `PATH` because its workspace includes a discovered
+custom Python tool.
+
 Set the credential referenced by the example catalog, then build the runtime
 and install the locked TUI dependencies:
 
@@ -70,7 +74,6 @@ The example endpoint is a placeholder. Replace it with the endpoint for the
 selected provider before making a model request. The full configuration
 contract and custom Python-tool example are in
 [`examples/local-runtime/README.md`](examples/local-runtime/README.md).
-The example's discovered Python tool also requires `uv` on `PATH`.
 
 ## Runtime and reference client
 
