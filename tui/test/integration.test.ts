@@ -284,18 +284,18 @@ describe("real rustx child integration", { skip: SKIP }, () => {
       "/debug",
     ]) {
       const outcome = await dispatcher.submit(command);
-      assert.equal(outcome.kind, "message", command);
-      if (outcome.kind === "message") {
-        assert.equal(outcome.level, "info", `${command}: ${outcome.text}`);
+      assert.equal(outcome.kind, "inspect", command);
+      if (outcome.kind === "inspect") {
+        assert.ok(outcome.body.length > 0, `${command} must have inspection content`);
         assert.ok(
-          !outcome.text.includes(CREDENTIAL_VALUE),
+          !outcome.body.includes(CREDENTIAL_VALUE),
           `${command} must never render a credential`,
         );
       }
     }
 
     // `/model` with no argument opens the selector over the real catalog the
-    // runtime published; it renders no message and sends no model_set.
+    // runtime published; it opens no inspection and sends no model_set.
     const chooser = await dispatcher.submit("/model");
     assert.equal(chooser.kind, "choose_model");
     if (chooser.kind === "choose_model") {

@@ -12,11 +12,14 @@ import { describe, it } from "node:test";
 import { SlashCommandAutocompleteProvider, commandPrefix } from "../src/commands/autocomplete.ts";
 import { CommandDispatcher } from "../src/commands/dispatcher.ts";
 import { COMMANDS, parseCommandLine } from "../src/commands/registry.ts";
+import { emptyPresentationState } from "../src/presentation/projection.ts";
 import { RuntimeClientConnection } from "../src/runtime/connection.ts";
 import { RuntimeClientAttachment } from "../src/runtime/attachment.ts";
+import { TransientFeedbackSurface } from "../src/ui/components/transient-feedback.ts";
 import { ArgumentError, parseArguments } from "../src/cli.ts";
 import {
   attemptModel,
+  catalogModel,
   capabilities,
   sessionModel,
   sessionView,
@@ -32,6 +35,17 @@ const NO_DIAGNOSTICS = () => ({
   pendingRequests: 0,
   resyncCount: 0,
 });
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
 
 async function harness(initial = snapshot()) {
   const peer = new ScriptedPeer();
@@ -181,12 +195,13 @@ describe("CommandDispatcher", () => {
   it("renders /help from the command table", async () => {
     const { dispatcher } = await harness();
     const outcome = await dispatcher.submit("/help");
-    assert.equal(outcome.kind, "message");
-    if (outcome.kind !== "message") {
+    assert.equal(outcome.kind, "inspect");
+    if (outcome.kind !== "inspect") {
       return;
     }
+    assert.equal(outcome.title, "Help");
     for (const command of COMMANDS) {
-      assert.ok(outcome.text.includes(command.name), command.name);
+      assert.ok(outcome.body.includes(command.name), command.name);
     }
   });
 
@@ -195,14 +210,15 @@ describe("CommandDispatcher", () => {
       snapshot({ model: sessionModel("alpha/model-a") }),
     );
     const outcome = await dispatcher.submit("/model show");
-    assert.equal(outcome.kind, "message");
-    if (outcome.kind !== "message") {
+    assert.equal(outcome.kind, "inspect");
+    if (outcome.kind !== "inspect") {
       return;
     }
-    assert.match(outcome.text, /alpha\/model-a/);
-    assert.match(outcome.text, /context window: 128000/);
+    assert.equal(outcome.title, "Model");
+    assert.match(outcome.body, /alpha\/model-a/);
+    assert.match(outcome.body, /context window: 128000/);
     // No provider endpoint or credential can appear: neither is in the view.
-    assert.ok(!/apiKey|api_key|baseUrl/i.test(outcome.text));
+    assert.ok(!/apiKey|api_key|baseUrl/i.test(outcome.body));
   });
 
   it("shows both models when the session moved past the running attempt", async () => {
@@ -220,12 +236,12 @@ describe("CommandDispatcher", () => {
     assert.equal(session.state?.attempt?.model.primary.model, "alpha/model-a");
 
     const outcome = await dispatcher.submit("/model show");
-    assert.equal(outcome.kind, "message");
-    if (outcome.kind !== "message") {
+    assert.equal(outcome.kind, "inspect");
+    if (outcome.kind !== "inspect") {
       return;
     }
-    assert.match(outcome.text, /Active attempt model \(frozen at admission\)/);
-    assert.match(outcome.text, /this attempt keeps the model it froze/);
+    assert.match(outcome.body, /Active attempt model \(frozen at admission\)/);
+    assert.match(outcome.body, /this attempt keeps the model it froze/);
   });
 
   it("changes the model only through model_catalog_get + model_set", async () => {
@@ -247,6 +263,12 @@ describe("CommandDispatcher", () => {
             maxOutputTokens: 777,
             summaryModel: summaryPolicy,
           },
+        },
+        attempt: {
+          attempt_id: "attempt-a",
+          phase: { type: "running" },
+          turn: 1,
+          model: attemptModel("alpha/model-a"),
         },
       }),
     );
@@ -300,12 +322,66 @@ describe("CommandDispatcher", () => {
     peer.respond(4, { type: "model_set", model: sessionModel("beta/model-b") });
 
     const outcome = await changing;
-    assert.equal(outcome.kind, "message");
-    if (outcome.kind === "message") {
-      assert.match(outcome.text, /session model is now beta\/model-b/);
-      assert.match(outcome.text, /primary overrides reset/);
-      assert.match(outcome.text, /summary model policy preserved/);
+    assert.equal(outcome.kind, "transient");
+    if (outcome.kind === "transient") {
+      assert.match(outcome.text, /session model -> beta\/model-b/);
+      assert.match(outcome.text, /current attempt remains alpha\/model-a/);
+      assert.match(outcome.text, /change applies to next attempt/);
+      const surface = new TransientFeedbackSurface();
+      surface.replace(outcome);
+      const rendered = surface.render(80).join("\n");
+      assert.match(rendered, /beta\/model-b/);
+      assert.match(rendered, /alpha\/model-a/);
+      assert.match(rendered, /next attempt/);
+      assert.ok(surface.render(80).length <= 3);
     }
+  });
+
+  it("keeps a two-phase model command on its admitted attachment", async () => {
+    const catalogStarted = deferred<undefined>();
+    const catalogResponse = deferred<{
+      models: ReturnType<typeof catalogModel>[];
+    }>();
+    let aCatalog = 0;
+    let aModelSet = 0;
+    let bModelSet = 0;
+    const sessionA = {
+      state: emptyPresentationState(sessionModel("alpha/model-a")),
+      modelCatalog: async () => {
+        aCatalog += 1;
+        catalogStarted.resolve(undefined);
+        return catalogResponse.promise;
+      },
+      modelSet: async () => {
+        aModelSet += 1;
+        return sessionModel("beta/model-b");
+      },
+    } as unknown as RuntimeClientAttachment;
+    const sessionB = {
+      state: emptyPresentationState(sessionModel("alpha/model-a")),
+      modelSet: async () => {
+        bModelSet += 1;
+        return sessionModel("beta/model-b");
+      },
+    } as unknown as RuntimeClientAttachment;
+    const dispatcher = new CommandDispatcher({
+      session: sessionA,
+      diagnostics: NO_DIAGNOSTICS,
+    });
+
+    const changing = dispatcher.submit("/model beta/model-b");
+    await catalogStarted.promise;
+
+    // Rebinding changes admission for future invocations while the admitted
+    // two-phase command is still waiting on A's catalog response.
+    dispatcher.setSession(sessionB);
+    catalogResponse.resolve({ models: [catalogModel("beta/model-b")] });
+
+    const outcome = await changing;
+    assert.equal(outcome.kind, "transient");
+    assert.equal(aCatalog, 1);
+    assert.equal(aModelSet, 1, "the admitted command completes on A");
+    assert.equal(bModelSet, 0, "the admitted command must never retarget B");
   });
 
   it("rejects a model the runtime catalog does not offer", async () => {
@@ -315,8 +391,8 @@ describe("CommandDispatcher", () => {
     peer.respond(3, { type: "model_catalog", catalog: { models: [] } });
 
     const outcome = await changing;
-    assert.equal(outcome.kind, "message");
-    if (outcome.kind === "message") {
+    assert.equal(outcome.kind, "transient");
+    if (outcome.kind === "transient") {
       assert.equal(outcome.level, "error");
       assert.match(outcome.text, /not in the runtime's catalog/);
     }
@@ -380,11 +456,12 @@ describe("CommandDispatcher", () => {
     peer.respond(3, { type: "session", session: sessionView({ name: "review" }) });
 
     const outcome = await reading;
-    assert.equal(outcome.kind, "message");
-    if (outcome.kind === "message") {
-      assert.match(outcome.text, /session review/);
-      assert.match(outcome.text, /active node node-1/);
-      assert.match(outcome.text, /conversation conv-test/);
+    assert.equal(outcome.kind, "inspect");
+    if (outcome.kind === "inspect") {
+      assert.equal(outcome.title, "Session");
+      assert.match(outcome.body, /session review/);
+      assert.match(outcome.body, /active node node-1/);
+      assert.match(outcome.body, /conversation conv-test/);
     }
   });
 
@@ -439,7 +516,7 @@ describe("CommandDispatcher", () => {
     await peer.awaitRequests(3);
     peer.respondError(3, { type: "session_failure", message: "unknown session" });
     assert.deepEqual(await selecting, {
-      kind: "message",
+      kind: "transient",
       level: "error",
       text: "session operation failed: unknown session",
     });
@@ -447,17 +524,17 @@ describe("CommandDispatcher", () => {
     const selectingNode = dispatcher.selectTreeNode("session-1", "missing-node");
     await peer.awaitRequests(4);
     peer.respondError(4, { type: "session_failure", message: "unknown node" });
-    assert.equal((await selectingNode).kind, "message");
+    assert.equal((await selectingNode).kind, "transient");
 
     const forking = dispatcher.forkAt(boundary);
     await peer.awaitRequests(5);
     peer.respondError(5, { type: "session_failure", message: "stale boundary" });
-    assert.equal((await forking).kind, "message");
+    assert.equal((await forking).kind, "transient");
 
     const branching = dispatcher.branchAt(boundary);
     await peer.awaitRequests(6);
     peer.respondError(6, { type: "session_failure", message: "catalog failure" });
-    assert.equal((await branching).kind, "message");
+    assert.equal((await branching).kind, "transient");
 
     // A semantic Session failure is a healthy protocol response, so the TUI
     // connection remains usable for the next overlay request.
@@ -499,8 +576,8 @@ describe("CommandDispatcher", () => {
     });
 
     const outcome = await renaming;
-    assert.equal(outcome.kind, "message");
-    if (outcome.kind === "message") {
+    assert.equal(outcome.kind, "transient");
+    if (outcome.kind === "transient") {
       assert.match(outcome.text, /session renamed to design review/);
     }
     assert.equal(
@@ -588,8 +665,8 @@ describe("CommandDispatcher", () => {
   it("rejects an unusable /reasoning argument instead of guessing", async () => {
     const { dispatcher } = await harness();
     const outcome = await dispatcher.submit("/reasoning maybe");
-    assert.equal(outcome.kind, "message");
-    if (outcome.kind === "message") {
+    assert.equal(outcome.kind, "transient");
+    if (outcome.kind === "transient") {
       assert.equal(outcome.level, "error");
       assert.match(outcome.text, /usage: \/reasoning \[on\|off\]/);
     }
@@ -600,15 +677,15 @@ describe("CommandDispatcher", () => {
       snapshot({ capabilities: capabilities(5) }),
     );
     const outcome = await dispatcher.submit("/tools");
-    assert.equal(outcome.kind, "message");
-    if (outcome.kind !== "message") {
+    assert.equal(outcome.kind, "inspect");
+    if (outcome.kind !== "inspect") {
       return;
     }
-    assert.match(outcome.text, /capability revision 5/);
-    assert.match(outcome.text, /`bash`/);
-    assert.match(outcome.text, /mcp:corpus/);
+    assert.match(outcome.body, /capability revision 5/);
+    assert.match(outcome.body, /`bash`/);
+    assert.match(outcome.body, /mcp:corpus/);
     // Policies come from the runtime; nothing is inferred from the name.
-    assert.match(outcome.text, /execution: model_selectable/);
+    assert.match(outcome.body, /execution: model_selectable/);
   });
 
   it("renders /skills from the runtime's Skill projection", async () => {
@@ -616,9 +693,9 @@ describe("CommandDispatcher", () => {
       snapshot({ capabilities: capabilities(2) }),
     );
     const outcome = await dispatcher.submit("/skills");
-    assert.equal(outcome.kind, "message");
-    if (outcome.kind === "message") {
-      assert.match(outcome.text, /`review` \(skill-review@1\)/);
+    assert.equal(outcome.kind, "inspect");
+    if (outcome.kind === "inspect") {
+      assert.match(outcome.body, /`review` \(skill-review@1\)/);
     }
   });
 
@@ -651,14 +728,14 @@ describe("CommandDispatcher", () => {
     );
 
     const outcome = await dispatcher.submit("/status");
-    assert.equal(outcome.kind, "message");
-    if (outcome.kind !== "message") {
+    assert.equal(outcome.kind, "inspect");
+    if (outcome.kind !== "inspect") {
       return;
     }
     // The rendering is the runtime's, verbatim.
-    assert.ok(outcome.text.includes(rendered));
-    assert.match(outcome.text, /inbound pending: 1/);
-    assert.match(outcome.text, /last drain: watermark 2, 2 item\(s\)/);
+    assert.ok(outcome.body.includes(rendered));
+    assert.match(outcome.body, /inbound pending: 1/);
+    assert.match(outcome.body, /last drain: watermark 2, 2 item\(s\)/);
   });
 
   it("renders bounded /debug diagnostics without any credential", async () => {
@@ -680,14 +757,14 @@ describe("CommandDispatcher", () => {
     });
 
     const outcome = await dispatcher.submit("/debug");
-    assert.equal(outcome.kind, "message");
-    if (outcome.kind !== "message") {
+    assert.equal(outcome.kind, "inspect");
+    if (outcome.kind !== "inspect") {
       return;
     }
-    assert.match(outcome.text, /attachment: `att-1`/);
-    assert.match(outcome.text, /authoritative repairs \(resync\): 2/);
-    assert.match(outcome.text, /1024 dropped/);
-    assert.ok(!/sk-|api[_-]?key|secret/i.test(outcome.text));
+    assert.match(outcome.body, /attachment: `att-1`/);
+    assert.match(outcome.body, /authoritative repairs \(resync\): 2/);
+    assert.match(outcome.body, /1024 dropped/);
+    assert.ok(!/sk-|api[_-]?key|secret/i.test(outcome.body));
   });
 
   it("treats attempt cancellation as acceptance", async () => {
@@ -701,8 +778,8 @@ describe("CommandDispatcher", () => {
     });
 
     const outcome = await cancelling;
-    assert.equal(outcome.kind, "message");
-    if (outcome.kind === "message") {
+    assert.equal(outcome.kind, "transient");
+    if (outcome.kind === "transient") {
       assert.match(outcome.text, /acceptance/);
       assert.match(outcome.text, /runtime owns the terminal settlement/);
     }
@@ -738,8 +815,8 @@ describe("CommandDispatcher", () => {
       interaction_id: "attempt-1-interaction-1",
     });
     const outcome = await responding;
-    assert.equal(outcome.kind, "message");
-    if (outcome.kind === "message") {
+    assert.equal(outcome.kind, "transient");
+    if (outcome.kind === "transient") {
       assert.match(outcome.text, /response accepted/);
     }
   });
@@ -765,7 +842,8 @@ describe("CommandDispatcher", () => {
     });
 
     const outcome = await cancelling;
-    if (outcome.kind === "message") {
+    assert.equal(outcome.kind, "transient");
+    if (outcome.kind === "transient") {
       assert.match(outcome.text, /acceptance, not settlement/);
     }
   });
@@ -777,8 +855,8 @@ describe("CommandDispatcher", () => {
     peer.respondError(3, { type: "no_current_attempt" });
 
     const outcome = await cancelling;
-    assert.equal(outcome.kind, "message");
-    if (outcome.kind === "message") {
+    assert.equal(outcome.kind, "transient");
+    if (outcome.kind === "transient") {
       assert.equal(outcome.level, "error");
       assert.match(outcome.text, /no attempt is currently cancellable/);
     }
@@ -792,8 +870,8 @@ describe("CommandDispatcher", () => {
   it("rejects an unknown command without reaching the wire", async () => {
     const { peer, dispatcher } = await harness();
     const outcome = await dispatcher.submit("/definitely-not-a-command");
-    assert.equal(outcome.kind, "message");
-    if (outcome.kind === "message") {
+    assert.equal(outcome.kind, "transient");
+    if (outcome.kind === "transient") {
       assert.equal(outcome.level, "error");
     }
     assert.equal(peer.requests.length, 2, "no request was issued");

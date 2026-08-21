@@ -80,6 +80,31 @@ describe("RuntimeClientAttachment", () => {
     assert.equal(session.state?.cursor, 12);
   });
 
+  it("notifies local-surface owners for initial attach and authoritative resync replacement", async () => {
+    const { peer, session } = connect();
+    let replacements = 0;
+    const removeSnapshotListener = session.onSnapshot(() => {
+      replacements += 1;
+    });
+
+    await attach(peer, session);
+    assert.equal(replacements, 1, "initial attach installs one authoritative snapshot");
+
+    const repairing = session.resync();
+    await peer.awaitRequests(3);
+    peer.respond(3, {
+      type: "snapshot",
+      snapshot: snapshot({ messages: [userMessage("m1", "repaired")] }),
+      cursor: 9,
+    });
+    await peer.awaitRequests(4);
+    peer.respond(4, { type: "subscribed", after_cursor: 9 });
+    await repairing;
+
+    assert.equal(replacements, 2, "resync installs a replacement snapshot");
+    removeSnapshotListener();
+  });
+
   it("answers a native interaction through the typed Runtime Client request", async () => {
     const { peer, session } = connect();
     await attach(peer, session);

@@ -36,7 +36,6 @@ import type {
 } from "../protocol/types.ts";
 import type {
   AttemptPresentation,
-  ClientNotice,
   PresentationState,
   StreamingBlock,
   StreamingMessage,
@@ -60,16 +59,16 @@ export function emptyPresentationState(
     sessionModel,
     runtimeShutdown: false,
     pendingSubmissions: [],
-    notices: [],
   };
 }
 
 /**
  * Replaces the whole projection from an authoritative snapshot.
  *
- * This is the only repair path. It keeps exactly two things that the snapshot
- * genuinely does not describe — the client's own transient notices and its
- * not-yet-acknowledged submissions — and derives everything else.
+ * This is the only repair path. It keeps the client's own not-yet-acknowledged
+ * submissions and derives everything else. TUI inspection and transient
+ * feedback surfaces live outside this runtime-derived projection, so an
+ * authoritative repair cannot reconstruct or carry them accidentally.
  */
 export function replaceFromSnapshot(
   snapshot: RuntimeClientSnapshot,
@@ -77,7 +76,7 @@ export function replaceFromSnapshot(
   carry?: Partial<
     Pick<
       PresentationState,
-      "notices" | "pendingSubmissions"
+      "pendingSubmissions"
     >
   >,
 ): PresentationState {
@@ -148,7 +147,6 @@ export function replaceFromSnapshot(
     sessionModel: snapshot.model,
     runtimeShutdown: snapshot.shutting_down,
     pendingSubmissions: carry?.pendingSubmissions ?? [],
-    notices: carry?.notices ?? [],
   };
 }
 
@@ -453,14 +451,6 @@ export function reduce(
         `unreachable Runtime Client Protocol v1 event: ${String(exhaustiveEvent)}`,
       );
   }
-}
-
-/** Adds a transient client notice. Never a runtime fact. */
-export function withNotice(
-  state: PresentationState,
-  notice: ClientNotice,
-): PresentationState {
-  return { ...state, notices: [...state.notices, notice] };
 }
 
 /** Records an optimistic local echo of a submission not yet acknowledged. */

@@ -146,6 +146,61 @@ carries the durable Session metadata and live status instead.
 | `ui/preferences.ts` | reasoning visibility and expanded cards | anything the runtime owns |
 | `ui/` | Pi components and rendering | every fact it displays |
 
+## Presentation surfaces
+
+The dispatcher classifies client information by presentation intent before it
+reaches Pi. The app owns the rendering mechanics; none of these client-side
+surfaces are Runtime Client facts or canonical conversation history.
+
+| Surface | Semantics and lifetime |
+| --- | --- |
+| **Inspection** | One reusable focused viewport for substantial read-only Markdown. It is bounded and scrollable with Up/Down, PageUp/PageDown, Home/End, and Escape. |
+| **Picker** | Existing focused selectors and approval interactions remain overlays with their existing selection and focus semantics. |
+| **Transient** | One current item, owned by the app. New feedback replaces old feedback; any input acknowledges it, and attachment/session replacement clears it. Producers keep the payload compact enough for the three-line bound; a defensive overflow is marked explicitly, and no wall-clock timer is used. |
+| **Local scrollback** | Deliberately not implemented. These client events have no honest interleaving point with runtime conversation history, so they use the finite transient surface instead of a second local event store. |
+| **Preference** | Reasoning visibility and expansion choices stay in client display preferences and never become runtime messages. |
+| **Control** | Canonical commands still go through the Runtime Client. Their short acknowledgement is transient; runtime status and settlement remain authoritative runtime projection. |
+| **Quit** | Shutdown is a control intent. Lifecycle failures are committed in a final Pi frame before the TUI stops, and are never turned into fake transcript messages. |
+
+The command-to-surface classification is:
+
+| Command | Final surface |
+| --- | --- |
+| `/help`, `/session`, `/tools`, `/skills`, `/status`, `/debug` | inspection |
+| `/model show` | inspection |
+| `/model` and `/model list` | picker; the selection result is transient |
+| `/resume` | picker; a direct session id is a control operation with transient result |
+| `/fork`, `/tree` | picker; the selected session operation has transient/replacement feedback |
+| `/new`, `/clone` | control with transient/replacement feedback |
+| `/name <text>`, `/model <provider/model>` | control with transient result |
+| `/cancel`, `/approve` | control with transient acceptance/validation result |
+| `/reasoning`, `/expand` | preference |
+| `/quit` | quit |
+| invalid, unknown, or empty-result command feedback | transient |
+
+Inspection and transient state live outside `PresentationState`: an
+authoritative snapshot or event-stream resync reconstructs runtime-derived
+projection state and does not carry arbitrary client feedback. Every such
+replacement closes all focused overlays — inspection and every picker —
+because their displayed facts or eventual selection action may have been
+derived from the superseded attachment. It also clears the transient item
+before the destination projection is shown.
+
+The app owns a presentation epoch tied to the current attachment. Async
+command, search, pagination, and selector continuations capture that lease
+and may update local presentation only while the epoch and attachment still
+match. Binding a replacement attachment, accepting a Session restart, or
+installing an authoritative snapshot invalidates the old lease. The canonical
+transcript remains reconstructed only from runtime-published message facts;
+client output never becomes a `MessageBlock`, a model request payload, or a
+Runtime Client protocol event.
+
+Command routing has a separate ownership boundary: rebinding the dispatcher
+changes admission only for future invocations. Each admitted command captures
+its `RuntimeClientAttachment` before its first await and passes that exact
+attachment through every later phase, so a catalog response from attachment A
+cannot cause a follow-up mutation on attachment B.
+
 ## Commands
 
 The TUI's current slash-command surface is grouped by purpose:
@@ -211,10 +266,16 @@ nothing but the screen. They send no request, and they are also bound to keys:
 | Key | Effect |
 | --- | --- |
 | `ctrl+l` | open the same model selector as `/model` |
-| `escape` | close the active overlay, or request cancellation for an unsettled attempt when idle |
+| `escape` | the focused overlay closes first; with no overlay, request cancellation for an unsettled attempt |
 | `ctrl+c` | cancellation intent for the active attempt, or quit when idle |
 | `ctrl+o` | expand or collapse the most recent tool card |
 | `ctrl+t` | show or hide model reasoning |
+
+Escape precedence is an app-level ownership rule: a focused inspection or
+picker receives Escape first and closes, restoring editor focus. Only a later
+Escape with no overlay can become cancellation intent for an unsettled
+attempt. Authoritative resync uses the same rule in reverse by closing every
+overlay before any new input is interpreted.
 
 There is deliberately **no** `!bash`, no `@file` attachment, no client-side
 file read, and no client-side Skill execution. Shell, file, and Skill behaviour
