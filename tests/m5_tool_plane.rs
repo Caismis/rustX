@@ -988,6 +988,24 @@ async fn edit_rejects_unsafe_partial_normalization_ranges_without_mutation() {
         expansion_original
     );
 
+    let ambiguous_partial = run_tool(
+        &fixture,
+        "edit",
+        serde_json::json!({
+            "path": "unsafe-expansion.txt",
+            "edits": [edit("f", "X")]
+        }),
+    )
+    .await;
+    assert!(matches!(
+        ambiguous_partial.status,
+        ToolExecutionStatus::Failed { .. }
+    ));
+    assert_eq!(
+        std::fs::read_to_string(&expansion_path).unwrap(),
+        expansion_original
+    );
+
     let combining_path = workspace_path(&fixture, "unsafe-combining.txt");
     let combining_original = "before a\u{301}\u{323} after";
     std::fs::write(&combining_path, combining_original).expect("combining fixture");
