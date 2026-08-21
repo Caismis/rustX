@@ -26,6 +26,19 @@ export interface TreeSelectorOptions {
   nextHistoryOffset?: number;
 }
 
+export interface TreePageRequest {
+  nodeOffset: number;
+  historyOffset: number;
+}
+
+type PageCursor =
+  | { state: "active"; offset: number }
+  | { state: "exhausted" };
+
+function pageCursor(offset: number | undefined): PageCursor {
+  return offset === undefined ? { state: "exhausted" } : { state: "active", offset };
+}
+
 export class TreeSelector implements Component, Focusable {
   focused = false;
   onSelect?: (selection: TreeSelection) => void;
@@ -35,9 +48,9 @@ export class TreeSelector implements Component, Focusable {
 
   readonly #session: SessionView;
   #nodes: SessionNodeView[];
-  #nextNodeOffset: number | undefined;
+  #nodeCursor: PageCursor;
   #boundaries: SessionUserMessageBoundaryView[];
-  #nextHistoryOffset: number | undefined;
+  #historyCursor: PageCursor;
   #query = "";
   #selected = 0;
   #loading = false;
@@ -45,10 +58,31 @@ export class TreeSelector implements Component, Focusable {
   constructor(options: TreeSelectorOptions) {
     this.#session = options.session;
     this.#nodes = options.nodes;
-    this.#nextNodeOffset = options.nextNodeOffset;
+    this.#nodeCursor = pageCursor(options.nextNodeOffset);
     this.#boundaries = options.boundaries;
-    this.#nextHistoryOffset = options.nextHistoryOffset;
+    this.#historyCursor = pageCursor(options.nextHistoryOffset);
     this.#selected = Math.max(0, this.items().length - 1);
+  }
+
+  /**
+   * Returns the next paired native request without reviving an exhausted
+   * stream. The native endpoint pages nodes and historical boundaries
+   * independently in one response, so an exhausted side advances at its
+   * current materialized length as a monotonic no-op while the other side
+   * continues.
+   */
+  nextPageRequest(): TreePageRequest | undefined {
+    if (this.#nodeCursor.state === "exhausted" && this.#historyCursor.state === "exhausted") {
+      return undefined;
+    }
+    return {
+      nodeOffset: this.#nodeCursor.state === "active"
+        ? this.#nodeCursor.offset
+        : this.#nodes.length,
+      historyOffset: this.#historyCursor.state === "active"
+        ? this.#historyCursor.offset
+        : this.#boundaries.length,
+    };
   }
 
   /** Appends bounded native node/history pages after a continuation request. */
@@ -59,9 +93,15 @@ export class TreeSelector implements Component, Focusable {
     nextHistoryOffset?: number;
   }): void {
     this.#nodes = [...this.#nodes, ...options.nodes];
-    this.#nextNodeOffset = options.nextNodeOffset;
+    this.#nodeCursor = pageCursor(options.nextNodeOffset);
     this.#boundaries = [...this.#boundaries, ...options.boundaries];
-    this.#nextHistoryOffset = options.nextHistoryOffset;
+    this.#historyCursor = pageCursor(options.nextHistoryOffset);
+    this.#loading = false;
+    this.onChange?.();
+  }
+
+  /** Releases the load guard after a failed page request for a retry. */
+  retryPage(): void {
     this.#loading = false;
     this.onChange?.();
   }
@@ -95,7 +135,7 @@ export class TreeSelector implements Component, Focusable {
     else if (matchesKey(data, "down")) {
       if (
         this.#selected >= visible.length - 1 &&
-        (this.#nextNodeOffset !== undefined || this.#nextHistoryOffset !== undefined) &&
+        (this.#nodeCursor.state === "active" || this.#historyCursor.state === "active") &&
         !this.#loading
       ) {
         this.#loading = true;
@@ -139,7 +179,7 @@ export class TreeSelector implements Component, Focusable {
           lines.push(`      ${role.meta(`revision ${item.boundary.surface_revision}`)}`);
         }
       });
-      if (this.#nextNodeOffset !== undefined || this.#nextHistoryOffset !== undefined) {
+      if (this.#nodeCursor.state === "active" || this.#historyCursor.state === "active") {
         lines.push(role.meta("↓ load more native tree/history rows"));
       }
     }

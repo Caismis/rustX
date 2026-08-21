@@ -17,6 +17,7 @@ import {
   attemptModel,
   capabilities,
   sessionModel,
+  sessionView,
   snapshot,
   userMessage,
 } from "./support/fixtures.ts";
@@ -405,6 +406,35 @@ describe("RuntimeClientAttachment", () => {
       assert.equal(isResyncRequired(error), false);
       assert.match(error.message, /rejected/);
       return true;
+    });
+  });
+
+  it("preserves a committed transition draft in the typed attachment result", async () => {
+    const { peer, session } = connect();
+    await attach(peer, session);
+
+    const switching = session.forkSession(7, "user-exact-7f3b");
+    await peer.awaitRequests(3);
+    peer.respond(3, {
+      type: "session_committed_restart_required",
+      session: sessionView({
+        id: "session-2",
+        active_node: "node-2",
+        active_conversation_id: "conv-2",
+      }),
+      editor_content: [{ type: "text", text: "fork-draft-exact-7f3b" }],
+      diagnostic: "catalog visibility committed; durability uncertain",
+    });
+
+    assert.deepEqual(await switching, {
+      session: sessionView({
+        id: "session-2",
+        active_node: "node-2",
+        active_conversation_id: "conv-2",
+      }),
+      editorContent: [{ type: "text", text: "fork-draft-exact-7f3b" }],
+      restartRequired: true,
+      restartDiagnostic: "catalog visibility committed; durability uncertain",
     });
   });
 

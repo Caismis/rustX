@@ -39,7 +39,7 @@ use crate::conversation::{SurfaceRevision, message_id_of};
 use crate::durable::{ConversationStore, ConversationStoreError, SqliteConversationStore};
 use crate::message::types::{
     AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, ToolMessageBlock,
-    UserMessageBlock,
+    UserContentBlock, UserMessageBlock,
 };
 use crate::runtime::identity::{ConversationId, MessageId, ToolCallId};
 
@@ -654,7 +654,7 @@ impl SessionCatalog {
                 message_id: message_id.clone(),
             });
         };
-        let editor_content = user.content.clone();
+        let editor_content = text_only_editor_content(user)?;
         let (session_id, node_id, conversation_id) = self.allocate_ids();
         let seed = remap_seed(&conversation_id, &source.messages[..index])?;
         let prepared =
@@ -693,7 +693,7 @@ impl SessionCatalog {
                 message_id: message_id.clone(),
             });
         };
-        let editor_content = user.content.clone();
+        let editor_content = text_only_editor_content(user)?;
         let mut node_ordinal = self.document.next_node_ordinal.max(1);
         let (node_id, conversation_id, database_path) = loop {
             let node_id = SessionNodeId::new(format!("node-{node_ordinal}"));
@@ -1007,6 +1007,27 @@ impl SessionCatalog {
         let result = atomic_write(&self.path, &bytes);
         result.map_err(SessionError::from)
     }
+}
+
+/// The native editor restoration contract is currently text-only. Rejecting
+/// other canonical user blocks here keeps a fork/tree transition from
+/// pretending that an image or file reference is equivalent to a placeholder
+/// string. The typed payload remains `Vec<UserContentBlock>` so a structured
+/// editor can extend this contract without changing Session lineage rules.
+fn text_only_editor_content(
+    user: &UserMessageBlock,
+) -> Result<Vec<UserContentBlock>, SessionError> {
+    if user
+        .content
+        .iter()
+        .any(|content| !matches!(content, UserContentBlock::Text(_)))
+    {
+        return Err(SessionError::Seed {
+            detail: "fork/tree editor restoration currently supports text user content only"
+                .to_owned(),
+        });
+    }
+    Ok(user.content.clone())
 }
 
 /// Reconstructs a destination seed with destination-owned message and tool

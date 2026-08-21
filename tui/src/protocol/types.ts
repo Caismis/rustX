@@ -1026,8 +1026,16 @@ export type RuntimeClientResult =
   | {
       type: "session_changed";
       session: SessionView;
+      /** Transient fork/tree editor content; not canonical history. */
       editor_content?: UserContentBlock[];
       restart_required: boolean;
+    }
+  | {
+      type: "session_committed_restart_required";
+      session: SessionView;
+      /** Restore only after restart confirms this Session/node. */
+      editor_content?: UserContentBlock[];
+      diagnostic: string;
     }
   | {
       type: "background_status";

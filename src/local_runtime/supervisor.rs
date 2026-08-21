@@ -9,7 +9,10 @@
 //! v1 deliberately uses a typed process-boundary switch. A switch leaves the
 //! old runtime quiescent and returns `restart_required`; the client then
 //! reconnects, and ordinary composition/recovery opens the newly selected
-//! `ConversationId`. The catalog publication is authoritative throughout.
+//! `ConversationId`. A visibility commit followed by an uncertain directory
+//! barrier returns a typed committed-transition result, including any
+//! transient fork/tree editor payload. The catalog publication is authoritative
+//! throughout.
 
 use std::sync::Arc;
 
@@ -37,6 +40,11 @@ pub struct SessionSwitchResult {
     pub editor_content: Option<Vec<UserContentBlock>>,
     /// v1 switches replace the one Runtime Client process attachment.
     pub restart_required: bool,
+    /// A post-visibility durability failure crossed the catalog commit point.
+    /// The transition is authoritative and this diagnostic is carried in the
+    /// typed committed-transition result, never collapsed into a generic
+    /// pre-commit failure.
+    pub committed_restart_diagnostic: Option<String>,
 }
 
 /// The native `/tree` read projection.
@@ -249,16 +257,22 @@ impl LocalSessionSupervisor {
             .preflight_publish_session(&prepared, "New session", origin.clone())?;
         self.quiesce_old(&mut state).await?;
         let session_id = prepared.session_id.clone();
-        let snapshot = state
+        match state
             .catalog
             .publish_session(&prepared, "New session", origin)
-            .map_err(|error| publication_failure(&error))?;
-        debug_assert_eq!(snapshot.id, session_id);
-        Ok(SessionSwitchResult {
-            session: snapshot,
-            editor_content: None,
-            restart_required: true,
-        })
+        {
+            Ok(snapshot) => {
+                debug_assert_eq!(snapshot.id, session_id);
+                Ok(SessionSwitchResult {
+                    session: snapshot,
+                    editor_content: None,
+                    restart_required: true,
+                    committed_restart_diagnostic: None,
+                })
+            }
+            Err(error) if error.committed() => committed_switch(&state, &session_id, None, &error),
+            Err(error) => Err(publication_failure(&error)),
+        }
     }
 
     /// Switches to an existing persisted Session/node after validating its
@@ -285,6 +299,7 @@ impl LocalSessionSupervisor {
                 session: current,
                 editor_content: None,
                 restart_required: false,
+                committed_restart_diagnostic: None,
             });
         }
         state
@@ -294,15 +309,16 @@ impl LocalSessionSupervisor {
             .catalog
             .preflight_select(&session_id, Some(&requested_node))?;
         self.quiesce_old(&mut state).await?;
-        let snapshot = state
-            .catalog
-            .select(&session_id, Some(&requested_node))
-            .map_err(|error| publication_failure(&error))?;
-        Ok(SessionSwitchResult {
-            session: snapshot,
-            editor_content: None,
-            restart_required: true,
-        })
+        match state.catalog.select(&session_id, Some(&requested_node)) {
+            Ok(snapshot) => Ok(SessionSwitchResult {
+                session: snapshot,
+                editor_content: None,
+                restart_required: true,
+                committed_restart_diagnostic: None,
+            }),
+            Err(error) if error.committed() => committed_switch(&state, &session_id, None, &error),
+            Err(error) => Err(publication_failure(&error)),
+        }
     }
 
     /// Clones the exact committed current Surface head into a new Session.
@@ -328,15 +344,21 @@ impl LocalSessionSupervisor {
             origin.clone(),
         )?;
         self.quiesce_old(&mut state).await?;
-        let snapshot = state
-            .catalog
-            .publish_session(&prepared, &format!("Clone of {source_session}"), origin)
-            .map_err(|error| publication_failure(&error))?;
-        Ok(SessionSwitchResult {
-            session: snapshot,
-            editor_content: None,
-            restart_required: true,
-        })
+        let session_id = prepared.session_id.clone();
+        match state.catalog.publish_session(
+            &prepared,
+            &format!("Clone of {source_session}"),
+            origin,
+        ) {
+            Ok(snapshot) => Ok(SessionSwitchResult {
+                session: snapshot,
+                editor_content: None,
+                restart_required: true,
+                committed_restart_diagnostic: None,
+            }),
+            Err(error) if error.committed() => committed_switch(&state, &session_id, None, &error),
+            Err(error) => Err(publication_failure(&error)),
+        }
     }
 
     /// Forks at an exact historical user-message boundary into a new Session.
@@ -370,15 +392,22 @@ impl LocalSessionSupervisor {
             origin.clone(),
         )?;
         self.quiesce_old(&mut state).await?;
-        let snapshot = state
+        let session_id = prepared.session_id.clone();
+        match state
             .catalog
             .publish_session(&prepared, &format!("Fork of {source_session}"), origin)
-            .map_err(|error| publication_failure(&error))?;
-        Ok(SessionSwitchResult {
-            session: snapshot,
-            editor_content: Some(editor_content),
-            restart_required: true,
-        })
+        {
+            Ok(snapshot) => Ok(SessionSwitchResult {
+                session: snapshot,
+                editor_content: Some(editor_content),
+                restart_required: true,
+                committed_restart_diagnostic: None,
+            }),
+            Err(error) if error.committed() => {
+                committed_switch(&state, &session_id, Some(editor_content), &error)
+            }
+            Err(error) => Err(publication_failure(&error)),
+        }
     }
 
     /// Creates a new independent node under the active Session from an exact
@@ -416,15 +445,21 @@ impl LocalSessionSupervisor {
             origin.clone(),
         )?;
         self.quiesce_old(&mut state).await?;
-        let snapshot = state
+        match state
             .catalog
             .publish_node(&source_session, &prepared, source_node.id.clone(), origin)
-            .map_err(|error| publication_failure(&error))?;
-        Ok(SessionSwitchResult {
-            session: snapshot,
-            editor_content: Some(editor_content),
-            restart_required: true,
-        })
+        {
+            Ok(snapshot) => Ok(SessionSwitchResult {
+                session: snapshot,
+                editor_content: Some(editor_content),
+                restart_required: true,
+                committed_restart_diagnostic: None,
+            }),
+            Err(error) if error.committed() => {
+                committed_switch(&state, &source_session, Some(editor_content), &error)
+            }
+            Err(error) => Err(publication_failure(&error)),
+        }
     }
 
     async fn quiesce_old(&self, state: &mut SupervisorState) -> Result<(), SessionSupervisorError> {
@@ -593,6 +628,28 @@ fn publication_failure(error: &SessionError) -> SessionSupervisorError {
     }
 }
 
+fn committed_switch(
+    state: &SupervisorState,
+    session_id: &SessionId,
+    editor_content: Option<Vec<UserContentBlock>>,
+    error: &SessionError,
+) -> Result<SessionSwitchResult, SessionSupervisorError> {
+    debug_assert!(error.committed());
+    let session = state.catalog.snapshot(session_id).map_err(|snapshot_error| {
+        SessionSupervisorError::RestartRequired {
+            detail: format!(
+                "catalog visibility committed, but the committed Session snapshot could not be read: {snapshot_error}; original durability outcome: {error}"
+            ),
+        }
+    })?;
+    Ok(SessionSwitchResult {
+        session,
+        editor_content,
+        restart_required: true,
+        committed_restart_diagnostic: Some(error.to_string()),
+    })
+}
+
 impl RuntimeClientSessionControl for LocalSessionSupervisor {
     #[allow(clippy::too_many_lines)]
     fn handle(&self, request: RuntimeClientSessionRequest) -> SessionControlFuture {
@@ -743,10 +800,18 @@ impl RuntimeClientSessionControl for LocalSessionSupervisor {
 }
 
 fn changed_view(change: SessionSwitchResult) -> RuntimeClientResult {
-    RuntimeClientResult::SessionChanged {
-        session: session_view(change.session),
-        editor_content: change.editor_content,
-        restart_required: change.restart_required,
+    if let Some(diagnostic) = change.committed_restart_diagnostic {
+        RuntimeClientResult::SessionCommittedRestartRequired {
+            session: session_view(change.session),
+            editor_content: change.editor_content,
+            diagnostic,
+        }
+    } else {
+        RuntimeClientResult::SessionChanged {
+            session: session_view(change.session),
+            editor_content: change.editor_content,
+            restart_required: change.restart_required,
+        }
     }
 }
 

@@ -1561,6 +1561,8 @@ mod tests {
         AgentStatusSectionId, AgentStatusSectionProvider, ContextError, DefaultTokenEstimator,
         TokenEstimator,
     };
+    use crate::conversation::SurfaceRevision;
+    use crate::durable::{ConversationStore, SqliteConversationStore};
     use crate::local_runtime::{LocalConversationConfig, LocalSessionSupervisor, SessionCatalog};
     use crate::message::content::TextBlock;
     use crate::message::types::{
@@ -1576,7 +1578,9 @@ mod tests {
         ConversationContextConfig, ConversationRuntime, ConversationRuntimeError, CoordinatorProbe,
         InboundAdmissionError, ModelUpdateError, RuntimeConversationConfig,
     };
-    use crate::runtime::identity::{AgentId, ConversationId, ToolCallId, ToolExecutionId, ToolId};
+    use crate::runtime::identity::{
+        AgentId, ConversationId, MessageId, ToolCallId, ToolExecutionId, ToolId,
+    };
     use crate::runtime::request_history::RequestHistory;
     use crate::runtime::types::RuntimeClock;
     use crate::runtime_client::endpoint::RuntimeClientEndpoint;
@@ -2498,6 +2502,57 @@ mod tests {
         .await
         .expect("provider invocation must settle")
         .expect("provider request-count signal must stay open");
+    }
+
+    /// Seeds one real settled user turn and returns the exact retained
+    /// Surface revision selected for a fork/tree transition. The loop waits
+    /// on the runtime's durable head, not on a scheduling delay.
+    async fn await_text_boundary(
+        runtime: &ConversationRuntime,
+        adapter: &GatedAdapter,
+        text: &str,
+    ) -> (SurfaceRevision, MessageId, Vec<MessageBlock>) {
+        let message_id = runtime
+            .submit_inbound(submit_content(text))
+            .expect("boundary turn accepted")
+            .message_id;
+        await_adapter_request_count(adapter, 1).await;
+        tokio::time::timeout(std::time::Duration::from_secs(120), async {
+            loop {
+                let (revision, messages) = runtime
+                    .historical_head_snapshot()
+                    .expect("historical head snapshot");
+                let found_user = messages.iter().any(
+                    |message| matches!(message, MessageBlock::User(user) if user.id == message_id),
+                );
+                let found_assistant = messages
+                    .iter()
+                    .any(|message| matches!(message, MessageBlock::Assistant(_)));
+                if found_user && found_assistant {
+                    return (revision, message_id.clone(), messages);
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("settled boundary must become durable")
+    }
+
+    fn catalog_conversation(
+        catalog_root: &std::path::Path,
+        session_id: &str,
+        conversation_id: &crate::runtime::identity::ConversationId,
+    ) -> Vec<MessageBlock> {
+        let path = catalog_root
+            .join("sessions")
+            .join(session_id)
+            .join("conversations")
+            .join(conversation_id.as_str())
+            .join("conversation.sqlite");
+        SqliteConversationStore::open(conversation_id.clone(), &path)
+            .expect("destination conversation store")
+            .load_canonical()
+            .expect("destination canonical history")
     }
 
     /// Submitting while an attempt is running queues the message in the
@@ -5213,13 +5268,27 @@ mod tests {
                     id: crate::runtime_client::RequestId::new(2),
                 })
                 .await;
-            assert!(
-                matches!(
-                    response.error,
-                    Some(RuntimeClientError::SessionRestartRequired { .. })
-                ),
-                "unexpected first transition response: {response:?}"
-            );
+            if post_rename {
+                assert!(matches!(
+                    response.result,
+                    Some(RuntimeClientResult::SessionCommittedRestartRequired {
+                        editor_content: None,
+                        ..
+                    })
+                ));
+                assert!(
+                    response.error.is_none(),
+                    "committed transition is typed success"
+                );
+            } else {
+                assert!(
+                    matches!(
+                        response.error,
+                        Some(RuntimeClientError::SessionRestartRequired { .. })
+                    ),
+                    "unexpected pre-commit transition response: {response:?}"
+                );
+            }
 
             // A repeated replacement request is fenced by the absorbing
             // supervisor state, rather than being treated as another normal
@@ -5281,6 +5350,217 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn fork_pre_rename_failure_is_terminal_without_committed_draft() {
+        let prompt = "fork-draft-exact-pre-7f3b";
+        let (adapter, fixture, endpoint, supervisor, catalog_root, config) =
+            local_session_endpoint(vec![one_turn_stop()], None).await;
+        initialize_endpoint(&endpoint);
+        let (revision, message_id, source_messages) =
+            await_text_boundary(&fixture.runtime, &adapter, prompt).await;
+        let source = SessionCatalog::open(catalog_root.path(), &config)
+            .expect("source catalog")
+            .active_snapshot()
+            .expect("source snapshot");
+
+        supervisor.arm_catalog_write_fault_before_rename().await;
+        let response = endpoint
+            .handle_request_async(RuntimeClientRequest::SessionFork {
+                id: crate::runtime_client::RequestId::new(20),
+                surface_revision: revision,
+                message_id,
+            })
+            .await;
+        assert!(matches!(
+            response.error,
+            Some(RuntimeClientError::SessionRestartRequired { .. })
+        ));
+        assert!(
+            response.result.is_none(),
+            "pre-commit failure has no transition result"
+        );
+
+        let reopened = SessionCatalog::open(catalog_root.path(), &config).expect("reopen source");
+        assert_eq!(
+            reopened
+                .active_snapshot()
+                .expect("active source after failure")
+                .id,
+            source.id
+        );
+        assert_eq!(
+            reopened
+                .list_page(None, 0, crate::local_runtime::SESSION_LIST_PAGE_LIMIT)
+                .expect("source page")
+                .sessions
+                .len(),
+            1,
+            "the prepared destination is not catalog-visible before rename"
+        );
+        assert_eq!(
+            fixture
+                .runtime
+                .historical_head_snapshot()
+                .expect("source history after failed fork")
+                .1,
+            source_messages,
+            "source lineage remains unchanged"
+        );
+
+        let duplicate = endpoint
+            .handle_request_async(RuntimeClientRequest::SessionFork {
+                id: crate::runtime_client::RequestId::new(21),
+                surface_revision: revision,
+                message_id: MessageId::new(prompt),
+            })
+            .await;
+        assert!(matches!(
+            duplicate.error,
+            Some(RuntimeClientError::SessionRestartRequired { .. })
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn fork_post_rename_failure_carries_exact_uncommitted_editor_payload() {
+        let prompt = "fork-draft-exact-7f3b";
+        let (adapter, fixture, endpoint, supervisor, catalog_root, config) =
+            local_session_endpoint(vec![one_turn_stop()], None).await;
+        initialize_endpoint(&endpoint);
+        let (revision, message_id, source_messages) =
+            await_text_boundary(&fixture.runtime, &adapter, prompt).await;
+        let source = SessionCatalog::open(catalog_root.path(), &config)
+            .expect("source catalog")
+            .active_snapshot()
+            .expect("source snapshot");
+
+        supervisor.arm_catalog_write_fault_after_rename().await;
+        let response = endpoint
+            .handle_request_async(RuntimeClientRequest::SessionFork {
+                id: crate::runtime_client::RequestId::new(30),
+                surface_revision: revision,
+                message_id,
+            })
+            .await;
+        let Some(RuntimeClientResult::SessionCommittedRestartRequired {
+            session,
+            editor_content,
+            diagnostic,
+        }) = response.result
+        else {
+            panic!("post-commit fork must carry a typed transition result: {response:?}");
+        };
+        assert!(response.error.is_none());
+        assert!(diagnostic.contains("durability is uncertain"));
+        assert_eq!(editor_content, Some(submit_content(prompt)));
+
+        let reopened = SessionCatalog::open(catalog_root.path(), &config).expect("reopen fork");
+        let authoritative = reopened.active_snapshot().expect("authoritative fork");
+        assert_eq!(authoritative.id.as_str(), session.id);
+        assert_ne!(
+            authoritative.active_conversation_id,
+            source.active_conversation_id
+        );
+        assert_eq!(
+            reopened
+                .list_page(None, 0, crate::local_runtime::SESSION_LIST_PAGE_LIMIT)
+                .expect("fork page")
+                .sessions
+                .len(),
+            2
+        );
+
+        let destination = catalog_conversation(
+            catalog_root.path(),
+            session.id.as_str(),
+            &session.active_conversation_id,
+        );
+        assert!(!destination.iter().any(|message| {
+            matches!(message, MessageBlock::User(user) if user.content.iter().any(|content| {
+                matches!(content, UserContentBlock::Text(text) if text.text == prompt)
+            }))
+        }));
+        assert_eq!(
+            fixture
+                .runtime
+                .historical_head_snapshot()
+                .expect("source history after committed fork")
+                .1,
+            source_messages,
+            "source lineage remains unchanged"
+        );
+
+        let duplicate = endpoint
+            .handle_request_async(RuntimeClientRequest::SessionNew {
+                id: crate::runtime_client::RequestId::new(31),
+            })
+            .await;
+        assert!(matches!(
+            duplicate.error,
+            Some(RuntimeClientError::SessionRestartRequired { .. })
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn tree_post_rename_failure_carries_exact_uncommitted_editor_payload() {
+        let prompt = "tree-draft-exact-7f3b";
+        let (adapter, fixture, endpoint, supervisor, catalog_root, config) =
+            local_session_endpoint(vec![one_turn_stop()], None).await;
+        initialize_endpoint(&endpoint);
+        let (revision, message_id, source_messages) =
+            await_text_boundary(&fixture.runtime, &adapter, prompt).await;
+        let source = SessionCatalog::open(catalog_root.path(), &config)
+            .expect("source catalog")
+            .active_snapshot()
+            .expect("source snapshot");
+
+        supervisor.arm_catalog_write_fault_after_rename().await;
+        let response = endpoint
+            .handle_request_async(RuntimeClientRequest::SessionTreeBranch {
+                id: crate::runtime_client::RequestId::new(40),
+                surface_revision: revision,
+                message_id,
+            })
+            .await;
+        let Some(RuntimeClientResult::SessionCommittedRestartRequired {
+            session,
+            editor_content,
+            diagnostic,
+        }) = response.result
+        else {
+            panic!("post-commit tree branch must carry a typed transition result: {response:?}");
+        };
+        assert!(response.error.is_none());
+        assert!(diagnostic.contains("durability is uncertain"));
+        assert_eq!(editor_content, Some(submit_content(prompt)));
+        assert_eq!(session.id, source.id.as_str());
+        assert_ne!(session.active_node, source.active_node.as_str());
+
+        let reopened = SessionCatalog::open(catalog_root.path(), &config).expect("reopen tree");
+        let authoritative = reopened.active_snapshot().expect("authoritative tree node");
+        assert_eq!(authoritative.id, source.id);
+        assert_eq!(authoritative.active_node.as_str(), session.active_node);
+        assert_eq!(authoritative.node_count, 2);
+        let destination = catalog_conversation(
+            catalog_root.path(),
+            session.id.as_str(),
+            &session.active_conversation_id,
+        );
+        assert!(!destination.iter().any(|message| {
+            matches!(message, MessageBlock::User(user) if user.content.iter().any(|content| {
+                matches!(content, UserContentBlock::Text(text) if text.text == prompt)
+            }))
+        }));
+        assert_eq!(
+            fixture
+                .runtime
+                .historical_head_snapshot()
+                .expect("source history after committed tree branch")
+                .1,
+            source_messages,
+            "source node remains unchanged"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

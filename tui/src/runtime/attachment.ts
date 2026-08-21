@@ -82,8 +82,11 @@ export interface AttachmentIdentity {
 
 export interface SessionSwitch {
   session: SessionView;
+  /** Fork/tree content selected before publication; never canonical history. */
   editorContent?: UserContentBlock[];
   restartRequired: boolean;
+  /** Present only when visibility committed before durability failed. */
+  restartDiagnostic?: string;
 }
 
 type StateListener = (state: PresentationState) => void;
@@ -530,6 +533,15 @@ export class RuntimeClientAttachment {
     result: RuntimeClientResult,
     method: string,
   ): SessionSwitch {
+    if (result.type === "session_committed_restart_required") {
+      this.#sessionInfo = result.session;
+      return {
+        session: result.session,
+        editorContent: result.editor_content,
+        restartRequired: true,
+        restartDiagnostic: result.diagnostic,
+      };
+    }
     if (result.type !== "session_changed") {
       throw new Error(`${method} returned ${result.type}`);
     }

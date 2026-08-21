@@ -454,11 +454,7 @@ export class RustxTuiApp {
     selector.onCancel = close;
     selector.onSelect = (model) => {
       close();
-      void this.#dispatcher.selectModel(model).then((outcome) => {
-        if (outcome.kind === "message") {
-          this.#note(outcome.level, outcome.text);
-        }
-      }).catch((error: unknown) => {
+      void this.#dispatcher.selectModel(model).then((outcome) => this.#handleOutcome(outcome)).catch((error: unknown) => {
         this.#note("error", `model selection failed: ${errorMessage(error)}`);
       });
     };
@@ -583,8 +579,6 @@ export class RustxTuiApp {
     boundaries: SessionUserMessageBoundaryView[],
     nextHistoryOffset: number | undefined,
   ): void {
-    let currentNodeOffset = nextNodeOffset;
-    let currentHistoryOffset = nextHistoryOffset;
     const selector = new TreeSelector({
       session,
       nodes,
@@ -601,11 +595,9 @@ export class RustxTuiApp {
     selector.onChange = () => this.#tui.requestRender();
     selector.onCancel = () => this.#closeOverlay();
     selector.onLoadMore = () => {
-      const nodeOffset = currentNodeOffset ?? nodes.length;
-      const historyOffset = currentHistoryOffset ?? boundaries.length;
-      void this.#session.sessionTreePage(nodeOffset, historyOffset).then((page) => {
-        currentNodeOffset = page.nextNodeOffset;
-        currentHistoryOffset = page.nextHistoryOffset;
+      const request = selector.nextPageRequest();
+      if (request === undefined) return;
+      void this.#session.sessionTreePage(request.nodeOffset, request.historyOffset).then((page) => {
         selector.appendPage({
           nodes: page.nodes,
           nextNodeOffset: page.nextNodeOffset,
@@ -614,12 +606,7 @@ export class RustxTuiApp {
         });
       }).catch((error: unknown) => {
         this.#note("error", `tree page failed: ${errorMessage(error)}`);
-        selector.appendPage({
-          nodes: [],
-          nextNodeOffset: currentNodeOffset,
-          boundaries: [],
-          nextHistoryOffset: currentHistoryOffset,
-        });
+        selector.retryPage();
       });
     };
     selector.onSelect = (selection: TreeSelection) => {
@@ -664,7 +651,12 @@ export class RustxTuiApp {
 
     this.#restarting = true;
     this.#editor.disableSubmit = true;
-    this.#note("info", `switching to session ${change.session.name}…`);
+    this.#note(
+      change.restartDiagnostic === undefined ? "info" : "error",
+      change.restartDiagnostic === undefined
+        ? `switching to session ${change.session.name}…`
+        : `Session ${change.session.name} committed before durability became uncertain: ${change.restartDiagnostic}`,
+    );
     const oldSession = this.#session;
     const oldConnection = this.#connection;
     const oldChild = this.#child;
@@ -678,11 +670,19 @@ export class RustxTuiApp {
 
       const next = await restart();
       this.#bindRuntime(next.session, next.connection, next.child);
-      await next.session.refreshSession();
+      const authoritative = await next.session.refreshSession();
       if (change.editorContent !== undefined) {
+        if (!sameSessionLineage(change.session, authoritative)) {
+          throw new Error(
+            "restarted Rust process selected a different Session/node than the committed transition",
+          );
+        }
         this.#editor.setText(editorText(change.editorContent));
       }
-      this.#note("info", `active session: ${change.session.name}`);
+      this.#note(
+        "info",
+        `active session: ${authoritative.name} · node ${authoritative.active_node}`,
+      );
       const state = this.#session.state;
       if (state !== undefined) this.#renderState(state);
     } catch (error) {
@@ -969,9 +969,21 @@ export class RustxTuiApp {
 }
 
 function editorText(content: SessionSwitch["editorContent"]): string {
+  const nonText = (content ?? []).find((block) => block.type !== "text");
+  if (nonText !== undefined) {
+    throw new Error(
+      `fork/tree editor restoration does not support ${nonText.type} content yet`,
+    );
+  }
   return (content ?? [])
-    .map((block) => block.type === "text" ? block.text : `[${block.type}]`)
+    .map((block) => block.text)
     .join("\n");
+}
+
+function sameSessionLineage(expected: SessionView, actual: SessionView): boolean {
+  return expected.id === actual.id &&
+    expected.active_node === actual.active_node &&
+    expected.active_conversation_id === actual.active_conversation_id;
 }
 
 function errorMessage(error: unknown): string {

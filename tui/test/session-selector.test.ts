@@ -119,4 +119,159 @@ describe("native Session selectors", () => {
     assert.match(rendered, /├─ node-1/);
     assert.doesNotMatch(rendered, /└─ node-1/);
   });
+
+  it("keeps an exhausted node stream at its loaded end while history continues", () => {
+    const initialNodes = Array.from({ length: 32 }, (_, index) => node(`node-${index}`));
+    const initialBoundaries = Array.from({ length: 32 }, (_, index) => boundaryAt(`user-${index}`));
+    const selector = new TreeSelector({
+      session: sessionView(),
+      nodes: initialNodes,
+      nextNodeOffset: 32,
+      boundaries: initialBoundaries,
+      nextHistoryOffset: 32,
+    });
+    const requests: Array<{ nodeOffset: number; historyOffset: number }> = [];
+    const nodeIds = initialNodes.map((item) => item.id);
+    const historyIds = initialBoundaries.map((item) => item.message.id);
+    selector.onLoadMore = () => {
+      const request = selector.nextPageRequest();
+      if (request === undefined) return;
+      requests.push(request);
+      if (requests.length === 1) {
+        const pageNodes = Array.from({ length: 8 }, (_, index) => node(`node-${index + 32}`));
+        const pageBoundaries = Array.from({ length: 32 }, (_, index) => boundaryAt(`user-${index + 32}`));
+        nodeIds.push(...pageNodes.map((item) => item.id));
+        historyIds.push(...pageBoundaries.map((item) => item.message.id));
+        selector.appendPage({
+          nodes: pageNodes,
+          nextNodeOffset: undefined,
+          boundaries: pageBoundaries,
+          nextHistoryOffset: 64,
+        });
+      } else {
+        const pageBoundaries = Array.from({ length: 32 }, (_, index) => boundaryAt(`user-${index + 64}`));
+        historyIds.push(...pageBoundaries.map((item) => item.message.id));
+        selector.appendPage({
+          nodes: [],
+          nextNodeOffset: undefined,
+          boundaries: pageBoundaries,
+          nextHistoryOffset: undefined,
+        });
+      }
+    };
+
+    // The initial highlight is the last row, so one native navigation event
+    // starts the first continuation. The second call models the next load
+    // after the history stream remains active.
+    selector.handleInput("\u001b[B");
+    selector.onLoadMore?.();
+
+    assert.deepEqual(requests, [
+      { nodeOffset: 32, historyOffset: 32 },
+      { nodeOffset: 40, historyOffset: 64 },
+    ]);
+    assert.equal(new Set(nodeIds).size, nodeIds.length);
+    assert.equal(new Set(historyIds).size, historyIds.length);
+    assert.equal(selector.nextPageRequest(), undefined);
+  });
+
+  it("keeps an exhausted history stream at its loaded end while nodes continue", () => {
+    const initialNodes = Array.from({ length: 32 }, (_, index) => node(`node-${index}`));
+    const initialBoundaries = Array.from({ length: 32 }, (_, index) => boundaryAt(`user-${index}`));
+    const selector = new TreeSelector({
+      session: sessionView(),
+      nodes: initialNodes,
+      nextNodeOffset: 32,
+      boundaries: initialBoundaries,
+      nextHistoryOffset: 32,
+    });
+    const requests: Array<{ nodeOffset: number; historyOffset: number }> = [];
+    const nodeIds = initialNodes.map((item) => item.id);
+    const historyIds = initialBoundaries.map((item) => item.message.id);
+    selector.onLoadMore = () => {
+      const request = selector.nextPageRequest();
+      if (request === undefined) return;
+      requests.push(request);
+      if (requests.length === 1) {
+        const pageNodes = Array.from({ length: 32 }, (_, index) => node(`node-${index + 32}`));
+        const pageBoundaries = Array.from({ length: 8 }, (_, index) => boundaryAt(`user-${index + 32}`));
+        nodeIds.push(...pageNodes.map((item) => item.id));
+        historyIds.push(...pageBoundaries.map((item) => item.message.id));
+        selector.appendPage({
+          nodes: pageNodes,
+          nextNodeOffset: 64,
+          boundaries: pageBoundaries,
+          nextHistoryOffset: undefined,
+        });
+      } else {
+        const pageNodes = Array.from({ length: 32 }, (_, index) => node(`node-${index + 64}`));
+        nodeIds.push(...pageNodes.map((item) => item.id));
+        selector.appendPage({
+          nodes: pageNodes,
+          nextNodeOffset: undefined,
+          boundaries: [],
+          nextHistoryOffset: undefined,
+        });
+      }
+    };
+
+    selector.handleInput("\u001b[B");
+    selector.onLoadMore?.();
+
+    assert.deepEqual(requests, [
+      { nodeOffset: 32, historyOffset: 32 },
+      { nodeOffset: 64, historyOffset: 40 },
+    ]);
+    assert.equal(new Set(nodeIds).size, nodeIds.length);
+    assert.equal(new Set(historyIds).size, historyIds.length);
+    assert.equal(selector.nextPageRequest(), undefined);
+  });
+
+  it("stops paired paging when both streams exhaust together", () => {
+    const selector = new TreeSelector({
+      session: sessionView(),
+      nodes: Array.from({ length: 32 }, (_, index) => node(`node-${index}`)),
+      nextNodeOffset: 32,
+      boundaries: Array.from({ length: 32 }, (_, index) => boundaryAt(`user-${index}`)),
+      nextHistoryOffset: 32,
+    });
+    const requests: Array<{ nodeOffset: number; historyOffset: number }> = [];
+    selector.onLoadMore = () => {
+      const request = selector.nextPageRequest();
+      if (request === undefined) return;
+      requests.push(request);
+      selector.appendPage({
+        nodes: Array.from({ length: 8 }, (_, index) => node(`node-${index + 32}`)),
+        nextNodeOffset: undefined,
+        boundaries: Array.from({ length: 8 }, (_, index) => boundaryAt(`user-${index + 32}`)),
+        nextHistoryOffset: undefined,
+      });
+    };
+
+    selector.handleInput("\u001b[B");
+    selector.onLoadMore?.();
+
+    assert.deepEqual(requests, [{ nodeOffset: 32, historyOffset: 32 }]);
+    assert.equal(selector.nextPageRequest(), undefined);
+  });
 });
+
+function node(id: string): SessionNodeView {
+  return {
+    id,
+    conversation_id: `conversation-${id}`,
+    origin: { type: "new" },
+  };
+}
+
+function boundaryAt(id: string): typeof boundary {
+  return {
+    surface_revision: Number(id.replace("user-", "")) + 1,
+    message: {
+      id,
+      content: [{ type: "text", text: id }],
+      source: "human",
+      kind: "message",
+    },
+  };
+}

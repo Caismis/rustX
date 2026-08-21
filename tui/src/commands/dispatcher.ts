@@ -374,33 +374,37 @@ export class CommandDispatcher {
    * simply reports both facts truthfully.
    */
   async selectModel(model: CatalogModelView): Promise<CommandOutcome> {
-    const current = this.#context.session.state?.sessionModel.configured;
-    if (current === undefined) {
-      return { kind: "message", level: "error", text: "not attached yet" };
+    try {
+      const current = this.#context.session.state?.sessionModel.configured;
+      if (current === undefined) {
+        return { kind: "message", level: "error", text: "not attached yet" };
+      }
+
+      // `/model X` is a deliberate whole-state replacement: the selected
+      // primary model gets its own runtime defaults, while the independently
+      // configured summary policy is copied from the authoritative current
+      // configuration unchanged.
+      const replacement = {
+        model: model.model,
+        reasoningProfile: model.defaultReasoningProfile,
+        requestParams: {},
+        summaryModel: current.summaryModel,
+      };
+      const updated = await this.#context.session.modelSet({
+        ...replacement,
+      });
+
+      const attempt = this.#context.session.state?.attempt;
+      const note =
+        attempt !== undefined && attempt.phase.type === "running"
+          ? `\nThe running attempt stays on ${attempt.model.primary.model}; the change applies to the next attempt.`
+          : "";
+      return info(
+        `session model is now ${updated.configured.model}\nprimary overrides reset to the selected model defaults; summary model policy preserved\n${capabilitySummary(updated.effective)}${note}`,
+      );
+    } catch (error) {
+      return failure(error);
     }
-
-    // `/model X` is a deliberate whole-state replacement: the selected
-    // primary model gets its own runtime defaults, while the independently
-    // configured summary policy is copied from the authoritative current
-    // configuration unchanged.
-    const replacement = {
-      model: model.model,
-      reasoningProfile: model.defaultReasoningProfile,
-      requestParams: {},
-      summaryModel: current.summaryModel,
-    };
-    const updated = await this.#context.session.modelSet({
-      ...replacement,
-    });
-
-    const attempt = this.#context.session.state?.attempt;
-    const note =
-      attempt !== undefined && attempt.phase.type === "running"
-        ? `\nThe running attempt stays on ${attempt.model.primary.model}; the change applies to the next attempt.`
-        : "";
-    return info(
-      `session model is now ${updated.configured.model}\nprimary overrides reset to the selected model defaults; summary model policy preserved\n${capabilitySummary(updated.effective)}${note}`,
-    );
   }
 
   async #cancel(argument: string): Promise<CommandOutcome> {

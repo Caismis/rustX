@@ -17,7 +17,12 @@ import type { ChildRuntimeProcess } from "../src/runtime/child-process.ts";
 import type { RuntimeClientConnection } from "../src/runtime/connection.ts";
 import type { RuntimeClientAttachment } from "../src/runtime/attachment.ts";
 import type { SessionSummaryView } from "../src/protocol/types.ts";
-import { attemptView, sessionModel, sessionView } from "./support/fixtures.ts";
+import {
+  attemptView,
+  catalogModel,
+  sessionModel,
+  sessionView,
+} from "./support/fixtures.ts";
 
 function fakeConnection(
   onClose?: (listener: (error: ConnectionClosedError) => void) => void,
@@ -269,6 +274,163 @@ describe("RustxTuiApp lifecycle", () => {
       "restart",
     ]);
     assert.ok(log.includes("refresh_authoritative"));
+
+    await app.quit();
+    await running;
+  });
+
+  it("restores a committed fork draft only after authoritative restart metadata", async () => {
+    const prompt = "fork-draft-exact-7f3b";
+    const log: string[] = [];
+    let refreshed!: () => void;
+    const refreshedObserved = new Promise<void>((resolve) => {
+      refreshed = resolve;
+    });
+    let submitted!: (content: string) => void;
+    const submittedObserved = new Promise<string>((resolve) => {
+      submitted = resolve;
+    });
+
+    const oldSession = fakeSession(
+      async () => {},
+      emptyPresentationState(sessionModel("alpha/model-a")),
+    );
+    const oldApi = oldSession as unknown as {
+      newSession: () => Promise<unknown>;
+      detach: () => Promise<void>;
+    };
+    oldApi.newSession = async () => ({
+      session: sessionView({ id: "session-2", name: "committed fork" }),
+      editorContent: [{ type: "text", text: prompt }],
+      restartRequired: true,
+      restartDiagnostic: "catalog visibility committed; durability uncertain",
+    });
+    oldApi.detach = async () => {
+      log.push("detach");
+    };
+
+    const nextSession = fakeSession(
+      async () => {},
+      emptyPresentationState(sessionModel("alpha/model-a")),
+    );
+    const nextApi = nextSession as unknown as {
+      refreshSession: () => Promise<ReturnType<typeof sessionView>>;
+      submitInbound: (content: Array<{ type: "text"; text: string }>) => Promise<{
+        messageId: string;
+        sequence: number;
+      }>;
+    };
+    nextApi.refreshSession = async () => {
+      refreshed();
+      return sessionView({ id: "session-2", name: "authoritative committed fork" });
+    };
+    nextApi.submitInbound = async (content) => {
+      submitted(content.map((block) => block.text).join("\n"));
+      return { messageId: "destination-user-1", sequence: 1 };
+    };
+
+    const app = new RustxTuiApp({
+      session: oldSession,
+      connection: fakeConnection(),
+      child: fakeChild(log),
+      restartRuntime: async () => ({
+        session: nextSession,
+        connection: fakeConnection(),
+        child: fakeChild(log),
+      }),
+    });
+    const running = app.run();
+    process.stdin.emit("data", "/new\r");
+    await refreshedObserved;
+    // The refresh promise resolves at the native metadata boundary; allow
+    // the app's awaited replacement continuation to install the draft before
+    // the next parser event is delivered.
+    await tick();
+
+    process.stdin.emit("data", "\r");
+    await tick();
+    assert.equal(await submittedObserved, prompt);
+    assert.deepEqual(log.slice(0, 3), ["detach", "close_stdin", "wait_exit"]);
+
+    await app.quit();
+    await running;
+  });
+
+  it("routes interactive model replacement through the terminal Session flow", async () => {
+    const log: string[] = [];
+    let refreshStarted!: () => void;
+    const refreshObserved = new Promise<void>((resolve) => {
+      refreshStarted = resolve;
+    });
+    const oldSession = fakeSession(
+      async () => {},
+      emptyPresentationState(sessionModel("alpha/model-a")),
+    );
+    const oldApi = oldSession as unknown as {
+      modelCatalog: () => Promise<{ models: ReturnType<typeof catalogModel>[] }>;
+      modelSet: () => Promise<never>;
+      refreshSession: () => Promise<ReturnType<typeof sessionView>>;
+      detach: () => Promise<void>;
+    };
+    oldApi.modelCatalog = async () => ({
+      models: [
+        catalogModel("alpha/model-a"),
+        catalogModel("beta/model-b"),
+      ],
+    });
+    oldApi.modelSet = async () => {
+      throw new RuntimeRequestError({
+        type: "session_restart_required",
+        message: "model catalog visibility committed; durability uncertain",
+      });
+    };
+    oldApi.refreshSession = async () => sessionView();
+    oldApi.detach = async () => {
+      log.push("detach");
+    };
+
+    const nextSession = fakeSession(
+      async () => {},
+      emptyPresentationState(sessionModel("beta/model-b")),
+    );
+    const nextApi = nextSession as unknown as {
+      refreshSession: () => Promise<ReturnType<typeof sessionView>>;
+    };
+    nextApi.refreshSession = async () => {
+      log.push("refresh_authoritative");
+      refreshStarted();
+      return sessionView({ id: "session-2", name: "authoritative model session" });
+    };
+
+    const app = new RustxTuiApp({
+      session: oldSession,
+      connection: fakeConnection(),
+      child: fakeChild(log),
+      restartRuntime: async () => {
+        log.push("restart");
+        return {
+          session: nextSession,
+          connection: fakeConnection(),
+          child: fakeChild(log),
+        };
+      },
+    });
+    const running = app.run();
+
+    process.stdin.emit("data", "/model\r");
+    await tick();
+    process.stdin.emit("data", "\u001b[B");
+    await tick();
+    process.stdin.emit("data", "\r");
+    await refreshObserved;
+
+    assert.deepEqual(log.slice(0, 5), [
+      "detach",
+      "close_stdin",
+      "wait_exit",
+      "restart",
+      "refresh_authoritative",
+    ]);
 
     await app.quit();
     await running;

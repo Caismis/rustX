@@ -778,7 +778,10 @@ pub enum RuntimeClientResult {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         next_history_offset: Option<usize>,
     },
-    /// A metadata change or a newly selected/created lineage.
+    /// A metadata change or a newly selected/created lineage whose catalog
+    /// visibility and durability completed normally. Fork/tree may carry a
+    /// selected user prompt as transient editor content; it is not canonical
+    /// destination history.
     SessionChanged {
         /// The newly authoritative Session snapshot.
         session: SessionView,
@@ -787,6 +790,21 @@ pub enum RuntimeClientResult {
         editor_content: Option<Vec<UserContentBlock>>,
         /// Whether the client must reattach to compose the selected lineage.
         restart_required: bool,
+    },
+    /// A Session transition crossed the catalog visibility commit point, but
+    /// the post-rename durability barrier was uncertain. The transition is
+    /// authoritative, the current attachment must be replaced, and the
+    /// optional editor content is a transient product result rather than
+    /// canonical conversation history. The client must restart and refresh
+    /// the Session from the new native process before restoring that content.
+    SessionCommittedRestartRequired {
+        /// The Session snapshot from the committed catalog document.
+        session: SessionView,
+        /// Optional uncommitted editor content restored by fork/tree branch.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        editor_content: Option<Vec<UserContentBlock>>,
+        /// Bounded diagnostic for the replacement path.
+        diagnostic: String,
     },
     /// `model_set` succeeded: the update was applied and published.
     ///
@@ -949,12 +967,12 @@ mod tests {
     use super::{
         RUNTIME_CLIENT_PROTOCOL_VERSION_V1, RuntimeClientCursor, RuntimeClientError,
         RuntimeClientProtocolEvent, RuntimeClientRequest, RuntimeClientResponse,
-        RuntimeClientResult,
+        RuntimeClientResult, SessionView,
     };
     use crate::events::types::EVENT_SCHEMA_VERSION;
     use crate::message::content::TextBlock;
     use crate::message::types::UserContentBlock;
-    use crate::runtime::identity::{AttemptId, InteractionId, ToolExecutionId};
+    use crate::runtime::identity::{AttemptId, ConversationId, InteractionId, ToolExecutionId};
     use crate::runtime::interaction::{ApprovalDecision, InteractionResponse};
     use crate::runtime_client::event::RuntimeClientEvent;
 
@@ -1072,6 +1090,35 @@ mod tests {
         assert!(value.get("error").is_none());
         let decoded: RuntimeClientResponse = serde_json::from_value(value).expect("deserialize");
         assert_eq!(decoded, response);
+    }
+
+    /// A committed-but-uncertain Session transition is a success payload with
+    /// a distinct wire discriminator, not a generic Session failure. Its
+    /// transient editor content survives the JSON round trip unchanged.
+    #[test]
+    fn committed_session_transition_round_trips_with_editor_payload() {
+        let now = chrono::Utc::now();
+        let result = RuntimeClientResult::SessionCommittedRestartRequired {
+            session: SessionView {
+                id: "session-2".to_owned(),
+                name: "fork".to_owned(),
+                created_at: now,
+                updated_at: now,
+                active_node: "node-2".to_owned(),
+                active_conversation_id: ConversationId::new("conversation-2"),
+                node_count: 1,
+            },
+            editor_content: Some(vec![UserContentBlock::Text(TextBlock {
+                text: "fork-draft-exact-7f3b".to_owned(),
+            })]),
+            diagnostic: "catalog visibility committed; durability uncertain".to_owned(),
+        };
+        let value = serde_json::to_value(&result).expect("serialize transition result");
+        assert_eq!(value["type"], "session_committed_restart_required");
+        assert_eq!(value["editor_content"][0]["type"], "text");
+        let decoded: RuntimeClientResult =
+            serde_json::from_value(value).expect("deserialize transition result");
+        assert_eq!(decoded, result);
     }
 
     /// Notifications structurally carry no request id: an event envelope

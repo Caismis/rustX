@@ -3222,6 +3222,23 @@ continue after a pre-commit failure, but a post-commit durability uncertainty
 fences the attachment too, so a live runtime cannot silently diverge from
 published metadata.
 
+Session transitions therefore have three distinct product outcomes:
+
+1. **No visibility commit.** The source selection remains authoritative and a
+   prepared destination is not visible. If the old runtime was already
+   quiesced, the attachment is still terminal, but a fork/tree editor prompt
+   is not returned as though the transition succeeded.
+2. **Committed and durable.** `session_changed` carries the newly authoritative
+   Session and, for fork/tree, the selected user content as transient editor
+   content. The prompt is not part of the destination's canonical seed.
+3. **Committed with durability uncertain.**
+   `session_committed_restart_required` carries the committed Session identity,
+   the same transient editor content when applicable, and a diagnostic. It is
+   a typed semantic result, not a generic failure. After restart the TUI reads
+   `session_get` from the new Rust process, verifies the authoritative
+   Session/node selection, and only then restores the carried prompt. The
+   prompt remains non-canonical until the user submits it.
+
 The supervisor attachment state is explicit and absorbing:
 
 ```text
@@ -3246,6 +3263,12 @@ then resumes presentation. It never derives the destination from stale
 picker/component state. Transport loss and ordinary cancellation remain
 separate lifecycle outcomes.
 
+Fork/tree editor restoration is currently explicitly text-only. A selected
+canonical image or file block is rejected at native seed preparation rather
+than being silently rewritten as `[image]` or `[file]`; the typed payload
+remains a block list so a structured editor can be added by a later
+architecture decision.
+
 ### Bounded native projections
 
 The native owner, not TypeScript rendering, enforces the projection bounds.
@@ -3257,3 +3280,9 @@ nodes are deterministic `SessionNodeId` order and boundaries retain their
 canonical first-appearance order. `SessionView` contains active metadata and a
 node count, not the entire graph. Continuations make older Sessions and
 history reachable without imposing a permanent global Session maximum.
+The two tree continuations are independent: once either `next_*_offset` is
+absent, that stream is exhausted for the selector snapshot and is never
+restarted from an earlier offset. The TUI uses the loaded length as the
+monotonic no-op offset for the exhausted side while the other side continues;
+it does not duplicate rows or turn client-side search into a native unbounded
+query.

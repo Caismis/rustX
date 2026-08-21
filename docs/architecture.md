@@ -3185,7 +3185,11 @@ and returns a continuation offset. Rows are ordered by Session identity.
 not the graph. `/tree` returns independently bounded node and historical
 user-message pages with deterministic continuations. Older Sessions and
 historical boundaries remain reachable by continuation; there is no arbitrary
-global Session cap.
+global Session cap. The node and history continuations are independent. Once
+one continuation is absent, that stream is exhausted for the selector
+snapshot; later requests use only its loaded-length no-op offset while the
+other stream continues, so an earlier page is never fetched again. Tree search
+remains a presentation filter over the bounded rows already loaded.
 
 Historical materialization is an explicit durable boundary:
 
@@ -3215,6 +3219,23 @@ publication operation reports full success only after the parent-directory
 durability barrier. A pre-rename failure leaves at most an unreferenced
 private directory, while a post-rename barrier failure is the explicit
 visible-but-durability-uncertain outcome described below.
+
+The Runtime Client exposes three different transition outcomes. A
+pre-rename failure has no transition result: the source remains authoritative,
+and a quiesced old attachment still requires replacement. A successful
+publication returns `session_changed`; fork/tree may include the selected user
+content as transient editor data, never as canonical destination history. A
+rename followed by a failed directory barrier returns
+`session_committed_restart_required` with the committed Session snapshot, the
+same transient editor payload, and a bounded diagnostic. The TUI detaches and
+restarts, refreshes `session_get` from the new Rust process, verifies the
+authoritative Session/node selection, and only then restores that payload. A
+prompt in this payload is not canonical until a later user submission.
+
+The current editor contract rejects fork/tree selections containing image or
+file blocks at native preparation. This prevents a placeholder string from
+being mistaken for the selected canonical content; the wire payload is already
+a `UserContentBlock` list for a future structured editor.
 
 The linearization points are explicit and ordered:
 

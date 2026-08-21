@@ -115,6 +115,16 @@ spawn rustx
   -> interactive
 ```
 
+Session replacement is also native-owned. A successful `/new`, `/resume`,
+`/clone`, `/fork`, or `/tree` result may require replacing the child process;
+the TUI closes the old attachment and the restarted Rust process re-reads the
+authoritative catalog. A committed-but-durability-uncertain fork/tree result
+also carries the selected user content as transient editor data. The TUI
+restores it only after `session_get` confirms the restarted Session/node, and
+it is not canonical until submitted. Tree node and history pages have
+independent bounded continuations; an exhausted stream is never restarted
+from an earlier offset while the other stream continues.
+
 ## Owners
 
 | Module | Owns | Does not own |
