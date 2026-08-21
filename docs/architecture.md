@@ -3636,7 +3636,10 @@ Markdown layout, overlays, a spinner. rustX supplies every semantic above it.
 No Pi class holds authoritative state, and nothing resembling Pi's
 `AgentSession`, `SessionManager`, model runtime, provider registry, tool
 registry, compaction state, session tree, extension runtime, Skill runtime,
-or `InteractiveMode` exists in the package. Pi is imported by one file.
+or `InteractiveMode` exists in the package. Pi-TUI dependencies remain
+confined to TUI presentation and input components; Runtime Client protocol
+handling, projection semantics, Session semantics, and execution semantics do
+not depend on Pi.
 
 **Owners.** Each responsibility has exactly one owner:
 
@@ -3796,10 +3799,9 @@ clean exit. The TUI owns no provider protocol: it launches the same
 `test-support/fake-provider` process the Rust conformance suite uses, through
 a launcher that knows only about process mechanics and the control API.
 
-The layering is checkable rather than asserted: `@earendil-works/pi-tui` is
-imported by four files — the app, the autocomplete provider, the model selector
-component, and the transcript module's one type import — and every suite below
-`ui/` runs without a terminal. Framing, RPC, presentation projection, session
+The layering is checkable rather than asserted: Pi-TUI dependencies are
+confined to TUI presentation and input components, and every suite below `ui/`
+runs without a terminal. Framing, RPC, presentation projection, Session
 lifecycle, the model invariant, tool correlation, the process owner, and the
 real-binary integration never reach Pi at all. Replacing the terminal library
 would leave every one of them valid.

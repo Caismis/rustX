@@ -48,11 +48,10 @@ rustX Runtime semantics
 > presentation reduction, model state, tool state, background state, and
 > command semantics remain valid?
 
-Yes. Pi is imported by four files, all of them presentation: `src/ui/app.ts`,
-`src/ui/components/model-selector.ts` (a `Component`), `src/ui/components/
-transcript.ts` (one type import), and `src/commands/autocomplete.ts` for the
-`AutocompleteProvider` interface it implements. Everything below `src/ui/` is
-plain TypeScript over protocol values.
+Yes. Pi-TUI dependencies are confined to TUI presentation and input
+components. Runtime Client protocol handling, projection semantics, Session
+semantics, and execution semantics do not depend on Pi. Everything below
+`src/ui/` is plain TypeScript over protocol values.
 
 No suite needs a terminal. Framing, RPC, presentation projection, session
 lifecycle, the model invariant, tool correlation, the process owner, and the
@@ -88,7 +87,7 @@ cargo build --bin rustx
 
 pnpm --dir tui start \
   --binary "$PWD/target/debug/rustx" \
-  --models  "$PWD/examples/local-runtime/models.json" \
+  --models "$PWD/examples/local-runtime/models.json" \
   --session "$PWD/examples/local-runtime/session.json" \
   --workspace "$PWD/examples/local-runtime/workspace" \
   --runtime-root "$PWD/examples/local-runtime/.rustx"
@@ -149,8 +148,51 @@ carries the durable Session metadata and live status instead.
 
 ## Commands
 
-`/help` `/model` `/tools` `/skills` `/status` `/debug` `/reasoning` `/expand`
-`/cancel` `/approve` `/quit`
+The TUI's current slash-command surface is grouped by purpose:
+
+### Session lifecycle
+
+- `/new` — create a new independent local Session.
+- `/resume [session-id]` — search persisted Sessions, or activate the given
+  Session directly.
+- `/session` — show active Session metadata: name, id, node, conversation, and
+  node count.
+- `/name <text>` — rename the active Session without changing its history.
+- `/clone` — clone the committed conversation head into a new Session.
+- `/fork` — choose a historical user message and open an editable fork in a
+  new Session.
+- `/tree` — inspect the active Session graph, select a node, or branch from a
+  historical user message within the Session.
+
+These operations use the runtime-owned Session catalog and graph through the
+canonical Runtime Client operations. They may replace the attached `rustx`
+process; the TUI reattaches and reprojects the authoritative result. The TUI
+does not implement a parallel Session system.
+
+### Model and capability inspection
+
+- `/model [show|provider/model]` — open the searchable model selector, show the
+  current model view, or select a model directly.
+- `/tools` — show the active runtime tool catalog.
+- `/skills` — show the active Skill catalog.
+- `/status` — show the runtime-composed Agent Status and diagnostics.
+
+### Control and presentation
+
+- `/cancel [execution-id]` — request cancellation of the current attempt, or
+  a background execution by id.
+- `/approve <interaction-id> <allow|deny> [reason]` — answer one runtime-owned
+  approval interaction.
+- `/debug` — show bounded presentation and protocol diagnostics.
+- `/reasoning [on|off]` — change the display preference for model reasoning;
+  it does not change runtime model configuration.
+- `/expand [latest|all|none|<tool-call-id>|background <execution-id>|interaction <interaction-id>]` —
+  expand or collapse display detail without re-executing or re-fetching.
+
+### Lifecycle and help
+
+- `/help` — list the available commands.
+- `/quit` — shut down the runtime and exit cleanly.
 
 Each either renders projection state, changes a client display preference, or
 invokes exactly one canonical Runtime Client operation. `/model` opens the
