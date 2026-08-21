@@ -399,6 +399,7 @@ impl<'a> OwnedConnect<'a> {
 /// Deterministic MCP ownership synchronization seams used by the M9c
 /// regressions. Test-only: no production path constructs these.
 #[cfg(test)]
+#[allow(dead_code)]
 pub(crate) mod test_sync {
     use std::sync::Mutex;
 
@@ -987,6 +988,7 @@ impl McpServerRuntime {
 
     /// Installs the test-only close synchronization/fault seam.
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn install_close_probe(&self, probe: Arc<test_sync::CloseProbe>) {
         assert!(
             self.close_probe.set(probe).is_ok(),

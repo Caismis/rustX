@@ -49,5 +49,6 @@ pub use inbox::{
     AcceptedInbound, CanonicalMessagePage, CompactionCommitInput, ConversationInboundCapability,
     ConversationStore, ConversationStoreBinding, ConversationStoreError, DurableConversationHead,
     EventPage, InboundDraft, PendingBatch, PendingInboundItem, RequestSnapshotPage,
+    SurfaceUserMessageBoundary,
 };
 pub use sqlite::SqliteConversationStore;

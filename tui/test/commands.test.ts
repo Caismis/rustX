@@ -423,6 +423,47 @@ describe("CommandDispatcher", () => {
     }
   });
 
+  it("turns native Session selection failures into error outcomes", async () => {
+    const { peer, connection, dispatcher } = await harness();
+    const boundary = {
+      surface_revision: 4,
+      message: {
+        id: "user-c",
+        content: [{ type: "text" as const, text: "try again" }],
+        source: "human" as const,
+        kind: "message" as const,
+      },
+    };
+
+    const selecting = dispatcher.selectSession("missing");
+    await peer.awaitRequests(3);
+    peer.respondError(3, { type: "session_failure", message: "unknown session" });
+    assert.deepEqual(await selecting, {
+      kind: "message",
+      level: "error",
+      text: "session operation failed: unknown session",
+    });
+
+    const selectingNode = dispatcher.selectTreeNode("session-1", "missing-node");
+    await peer.awaitRequests(4);
+    peer.respondError(4, { type: "session_failure", message: "unknown node" });
+    assert.equal((await selectingNode).kind, "message");
+
+    const forking = dispatcher.forkAt(boundary);
+    await peer.awaitRequests(5);
+    peer.respondError(5, { type: "session_failure", message: "stale boundary" });
+    assert.equal((await forking).kind, "message");
+
+    const branching = dispatcher.branchAt(boundary);
+    await peer.awaitRequests(6);
+    peer.respondError(6, { type: "session_failure", message: "catalog failure" });
+    assert.equal((await branching).kind, "message");
+
+    // A semantic Session failure is a healthy protocol response, so the TUI
+    // connection remains usable for the next overlay request.
+    assert.equal(connection.closed, undefined);
+  });
+
   it("creates a new Session through the native control request", async () => {
     const { peer, dispatcher } = await harness();
     const creating = dispatcher.submit("/new");

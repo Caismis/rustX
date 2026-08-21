@@ -103,4 +103,12 @@ describe("native Session selectors", () => {
       /Session tree/,
     );
   });
+
+  it("renders a root node with the root glyph", () => {
+    const selector = new TreeSelector({ session: sessionView(), boundaries: [] });
+    const rendered = selector.render(120).map(plainText).join("\n");
+
+    assert.match(rendered, /├─ node-1/);
+    assert.doesNotMatch(rendered, /└─ node-1/);
+  });
 });

@@ -64,6 +64,7 @@ pub struct SessionNodeView {
     /// Node identity.
     pub id: String,
     /// Parent node in the same Session graph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
     /// The independent linear `ConversationId` of this node.
     pub conversation_id: ConversationId,

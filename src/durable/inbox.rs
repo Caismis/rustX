@@ -107,6 +107,17 @@ pub struct DurableConversationHead {
     pub active_message_ids: Vec<MessageId>,
 }
 
+/// One retained Surface revision in which a canonical user message first
+/// appears. Backends return these boundaries directly so callers do not need
+/// to materialize every historical Surface revision.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SurfaceUserMessageBoundary {
+    /// The first retained Surface revision containing the message.
+    pub surface_revision: SurfaceRevision,
+    /// The canonical user message body.
+    pub message: UserMessageBlock,
+}
+
 /// The semantic input to one atomic canonical compaction transition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompactionCommitInput {
@@ -553,6 +564,15 @@ pub trait ConversationStore: Send + Sync + 'static {
         let ids = self.reconstruct_surface(revision)?;
         self.load_messages(&ids)
     }
+
+    /// Loads every ordinary inbound user message through one retained Surface
+    /// revision together with the exact first revision in which it appears.
+    /// The result is ordered by that first appearance and does not materialize
+    /// each intermediate Surface snapshot.
+    fn load_user_message_boundaries(
+        &self,
+        through: SurfaceRevision,
+    ) -> Result<Vec<SurfaceUserMessageBoundary>, ConversationStoreError>;
 
     /// Appends one canonical [`MessageBlock`] to the durable Message Ledger.
     ///

@@ -246,8 +246,14 @@ export class RustxTuiApp {
           return { consume: true };
         }
         if (matchesKey(data, "escape")) {
+          const attempt = this.#session.state?.attempt;
+          const acted = this.#overlay !== undefined || (
+            !this.#restarting &&
+            attempt !== undefined &&
+            attempt.phase.type !== "settled"
+          );
           void this.#onEscape();
-          return { consume: true };
+          return acted ? { consume: true } : undefined;
         }
         // Ctrl+O and Ctrl+T are presentation only. They change what is drawn
         // and send nothing to the runtime.
@@ -440,6 +446,8 @@ export class RustxTuiApp {
         if (outcome.kind === "message") {
           this.#note(outcome.level, outcome.text);
         }
+      }).catch((error: unknown) => {
+        this.#note("error", `model selection failed: ${errorMessage(error)}`);
       });
     };
 
@@ -463,9 +471,11 @@ export class RustxTuiApp {
     selector.onCancel = () => this.#closeOverlay();
     selector.onSelect = (session) => {
       this.#closeOverlay();
-      void this.#dispatcher.selectSession(session.id).then((outcome) =>
-        this.#handleOutcome(outcome),
-      );
+      void this.#dispatcher.selectSession(session.id)
+        .then((outcome) => this.#handleOutcome(outcome))
+        .catch((error: unknown) => {
+          this.#note("error", `session selection failed: ${errorMessage(error)}`);
+        });
     };
     handle.focus();
     this.#tui.requestRender();
@@ -497,7 +507,11 @@ export class RustxTuiApp {
       const request = operation === "fork"
         ? this.#dispatcher.forkAt(boundary)
         : this.#dispatcher.branchAt(boundary);
-      void request.then((outcome) => this.#handleOutcome(outcome));
+      void request
+        .then((outcome) => this.#handleOutcome(outcome))
+        .catch((error: unknown) => {
+          this.#note("error", `session switch failed: ${errorMessage(error)}`);
+        });
     };
     handle.focus();
     this.#tui.requestRender();
@@ -521,7 +535,11 @@ export class RustxTuiApp {
       const request = selection.kind === "node"
         ? this.#dispatcher.selectTreeNode(session.id, selection.node.id)
         : this.#dispatcher.branchAt(selection.boundary);
-      void request.then((outcome) => this.#handleOutcome(outcome));
+      void request
+        .then((outcome) => this.#handleOutcome(outcome))
+        .catch((error: unknown) => {
+          this.#note("error", `session switch failed: ${errorMessage(error)}`);
+        });
     };
     handle.focus();
     this.#tui.requestRender();
@@ -547,6 +565,8 @@ export class RustxTuiApp {
     const restart = this.#restartRuntime;
     if (restart === undefined) {
       this.#note("error", "the runtime cannot be replaced by this attachment");
+      this.#editor.disableSubmit = true;
+      this.#finish(1);
       return;
     }
 
@@ -573,10 +593,14 @@ export class RustxTuiApp {
       const state = this.#session.state;
       if (state !== undefined) this.#renderState(state);
     } catch (error) {
-      this.#note("error", `session switch failed: ${(error as Error).message}`);
+      this.#note("error", `session switch failed: ${errorMessage(error)}`);
+      this.#editor.disableSubmit = true;
+      this.#finish(1);
     } finally {
       this.#restarting = false;
-      this.#editor.disableSubmit = this.#quitting;
+      if (!this.#finished) {
+        this.#editor.disableSubmit = this.#quitting;
+      }
     }
   }
 
@@ -796,4 +820,8 @@ function editorText(content: SessionSwitch["editorContent"]): string {
   return (content ?? [])
     .map((block) => block.type === "text" ? block.text : `[${block.type}]`)
     .join("\n");
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

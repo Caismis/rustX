@@ -9,7 +9,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(test)]
 use std::collections::VecDeque;
@@ -34,7 +34,7 @@ use crate::runtime::inbound::InboundSequence;
 use super::inbox::{
     AcceptedInbound, CanonicalMessagePage, CompactionCommitInput, ConversationStore,
     ConversationStoreError, DurableConversationHead, EventPage, InboundDraft, PendingBatch,
-    PendingInboundItem, RequestSnapshotPage,
+    PendingInboundItem, RequestSnapshotPage, SurfaceUserMessageBoundary,
 };
 
 /// The only schema accepted by this pre-production store. Incompatible
@@ -709,6 +709,14 @@ impl ConversationStore for SqliteConversationStore {
         let connection = self.lock()?;
         let ids = reconstruct_surface(&connection, revision)?;
         ids.iter().map(|id| load_message(&connection, id)).collect()
+    }
+
+    fn load_user_message_boundaries(
+        &self,
+        through: SurfaceRevision,
+    ) -> Result<Vec<SurfaceUserMessageBoundary>, ConversationStoreError> {
+        let connection = self.lock()?;
+        load_user_message_boundaries(&connection, through)
     }
 
     fn append_canonical(&self, message: &MessageBlock) -> Result<(), ConversationStoreError> {
@@ -2199,6 +2207,154 @@ fn load_canonical_rows(
         Ok(message)
     })
     .collect()
+}
+
+#[allow(clippy::too_many_lines)]
+fn load_user_message_boundaries(
+    connection: &Connection,
+    through: SurfaceRevision,
+) -> Result<Vec<SurfaceUserMessageBoundary>, ConversationStoreError> {
+    let Some((head_revision, _, head_active_json)) = read_surface_head(connection)? else {
+        if through == SurfaceRevision::INITIAL {
+            return Ok(Vec::new());
+        }
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "Surface revision {through} has no durable head"
+        )));
+    };
+    let head_revision = SurfaceRevision::new(nonnegative(head_revision, "Surface revision")?);
+    if through > head_revision {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "Surface revision {through} is newer than head {head_revision}"
+        )));
+    }
+
+    let ledger: BTreeMap<MessageId, MessageBlock> = load_canonical_rows(connection)?
+        .into_iter()
+        .map(|message| {
+            let id = crate::conversation::message_id_of(&message);
+            (id, message)
+        })
+        .collect();
+    let mut active = Vec::new();
+    let mut boundaries = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut statement = connection
+        .prepare(
+            "SELECT revision,compaction_generation,op_json
+             FROM surface_ops WHERE revision <= ?1 ORDER BY revision",
+        )
+        .map_err(|error| storage(format!("read Surface history: {error}")))?;
+    let rows = statement
+        .query_map([seq_to_i64(through.get())?], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|error| storage(format!("read Surface history query: {error}")))?;
+    let mut expected_revision = 1_u64;
+    let mut expected_generation = 0_u64;
+    for row in rows {
+        let (stored_revision, stored_generation, json) =
+            row.map_err(|error| storage(format!("Surface history row: {error}")))?;
+        if u64::try_from(stored_revision).ok() != Some(expected_revision) {
+            return Err(ConversationStoreError::InvalidReference(
+                "Surface operation revisions are not contiguous from revision 1".to_owned(),
+            ));
+        }
+        let stored_generation = nonnegative(stored_generation, "Surface compaction generation")?;
+        let operation: SurfaceOp = decode(&json, "Surface operation")?;
+        validate_surface_operation_references_from_ledger(&ledger, &operation)?;
+        let is_replace = matches!(&operation, SurfaceOp::Replace { .. });
+        let next_generation = if is_replace {
+            expected_generation
+                .checked_add(1)
+                .ok_or_else(|| storage("Surface compaction generation is exhausted"))?
+        } else {
+            expected_generation
+        };
+        if stored_generation != next_generation {
+            return Err(ConversationStoreError::InvalidReference(
+                "Surface operation compaction generation is inconsistent".to_owned(),
+            ));
+        }
+        expected_generation = next_generation;
+        let appended_message_id = match &operation {
+            SurfaceOp::Append { message_id } => Some(message_id.clone()),
+            SurfaceOp::Replace { .. } => None,
+        };
+        apply_surface_op(&mut active, operation)?;
+        if let Some(message_id) = appended_message_id
+            && let Some(MessageBlock::User(user)) = ledger.get(&message_id)
+            && user.kind == InboundKind::Message
+            && seen.insert(message_id)
+        {
+            boundaries.push(SurfaceUserMessageBoundary {
+                surface_revision: SurfaceRevision::new(expected_revision),
+                message: user.clone(),
+            });
+        }
+        expected_revision = expected_revision
+            .checked_add(1)
+            .ok_or_else(|| storage("Surface revision is exhausted"))?;
+    }
+    let expected_next_revision = through
+        .get()
+        .checked_add(1)
+        .ok_or_else(|| storage("Surface revision is exhausted"))?;
+    if expected_revision != expected_next_revision {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "Surface revision {through} has a non-contiguous operation history"
+        )));
+    }
+    if through == head_revision {
+        let head_active: Vec<MessageId> = decode(&head_active_json, "Surface head")?;
+        if active != head_active {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "Surface head {head_revision} does not match its immutable operation history"
+            )));
+        }
+    }
+    Ok(boundaries)
+}
+
+fn validate_surface_operation_references_from_ledger(
+    ledger: &BTreeMap<MessageId, MessageBlock>,
+    operation: &SurfaceOp,
+) -> Result<(), ConversationStoreError> {
+    let references: [&MessageId; 3] = match operation {
+        SurfaceOp::Append { message_id } => [message_id, message_id, message_id],
+        SurfaceOp::Replace {
+            start,
+            end,
+            replacement,
+        } => [start, end, replacement],
+    };
+    for message_id in references {
+        if !ledger.contains_key(message_id) {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "Surface operation references missing Ledger message {message_id}"
+            )));
+        }
+    }
+    if let SurfaceOp::Replace { replacement, .. } = operation {
+        let message = ledger
+            .get(replacement)
+            .expect("replacement was checked above");
+        if !matches!(
+            message,
+            MessageBlock::User(user)
+                if user.source == UserSource::Runtime
+                    && user.kind == InboundKind::CompactionSummary
+        ) {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "Surface Replace replacement {replacement} is not a User(Runtime / CompactionSummary) message"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn reconstruct_surface(

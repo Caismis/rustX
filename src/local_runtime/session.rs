@@ -450,31 +450,19 @@ impl SessionCatalog {
         session_id: &SessionId,
         node_id: Option<&SessionNodeId>,
     ) -> Result<SessionSnapshot, SessionError> {
-        let (_, _) = self.lineage(session_id, node_id)?;
-        let mut next = self.document.clone();
-        let session =
-            next.sessions
-                .get_mut(session_id)
-                .ok_or_else(|| SessionError::UnknownSession {
-                    session_id: session_id.clone(),
-                })?;
-        let selected_node = node_id
-            .cloned()
-            .unwrap_or_else(|| session.active_node.clone());
-        session.active_node = selected_node.clone();
-        session.config.conversation_id = session
-            .nodes
-            .get(&selected_node)
-            .ok_or_else(|| SessionError::UnknownNode {
-                session_id: session_id.clone(),
-                node_id: selected_node.clone(),
-            })?
-            .conversation_id
-            .clone();
-        session.updated_at = Utc::now();
-        next.active_session = session_id.clone();
+        let next = self.build_select_document(session_id, node_id)?;
         self.commit(next)?;
         self.snapshot(session_id)
+    }
+
+    /// Validates the catalog publication for a selected Session/node before
+    /// the current runtime is quiesced.
+    pub(crate) fn preflight_select(
+        &self,
+        session_id: &SessionId,
+        node_id: Option<&SessionNodeId>,
+    ) -> Result<(), SessionError> {
+        validate_document(&self.build_select_document(session_id, node_id)?)
     }
 
     /// Prepares a new independent Session with a fresh `ConversationId`.
@@ -580,7 +568,13 @@ impl SessionCatalog {
                 .sessions
                 .values()
                 .any(|session| session.nodes.contains_key(&node_id));
-            if !node_id_taken && !database_path.exists() {
+            let conversation_taken = self
+                .document
+                .sessions
+                .values()
+                .flat_map(|session| session.nodes.values())
+                .any(|node| node.conversation_id == conversation_id);
+            if !node_id_taken && !conversation_taken && !database_path.exists() {
                 break (node_id, conversation_id, database_path);
             }
             node_ordinal = node_ordinal.saturating_add(1);
@@ -625,51 +619,24 @@ impl SessionCatalog {
     /// Publishes a prepared independent Session and makes it active.
     pub(crate) fn publish_session(
         &mut self,
-        prepared: PreparedLineage,
+        prepared: &PreparedLineage,
         name: &str,
         origin: SessionNodeOrigin,
     ) -> Result<SessionSnapshot, SessionError> {
-        if self.document.sessions.contains_key(&prepared.session_id) {
-            return Err(SessionError::Catalog {
-                detail: format!(
-                    "prepared Session {} has already been published",
-                    prepared.session_id
-                ),
-            });
-        }
-        if !prepared.database_path.is_file() {
-            return Err(SessionError::Catalog {
-                detail: "prepared conversation seed is not a database file".to_owned(),
-            });
-        }
-        let name = normalize_name(name)?;
-        let now = Utc::now();
-        let node = SessionNode {
-            id: prepared.node_id.clone(),
-            parent: None,
-            conversation_id: prepared.conversation_id,
-            origin,
-        };
-        let mut nodes = BTreeMap::new();
-        nodes.insert(prepared.node_id.clone(), node);
-        let mut next = self.document.clone();
-        next.sessions.insert(
-            prepared.session_id.clone(),
-            PersistedSession {
-                id: prepared.session_id.clone(),
-                name,
-                created_at: now,
-                updated_at: now,
-                active_node: prepared.node_id,
-                nodes,
-                config: prepared.config,
-            },
-        );
-        next.active_session = prepared.session_id.clone();
-        next.next_session_ordinal = next.next_session_ordinal.saturating_add(1);
-        next.next_node_ordinal = next.next_node_ordinal.saturating_add(1);
+        let session_id = prepared.session_id.clone();
+        let next = self.build_session_document(prepared, name, origin)?;
         self.commit(next)?;
-        self.snapshot(&prepared.session_id)
+        self.snapshot(&session_id)
+    }
+
+    /// Validates a prepared Session publication before runtime quiescence.
+    pub(crate) fn preflight_publish_session(
+        &self,
+        prepared: &PreparedLineage,
+        name: &str,
+        origin: SessionNodeOrigin,
+    ) -> Result<(), SessionError> {
+        validate_document(&self.build_session_document(prepared, name, origin)?)
     }
 
     /// Publishes a prepared branch node inside an existing Session and makes
@@ -677,47 +644,24 @@ impl SessionCatalog {
     pub(crate) fn publish_node(
         &mut self,
         session_id: &SessionId,
-        prepared: PreparedLineage,
+        prepared: &PreparedLineage,
         parent: SessionNodeId,
         origin: SessionNodeOrigin,
     ) -> Result<SessionSnapshot, SessionError> {
-        if prepared.session_id != *session_id {
-            return Err(SessionError::Catalog {
-                detail: "prepared node belongs to another Session".to_owned(),
-            });
-        }
-        if !prepared.database_path.is_file() {
-            return Err(SessionError::Catalog {
-                detail: "prepared conversation seed is not a database file".to_owned(),
-            });
-        }
-        let mut next = self.document.clone();
-        let session =
-            next.sessions
-                .get_mut(session_id)
-                .ok_or_else(|| SessionError::UnknownSession {
-                    session_id: session_id.clone(),
-                })?;
-        if !session.nodes.contains_key(&parent) {
-            return Err(SessionError::UnknownNode {
-                session_id: session_id.clone(),
-                node_id: parent,
-            });
-        }
-        session.config.conversation_id = prepared.conversation_id.clone();
-        let node = SessionNode {
-            id: prepared.node_id.clone(),
-            parent: Some(parent),
-            conversation_id: prepared.conversation_id,
-            origin,
-        };
-        session.nodes.insert(prepared.node_id.clone(), node);
-        session.active_node = prepared.node_id;
-        session.updated_at = Utc::now();
-        next.active_session = session_id.clone();
-        next.next_node_ordinal = next.next_node_ordinal.saturating_add(1);
+        let next = self.build_node_document(session_id, prepared, parent, origin)?;
         self.commit(next)?;
         self.snapshot(session_id)
+    }
+
+    /// Validates a prepared branch-node publication before runtime quiescence.
+    pub(crate) fn preflight_publish_node(
+        &self,
+        session_id: &SessionId,
+        prepared: &PreparedLineage,
+        parent: SessionNodeId,
+        origin: SessionNodeOrigin,
+    ) -> Result<(), SessionError> {
+        validate_document(&self.build_node_document(session_id, prepared, parent, origin)?)
     }
 
     /// Validates that a selected node still has a coherent durable store.
@@ -763,6 +707,130 @@ impl SessionCatalog {
             session_ordinal = session_ordinal.saturating_add(1);
             node_ordinal = node_ordinal.saturating_add(1);
         }
+    }
+
+    fn build_select_document(
+        &self,
+        session_id: &SessionId,
+        node_id: Option<&SessionNodeId>,
+    ) -> Result<CatalogDocument, SessionError> {
+        let (_, _) = self.lineage(session_id, node_id)?;
+        let mut next = self.document.clone();
+        let session =
+            next.sessions
+                .get_mut(session_id)
+                .ok_or_else(|| SessionError::UnknownSession {
+                    session_id: session_id.clone(),
+                })?;
+        let selected_node = node_id
+            .cloned()
+            .unwrap_or_else(|| session.active_node.clone());
+        session.active_node = selected_node.clone();
+        session.config.conversation_id = session
+            .nodes
+            .get(&selected_node)
+            .ok_or_else(|| SessionError::UnknownNode {
+                session_id: session_id.clone(),
+                node_id: selected_node.clone(),
+            })?
+            .conversation_id
+            .clone();
+        session.updated_at = Utc::now();
+        next.active_session = session_id.clone();
+        Ok(next)
+    }
+
+    fn build_session_document(
+        &self,
+        prepared: &PreparedLineage,
+        name: &str,
+        origin: SessionNodeOrigin,
+    ) -> Result<CatalogDocument, SessionError> {
+        if self.document.sessions.contains_key(&prepared.session_id) {
+            return Err(SessionError::Catalog {
+                detail: format!(
+                    "prepared Session {} has already been published",
+                    prepared.session_id
+                ),
+            });
+        }
+        if !prepared.database_path.is_file() {
+            return Err(SessionError::Catalog {
+                detail: "prepared conversation seed is not a database file".to_owned(),
+            });
+        }
+        let name = normalize_name(name)?;
+        let now = Utc::now();
+        let node = SessionNode {
+            id: prepared.node_id.clone(),
+            parent: None,
+            conversation_id: prepared.conversation_id.clone(),
+            origin,
+        };
+        let mut nodes = BTreeMap::new();
+        nodes.insert(prepared.node_id.clone(), node);
+        let mut next = self.document.clone();
+        next.sessions.insert(
+            prepared.session_id.clone(),
+            PersistedSession {
+                id: prepared.session_id.clone(),
+                name,
+                created_at: now,
+                updated_at: now,
+                active_node: prepared.node_id.clone(),
+                nodes,
+                config: prepared.config.clone(),
+            },
+        );
+        next.active_session = prepared.session_id.clone();
+        next.next_session_ordinal = next.next_session_ordinal.saturating_add(1);
+        next.next_node_ordinal = next.next_node_ordinal.saturating_add(1);
+        Ok(next)
+    }
+
+    fn build_node_document(
+        &self,
+        session_id: &SessionId,
+        prepared: &PreparedLineage,
+        parent: SessionNodeId,
+        origin: SessionNodeOrigin,
+    ) -> Result<CatalogDocument, SessionError> {
+        if prepared.session_id != *session_id {
+            return Err(SessionError::Catalog {
+                detail: "prepared node belongs to another Session".to_owned(),
+            });
+        }
+        if !prepared.database_path.is_file() {
+            return Err(SessionError::Catalog {
+                detail: "prepared conversation seed is not a database file".to_owned(),
+            });
+        }
+        let mut next = self.document.clone();
+        let session =
+            next.sessions
+                .get_mut(session_id)
+                .ok_or_else(|| SessionError::UnknownSession {
+                    session_id: session_id.clone(),
+                })?;
+        if !session.nodes.contains_key(&parent) {
+            return Err(SessionError::UnknownNode {
+                session_id: session_id.clone(),
+                node_id: parent,
+            });
+        }
+        session.config.conversation_id = prepared.conversation_id.clone();
+        let node = SessionNode {
+            id: prepared.node_id.clone(),
+            parent: Some(parent),
+            conversation_id: prepared.conversation_id.clone(),
+            origin,
+        };
+        session.nodes.insert(prepared.node_id.clone(), node);
+        session.active_node = prepared.node_id.clone();
+        session.updated_at = Utc::now();
+        next.active_session = session_id.clone();
+        next.next_node_ordinal = next.next_node_ordinal.saturating_add(1);
+        Ok(next)
     }
 
     fn commit(&mut self, next: CatalogDocument) -> Result<(), SessionError> {
@@ -1284,7 +1352,7 @@ mod tests {
             .expect("prepare new session");
         let new_session_id = prepared.session_id.clone();
         let snapshot = catalog
-            .publish_session(prepared, "New session", SessionNodeOrigin::New)
+            .publish_session(&prepared, "New session", SessionNodeOrigin::New)
             .expect("publish new session");
 
         assert_ne!(snapshot.id, source_session);
@@ -1409,7 +1477,7 @@ mod tests {
 
         let destination = catalog
             .publish_session(
-                prepared,
+                &prepared,
                 "Clone of session-1",
                 SessionNodeOrigin::Clone {
                     source_session: source_session.clone(),
@@ -1492,7 +1560,7 @@ mod tests {
             .expect("prepare private destination");
         std::fs::remove_file(&failed.database_path).expect("remove private seed");
         assert!(matches!(
-            catalog.publish_session(failed, "invisible", SessionNodeOrigin::New),
+            catalog.publish_session(&failed, "invisible", SessionNodeOrigin::New),
             Err(SessionError::Catalog { .. })
         ));
         assert_eq!(
@@ -1514,7 +1582,7 @@ mod tests {
         let snapshot = catalog
             .publish_node(
                 &source_session,
-                prepared,
+                &prepared,
                 source_node.clone(),
                 SessionNodeOrigin::Fork {
                     source_session: source_session.clone(),
@@ -1544,7 +1612,7 @@ mod tests {
             .expect("prepare new session after tree branch");
         assert_ne!(new_session.node_id, snapshot.active_node);
         catalog
-            .publish_session(new_session, "after branch", SessionNodeOrigin::New)
+            .publish_session(&new_session, "after branch", SessionNodeOrigin::New)
             .expect("publish new session after tree branch");
         assert_eq!(catalog.list().len(), 2);
     }

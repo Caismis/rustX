@@ -11,11 +11,10 @@
 //! reconnects, and ordinary composition/recovery opens the newly selected
 //! `ConversationId`. The catalog publication is authoritative throughout.
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::conversation::SurfaceRevision;
-use crate::message::types::{InboundKind, MessageBlock, UserContentBlock};
+use crate::message::types::UserContentBlock;
 use crate::runtime::conversation_runtime::{ConversationRuntime, ShutdownError};
 use crate::runtime::identity::MessageId;
 use crate::runtime_client::host::{RuntimeClientSessionControl, SessionControlFuture};
@@ -162,13 +161,16 @@ impl LocalSessionSupervisor {
         let mut state = self.state.lock().await;
         let (_, _, template) = state.catalog.active_lineage()?;
         let prepared = state.catalog.prepare_session(&template, &[])?;
+        let origin = super::session::SessionNodeOrigin::New;
+        state
+            .catalog
+            .preflight_publish_session(&prepared, "New session", origin.clone())?;
         self.quiesce_old(&mut state).await?;
         let session_id = prepared.session_id.clone();
-        let snapshot = state.catalog.publish_session(
-            prepared,
-            "New session",
-            super::session::SessionNodeOrigin::New,
-        )?;
+        let snapshot = state
+            .catalog
+            .publish_session(&prepared, "New session", origin)
+            .map_err(|error| publication_failure(&error))?;
         debug_assert_eq!(snapshot.id, session_id);
         Ok(SessionSwitchResult {
             session: snapshot,
@@ -205,8 +207,14 @@ impl LocalSessionSupervisor {
         state
             .catalog
             .validate_storage(&session_id, Some(&requested_node))?;
+        state
+            .catalog
+            .preflight_select(&session_id, Some(&requested_node))?;
         self.quiesce_old(&mut state).await?;
-        let snapshot = state.catalog.select(&session_id, Some(&requested_node))?;
+        let snapshot = state
+            .catalog
+            .select(&session_id, Some(&requested_node))
+            .map_err(|error| publication_failure(&error))?;
         Ok(SessionSwitchResult {
             session: snapshot,
             editor_content: None,
@@ -225,16 +233,21 @@ impl LocalSessionSupervisor {
         let (source_session, source_node, template) = state.catalog.active_lineage()?;
         let source = current_head(&state)?;
         let prepared = state.catalog.prepare_clone_session(&template, &source)?;
-        self.quiesce_old(&mut state).await?;
-        let snapshot = state.catalog.publish_session(
-            prepared,
+        let origin = super::session::SessionNodeOrigin::Clone {
+            source_session: source_session.clone(),
+            source_node: source_node.id.clone(),
+            source_surface_revision: source.surface_revision,
+        };
+        state.catalog.preflight_publish_session(
+            &prepared,
             &format!("Clone of {source_session}"),
-            super::session::SessionNodeOrigin::Clone {
-                source_session: source_session.clone(),
-                source_node: source_node.id,
-                source_surface_revision: source.surface_revision,
-            },
+            origin.clone(),
         )?;
+        self.quiesce_old(&mut state).await?;
+        let snapshot = state
+            .catalog
+            .publish_session(&prepared, &format!("Clone of {source_session}"), origin)
+            .map_err(|error| publication_failure(&error))?;
         Ok(SessionSwitchResult {
             session: snapshot,
             editor_content: None,
@@ -260,17 +273,22 @@ impl LocalSessionSupervisor {
             state
                 .catalog
                 .prepare_fork_session(&template, &source, &message_id)?;
-        self.quiesce_old(&mut state).await?;
-        let snapshot = state.catalog.publish_session(
-            prepared,
+        let origin = super::session::SessionNodeOrigin::Fork {
+            source_session: source_session.clone(),
+            source_node: source_node.id.clone(),
+            source_surface_revision: surface_revision,
+            source_user_message: message_id.clone(),
+        };
+        state.catalog.preflight_publish_session(
+            &prepared,
             &format!("Fork of {source_session}"),
-            super::session::SessionNodeOrigin::Fork {
-                source_session: source_session.clone(),
-                source_node: source_node.id,
-                source_surface_revision: surface_revision,
-                source_user_message: message_id,
-            },
+            origin.clone(),
         )?;
+        self.quiesce_old(&mut state).await?;
+        let snapshot = state
+            .catalog
+            .publish_session(&prepared, &format!("Fork of {source_session}"), origin)
+            .map_err(|error| publication_failure(&error))?;
         Ok(SessionSwitchResult {
             session: snapshot,
             editor_content: Some(editor_content),
@@ -299,18 +317,23 @@ impl LocalSessionSupervisor {
             &source,
             &message_id,
         )?;
-        self.quiesce_old(&mut state).await?;
-        let snapshot = state.catalog.publish_node(
+        let origin = super::session::SessionNodeOrigin::Fork {
+            source_session: source_session.clone(),
+            source_node: source_node.id.clone(),
+            source_surface_revision: surface_revision,
+            source_user_message: message_id.clone(),
+        };
+        state.catalog.preflight_publish_node(
             &source_session,
-            prepared,
+            &prepared,
             source_node.id.clone(),
-            super::session::SessionNodeOrigin::Fork {
-                source_session: source_session.clone(),
-                source_node: source_node.id.clone(),
-                source_surface_revision: surface_revision,
-                source_user_message: message_id,
-            },
+            origin.clone(),
         )?;
+        self.quiesce_old(&mut state).await?;
+        let snapshot = state
+            .catalog
+            .publish_node(&source_session, &prepared, source_node.id.clone(), origin)
+            .map_err(|error| publication_failure(&error))?;
         Ok(SessionSwitchResult {
             session: snapshot,
             editor_content: Some(editor_content),
@@ -373,30 +396,21 @@ fn branchable_messages(
     head: &HistoricalConversationSnapshot,
     runtime: Option<&ConversationRuntime>,
 ) -> Result<Vec<SessionUserMessageBoundary>, SessionSupervisorError> {
-    let Some(runtime) = runtime.as_ref() else {
+    let Some(runtime) = runtime else {
         return Err(SessionSupervisorError::NoActiveRuntime);
     };
-    let mut seen = BTreeSet::new();
-    let mut result = Vec::new();
-    for raw_revision in 0..=head.surface_revision.get() {
-        let revision = SurfaceRevision::new(raw_revision);
-        let messages = runtime
-            .historical_surface_snapshot(revision)
-            .map_err(SessionSupervisorError::Store)?;
-        for message in messages {
-            let MessageBlock::User(user) = message else {
-                continue;
-            };
-            if user.kind != InboundKind::Message || !seen.insert(user.id.clone()) {
-                continue;
-            }
-            result.push(SessionUserMessageBoundary {
-                surface_revision: revision,
-                message: user,
-            });
-        }
-    }
-    Ok(result)
+    runtime
+        .historical_user_message_boundaries(head.surface_revision)
+        .map_err(SessionSupervisorError::Store)
+        .map(|boundaries| {
+            boundaries
+                .into_iter()
+                .map(|boundary| SessionUserMessageBoundary {
+                    surface_revision: boundary.surface_revision,
+                    message: boundary.message,
+                })
+                .collect()
+        })
 }
 
 /// A native Session-supervisor failure.
@@ -410,6 +424,9 @@ pub enum SessionSupervisorError {
     Shutdown(ShutdownError),
     /// No live runtime remains in this process after a switch.
     NoActiveRuntime,
+    /// Catalog publication failed after the old runtime was quiesced. The
+    /// process attachment is no longer usable and must be restarted.
+    RestartRequired { detail: String },
     /// A second runtime was offered to one product instance.
     RuntimeAlreadyInstalled,
     /// The selected node and composed runtime disagree.
@@ -432,6 +449,10 @@ impl core::fmt::Display for SessionSupervisorError {
             Self::Store(error) => write!(f, "session history: {error}"),
             Self::Shutdown(error) => write!(f, "runtime did not reach quiescence: {error:?}"),
             Self::NoActiveRuntime => f.write_str("no active ConversationRuntime remains"),
+            Self::RestartRequired { detail } => write!(
+                f,
+                "session publication failed after quiescing the old runtime; restart the process: {detail}"
+            ),
             Self::RuntimeAlreadyInstalled => {
                 f.write_str("the local product already owns an active ConversationRuntime")
             }
@@ -444,6 +465,12 @@ impl core::fmt::Display for SessionSupervisorError {
 }
 
 impl std::error::Error for SessionSupervisorError {}
+
+fn publication_failure(error: &SessionError) -> SessionSupervisorError {
+    SessionSupervisorError::RestartRequired {
+        detail: error.to_string(),
+    }
+}
 
 impl RuntimeClientSessionControl for LocalSessionSupervisor {
     fn handle(&self, request: RuntimeClientSessionRequest) -> SessionControlFuture {

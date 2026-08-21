@@ -208,9 +208,8 @@ pub trait RuntimeClientSessionControl: Send + Sync {
     /// quiescence await; no host lock is held across it.
     fn handle(&self, request: RuntimeClientSessionRequest) -> SessionControlFuture;
 
-    /// Persists a successfully applied live model configuration for the
-    /// active local Session. This records product configuration only; the
-    /// `ConversationRuntime` remains the live model authority.
+    /// Persists a live model candidate for the active local Session before
+    /// the `ConversationRuntime` replaces its authoritative configuration.
     ///
     /// # Errors
     ///
@@ -705,10 +704,19 @@ impl ClientInner {
         let state = self.lock_state();
         state.projection.snapshot_ref_checked()?;
         drop(state);
-        let persisted_config = config.clone();
+        let control = self.session_control.as_ref().map(Arc::clone);
         let view = self
             .runtime
-            .model_set(config)
+            .model_set_with_persistence(config, |config| {
+                if let Some(control) = control {
+                    control.persist_model(config).map_err(|error| {
+                        ModelUpdateError::PersistenceFailed {
+                            message: format!("cannot persist active Session model: {error:?}"),
+                        }
+                    })?;
+                }
+                Ok(())
+            })
             .map_err(|error| match error {
                 ModelUpdateError::Inactive => RuntimeClientError::InvalidState {
                     message: "the conversation runtime is not activated".to_owned(),
@@ -719,10 +727,10 @@ impl ClientInner {
                 ModelUpdateError::DurabilityFailed { message } => {
                     RuntimeClientError::InvalidState { message }
                 }
+                ModelUpdateError::PersistenceFailed { message } => {
+                    RuntimeClientError::SessionFailure { message }
+                }
             })?;
-        if let Some(control) = self.session_control.as_ref() {
-            control.persist_model(persisted_config)?;
-        }
         Ok(RuntimeClientResult::ModelSet {
             model: Box::new(view),
         })

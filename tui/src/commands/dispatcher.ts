@@ -215,37 +215,53 @@ export class CommandDispatcher {
 
   /** Selection seams used by the native-data overlays. */
   async selectSession(sessionId: string): Promise<CommandOutcome> {
-    return {
-      kind: "session_switch",
-      change: await this.#context.session.selectSession(sessionId),
-    };
+    try {
+      return {
+        kind: "session_switch",
+        change: await this.#context.session.selectSession(sessionId),
+      };
+    } catch (error) {
+      return failure(error);
+    }
   }
 
   async selectTreeNode(sessionId: string, nodeId: string): Promise<CommandOutcome> {
-    return {
-      kind: "session_switch",
-      change: await this.#context.session.selectSession(sessionId, nodeId),
-    };
+    try {
+      return {
+        kind: "session_switch",
+        change: await this.#context.session.selectSession(sessionId, nodeId),
+      };
+    } catch (error) {
+      return failure(error);
+    }
   }
 
   async forkAt(boundary: SessionUserMessageBoundaryView): Promise<CommandOutcome> {
-    return {
-      kind: "session_switch",
-      change: await this.#context.session.forkSession(
-        boundary.surface_revision,
-        boundary.message.id,
-      ),
-    };
+    try {
+      return {
+        kind: "session_switch",
+        change: await this.#context.session.forkSession(
+          boundary.surface_revision,
+          boundary.message.id,
+        ),
+      };
+    } catch (error) {
+      return failure(error);
+    }
   }
 
   async branchAt(boundary: SessionUserMessageBoundaryView): Promise<CommandOutcome> {
-    return {
-      kind: "session_switch",
-      change: await this.#context.session.branchTree(
-        boundary.surface_revision,
-        boundary.message.id,
-      ),
-    };
+    try {
+      return {
+        kind: "session_switch",
+        change: await this.#context.session.branchTree(
+          boundary.surface_revision,
+          boundary.message.id,
+        ),
+      };
+    } catch (error) {
+      return failure(error);
+    }
   }
 
   async #resume(argument: string): Promise<CommandOutcome> {

@@ -954,6 +954,7 @@ impl CapabilityCoordinator {
 
     /// Installs the test-only MCP connect ownership pause.
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn install_connect_ownership_pause(
         &self,
         pause: Arc<crate::tools::mcp::test_sync::ConnectOwnershipPause>,

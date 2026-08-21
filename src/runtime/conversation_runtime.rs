@@ -279,7 +279,9 @@ use crate::context::tokens::TokenEstimator;
 use crate::context::{AgentStatusComposer, ContextRuntime, SessionContextPolicy};
 use crate::conversation::ConversationState;
 use crate::conversation::SurfaceRevision;
-use crate::durable::{ConversationStore, ConversationStoreError, InboundDraft};
+use crate::durable::{
+    ConversationStore, ConversationStoreError, InboundDraft, SurfaceUserMessageBoundary,
+};
 use crate::events::types::RuntimeEvent;
 use crate::message::types::{InboundKind, MessageBlock, UserContentBlock, UserSource};
 use crate::model::catalog::ModelCatalogView;
@@ -3006,7 +3008,9 @@ impl ConversationRuntime {
     /// # Transactionality
     ///
     /// A rejected update changes nothing: the session keeps its previous
-    /// configuration and no observation is published.
+    /// configuration and no observation is published. Product adapters that
+    /// persist the selected configuration use the same transaction seam and
+    /// persist before this live state is replaced.
     ///
     /// # Errors
     ///
@@ -3019,6 +3023,21 @@ impl ConversationRuntime {
     pub fn model_set(
         &self,
         config: SessionModelConfig,
+    ) -> Result<SessionModelView, ModelUpdateError> {
+        self.model_set_with_persistence(config, |_| Ok(()))
+    }
+
+    /// Replaces the live model only after an optional product persistence
+    /// callback has accepted the candidate configuration.
+    ///
+    /// The callback runs while the coordinator state is held, so a failure
+    /// leaves both the live model and the catalog unchanged. This ordering is
+    /// used by the native Session host to avoid reporting an error after a
+    /// live model mutation has already taken effect.
+    pub(crate) fn model_set_with_persistence(
+        &self,
+        config: SessionModelConfig,
+        persist: impl FnOnce(SessionModelConfig) -> Result<(), ModelUpdateError>,
     ) -> Result<SessionModelView, ModelUpdateError> {
         let mut state = self.inner.lock_state();
         if !self.inner.lifecycle.is_running() {
@@ -3034,7 +3053,7 @@ impl ConversationRuntime {
         // *candidate* snapshot before anything is published.
         let mut candidate = state.model.clone();
         candidate
-            .apply(config)
+            .apply(config.clone())
             .map_err(|error| invalid_model(&error))?;
         validate_context_policy(&self.inner.context.policy, &candidate.snapshot()).map_err(
             |error| {
@@ -3044,6 +3063,7 @@ impl ConversationRuntime {
                 ))
             },
         )?;
+        persist(config)?;
         let view = candidate.view();
         state.model = candidate;
         self.inner
@@ -3150,6 +3170,21 @@ impl ConversationRuntime {
         revision: SurfaceRevision,
     ) -> Result<Vec<MessageBlock>, ConversationStoreError> {
         self.inner.store.load_surface_snapshot(revision)
+    }
+
+    /// Reads the first retained Surface revision for each ordinary inbound
+    /// user message through the selected revision. This is the native Session
+    /// boundary read and avoids replaying and materializing every revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns the durable store error when the selected revision or its
+    /// canonical facts cannot be read.
+    pub fn historical_user_message_boundaries(
+        &self,
+        through: SurfaceRevision,
+    ) -> Result<Vec<SurfaceUserMessageBoundary>, ConversationStoreError> {
+        self.inner.store.load_user_message_boundaries(through)
     }
 
     /// Selects the current committed Surface head and materializes that exact
@@ -3448,6 +3483,11 @@ pub enum ModelUpdateError {
     /// mutation may begin until the runtime is reconstructed.
     DurabilityFailed {
         /// The human-readable failure diagnostic.
+        message: String,
+    },
+    /// Product persistence rejected a valid live candidate before mutation.
+    PersistenceFailed {
+        /// The human-readable persistence diagnostic.
         message: String,
     },
 }

@@ -12,9 +12,11 @@ import { describe, it } from "node:test";
 
 import { RustxTuiApp } from "../src/ui/app.ts";
 import { ConnectionClosedError } from "../src/runtime/connection.ts";
+import { emptyPresentationState } from "../src/presentation/projection.ts";
 import type { ChildRuntimeProcess } from "../src/runtime/child-process.ts";
 import type { RuntimeClientConnection } from "../src/runtime/connection.ts";
 import type { RuntimeClientAttachment } from "../src/runtime/attachment.ts";
+import { sessionModel, sessionView } from "./support/fixtures.ts";
 
 function fakeConnection(
   onClose?: (listener: (error: ConnectionClosedError) => void) => void,
@@ -22,6 +24,7 @@ function fakeConnection(
   return {
     pendingCount: 0,
     closed: undefined,
+    close: () => {},
     onEvent: () => () => {},
     onClose: (listener: (error: ConnectionClosedError) => void) => {
       onClose?.(listener);
@@ -32,14 +35,15 @@ function fakeConnection(
 
 function fakeSession(
   waitForSettlement: (attemptId: string) => Promise<unknown>,
+  state: unknown = {
+    attempt: {
+      attemptId: "attempt-1",
+      phase: { type: "running" as const },
+    },
+  },
 ): RuntimeClientAttachment {
   return {
-    state: {
-      attempt: {
-        attemptId: "attempt-1",
-        phase: { type: "running" },
-      },
-    },
+    state,
     onState: () => () => {},
     updateState: () => {},
     shutdown: async () => {},
@@ -111,5 +115,34 @@ describe("RustxTuiApp lifecycle", () => {
     });
 
     assert.equal(await app.run(), 1);
+  });
+
+  it("finishes with failure when a session restart cannot be launched", async () => {
+    const log: string[] = [];
+    const session = fakeSession(
+      async () => {},
+      emptyPresentationState(sessionModel("alpha/model-a")),
+    );
+    (session as unknown as {
+      newSession: () => Promise<unknown>;
+    }).newSession = async () => ({
+      session: sessionView({ id: "session-2" }),
+      restartRequired: true,
+    });
+    const app = new RustxTuiApp({
+      session,
+      connection: fakeConnection(),
+      child: fakeChild(log),
+      restartRuntime: async () => {
+        log.push("restart");
+        throw new Error("spawn failed");
+      },
+    });
+
+    const running = app.run();
+    process.stdin.emit("data", "/new\r");
+
+    assert.equal(await running, 1);
+    assert.deepEqual(log, ["close_stdin", "wait_exit", "restart"]);
   });
 });
