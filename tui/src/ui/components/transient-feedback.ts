@@ -20,6 +20,7 @@ export interface TransientFeedback {
   text: string;
 }
 
+/** Current producers keep transient payloads to this compact bound. */
 const MAX_LINES = 3;
 
 export class TransientFeedbackSurface implements Component {
@@ -52,6 +53,10 @@ export class TransientFeedbackSurface implements Component {
     const sourceLines = feedback.text.split(/\r?\n/);
     const lines = sourceLines.slice(0, MAX_LINES);
     if (sourceLines.length > MAX_LINES) {
+      // This is a defensive guard for an incorrectly shaped producer. Normal
+      // diagnostics are compacted before they reach this surface; the marker
+      // makes an accidental overflow visible instead of presenting a silent
+      // false impression that every source line was rendered.
       lines[MAX_LINES - 1] = `${lines[MAX_LINES - 1] ?? ""} …`;
     }
     const color = feedback.level === "error" ? role.error : role.assistant;

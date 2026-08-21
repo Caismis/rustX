@@ -121,6 +121,18 @@ export interface RuntimeAttachmentHandle {
   child: ChildRuntimeProcess;
 }
 
+/**
+ * A lease for one asynchronous client-side presentation continuation.
+ *
+ * The epoch is advanced whenever authoritative runtime ownership changes. The
+ * attachment identity is checked as well, so a late continuation cannot
+ * repaint a new attachment that happens to have the same projection shape.
+ */
+interface PresentationLease {
+  epoch: number;
+  session: RuntimeClientAttachment;
+}
+
 export class RustxTuiApp {
   #session: RuntimeClientAttachment;
   #connection: RuntimeClientConnection;
@@ -145,6 +157,8 @@ export class RustxTuiApp {
   #finished = false;
   #started = false;
   #restarting = false;
+  #presentationEpoch = 0;
+  #terminalFinishStarted = false;
   #submissionOrdinal = 0;
   #removeStateListener: (() => void) | undefined;
   #removeSnapshotListener: (() => void) | undefined;
@@ -187,7 +201,9 @@ export class RustxTuiApp {
     connection: RuntimeClientConnection,
     child: ChildRuntimeProcess,
   ): void {
-    this.#resetLocalSurfaces();
+    // Binding a new attachment invalidates every local surface and every
+    // continuation that was started against the previous one.
+    this.#invalidatePresentation();
     this.#removeStateListener?.();
     this.#removeSnapshotListener?.();
     this.#removeCloseListener?.();
@@ -195,18 +211,31 @@ export class RustxTuiApp {
     this.#connection = connection;
     this.#child = child;
     this.#dispatcher.setSession(session);
-    this.#removeSnapshotListener = session.onSnapshot(() => this.#resetLocalSurfaces());
-    this.#removeStateListener = session.onState((state) => this.#renderState(state));
+    this.#removeSnapshotListener = session.onSnapshot(() => {
+      // A resync is an authoritative replacement within this attachment. It
+      // invalidates local inspection, picker, and transient ownership, while
+      // the subsequent state publication still renders the new projection.
+      if (this.#session !== session || this.#finished) return;
+      this.#invalidatePresentation();
+    });
+    this.#removeStateListener = session.onState((state) => {
+      // Runtime state rendering follows attachment identity, not the
+      // presentation epoch: the state published immediately after a snapshot
+      // replacement is the authoritative state we must render.
+      if (this.#session !== session || this.#finished) return;
+      this.#renderState(state);
+    });
+    const boundSession = session;
     this.#removeCloseListener = connection.onClose((error) => {
-      if (this.#restarting) return;
+      if (this.#connection !== connection || this.#session !== boundSession) return;
+      if (this.#restarting || this.#quitting || this.#terminalFinishStarted) return;
       // Transport loss is not cancellation. It only ends observation, so the
       // client says exactly that and stops accepting input.
-      this.#showTransient(
-        "error",
-        `${error.message}\nThe runtime is no longer observable from this client.`,
-      );
       this.#editor.disableSubmit = true;
-      if (!this.#quitting) this.#finish(1);
+      void this.#showTerminalFailureAndFinish(
+        `${compactDiagnostic(error)}\nThe runtime is no longer observable from this client.`,
+        1,
+      );
     });
   }
 
@@ -235,19 +264,22 @@ export class RustxTuiApp {
       // startup remains the same initialize/subscribe cut used by existing
       // Runtime Client consumers, while the footer still becomes session-aware
       // as soon as the authoritative read returns.
+      const refreshLease = this.#presentationLease();
       const refreshSession = (
-        this.#session as unknown as {
+        refreshLease.session as unknown as {
           refreshSession?: () => Promise<unknown>;
         }
       ).refreshSession;
       if (refreshSession !== undefined) {
-        void refreshSession.call(this.#session).then(
+        void refreshSession.call(refreshLease.session).then(
           () => {
-            const refreshed = this.#session.state;
+            if (!this.#isCurrentPresentationLease(refreshLease)) return;
+            const refreshed = refreshLease.session.state;
             if (refreshed !== undefined) this.#renderState(refreshed);
           },
           (error: unknown) => {
-            this.#showTransient("error", `session metadata unavailable: ${(error as Error).message}`);
+            if (!this.#isCurrentPresentationLease(refreshLease)) return;
+            this.#showTransient("error", `session metadata unavailable: ${compactDiagnostic(error)}`);
           },
         );
       }
@@ -264,9 +296,15 @@ export class RustxTuiApp {
           if (this.#overlay !== undefined) {
             return undefined;
           }
+          const lease = this.#presentationLease();
           void this.#dispatcher
             .submit("/model")
-            .then((outcome) => this.#handleOutcome(outcome));
+            .then((outcome) => this.#handleOutcome(outcome, lease))
+            .catch((error: unknown) => {
+              if (this.#isCurrentPresentationLease(lease)) {
+                this.#showTransient("error", `model command failed: ${compactDiagnostic(error)}`);
+              }
+            });
           return { consume: true };
         }
         // Ctrl+C is a cancellation *intent*, routed through the protocol like
@@ -302,6 +340,7 @@ export class RustxTuiApp {
 
   async #onSubmit(text: string): Promise<void> {
     if (this.#restarting || this.#finished) return;
+    const lease = this.#presentationLease();
     const line = text.trim();
     if (line.length === 0) {
       return;
@@ -314,35 +353,46 @@ export class RustxTuiApp {
     const key = `local-${++this.#submissionOrdinal}`;
     const optimistic = !line.startsWith("/");
     if (optimistic) {
-      this.#session.updateState((state) =>
+      lease.session.updateState((state) =>
         withPendingSubmission(state, key, line),
       );
     }
 
-    await this.#handleOutcome(await this.#dispatcher.submit(text));
+    try {
+      const outcome = await this.#dispatcher.submit(text);
+      if (!this.#isCurrentPresentationLease(lease)) return;
+      await this.#handleOutcome(outcome, lease);
+    } catch (error: unknown) {
+      if (this.#isCurrentPresentationLease(lease)) {
+        this.#showTransient("error", `command failed: ${compactDiagnostic(error)}`);
+      }
+    }
   }
 
   async #handleOutcome(
     outcome: Awaited<ReturnType<CommandDispatcher["submit"]>>,
+    lease: PresentationLease,
   ): Promise<void> {
+    if (!this.#isCurrentPresentationLease(lease)) return;
     switch (outcome.kind) {
       case "inspect":
-        this.#showInspection(outcome.title, outcome.body);
+        this.#showInspection(outcome.title, outcome.body, lease);
         break;
       case "transient":
         this.#showTransient(outcome.level, outcome.text);
         break;
       case "choose_model":
-        this.#showModelSelector(outcome.models);
+        this.#showModelSelector(outcome.models, lease);
         break;
       case "choose_session":
-        this.#showSessionSelector(outcome.sessions, outcome.nextOffset, outcome.query);
+        this.#showSessionSelector(outcome.sessions, outcome.nextOffset, outcome.query, lease);
         break;
       case "choose_fork":
         this.#showBoundarySelector(
           outcome.boundaries,
           "Fork from user message",
           "fork",
+          lease,
           outcome.nextOffset,
         );
         break;
@@ -353,13 +403,14 @@ export class RustxTuiApp {
           outcome.nextNodeOffset,
           outcome.boundaries,
           outcome.nextHistoryOffset,
+          lease,
         );
         break;
       case "session_switch":
-        await this.#applySessionSwitch(outcome.change);
+        await this.#applySessionSwitch(outcome.change, lease);
         break;
       case "replacement_required":
-        await this.#applyReplacementRequired(outcome.message);
+        await this.#applyReplacementRequired(outcome.message, lease);
         break;
       case "preference":
         this.#applyPreference(outcome.preference);
@@ -381,7 +432,17 @@ export class RustxTuiApp {
     if (this.#restarting) return;
     const attempt = this.#session.state?.attempt;
     if (attempt !== undefined && attempt.phase.type !== "settled") {
-      await this.#handleOutcome(await this.#dispatcher.submit("/cancel"));
+      const lease = this.#presentationLease();
+      try {
+        const outcome = await this.#dispatcher.submit("/cancel");
+        if (this.#isCurrentPresentationLease(lease)) {
+          await this.#handleOutcome(outcome, lease);
+        }
+      } catch (error: unknown) {
+        if (this.#isCurrentPresentationLease(lease)) {
+          this.#showTransient("error", `cancellation failed: ${compactDiagnostic(error)}`);
+        }
+      }
     }
   }
 
@@ -390,7 +451,17 @@ export class RustxTuiApp {
     if (this.#restarting) return;
     const state = this.#session.state;
     if (state?.attempt !== undefined && state.attempt.phase.type !== "settled") {
-      await this.#handleOutcome(await this.#dispatcher.submit("/cancel"));
+      const lease = this.#presentationLease();
+      try {
+        const outcome = await this.#dispatcher.submit("/cancel");
+        if (this.#isCurrentPresentationLease(lease)) {
+          await this.#handleOutcome(outcome, lease);
+        }
+      } catch (error: unknown) {
+        if (this.#isCurrentPresentationLease(lease)) {
+          this.#showTransient("error", `cancellation failed: ${compactDiagnostic(error)}`);
+        }
+      }
       return;
     }
     await this.quit();
@@ -415,6 +486,7 @@ export class RustxTuiApp {
       return;
     }
     this.#quitting = true;
+    this.#invalidatePresentation();
     this.#editor.disableSubmit = true;
     this.#showTransient("info", "shutting the runtime down…");
 
@@ -423,37 +495,37 @@ export class RustxTuiApp {
       attempt !== undefined && attempt.phase.type !== "settled"
         ? attempt.attemptId
         : undefined;
-    let lifecycleFailure = false;
+    let lifecycleFailure: string | undefined;
     try {
       await this.#session.shutdown();
     } catch (error) {
-      lifecycleFailure = true;
-      this.#showTransient("error", `shutdown request failed: ${(error as Error).message}`);
+      lifecycleFailure = `shutdown request failed: ${compactDiagnostic(error)}`;
     }
 
-    if (!lifecycleFailure && unsettledAttemptId !== undefined) {
+    if (lifecycleFailure === undefined && unsettledAttemptId !== undefined) {
       try {
         await this.#session.waitForAttemptSettlement(unsettledAttemptId);
       } catch (error) {
-        lifecycleFailure = true;
-        this.#showTransient(
-          "error",
-          `attempt settlement was not observed: ${(error as Error).message}`,
-        );
+        lifecycleFailure = `attempt settlement was not observed: ${compactDiagnostic(error)}`;
       }
     }
 
     this.#child.closeStdin();
     const exit = await this.#child.waitOrTerminate(this.#terminationGraceMs);
     this.#exitCode = exit.code ?? 1;
-    if (lifecycleFailure && this.#exitCode === 0) {
+    if (lifecycleFailure !== undefined && this.#exitCode === 0) {
       this.#exitCode = 1;
     }
-    this.#finish(this.#exitCode);
+    if (lifecycleFailure !== undefined) {
+      await this.#showTerminalFailureAndFinish(lifecycleFailure, this.#exitCode);
+    } else {
+      this.#finish(this.#exitCode);
+    }
   }
 
   /** Opens the shared focused surface for substantial read-only information. */
-  #showInspection(title: string, body: string): void {
+  #showInspection(title: string, body: string, lease: PresentationLease): void {
+    if (!this.#isCurrentPresentationLease(lease)) return;
     this.#closeOverlay();
     const viewportLines = Math.max(
       1,
@@ -466,8 +538,12 @@ export class RustxTuiApp {
       anchor: "center",
     });
     this.#overlay = handle;
-    inspection.onChange = () => this.#tui.requestRender();
-    inspection.onClose = () => this.#closeOverlay();
+    inspection.onChange = () => {
+      if (this.#isCurrentPresentationLease(lease)) this.#tui.requestRender();
+    };
+    inspection.onClose = () => {
+      if (this.#overlay === handle) this.#closeOverlay();
+    };
     handle.focus();
     this.#tui.requestRender();
   }
@@ -478,8 +554,9 @@ export class RustxTuiApp {
    * The overlay owns focus while it is up and hands it straight back to the
    * editor on select or cancel, so the editor is never left unfocused.
    */
-  #showModelSelector(models: CatalogModelView[]): void {
-    const state = this.#session.state;
+  #showModelSelector(models: CatalogModelView[], lease: PresentationLease): void {
+    if (!this.#isCurrentPresentationLease(lease)) return;
+    const state = lease.session.state;
     if (state === undefined) {
       return;
     }
@@ -496,19 +573,29 @@ export class RustxTuiApp {
     this.#overlay = handle;
 
     const close = () => {
+      if (this.#overlay !== handle) return;
       handle.hide();
       this.#overlay = undefined;
       this.#tui.setFocus(this.#editor);
       this.#tui.requestRender();
     };
 
-    selector.onChange = () => this.#tui.requestRender();
-    selector.onCancel = close;
+    selector.onChange = () => {
+      if (this.#isCurrentPresentationLease(lease)) this.#tui.requestRender();
+    };
+    selector.onCancel = () => {
+      if (this.#isCurrentPresentationLease(lease)) close();
+    };
     selector.onSelect = (model) => {
+      if (!this.#isCurrentPresentationLease(lease)) return;
       close();
-      void this.#dispatcher.selectModel(model).then((outcome) => this.#handleOutcome(outcome)).catch((error: unknown) => {
-        this.#showTransient("error", `model selection failed: ${errorMessage(error)}`);
-      });
+      void this.#dispatcher.selectModel(model)
+        .then((outcome) => this.#handleOutcome(outcome, lease))
+        .catch((error: unknown) => {
+          if (this.#isCurrentPresentationLease(lease)) {
+            this.#showTransient("error", `model selection failed: ${compactDiagnostic(error)}`);
+          }
+        });
     };
 
     handle.focus();
@@ -519,7 +606,9 @@ export class RustxTuiApp {
     sessions: SessionSummaryView[],
     nextOffset: number | undefined,
     query: string,
+    lease: PresentationLease,
   ): void {
+    if (!this.#isCurrentPresentationLease(lease)) return;
     if (sessions.length === 0) {
       this.#showTransient("info", "no persisted sessions are available");
       return;
@@ -534,19 +623,25 @@ export class RustxTuiApp {
       anchor: "center",
     });
     this.#overlay = handle;
-    selector.onChange = () => this.#tui.requestRender();
-    selector.onCancel = () => this.#closeOverlay();
+    selector.onChange = () => {
+      if (this.#isCurrentPresentationLease(lease)) this.#tui.requestRender();
+    };
+    selector.onCancel = () => {
+      if (this.#isCurrentPresentationLease(lease) && this.#overlay === handle) {
+        this.#closeOverlay();
+      }
+    };
     selector.onQueryChange = (nextQuery) => {
       currentQuery = nextQuery;
       currentNextOffset = undefined;
       const serial = ++requestSerial;
-      void this.#session.listSessions(nextQuery, 0).then((page) => {
-        if (serial !== requestSerial) return;
+      void lease.session.listSessions(nextQuery, 0).then((page) => {
+        if (!this.#isCurrentPresentationLease(lease) || serial !== requestSerial) return;
         currentNextOffset = page.nextOffset;
         selector.replacePage(page.sessions, page.nextOffset);
       }).catch((error: unknown) => {
-        if (serial !== requestSerial) return;
-        this.#showTransient("error", `session search failed: ${errorMessage(error)}`);
+        if (!this.#isCurrentPresentationLease(lease) || serial !== requestSerial) return;
+        this.#showTransient("error", `session search failed: ${compactDiagnostic(error)}`);
         selector.replacePage([], undefined);
       });
     };
@@ -554,21 +649,25 @@ export class RustxTuiApp {
       const offset = currentNextOffset;
       if (offset === undefined) return;
       const serial = requestSerial;
-      void this.#session.listSessions(currentQuery, offset).then((page) => {
-        if (serial !== requestSerial) return;
+      void lease.session.listSessions(currentQuery, offset).then((page) => {
+        if (!this.#isCurrentPresentationLease(lease) || serial !== requestSerial) return;
         currentNextOffset = page.nextOffset;
         selector.appendPage(page.sessions, page.nextOffset);
       }).catch((error: unknown) => {
-        this.#showTransient("error", `session page failed: ${errorMessage(error)}`);
+        if (!this.#isCurrentPresentationLease(lease) || serial !== requestSerial) return;
+        this.#showTransient("error", `session page failed: ${compactDiagnostic(error)}`);
         selector.appendPage([], currentNextOffset);
       });
     };
     selector.onSelect = (session) => {
+      if (!this.#isCurrentPresentationLease(lease)) return;
       this.#closeOverlay();
       void this.#dispatcher.selectSession(session.id)
-        .then((outcome) => this.#handleOutcome(outcome))
+        .then((outcome) => this.#handleOutcome(outcome, lease))
         .catch((error: unknown) => {
-          this.#showTransient("error", `session selection failed: ${errorMessage(error)}`);
+          if (this.#isCurrentPresentationLease(lease)) {
+            this.#showTransient("error", `session selection failed: ${compactDiagnostic(error)}`);
+          }
         });
     };
     handle.focus();
@@ -579,8 +678,10 @@ export class RustxTuiApp {
     boundaries: SessionUserMessageBoundaryView[],
     title: string,
     operation: "fork" | "tree",
+    lease: PresentationLease,
     nextOffset?: number,
   ): void {
+    if (!this.#isCurrentPresentationLease(lease)) return;
     if (boundaries.length === 0) {
       this.#showTransient(
         "info",
@@ -596,28 +697,39 @@ export class RustxTuiApp {
       anchor: "center",
     });
     this.#overlay = handle;
-    selector.onChange = () => this.#tui.requestRender();
-    selector.onCancel = () => this.#closeOverlay();
+    selector.onChange = () => {
+      if (this.#isCurrentPresentationLease(lease)) this.#tui.requestRender();
+    };
+    selector.onCancel = () => {
+      if (this.#isCurrentPresentationLease(lease) && this.#overlay === handle) {
+        this.#closeOverlay();
+      }
+    };
     selector.onLoadMore = () => {
       const offset = currentNextOffset;
       if (offset === undefined) return;
-      void this.#session.sessionTreePage(0, offset).then((page) => {
+      void lease.session.sessionTreePage(0, offset).then((page) => {
+        if (!this.#isCurrentPresentationLease(lease)) return;
         currentNextOffset = page.nextHistoryOffset;
         selector.appendPage(page.branchableMessages, page.nextHistoryOffset);
       }).catch((error: unknown) => {
-        this.#showTransient("error", `history page failed: ${errorMessage(error)}`);
+        if (!this.#isCurrentPresentationLease(lease)) return;
+        this.#showTransient("error", `history page failed: ${compactDiagnostic(error)}`);
         selector.appendPage([], currentNextOffset);
       });
     };
     selector.onSelect = (boundary) => {
+      if (!this.#isCurrentPresentationLease(lease)) return;
       this.#closeOverlay();
       const request = operation === "fork"
         ? this.#dispatcher.forkAt(boundary)
         : this.#dispatcher.branchAt(boundary);
       void request
-        .then((outcome) => this.#handleOutcome(outcome))
+        .then((outcome) => this.#handleOutcome(outcome, lease))
         .catch((error: unknown) => {
-          this.#showTransient("error", `session switch failed: ${errorMessage(error)}`);
+          if (this.#isCurrentPresentationLease(lease)) {
+            this.#showTransient("error", `session switch failed: ${compactDiagnostic(error)}`);
+          }
         });
     };
     handle.focus();
@@ -630,7 +742,9 @@ export class RustxTuiApp {
     nextNodeOffset: number | undefined,
     boundaries: SessionUserMessageBoundaryView[],
     nextHistoryOffset: number | undefined,
+    lease: PresentationLease,
   ): void {
+    if (!this.#isCurrentPresentationLease(lease)) return;
     const selector = new TreeSelector({
       session,
       nodes,
@@ -644,12 +758,19 @@ export class RustxTuiApp {
       anchor: "center",
     });
     this.#overlay = handle;
-    selector.onChange = () => this.#tui.requestRender();
-    selector.onCancel = () => this.#closeOverlay();
+    selector.onChange = () => {
+      if (this.#isCurrentPresentationLease(lease)) this.#tui.requestRender();
+    };
+    selector.onCancel = () => {
+      if (this.#isCurrentPresentationLease(lease) && this.#overlay === handle) {
+        this.#closeOverlay();
+      }
+    };
     selector.onLoadMore = () => {
       const request = selector.nextPageRequest();
       if (request === undefined) return;
-      void this.#session.sessionTreePage(request.nodeOffset, request.historyOffset).then((page) => {
+      void lease.session.sessionTreePage(request.nodeOffset, request.historyOffset).then((page) => {
+        if (!this.#isCurrentPresentationLease(lease)) return;
         selector.appendPage({
           nodes: page.nodes,
           nextNodeOffset: page.nextNodeOffset,
@@ -657,19 +778,23 @@ export class RustxTuiApp {
           nextHistoryOffset: page.nextHistoryOffset,
         });
       }).catch((error: unknown) => {
-        this.#showTransient("error", `tree page failed: ${errorMessage(error)}`);
+        if (!this.#isCurrentPresentationLease(lease)) return;
+        this.#showTransient("error", `tree page failed: ${compactDiagnostic(error)}`);
         selector.retryPage();
       });
     };
     selector.onSelect = (selection: TreeSelection) => {
+      if (!this.#isCurrentPresentationLease(lease)) return;
       this.#closeOverlay();
       const request = selection.kind === "node"
         ? this.#dispatcher.selectTreeNode(session.id, selection.node.id)
         : this.#dispatcher.branchAt(selection.boundary);
       void request
-        .then((outcome) => this.#handleOutcome(outcome))
+        .then((outcome) => this.#handleOutcome(outcome, lease))
         .catch((error: unknown) => {
-          this.#showTransient("error", `session switch failed: ${errorMessage(error)}`);
+          if (this.#isCurrentPresentationLease(lease)) {
+            this.#showTransient("error", `session switch failed: ${compactDiagnostic(error)}`);
+          }
         });
     };
     handle.focus();
@@ -685,7 +810,16 @@ export class RustxTuiApp {
     this.#tui.requestRender();
   }
 
-  async #applySessionSwitch(change: SessionSwitch): Promise<void> {
+  async #applySessionSwitch(
+    change: SessionSwitch,
+    lease: PresentationLease,
+  ): Promise<void> {
+    if (!this.#isCurrentPresentationLease(lease)) return;
+
+    // Accepting a committed Session transition is itself an ownership
+    // boundary. The transition below is allowed to complete its runtime work,
+    // but unrelated continuations from the old presentation are stale now.
+    this.#invalidatePresentation();
     if (!change.restartRequired) {
       this.#showTransient(
         "info",
@@ -695,9 +829,11 @@ export class RustxTuiApp {
     }
     const restart = this.#restartRuntime;
     if (restart === undefined) {
-      this.#showTransient("error", "the runtime cannot be replaced by this attachment");
       this.#editor.disableSubmit = true;
-      this.#finish(1);
+      await this.#showTerminalFailureAndFinish(
+        "the runtime cannot be replaced by this attachment",
+        1,
+      );
       return;
     }
 
@@ -707,11 +843,13 @@ export class RustxTuiApp {
       change.restartDiagnostic === undefined ? "info" : "error",
       change.restartDiagnostic === undefined
         ? `switching to session ${change.session.name}…`
-        : `Session ${change.session.name} committed before durability became uncertain: ${change.restartDiagnostic}`,
+        : `Session ${change.session.name} committed before durability became uncertain: ${compactDiagnostic(change.restartDiagnostic)}`,
     );
     const oldSession = this.#session;
     const oldConnection = this.#connection;
     const oldChild = this.#child;
+    let transitionSession = oldSession;
+    let refreshLease: PresentationLease | undefined;
     try {
       // Rust has already reached its semantic quiescence point before it
       // returned this result. Closing here only releases the old process
@@ -722,7 +860,10 @@ export class RustxTuiApp {
 
       const next = await restart();
       this.#bindRuntime(next.session, next.connection, next.child);
+      transitionSession = next.session;
+      refreshLease = this.#presentationLease();
       const authoritative = await next.session.refreshSession();
+      if (!this.#isCurrentPresentationLease(refreshLease)) return;
       if (change.editorContent !== undefined) {
         if (!sameSessionLineage(change.session, authoritative)) {
           throw new Error(
@@ -735,12 +876,24 @@ export class RustxTuiApp {
         "info",
         `active session: ${authoritative.name} · node ${authoritative.active_node}`,
       );
-      const state = this.#session.state;
+      const state = refreshLease.session.state;
       if (state !== undefined) this.#renderState(state);
     } catch (error) {
-      this.#showTransient("error", `session switch failed: ${errorMessage(error)}`);
+      // A refresh continuation that lost its lease must not turn a newer
+      // attachment's UI into a failure surface. Failures before the new
+      // attachment is bound still belong to this accepted transition.
+      if (
+        (refreshLease !== undefined && !this.#isCurrentPresentationLease(refreshLease)) ||
+        this.#session !== transitionSession ||
+        this.#finished
+      ) {
+        return;
+      }
       this.#editor.disableSubmit = true;
-      this.#finish(1);
+      await this.#showTerminalFailureAndFinish(
+        `session switch failed: ${compactDiagnostic(error)}`,
+        1,
+      );
     } finally {
       this.#restarting = false;
       if (!this.#finished) {
@@ -754,21 +907,33 @@ export class RustxTuiApp {
    * The restarted process reads the catalog again; this method deliberately
    * does not infer a destination Session from the failed command.
    */
-  async #applyReplacementRequired(message: string): Promise<void> {
-    if (this.#restarting || this.#finished) return;
+  async #applyReplacementRequired(
+    message: string,
+    lease: PresentationLease,
+  ): Promise<void> {
+    if (!this.#isCurrentPresentationLease(lease) || this.#restarting) return;
+    this.#invalidatePresentation();
     const restart = this.#restartRuntime;
     this.#restarting = true;
     this.#editor.disableSubmit = true;
-    this.#closeOverlay();
-    this.#showTransient("error", `the active Session attachment must be replaced: ${message}`);
+    this.#showTransient(
+      "error",
+      `the active Session attachment must be replaced: ${compactDiagnostic(message)}`,
+    );
     if (restart === undefined) {
-      this.#finish(1);
+      await this.#showTerminalFailureAndFinish(
+        `the active Session attachment must be replaced: ${compactDiagnostic(message)}`,
+        1,
+      );
+      this.#restarting = false;
       return;
     }
 
     const oldSession = this.#session;
     const oldConnection = this.#connection;
     const oldChild = this.#child;
+    let transitionSession = oldSession;
+    let refreshLease: PresentationLease | undefined;
     try {
       await this.#detachOldAttachment(oldSession, oldConnection);
       oldChild.closeStdin();
@@ -776,17 +941,29 @@ export class RustxTuiApp {
 
       const next = await restart();
       this.#bindRuntime(next.session, next.connection, next.child);
+      transitionSession = next.session;
+      refreshLease = this.#presentationLease();
       const authoritative = await next.session.refreshSession();
+      if (!this.#isCurrentPresentationLease(refreshLease)) return;
       this.#showTransient(
         "info",
         `attached to authoritative Session ${authoritative.name} · node ${authoritative.active_node}`,
       );
-      const state = this.#session.state;
+      const state = refreshLease.session.state;
       if (state !== undefined) this.#renderState(state);
     } catch (error) {
-      this.#showTransient("error", `Session attachment replacement failed: ${errorMessage(error)}`);
+      if (
+        (refreshLease !== undefined && !this.#isCurrentPresentationLease(refreshLease)) ||
+        this.#session !== transitionSession ||
+        this.#finished
+      ) {
+        return;
+      }
       this.#editor.disableSubmit = true;
-      this.#finish(1);
+      await this.#showTerminalFailureAndFinish(
+        `Session attachment replacement failed: ${compactDiagnostic(error)}`,
+        1,
+      );
     } finally {
       this.#restarting = false;
       if (!this.#finished) {
@@ -893,7 +1070,55 @@ export class RustxTuiApp {
       : withToggledToolCall(this.#preferences, latest);
   }
 
+  #presentationLease(): PresentationLease {
+    return {
+      epoch: this.#presentationEpoch,
+      session: this.#session,
+    };
+  }
+
+  #isCurrentPresentationLease(lease: PresentationLease): boolean {
+    return !this.#finished &&
+      !this.#quitting &&
+      !this.#terminalFinishStarted &&
+      lease.epoch === this.#presentationEpoch &&
+      lease.session === this.#session;
+  }
+
+  /** Invalidates attachment-local presentation work at one central boundary. */
+  #invalidatePresentation(): void {
+    this.#presentationEpoch += 1;
+    this.#resetLocalSurfaces();
+  }
+
+  /**
+   * Commits a fatal diagnostic before stopping Pi.
+   *
+   * pi-tui 0.82.1 schedules both normal and forced renders on
+   * `process.nextTick`, while `stop()` marks the TUI stopped and cancels the
+   * pending render timer. Awaiting one next-tick barrier after the forced
+   * render therefore establishes the presentation commit point without a
+   * timing delay.
+   */
+  async #showTerminalFailureAndFinish(message: string, code: number): Promise<void> {
+    if (this.#finished || this.#terminalFinishStarted) return;
+    this.#terminalFinishStarted = true;
+    this.#editor.disableSubmit = true;
+    this.#invalidatePresentation();
+    this.#transient.replace({ level: "error", text: message });
+    if (this.#started) {
+      this.#tui.requestRender(true);
+      await nextTick();
+    } else {
+      // There is no Pi-owned terminal frame before run() starts. Preserve the
+      // diagnostic for startup failures on stderr, then settle the app.
+      process.stderr.write(`${message}\n`);
+    }
+    this.#finish(code);
+  }
+
   #showTransient(level: "info" | "error", text: string): void {
+    if (this.#finished || this.#terminalFinishStarted) return;
     this.#transient.replace({ level, text });
     this.#tui.requestRender();
   }
@@ -1059,4 +1284,12 @@ function sameSessionLineage(expected: SessionView, actual: SessionView): boolean
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function compactDiagnostic(error: unknown): string {
+  return errorMessage(error).replace(/\s*\r?\n\s*/g, " · ").trim();
+}
+
+function nextTick(): Promise<void> {
+  return new Promise((resolve) => process.nextTick(resolve));
 }

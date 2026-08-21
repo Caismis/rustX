@@ -131,7 +131,12 @@ export class RuntimeClientAttachment {
     return () => this.#listeners.delete(listener);
   }
 
-  /** Subscribes to authoritative projection replacement, including resync. */
+  /**
+   * Subscribes to authoritative projection replacement, including resync.
+   *
+   * The controlling TUI uses this signal to invalidate attachment-local
+   * presentation leases. It carries no Pi or client-surface semantics.
+   */
   onSnapshot(listener: SnapshotListener): () => void {
     this.#snapshotListeners.add(listener);
     return () => this.#snapshotListeners.delete(listener);

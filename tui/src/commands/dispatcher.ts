@@ -393,13 +393,23 @@ export class CommandDispatcher {
       });
 
       const attempt = this.#context.session.state?.attempt;
-      const note =
+      const attemptNote =
         attempt !== undefined && attempt.phase.type === "running"
-          ? `\nThe running attempt stays on ${attempt.model.primary.model}; the change applies to the next attempt.`
+          ? `current attempt remains ${attempt.model.primary.model}`
           : "";
+      const modelFeedback = attemptNote.length > 0
+        ? [
+            `session model -> ${updated.configured.model}; ${attemptNote}`,
+            "change applies to next attempt; primary overrides reset; summary policy preserved",
+            `capabilities: ${capabilitySummary(updated.effective)}`,
+          ].join("\n")
+        : [
+            `session model -> ${updated.configured.model}; primary overrides reset; summary policy preserved`,
+            `capabilities: ${capabilitySummary(updated.effective)}`,
+          ].join("\n");
       return transient(
         "info",
-        `session model is now ${updated.configured.model}\nprimary overrides reset to the selected model defaults; summary model policy preserved\n${capabilitySummary(updated.effective)}${note}`,
+        modelFeedback,
       );
     } catch (error) {
       return failure(error);
@@ -552,9 +562,15 @@ function failure(error: unknown): CommandOutcome {
     if (error.error.type === "session_restart_required") {
       return { kind: "replacement_required", message: error.error.message };
     }
-    return transient("error", error.message);
+    return transient("error", compactDiagnostic(error.message));
   }
-  return transient("error", (error as Error).message ?? String(error));
+  return transient("error", compactDiagnostic(error));
+}
+
+/** Transient errors keep their distinguishing identity near the front. */
+function compactDiagnostic(value: unknown): string {
+  const text = value instanceof Error ? value.message : String(value);
+  return text.replace(/\s*\r?\n\s*/g, " · ").trim();
 }
 
 // ---------------------------------------------------------------------------

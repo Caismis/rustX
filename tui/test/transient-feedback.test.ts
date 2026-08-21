@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import { TransientFeedbackSurface } from "../src/ui/components/transient-feedback.ts";
 
 describe("TransientFeedbackSurface", () => {
-  it("replaces feedback, bounds multiline errors, and clears on acknowledgement", () => {
+  it("replaces feedback, marks defensive overflow, and clears on acknowledgement", () => {
     const surface = new TransientFeedbackSurface();
     surface.replace({ level: "info", text: "first result" });
     surface.replace({
@@ -17,6 +17,7 @@ describe("TransientFeedbackSurface", () => {
     assert.match(rendered, /line one/);
     assert.match(rendered, /line three/);
     assert.doesNotMatch(rendered, /line four/);
+    assert.match(rendered, /…/);
 
     surface.acknowledge();
     assert.equal(surface.feedback, undefined);

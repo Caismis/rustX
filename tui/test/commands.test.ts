@@ -14,6 +14,7 @@ import { CommandDispatcher } from "../src/commands/dispatcher.ts";
 import { COMMANDS, parseCommandLine } from "../src/commands/registry.ts";
 import { RuntimeClientConnection } from "../src/runtime/connection.ts";
 import { RuntimeClientAttachment } from "../src/runtime/attachment.ts";
+import { TransientFeedbackSurface } from "../src/ui/components/transient-feedback.ts";
 import { ArgumentError, parseArguments } from "../src/cli.ts";
 import {
   attemptModel,
@@ -250,6 +251,12 @@ describe("CommandDispatcher", () => {
             summaryModel: summaryPolicy,
           },
         },
+        attempt: {
+          attempt_id: "attempt-a",
+          phase: { type: "running" },
+          turn: 1,
+          model: attemptModel("alpha/model-a"),
+        },
       }),
     );
     const changing = dispatcher.submit("/model beta/model-b");
@@ -304,9 +311,16 @@ describe("CommandDispatcher", () => {
     const outcome = await changing;
     assert.equal(outcome.kind, "transient");
     if (outcome.kind === "transient") {
-      assert.match(outcome.text, /session model is now beta\/model-b/);
-      assert.match(outcome.text, /primary overrides reset/);
-      assert.match(outcome.text, /summary model policy preserved/);
+      assert.match(outcome.text, /session model -> beta\/model-b/);
+      assert.match(outcome.text, /current attempt remains alpha\/model-a/);
+      assert.match(outcome.text, /change applies to next attempt/);
+      const surface = new TransientFeedbackSurface();
+      surface.replace(outcome);
+      const rendered = surface.render(80).join("\n");
+      assert.match(rendered, /beta\/model-b/);
+      assert.match(rendered, /alpha\/model-a/);
+      assert.match(rendered, /next attempt/);
+      assert.ok(surface.render(80).length <= 3);
     }
   });
 

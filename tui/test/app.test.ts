@@ -9,10 +9,12 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { TUI } from "@earendil-works/pi-tui";
 
 import { RustxTuiApp } from "../src/ui/app.ts";
 import { ConnectionClosedError, RuntimeRequestError } from "../src/runtime/connection.ts";
 import { emptyPresentationState } from "../src/presentation/projection.ts";
+import { TransientFeedbackSurface } from "../src/ui/components/transient-feedback.ts";
 import type { ChildRuntimeProcess } from "../src/runtime/child-process.ts";
 import type { RuntimeClientConnection } from "../src/runtime/connection.ts";
 import type { RuntimeClientAttachment } from "../src/runtime/attachment.ts";
@@ -87,6 +89,47 @@ function waitForApplicationContinuation(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
+function countTuiRenderRequests(): {
+  readonly count: () => number;
+  readonly start: () => void;
+  readonly restore: () => void;
+} {
+  const prototype = TUI.prototype as unknown as {
+    requestRender: (force?: boolean) => void;
+  };
+  const original = prototype.requestRender;
+  let enabled = false;
+  let count = 0;
+  prototype.requestRender = function(force?: boolean): void {
+    if (enabled) count += 1;
+    original.call(this, force);
+  };
+  return {
+    count: () => count,
+    start: () => {
+      enabled = true;
+      count = 0;
+    },
+    restore: () => {
+      prototype.requestRender = original;
+    },
+  };
+}
+
 describe("RustxTuiApp lifecycle", () => {
   it("keeps stdin open until the exact attempt settlement is observed", async () => {
     const log: string[] = [];
@@ -138,6 +181,64 @@ describe("RustxTuiApp lifecycle", () => {
     });
 
     assert.equal(await app.run(), 1);
+  });
+
+  it("commits a fatal diagnostic before stopping the TUI", async () => {
+    const events: string[] = [];
+    let close!: (error: ConnectionClosedError) => void;
+    const prototype = TUI.prototype as unknown as {
+      doRender: () => void;
+      stop: () => void;
+    };
+    const transientPrototype = TransientFeedbackSurface.prototype as unknown as {
+      replace: (feedback: { level: "info" | "error"; text: string }) => void;
+    };
+    const originalRender = prototype.doRender;
+    const originalStop = prototype.stop;
+    const originalReplace = transientPrototype.replace;
+    prototype.doRender = function(): void {
+      events.push("render");
+      originalRender.call(this);
+    };
+    prototype.stop = function(): void {
+      events.push("stop");
+      originalStop.call(this);
+    };
+    transientPrototype.replace = function(feedback): void {
+      if (feedback.text.includes("fatal transport diagnostic")) {
+        events.push("fatal_feedback");
+      }
+      originalReplace.call(this, feedback);
+    };
+
+    try {
+      const app = new RustxTuiApp({
+        session: fakeSession(async () => {}, emptyPresentationState(sessionModel("alpha/model-a"))),
+        connection: fakeConnection((listener) => {
+          close = listener;
+        }),
+        child: fakeChild([]),
+      });
+      const running = app.run();
+      await waitForApplicationContinuation();
+      events.length = 0;
+
+      close(new ConnectionClosedError("process_exit", "fatal transport diagnostic"));
+      assert.equal(await running, 1);
+      const renderIndex = events.indexOf("render");
+      const stopIndex = events.indexOf("stop");
+      assert.deepEqual(events.slice(0, 3), [
+        "fatal_feedback",
+        "render",
+        "stop",
+      ]);
+      assert.ok(renderIndex >= 0, "fatal path must commit a final frame");
+      assert.ok(stopIndex > renderIndex, "TUI stop must follow the final frame");
+    } finally {
+      prototype.doRender = originalRender;
+      prototype.stop = originalStop;
+      transientPrototype.replace = originalReplace;
+    }
   });
 
   it("finishes with failure when a session restart cannot be launched", async () => {
@@ -284,6 +385,270 @@ describe("RustxTuiApp lifecycle", () => {
 
     await app.quit();
     await running;
+  });
+
+  it("drops an inspection result that completes after a new attachment is bound", async () => {
+    let oldInspectionStarted!: () => void;
+    const oldInspectionObserved = new Promise<void>((resolve) => {
+      oldInspectionStarted = resolve;
+    });
+    const oldInspection = deferred<ReturnType<typeof sessionView>>();
+    let refreshCalls = 0;
+    let nextBound!: () => void;
+    const nextBoundObserved = new Promise<void>((resolve) => {
+      nextBound = resolve;
+    });
+    let oldCancelled = 0;
+    let nextCancelled = 0;
+    const runningState = {
+      ...emptyPresentationState(sessionModel("alpha/model-a")),
+      attempt: {
+        ...attemptView(),
+        phase: { type: "running" as const },
+      },
+    };
+    const oldSession = fakeSession(async () => {}, runningState);
+    const oldApi = oldSession as unknown as {
+      refreshSession: () => Promise<ReturnType<typeof sessionView>>;
+      newSession: () => Promise<unknown>;
+      detach: () => Promise<void>;
+      cancelCurrentAttempt: () => Promise<string>;
+    };
+    oldApi.refreshSession = async () => {
+      refreshCalls += 1;
+      if (refreshCalls === 1) return sessionView({ id: "session-a", name: "A" });
+      oldInspectionStarted();
+      return oldInspection.promise;
+    };
+    oldApi.newSession = async () => ({
+      session: sessionView({ id: "session-b", name: "B" }),
+      restartRequired: true,
+    });
+    oldApi.detach = async () => {};
+    oldApi.cancelCurrentAttempt = async () => {
+      oldCancelled += 1;
+      return "old-attempt";
+    };
+
+    const nextSession = fakeSession(async () => {}, runningState);
+    const nextApi = nextSession as unknown as {
+      refreshSession: () => Promise<ReturnType<typeof sessionView>>;
+      cancelCurrentAttempt: () => Promise<string>;
+    };
+    nextApi.refreshSession = async () => {
+      nextBound();
+      return sessionView({ id: "session-b", name: "B" });
+    };
+    nextApi.cancelCurrentAttempt = async () => {
+      nextCancelled += 1;
+      return "next-attempt";
+    };
+
+    const app = new RustxTuiApp({
+      session: oldSession,
+      connection: fakeConnection(),
+      child: fakeChild([]),
+      restartRuntime: async () => ({
+        session: nextSession,
+        connection: fakeConnection(),
+        child: fakeChild([]),
+      }),
+    });
+    const running = app.run();
+    await waitForApplicationContinuation();
+
+    process.stdin.emit("data", "/session\r");
+    await oldInspectionObserved;
+    process.stdin.emit("data", "/new\r");
+    await nextBoundObserved;
+    await waitForApplicationContinuation();
+
+    // The old request really completes after B is current. Its inspection
+    // result must not acquire B's overlay or steal its editor focus.
+    oldInspection.resolve(sessionView({ id: "session-a", name: "stale A" }));
+    await waitForApplicationContinuation();
+    process.stdin.emit("data", "\u001b");
+    await waitForPiEscapeDisambiguation();
+
+    assert.equal(oldCancelled, 0);
+    assert.equal(nextCancelled, 1, "Escape must reach the current attachment");
+
+    await app.quit();
+    await running;
+  });
+
+  it("does not let a late old-attachment acknowledgement replace B's transient", async () => {
+    let oldRenameStarted!: () => void;
+    const oldRenameObserved = new Promise<void>((resolve) => {
+      oldRenameStarted = resolve;
+    });
+    const oldRename = deferred<ReturnType<typeof sessionView>>();
+    let nextBound!: () => void;
+    const nextBoundObserved = new Promise<void>((resolve) => {
+      nextBound = resolve;
+    });
+    const renders = countTuiRenderRequests();
+    const runningState = {
+      ...emptyPresentationState(sessionModel("alpha/model-a")),
+      attempt: {
+        ...attemptView(),
+        phase: { type: "running" as const },
+      },
+    };
+    const oldSession = fakeSession(async () => {}, runningState);
+    const oldApi = oldSession as unknown as {
+      refreshSession: () => Promise<ReturnType<typeof sessionView>>;
+      newSession: () => Promise<unknown>;
+      detach: () => Promise<void>;
+      nameSession: () => Promise<ReturnType<typeof sessionView>>;
+    };
+    oldApi.refreshSession = async () => sessionView({ id: "session-a", name: "A" });
+    oldApi.nameSession = async () => {
+      oldRenameStarted();
+      return oldRename.promise;
+    };
+    oldApi.newSession = async () => ({
+      session: sessionView({ id: "session-b", name: "B" }),
+      restartRequired: true,
+    });
+    oldApi.detach = async () => {};
+
+    const nextSession = fakeSession(async () => {}, runningState);
+    const nextApi = nextSession as unknown as {
+      refreshSession: () => Promise<ReturnType<typeof sessionView>>;
+      nameSession: () => Promise<ReturnType<typeof sessionView>>;
+    };
+    nextApi.refreshSession = async () => {
+      nextBound();
+      return sessionView({ id: "session-b", name: "B" });
+    };
+    nextApi.nameSession = async () => sessionView({ id: "session-b", name: "current B" });
+
+    try {
+      const app = new RustxTuiApp({
+        session: oldSession,
+        connection: fakeConnection(),
+        child: fakeChild([]),
+        restartRuntime: async () => ({
+          session: nextSession,
+          connection: fakeConnection(),
+          child: fakeChild([]),
+        }),
+      });
+      const running = app.run();
+      await waitForApplicationContinuation();
+
+      process.stdin.emit("data", "/name stale A\r");
+      await oldRenameObserved;
+      process.stdin.emit("data", "/new\r");
+      await nextBoundObserved;
+      await waitForApplicationContinuation();
+
+      // Establish a current B-owned feedback item before releasing A's old
+      // operation. A stale completion must not replace it or request a redraw.
+      process.stdin.emit("data", "/name current B\r");
+      await waitForApplicationContinuation();
+      renders.start();
+      oldRename.resolve(sessionView({ id: "session-a", name: "stale A" }));
+      await waitForApplicationContinuation();
+      assert.equal(renders.count(), 0, "late A feedback must not touch B's surface");
+
+      await app.quit();
+      await running;
+    } finally {
+      renders.restore();
+    }
+  });
+
+  it("closes a stale picker and rejects its late page callback on resync", async () => {
+    let snapshotListener!: () => void;
+    let firstPage!: () => void;
+    const firstPageObserved = new Promise<void>((resolve) => {
+      firstPage = resolve;
+    });
+    const latePage = deferred<{
+      sessions: SessionSummaryView[];
+      nextOffset?: number;
+    }>();
+    let listCalls = 0;
+    let cancelled = 0;
+    const renders = countTuiRenderRequests();
+    const session = fakeSession(async () => {}, {
+      ...emptyPresentationState(sessionModel("alpha/model-a")),
+      attempt: {
+        ...attemptView(),
+        phase: { type: "running" as const },
+      },
+    });
+    const api = session as unknown as {
+      onSnapshot: (listener: () => void) => () => void;
+      refreshSession: () => Promise<ReturnType<typeof sessionView>>;
+      listSessions: () => Promise<{
+        sessions: SessionSummaryView[];
+        nextOffset?: number;
+      }>;
+      cancelCurrentAttempt: () => Promise<string>;
+    };
+    api.onSnapshot = (listener) => {
+      snapshotListener = listener;
+      return () => {};
+    };
+    api.refreshSession = async () => sessionView();
+    api.listSessions = async () => {
+      listCalls += 1;
+      if (listCalls === 1) {
+        firstPage();
+        return {
+          sessions: [{
+            id: "session-a",
+            name: "A",
+            updated_at: "2026-08-21T00:00:00Z",
+            active_node: "node-a",
+            active: true,
+          }],
+          nextOffset: 1,
+        };
+      }
+      return latePage.promise;
+    };
+    api.cancelCurrentAttempt = async () => {
+      cancelled += 1;
+      return "attempt-a";
+    };
+
+    try {
+      const app = new RustxTuiApp({
+        session,
+        connection: fakeConnection(),
+        child: fakeChild([]),
+      });
+      const running = app.run();
+      process.stdin.emit("data", "/resume\r");
+      await firstPageObserved;
+      await waitForApplicationContinuation();
+
+      // The only row is selected, so Down starts the deferred continuation.
+      process.stdin.emit("data", "\u001b[B");
+      await waitForApplicationContinuation();
+      snapshotListener();
+      await waitForApplicationContinuation();
+
+      // Snapshot replacement closes every overlay, including non-inspection
+      // pickers. The late page error must not repaint the new presentation.
+      renders.start();
+      latePage.reject(new Error("stale page failure"));
+      await waitForApplicationContinuation();
+      assert.equal(renders.count(), 0);
+
+      process.stdin.emit("data", "\u001b");
+      await waitForPiEscapeDisambiguation();
+      assert.equal(cancelled, 1, "the closed picker must restore cancellation precedence");
+
+      await app.quit();
+      await running;
+    } finally {
+      renders.restore();
+    }
   });
 
   it("replaces a terminal Session attachment from the authoritative restart", async () => {
