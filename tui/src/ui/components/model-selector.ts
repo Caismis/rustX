@@ -50,6 +50,7 @@
 
 import {
   fuzzyMatch,
+  Input,
   matchesKey,
   type Component,
   type Focusable,
@@ -79,7 +80,6 @@ export interface ModelSelectorOptions {
 }
 
 export class ModelSelector implements Component, Focusable {
-  focused = false;
   onSelect?: (model: CatalogModelView) => void;
   onCancel?: () => void;
   onChange?: () => void;
@@ -87,6 +87,7 @@ export class ModelSelector implements Component, Focusable {
   readonly #models: CatalogModelView[];
   readonly #sessionModel: SessionModelView;
   readonly #attempt: AttemptPresentation | undefined;
+  readonly #searchInput: Input;
   #query = "";
   #selected = 0;
 
@@ -94,6 +95,17 @@ export class ModelSelector implements Component, Focusable {
     this.#models = options.models;
     this.#sessionModel = options.sessionModel;
     this.#attempt = options.attempt;
+    this.#searchInput = new Input();
+    this.#searchInput.onEscape = () => this.onCancel?.();
+    this.#searchInput.onSubmit = () => this.#selectCurrent();
+  }
+
+  get focused(): boolean {
+    return this.#searchInput.focused;
+  }
+
+  set focused(value: boolean) {
+    this.#searchInput.focused = value;
   }
 
   /** The current search text. */
@@ -120,6 +132,7 @@ export class ModelSelector implements Component, Focusable {
 
   setQuery(query: string): void {
     this.#query = query;
+    this.#searchInput.setValue(query);
     this.#selected = 0;
     this.onChange?.();
   }
@@ -149,23 +162,26 @@ export class ModelSelector implements Component, Focusable {
       this.#move(1, visible.length);
       return;
     }
-    if (matchesKey(data, "backspace")) {
-      this.setQuery(this.#query.slice(0, -1));
-      return;
-    }
-    // Everything else that is plain printable text goes to the search box.
-    // Control and escape sequences are ignored rather than typed, so an
-    // unhandled key never corrupts the query.
-    if (isPrintable(data)) {
-      this.setQuery(this.#query + data);
+    // Let pi-tui's native input own cursor movement, insertion, deletion,
+    // word editing, undo, kill/yank, and bracketed paste. The selector owns
+    // only the model filter and list navigation; it never reimplements text
+    // editing policy.
+    this.#searchInput.handleInput(data);
+    const query = this.#searchInput.getValue();
+    if (query !== this.#query) {
+      this.#query = query;
+      this.#selected = 0;
+      this.onChange?.();
     }
   }
 
   render(width: number): string[] {
     const visible = this.visibleModels();
+    const searchWidth = Math.max(1, width - plainWidth("Search: "));
+    const search = this.#searchInput.render(searchWidth)[0] ?? "";
     const lines: string[] = [
       role.strong("Select model"),
-      `${role.meta("Search:")} ${this.#query}${this.focused ? role.accent("▌") : ""}`,
+      truncate(`${role.meta("Search:")} ${search}`, width),
       "",
     ];
 
@@ -194,6 +210,13 @@ export class ModelSelector implements Component, Focusable {
     lines.push(...this.#renderContext());
     lines.push(role.meta("↑↓ navigate · Enter select · Esc close"));
     return lines;
+  }
+
+  #selectCurrent(): void {
+    const model = this.visibleModels()[this.#selected];
+    if (model !== undefined) {
+      this.onSelect?.(model);
+    }
   }
 
   #move(delta: number, length: number): void {
@@ -361,20 +384,6 @@ function tokens(value: number): string {
     return `${Math.round(value / 1_000)}k`;
   }
   return String(value);
-}
-
-/** Whether one input chunk is text a search box should accept. */
-function isPrintable(data: string): boolean {
-  if (data.length === 0) {
-    return false;
-  }
-  for (const character of data) {
-    const code = character.codePointAt(0) ?? 0;
-    if (code < 0x20 || code === 0x7f) {
-      return false;
-    }
-  }
-  return true;
 }
 
 /**

@@ -17,7 +17,13 @@ import {
   renderInteractionSection,
   renderOrphanExecutions,
 } from "../src/ui/components/activity.ts";
-import { renderFooter, workingStatus } from "../src/ui/components/status.ts";
+import {
+  contextLabel,
+  renderFooter,
+  renderStartup,
+  startupVisible,
+  workingStatus,
+} from "../src/ui/components/status.ts";
 import { plainText } from "../src/ui/theme.ts";
 import {
   DEFAULT_PREVIEW_CHARS,
@@ -32,6 +38,7 @@ import {
   foreground,
   sessionModel,
   toolResult,
+  userMessage,
 } from "./support/fixtures.ts";
 import { prefs, stateOf } from "./support/render.ts";
 
@@ -147,13 +154,13 @@ describe("working status", () => {
           pending_interactions: [approvalInteraction()],
         }),
       ),
-      "Working… (turn 1)",
+      "Working…",
     );
   });
 });
 
 describe("footer", () => {
-  it("shows the session model, capability revision, and connection state", () => {
+  it("shows the active model, provider, context, and connection state", () => {
     const rendered = footer(
       stateOf({
         model: sessionModel("alpha/model-a"),
@@ -162,8 +169,10 @@ describe("footer", () => {
       "connected",
     );
     assert.match(rendered, /alpha\/model-a/);
-    assert.match(rendered, /cap r3/);
-    assert.match(rendered, /connected/);
+    assert.match(rendered, /provider alpha/);
+    assert.match(rendered, /context —\/128k/);
+    assert.match(rendered, /online/);
+    assert.doesNotMatch(rendered, /cap r3/);
   });
 
   it("shows the native active Session and node when published", () => {
@@ -211,8 +220,8 @@ describe("footer", () => {
       }),
       "connected",
     );
-    assert.match(degraded, /cap r3/);
-    assert.match(degraded, /1 cap unavailable \(mcp exa\)/);
+    assert.match(degraded, /1 optional capability unavailable/);
+    assert.doesNotMatch(degraded, /cap r3/);
   });
 
   it("shows the attempt's frozen model when the session moved on", () => {
@@ -225,7 +234,7 @@ describe("footer", () => {
     );
     assert.match(rendered, /cfg beta\/model-b/, "the desired session model");
     assert.match(rendered, /attempt alpha\/model-a/, "the frozen attempt model");
-    assert.match(rendered, /running · turn 2/);
+    assert.match(rendered, /Working…/);
   });
 
   it("collapses to one model when all of them agree", () => {
@@ -292,7 +301,12 @@ describe("footer", () => {
     assert.match(rendered, /cfg alpha\/model-a/);
     assert.match(rendered, /eff beta\/model-b/);
     assert.match(rendered, /attempt gamma\/model-c/);
-    assert.ok(!rendered.includes("…"), "an identity is never elided into a prefix");
+    assert.ok(
+      !rendered.includes("cfg alpha/model-…") &&
+        !rendered.includes("eff beta/model-…") &&
+        !rendered.includes("attempt gamma/model-…"),
+      "an identity is never elided into a prefix",
+    );
   });
 
   it("shows a settled attempt's outcome rather than a phase", () => {
@@ -304,7 +318,7 @@ describe("footer", () => {
       }),
       "connected",
     );
-    assert.match(rendered, /cancelled \(user_requested\)/);
+    assert.match(rendered, /cancelled/);
   });
 
   it("distinguishes known usage from usage the runtime has not published", () => {
@@ -317,11 +331,11 @@ describe("footer", () => {
         }),
         "connected",
       ),
-      /12\.5kin 840out/,
+      /↑12\.5k ↓840/,
     );
     assert.match(
       footer(stateOf({ attempt: attemptView() }), "connected"),
-      /usage pending/,
+      /tokens pending/,
     );
   });
 
@@ -346,15 +360,15 @@ describe("footer", () => {
       }),
       "connected",
     );
-    assert.match(rendered, /inbox 1/);
-    assert.match(rendered, /bg 1/);
+    assert.match(rendered, /queued 1/);
+    assert.match(rendered, /background 1/);
     assert.match(rendered, /approvals 1/);
   });
 
   it("reports drain and a closed transport without implying cancellation", () => {
     const rendered = footer(stateOf({ shutting_down: true }), "closed: input_eof");
-    assert.match(rendered, /shutting down/);
-    assert.match(rendered, /closed: input_eof/);
+    assert.match(rendered, /draining/);
+    assert.match(rendered, /offline/);
     assert.ok(!/cancelled/i.test(rendered));
   });
 
@@ -371,7 +385,7 @@ describe("footer", () => {
 
     const wide = footer(state, "connected", 200);
     assert.equal(wide.split("\n").length, 1);
-    assert.match(wide, /cap r9/);
+    assert.match(wide, /context 10%\/128k/);
 
     const narrow = footer(state, "connected", 40);
     const rows = narrow.split("\n");
@@ -379,10 +393,70 @@ describe("footer", () => {
     for (const row of rows) {
       assert.ok(row.length <= 40, `row within width: ${JSON.stringify(row)}`);
     }
-    // The essential identities survive; the low-priority revision is dropped.
+    // The essential identities survive; optional status and hint content may
+    // be dropped or wrapped for a narrow terminal.
     assert.match(narrow, /alpha\/model-a/);
     assert.match(narrow, /attempt beta\/model-b/);
-    assert.ok(!narrow.includes("cap r9"));
+    assert.ok(!narrow.includes("Ctrl+L model"));
+  });
+});
+
+describe("startup and context", () => {
+  it("is shown before a real turn and reclaimed after transcript content", () => {
+    const initial = stateOf();
+    assert.equal(startupVisible(initial), true);
+    assert.equal(
+      startupVisible(stateOf({ messages: [userMessage("m1", "hello")] })),
+      false,
+    );
+  });
+
+  it("shows authoritative welcome facts without client internals", () => {
+    const state = stateOf({
+      model: sessionModel("alpha/model-a", {
+        protocol: "openai_responses",
+        contextWindow: 256_000,
+        capabilities: {
+          inputModalities: ["text"],
+          outputModalities: ["text"],
+          toolCalls: true,
+          reasoning: true,
+        },
+        reasoningEnabled: true,
+        reasoningProfile: "medium",
+      }),
+    });
+    const rendered = plainText(
+      renderStartup(state, {
+        id: "session-7",
+        name: "review branch",
+        created_at: "2026-08-21T00:00:00Z",
+        updated_at: "2026-08-21T00:00:00Z",
+        active_node: "node-3",
+        active_conversation_id: "conv-3",
+        node_count: 1,
+      }),
+    );
+
+    assert.match(rendered, /rustX/);
+    assert.match(rendered, /model alpha\/model-a/);
+    assert.match(rendered, /provider alpha · Responses/);
+    assert.match(rendered, /context —\/256k/);
+    assert.match(rendered, /reasoning on \(profile medium\)/);
+    assert.match(rendered, /session review branch · node node-3/);
+    assert.match(rendered, /Ctrl\+L model/);
+    assert.match(rendered, /\/help commands/);
+    assert.doesNotMatch(rendered, /attachment|conversation|cursor|cap r/i);
+  });
+
+  it("uses only the latest runtime-published request usage", () => {
+    const state = stateOf({
+      attempt: attemptView({
+        model: attemptModel("alpha/model-a", { contextWindow: 256_000 }),
+        last_usage: { input_tokens: 25_600, output_tokens: 512, total_tokens: 26_112 },
+      }),
+    });
+    assert.equal(contextLabel(state), "context 10%/256k");
   });
 });
 

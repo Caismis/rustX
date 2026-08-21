@@ -18,6 +18,7 @@ import {
   assistantBlocks,
   assistantMessage,
   attemptModel,
+  attemptView,
   runtimeInbound,
   toolCallBlock,
   userMessage,
@@ -76,6 +77,117 @@ describe("assistant text", () => {
     // Nothing reflows when the message commits: the same text, the same kind.
     assert.deepEqual(transcriptText(streaming), ["final answer"]);
     assert.deepEqual(transcriptText(committed), ["final answer"]);
+  });
+
+  it("keeps a provider failure beside the interrupted answer", () => {
+    const state = stateOf({
+      messages: [assistantMessage("m1", "partial answer")],
+      attempt: {
+        ...attemptView(),
+        phase: {
+          type: "settled",
+          outcome: {
+            type: "failed",
+            error: {
+              type: "model",
+              kind: "provider_error",
+              message: "provider returned a structured failure",
+            },
+          },
+        },
+      },
+    });
+    const rendered = transcriptString(state);
+
+    assert.match(rendered, /partial answer/);
+    assert.match(rendered, /request failed · provider_error/);
+    assert.match(rendered, /provider returned a structured failure/);
+  });
+
+  it("renders runtime failure, cancellation, timeout, and limit outcomes inline", () => {
+    const outcomes = [
+      {
+        outcome: {
+          type: "failed" as const,
+          error: {
+            type: "runtime" as const,
+            error: { type: "runtime_failure", message: "runtime detail" },
+          },
+        },
+        expected: /runtime failed · runtime_failure.*runtime detail/s,
+      },
+      {
+        outcome: { type: "cancelled" as const, reason: "user_requested" as const },
+        expected: /cancelled · user_requested/,
+      },
+      {
+        outcome: { type: "timed_out" as const },
+        expected: /timed out/,
+      },
+      {
+        outcome: { type: "limit_exceeded" as const, limit: "max_turns" as const },
+        expected: /limit exceeded · max_turns/,
+      },
+    ];
+
+    for (const [index, item] of outcomes.entries()) {
+      const rendered = transcriptString(
+        stateOf({
+          messages: [assistantMessage("m1", "interrupted")],
+          attempt: {
+            ...attemptView({ attempt_id: `attempt-${index}` }),
+            phase: { type: "settled", outcome: item.outcome },
+          },
+        }),
+      );
+      assert.match(rendered, item.expected);
+    }
+  });
+
+  it("does not add an error band for a completed attempt", () => {
+    const state = stateOf({
+      messages: [assistantMessage("m1", "complete")],
+      attempt: {
+        ...attemptView(),
+        phase: {
+          type: "settled",
+          outcome: { type: "completed", finish_reason: { type: "stop" } },
+        },
+      },
+    });
+    assert.deepEqual(transcriptText(state), ["complete"]);
+  });
+
+  it("does not infer cancellation from an observable unsettled attempt", () => {
+    const rendered = transcriptString(
+      stateOf({
+        messages: [assistantMessage("m1", "still streaming")],
+        attempt: attemptView({ phase: { type: "running" } }),
+      }),
+    );
+    assert.match(rendered, /still streaming/);
+    assert.doesNotMatch(rendered, /cancelled|timed out|failed/);
+  });
+
+  it("bounds terminal outcome diagnostics", () => {
+    const detail = "x".repeat(2_000);
+    const rendered = transcriptString(
+      stateOf({
+        attempt: {
+          ...attemptView(),
+          phase: {
+            type: "settled",
+            outcome: {
+              type: "failed",
+              error: { type: "model", kind: "provider_error", message: detail },
+            },
+          },
+        },
+      }),
+    );
+    assert.ok(rendered.length < 1_000, "the inline diagnostic stays bounded");
+    assert.ok(rendered.includes("x".repeat(100)));
+    assert.ok(!rendered.includes(detail));
   });
 });
 

@@ -464,4 +464,54 @@ describe("RustxTuiApp lifecycle", () => {
     await app.quit();
     await running;
   });
+
+  it("opens the same dispatcher-backed model selector from Ctrl+L", async () => {
+    let catalogReads = 0;
+    let selectedModel: string | undefined;
+    let catalogRead!: () => void;
+    const catalogReadObserved = new Promise<void>((resolve) => {
+      catalogRead = resolve;
+    });
+    const session = fakeSession(
+      async () => {},
+      emptyPresentationState(sessionModel("alpha/model-a")),
+    );
+    const api = session as unknown as {
+      modelCatalog: () => Promise<{ models: ReturnType<typeof catalogModel>[] }>;
+      modelSet: (config: { model: string }) => Promise<ReturnType<typeof sessionModel>>;
+    };
+    api.modelCatalog = async () => {
+      catalogReads += 1;
+      catalogRead();
+      return {
+        models: [catalogModel("alpha/model-a"), catalogModel("beta/model-b")],
+      };
+    };
+    api.modelSet = async (config) => {
+      selectedModel = config.model;
+      return sessionModel(config.model);
+    };
+
+    const app = new RustxTuiApp({
+      session,
+      connection: fakeConnection(),
+      child: fakeChild([]),
+    });
+    const running = app.run();
+
+    process.stdin.emit("data", "\f");
+    await catalogReadObserved;
+    await waitForApplicationContinuation();
+    // The focused overlay owns Ctrl+L; it must not open a second selector.
+    process.stdin.emit("data", "\f");
+    process.stdin.emit("data", "\u001b[B");
+    process.stdin.emit("data", "\r");
+    await waitForApplicationContinuation();
+
+    assert.equal(catalogReads, 1);
+    assert.equal(selectedModel, "beta/model-b");
+
+    await app.quit();
+    await running;
+  });
 });

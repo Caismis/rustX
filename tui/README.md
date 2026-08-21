@@ -125,6 +125,13 @@ it is not canonical until submitted. Tree node and history pages have
 independent bounded continuations; an exhausted stream is never restarted
 from an earlier offset while the other stream continues.
 
+Before the first real transcript turn, the screen includes a compact welcome
+block with the published effective model, protocol/provider display label,
+context window, reasoning state, active Session name/node when the native
+Session read is available, and the basic keyboard hints. Once a real turn or
+optimistic submission exists, that block is reclaimed and the compact footer
+carries the durable Session metadata and live status instead.
+
 ## Owners
 
 | Module | Owns | Does not own |
@@ -161,6 +168,8 @@ nothing but the screen. They send no request, and they are also bound to keys:
 
 | Key | Effect |
 | --- | --- |
+| `ctrl+l` | open the same model selector as `/model` |
+| `escape` | close the active overlay, or request cancellation for an unsettled attempt when idle |
 | `ctrl+c` | cancellation intent for the active attempt, or quit when idle |
 | `ctrl+o` | expand or collapse the most recent tool card |
 | `ctrl+t` | show or hide model reasoning |
@@ -184,23 +193,34 @@ infers an outcome from detach/EOF, or callbacks into the Agent Loop.
 
 ## The model selector
 
-`/model` opens a searchable overlay over the catalog `model_catalog_get`
-published. It searches the model reference *and* the useful metadata the
-catalog publishes about a row — the protocol (by wire spelling and by display
-label), the input and output modalities, the tool and reasoning capabilities,
-the reasoning profile ids, and the context/output limits — marks the
-configured model as current, and shows the highlighted entry's effective
-capability, context window, output limit, and reasoning profiles, each exactly
-as the catalog published it. The reference is matched fuzzily; the metadata
-terms are a short closed vocabulary and are matched by containment, because
-`image` is a fuzzy subsequence of `anthropic_messages` and a text-only row
-must not answer a query about image input. Session state is not searchable
-row metadata, and there is no `claude`- or `gpt`-shaped alias: the client is
-not an authority on what a model is. A reasoning-capable model that declares no profiles is shown as
-exactly that: there is no universal off/low/medium/high, and inventing one
-would make this client a second model-configuration authority. The overlay also
-states the configured/effective pair and, while an attempt is running, that the
-running attempt keeps the model it froze.
+`/model` and `Ctrl+L` open the same searchable overlay over the catalog
+`model_catalog_get` published. The search field delegates cursor movement,
+insertion, deletion, word editing, undo, kill/yank, and bracketed paste to
+pi-tui's native `Input`; rustX still owns filtering/ranking over the catalog's
+published facts, highlighted identity, and selection. Enter selects the
+highlighted row and Esc closes the overlay. A visible overlay owns its input,
+so the app-level Ctrl+L shortcut is ignored while it is open and Esc closes it
+before cancellation is considered. The existing Ctrl+C interrupt-or-quit
+policy remains unchanged.
+
+The selector searches the model reference *and* useful metadata the catalog
+publishes — protocol, modalities, capabilities, reasoning profiles, and
+limits. It preserves configured, effective, and attempt-frozen identities and
+shows the highlighted row's effective facts exactly as published. The client
+does not read `models.json`, infer provider behavior from a model prefix, or
+invent a reasoning scale. Selecting a row calls the canonical dispatcher
+`model_set` path; a `replacement_required` result is interpreted by the same
+`#handleOutcome` flow as `/model` and Session commands.
+
+The footer is intentionally compact: it keeps the effective/configured/
+attempt-frozen model distinction, `session <name> · node <node>`, work state,
+latest published token usage, queued/background/approval counts, optional
+capability availability, connection state, and a short command hint as space
+allows. The context indicator is specifically the latest runtime/provider-
+published `input_tokens` divided by the published context window for that
+attempt's model. It is not a client tokenization of transcript history and is
+not a canonical compaction or occupancy calculation. Plumbing such as
+attachment ids, cursors, and capability revisions remains in `/debug`.
 
 ## The model invariant
 
@@ -232,6 +252,13 @@ tool result     folded into that card when folding preserves canonical
 Canonical block order is preserved exactly: `reasoning, text, tool_call, text`
 renders in that sequence, streaming and committed alike, and streaming text
 renders identically to the committed text so nothing reflows on commit.
+
+When the runtime publishes a terminal non-success attempt outcome, the
+transcript renders a bounded inline band beside the interrupted conversation:
+cancelled, timed out, limit exceeded, model/provider failure, or runtime
+failure. A completed attempt adds no error band, and transport EOF, detach,
+restart, or missing assistant text never gets reinterpreted as cancellation or
+failure.
 
 ### One tool call is one visual entity
 
@@ -472,9 +499,11 @@ pnpm --dir tui test
 ```
 
 Everything is deterministic: scripted byte and record sequences, a data
-barrier rather than a delay for readiness, and no `setTimeout` used to
-establish an ordering. The presentation suites drive projection facts directly
-and assert on normalized strings — `transcript.test.ts`,
+barrier rather than a delay for readiness, and no elapsed-time wait used to
+establish rustX semantic ordering. The one isolated parser-boundary helper in
+`app.test.ts` waits for pi-tui's bare-Esc disambiguation window; it does not
+synchronize Runtime Client or Session behavior. The presentation suites drive
+projection facts directly and assert on normalized strings — `transcript.test.ts`,
 `tool-correlation.test.ts`, `tool-card.test.ts`, `model-selector.test.ts`,
 `status.test.ts`, `identity-domains.test.ts`, and `reconstruction.test.ts`,
 which rebuilds the whole visible UI from one fresh snapshot.

@@ -210,6 +210,35 @@ describe("search", () => {
     component.handleInput("");
     assert.equal(component.query, "s");
   });
+
+  it("uses pi-tui editing semantics inside the search field", () => {
+    const component = selector();
+    component.handleInput("a");
+    component.handleInput("b");
+    // Left arrow moves the cursor without changing the filtered catalog.
+    component.handleInput("[D");
+    component.handleInput("X");
+    assert.equal(component.query, "aXb");
+    // Backspace deletes at the cursor, rather than always deleting the last
+    // character as the old selector did.
+    component.handleInput("");
+    assert.equal(component.query, "ab");
+
+    // Forward delete is also delegated to Input.
+    component.handleInput("[3~");
+    assert.equal(component.query, "a");
+
+    // Bracketed paste is accepted as one edit and still flows through the
+    // catalog's published-fact filter.
+    const pasted = selector();
+    pasted.handleInput("[200~beta/model-b[201~");
+    assert.equal(pasted.query, "beta/model-b");
+    assert.equal(pasted.visibleModels()[0]?.model, "beta/model-b");
+
+    // Pi's undo binding remains available to the same native input object.
+    pasted.handleInput("");
+    assert.equal(pasted.query, "");
+  });
 });
 
 describe("displayed metadata", () => {
