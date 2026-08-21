@@ -48,9 +48,10 @@ SECOND_ATTEMPT = "conformance: second attempt"
 
 # -- workspace fixtures the Rust driver writes -----------------------------
 
-# rustX native filesystem tools require absolute locators (Issue #86); the
-# {workspace} placeholder is substituted with the concrete absolute
-# workspace root of the runtime under test at scenario build time.
+# These conformance calls use an absolute path so the provider-side script can
+# address the fixture independently of the process cwd. The {workspace}
+# placeholder is substituted with the concrete workspace root at scenario
+# build time; native file tools also accept cwd-relative paths.
 NOTE_PATH = "{workspace}/note.txt"
 NOTE_MARKER = "deterministic-note-payload-6d41"
 SKILL_NAME = "conformance-skill"
@@ -160,7 +161,7 @@ def tool_call_continuation() -> Scenario:
                 tools_include=("read",),
             ),
             Stream(
-                ToolCall("call-read-1", "read", f'{{"file_path":"{NOTE_PATH}"}}', pieces=2),
+                ToolCall("call-read-1", "read", f'{{"path":"{NOTE_PATH}"}}', pieces=2),
                 Finish("tool_calls"),
             ),
         ),
@@ -192,7 +193,7 @@ def skill_read_turn() -> Scenario:
                 tools_include=("read",),
             ),
             Stream(
-                ToolCall("call-skill-1", "read", f'{{"file_path":"{SKILL_PATH}"}}'),
+                ToolCall("call-skill-1", "read", f'{{"path":"{SKILL_PATH}"}}'),
                 Finish("tool_calls"),
             ),
         ),

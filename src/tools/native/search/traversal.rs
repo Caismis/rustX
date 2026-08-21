@@ -38,11 +38,11 @@ pub(super) fn enumerate(root: &Path) -> Result<Vec<SearchFile>, String> {
         .git_exclude(false)
         .require_git(false)
         .parents(false)
-        // Hidden files are ordinary workspace files.
+        // Hidden files are ordinary files.
         .hidden(false)
         // Symlinks are never followed: a directory symlink must not recurse
-        // and a file symlink must not smuggle an out-of-workspace target
-        // into the universe. Only regular files survive the filter below.
+        // and a file symlink must not smuggle an outside target into the
+        // universe. Only regular files survive the filter below.
         .follow_links(false)
         // One deterministic traversal; no parallel walker whose completion
         // order would then have to be repaired.

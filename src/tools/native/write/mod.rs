@@ -1,15 +1,9 @@
-//! Native Write tool (M5).
+//! Native Write tool.
 //!
-//! Creates or replaces a file inside the workspace. The model-facing
-//! `file_path` is an absolute locator resolved through the one filesystem
-//! authority ([`crate::tools::locator`]): mutation is authorized inside the
-//! workspace root only. The parent directory
-//! must already exist — there is no implicit recursive directory creation —
-//! and the write is atomic: a temporary file in the target directory is
-//! written and then renamed over the target. No shell invocation is used.
-//!
-//! The model-facing argument contract is the typed [`WriteInput`]; the
-//! canonical schema is generated from it.
+//! Write resolves relative paths against the execution cwd, creates missing
+//! parent directories, and commits a complete UTF-8 snapshot atomically.
+//! Absolute paths are ordinary host filesystem paths and are not subject to
+//! the workspace containment policy used by unrelated runtime subsystems.
 
 mod input;
 
@@ -17,7 +11,7 @@ use futures_util::future::BoxFuture;
 
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
-use crate::tools::native::support::{atomic_commit, failed_result, success_json};
+use crate::tools::native::support::{atomic_commit, failed_result, resolve_path, success_text};
 use crate::tools::types::ToolInvocationPolicy;
 use crate::tools::types::{ToolExecutionResult, ToolInvocation};
 
@@ -33,8 +27,7 @@ pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistrati
         native_definition::<WriteInput>(
             "tool-write",
             NAME,
-            "Create or replace a file at an absolute path inside the workspace (parent \
-             directory must already exist).",
+            "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.",
             policy,
         ),
         std::sync::Arc::new(WriteTool),
@@ -62,31 +55,24 @@ fn run_write(
         Ok(input) => input,
         Err(error) => return failed_result(error),
     };
-    let file_content = input.content.as_str();
-    let target = match crate::tools::locator::resolve(
-        context.workspace,
-        context.tool_output,
-        &input.file_path,
-        crate::tools::locator::LocatorOperation::Mutate,
-    ) {
-        Ok(target) => target,
-        Err(error) => return failed_result(error.to_string()),
-    };
-    match target.parent() {
-        Some(parent) if parent.exists() && parent.is_dir() => {}
-        _ => {
-            return failed_result(format!(
-                "the parent directory of {} does not exist; Write never creates directories \
-                 implicitly",
-                target.display()
-            ));
-        }
+    let target = resolve_path(context.workspace.root(), &input.path);
+    if let Some(parent) = target.parent()
+        && let Err(error) = std::fs::create_dir_all(parent)
+    {
+        return failed_result(format!(
+            "cannot create parent directories for {}: {error}",
+            target.display()
+        ));
     }
-    if let Err(error) = atomic_commit(&target, file_content.as_bytes()) {
+    if let Err(error) = atomic_commit(&target, input.content.as_bytes()) {
         return failed_result(error);
     }
-    success_json(serde_json::json!({
-        "path": target.display().to_string(),
-        "bytes_written": file_content.len(),
-    }))
+    success_text(
+        format!(
+            "Successfully wrote {} bytes to {}",
+            input.content.len(),
+            input.path
+        ),
+        None,
+    )
 }

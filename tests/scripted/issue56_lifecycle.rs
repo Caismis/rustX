@@ -2116,7 +2116,7 @@ async fn native_read_is_distinguished_from_a_non_native_tool_named_read() {
         tool_id: "tool-read",
         name: "read",
         arguments: serde_json::json!({
-            "file_path": fixture
+            "path": fixture
                 .runtime
                 .workspace()
                 .root()
@@ -2762,7 +2762,7 @@ async fn observer_reads_the_native_read_target_from_validated_arguments() {
         tool_id: "tool-read",
         name: "read",
         arguments: serde_json::json!({
-            "file_path": fixture
+            "path": fixture
                 .runtime
                 .workspace()
                 .root()
@@ -2797,7 +2797,7 @@ async fn observer_reads_the_native_read_target_from_validated_arguments() {
     assert_eq!(invocation.origin, ToolOrigin::Builtin);
     assert_eq!(invocation.mode, ToolInvocationMode::Foreground);
     // The fact the result alone under-determines: which file was touched.
-    // The validated argument is the absolute locator the model supplied.
+    // The validated argument preserves the path spelling the model supplied.
     let expected = fixture
         .runtime
         .workspace()
@@ -2809,7 +2809,7 @@ async fn observer_reads_the_native_read_target_from_validated_arguments() {
     assert_eq!(
         invocation
             .arguments
-            .get("file_path")
+            .get("path")
             .and_then(|path| path.as_str()),
         Some(expected.as_str()),
     );

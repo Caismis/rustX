@@ -1,14 +1,16 @@
-//! The one model-facing filesystem locator/authority boundary.
+//! The runtime-owned filesystem locator/authority boundary.
 //!
-//! Native filesystem tools consume **absolute** model-facing locators. An
-//! absolute path is a locator, never authority: this module is the single
-//! boundary that resolves a locator against the conversation's explicitly
-//! authorized roots and enforces the per-operation mutability contract:
+//! Runtime subsystems that expose managed tool output consume **absolute**
+//! locators. An absolute path is a locator, never authority: this module is
+//! the boundary that resolves one against explicitly authorized roots and
+//! enforces the per-operation mutability contract. Native
+//! Read/Write/Edit/Grep/Glob intentionally do not call this module; they
+//! resolve model paths against the execution cwd and accept absolute host
+//! paths.
 //!
 //! ```text
-//! workspace root            Read  Grep  Glob  Write  Edit
-//! managed tool-output root  Read  Grep  Glob  --- read-only ---
-//! every other host path     rejected
+//! runtime-authorized root   operation-specific managed-output checks
+//! every other runtime path  rejected
 //! ```
 //!
 //! Ownership stays with the owning types: [`Workspace`] owns the canonical
@@ -59,8 +61,8 @@ use crate::tools::workspace::Workspace;
 /// A filesystem locator resolution/authorization failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LocatorError {
-    /// The model supplied a non-absolute locator; model-facing filesystem
-    /// locators are absolute paths.
+    /// The caller supplied a non-absolute runtime locator; this authority
+    /// boundary accepts absolute paths only.
     NotAbsolute(String),
     /// The locator resolves outside every authorized root.
     OutsideAuthorizedRoots(String),
@@ -76,8 +78,7 @@ impl core::fmt::Display for LocatorError {
         match self {
             Self::NotAbsolute(path) => write!(
                 f,
-                "filesystem path {path:?} is not absolute; model-facing filesystem paths are \
-                 absolute locators"
+                "filesystem path {path:?} is not absolute; runtime locators are absolute paths"
             ),
             Self::OutsideAuthorizedRoots(path) => write!(
                 f,
@@ -102,8 +103,8 @@ impl std::error::Error for LocatorError {}
 /// The operation whose authority is being decided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocatorOperation {
-    /// A read-only operation (Read, Grep, Glob): authorized against the
-    /// workspace root and the managed tool-output root.
+    /// A read-only runtime operation: authorized against the workspace root
+    /// and the managed tool-output root.
     Read,
     /// A mutating operation (Write, Edit): authorized against the workspace
     /// root only.
@@ -114,13 +115,13 @@ pub enum LocatorOperation {
 /// symlink traversal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OwningRoot {
-    /// The model workspace root (Read/Grep/Glob/Write/Edit).
+    /// The runtime workspace root.
     Workspace,
     /// The read-only managed tool-output root (Read/Grep/Glob only).
     ManagedOutput,
 }
 
-/// Resolves one absolute model-facing locator for `operation`.
+/// Resolves one absolute runtime locator for `operation`.
 ///
 /// The locator must be absolute; its lexical owning root is determined
 /// first, the locator is canonicalized, and the canonical result must

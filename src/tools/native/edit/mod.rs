@@ -1,50 +1,20 @@
-//! Native Edit tool (M5).
+//! Native Edit tool.
 //!
-//! Applies a set of exact text replacements to one UTF-8 file inside the
-//! workspace. The model-facing `file_path` is an absolute locator resolved
-//! through the one filesystem authority ([`crate::tools::locator`]):
-//! mutation is authorized inside the workspace root only.
-//!
-//! # The atomic multi-edit invariant
-//!
-//! > One Edit invocation describes one atomic transformation from one
-//! > original file snapshot to one final file snapshot.
-//!
-//! Concretely, for every invocation:
-//!
-//! 1. exactly one original snapshot of the file is read;
-//! 2. every `oldText` is matched against *that* snapshot — never against a
-//!    partially edited intermediate, so the edits are order-independent and
-//!    an earlier replacement can never change what a later one matches;
-//! 3. every `oldText` must resolve to exactly one range in the snapshot;
-//!    zero candidate ranges and two or more candidate ranges are both
-//!    deterministic failures. Candidates may *overlap*: in `"aaa"` the
-//!    anchor `"aa"` identifies both `0..2` and `1..3`, so it names no single
-//!    target and is rejected as ambiguous;
-//! 4. the complete replacement range set is computed before any mutation and
-//!    rejected when any two ranges intersect, nest, or coincide;
-//! 5. the validated ranges are ordered by their position in the snapshot and
-//!    the final snapshot is built from the original plus those replacements;
-//! 6. the final snapshot is committed as exactly one file mutation through
-//!    the shared atomic commit of the native tool plane.
-//!
-//! Any validation failure leaves the file byte-for-byte unchanged: the
-//! commit is only ever reached with a fully validated edit set. There is no
-//! sequential "edit 1 mutates, edit 2 matches the mutated file" mode, no
-//! replace-all mode, and no fuzzy/LLM edit matching.
-//!
-//! The model-facing argument contract is the typed [`EditInput`]; the
-//! canonical schema is generated from it.
+//! Edit is a precise, atomic mutation primitive. All anchors are resolved
+//! against one original snapshot, exact matching is preferred, and a
+//! NFKC-based fuzzy fallback is used only when exact matching cannot find an
+//! anchor. Any validation failure leaves the target unchanged.
 
 mod input;
 
 use std::ops::Range;
 
 use futures_util::future::BoxFuture;
+use unicode_normalization::UnicodeNormalization;
 
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
-use crate::tools::native::support::{atomic_commit, failed_result, success_json};
+use crate::tools::native::support::{atomic_commit, failed_result, resolve_path, success_text};
 use crate::tools::types::ToolInvocationPolicy;
 use crate::tools::types::{ToolExecutionResult, ToolInvocation};
 
@@ -60,14 +30,12 @@ pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistrati
         native_definition::<EditInput>(
             "tool-edit",
             NAME,
-            "Apply exact text replacements to one UTF-8 file at an absolute path inside the \
-             workspace. Every oldText \
-             must occur exactly once in the file as it is now, and all edits are applied together \
-             as one atomic change.",
+            "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
             policy,
         ),
         std::sync::Arc::new(EditTool),
     )
+    .with_normalizer(input::normalize_arguments)
 }
 
 /// The native Edit executor.
@@ -91,186 +59,344 @@ fn run_edit(
         Ok(input) => input,
         Err(error) => return failed_result(error),
     };
-    let target = match crate::tools::locator::resolve(
-        context.workspace,
-        context.tool_output,
-        &input.file_path,
-        crate::tools::locator::LocatorOperation::Mutate,
-    ) {
-        Ok(target) => target,
-        Err(error) => return failed_result(error.to_string()),
-    };
-    let display = target.display().to_string();
-    // (1) One original snapshot; every later step reads only from it.
+    let target = resolve_path(context.workspace.root(), &input.path);
     let bytes = match std::fs::read(&target) {
         Ok(bytes) => bytes,
-        Err(error) => {
-            return failed_result(format!("cannot read {}: {error}", target.display()));
-        }
+        Err(error) => return failed_result(format!("cannot read {}: {error}", target.display())),
     };
-    let Ok(original) = String::from_utf8(bytes) else {
+    let Ok(original_with_bom) = String::from_utf8(bytes) else {
         return failed_result(format!(
-            "{display} is not a UTF-8 text file; Edit never operates on binary content"
+            "{} is not a UTF-8 text file; Edit never operates on binary content",
+            target.display()
         ));
     };
-    // (2)-(4) The whole edit set is validated before anything is mutated.
-    let planned = match plan(&original, &input.edits, &display) {
+    let (bom, original_body) = strip_bom(&original_with_bom);
+    let ending = detect_line_ending(original_body);
+    let normalized = normalize_to_lf(original_body);
+    let planned = match plan(&normalized, &input.edits, &input.path) {
         Ok(planned) => planned,
         Err(error) => return failed_result(error),
     };
-    // (5) One final snapshot built from the original plus the planned
-    // replacements, and (6) exactly one committed mutation.
-    let updated = apply(&original, &planned);
+    let updated_normalized = if planned.used_fuzzy {
+        apply_replacements_preserving_unchanged_lines(
+            &normalized,
+            &normalize_for_fuzzy_match(&normalized),
+            &planned.edits,
+        )
+    } else {
+        apply_replacements(&normalized, &planned.edits)
+    };
+    let updated_body = restore_line_endings(&updated_normalized, ending);
+    let updated = format!("{bom}{updated_body}");
+    if updated == original_with_bom {
+        return failed_result(no_change_error(&input.path, input.edits.len()));
+    }
     if let Err(error) = atomic_commit(&target, updated.as_bytes()) {
         return failed_result(error);
     }
-    success_json(serde_json::json!({
-        "path": display,
-        "replacements": planned.len(),
-    }))
+    success_text(
+        format!(
+            "Successfully replaced {} block(s) in {}.",
+            input.edits.len(),
+            input.path
+        ),
+        None,
+    )
 }
 
-/// One validated replacement: where it applies in the original snapshot and
-/// what it puts there.
-struct PlannedEdit<'a> {
-    /// The byte range of the original snapshot this edit replaces.
+struct PlannedEdits {
+    edits: Vec<PlannedEdit>,
+    used_fuzzy: bool,
+}
+
+struct PlannedEdit {
+    index: usize,
     range: Range<usize>,
-    /// The replacement text.
-    replacement: &'a str,
+    replacement: String,
 }
 
-/// Resolves every replacement against the original snapshot and validates
-/// the resulting range set.
-///
-/// # Errors
-///
-/// Returns the deterministic diagnostic of the first violation: a zero-match
-/// anchor, an ambiguous anchor, or a pair of conflicting ranges. On any
-/// error the caller must not mutate the file.
-fn plan<'a>(
-    original: &str,
-    edits: &'a [EditReplacement],
-    relative: &str,
-) -> Result<Vec<PlannedEdit<'a>>, String> {
-    let mut planned: Vec<(usize, PlannedEdit<'a>)> = Vec::with_capacity(edits.len());
-    for (index, edit) in edits.iter().enumerate() {
-        // Every anchor is resolved against the original snapshot, never
-        // against a partially edited intermediate.
-        let range = match anchor_target(original, edit.old_text.as_str()) {
-            AnchorTarget::Unique(range) => range,
-            AnchorTarget::Missing => {
-                return Err(format!(
-                    "edits[{index}]: oldText not found in {relative}; no edit was applied"
-                ));
+enum MatchTarget {
+    Missing,
+    Ambiguous(usize),
+    Unique(Range<usize>),
+}
+
+fn plan(original: &str, edits: &[EditReplacement], path: &str) -> Result<PlannedEdits, String> {
+    let normalized_edits: Vec<EditReplacementOwned> = edits
+        .iter()
+        .map(|edit| EditReplacementOwned {
+            old_text: normalize_to_lf(&edit.old_text),
+            new_text: normalize_to_lf(&edit.new_text),
+        })
+        .collect();
+
+    let mut needs_fuzzy = false;
+    for (index, edit) in normalized_edits.iter().enumerate() {
+        match unique_match(original, &edit.old_text) {
+            MatchTarget::Unique(_) => {}
+            MatchTarget::Missing => needs_fuzzy = true,
+            MatchTarget::Ambiguous(count) => {
+                return Err(ambiguous_error(path, index, edits.len(), count));
             }
-            AnchorTarget::Ambiguous => {
-                return Err(format!(
-                    "edits[{index}]: oldText matches more than one place in {relative}; it must \
-                     identify exactly one place, so no edit was applied"
-                ));
+        }
+    }
+
+    let replacement_base = if needs_fuzzy {
+        normalize_for_fuzzy_match(original)
+    } else {
+        original.to_owned()
+    };
+    let mut planned = Vec::with_capacity(normalized_edits.len());
+    for (index, edit) in normalized_edits.iter().enumerate() {
+        let old_text = if needs_fuzzy {
+            normalize_for_fuzzy_match(&edit.old_text)
+        } else {
+            edit.old_text.clone()
+        };
+        let range = match unique_match(&replacement_base, &old_text) {
+            MatchTarget::Unique(range) => range,
+            MatchTarget::Missing => return Err(not_found_error(path, index, edits.len())),
+            MatchTarget::Ambiguous(count) => {
+                return Err(ambiguous_error(path, index, edits.len(), count));
             }
         };
-        planned.push((
+        planned.push(PlannedEdit {
             index,
-            PlannedEdit {
-                range,
-                replacement: edit.new_text.as_str(),
-            },
-        ));
+            range,
+            replacement: edit.new_text.clone(),
+        });
     }
-    // The deterministic position order of the replacements. Sorting by the
-    // range makes the outcome independent of the order the edits arrived in;
-    // the original input index only ever appears in diagnostics.
-    planned.sort_by(|left, right| {
-        left.1
-            .range
-            .start
-            .cmp(&right.1.range.start)
-            .then(left.1.range.end.cmp(&right.1.range.end))
-            .then(left.0.cmp(&right.0))
-    });
-    // Intersecting, nested, and coinciding ranges are all rejected by the
-    // same rule: in position order, each range must start at or after the
-    // end of the previous one.
+    planned.sort_by_key(|edit| (edit.range.start, edit.index));
     for pair in planned.windows(2) {
-        let (previous_index, previous) = (pair[0].0, &pair[0].1);
-        let (next_index, next) = (pair[1].0, &pair[1].1);
-        if next.range.start < previous.range.end {
+        if pair[1].range.start < pair[0].range.end {
             return Err(format!(
-                "edits[{previous_index}] and edits[{next_index}] describe conflicting changes to \
-                 the same region of {relative} (bytes {}..{} and {}..{}); no edit was applied",
-                previous.range.start, previous.range.end, next.range.start, next.range.end
+                "edits[{}] and edits[{}] overlap in {path}. Merge them into one edit or target disjoint regions.",
+                pair[0].index, pair[1].index
             ));
         }
     }
-    Ok(planned.into_iter().map(|(_, edit)| edit).collect())
+    Ok(PlannedEdits {
+        edits: planned,
+        used_fuzzy: needs_fuzzy,
+    })
 }
 
-/// What one exact anchor identifies in the original snapshot.
-enum AnchorTarget {
-    /// The anchor occurs nowhere.
-    Missing,
-    /// The anchor identifies exactly one byte range.
-    Unique(Range<usize>),
-    /// The anchor could be placed at two or more distinct byte ranges, so it
-    /// identifies no single target.
-    Ambiguous,
+struct EditReplacementOwned {
+    old_text: String,
+    new_text: String,
 }
 
-/// Resolves one exact anchor to the single byte range it identifies.
-///
-/// Every byte offset at which the anchor could start is a distinct candidate
-/// target, **including overlapping ones**: in `"aaa"` the anchor `"aa"` can
-/// be placed at `0..2` and at `1..3`, and in `"ababa"` the anchor `"aba"` can
-/// be placed at `0..3` and at `2..5`. Both are ambiguous. A non-overlapping
-/// match iterator would report one match for each and silently pick a target
-/// the caller never chose, so the scan resumes one character past a
-/// candidate's *start* rather than past its end.
-///
-/// The scan stops the moment a second candidate exists: proving ambiguity
-/// never requires counting the remaining occurrences, so a large file with a
-/// very common anchor still costs one bounded pass.
-///
-/// A candidate start is always a UTF-8 character boundary of `original`:
-/// UTF-8 is self-synchronizing, so a byte-level match of the (valid UTF-8)
-/// anchor can never begin inside a code point. Slicing at these offsets is
-/// therefore safe.
-fn anchor_target(original: &str, anchor: &str) -> AnchorTarget {
-    // The input contract already rejects an empty anchor; it has no exact
-    // placement semantics and must never reach the planner.
-    debug_assert!(!anchor.is_empty(), "an empty oldText is rejected as input");
-    let mut found: Option<Range<usize>> = None;
-    let mut cursor = 0usize;
-    while let Some(offset) = original[cursor..].find(anchor) {
-        let start = cursor + offset;
-        if found.is_some() {
-            return AnchorTarget::Ambiguous;
+/// Counts non-overlapping occurrences, matching `split(oldText).len() - 1`.
+fn unique_match(content: &str, old_text: &str) -> MatchTarget {
+    debug_assert!(!old_text.is_empty());
+    let occurrences = content.split(old_text).count().saturating_sub(1);
+    match occurrences {
+        0 => MatchTarget::Missing,
+        1 => content
+            .find(old_text)
+            .map_or(MatchTarget::Missing, |start| {
+                MatchTarget::Unique(start..start + old_text.len())
+            }),
+        count => MatchTarget::Ambiguous(count),
+    }
+}
+
+fn not_found_error(path: &str, index: usize, total: usize) -> String {
+    if total == 1 {
+        "Could not find the exact text in".to_owned()
+            + &format!(
+                " {path}. The old text must match exactly including all whitespace and newlines."
+            )
+    } else {
+        format!(
+            "Could not find edits[{index}] in {path}. The oldText must match exactly including all whitespace and newlines."
+        )
+    }
+}
+
+fn ambiguous_error(path: &str, index: usize, total: usize, occurrences: usize) -> String {
+    if total == 1 {
+        format!(
+            "Found {occurrences} occurrences of the text in {path}. The text must be unique. Please provide more context to make it unique."
+        )
+    } else {
+        format!(
+            "Found {occurrences} occurrences of edits[{index}] in {path}. Each oldText must be unique. Please provide more context to make it unique."
+        )
+    }
+}
+
+fn no_change_error(path: &str, total: usize) -> String {
+    if total == 1 {
+        format!(
+            "No changes made to {path}. The replacement produced identical content. This might indicate an issue with special characters or the text not existing as expected."
+        )
+    } else {
+        format!("No changes made to {path}. The replacements produced identical content.")
+    }
+}
+
+fn apply_replacements(content: &str, replacements: &[PlannedEdit]) -> String {
+    let mut result = content.to_owned();
+    for replacement in replacements.iter().rev() {
+        result.replace_range(replacement.range.clone(), replacement.replacement.as_str());
+    }
+    result
+}
+
+#[derive(Clone, Copy)]
+struct LineSpan {
+    start: usize,
+    end: usize,
+}
+
+fn split_lines_with_endings(content: &str) -> Vec<&str> {
+    content
+        .match_indices('\n')
+        .scan(0, |start, (index, _)| {
+            let line = &content[*start..=index];
+            *start = index + 1;
+            Some(line)
+        })
+        .chain({
+            let end = content.len();
+            let last_start = content.rfind('\n').map_or(0, |index| index + 1);
+            (last_start < end).then(|| &content[last_start..end])
+        })
+        .collect()
+}
+
+fn line_spans(content: &str) -> Vec<LineSpan> {
+    let mut spans = Vec::new();
+    let mut start = 0;
+    for (index, _) in content.match_indices('\n') {
+        spans.push(LineSpan {
+            start,
+            end: index + 1,
+        });
+        start = index + 1;
+    }
+    if start < content.len() {
+        spans.push(LineSpan {
+            start,
+            end: content.len(),
+        });
+    }
+    spans
+}
+
+fn replacement_line_range(lines: &[LineSpan], replacement: &PlannedEdit) -> (usize, usize) {
+    let start = lines
+        .iter()
+        .position(|line| {
+            replacement.range.start >= line.start && replacement.range.start < line.end
+        })
+        .expect("planned replacement starts inside the base content");
+    let end_offset = replacement.range.end.saturating_sub(1);
+    let end = lines
+        .iter()
+        .position(|line| end_offset >= line.start && end_offset < line.end)
+        .expect("planned replacement ends inside the base content");
+    (start, end + 1)
+}
+
+fn apply_replacements_preserving_unchanged_lines(
+    original: &str,
+    base: &str,
+    replacements: &[PlannedEdit],
+) -> String {
+    let original_lines = split_lines_with_endings(original);
+    let base_spans = line_spans(base);
+    debug_assert_eq!(original_lines.len(), base_spans.len());
+    let mut groups: Vec<(usize, usize, Vec<&PlannedEdit>)> = Vec::new();
+    for replacement in replacements {
+        let (start, end) = replacement_line_range(&base_spans, replacement);
+        if let Some(group) = groups.last_mut()
+            && start < group.1
+        {
+            group.1 = group.1.max(end);
+            group.2.push(replacement);
+        } else {
+            groups.push((start, end, vec![replacement]));
         }
-        found = Some(start..start + anchor.len());
-        // Resume at the next character, not after the candidate, so an
-        // overlapping placement is still discovered.
-        cursor = start + next_char_bytes(original, start);
     }
-    found.map_or(AnchorTarget::Missing, AnchorTarget::Unique)
+
+    let mut result = String::new();
+    let mut original_line = 0;
+    for (start, end, group_replacements) in groups {
+        result.push_str(&original_lines[original_line..start].concat());
+        let group_start = base_spans[start].start;
+        let group_end = base_spans[end - 1].end;
+        let group = apply_replacements(
+            &base[group_start..group_end],
+            &group_replacements
+                .iter()
+                .map(|replacement| PlannedEdit {
+                    index: replacement.index,
+                    range: (replacement.range.start - group_start)
+                        ..(replacement.range.end - group_start),
+                    replacement: replacement.replacement.clone(),
+                })
+                .collect::<Vec<_>>(),
+        );
+        result.push_str(&group);
+        original_line = end;
+    }
+    result.push_str(&original_lines[original_line..].concat());
+    result
 }
 
-/// The byte length of the character starting at `at`, which is a character
-/// boundary of `text`. Returns `1` only at the end of the string, where the
-/// caller's scan is already finished.
-fn next_char_bytes(text: &str, at: usize) -> usize {
-    text[at..].chars().next().map_or(1, char::len_utf8)
+fn strip_bom(content: &str) -> (&str, &str) {
+    content
+        .strip_prefix('\u{FEFF}')
+        .map_or(("", content), |body| ("\u{FEFF}", body))
 }
 
-/// Builds the final snapshot from the original snapshot plus the validated,
-/// position-ordered, disjoint replacements.
-fn apply(original: &str, planned: &[PlannedEdit<'_>]) -> String {
-    let mut updated = String::with_capacity(original.len());
-    let mut cursor = 0usize;
-    for edit in planned {
-        updated.push_str(&original[cursor..edit.range.start]);
-        updated.push_str(edit.replacement);
-        cursor = edit.range.end;
+#[derive(Clone, Copy)]
+enum LineEnding {
+    Lf,
+    CrLf,
+    Cr,
+}
+
+fn detect_line_ending(content: &str) -> LineEnding {
+    let bytes = content.as_bytes();
+    for index in 0..bytes.len() {
+        match bytes[index] {
+            b'\n' if index > 0 && bytes[index - 1] == b'\r' => return LineEnding::CrLf,
+            b'\n' => return LineEnding::Lf,
+            b'\r' if bytes.get(index + 1) != Some(&b'\n') => return LineEnding::Cr,
+            _ => {}
+        }
     }
-    updated.push_str(&original[cursor..]);
-    updated
+    LineEnding::Lf
+}
+
+fn normalize_to_lf(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+fn restore_line_endings(text: &str, ending: LineEnding) -> String {
+    match ending {
+        LineEnding::Lf => text.to_owned(),
+        LineEnding::CrLf => text.replace('\n', "\r\n"),
+        LineEnding::Cr => text.replace('\n', "\r"),
+    }
+}
+
+fn normalize_for_fuzzy_match(text: &str) -> String {
+    let nfkc: String = text.nfkc().collect();
+    nfkc.split('\n')
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .chars()
+        .map(|character| match character {
+            '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}' => '\'',
+            '\u{201C}' | '\u{201D}' | '\u{201E}' | '\u{201F}' => '"',
+            '\u{2010}'..='\u{2015}' | '\u{2212}' => '-',
+            '\u{00A0}' | '\u{2002}'..='\u{200A}' | '\u{202F}' | '\u{205F}' | '\u{3000}' => ' ',
+            other => other,
+        })
+        .collect()
 }

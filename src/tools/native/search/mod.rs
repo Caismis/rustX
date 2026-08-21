@@ -18,7 +18,7 @@
 //!
 //! # The one filesystem-universe policy
 //!
-//! Given the same workspace and the same search root, Glob and Grep observe
+//! Given the same execution cwd and the same search root, Glob and Grep observe
 //! exactly the same set of files. A caller-supplied filter (Glob's pattern,
 //! Grep's optional `glob`) only ever *narrows* that shared set; it can never
 //! widen it, and neither tool can reach a file the other cannot see.
@@ -26,26 +26,24 @@
 //! The policy is stated here, once, and is deliberately explicit rather than
 //! inherited:
 //!
-//! - **Containment.** The search root is resolved through the canonical
-//!   locator authority ([`crate::tools::locator`]): an omitted `path` means
-//!   the workspace root; a supplied path is an absolute locator contained
-//!   in the workspace root or the read-only managed tool-output root.
-//!   Enumeration never leaves the resolved root.
+//! - **Root resolution.** An omitted `path` means the execution cwd; a
+//!   relative path is joined to that cwd and an absolute path is used as a
+//!   host filesystem path. Enumeration never leaves the resolved root.
 //! - **Ignore files are not applied.** `.gitignore`, `.ignore`, git's global
-//!   excludes, and `.git/info/exclude` have no effect. A workspace file is
-//!   part of the search universe because it exists, not because a version
-//!   control system happens to track it. Every ignore mechanism of the
-//!   underlying crate is switched off explicitly, so a future default change
-//!   in that crate cannot silently redefine rustX semantics.
+//!   excludes, and `.git/info/exclude` have no effect. A file under the
+//!   resolved root is part of the search universe because it exists, not
+//!   because a version control system happens to track it. Every ignore
+//!   mechanism of the underlying crate is switched off explicitly, so a
+//!   future default change in that crate cannot silently redefine rustX
+//!   semantics.
 //! - **Hidden files are visible.** A leading dot has no meaning here.
 //! - **Symlinks are never followed.** Neither a directory symlink (which
-//!   would recurse, possibly outside the workspace or into a cycle) nor a
-//!   file symlink (whose target may live outside the workspace) is part of
+//!   would recurse, possibly outside the resolved root or into a cycle) nor a
+//!   file symlink (whose target may live outside the resolved root) is part of
 //!   the universe. Only regular files are enumerated.
 //! - **Normalized relative paths.** Every enumerated file is identified by
 //!   its forward-slash path relative to the *search root*, never by an
-//!   absolute path. A single-file root (one managed spill file searched
-//!   directly) is identified by its file name.
+//!   absolute path. A single-file root is identified by its file name.
 //! - **Deterministic enumeration.** Files are returned in lexical order of
 //!   that normalized relative path, so physical filesystem enumeration order
 //!   can never become observable result order.
@@ -61,45 +59,35 @@ mod traversal;
 
 use std::path::PathBuf;
 
-use crate::tools::locator::{LocatorOperation, resolve};
-use crate::tools::managed_output::ManagedToolOutput;
-use crate::tools::workspace::Workspace;
+use crate::tools::native::support::resolve_path;
+use std::path::Path;
 
 pub(super) use traversal::SearchFile;
 
-/// One resolved search root: the canonical directory (or single file) whose
-/// file universe Glob and Grep observe identically.
+/// One resolved search root: the directory (or single file) whose file
+/// universe Glob and Grep observe identically.
 pub(super) enum SearchRoot {
-    /// A canonical directory the traversal starts from.
+    /// A directory the traversal starts from.
     Directory(PathBuf),
-    /// One canonical file (for example a single managed spill file): the
-    /// universe is exactly that file.
+    /// One file: the universe is exactly that file.
     File(PathBuf),
 }
 
 impl SearchRoot {
-    /// Resolves the model-supplied search root through the one locator
-    /// authority; an omitted `path` means the workspace root.
+    /// Resolves the model-supplied search root against the execution cwd.
     ///
-    /// A supplied path must be an absolute locator contained in the
-    /// workspace root or the read-only managed tool-output root. It may
-    /// name a directory (searched recursively) or — for Grep — a single
-    /// file, so a model can search one managed spill file directly.
+    /// A supplied path may name a directory (searched recursively) or — for
+    /// Grep — a single file.
     ///
     /// # Errors
     ///
-    /// Returns the deterministic locator rejection message when the path is
-    /// not absolute, escapes every authorized root, or cannot be resolved.
-    pub(super) fn resolve(
-        workspace: &Workspace,
-        tool_output: &ManagedToolOutput,
-        path: Option<&str>,
-    ) -> Result<Self, String> {
+    /// Returns a deterministic filesystem diagnostic when the path cannot be
+    /// resolved or is neither a file nor a directory.
+    pub(super) fn resolve(cwd: &Path, path: Option<&str>) -> Result<Self, String> {
         let Some(requested) = path else {
-            return Ok(Self::Directory(workspace.root().to_path_buf()));
+            return Ok(Self::Directory(cwd.to_path_buf()));
         };
-        let absolute = resolve(workspace, tool_output, requested, LocatorOperation::Read)
-            .map_err(|error| error.to_string())?;
+        let absolute = resolve_path(cwd, requested);
         if absolute.is_dir() {
             return Ok(Self::Directory(absolute));
         }

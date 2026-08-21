@@ -19,16 +19,19 @@
 //! # Storage disjointness
 //!
 //! The artifact store and the model workspace must be disjoint filesystem
-//! regions: runtime-private output files must never be observable through
-//! Glob/Grep/Bash. Construction canonicalizes both roots and rejects an
-//! artifact root that equals the workspace root, nests inside it, or
-//! contains it (including symlink-resolved overlap).
+//! regions: runtime-private output files are not included by default
+//! cwd-relative Glob/Grep traversal or published as native file-tool paths.
+//! Native tools intentionally accept an absolute host path when a caller
+//! already knows it, so this disjointness is storage ownership rather than a
+//! second containment policy. Construction canonicalizes both roots and
+//! rejects an artifact root that equals the workspace root, nests inside it,
+//! or contains it (including symlink-resolved overlap).
 //!
 //! The managed tool-output root lives in a dedicated `tool-output/`
 //! directory below the runtime-private artifact root. Only that directory —
 //! never its enclosing runtime-private parent, which also holds the durable
 //! conversation database and semantic artifact internals — is authorized
-//! for the model-facing read-only filesystem operations.
+//! for runtime-managed read-only continuation operations.
 //!
 //! Root composition is validated here, where the runtime composes those
 //! resources: the canonical managed-output root must be a strict dedicated

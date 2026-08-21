@@ -613,7 +613,7 @@ async fn bash_large_output_spills_to_managed_output() {
         &fixture,
         "read",
         serde_json::json!({
-            "file_path": full_output,
+            "path": full_output,
             "offset": marker_line,
             "limit": 1,
         }),
@@ -628,7 +628,10 @@ async fn bash_large_output_spills_to_managed_output() {
             _ => None,
         })
         .expect("text content");
-    assert_eq!(read_text, "spill-boundary-marker");
+    assert_eq!(
+        read_text,
+        "spill-boundary-marker\n\n[1501 more lines in file. Use offset=1502 to continue.]"
+    );
 
     // Ordinary native Grep searches the single spill file and the managed
     // root directory.
@@ -639,14 +642,15 @@ async fn bash_large_output_spills_to_managed_output() {
     )
     .await;
     assert_eq!(grep_file.status, ToolExecutionStatus::Success);
-    assert!(
-        json_content(&grep_file)["matches"]
-            .as_array()
-            .expect("matches")
-            .len()
-            == 1,
-        "Grep finds the spilled text in the single file"
-    );
+    let grep_file_text = grep_file
+        .content
+        .iter()
+        .find_map(|block| match block {
+            ToolResultContent::Text(text) => Some(text.text.clone()),
+            _ => None,
+        })
+        .expect("Grep text");
+    assert!(grep_file_text.contains(": spill-boundary-marker"));
     let grep_root = run_tool(
         &fixture,
         "grep",
@@ -657,39 +661,15 @@ async fn bash_large_output_spills_to_managed_output() {
     )
     .await;
     assert_eq!(grep_root.status, ToolExecutionStatus::Success);
-    assert_eq!(
-        json_content(&grep_root)["matches"]
-            .as_array()
-            .expect("matches")
-            .len(),
-        1,
-        "Grep finds the spilled text through the managed root"
-    );
-
-    // The managed root is read-only: Write and Edit reject it.
-    let write = run_tool(
-        &fixture,
-        "write",
-        serde_json::json!({"file_path": full_output, "content": "x"}),
-    )
-    .await;
-    assert!(
-        matches!(write.status, ToolExecutionStatus::Failed { .. }),
-        "Write must reject the managed tool-output root"
-    );
-    let edit = run_tool(
-        &fixture,
-        "edit",
-        serde_json::json!({
-            "file_path": full_output,
-            "edits": [{"oldText": "marker", "newText": "x"}],
-        }),
-    )
-    .await;
-    assert!(
-        matches!(edit.status, ToolExecutionStatus::Failed { .. }),
-        "Edit must reject the managed tool-output root"
-    );
+    let grep_root_text = grep_root
+        .content
+        .iter()
+        .find_map(|block| match block {
+            ToolResultContent::Text(text) => Some(text.text.clone()),
+            _ => None,
+        })
+        .expect("Grep text");
+    assert!(grep_root_text.contains(": spill-boundary-marker"));
 }
 
 /// Every advertised Read/Grep path holds valid UTF-8 text (Issue #86):
@@ -731,12 +711,7 @@ async fn bash_non_utf8_output_spills_as_deterministic_text() {
     );
 
     // The advertised path is genuinely inspectable: Read and Grep succeed.
-    let read = run_tool(
-        &fixture,
-        "read",
-        serde_json::json!({"file_path": full_output}),
-    )
-    .await;
+    let read = run_tool(&fixture, "read", serde_json::json!({"path": full_output})).await;
     assert_eq!(
         read.status,
         ToolExecutionStatus::Success,
@@ -753,13 +728,15 @@ async fn bash_non_utf8_output_spills_as_deterministic_text() {
         ToolExecutionStatus::Success,
         "Grep searches the decoded-text spill"
     );
-    assert_eq!(
-        json_content(&grep)["matches"]
-            .as_array()
-            .expect("matches")
-            .len(),
-        1
-    );
+    let grep_text = grep
+        .content
+        .iter()
+        .find_map(|block| match block {
+            ToolResultContent::Text(text) => Some(text.text.clone()),
+            _ => None,
+        })
+        .expect("Grep text");
+    assert!(grep_text.contains("... [truncated]"));
 }
 
 /// A shell parent that exits while a descendant stays in the owned process

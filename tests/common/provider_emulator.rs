@@ -60,10 +60,10 @@ impl ProviderEmulator {
         Self::start_with_workspace(scenario, None).await
     }
 
-    /// Starts the scenario with the absolute workspace root of the runtime
-    /// under test, substituting the `{workspace}` placeholder of scripted
-    /// tool-call arguments (rustX native filesystem tools require absolute
-    /// locators, Issue #86).
+    /// Starts the scenario with the workspace root of the runtime under test,
+    /// substituting the `{workspace}` placeholder of scripted tool-call
+    /// arguments. Scenarios may use it to exercise absolute paths while the
+    /// native file tools also accept cwd-relative paths.
     pub async fn start_with_workspace(
         scenario: &str,
         workspace: Option<&std::path::Path>,

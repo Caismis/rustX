@@ -405,7 +405,7 @@ const bashRenderer: ToolPresentationRenderer = {
 const readRenderer: ToolPresentationRenderer = {
   renderCall(args) {
     const fields = record(args);
-    const path = text(fields?.["file_path"]);
+    const path = text(fields?.["path"]);
     if (path === undefined) {
       return undefined;
     }
@@ -471,24 +471,11 @@ const grepRenderer: ToolPresentationRenderer = {
     };
   },
   renderResult(result, _args) {
-    const payload = record(resultJson(result));
-    const matches = payload?.["matches"];
-    if (!Array.isArray(matches)) {
+    const body = resultText(result);
+    if (body.length === 0) {
       return undefined;
     }
-    const summary = role.meta(
-      `${matches.length} ${matches.length === 1 ? "match" : "matches"}`,
-    );
-    const rows = matches.map((match) => {
-      const entry = record(match);
-      const path = text(entry?.["path"]) ?? "";
-      const line = count(entry?.["line"]);
-      const body = text(entry?.["text"]) ?? "";
-      return `${role.accent(path)}${line === undefined ? "" : role.chrome(`:${line}`)} ${body.trim()}`;
-    });
-    // The count is a runtime-published fact and stays visible when collapsed;
-    // the rows are the detail the shell bounds.
-    return { summary: [summary], detail: rows };
+    return { detail: body };
   },
 };
 
@@ -507,25 +494,18 @@ const globRenderer: ToolPresentationRenderer = {
     };
   },
   renderResult(result, _args) {
-    const payload = record(resultJson(result));
-    const results = payload?.["results"];
-    if (!Array.isArray(results)) {
+    const body = resultText(result);
+    if (body.length === 0) {
       return undefined;
     }
-    const summary = role.meta(
-      `${results.length} ${results.length === 1 ? "path" : "paths"}`,
-    );
-    return {
-      summary: [summary],
-      detail: results.map((entry) => text(entry) ?? String(entry)),
-    };
+    return { detail: body };
   },
 };
 
 const editRenderer: ToolPresentationRenderer = {
   renderCall(args) {
     const fields = record(args);
-    const path = text(fields?.["file_path"]);
+    const path = text(fields?.["path"]);
     const edits = fields?.["edits"];
     if (path === undefined || !Array.isArray(edits)) {
       return undefined;
@@ -553,25 +533,18 @@ const editRenderer: ToolPresentationRenderer = {
     return { title: "Edit", subject: path, detail };
   },
   renderResult(result, _args) {
-    const payload = record(resultJson(result));
-    const replacements = count(payload?.["replacements"]);
-    if (replacements === undefined) {
+    const body = resultText(result);
+    if (body.length === 0) {
       return undefined;
     }
-    return {
-      summary: [
-        role.meta(
-          `applied ${replacements} ${replacements === 1 ? "replacement" : "replacements"}`,
-        ),
-      ],
-    };
+    return { detail: body };
   },
 };
 
 const writeRenderer: ToolPresentationRenderer = {
   renderCall(args) {
     const fields = record(args);
-    const path = text(fields?.["file_path"]);
+    const path = text(fields?.["path"]);
     const content = text(fields?.["content"]);
     if (path === undefined || content === undefined) {
       return undefined;
@@ -586,17 +559,11 @@ const writeRenderer: ToolPresentationRenderer = {
     };
   },
   renderResult(result, _args) {
-    const payload = record(resultJson(result));
-    const bytes = count(payload?.["bytes_written"]);
-    const path = text(payload?.["path"]);
-    if (bytes === undefined) {
+    const body = resultText(result);
+    if (body.length === 0) {
       return undefined;
     }
-    return {
-      summary: [
-        role.meta(`wrote ${bytes} bytes${path === undefined ? "" : ` to ${path}`}`),
-      ],
-    };
+    return { detail: body };
   },
 };
 

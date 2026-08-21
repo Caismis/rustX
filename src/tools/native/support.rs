@@ -4,30 +4,17 @@ use std::path::{Path, PathBuf};
 
 use crate::tools::types::{ToolExecutionResult, ToolExecutionStatus, ToolResultContent};
 
-/// The exact serialized byte length of one model-facing JSON value.
-///
-/// The bounded search tools budget their payload against the bytes the model
-/// actually receives, so the only trustworthy measure is the serialization
-/// itself: JSON string escaping (`"`, `\`, control characters), field names,
-/// array and object punctuation, and numeric widths all change the size and
-/// none of them are recoverable from a string's own length.
-///
-/// A value that cannot be serialized is reported as [`usize::MAX`], so a
-/// caller budgeting against a cap always rejects it rather than admitting an
-/// unmeasured item. Native tools only ever build serializable values.
+/// Resolves one model-facing file path against the authoritative execution
+/// directory. Absolute paths remain host filesystem paths; relative paths are
+/// interpreted from `cwd` without applying a containment policy.
 #[must_use]
-pub fn json_bytes(value: &serde_json::Value) -> usize {
-    serde_json::to_vec(value).map_or(usize::MAX, |bytes| bytes.len())
-}
-
-/// The byte cost of appending one already-measured element to a JSON array
-/// that currently holds `present` elements.
-///
-/// The array's own brackets belong to the enclosing envelope; each element
-/// after the first additionally pays for its separating comma.
-#[must_use]
-pub fn json_array_element_cost(element_bytes: usize, present: usize) -> usize {
-    element_bytes.saturating_add(usize::from(present > 0))
+pub fn resolve_path(cwd: &Path, requested: &str) -> PathBuf {
+    let path = Path::new(requested);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    }
 }
 
 /// The one file-mutation commit of the native tool plane.
@@ -39,25 +26,59 @@ pub fn json_array_element_cost(element_bytes: usize, present: usize) -> usize {
 /// therefore observes either the previous file or the complete new one, and
 /// a failed commit leaves no temporary file behind.
 ///
-/// # Errors
-///
-/// Returns an explicit diagnostic when the target has no parent directory,
-/// when the temporary file cannot be created or written, or when the rename
-/// fails.
+/// When the final path component is a symlink, the commit target is the
+/// symlink's destination rather than the link itself. This preserves ordinary
+/// write-through filesystem semantics while retaining atomic replacement of
+/// the destination file.
 pub fn atomic_commit(target: &Path, content: &[u8]) -> Result<(), String> {
-    let parent = target
+    let commit_target = follow_final_symlink(target)?;
+    let parent = commit_target
         .parent()
-        .ok_or_else(|| format!("{} has no parent directory", target.display()))?;
+        .ok_or_else(|| format!("{} has no parent directory", commit_target.display()))?;
     let temp = create_temp_in(parent)?;
     if let Err(error) = std::fs::write(&temp, content) {
         let _ = std::fs::remove_file(&temp);
         return Err(format!("cannot write {}: {error}", temp.display()));
     }
-    if let Err(error) = std::fs::rename(&temp, target) {
+    if let Err(error) = std::fs::rename(&temp, &commit_target) {
         let _ = std::fs::remove_file(&temp);
-        return Err(format!("cannot persist {}: {error}", target.display()));
+        return Err(format!(
+            "cannot persist {}: {error}",
+            commit_target.display()
+        ));
     }
     Ok(())
+}
+
+/// Resolves an existing final-component symlink without changing the path
+/// when the target is an ordinary file or a not-yet-created file.
+fn follow_final_symlink(target: &Path) -> Result<PathBuf, String> {
+    let metadata = match std::fs::symlink_metadata(target) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(target.to_path_buf());
+        }
+        Err(error) => return Err(format!("cannot inspect {}: {error}", target.display())),
+    };
+    if !metadata.file_type().is_symlink() {
+        return Ok(target.to_path_buf());
+    }
+    let link = std::fs::read_link(target)
+        .map_err(|error| format!("cannot resolve {}: {error}", target.display()))?;
+    let destination = if link.is_absolute() {
+        link
+    } else {
+        target
+            .parent()
+            .ok_or_else(|| format!("{} has no parent directory", target.display()))?
+            .join(link)
+    };
+    if destination.exists() {
+        std::fs::canonicalize(&destination)
+            .map_err(|error| format!("cannot resolve {}: {error}", target.display()))
+    } else {
+        Ok(destination)
+    }
 }
 
 /// Creates a unique temporary file inside `parent` for the atomic commit.
@@ -100,7 +121,8 @@ pub fn failed_result(error: impl Into<String>) -> ToolExecutionResult {
     }
 }
 
-/// A normalized successful structured result.
+/// A normalized successful structured result used by tools whose contract is
+/// intentionally JSON (for example the subagent intrinsic).
 #[must_use]
 pub fn success_json(value: serde_json::Value) -> ToolExecutionResult {
     ToolExecutionResult {
@@ -114,20 +136,20 @@ pub fn success_json(value: serde_json::Value) -> ToolExecutionResult {
     }
 }
 
-/// A normalized successful structured result with truncation metadata and
-/// artifact references.
+/// A normalized successful plain-text result.
 #[must_use]
-pub fn success_json_with(
-    value: serde_json::Value,
+pub fn success_text(
+    text: impl Into<String>,
     truncation: Option<crate::tools::types::TruncationState>,
-    artifacts: Vec<crate::message::content::FileReference>,
 ) -> ToolExecutionResult {
     ToolExecutionResult {
         status: ToolExecutionStatus::Success,
-        content: vec![ToolResultContent::Json { value }],
+        content: vec![ToolResultContent::Text(
+            crate::message::content::TextBlock { text: text.into() },
+        )],
         duration_ms: 0,
         exit_code: None,
-        artifacts,
+        artifacts: Vec::new(),
         truncation,
         managed_output: None,
     }
