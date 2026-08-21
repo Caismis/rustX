@@ -230,7 +230,7 @@ describe("progressive disclosure bounds call details too", () => {
       toolId: "tool-edit",
       name: "edit",
       argumentsText: JSON.stringify({
-        file_path: "/workspace/src/lib.rs",
+        path: "/workspace/src/lib.rs",
         edits: [{ oldText, newText }],
       }),
       lifecycle: { type: "assembled" as const },
@@ -356,7 +356,7 @@ describe("progressive disclosure bounds call details too", () => {
       toolId: "tool-write",
       name: "write",
       argumentsText: JSON.stringify({
-        file_path: `a.rs\n${"b\n".repeat(50)}`,
+        path: `a.rs\n${"b\n".repeat(50)}`,
         content: "x",
       }),
     });
@@ -508,7 +508,7 @@ describe("specialized native renderers", () => {
         toolId: "tool-read",
         name: "read",
         argumentsText:
-          '{"file_path":"/workspace/src/runtime/agent_loop.rs","offset":120,"limit":121}',
+          '{"path":"/workspace/src/runtime/agent_loop.rs","offset":120,"limit":121}',
       }),
       /Read[\s\S]*src\/runtime\/agent_loop\.rs[\s\S]*lines 120–240/,
     );
@@ -516,7 +516,7 @@ describe("specialized native renderers", () => {
       card({
         toolId: "tool-read",
         name: "read",
-        argumentsText: '{"file_path":"/workspace/a.rs","offset":10}',
+        argumentsText: '{"path":"/workspace/a.rs","offset":10}',
       }),
       /from line 10/,
     );
@@ -525,7 +525,7 @@ describe("specialized native renderers", () => {
     const bare = card({
       toolId: "tool-read",
       name: "read",
-      argumentsText: '{"file_path":"/workspace/a.rs"}',
+      argumentsText: '{"path":"/workspace/a.rs"}',
     });
     assert.ok(!/lines |from line |first /.test(bare));
   });
@@ -537,26 +537,13 @@ describe("specialized native renderers", () => {
       argumentsText:
         '{"pattern":"AttemptSettled","path":"src/runtime","literal":true}',
       lifecycle: settled({
-        content: [
-          {
-            type: "json",
-            value: {
-              matches: [
-                { path: "src/runtime/a.rs", line: 12, column: 4, text: "  AttemptSettled," },
-                { path: "src/runtime/b.rs", line: 40, column: 1, text: "AttemptSettled {" },
-              ],
-              context: [],
-              truncated: false,
-            },
-          },
-        ],
+        content: [{ type: "text", text: "src/runtime/a.rs:12:   AttemptSettled,\nsrc/runtime/b.rs:40: AttemptSettled {" }],
       }),
     });
     assert.match(rendered, /Grep/);
     assert.match(rendered, /"AttemptSettled"/);
     assert.match(rendered, /src\/runtime · literal/);
-    assert.match(rendered, /2 matches/);
-    assert.match(rendered, /src\/runtime\/a\.rs:12 AttemptSettled,/);
+    assert.match(rendered, /src\/runtime\/a\.rs:12:.*AttemptSettled,/);
   });
 
   it("renders Glob as a pattern and a path count", () => {
@@ -565,13 +552,10 @@ describe("specialized native renderers", () => {
       name: "glob",
       argumentsText: '{"pattern":"**/*.rs"}',
       lifecycle: settled({
-        content: [
-          { type: "json", value: { results: ["a.rs", "b.rs", "c.rs"], truncated: false } },
-        ],
+        content: [{ type: "text", text: "a.rs\nb.rs\nc.rs" }],
       }),
     });
     assert.match(rendered, /Glob/);
-    assert.match(rendered, /3 paths/);
     assert.match(rendered, /b\.rs/);
   });
 
@@ -580,35 +564,35 @@ describe("specialized native renderers", () => {
       toolId: "tool-edit",
       name: "edit",
       argumentsText: JSON.stringify({
-        file_path: "/workspace/src/lib.rs",
+        path: "/workspace/src/lib.rs",
         edits: [{ oldText: "let x = 1;", newText: "let x = 2;" }],
       }),
       lifecycle: settled({
-        content: [{ type: "json", value: { path: "src/lib.rs", replacements: 1 } }],
+        content: [{ type: "text", text: "Successfully replaced 1 block(s) in /workspace/src/lib.rs." }],
       }),
     });
     assert.match(rendered, /Edit/);
     assert.match(rendered, /src\/lib\.rs/);
     assert.match(rendered, /^\s*- let x = 1;$/m);
     assert.match(rendered, /^\s*\+ let x = 2;$/m);
-    assert.match(rendered, /applied 1 replacement/);
+    assert.match(rendered, /Successfully replaced 1 block/);
   });
 
   it("renders Write as a path plus the runtime's own byte count", () => {
     const rendered = card({
       toolId: "tool-write",
       name: "write",
-      argumentsText: JSON.stringify({ file_path: "/workspace/notes.md", content: "a\nb\nc" }),
+      argumentsText: JSON.stringify({ path: "/workspace/notes.md", content: "a\nb\nc" }),
       lifecycle: settled({
         content: [
-          { type: "json", value: { path: "notes.md", bytes_written: 5 } },
+          { type: "text", text: "Successfully wrote 5 bytes to /workspace/notes.md" },
         ],
       }),
     });
     assert.match(rendered, /Write/);
     assert.match(rendered, /\/workspace\/notes\.md/);
     assert.match(rendered, /3 lines/);
-    assert.match(rendered, /wrote 5 bytes to notes\.md/);
+    assert.match(rendered, /Successfully wrote 5 bytes/);
   });
 
   it("degrades to the generic presentation on an unexpected argument shape", () => {
@@ -619,8 +603,8 @@ describe("specialized native renderers", () => {
       ["tool-read", "read", '{"file":"a.rs"}'],
       ["tool-grep", "grep", '{"regex":"x"}'],
       ["tool-glob", "glob", "[1,2,3]"],
-      ["tool-edit", "edit", '{"file_path":"/workspace/a.rs","edits":"not-a-list"}'],
-      ["tool-write", "write", '{"file_path":"/workspace/a.rs"}'],
+      ["tool-edit", "edit", '{"path":"/workspace/a.rs","edits":"not-a-list"}'],
+      ["tool-write", "write", '{"path":"/workspace/a.rs"}'],
     ] as const;
     for (const [toolId, name, argumentsText] of shapes) {
       const rendered = card({ toolId, name, argumentsText });
@@ -711,7 +695,7 @@ describe("boundedness in both dimensions", () => {
       toolId: "tool-edit",
       name: "edit",
       argumentsText: JSON.stringify({
-        file_path: "/workspace/src/lib.rs",
+        path: "/workspace/src/lib.rs",
         edits: [{ oldText: payload, newText: payload }],
       }),
     });
@@ -744,7 +728,7 @@ describe("boundedness in both dimensions", () => {
     assertBounded("Read", (payload) => ({
       toolId: "tool-read",
       name: "read",
-      argumentsText: JSON.stringify({ file_path: payload }),
+      argumentsText: JSON.stringify({ path: payload }),
     }));
   });
 
@@ -752,7 +736,7 @@ describe("boundedness in both dimensions", () => {
     assertBounded("Write", (payload) => ({
       toolId: "tool-write",
       name: "write",
-      argumentsText: JSON.stringify({ file_path: payload, content: "hi" }),
+      argumentsText: JSON.stringify({ path: payload, content: "hi" }),
     }));
   });
 
@@ -797,16 +781,15 @@ describe("boundedness in both dimensions", () => {
   });
 
   it("bounds a runtime-published summary, so summary is not an escape hatch", () => {
-    // `Write` builds its always-visible summary from the *result's* published
-    // path. A renderer that puts arbitrary runtime text in `summary` cannot
-    // make a collapsed card unbounded, because the shell bounds that band too.
+    // A native Write result is plain model-facing text. The card still bounds
+    // the published result body when the path is enormous.
     const build = (payload: string) => ({
       toolId: "tool-write",
       name: "write",
-      argumentsText: JSON.stringify({ file_path: "/workspace/out.txt", content: "hi" }),
+      argumentsText: JSON.stringify({ path: "/workspace/out.txt", content: "hi" }),
       lifecycle: settled({
         content: [
-          { type: "json" as const, value: { bytes_written: 4, path: payload } },
+          { type: "text" as const, text: `Successfully wrote 4 bytes to ${payload}` },
         ],
       }),
     });

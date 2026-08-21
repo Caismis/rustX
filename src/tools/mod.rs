@@ -3,11 +3,13 @@
 //! The tool plane owns the canonical [`ToolDefinition`] contract, the
 //! validating [`ToolRegistry`], the [`ToolExecutor`] boundary, the JSON
 //! Schema validation and the model-facing schema compiler, the workspace
-//! boundary, the absolute-locator filesystem authority, the managed
-//! tool-output store, the artifact store, the explicit tool environment, and
-//! the conversation-owned background registry. Native, MCP, and Python executor
-//! implementations share exactly this contract; M5 implements the native
-//! tools.
+//! boundary, the managed tool-output store, the artifact store, the explicit
+//! tool environment, and the conversation-owned background registry. Native,
+//! MCP, and Python executor implementations share exactly this contract.
+//! Native Read/Write/Edit/Grep/Glob use the workspace root as their cwd and
+//! accept ordinary absolute host paths. The locator remains the runtime's
+//! read-only resolver for advertised managed-output paths; `ManagedToolOutput`
+//! owns the separate model-mutation guard.
 
 pub mod artifacts;
 pub mod background;
@@ -36,7 +38,7 @@ pub use executor::{
     BACKGROUND_TASK_TOOL_NAME, PreflightOutcome, PreparedInvocation, ProgressReporter,
     ToolExecutionContext, ToolExecutor, ToolPreflightError, ToolRegistry, ToolRegistryError,
 };
-pub use locator::{LocatorError, LocatorOperation};
+pub use locator::LocatorError;
 pub use managed_output::{BackgroundOutput, ManagedOutputError, ManagedToolOutput, ResultSpill};
 pub use runtime::ConversationToolRuntime;
 pub use schema::{

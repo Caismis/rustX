@@ -2,12 +2,13 @@
 //!
 //! One conversation runtime owns one workspace root. The root is
 //! canonicalized once at construction and must be a directory. The
-//! workspace owns only the root identity: model-facing tools supply
-//! **absolute** locators, and the resolution/authorization decision —
-//! containment, symlink canonicalization, and per-operation mutability —
-//! lives in the one locator boundary ([`crate::tools::locator`]). This is a
-//! correctness boundary, not a hostile multi-user security sandbox; TOCTOU
-//! hardening is deliberately outside M5.
+//! workspace owns the authoritative execution cwd used by native file tools
+//! and Bash. Native Read/Write/Edit/Grep/Glob resolve relative model paths
+//! against this root and accept absolute host paths; runtime-owned managed
+//! output remains owned by [`crate::tools::managed_output`] and runtime read
+//! locators remain in [`crate::tools::locator`]. This is a correctness
+//! boundary, not a hostile
+//! multi-user security sandbox; TOCTOU hardening is deliberately outside M5.
 
 use std::path::{Path, PathBuf};
 

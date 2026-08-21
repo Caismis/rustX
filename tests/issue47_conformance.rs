@@ -474,8 +474,8 @@ fn model_id(reference: &str) -> &str {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_tool_call_runs_the_real_tool_and_continues() {
     // The workspace exists before the emulator starts: the scripted tool
-    // call carries the absolute locator of the note (Issue #86), so the
-    // emulator substitutes the concrete root at scenario build time.
+    // call carries the fixture's absolute path so the emulator can substitute
+    // the concrete root at scenario build time.
     let root = tempfile::tempdir().expect("temp root");
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
@@ -533,8 +533,8 @@ async fn a_real_skill_reaches_the_provider_and_is_read_by_the_real_tool() {
     // The Skill must exist before composition: the capability candidate is
     // prepared and committed during `compose`. The workspace also exists
     // before the emulator starts: the scripted Read call carries the
-    // absolute locator of the SKILL.md (Issue #86), substituted by the
-    // emulator at scenario build time.
+    // fixture's absolute SKILL.md path, substituted by the emulator at
+    // scenario build time.
     let root = tempfile::tempdir().expect("temp root");
     let workspace = root.path().join("workspace");
     let package = workspace.join(".agents/skills").join(SKILL_NAME);

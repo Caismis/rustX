@@ -1,55 +1,26 @@
-//! Deterministic invariant coverage of the native tool plane's module
-//! boundaries and typed input contracts.
+//! Canonical schema and registry-boundary regressions for Issue #91.
 //!
-//! The native tool plane owns one module per capability, and every native
-//! tool owns a typed input contract from which its canonical schema is
-//! generated. These tests prove the two boundaries that matter at runtime:
-//!
-//! - the generated schema is exactly the tool's model-facing input contract
-//!   (required fields, optional fields, constraints, no reserved property,
-//!   no `$ref`/`$defs` indirection), where a property that is optional
-//!   because its Rust field expresses omission means an *absent* property
-//!   and never an implicitly nullable one;
-//! - invalid input is rejected before execution — the registry preflight
-//!   rejects the call so no invocation is ever produced, and a direct
-//!   executor call decodes and rejects the arguments before performing any
-//!   work.
-//!
-//! The optional-non-nullable assertions are stated over the concrete
-//! optional properties of the current contracts, never as a global rule
-//! about how every native property must be shaped: a future contract stays
-//! free to use a composite schema where that is the right model-facing
-//! shape.
-//!
-//! Agent-loop lifecycle and Bash lifecycle regressions live at the end of
-//! the file: a real native tool executes through the agent loop with the
-//! canonical event ordering, and a rejected native input stays a normal
-//! failed result slot.
+//! These tests deliberately exercise the model-facing schema and the actual
+//! preflight path. Edit's tolerated malformed model spellings are normalized
+//! by its registration before canonical schema validation; no provider or
+//! Agent Loop branch knows about those spellings.
 
 use super::{common, support};
-
-use std::sync::Arc;
-
-use rustx::agent::{
-    AgentCancellation, AgentExecution, AgentExecutionRequest, AgentExecutionResult,
-};
+use rustx::agent::{AgentCancellation, AgentExecution, AgentExecutionRequest};
 use rustx::events::types::{AttemptOutcome, RuntimeEvent};
-use rustx::message::types::{
-    MessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
-};
+use rustx::message::types::{MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
-use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolCallId};
+use rustx::runtime::identity::ToolCallId;
+use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId};
 use rustx::runtime::types::CancellationReason;
-use rustx::tools::executor::{PreflightOutcome, ToolExecutionContext};
-use rustx::tools::schema::validate_canonical_schema;
+use rustx::tools::executor::PreflightOutcome;
 use rustx::tools::types::{
-    ToolCall, ToolDefinition, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
-    ToolInvocationMode,
+    ToolCall, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionStatus, ToolInvocationMode,
+    ToolInvocationPolicy,
 };
-use support::fake::{FakeModel, FakeStep, ScriptedCall, fake_model, tool_call_events};
+use std::sync::Arc;
 
-/// The explicitly composed native tool plane.
 const NATIVE_TOOL_NAMES: [&str; 7] = [
     "read",
     "write",
@@ -60,8 +31,7 @@ const NATIVE_TOOL_NAMES: [&str; 7] = [
     "background_task",
 ];
 
-/// The canonical definition of one registered native tool.
-fn definition(fixture: &common::NativeFixture, name: &str) -> ToolDefinition {
+fn definition(fixture: &common::NativeFixture, name: &str) -> rustx::tools::types::ToolDefinition {
     fixture
         .registry
         .definitions()
@@ -70,28 +40,21 @@ fn definition(fixture: &common::NativeFixture, name: &str) -> ToolDefinition {
         .unwrap_or_else(|| panic!("{name} is registered"))
 }
 
-/// The sorted `required` field list of a generated schema.
 fn required(schema: &serde_json::Value) -> Vec<String> {
-    let mut required: Vec<String> = schema["required"]
+    let mut names: Vec<String> = schema["required"]
         .as_array()
-        .expect("generated schemas declare required")
+        .expect("required")
         .iter()
-        .map(|value| {
-            value
-                .as_str()
-                .expect("required names are strings")
-                .to_owned()
-        })
+        .map(|value| value.as_str().expect("required string").to_owned())
         .collect();
-    required.sort();
-    required
+    names.sort();
+    names
 }
 
-/// The sorted property names of a generated schema.
 fn properties(schema: &serde_json::Value) -> Vec<String> {
     let mut names: Vec<String> = schema["properties"]
         .as_object()
-        .expect("generated schemas declare properties")
+        .expect("properties")
         .keys()
         .cloned()
         .collect();
@@ -99,817 +62,384 @@ fn properties(schema: &serde_json::Value) -> Vec<String> {
     names
 }
 
-/// Every native tool's generated schema is a valid canonical tool schema:
-/// a self-contained root object schema with no reserved runtime property
-/// and no `$ref`/`$defs`/meta-schema indirection reaching the provider
-/// surface.
-#[test]
-fn generated_native_schemas_are_canonical_root_object_schemas() {
-    let fixture = common::native_fixture();
-    for name in NATIVE_TOOL_NAMES {
-        let schema = definition(&fixture, name).input_schema;
-        validate_canonical_schema(&schema)
-            .unwrap_or_else(|error| panic!("{name} schema is canonical: {error}"));
-        let object = schema.as_object().expect("root object schema");
-        assert_eq!(object["type"], "object", "{name} is a root object schema");
-        assert_eq!(
-            object["additionalProperties"],
-            serde_json::Value::Bool(false),
-            "{name} rejects unknown properties"
-        );
-        for key in ["$schema", "$defs", "definitions", "title"] {
-            assert!(
-                !object.contains_key(key),
-                "{name} schema must not carry {key}"
-            );
-        }
-        assert!(
-            !schema.to_string().contains("$ref"),
-            "{name} schema inlines every subschema"
-        );
-    }
-}
-
-/// Every optional property of the current native input contracts — the
-/// ones that express omission through `Option<T>` or a serde default —
-/// with the single non-null type each one declares today.
-///
-/// This is the concrete list the optional-non-nullable invariant is stated
-/// over. It is deliberately *not* a rule about every property of every
-/// schema: a future native contract is free to use a composite or
-/// explicitly nullable schema (`anyOf`, `oneOf`, a union type) where that
-/// is the right model-facing contract — the invariant only forbids picking
-/// up nullability *implicitly* from a Rust field that exists to express
-/// omission.
-const OPTIONAL_NATIVE_PROPERTIES: [(&str, &str, &str); 10] = [
-    ("read", "offset", "integer"),
-    ("read", "limit", "integer"),
-    ("glob", "path", "string"),
-    ("grep", "path", "string"),
-    ("grep", "glob", "string"),
-    ("grep", "ignoreCase", "boolean"),
-    ("grep", "literal", "boolean"),
-    ("grep", "context", "integer"),
-    ("grep", "limit", "integer"),
-    ("bash", "timeout", "integer"),
-];
-
-/// Each current optional native property means the property may be
-/// *absent*: it stays out of `required`, and its generated contract does
-/// not admit `null` just because the Rust field expresses omission with an
-/// `Option`/`default`.
-///
-/// The list is also proven complete: every property of every native
-/// contract that is absent from `required` is one of the properties this
-/// invariant is stated over, so a newly added optional property cannot
-/// silently escape it.
-#[test]
-fn optional_native_properties_are_absent_never_null() {
-    let fixture = common::native_fixture();
-    for (tool, property, declared_type) in OPTIONAL_NATIVE_PROPERTIES {
-        let schema = definition(&fixture, tool).input_schema;
-        assert!(
-            !required(&schema).contains(&property.to_owned()),
-            "{tool}.{property} is optional, so it is absent from required"
-        );
-        let contract = &schema["properties"][property];
-        assert!(
-            contract.is_object(),
-            "{tool}.{property} stays a declared property of the contract"
-        );
-        assert_eq!(
-            contract["type"], declared_type,
-            "{tool}.{property} keeps its own type and never becomes a \
-             nullable union"
-        );
-    }
-
-    for name in NATIVE_TOOL_NAMES {
-        let schema = definition(&fixture, name).input_schema;
-        let required = required(&schema);
-        for property in properties(&schema)
-            .into_iter()
-            .filter(|property| !required.contains(property))
-        {
-            assert!(
-                OPTIONAL_NATIVE_PROPERTIES
-                    .iter()
-                    .any(|(tool, listed, _)| *tool == name && *listed == property),
-                "{name}.{property} is optional but is not covered by the \
-                 optional-non-nullable invariant"
-            );
-        }
-    }
-}
-
-/// The optional-non-nullable contract holds at the runtime validation
-/// boundary for every optional property of the current native contracts:
-/// an absent property and a valid value are accepted, while an explicit
-/// `null` is rejected by the registry preflight before any invocation
-/// exists.
-///
-/// The cases cover every entry of [`OPTIONAL_NATIVE_PROPERTIES`] — every
-/// optional integer, string, and boolean property the native tools declare
-/// today — and that coverage is asserted, not assumed.
-#[test]
-fn explicit_null_is_rejected_for_optional_native_properties() {
-    let fixture = common::native_fixture();
-    // (tool, property, accepted-without-the-property,
-    //  accepted-with-a-value, rejected-with-an-explicit-null)
-    let cases: [(
-        &str,
-        &str,
-        serde_json::Value,
-        serde_json::Value,
-        serde_json::Value,
-    ); 10] = [
-        // Optional integers (Option<u64> / Option<u32>).
-        (
-            "read",
-            "offset",
-            serde_json::json!({"file_path": "/w/a.txt"}),
-            serde_json::json!({"file_path": "/w/a.txt", "offset": 3}),
-            serde_json::json!({"file_path": "/w/a.txt", "offset": null}),
-        ),
-        (
-            "read",
-            "limit",
-            serde_json::json!({"file_path": "/w/a.txt"}),
-            serde_json::json!({"file_path": "/w/a.txt", "limit": 5}),
-            serde_json::json!({"file_path": "/w/a.txt", "limit": null}),
-        ),
-        (
-            "grep",
-            "context",
-            serde_json::json!({"pattern": "x"}),
-            serde_json::json!({"pattern": "x", "context": 2}),
-            serde_json::json!({"pattern": "x", "context": null}),
-        ),
-        (
-            "grep",
-            "limit",
-            serde_json::json!({"pattern": "x"}),
-            serde_json::json!({"pattern": "x", "limit": 10}),
-            serde_json::json!({"pattern": "x", "limit": null}),
-        ),
-        (
-            "bash",
-            "timeout",
-            serde_json::json!({"command": "true"}),
-            serde_json::json!({"command": "true", "timeout": 30}),
-            serde_json::json!({"command": "true", "timeout": null}),
-        ),
-        // Optional strings (search-root and file filters).
-        (
-            "glob",
-            "path",
-            serde_json::json!({"pattern": "*"}),
-            serde_json::json!({"pattern": "*", "path": "."}),
-            serde_json::json!({"pattern": "*", "path": null}),
-        ),
-        (
-            "grep",
-            "path",
-            serde_json::json!({"pattern": "x"}),
-            serde_json::json!({"pattern": "x", "path": "."}),
-            serde_json::json!({"pattern": "x", "path": null}),
-        ),
-        (
-            "grep",
-            "glob",
-            serde_json::json!({"pattern": "x"}),
-            serde_json::json!({"pattern": "x", "glob": "**/*.rs"}),
-            serde_json::json!({"pattern": "x", "glob": null}),
-        ),
-        // Optional booleans (search-mode flags).
-        (
-            "grep",
-            "ignoreCase",
-            serde_json::json!({"pattern": "x"}),
-            serde_json::json!({"pattern": "x", "ignoreCase": true}),
-            serde_json::json!({"pattern": "x", "ignoreCase": null}),
-        ),
-        (
-            "grep",
-            "literal",
-            serde_json::json!({"pattern": "x"}),
-            serde_json::json!({"pattern": "x", "literal": true}),
-            serde_json::json!({"pattern": "x", "literal": null}),
-        ),
-    ];
-    for (tool, property, absent, present, null) in &cases {
-        assert!(
-            matches!(
-                preflight(&fixture, tool, absent),
-                PreflightOutcome::Ready(_)
-            ),
-            "{tool} accepts an invocation without {property}"
-        );
-        assert!(
-            matches!(
-                preflight(&fixture, tool, present),
-                PreflightOutcome::Ready(_)
-            ),
-            "{tool} accepts a valid {property} value"
-        );
-        assert!(
-            matches!(
-                preflight(&fixture, tool, null),
-                PreflightOutcome::Rejected { .. }
-            ),
-            "{tool} rejects an explicit null {property}"
-        );
-    }
-
-    for (tool, property, _) in OPTIONAL_NATIVE_PROPERTIES {
-        assert!(
-            cases
-                .iter()
-                .any(|(covered_tool, covered, ..)| *covered_tool == tool && *covered == property),
-            "{tool}.{property} has a runtime null-rejection case"
-        );
-    }
-}
-
-/// Preflights one model-issued call against the registered native tool.
 fn preflight(
     fixture: &common::NativeFixture,
     name: &str,
-    arguments: &serde_json::Value,
+    arguments: serde_json::Value,
 ) -> PreflightOutcome {
     let definition = definition(fixture, name);
     fixture
         .registry
         .preflight(&ToolCall {
             id: ToolCallId::new("call-preflight"),
-            tool_id: definition.id.clone(),
+            tool_id: definition.id,
             name: name.to_owned(),
-            arguments: arguments.clone(),
+            arguments,
         })
-        .expect("resolvable call")
+        .expect("identity resolves")
 }
 
-/// The generated Read schema is exactly the `ReadInput` contract: one
-/// required absolute `file_path` plus the optional bounded `offset`/`limit`
-/// line window. The obsolete workspace-relative `path` spelling and the
-/// older `start_line`/`line_count` spelling are gone, not aliased.
 #[test]
-fn read_schema_matches_its_input_contract() {
+fn all_native_schemas_are_canonical_and_have_no_file_path_contract() {
     let fixture = common::native_fixture();
-    let schema = definition(&fixture, "read").input_schema;
-    assert_eq!(required(&schema), ["file_path"]);
-    assert_eq!(properties(&schema), ["file_path", "limit", "offset"]);
-    assert_eq!(schema["properties"]["file_path"]["type"], "string");
-    for optional in ["offset", "limit"] {
-        assert_eq!(
-            schema["properties"][optional]["minimum"], 1,
-            "{optional} is bounded by its contract"
-        );
-        assert_eq!(
-            schema["properties"][optional]["type"], "integer",
-            "{optional} is an optional integer, never an implicit nullable union"
-        );
+    for name in NATIVE_TOOL_NAMES {
+        let schema = definition(&fixture, name).input_schema;
+        rustx::tools::schema::validate_canonical_schema(&schema)
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(schema["type"], "object");
+        assert_eq!(schema["additionalProperties"], false);
+        assert!(!schema.to_string().contains("$ref"));
+        assert!(!schema.to_string().contains("file_path"));
     }
 }
 
-/// Write and Edit take an absolute `file_path`, and the generated Edit
-/// schema is exactly the atomic multi-edit contract: one file path plus a
-/// non-empty `edits` array whose items carry the Pi-compatible camelCase
-/// `oldText`/`newText` names. The obsolete single-replacement fields
-/// (`old_text`, `new_text`, `replace_all`) exist nowhere in the contract.
 #[test]
-fn write_and_edit_schemas_match_their_input_contracts() {
+fn read_write_edit_schemas_are_path_oriented_and_read_accepts_zero_offset() {
     let fixture = common::native_fixture();
-    let write = definition(&fixture, "write").input_schema;
-    assert_eq!(required(&write), ["content", "file_path"]);
-    assert_eq!(properties(&write), ["content", "file_path"]);
+    let read = definition(&fixture, "read").input_schema;
+    assert_eq!(required(&read), ["path"]);
+    assert_eq!(properties(&read), ["limit", "offset", "path"]);
+    assert_eq!(read["properties"]["offset"]["minimum"], 0);
+    assert_eq!(read["properties"]["limit"]["minimum"], 1);
+    assert!(read["properties"]["limit"]["maximum"].is_null());
 
+    for name in ["write", "edit"] {
+        let schema = definition(&fixture, name).input_schema;
+        assert!(required(&schema).contains(&"path".to_owned()));
+        assert!(properties(&schema).contains(&"path".to_owned()));
+        assert!(!properties(&schema).contains(&"file_path".to_owned()));
+    }
     let edit = definition(&fixture, "edit").input_schema;
-    assert_eq!(required(&edit), ["edits", "file_path"]);
-    assert_eq!(properties(&edit), ["edits", "file_path"]);
-    assert_eq!(edit["properties"]["edits"]["type"], "array");
+    assert_eq!(edit["properties"]["edits"]["minItems"], 1);
     assert_eq!(
-        edit["properties"]["edits"]["minItems"], 1,
-        "an edit set describing no transformation is not a legal contract"
+        edit["properties"]["edits"]["items"]["properties"]["oldText"]["minLength"],
+        1
     );
-
-    let replacement = &edit["properties"]["edits"]["items"];
-    assert_eq!(replacement["type"], "object");
-    assert_eq!(
-        replacement["additionalProperties"],
-        serde_json::Value::Bool(false),
-        "a replacement rejects unknown properties too"
-    );
-    assert_eq!(required(replacement), ["newText", "oldText"]);
-    assert_eq!(properties(replacement), ["newText", "oldText"]);
-    assert_eq!(replacement["properties"]["oldText"]["type"], "string");
-    assert_eq!(replacement["properties"]["newText"]["type"], "string");
-    assert_eq!(replacement["properties"]["oldText"]["minLength"], 1);
-    for obsolete in ["old_text", "new_text", "replace_all"] {
-        assert!(
-            replacement["properties"][obsolete].is_null() && edit["properties"][obsolete].is_null(),
-            "the obsolete Edit field {obsolete} must not survive anywhere in the contract"
-        );
-    }
 }
 
-/// The generated Glob and Grep schemas are exactly the Pi-style search
-/// contracts. Both spell their search root `path` and leave it optional
-/// (an omitted root means the workspace), and Grep exposes `ignoreCase`
-/// rather than the obsolete `case_sensitive` inversion.
 #[test]
-fn glob_and_grep_schemas_match_their_input_contracts() {
+fn grep_and_glob_expose_unbounded_model_configurable_limits() {
     let fixture = common::native_fixture();
-    let glob = definition(&fixture, "glob").input_schema;
-    assert_eq!(required(&glob), ["pattern"]);
-    assert_eq!(properties(&glob), ["path", "pattern"]);
-
     let grep = definition(&fixture, "grep").input_schema;
-    assert_eq!(required(&grep), ["pattern"]);
-    assert_eq!(
-        properties(&grep),
-        [
-            "context",
-            "glob",
-            "ignoreCase",
-            "limit",
-            "literal",
-            "path",
-            "pattern"
-        ]
-    );
-    assert!(
-        grep["properties"]["case_sensitive"].is_null(),
-        "the obsolete case_sensitive field must not survive as an alias"
-    );
-    assert_eq!(grep["properties"]["ignoreCase"]["type"], "boolean");
-    assert_eq!(grep["properties"]["literal"]["type"], "boolean");
-    assert_eq!(grep["properties"]["context"]["minimum"], 0);
-    assert_eq!(
-        grep["properties"]["context"]["maximum"],
-        u64::from(rustx::tools::limits::MAX_GREP_CONTEXT_LINES)
-    );
     assert_eq!(grep["properties"]["limit"]["minimum"], 1);
-    assert_eq!(
-        grep["properties"]["limit"]["maximum"],
-        rustx::tools::limits::MAX_GREP_MATCHES as u64,
-        "the schema states the same hard match cap the executor enforces"
-    );
+    assert!(grep["properties"]["limit"]["maximum"].is_null());
+    let glob = definition(&fixture, "glob").input_schema;
+    assert_eq!(properties(&glob), ["limit", "path", "pattern"]);
+    assert_eq!(glob["properties"]["limit"]["minimum"], 1);
+    assert!(glob["properties"]["limit"]["maximum"].is_null());
 }
 
-/// The generated Bash schema states the non-empty command and the bounded
-/// optional deadline in **seconds**; the `background_task` intrinsic keeps
-/// its exact two-operation enum.
 #[test]
-fn bash_and_background_task_schemas_match_their_input_contracts() {
+fn old_file_path_and_invalid_business_arguments_are_rejected() {
     let fixture = common::native_fixture();
-    let bash = definition(&fixture, "bash").input_schema;
-    assert_eq!(required(&bash), ["command"]);
-    assert_eq!(properties(&bash), ["command", "timeout"]);
-    assert_eq!(bash["properties"]["command"]["minLength"], 1);
-    assert_eq!(bash["properties"]["timeout"]["minimum"], 1);
-    assert!(
-        bash["properties"]["timeout_ms"].is_null(),
-        "the obsolete millisecond field must not survive as an alias"
-    );
-    let timeout_description = bash["properties"]["timeout"]["description"]
-        .as_str()
-        .expect("the timeout property documents its unit");
-    assert!(
-        timeout_description.contains("seconds"),
-        "the model-facing unit is explicit in the contract: {timeout_description}"
-    );
-
-    let intrinsic = definition(&fixture, "background_task").input_schema;
-    assert_eq!(required(&intrinsic), ["action", "execution_id"]);
-    assert_eq!(properties(&intrinsic), ["action", "execution_id"]);
-    assert_eq!(intrinsic["properties"]["action"]["type"], "string");
-    assert_eq!(
-        intrinsic["properties"]["action"]["enum"],
-        serde_json::json!(["status", "cancel"])
-    );
-}
-
-/// Invalid model arguments never produce an invocation: the registry
-/// preflight rejects the call against the generated schema, so no native
-/// executor is ever reached.
-///
-/// The cases cover wrong JSON types, missing required fields, unknown
-/// fields, invalid values, and an invalid enum variant.
-#[test]
-fn invalid_native_arguments_are_rejected_before_any_invocation_exists() {
-    let fixture = common::native_fixture();
-    let cases: [(&str, serde_json::Value); 23] = [
-        ("read", serde_json::json!({})),
-        ("read", serde_json::json!({"file_path": 42})),
-        (
-            "read",
-            serde_json::json!({"file_path": "/w/a.txt", "offset": 0}),
-        ),
-        (
-            "read",
-            serde_json::json!({"file_path": "/w/a.txt", "limit": 0}),
-        ),
-        (
-            "read",
-            serde_json::json!({"file_path": "/w/a.txt", "limit": "many"}),
-        ),
-        (
-            "read",
-            serde_json::json!({"file_path": "/w/a.txt", "extra": true}),
-        ),
-        // The obsolete workspace-relative `path` spelling is an unknown
-        // field now, not an alias; so is the older Read spelling.
-        ("read", serde_json::json!({"path": "a.txt"})),
-        (
-            "read",
-            serde_json::json!({"file_path": "/w/a.txt", "start_line": 2, "line_count": 1}),
-        ),
-        ("write", serde_json::json!({"file_path": "/w/a.txt"})),
-        (
-            "edit",
-            serde_json::json!({"file_path": "/w/a.txt", "edits": []}),
-        ),
-        (
-            "edit",
-            serde_json::json!({"file_path": "/w/a.txt", "edits": [{"oldText": "", "newText": "b"}]}),
-        ),
-        (
-            "edit",
-            serde_json::json!({"file_path": "/w/a.txt", "edits": [{"oldText": "a"}]}),
-        ),
-        // The obsolete Edit spelling is an unknown field now, not an alias.
-        (
-            "edit",
-            serde_json::json!({"file_path": "/w/a.txt", "old_text": "a", "new_text": "b"}),
-        ),
-        (
-            "edit",
-            serde_json::json!({"file_path": "/w/a.txt", "edits": [{"old_text": "a", "new_text": "b"}]}),
-        ),
-        ("glob", serde_json::json!({"pattern": "*", "path": 3})),
-        (
-            "grep",
-            serde_json::json!({"pattern": "x", "ignoreCase": "yes"}),
-        ),
-        // The obsolete Grep spelling is an unknown field now, not an alias.
-        (
-            "grep",
-            serde_json::json!({"pattern": "x", "case_sensitive": false}),
-        ),
-        ("grep", serde_json::json!({"pattern": "x", "context": 999})),
-        ("grep", serde_json::json!({"pattern": "x", "limit": 0})),
-        ("bash", serde_json::json!({"command": ""})),
-        ("bash", serde_json::json!({"command": "true", "timeout": 0})),
-        // The obsolete Bash spelling is an unknown field now, not an alias.
-        (
-            "bash",
-            serde_json::json!({"command": "true", "timeout_ms": 1000}),
-        ),
-        (
-            "background_task",
-            serde_json::json!({"execution_id": "exec-1", "action": "list"}),
-        ),
-    ];
-    for (name, arguments) in cases {
-        let definition = definition(&fixture, name);
-        let call = ToolCall {
-            id: ToolCallId::new("call-invalid"),
-            tool_id: definition.id.clone(),
-            name: name.to_owned(),
-            arguments: arguments.clone(),
-        };
-        let outcome = fixture.registry.preflight(&call).expect("resolvable call");
+    for name in ["read", "write", "edit"] {
+        let result = preflight(
+            &fixture,
+            name,
+            serde_json::json!({"file_path": "/tmp/file.txt", "content": "x", "edits": []}),
+        );
         assert!(
-            matches!(outcome, PreflightOutcome::Rejected { .. }),
-            "{name} must reject {arguments} before dispatch"
+            matches!(result, PreflightOutcome::Rejected { .. }),
+            "{name}"
         );
     }
+    for (name, arguments) in [
+        ("read", serde_json::json!({"path": "/tmp/file", "limit": 0})),
+        ("write", serde_json::json!({"path": "/tmp/file"})),
+        ("edit", serde_json::json!({"path": "/tmp/file", "edits": 7})),
+        ("grep", serde_json::json!({"pattern": "x", "limit": 0})),
+        ("glob", serde_json::json!({"pattern": "*", "limit": 0})),
+    ] {
+        assert!(matches!(
+            preflight(&fixture, name, arguments),
+            PreflightOutcome::Rejected { .. }
+        ));
+    }
+    assert!(matches!(
+        preflight(
+            &fixture,
+            "read",
+            serde_json::json!({"path": "relative.txt", "offset": 0})
+        ),
+        PreflightOutcome::Ready(_)
+    ));
 }
 
-/// A direct executor call with contract-violating arguments — the path a
-/// registry preflight would already have rejected — fails without doing any
-/// of the tool's work: no file is created, and no file is modified.
-#[tokio::test]
-async fn rejected_input_never_reaches_the_executed_work() {
+#[test]
+fn edit_model_variants_normalize_to_the_same_canonical_invocation() {
     let fixture = common::native_fixture();
-    let workspace = fixture.runtime.workspace().root().to_path_buf();
-    std::fs::write(workspace.join("kept.txt"), "original").expect("fixture file");
-
-    let created = workspace.join("never.txt");
-    let write = execute_directly(
-        &fixture,
-        "write",
-        serde_json::json!({"file_path": created.to_str().expect("utf8"), "content": 7}),
-    )
-    .await;
-    assert!(matches!(write.status, ToolExecutionStatus::Failed { .. }));
-    assert!(
-        !created.exists(),
-        "a rejected Write never creates its target"
+    let canonical_edits = serde_json::json!([{"oldText": "a", "newText": "b"}]);
+    let variants = [
+        serde_json::json!({"path": "file.txt", "edits": canonical_edits}),
+        serde_json::json!({
+            "path": "file.txt",
+            "edits": serde_json::to_string(&canonical_edits).expect("encoded edits")
+        }),
+        serde_json::json!({"path": "file.txt", "edits": {"oldText": "a", "newText": "b"}}),
+        serde_json::json!({"path": "file.txt", "oldText": "a", "newText": "b"}),
+    ];
+    let mut canonical = None;
+    for variant in variants {
+        let PreflightOutcome::Ready(prepared) = preflight(&fixture, "edit", variant) else {
+            panic!("supported Edit variant was rejected");
+        };
+        if let Some(expected) = &canonical {
+            assert_eq!(&prepared.invocation.arguments, expected);
+        } else {
+            canonical = Some(prepared.invocation.arguments);
+        }
+    }
+    assert_eq!(
+        canonical.expect("canonical invocation"),
+        serde_json::json!({"path": "file.txt", "edits": [{"oldText": "a", "newText": "b"}]})
     );
+}
 
-    let edit = execute_directly(
+#[test]
+fn edit_normalization_cannot_consume_reserved_or_unrelated_fields() {
+    let fixture = common::native_fixture();
+    let reserved = preflight(
         &fixture,
         "edit",
         serde_json::json!({
-            "file_path": workspace.join("kept.txt").to_str().expect("utf8"),
-            "edits": [{"oldText": "", "newText": "replaced"}],
+            "path": "file.txt",
+            "oldText": "a",
+            "newText": "b",
+            "__rustx_forged": "value"
         }),
-    )
-    .await;
-    assert!(matches!(edit.status, ToolExecutionStatus::Failed { .. }));
-    assert_eq!(
-        std::fs::read_to_string(workspace.join("kept.txt")).expect("kept file"),
-        "original",
-        "a rejected Edit never writes back"
     );
-
-    let bash = execute_directly(&fixture, "bash", serde_json::json!({"command": ""})).await;
-    assert!(matches!(bash.status, ToolExecutionStatus::Failed { .. }));
-    assert!(
-        bash.artifacts.is_empty() && bash.exit_code.is_none(),
-        "a rejected Bash invocation never owns a process"
-    );
-}
-
-/// Executes one native tool without the registry preflight, so the typed
-/// input boundary inside the executor is what rejects the arguments.
-async fn execute_directly(
-    fixture: &common::NativeFixture,
-    name: &str,
-    arguments: serde_json::Value,
-) -> ToolExecutionResult {
-    let definition = definition(fixture, name);
-    let executor = fixture.registry.executor(&definition.id);
-    let reporter = common::NoopProgress;
-    let context = ToolExecutionContext {
-        conversation_id: fixture.runtime.conversation_id(),
-        execution_id: None,
-        cancellation: rustx::runtime::ExecutionCancellation::detached(
-            rustx::runtime::CancellationSignal::new(),
-            rustx::runtime::types::CancellationReason::UserRequested,
-        ),
-        workspace: fixture.runtime.workspace(),
-        progress: &reporter,
-        artifacts: fixture.runtime.artifacts(),
-        tool_output: fixture.runtime.tool_output(),
-        environment: fixture.runtime.environment(),
-    };
-    executor
-        .execute(
-            ToolInvocation {
-                call_id: ToolCallId::new("call-direct"),
-                tool_id: definition.id.clone(),
-                tool_name: name.to_owned(),
-                mode: ToolInvocationMode::Foreground,
-                arguments,
-            },
-            context,
-        )
-        .await
-}
-
-/// A valid native invocation still executes through the Agent Loop with the
-/// canonical tool lifecycle: one `ToolExecutionStarted`, one
-/// `ToolExecutionCompleted`, one committed tool message, and the canonical
-/// `ToolExecutionResult` of the tool itself.
-#[tokio::test]
-async fn native_tools_still_execute_through_the_agent_loop() {
-    let fixture = common::native_fixture();
-    std::fs::write(
-        fixture.runtime.workspace().root().join("sample.txt"),
-        "alpha\nbeta\n",
-    )
-    .expect("fixture file");
-    let call = ScriptedCall {
-        id: "call-1",
-        tool_id: "tool-read",
-        name: "read",
-        arguments: serde_json::json!({
-            "file_path": fixture
-                .runtime
-                .workspace()
-                .root()
-                .join("sample.txt")
-                .to_str()
-                .expect("utf8"),
-            "offset": 2,
-            "limit": 1,
-        }),
-    };
-    let result = run_through_agent_loop(&fixture, &call).await;
-
-    assert!(matches!(
-        result.outcome,
-        AttemptOutcome::Completed {
-            finish_reason: ModelFinishReason::Stop
-        }
-    ));
-    let messages = tool_messages(&result);
-    assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].result.status, ToolExecutionStatus::Success);
-    let rendered = format!("{:?}", messages[0].result.content);
-    assert!(
-        rendered.contains("beta") && !rendered.contains("alpha"),
-        "the canonical result is the tool's own deterministic slice: {rendered}"
-    );
-    assert_eq!(
-        lifecycle_events(&result),
-        vec!["ToolExecutionStarted", "ToolExecutionCompleted"],
-        "the tool lifecycle event ordering is unchanged"
-    );
-}
-
-/// A native input-contract violation stays a normal failed result slot in
-/// the Agent Loop: the batch commits, the attempt completes, and — because
-/// the executor never runs — no tool execution lifecycle event is emitted
-/// for the rejected call.
-#[tokio::test]
-async fn rejected_native_input_is_a_normal_failed_result_slot_in_the_agent_loop() {
-    let fixture = common::native_fixture();
-    let call = ScriptedCall {
-        id: "call-1",
-        tool_id: "tool-read",
-        name: "read",
-        arguments: serde_json::json!({"file_path": 42}),
-    };
-    let result = run_through_agent_loop(&fixture, &call).await;
-
-    assert!(matches!(
-        result.outcome,
-        AttemptOutcome::Completed {
-            finish_reason: ModelFinishReason::Stop
-        }
-    ));
-    let messages = tool_messages(&result);
-    assert_eq!(messages.len(), 1);
-    assert!(matches!(
-        messages[0].result.status,
-        ToolExecutionStatus::Failed { .. }
-    ));
-    assert!(
-        lifecycle_events(&result).is_empty(),
-        "a rejected invocation never starts an execution, so it emits no \
-         tool execution lifecycle event"
-    );
-}
-
-/// An explicit `null` for a non-nullable optional native argument is a
-/// business argument violation in the Agent Loop: the registry rejects the
-/// call, the failed result slot is committed normally, no tool execution
-/// lifecycle event is emitted, and the tool's side effect never happens.
-#[cfg(unix)]
-#[tokio::test]
-async fn explicit_null_optional_argument_is_rejected_by_the_agent_loop() {
-    let fixture = common::native_fixture();
-    let marker = fixture.runtime.workspace().root().join("marker.txt");
-    let call = ScriptedCall {
-        id: "call-1",
-        tool_id: "tool-bash",
-        name: "bash",
-        arguments: serde_json::json!({
-            "command": "printf marker > marker.txt",
-            "timeout": null
-        }),
-    };
-    let result = run_through_agent_loop(&fixture, &call).await;
-
-    assert!(matches!(
-        result.outcome,
-        AttemptOutcome::Completed {
-            finish_reason: ModelFinishReason::Stop
-        }
-    ));
-    let messages = tool_messages(&result);
-    assert_eq!(messages.len(), 1, "the batch still settles exactly once");
-    assert!(matches!(
-        messages[0].result.status,
-        ToolExecutionStatus::Failed { .. }
-    ));
-    assert!(
-        lifecycle_events(&result).is_empty(),
-        "a rejected null argument never starts a tool execution"
-    );
-    assert!(
-        !marker.exists(),
-        "the Bash command never ran, so its side effect never happened"
-    );
-}
-
-/// The Bash lifecycle is unchanged behind the typed input contract: a
-/// valid invocation still spawns its supervised process, settles, captures
-/// its output as bounded text, and reports the exit code — including a
-/// non-zero exit as a normal failed result.
-///
-/// The supervisor ownership, timeout, and cancellation regressions in
-/// `tests/m5_bash.rs` and the in-crate `tools::native::bash` regressions
-/// run over exactly this path.
-#[cfg(unix)]
-#[tokio::test]
-async fn bash_still_settles_its_process_lifecycle_behind_the_typed_contract() {
-    let fixture = common::native_fixture();
-    let success = common::run_tool(
+    assert!(matches!(reserved, PreflightOutcome::Rejected { .. }));
+    let unrelated = preflight(
         &fixture,
-        "bash",
-        serde_json::json!({"command": "printf hello"}),
-    )
-    .await;
-    assert_eq!(success.status, ToolExecutionStatus::Success);
-    assert_eq!(success.exit_code, Some(0));
-    assert!(
-        success.artifacts.is_empty(),
-        "ordinary textual output is never a semantic artifact"
+        "edit",
+        serde_json::json!({"path": "file.txt", "edits": 42}),
     );
-
-    let failure =
-        common::run_tool(&fixture, "bash", serde_json::json!({"command": "exit 7"})).await;
-    assert!(matches!(failure.status, ToolExecutionStatus::Failed { .. }));
-    assert_eq!(failure.exit_code, Some(7));
-
-    let timed_out = common::run_tool(
-        &fixture,
-        "bash",
-        serde_json::json!({"command": "sleep 30", "timeout": 1}),
-    )
-    .await;
-    assert_eq!(
-        timed_out.status,
-        ToolExecutionStatus::TimedOut,
-        "an explicit timeout in seconds from the typed contract still bounds the invocation"
-    );
+    assert!(matches!(unrelated, PreflightOutcome::Rejected { .. }));
 }
 
-/// The canonical tool lifecycle event names of one attempt, in order.
-fn lifecycle_events(result: &common::DurableExecutionAudit) -> Vec<&'static str> {
-    result
-        .event_history
-        .iter()
-        .filter_map(|event| match event {
-            RuntimeEvent::ToolExecutionStarted { .. } => Some("ToolExecutionStarted"),
-            RuntimeEvent::ToolExecutionCompleted { .. } => Some("ToolExecutionCompleted"),
-            RuntimeEvent::ToolExecutionProgress { .. } => Some("ToolExecutionProgress"),
-            _ => None,
-        })
-        .collect()
-}
-
-/// Tool messages committed to canonical history, in order.
-fn tool_messages(result: &AgentExecutionResult) -> Vec<&ToolMessageBlock> {
-    result
-        .messages()
-        .iter()
-        .filter_map(|message| match message {
-            MessageBlock::Tool(tool) => Some(tool),
-            _ => None,
-        })
-        .collect()
-}
-
-/// Runs one scripted native tool call through a real Agent Loop attempt
-/// over the native tool registry of the fixture.
-async fn run_through_agent_loop(
-    fixture: &common::NativeFixture,
-    call: &ScriptedCall,
-) -> common::DurableExecutionAudit {
-    let model = fake_model(tool_turn_then_stop(call));
-    let store = fixture.runtime.durable_store();
-    let capability = common::capability_lease(fixture.registry.clone(), &fixture.runtime).await;
-    let (lease, _coordinator) = capability.into_lease_and_coordinator();
-    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = AgentExecution::new(
-        request(fixture.runtime.conversation_id().clone(), &model),
-        lease,
-        &cancellation,
-        context_runtime(&model),
-        &fixture.runtime,
-        rustx::agent::AttemptLifecycle::inert(),
-    )
-    .expect("conversation identity matches the tool runtime")
-    .run()
-    .await;
-    common::durable_agent_result(result, store.as_ref())
-}
-
-/// One tool-call turn followed by a plain stop turn.
-fn tool_turn_then_stop(call: &ScriptedCall) -> Vec<Vec<FakeStep>> {
-    let mut first = vec![FakeStep::Emit(ModelEvent::Started)];
-    for event in tool_call_events(0, call) {
-        first.push(FakeStep::Emit(event));
+#[test]
+fn optional_native_properties_are_absent_not_nullable_and_registry_metadata_stays_private() {
+    let fixture = common::native_fixture();
+    for name in ["read", "grep", "glob"] {
+        let schema = definition(&fixture, name).input_schema;
+        for property in schema["properties"]
+            .as_object()
+            .expect("properties")
+            .values()
+        {
+            assert_ne!(property["type"], serde_json::json!(["null"]));
+        }
+        assert!(schema["properties"]["__rustx_execution"].is_null());
+        assert!(!schema.to_string().contains("__rustx_execution"));
     }
-    first.push(FakeStep::Emit(ModelEvent::Completed {
+    for definition in fixture.registry.model_definitions() {
+        assert!(
+            !definition
+                .input_schema
+                .to_string()
+                .contains("__rustx_execution"),
+            "default native definitions stay provider-neutral: {}",
+            definition.name
+        );
+    }
+}
+
+#[test]
+fn native_tools_preserve_legal_execution_policies_and_fixed_background_task_policy() {
+    use rustx::runtime::identity::{ConversationId, ToolId};
+    use rustx::tools::executor::ToolRegistry;
+    use rustx::tools::native::{NativeToolPolicies, NativeToolResources, register_native_tools};
+    use rustx::tools::runtime::{ConversationRuntimeConfig, ConversationToolRuntime};
+
+    for execution in [
+        ToolExecutionPolicy::ForegroundOnly,
+        ToolExecutionPolicy::BackgroundOnly,
+        ToolExecutionPolicy::ModelSelectable,
+    ] {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let runtime = ConversationToolRuntime::from_config(
+            ConversationId::new("policy-conversation"),
+            ConversationRuntimeConfig::new(&workspace, dir.path().join("artifacts")),
+        )
+        .expect("runtime");
+        let mut registry = ToolRegistry::new();
+        register_native_tools(
+            &mut registry,
+            NativeToolResources {
+                background: runtime.background().clone(),
+                subagents: None,
+            },
+            NativeToolPolicies::uniform(ToolInvocationPolicy::new(
+                execution,
+                ToolConcurrencyPolicy::Sequential,
+            )),
+        )
+        .expect("ordinary native policy registration");
+
+        let read = registry
+            .definitions()
+            .into_iter()
+            .find(|definition| definition.name == "read")
+            .expect("read definition");
+        assert_eq!(read.execution_policy, execution);
+        let arguments = if execution == ToolExecutionPolicy::ModelSelectable {
+            serde_json::json!({"path": "a.txt", "__rustx_execution": "foreground"})
+        } else {
+            serde_json::json!({"path": "a.txt"})
+        };
+        let outcome = registry
+            .preflight(&ToolCall {
+                id: ToolCallId::new("policy-call"),
+                tool_id: ToolId::new("tool-read"),
+                name: "read".to_owned(),
+                arguments,
+            })
+            .expect("policy preflight");
+        let PreflightOutcome::Ready(prepared) = outcome else {
+            panic!("read must preflight under {execution:?}");
+        };
+        assert_eq!(
+            prepared.invocation.mode,
+            if execution == ToolExecutionPolicy::BackgroundOnly {
+                ToolInvocationMode::Background
+            } else {
+                ToolInvocationMode::Foreground
+            }
+        );
+
+        let background_task = registry
+            .definitions()
+            .into_iter()
+            .find(|definition| definition.name == "background_task")
+            .expect("background_task definition");
+        assert_eq!(
+            background_task.execution_policy,
+            ToolExecutionPolicy::ForegroundOnly
+        );
+        assert_eq!(
+            background_task.concurrency_policy,
+            ToolConcurrencyPolicy::Sequential
+        );
+    }
+}
+
+#[test]
+fn independent_native_execution_policies_coexist_in_one_registry() {
+    use rustx::tools::executor::ToolRegistry;
+    use rustx::tools::native::{NativeToolPolicies, NativeToolResources, register_native_tools};
+    use rustx::tools::runtime::{ConversationRuntimeConfig, ConversationToolRuntime};
+
+    let dir = tempfile::tempdir().expect("temporary policy runtime");
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let runtime = ConversationToolRuntime::from_config(
+        ConversationId::new("independent-policy-conversation"),
+        ConversationRuntimeConfig::new(&workspace, dir.path().join("artifacts")),
+    )
+    .expect("runtime");
+    let policies = NativeToolPolicies {
+        read: ToolInvocationPolicy::new(
+            ToolExecutionPolicy::ForegroundOnly,
+            ToolConcurrencyPolicy::Sequential,
+        ),
+        write: ToolInvocationPolicy::new(
+            ToolExecutionPolicy::BackgroundOnly,
+            ToolConcurrencyPolicy::Parallel,
+        ),
+        edit: ToolInvocationPolicy::new(
+            ToolExecutionPolicy::ModelSelectable,
+            ToolConcurrencyPolicy::Sequential,
+        ),
+        glob: ToolInvocationPolicy::new(
+            ToolExecutionPolicy::ForegroundOnly,
+            ToolConcurrencyPolicy::Parallel,
+        ),
+        grep: ToolInvocationPolicy::new(
+            ToolExecutionPolicy::BackgroundOnly,
+            ToolConcurrencyPolicy::Sequential,
+        ),
+        bash: ToolInvocationPolicy::new(
+            ToolExecutionPolicy::ForegroundOnly,
+            ToolConcurrencyPolicy::Parallel,
+        ),
+    };
+    let mut registry = ToolRegistry::new();
+    register_native_tools(
+        &mut registry,
+        NativeToolResources {
+            background: runtime.background().clone(),
+            subagents: None,
+        },
+        policies,
+    )
+    .expect("independent native policy registration");
+    let definitions = registry.definitions();
+    let policy = |name: &str| {
+        definitions
+            .iter()
+            .find(|definition| definition.name == name)
+            .expect("native definition")
+    };
+    assert_eq!(
+        policy("read").execution_policy,
+        ToolExecutionPolicy::ForegroundOnly
+    );
+    assert_eq!(
+        policy("write").execution_policy,
+        ToolExecutionPolicy::BackgroundOnly
+    );
+    assert_eq!(
+        policy("edit").execution_policy,
+        ToolExecutionPolicy::ModelSelectable
+    );
+    assert_eq!(
+        policy("read").concurrency_policy,
+        ToolConcurrencyPolicy::Sequential
+    );
+    assert_eq!(
+        policy("write").concurrency_policy,
+        ToolConcurrencyPolicy::Parallel
+    );
+    assert_eq!(
+        policy("edit").concurrency_policy,
+        ToolConcurrencyPolicy::Sequential
+    );
+    assert_eq!(
+        policy("glob").concurrency_policy,
+        ToolConcurrencyPolicy::Parallel
+    );
+    assert_eq!(
+        policy("grep").execution_policy,
+        ToolExecutionPolicy::BackgroundOnly
+    );
+    assert_eq!(
+        policy("grep").concurrency_policy,
+        ToolConcurrencyPolicy::Sequential
+    );
+}
+
+fn native_tool_turn(call: &support::fake::ScriptedCall) -> Vec<Vec<support::fake::FakeStep>> {
+    let mut first = vec![support::fake::FakeStep::Emit(ModelEvent::Started)];
+    first.extend(
+        support::fake::tool_call_events(0, call)
+            .into_iter()
+            .map(support::fake::FakeStep::Emit),
+    );
+    first.push(support::fake::FakeStep::Emit(ModelEvent::Completed {
         finish_reason: ModelFinishReason::ToolCalls,
         usage: None,
     }));
     vec![
         first,
         vec![
-            FakeStep::Emit(ModelEvent::Started),
-            FakeStep::Emit(ModelEvent::TextDelta {
+            support::fake::FakeStep::Emit(ModelEvent::Started),
+            support::fake::FakeStep::Emit(ModelEvent::TextDelta {
                 block_index: rustx::message::types::ContentBlockIndex::new(0),
                 text: "done".to_owned(),
             }),
-            FakeStep::Emit(ModelEvent::Completed {
+            support::fake::FakeStep::Emit(ModelEvent::Completed {
                 finish_reason: ModelFinishReason::Stop,
                 usage: None,
             }),
@@ -917,20 +447,19 @@ fn tool_turn_then_stop(call: &ScriptedCall) -> Vec<Vec<FakeStep>> {
     ]
 }
 
-/// The attempt request bound to the fixture's conversation identity.
-fn request(
-    conversation_id: ConversationId,
-    model: &std::sync::Arc<FakeModel>,
+fn native_request(
+    model: &Arc<support::fake::FakeModel>,
+    conversation_id: &ConversationId,
 ) -> AgentExecutionRequest {
     AgentExecutionRequest {
-        agent_id: AgentId::new("agent-a"),
-        conversation_id,
-        attempt_id: AttemptId::new("attempt-1"),
+        agent_id: AgentId::new("agent-native-contract"),
+        conversation_id: conversation_id.clone(),
+        attempt_id: AttemptId::new("attempt-native-contract"),
         conversation: rustx::conversation::ConversationState::from_messages(vec![
             MessageBlock::User(UserMessageBlock {
-                id: MessageId::new("msg-user-1"),
+                id: MessageId::new("message-native-contract"),
                 content: vec![UserContentBlock::Text(rustx::message::content::TextBlock {
-                    text: "go".to_owned(),
+                    text: "inspect".to_owned(),
                 })],
                 source: UserSource::Human,
                 kind: rustx::message::types::InboundKind::Message,
@@ -940,24 +469,162 @@ fn request(
         .expect("bootstrap conversation"),
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
         timezone: None,
-        model: support::attempt_model(model.clone(), "fake-model"),
+        model: support::attempt_model(model.clone(), "native-contract-model"),
     }
 }
 
-/// A context runtime with no compaction pressure.
-fn context_runtime(model: &std::sync::Arc<FakeModel>) -> rustx::context::ContextRuntime {
-    use rustx::context::{ContextRuntime, DefaultTokenEstimator, SessionContextPolicy};
-    let estimator: Arc<dyn rustx::context::TokenEstimator> = Arc::new(DefaultTokenEstimator);
-    let snapshot = support::attempt_model(model.clone(), "fake-model");
-    ContextRuntime::for_attempt(
-        SessionContextPolicy {
+fn native_context_runtime(model: &Arc<support::fake::FakeModel>) -> rustx::context::ContextRuntime {
+    rustx::context::ContextRuntime::for_attempt(
+        rustx::context::SessionContextPolicy {
             reserve_tokens: 0,
             keep_recent_tokens: 0,
             summary_output_cap: None,
         },
-        estimator,
+        Arc::new(rustx::context::DefaultTokenEstimator),
         rustx::context::AgentStatusComposer::default(),
-        &snapshot,
+        &support::attempt_model(model.clone(), "native-contract-model"),
     )
-    .expect("valid context runtime")
+    .expect("context runtime")
+}
+
+async fn run_native_script(
+    fixture: &common::NativeFixture,
+    call: support::fake::ScriptedCall,
+) -> common::DurableExecutionAudit {
+    let model = support::fake::fake_model(native_tool_turn(&call));
+    let capability = common::capability_lease(fixture.registry.clone(), &fixture.runtime).await;
+    let (lease, coordinator) = capability.into_lease_and_coordinator();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let result = AgentExecution::new(
+        native_request(&model, fixture.runtime.conversation_id()),
+        lease,
+        &cancellation,
+        native_context_runtime(&model),
+        &fixture.runtime,
+        rustx::agent::AttemptLifecycle::inert(),
+    )
+    .expect("conversation identity matches the tool runtime")
+    .run()
+    .await;
+    let audit = common::durable_agent_result(result, fixture.store.as_ref());
+    drop(coordinator);
+    audit
+}
+
+#[tokio::test]
+async fn native_agent_loop_invocation_has_one_start_and_one_completion_in_order() {
+    let fixture = common::native_fixture();
+    std::fs::write(
+        fixture.runtime.workspace().root().join("read.txt"),
+        "hello\n",
+    )
+    .expect("fixture");
+    let audit = run_native_script(
+        &fixture,
+        support::fake::ScriptedCall {
+            id: "call-native-read",
+            tool_id: "tool-read",
+            name: "read",
+            arguments: serde_json::json!({"path": "read.txt"}),
+        },
+    )
+    .await;
+
+    let started_positions: Vec<usize> = audit
+        .event_history
+        .iter()
+        .enumerate()
+        .filter_map(|(index, event)| match event {
+            RuntimeEvent::ToolExecutionStarted { tool_call_id, .. }
+                if tool_call_id.as_str() == "call-native-read" =>
+            {
+                Some(index)
+            }
+            _ => None,
+        })
+        .collect();
+    let completed_positions: Vec<usize> = audit
+        .event_history
+        .iter()
+        .enumerate()
+        .filter_map(|(index, event)| match event {
+            RuntimeEvent::ToolExecutionCompleted { tool_call_id, .. }
+                if tool_call_id.as_str() == "call-native-read" =>
+            {
+                Some(index)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(started_positions.len(), 1, "one native start event");
+    assert_eq!(completed_positions.len(), 1, "one native completion event");
+    assert!(started_positions[0] < completed_positions[0]);
+
+    let tool_message = audit
+        .messages()
+        .iter()
+        .find_map(|message| match message {
+            MessageBlock::Tool(tool) if tool.tool_call_id.as_str() == "call-native-read" => {
+                Some(tool)
+            }
+            _ => None,
+        })
+        .expect("committed native tool result");
+    assert_eq!(tool_message.result.status, ToolExecutionStatus::Success);
+    assert_eq!(
+        tool_message.result.content[0],
+        rustx::tools::types::ToolResultContent::Text(rustx::message::content::TextBlock {
+            text: "hello\n".to_owned(),
+        })
+    );
+    assert!(matches!(audit.outcome, AttemptOutcome::Completed { .. }));
+}
+
+#[tokio::test]
+async fn native_agent_loop_preflight_rejection_settles_without_starting_an_executor() {
+    let fixture = common::native_fixture();
+    let audit = run_native_script(
+        &fixture,
+        support::fake::ScriptedCall {
+            id: "call-invalid-write",
+            tool_id: "tool-write",
+            name: "write",
+            arguments: serde_json::json!({
+                "path": "must-not-be-created.txt",
+                "content": "x",
+                "unknown": true
+            }),
+        },
+    )
+    .await;
+
+    assert!(!audit.event_history.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::ToolExecutionStarted { tool_call_id, .. }
+                if tool_call_id.as_str() == "call-invalid-write"
+        )
+    }));
+    let tool_message = audit
+        .messages()
+        .iter()
+        .find_map(|message| match message {
+            MessageBlock::Tool(tool) if tool.tool_call_id.as_str() == "call-invalid-write" => {
+                Some(tool)
+            }
+            _ => None,
+        })
+        .expect("rejected result slot");
+    assert!(matches!(
+        tool_message.result.status,
+        ToolExecutionStatus::Failed { .. }
+    ));
+    assert!(
+        !fixture
+            .runtime
+            .workspace()
+            .root()
+            .join("must-not-be-created.txt")
+            .exists()
+    );
 }

@@ -1027,9 +1027,10 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   the runtime intrinsic `background_task` is intentionally fixed
   (foreground-only, sequential) and is outside the configurable set.
 - Invocation order is frozen: resolve tool, extract/resolve invocation
-  metadata, strip metadata, validate business arguments against the
-  canonical schema, dispatch executor. A business validation failure is a
-  normal failed result slot; the executor never runs.
+  metadata, strip metadata, apply tool-owned business-argument normalization,
+  validate the normalized arguments against the canonical schema, dispatch
+  executor. A business validation failure is a normal failed result slot; the
+  executor never runs.
 - Both `PreflightOutcome` variants carry the canonical registry-resolved
   `ToolId` and `ToolOrigin`, taken from the same resolved `ToolDefinition`
   that produces the invocation. Identity resolution always precedes
@@ -1040,7 +1041,8 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   its name, description, typed input contract, generated schema, executor,
   and private helpers, and constructs itself through its own
   `registration(...)` function returning the plane-internal
-  `NativeToolRegistration` pair. The native plane module only composes the
+  `NativeToolRegistration` (definition, executor, and optional tool-owned
+  normalizer). The native plane module only composes the
   known native tools — there is no discovery, plugin loading, registration
   macro, or generic tool factory, and the Bash supervisor is an
   implementation detail of Bash execution ownership, never a separate tool.
@@ -1058,9 +1060,10 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   shape states it explicitly.
 - A native tool's canonical schema is generated from its typed input
   contract, which is the single source of truth for its model-facing
-  arguments. The executor ABI is unchanged: `ToolRegistry` validates
-  business arguments against that generated schema before dispatch, and the
-  native executor receives the validated canonical `ToolInvocation` and
+  arguments. The executor ABI is unchanged: `ToolRegistry` applies any
+  tool-owned normalization and then validates business arguments against that
+  generated schema before dispatch, and the native executor receives the
+  validated canonical `ToolInvocation` and
   immediately decodes its JSON arguments into the tool-owned typed input
   before any tool-specific filesystem, process, or other business work
   begins — no executor performs ad-hoc JSON inspection, and `ToolExecutor`
@@ -1146,14 +1149,15 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
 - The artifact store and the model workspace are disjoint filesystem
   regions: construction rejects an artifact root that equals the workspace
   root, nests inside it, or contains it — including symlink-resolved
-  overlap — so Glob/Grep/Bash cannot surface runtime-private output files.
-  The conversation's managed tool-output root inherits the same
-  disjointness and is additionally read-only for every native tool, and
-  its composition is validated where the runtime composes it: construction
-  rejects a pre-existing symlink at the `tool-output/` root and requires
-  the canonical managed root to be a strict dedicated descendant of the
-  canonical artifact root, disjoint from the canonical workspace root, so
-  no authorized filesystem root can ever alias another.
+  overlap — so runtime-private output files are not included in the default
+  cwd-based Glob/Grep traversal. An explicit absolute host path remains
+  subject to the ordinary native file-tool contract. The conversation's
+  managed tool-output root retains its own disjointness and composition
+  invariants: construction rejects a pre-existing symlink at the
+  `tool-output/` root and requires the canonical managed root to be a strict
+  dedicated descendant of the canonical artifact root, disjoint from the
+  canonical workspace root, so no authorized runtime root can ever alias
+  another.
 - All progress entering runtime state and events passes through one shared
   UTF-8-safe bound (`bound_tool_progress`); the foreground reporter and the
   background registry produce the same normalized value, and an oversized
@@ -1171,59 +1175,48 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
 
 ## Native tools and Bash (M5)
 
-- Native filesystem tools and Bash operate only inside explicitly
-  authorized filesystem roots: the canonical workspace (read and mutate)
-  and the conversation's managed tool-output root (read-only), with Bash
-  running inside the canonical workspace. Model-facing locators are
-  absolute paths, authority is decided on the canonical target, and a
-  symlink can never resolve authority outside its owning root. The full
-  locator contract follows in the absolute-locators bullet below.
-- The model-facing contracts of the six ordinary native tools follow
-  established Pi coding-agent conventions — `read {file_path, offset?,
-  limit?}`, `write {file_path, content}`, `edit {file_path,
-  edits:[{oldText, newText}]}`, `glob {pattern, path?}`,
+- Native Read/Write/Edit/Grep/Glob resolve relative model paths against the
+  authoritative execution cwd (`Workspace::root()`) and use absolute paths
+  as ordinary host filesystem paths. Both forms are lexically normalized for
+  `.` and `..` before filesystem behavior, without requiring intermediate
+  components to exist. They no longer impose workspace containment. Workspace remains the runtime/Bash cwd authority, while
+  `locator.rs` remains the runtime read resolver for advertised managed-output
+  paths and unrelated runtime invariants; `ManagedToolOutput` owns the narrow
+  model-mutation rejection for that namespace. Final-component symlinks are
+  followed by atomic
+  Write/Edit commits so the link itself is not replaced.
+- The model-facing contracts of the six ordinary native tools are
+  `read {path, offset?, limit?}`, `write {path, content}`, `edit {path,
+  edits:[{oldText, newText}]}`, `glob {pattern, path?, limit?}`,
   `grep {pattern, path?, glob?, ignoreCase?, literal?, context?, limit?}`,
-  `bash {command, timeout?}` — while execution semantics stay rustX-owned.
+  and the unchanged `bash {command, timeout?}` contract. Read accepts
+  offset zero and normalizes it to one; Grep defaults to 100 matches and
+  Glob to 1000 results, with larger caller limits accepted.
   Adopting the schema convention never imports another agent's runtime,
   subprocess model, permission system, ignore behavior, or result ordering.
-  There are no legacy aliases: the obsolete `path` (for `file_path`),
-  `start_line`/`line_count`, `old_text`/`new_text`/`replace_all`,
-  `case_sensitive`, and `timeout_ms` spellings are unknown fields, rejected
-  before dispatch.
-- **Absolute locators, explicit authority.** Every native filesystem tool
-  takes absolute locators with explicit authority: `file_path` of
-  Read/Write/Edit must be absolute, and an omitted `path` of Glob/Grep
-  means the workspace root. One locator-authority boundary
-  (`crate::tools::locator`) admits exactly two roots: the workspace (read
-  and mutate) and the conversation's managed tool-output root (read-only —
-  the model reads spilled tool output but can never mutate runtime-owned
-  storage). Every other absolute location — including runtime-private
-  regions such as the durable store — is rejected. The locator's **owning
-  root** is determined lexically (after `.`/`..` normalization) BEFORE any
-  symlink traversal, and the canonicalized target must remain inside that
-  same owning root (Read canonicalizes the existing file; Mutate
-  canonicalizes the deepest existing ancestor): a symlink can never escape
-  its owning root and can never transfer authority between the two roots —
-  `managed-output/link -> workspace` and `workspace/link ->
-  managed-output` are both rejected even though both targets are otherwise
-  authorized. Path shape never decides authority. An invalid locator is a
-  normal failed result, never an agent-loop failure.
+  `file_path` is intentionally not an alias for `path` and is rejected by
+  the canonical schemas, as are unrelated obsolete spellings.
+- **Cwd-oriented file paths.** Native file tools resolve a relative `path`
+  with `Workspace::root().join(path)` and use absolute `path` values
+  directly. Resolution is a small native file-tool boundary, not a second
+  authorization system. An invalid filesystem operation is a normal failed
+  result, never an Agent Loop failure. Read/Grep/Glob may inspect advertised
+  managed output, while ManagedToolOutput rejects model-originated Write/Edit
+  mutations of that runtime-owned namespace.
 - **One Edit invocation is one atomic transformation from one original file
   snapshot to one final file snapshot.** Every `oldText` is resolved against
-  that same original snapshot — never against the result of an earlier edit
-  in the same call — and must identify exactly one range; zero matches and
-  ambiguous matches are deterministic failures. The complete replacement
-  range set is computed and validated before any mutation, and intersecting,
-  nested, and coinciding ranges are all rejected. Validated disjoint ranges
-  are ordered by position, so input edit ordering can never change the
-  result, and the final snapshot is committed as exactly one file mutation
-  through the plane's single atomic commit. Any validation failure leaves
-  the file byte-for-byte unchanged. There is no sequential-application mode
-  and no replace-all mode.
-- **Glob and Grep observe one shared workspace file universe.** The private
+  that same snapshot; exact matching is preferred and an NFKC-based fallback
+  normalizes trailing whitespace, smart quotes, dashes, and special spaces.
+  Effective occurrences use non-overlapping counting, ambiguous or
+  overlapping ranges fail, and all validation precedes one atomic commit.
+  BOM and the original LF/CRLF/CR style are restored. Any failure leaves the
+  file unchanged. The registry normalizes known malformed Edit arguments
+  before canonical schema validation; the provider and Agent Loop remain
+  unaware of those variants.
+- **Glob and Grep observe one shared file universe.** The private
   `tools/native/search/` substrate — not either tool, and not a traversal
-  crate's defaults — owns that policy: search-root containment through the
-  `Workspace` boundary, hidden files visible, ignore files (`.gitignore`,
+  crate's defaults — owns that policy: relative roots are cwd-oriented and
+  absolute roots are host paths, hidden files visible, ignore files (`.gitignore`,
   `.ignore`, git global excludes, `.git/info/exclude`) deliberately not
   applied, symlinks never followed (neither directory-symlink recursion nor
   a file symlink's target enters the universe), normalized root-relative
@@ -1240,22 +1233,17 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   owns workspace traversal — it only decides how matching happens inside a
   file the substrate handed it.
 - Glob and Grep results are deterministically ordered and bounded: Glob
-  returns lexically ordered root-relative paths (never mtime-ranked), Grep
-  returns matches ordered by path, then line, then column, with several
-  matches on one line reported separately in column order. Grep context
-  windows merge as a set union — every source line appears exactly once and
-  a matching line is never also reported as context. Both enforce a result
-  count cap and a hard payload byte cap, and both report truncation
-  explicitly; results are never dropped silently.
-- The Glob/Grep payload cap bounds the **actually serialized** model-facing
-  JSON, never an estimate of it. Each candidate entry is charged its own
-  serialization plus its array separator on top of a measured envelope, and
-  is admitted only when the complete document still fits, so JSON escaping
-  of quotes, backslashes, and control characters inside a path or a matched
-  line can never deliver more than `MAX_MODEL_TOOL_RESULT_BYTES` to the
-  model. Grep's `matches` and `context` arrays share one budget. The count
-  cap is evaluated before the byte budget, so which entries survive
-  truncation depends only on the deterministic ordering.
+  returns lexically ordered POSIX root-relative paths, and Grep returns
+  `path:line: text` matches plus `path-line- text` context. Both use a
+  complete-line 50KB text projection and actionable continuation messages;
+  Grep also shortens long lines to 500 Unicode characters. Read owns the
+  corresponding sequential 2000-line/50KB head and never uses head/tail
+  preview semantics.
+- These five tools publish plain text, not JSON envelopes. Their 50KB
+  content budgets remain below the unchanged global 64KB model-result safety
+  boundary, which remains a last-resort limiter for Bash, MCP, and other
+  tools. Every recoverable cutoff tells the model the next offset/limit or
+  refinement to request.
 - Grep distinguishes a content policy from an execution failure. A file
   whose bytes are not valid UTF-8 is not searched, contributes no matches,
   and is not an error — binary content is never fabricated as text. A file

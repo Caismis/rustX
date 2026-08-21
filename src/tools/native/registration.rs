@@ -2,10 +2,11 @@
 //!
 //! Every native capability owns one module boundary and constructs itself:
 //! a tool module exposes exactly one `registration(...)` function returning
-//! the [`NativeToolRegistration`] pair of its canonical [`ToolDefinition`]
-//! and its [`ToolExecutor`]. [`register_native_tools`] only composes the
+//! the [`NativeToolRegistration`] object of its canonical [`ToolDefinition`],
+//! [`ToolExecutor`], and optional business-argument normalizer.
+//! [`register_native_tools`] only composes the
 //! known native tools — there is no discovery, no factory, no plugin
-//! loading, and no registration macro. The registration pair is internal to
+//! loading, and no registration macro. The registration object is internal to
 //! the native plane; the public tool-plane API stays [`ToolDefinition`],
 //! [`ToolExecutor`], [`ToolRegistry`], and [`ToolExecutionResult`].
 //!
@@ -34,11 +35,11 @@ use schemars::transform::{Transform, transform_subschemas};
 use schemars::{JsonSchema, Schema};
 
 use crate::runtime::identity::ToolId;
-use crate::tools::executor::ToolExecutor;
+use crate::tools::executor::{BusinessArgumentNormalizer, ToolExecutor};
 use crate::tools::types::{ToolDefinition, ToolInvocationPolicy, ToolOrigin, ToolReplayPolicy};
 
-/// One fully constructed native tool: its canonical definition and the
-/// executor that serves it.
+/// One fully constructed native tool: its canonical definition, executor,
+/// and optional business-argument normalizer.
 ///
 /// This is the internal composition object of the native tool plane — a
 /// native tool module builds one, and [`register_native_tools`] consumes
@@ -46,7 +47,7 @@ use crate::tools::types::{ToolDefinition, ToolInvocationPolicy, ToolOrigin, Tool
 /// consumers depend on [`ToolDefinition`], [`ToolExecutor`],
 /// [`ToolRegistry`], and [`ToolExecutionResult`], and the registry keeps
 /// owning registration validation and the definition/executor
-/// relationship.
+/// relationship and preflight normalization boundary.
 ///
 /// [`ToolRegistry`]: crate::tools::executor::ToolRegistry
 /// [`ToolExecutionResult`]: crate::tools::types::ToolExecutionResult
@@ -56,16 +57,34 @@ pub(super) struct NativeToolRegistration {
     pub definition: ToolDefinition,
     /// The executor serving that definition.
     pub executor: Arc<dyn ToolExecutor>,
+    /// Tool-owned normalization applied after runtime metadata is stripped
+    /// and before the canonical schema is validated.
+    pub normalizer: BusinessArgumentNormalizer,
 }
 
 impl NativeToolRegistration {
-    /// Pairs one canonical definition with its executor.
+    /// Pairs one canonical definition with its executor and identity
+    /// normalization.
     pub(super) fn new(definition: ToolDefinition, executor: Arc<dyn ToolExecutor>) -> Self {
         Self {
             definition,
             executor,
+            normalizer: identity_arguments,
         }
     }
+
+    /// Attaches one tool-owned business-argument normalizer.
+    pub(super) fn with_normalizer(mut self, normalizer: BusinessArgumentNormalizer) -> Self {
+        self.normalizer = normalizer;
+        self
+    }
+}
+
+// The registry seam deliberately gives identity normalization the same fallible
+// shape as tool-owned normalizers so every registered tool follows one path.
+#[allow(clippy::unnecessary_wraps)]
+fn identity_arguments(arguments: &serde_json::Value) -> Result<serde_json::Value, String> {
+    Ok(arguments.clone())
 }
 
 /// Builds a canonical native tool definition whose input schema is

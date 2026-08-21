@@ -19,23 +19,27 @@
 //! # Storage disjointness
 //!
 //! The artifact store and the model workspace must be disjoint filesystem
-//! regions: runtime-private output files must never be observable through
-//! Glob/Grep/Bash. Construction canonicalizes both roots and rejects an
-//! artifact root that equals the workspace root, nests inside it, or
-//! contains it (including symlink-resolved overlap).
+//! regions: runtime-private output files are not included by default
+//! cwd-relative Glob/Grep traversal or published as native file-tool paths.
+//! Native tools intentionally accept an absolute host path when a caller
+//! already knows it, so this disjointness is storage ownership rather than a
+//! second containment policy. Construction canonicalizes both roots and
+//! rejects an artifact root that equals the workspace root, nests inside it,
+//! or contains it (including symlink-resolved overlap).
 //!
 //! The managed tool-output root lives in a dedicated `tool-output/`
 //! directory below the runtime-private artifact root. Only that directory —
 //! never its enclosing runtime-private parent, which also holds the durable
 //! conversation database and semantic artifact internals — is authorized
-//! for the model-facing read-only filesystem operations.
+//! for runtime-managed read-only continuation operations. `ManagedToolOutput`
+//! separately rejects model-originated Write/Edit mutations of that root.
 //!
 //! Root composition is validated here, where the runtime composes those
 //! resources: the canonical managed-output root must be a strict dedicated
 //! descendant of the canonical artifact root and must stay disjoint from
 //! the canonical workspace root, and a pre-existing symlink at the
-//! `tool-output/` root is rejected. No authorized root can therefore alias
-//! another, and the locator authority can rely on valid, disjoint roots.
+//! `tool-output/` root is rejected. No runtime read root can therefore alias
+//! another, and the locator can rely on valid, disjoint roots.
 //!
 //! # Durable authority binding
 //!
@@ -384,8 +388,9 @@ impl ConversationToolRuntime {
         // runtime-private root: textual spill files must be model-readable
         // through the read-only filesystem tools, but the enclosing
         // runtime-private region (the durable conversation database, the
-        // semantic artifact internals) must not. The locator authority
-        // therefore authorizes exactly this root, never its parent.
+        // semantic artifact internals) must not. The runtime read locator
+        // therefore authorizes exactly this root, never its parent, while
+        // ManagedToolOutput rejects model-originated mutation there.
         let tool_output =
             ManagedToolOutput::new(conversation_id.clone(), artifacts_root.join("tool-output"))
                 .map_err(ConversationRuntimeError::ManagedOutput)?;
@@ -635,7 +640,7 @@ fn validate_disjoint_storage(
 /// All three roots are canonical at this point, and
 /// [`ManagedToolOutput::new`] has already rejected a pre-existing symlink
 /// at the dedicated root itself; this check is the composition-level
-/// guarantee the locator authority relies on.
+/// guarantee the runtime read locator and mutation guard rely on.
 fn validate_managed_output_root(
     workspace_root: &Path,
     artifacts_root: &Path,
@@ -852,8 +857,8 @@ mod tests {
 
     /// A normal real `tool-output/` directory satisfies the composition
     /// invariant: construction succeeds, the managed root is a strict
-    /// descendant of the canonical artifact root, and the locator authority
-    /// enforces it read-only.
+    /// descendant of the canonical artifact root, and `ManagedToolOutput` owns
+    /// its model-mutation guard.
     #[test]
     fn a_real_tool_output_directory_is_accepted_and_read_only() {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -874,26 +879,16 @@ mod tests {
         let spill = runtime.tool_output().open_spill().expect("spill");
         let locator = spill.path().to_str().expect("utf8 path").to_owned();
         drop(spill);
-        crate::tools::locator::resolve(
-            runtime.workspace(),
-            runtime.tool_output(),
-            &locator,
-            crate::tools::locator::LocatorOperation::Read,
-        )
-        .expect("the managed root is readable");
+        crate::tools::locator::resolve(runtime.workspace(), runtime.tool_output(), &locator)
+            .expect("the managed root is readable");
         assert!(
             matches!(
-                crate::tools::locator::resolve(
-                    runtime.workspace(),
-                    runtime.tool_output(),
-                    &locator,
-                    crate::tools::locator::LocatorOperation::Mutate,
-                ),
-                Err(crate::tools::locator::LocatorError::ManagedOutputReadOnly(
-                    _
-                ))
+                runtime
+                    .tool_output()
+                    .ensure_model_mutation_allowed(&managed),
+                Err(crate::tools::managed_output::ManagedOutputError::ModelMutationReadOnly(_))
             ),
-            "the managed root is read-only"
+            "the managed root is read-only to model-originated mutation"
         );
     }
 

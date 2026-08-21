@@ -10,34 +10,28 @@ use crate::tools::native::input::decode;
 #[serde(deny_unknown_fields)]
 pub(super) struct GlobInput {
     /// The glob pattern, matched against paths relative to the search root.
-    /// `*` and `?` never match a path separator; use `**` to cross
-    /// directories.
     pub pattern: String,
-    /// The absolute directory to search. It must resolve inside the
-    /// workspace root or the read-only managed tool-output root. Omit it to
-    /// search the workspace root.
+    /// An optional relative or absolute directory search root. Omit it to
+    /// search the execution cwd.
     pub path: Option<String>,
+    /// The maximum number of results to return. Defaults to 1000; larger
+    /// values are accepted and remain bounded by the tool's byte budget.
+    #[schemars(range(min = 1))]
+    pub limit: Option<u64>,
 }
 
 impl GlobInput {
     /// Deserializes and semantically validates one Glob invocation.
-    ///
-    /// Pattern compilation is an execution concern: an unparsable pattern
-    /// is reported by the executor with the globset diagnostic. The
-    /// absolute-locator rule is enforced on the typed value so a direct
-    /// executor call can never bypass it.
-    ///
-    /// # Errors
-    ///
-    /// Returns the deterministic rejection message of the first input
-    /// contract violation.
     pub(super) fn parse(arguments: &serde_json::Value) -> Result<Self, String> {
         let input: Self = decode(super::NAME, arguments)?;
-        if let Some(path) = &input.path
-            && !std::path::Path::new(path).is_absolute()
-        {
-            return Err("glob requires an absolute path when one is supplied".to_owned());
+        if input.limit == Some(0) {
+            return Err("glob requires a limit of at least 1".to_owned());
         }
         Ok(input)
+    }
+
+    pub(super) fn limit(&self) -> u64 {
+        self.limit
+            .unwrap_or(crate::tools::limits::DEFAULT_GLOB_RESULTS)
     }
 }

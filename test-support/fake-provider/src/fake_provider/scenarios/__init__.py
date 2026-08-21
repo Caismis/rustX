@@ -8,12 +8,11 @@ failure reporting for no gain.
 Every scenario is registered by name. `--scenario <name>` selects one, and
 `--list` prints the registry.
 
-The one dynamic value a static script legitimately needs is the absolute
-workspace root of the rustX runtime under test: rustX native filesystem
-tools require absolute locators (Issue #86), and the workspace is a fresh
-temp directory per test run. A scripted tool-call argument may therefore
-carry the ``{workspace}`` placeholder, which ``--workspace`` substitutes
-with the concrete absolute root at build time. A placeholder without a
+The one dynamic value a static script legitimately needs is the workspace
+root of the rustX runtime under test. The workspace is a fresh temp directory
+per test run, and a scripted tool-call argument may carry the ``{workspace}``
+placeholder when a scenario wants to exercise an absolute path. ``--workspace``
+substitutes the concrete root at build time. A placeholder without a
 ``--workspace`` value is a startup error, never a silently broken script.
 """
 

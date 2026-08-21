@@ -286,7 +286,7 @@ def test_a_workspace_placeholder_without_a_workspace_fails_loudly():
 def test_the_workspace_placeholder_is_substituted():
     scenario = build("tool_call_continuation", "/tmp/rustx-ws")
     args = scenario.steps[0].respond.script[0].arguments
-    assert '"file_path":"/tmp/rustx-ws/note.txt"' in args
+    assert '"path":"/tmp/rustx-ws/note.txt"' in args
 
 
 def test_an_unknown_scenario_name_fails_loudly():

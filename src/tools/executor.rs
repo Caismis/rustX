@@ -79,18 +79,21 @@ pub struct ToolExecutionContext<'a> {
     /// at start time: an execution that started before the cancellation race
     /// happened still reports the cause that actually won it.
     pub cancellation: ExecutionCancellation,
-    /// The canonical workspace boundary every native filesystem tool and
-    /// Bash operates against.
+    /// The authoritative execution cwd for native file tools and the
+    /// workspace authority used by Bash. Native file tools join relative
+    /// model paths to this root but do not impose containment on absolute
+    /// host paths.
     pub workspace: &'a Workspace,
     /// The bounded progress reporter of the execution.
     pub progress: &'a dyn ProgressReporter,
     /// The conversation-owned artifact store for genuine semantic file
     /// artifacts (never for oversized textual output).
     pub artifacts: &'a ArtifactStore,
-    /// The conversation-owned managed tool-output store: the read-only
-    /// region of auxiliary textual output — lazy result spills of oversized
+    /// The conversation-owned managed tool-output store: the runtime-owned
+    /// auxiliary textual output region — lazy result spills of oversized
     /// foreground output, and the dispatch-allocated live-output channel of
-    /// background executions.
+    /// background executions. Read/Grep/Glob may inspect it; Write/Edit are
+    /// rejected by its model-mutation guard.
     pub tool_output: &'a ManagedToolOutput,
     /// The explicit authorized tool environment.
     pub environment: &'a ToolEnvironment,
@@ -252,17 +255,25 @@ impl Clone for ToolRegistry {
         let mut clone = Self::new();
         for entry in &self.entries {
             clone
-                .register(entry.definition.clone(), entry.executor.clone())
+                .register_with_argument_normalizer(
+                    entry.definition.clone(),
+                    entry.executor.clone(),
+                    entry.normalizer,
+                )
                 .expect("a validated registry clones without registration errors");
         }
         clone
     }
 }
 
-/// One registered definition/executor pair.
+/// One registered definition, executor, and business-argument normalizer.
+pub(crate) type BusinessArgumentNormalizer =
+    fn(&serde_json::Value) -> Result<serde_json::Value, String>;
+
 struct RegistryEntry {
     definition: ToolDefinition,
     executor: Arc<dyn ToolExecutor>,
+    normalizer: BusinessArgumentNormalizer,
 }
 
 /// The name of the runtime intrinsic background inspection tool.
@@ -295,6 +306,21 @@ impl ToolRegistry {
         &mut self,
         definition: ToolDefinition,
         executor: Arc<dyn ToolExecutor>,
+    ) -> Result<(), ToolRegistryError> {
+        self.register_with_argument_normalizer(definition, executor, identity_arguments)
+    }
+
+    /// Registers one tool with a tool-owned business-argument normalizer.
+    ///
+    /// Runtime metadata has already been removed when the normalizer runs,
+    /// and the normalized value is still validated against the one canonical
+    /// schema before an executor can receive it. Native Edit is currently the
+    /// only consumer.
+    pub(crate) fn register_with_argument_normalizer(
+        &mut self,
+        definition: ToolDefinition,
+        executor: Arc<dyn ToolExecutor>,
+        normalizer: BusinessArgumentNormalizer,
     ) -> Result<(), ToolRegistryError> {
         if definition.id.as_str().is_empty() {
             return Err(ToolRegistryError::InvalidIdentity(format!(
@@ -339,6 +365,7 @@ impl ToolRegistry {
         self.entries.push(RegistryEntry {
             definition,
             executor,
+            normalizer,
         });
         Ok(())
     }
@@ -429,7 +456,8 @@ impl ToolRegistry {
     /// resolve tool
     /// → extract/resolve rustX invocation metadata
     /// → strip rustX metadata
-    /// → validate business arguments against the canonical schema
+    /// → normalize tool-owned business arguments
+    /// → validate normalized arguments against the canonical schema
     /// → dispatch executor
     /// ```
     ///
@@ -452,7 +480,18 @@ impl ToolRegistry {
                     });
                 }
             };
-        if let Err(error) = validate_business_arguments(&entry.definition.input_schema, &stripped) {
+        let normalized = match (entry.normalizer)(&stripped) {
+            Ok(arguments) => arguments,
+            Err(error) => {
+                return Ok(PreflightOutcome::Rejected {
+                    tool_id: entry.definition.id.clone(),
+                    origin: entry.definition.origin.clone(),
+                    error,
+                });
+            }
+        };
+        if let Err(error) = validate_business_arguments(&entry.definition.input_schema, &normalized)
+        {
             return Ok(PreflightOutcome::Rejected {
                 tool_id: entry.definition.id.clone(),
                 origin: entry.definition.origin.clone(),
@@ -465,7 +504,7 @@ impl ToolRegistry {
                 tool_id: entry.definition.id.clone(),
                 tool_name: entry.definition.name.clone(),
                 mode,
-                arguments: stripped,
+                arguments: normalized,
             },
             concurrency: entry.definition.concurrency_policy,
             origin: entry.definition.origin.clone(),
@@ -510,6 +549,13 @@ impl ToolRegistry {
             }),
         }
     }
+}
+
+// The registry seam deliberately gives identity normalization the same fallible
+// shape as tool-owned normalizers so every registered tool follows one path.
+#[allow(clippy::unnecessary_wraps)]
+fn identity_arguments(arguments: &serde_json::Value) -> Result<serde_json::Value, String> {
+    Ok(arguments.clone())
 }
 
 #[cfg(test)]

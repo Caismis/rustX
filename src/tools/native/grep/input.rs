@@ -3,105 +3,67 @@
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::tools::limits::{DEFAULT_GREP_MATCHES, MAX_GREP_CONTEXT_LINES, MAX_GREP_MATCHES};
+use crate::tools::limits::MAX_GREP_CONTEXT_LINES;
 use crate::tools::native::input::decode;
 
 /// The canonical input contract of the Grep tool.
-///
-/// The model-facing JSON name of the case flag is `ignoreCase`; the Rust
-/// field name stays idiomatic and the serde/schema rename is the contract.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct GrepInput {
     /// The pattern to search for. A regular expression unless `literal` is
     /// true.
     pub pattern: String,
-    /// The absolute directory (or single file) to search. It must resolve
-    /// inside the workspace root or the read-only managed tool-output
-    /// root. Omit it to search the workspace root.
+    /// An optional relative or absolute directory/file search root. Omit it
+    /// to search the execution cwd.
     pub path: Option<String>,
     /// A glob restricting which files are searched, matched against paths
-    /// relative to the search root. Defaults to searching every file.
+    /// relative to the search root.
     pub glob: Option<String>,
-    /// Whether to match case-insensitively. Defaults to false, a
-    /// case-sensitive search.
+    /// Whether to match case-insensitively.
     #[serde(rename = "ignoreCase")]
     #[schemars(rename = "ignoreCase")]
     pub ignore_case: Option<bool>,
-    /// Whether to search for the pattern as literal text instead of a
-    /// regular expression. Defaults to false. Use it to avoid escaping
-    /// regex metacharacters.
+    /// Whether to search for literal text instead of a regular expression.
     pub literal: Option<bool>,
-    /// How many lines of surrounding context to return around each matching
-    /// line. Defaults to 0.
+    /// How many lines of surrounding context to return on each side.
     #[schemars(range(min = 0, max = 20))]
     pub context: Option<u32>,
-    /// The maximum number of matches to return. Defaults to 200.
-    #[schemars(range(min = 1, max = 2000))]
-    pub limit: Option<u32>,
+    /// The maximum number of matching lines to return. Defaults to 100.
+    /// Larger values are accepted and are bounded by the tool's finite
+    /// content budget rather than by a schema maximum.
+    #[schemars(range(min = 1))]
+    pub limit: Option<u64>,
 }
 
 impl GrepInput {
     /// Deserializes and semantically validates one Grep invocation.
-    ///
-    /// Regex and glob compilation are execution concerns: an unparsable
-    /// expression is reported by the executor with its diagnostic.
-    ///
-    /// # Errors
-    ///
-    /// Returns the deterministic rejection message of the first input
-    /// contract violation.
     pub(super) fn parse(arguments: &serde_json::Value) -> Result<Self, String> {
         let input: Self = decode(super::NAME, arguments)?;
-        input.validate()?;
-        Ok(input)
-    }
-
-    /// The tool-specific semantic rules of the two bounded numeric fields
-    /// and the locator. The generated schema states the same bounds, so
-    /// they also hold for a direct executor call that bypasses the registry
-    /// preflight.
-    fn validate(&self) -> Result<(), String> {
-        if let Some(path) = &self.path
-            && !std::path::Path::new(path).is_absolute()
-        {
-            return Err("grep requires an absolute path when one is supplied".to_owned());
-        }
-        if let Some(context) = self.context
-            && context > MAX_GREP_CONTEXT_LINES
-        {
+        if input.context.unwrap_or(0) > MAX_GREP_CONTEXT_LINES {
             return Err(format!(
                 "grep allows at most {MAX_GREP_CONTEXT_LINES} lines of context"
             ));
         }
-        match self.limit {
-            Some(0) => Err("grep requires a limit of at least 1".to_owned()),
-            Some(limit) if limit as usize > MAX_GREP_MATCHES => {
-                Err(format!("grep returns at most {MAX_GREP_MATCHES} matches"))
-            }
-            _ => Ok(()),
+        if input.limit == Some(0) {
+            return Err("grep requires a limit of at least 1".to_owned());
         }
+        Ok(input)
     }
 
-    /// Whether the search is case-insensitive.
     pub(super) fn ignore_case(&self) -> bool {
         self.ignore_case.unwrap_or(false)
     }
 
-    /// Whether the pattern is literal text rather than a regular expression.
     pub(super) fn literal(&self) -> bool {
         self.literal.unwrap_or(false)
     }
 
-    /// The effective number of context lines around each matching line.
     pub(super) fn context(&self) -> usize {
         self.context.unwrap_or(0) as usize
     }
 
-    /// The effective maximum number of returned matches.
-    pub(super) fn limit(&self) -> usize {
+    pub(super) fn limit(&self) -> u64 {
         self.limit
-            .map_or(DEFAULT_GREP_MATCHES, |limit| limit as usize)
-            .min(MAX_GREP_MATCHES)
+            .unwrap_or(crate::tools::limits::DEFAULT_GREP_MATCHES)
     }
 }

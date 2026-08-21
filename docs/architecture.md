@@ -485,19 +485,20 @@ tools/schema.rs            JSON Schema validation, the reserved __rustx_
                            reserved invocation metadata extraction
 tools/workspace.rs         Workspace: the canonical runtime-owned workspace
                            boundary (canonicalized root)
-tools/locator.rs           the one locator-authority boundary of the native
-                           filesystem tools: absolute locators, two authorized
-                           roots (workspace read/mutate, managed tool-output
-                           read-only), lexical owning-root determination
-                           before canonicalization, same-root canonical-target
-                           authority, no symlink escape and no cross-root
+tools/locator.rs           runtime-owned read locator authority for advertised
+                           managed-output paths and unrelated runtime
+                           invariants: absolute locators, explicit authorized
+                           roots, lexical owning-root determination before
+                           canonicalization, same-root canonical-target
+                           authority, no symlink escape or cross-root
                            authority transfer
 tools/managed_output.rs    ManagedToolOutput: the conversation-owned managed
                            tool-output store: lazy foreground result spills
                            (`results/result_N.txt`, monotonic sequence,
                            `create_new`) and the dispatch-allocated
                            background live-output channel
-                           (`tasks/exec_N.output`)
+                           (`tasks/exec_N.output`); owns model-mutation
+                           rejection for its runtime-owned namespace
 tools/artifacts.rs         ArtifactStore: conversation-owned opaque monotonic
                            artifact ids with streaming spooling (genuine
                            semantic artifacts only — never textual overflow)
@@ -522,13 +523,13 @@ tools/native/             the native tool plane: one module per native
                            description, typed input contract, generated
                            schema, executor, and private helpers;
                            registration.rs owns the NativeToolRegistration
-                           pair and schema generation, input.rs the typed
+                           and schema generation, input.rs the typed
                            input boundary, support.rs the shared failed/
                            success results and the one atomic file commit,
                            and mod.rs only composes the known native tools
 tools/native/search/      the private native-search substrate shared by
                            Glob and Grep: the one workspace file-universe
-                           policy (containment, traversal, hidden-file
+                           policy (cwd-oriented root resolution, traversal, hidden-file
                            visibility, ignore-file behavior, symlink
                            policy, normalized relative paths, deterministic
                            enumeration) — not a tool, never registered,
@@ -833,7 +834,7 @@ ExecutionStateMachine: Idle -> RunningModel -> WaitingForTool -> RunningModel ->
         |
 ModelEventAssembler: stream validation + ordered AssistantMessageBlock assembly
         |
-ToolRegistry preflight: resolve -> extract -> strip -> validate -> dispatch
+ToolRegistry preflight: resolve -> extract -> strip -> tool-owned normalize -> validate -> dispatch
         |
 deterministic scheduling phases (sequential barriers, parallel groups)
         |
@@ -1329,7 +1330,8 @@ canonical ToolDefinition (tool-owned schema + two policy axes)
         |
 validating ToolRegistry (definition + Arc<dyn ToolExecutor>)
         |
-preflight: resolve -> extract reserved metadata -> strip -> JSON Schema validate
+preflight: resolve -> extract reserved metadata -> strip -> tool-owned business-argument
+            normalize -> canonical JSON Schema validate
         |
 ToolInvocation (stripped/validated business arguments + resolved mode)
         |
@@ -1355,9 +1357,12 @@ required reserved `__rustx_execution` field
 reserved `__rustx_` top-level property namespace. The runtime extracts the
 field, resolves the canonical mode, strips it, and validates the remaining
 business arguments against the original schema before dispatch; reserved
-fields are never forwarded to executors. `ModelRequest.tools` carries the
-compiled [`ModelToolDefinition`] values only — provider adapters translate
-them verbatim and never decide execution semantics.
+fields are never forwarded to executors. Tool-owned argument normalization,
+where present, runs between stripping and that canonical validation. Native
+Edit's known malformed argument spellings are handled there; provider
+adapters and the Agent Loop remain unaware of them. `ModelRequest.tools`
+carries the compiled [`ModelToolDefinition`] values only — provider adapters
+translate them verbatim and never decide execution semantics.
 
 The registry is a correctness boundary: duplicate `ToolId`s, duplicate
 model-facing names, empty identities, invalid or non-root JSON Schema,
@@ -1384,8 +1389,9 @@ live-output files allocated at the background dispatch commit point and
 reused by the terminal settlement message). The
 artifact root and the workspace root must be disjoint filesystem regions:
 equal roots, nested roots, and symlink-resolved overlap are rejected at
-construction, so runtime-private output files are never observable through
-Glob/Grep/Bash.
+construction, so runtime-private output files are not included in the default
+cwd-based Glob/Grep traversal. An explicit absolute host path remains subject
+to the ordinary native file-tool contract.
 The explicit `ToolEnvironment` and the authoritative
 `ConversationBackgroundRegistry` complete the bundle. Background
 executions own a deterministic `exec_N` `ToolExecutionId`, a lifecycle
@@ -1441,7 +1447,7 @@ One native capability owns one module boundary. A native tool module owns
 its name, description, typed input contract, generated schema, executor,
 and private helpers, and constructs itself through its own
 `registration(policy)` function returning a `NativeToolRegistration`
-(definition + executor); `tools/native/mod.rs` only composes the known
+(definition + executor + tool-owned argument normalizer); `tools/native/mod.rs` only composes the known
 native tools. Composition stays explicit and deterministic: no discovery,
 no plugin loading, no registration macros, no generic tool factory.
 
@@ -1453,27 +1459,28 @@ parameter vocabulary, so a model trained around modern coding agents
 recognizes the surface immediately:
 
 ```text
-read   { file_path, offset?, limit? }         offset is 1-based (default 1),
-                                              limit defaults to 200 lines
-write  { file_path, content }
-edit   { file_path, edits: [{ oldText, newText }] }
-glob   { pattern, path? }                     omitted path = workspace root
+read   { path, offset?, limit? }              offset is 1-based (default 1),
+                                              zero normalizes to one; no page default
+write  { path, content }                      creates missing parent directories
+edit   { path, edits: [{ oldText, newText }] }
+glob   { pattern, path?, limit? }              omitted path = execution cwd
 grep   { pattern, path?, glob?, ignoreCase?, literal?, context?, limit? }
 bash   { command, timeout? }                  timeout is in seconds
 ```
 
-Locators are absolute with explicit authority (Issue #86): `file_path` of
-Read/Write/Edit must be absolute, and Glob/Grep's optional `path` is
-absolute when supplied (omitted means the workspace root). One
-locator-authority boundary (`tools/locator.rs`) admits exactly two roots —
-the workspace (read and mutate) and the conversation's managed tool-output
-root (read-only) — determines the locator's lexical owning root BEFORE any
-symlink traversal, canonicalizes the existing target (Read) or the deepest
-existing ancestor (Mutate), requires the canonical target to remain inside
-that same owning root, and rejects every other location, including
-runtime-private regions. A symlink can therefore neither escape its owning
-root nor transfer authority between the two roots, and path shape never
-decides authority.
+For Read, Write, Edit, Grep, and Glob, a relative model path is interpreted
+against and lexically normalized from the authoritative execution cwd
+(`Workspace::root()` in the current runtime); an absolute path is likewise
+lexically normalized as an ordinary host filesystem path. `.` and `..` are
+resolved before filesystem existence or symlink behavior, so missing
+intermediate components cannot change path meaning. These five tools do not
+impose the locator workspace-containment policy. `Workspace` remains the
+runtime/Bash cwd authority. `tools/locator.rs` resolves runtime-advertised
+managed-output paths for reads, while `ManagedToolOutput` owns the narrow
+model-mutation rejection; neither is a hidden second policy for ordinary
+native file paths. Final-component symlinks
+are followed for atomic Write/Edit commits so the link itself is not
+replaced.
 
 Adopting those conventions is a *schema* decision only. It does not import
 Pi's runtime, subprocess model, permission system, ignore behavior, result
@@ -1485,19 +1492,17 @@ Three consequences are load-bearing:
 - **Edit is an atomic multi-edit against one original file snapshot.** One
   invocation reads one snapshot, resolves *every* `oldText` against that
   same snapshot (never against the result of an earlier edit in the same
-  call), requires each to identify exactly one range, computes the whole
-  replacement range set before mutating anything, rejects intersecting,
-  nested, and coinciding ranges, orders the validated disjoint ranges by
-  position, and commits one final snapshot through the plane's single
-  atomic file commit. Input edit ordering therefore cannot change the
-  result, and any validation failure leaves the file byte-for-byte
-  unchanged. There is no sequential-application mode and no replace-all
-  mode.
+  call), prefers exact matching, and uses a NFKC-based fuzzy fallback only
+  when exact matching fails. Fuzzy matching removes per-line trailing
+  whitespace and normalizes smart quotes, dashes, and special spaces. Each
+  effective oldText must be unique using non-overlapping occurrence
+  counting; intersecting, nested, and coinciding ranges are rejected before
+  one atomic commit. BOM and the original LF/CRLF/CR line-ending style are
+  restored, and any validation failure leaves the file unchanged.
 - **Glob and Grep share one search substrate.** `tools/native/search/` owns
-  the single workspace file-universe policy both observe: search roots
-  resolved through the one locator-authority boundary (workspace or the
-  read-only managed tool-output root; a single file is a legal Grep root),
-  hidden files visible,
+  the single file-universe policy both observe: search roots are resolved
+  against cwd or used as absolute host paths, a single file is a legal Grep
+  root, hidden files are visible,
   ignore files (`.gitignore`, `.ignore`, git global excludes,
   `.git/info/exclude`) deliberately *not* applied, symlinks never followed
   (so neither a directory symlink recursion nor a file symlink target can
@@ -1516,20 +1521,14 @@ Three consequences are load-bearing:
   conversion spreads into the process plane.
 
 Deterministic ordering and bounded output remain rustX-owned semantics in
-all cases: Glob returns lexically ordered paths (never mtime-ranked), Grep
-returns matches ordered by path, then line, then column, both enforce a
-result count cap and a hard payload byte cap with explicit truncation
-state, and neither ever drops results silently.
-
-The payload cap bounds the **actually serialized** model-facing JSON, not an
-estimate of it. Each candidate entry is charged its own serialization plus
-its array separator on top of a measured envelope, and an entry is admitted
-only if the whole document still fits, so JSON escaping inside a path or a
-matched line cannot push the delivered payload past
-`MAX_MODEL_TOOL_RESULT_BYTES`. Grep's `matches` and `context` arrays share
-that one budget. The count cap is evaluated before the byte budget, so which
-entries survive truncation stays a function of the deterministic ordering
-alone rather than of how expensive a particular entry is to encode.
+all cases. Read returns a contiguous complete-line head of at most 2000
+lines/50KB and reports the exact continuation offset. Grep and Glob return
+plain text, use a complete-line 50KB head, and report either the requested
+match/result limit or the byte limit with actionable guidance. Grep shortens
+individual lines to 500 Unicode characters and says how to use Read for the
+full line. These tool-owned projections remain below the global 64KB runtime
+safety boundary; the global limiter is not changed and remains the last
+resort for Bash, MCP, and other result types.
 
 `background_task` is a runtime intrinsic that happens to participate in the
 common tool execution plane. It is not an ordinary native tool, its contract

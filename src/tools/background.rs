@@ -3513,7 +3513,7 @@ mod tests {
             tool_id: ToolId::new("tool-read"),
             tool_name: "read".to_owned(),
             mode: ToolInvocationMode::Foreground,
-            arguments: serde_json::json!({"file_path": output_path}),
+            arguments: serde_json::json!({"path": output_path}),
         };
         let read = crate::tools::native::ReadTool
             .execute(
@@ -3539,7 +3539,7 @@ mod tests {
             other => panic!("read returns text, got {other:?}"),
         };
         assert_eq!(
-            read_text, "line-A",
+            read_text, "line-A\n",
             "Read observes the committed prefix while the execution runs"
         );
 
@@ -3574,13 +3574,12 @@ mod tests {
             )
             .await;
         assert_eq!(grep.status, ToolExecutionStatus::Success);
-        let grep_json = match &grep.content[0] {
-            ToolResultContent::Json { value } => value.clone(),
-            other => panic!("grep returns JSON, got {other:?}"),
+        let grep_text = match &grep.content[0] {
+            ToolResultContent::Text(text) => text.text.clone(),
+            other => panic!("grep returns text, got {other:?}"),
         };
         assert_eq!(
-            grep_json["matches"].as_array().expect("matches").len(),
-            1,
+            grep_text, "exec_1.output:1: line-A",
             "Grep finds the committed prefix in the live file while the execution runs"
         );
 

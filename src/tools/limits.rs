@@ -18,25 +18,28 @@ pub const MAX_MODEL_TOOL_RESULT_BYTES: usize = 64 * 1024;
 /// make the canonical terminal record unbounded.
 pub const MAX_OUTPUT_CONTINUATION_DIAGNOSTIC_BYTES: usize = 1024;
 
-/// The maximum number of Glob results returned to the model.
-pub const MAX_GLOB_RESULTS: usize = 2_000;
+/// The tool-owned content budget of the native sequential/search projections.
+pub const NATIVE_FILE_TOOL_MAX_BYTES: usize = 50 * 1024;
 
-/// The hard cap on Grep matches returned to the model. A `limit` above it
-/// is a contract violation, not a silently clamped request.
-pub const MAX_GREP_MATCHES: usize = 2_000;
+/// The maximum number of complete lines returned by Read when its own byte
+/// budget is not reached first.
+pub const MAX_READ_LINES: usize = 2_000;
 
 /// The canonical bounded default number of Grep matches, used when the model
 /// omits `limit`.
-pub const DEFAULT_GREP_MATCHES: usize = 200;
+pub const DEFAULT_GREP_MATCHES: u64 = 100;
+
+/// The canonical bounded default number of Glob results, used when the model
+/// omits `limit`.
+pub const DEFAULT_GLOB_RESULTS: u64 = 1_000;
 
 /// The maximum number of context lines Grep returns on each side of a
 /// matching line.
 pub const MAX_GREP_CONTEXT_LINES: u32 = 20;
 
-/// The maximum bytes of one line Grep reports. A longer line is shortened
-/// with an explicit truncation marker; the reported column always refers to
-/// the original line.
-pub const MAX_GREP_LINE_BYTES: usize = 512;
+/// The maximum Unicode scalar values of one line Grep reports. A longer line
+/// is shortened with an explicit marker.
+pub const MAX_GREP_LINE_CHARS: usize = 500;
 
 /// The maximum length of one progress message text.
 pub const MAX_PROGRESS_MESSAGE_BYTES: usize = 512;

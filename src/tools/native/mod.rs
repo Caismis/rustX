@@ -21,11 +21,12 @@
 //! name, its description, its input contract, its executor, and its
 //! tool-private helpers, and constructs itself through its own
 //! `registration(...)` function returning the plane-internal registration
-//! pair of a definition and its executor. This module only *composes* the
+//! object of a definition, executor, and optional tool-owned normalizer. This
+//! module only *composes* the
 //! known native tools — the composition is explicit and deterministic, with
 //! no discovery, no plugin loading, and no generic tool factory.
 //!
-//! The registration pair is an implementation detail: the public tool-plane
+//! The registration object is an implementation detail: the public tool-plane
 //! API stays [`ToolDefinition`], [`ToolExecutor`], [`ToolRegistry`], and
 //! [`ToolExecutionResult`].
 //!
@@ -179,9 +180,10 @@ pub fn register_native_tools(
     for NativeToolRegistration {
         definition,
         executor,
+        normalizer,
     } in registrations
     {
-        registry.register(definition, executor)?;
+        registry.register_with_argument_normalizer(definition, executor, normalizer)?;
     }
     Ok(())
 }
@@ -211,9 +213,10 @@ pub fn register_subagent_child_tools(
     for NativeToolRegistration {
         definition,
         executor,
+        normalizer,
     } in registrations
     {
-        registry.register(definition, executor)?;
+        registry.register_with_argument_normalizer(definition, executor, normalizer)?;
     }
     Ok(())
 }

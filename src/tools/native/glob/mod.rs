@@ -1,36 +1,19 @@
-//! Native Glob tool (M5).
+//! Native Glob tool.
 //!
-//! Lists the files of the workspace whose path matches a glob pattern. The
-//! file universe comes from the shared native-search substrate
-//! ([`crate::tools::native::search`]), which is the same universe Grep
-//! observes: no shelling out, no implicit ignore-file semantics, hidden
-//! files visible, and symlinks never followed. Results are normalized paths
-//! relative to the search root, sorted lexicographically so physical
-//! filesystem enumeration order can never become result order.
-//!
-//! The result is bounded twice: by [`MAX_GLOB_RESULTS`] entries and by
-//! [`MAX_MODEL_TOOL_RESULT_BYTES`] of **actually serialized** model-facing
-//! JSON. The byte budget is charged the exact serialization of each path
-//! plus its array separator, on top of a measured envelope, so JSON escaping
-//! of quotes, backslashes, and control characters inside a filename can
-//! never push the delivered payload past the cap. Reaching either bound is
-//! reported explicitly and nothing is dropped silently. Ordering is never by
-//! modification time.
-//!
-//! The model-facing argument contract is the typed [`GlobInput`]; the
-//! canonical schema is generated from it.
+//! Glob keeps rustX's in-process deterministic traversal. It resolves a
+//! relative root against the execution cwd, preserves the existing hidden,
+//! ignore-file, and symlink policies, and returns sorted POSIX-separated
+//! root-relative paths as bounded plain text.
 
 mod input;
 
 use futures_util::future::BoxFuture;
 
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
-use crate::tools::limits::{MAX_GLOB_RESULTS, MAX_MODEL_TOOL_RESULT_BYTES};
+use crate::tools::limits::NATIVE_FILE_TOOL_MAX_BYTES;
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
 use crate::tools::native::search::SearchRoot;
-use crate::tools::native::support::{
-    failed_result, json_array_element_cost, json_bytes, success_json_with,
-};
+use crate::tools::native::support::{failed_result, success_text};
 use crate::tools::types::ToolInvocationPolicy;
 use crate::tools::types::{ToolExecutionResult, ToolInvocation, TruncationState};
 
@@ -39,15 +22,6 @@ use input::GlobInput;
 /// The canonical model-facing name of the tool.
 pub const NAME: &str = "glob";
 
-/// The serialized size of the result envelope with an empty result array.
-///
-/// It is measured, not estimated, and it uses `"truncated": false` because
-/// `false` serializes one byte longer than `true`: whichever value the run
-/// finally reports, the real envelope is no larger than the reserved one.
-fn envelope_bytes() -> usize {
-    json_bytes(&serde_json::json!({ "results": [], "truncated": false }))
-}
-
 /// The tool-owned registration of the native Glob tool.
 #[must_use]
 pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
@@ -55,11 +29,7 @@ pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistrati
         native_definition::<GlobInput>(
             "tool-glob",
             NAME,
-            "Find files whose path matches a glob pattern. The optional path is an absolute \
-             directory locator inside the workspace root or the read-only managed tool-output \
-             root; omit it to search the workspace root. Returns paths relative to \
-             the search root in lexical order. Hidden files are included and ignore files such as \
-             .gitignore are not applied.",
+            "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
             policy,
         ),
         std::sync::Arc::new(GlobTool),
@@ -96,11 +66,7 @@ fn run_glob(
         Ok(matcher) => matcher,
         Err(error) => return failed_result(format!("invalid glob pattern {pattern:?}: {error}")),
     };
-    let root = match SearchRoot::resolve(
-        context.workspace,
-        context.tool_output,
-        input.path.as_deref(),
-    ) {
+    let root = match SearchRoot::resolve(context.workspace.root(), input.path.as_deref()) {
         Ok(root) => root,
         Err(error) => return failed_result(error),
     };
@@ -111,39 +77,57 @@ fn run_glob(
         Ok(files) => files,
         Err(error) => return failed_result(error),
     };
-
-    // The shared traversal already yields the universe in lexical order of
-    // the normalized relative path, so filtering preserves that order.
-    //
-    // The count cap is checked before the byte cap so that which results are
-    // dropped stays a function of the ordering alone, never of how expensive
-    // a path happens to be to serialize.
-    let mut results: Vec<serde_json::Value> = Vec::new();
-    let mut truncated = false;
-    let mut payload = envelope_bytes();
+    let limit = input.limit();
+    let mut results = Vec::new();
+    let mut bytes = 0usize;
+    let mut result_limit_reached = false;
+    let mut byte_limit_reached = false;
     for file in files {
         if !matcher.is_match(&file.relative) {
             continue;
         }
-        if results.len() >= MAX_GLOB_RESULTS {
-            truncated = true;
+        if results.len() as u64 >= limit {
+            result_limit_reached = true;
             break;
         }
-        let entry = serde_json::Value::String(file.relative);
-        let cost = json_array_element_cost(json_bytes(&entry), results.len());
-        if payload.saturating_add(cost) > MAX_MODEL_TOOL_RESULT_BYTES {
-            truncated = true;
+        let cost = file
+            .relative
+            .len()
+            .saturating_add(usize::from(!results.is_empty()));
+        if bytes.saturating_add(cost) > NATIVE_FILE_TOOL_MAX_BYTES {
+            byte_limit_reached = true;
             break;
         }
-        payload += cost;
-        results.push(entry);
+        bytes = bytes.saturating_add(cost);
+        results.push(file.relative);
     }
-    success_json_with(
-        serde_json::json!({ "results": results, "truncated": truncated }),
+
+    if results.is_empty() && !result_limit_reached && !byte_limit_reached {
+        return success_text("No files found matching pattern", None);
+    }
+    let mut output = results.join("\n");
+    let mut notices = Vec::new();
+    if result_limit_reached {
+        notices.push(format!(
+            "{} results limit reached. Use limit={} for more, or refine pattern",
+            limit,
+            limit.saturating_mul(2)
+        ));
+    }
+    if byte_limit_reached {
+        notices.push("50KB limit reached".to_owned());
+    }
+    if !notices.is_empty() {
+        output.push_str("\n\n[");
+        output.push_str(&notices.join(". "));
+        output.push(']');
+    }
+    let truncated = !notices.is_empty();
+    success_text(
+        output,
         truncated.then_some(TruncationState {
             truncated: true,
             original_bytes: None,
         }),
-        Vec::new(),
     )
 }
