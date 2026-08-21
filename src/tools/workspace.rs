@@ -5,8 +5,9 @@
 //! workspace owns the authoritative execution cwd used by native file tools
 //! and Bash. Native Read/Write/Edit/Grep/Glob resolve relative model paths
 //! against this root and accept absolute host paths; runtime-owned managed
-//! output and unrelated authority checks remain in
-//! [`crate::tools::locator`]. This is a correctness boundary, not a hostile
+//! output remains owned by [`crate::tools::managed_output`] and runtime read
+//! locators remain in [`crate::tools::locator`]. This is a correctness
+//! boundary, not a hostile
 //! multi-user security sandbox; TOCTOU hardening is deliberately outside M5.
 
 use std::path::{Path, PathBuf};

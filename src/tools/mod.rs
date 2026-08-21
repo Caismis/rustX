@@ -7,8 +7,9 @@
 //! tool environment, and the conversation-owned background registry. Native,
 //! MCP, and Python executor implementations share exactly this contract.
 //! Native Read/Write/Edit/Grep/Glob use the workspace root as their cwd and
-//! accept ordinary absolute host paths; the locator module remains for
-//! runtime-owned managed-output invariants and unrelated subsystems.
+//! accept ordinary absolute host paths. The locator remains the runtime's
+//! read-only resolver for advertised managed-output paths; `ManagedToolOutput`
+//! owns the separate model-mutation guard.
 
 pub mod artifacts;
 pub mod background;
@@ -37,7 +38,7 @@ pub use executor::{
     BACKGROUND_TASK_TOOL_NAME, PreflightOutcome, PreparedInvocation, ProgressReporter,
     ToolExecutionContext, ToolExecutor, ToolPreflightError, ToolRegistry, ToolRegistryError,
 };
-pub use locator::{LocatorError, LocatorOperation};
+pub use locator::LocatorError;
 pub use managed_output::{BackgroundOutput, ManagedOutputError, ManagedToolOutput, ResultSpill};
 pub use runtime::ConversationToolRuntime;
 pub use schema::{

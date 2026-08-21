@@ -2,21 +2,22 @@
 //!
 //! Runtime subsystems that expose managed tool output consume **absolute**
 //! locators. An absolute path is a locator, never authority: this module is
-//! the boundary that resolves one against explicitly authorized roots and
-//! enforces the per-operation mutability contract. Native
+//! the boundary that resolves one against explicitly authorized roots for
+//! runtime-owned read operations. Native
 //! Read/Write/Edit/Grep/Glob intentionally do not call this module; they
 //! resolve model paths against the execution cwd and accept absolute host
 //! paths.
 //!
 //! ```text
-//! runtime-authorized root   operation-specific managed-output checks
+//! runtime-authorized root   read-only managed-output path resolution
 //! every other runtime path  rejected
 //! ```
 //!
 //! Ownership stays with the owning types: [`Workspace`] owns the canonical
 //! workspace root, [`ManagedToolOutput`] owns the canonical managed-output
 //! root, and this module owns only the resolution/authorization decision —
-//! it is not a VFS and it never stores paths.
+//! it is not a VFS and it never stores paths. Model-originated mutation
+//! ownership belongs to [`ManagedToolOutput`], not this module.
 //!
 //! # Canonicalization
 //!
@@ -35,8 +36,7 @@
 //!     or none -> reject
 //!     |
 //!     v
-//! canonicalize (Read: the target itself; Mutate: the deepest existing
-//!     ancestor plus the remaining components)
+//! canonicalize the target itself
 //!     |
 //!     v
 //! the canonical result must remain inside the SAME owning root
@@ -66,9 +66,6 @@ pub enum LocatorError {
     NotAbsolute(String),
     /// The locator resolves outside every authorized root.
     OutsideAuthorizedRoots(String),
-    /// The locator resolves into the read-only managed tool-output root,
-    /// which Write/Edit may never mutate.
-    ManagedOutputReadOnly(String),
     /// The locator cannot be resolved on the local filesystem.
     Unresolvable(String, String),
 }
@@ -85,11 +82,6 @@ impl core::fmt::Display for LocatorError {
                 "filesystem path {path:?} resolves outside every authorized root; only the \
                  workspace root and the read-only managed tool-output root are accessible"
             ),
-            Self::ManagedOutputReadOnly(path) => write!(
-                f,
-                "filesystem path {path:?} is inside the managed tool-output root, which is \
-                 read-only auxiliary storage; Write/Edit never mutate it"
-            ),
             Self::Unresolvable(path, error) => write!(
                 f,
                 "filesystem path {path:?} cannot be resolved on the filesystem: {error}"
@@ -99,17 +91,6 @@ impl core::fmt::Display for LocatorError {
 }
 
 impl std::error::Error for LocatorError {}
-
-/// The operation whose authority is being decided.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LocatorOperation {
-    /// A read-only runtime operation: authorized against the workspace root
-    /// and the managed tool-output root.
-    Read,
-    /// A mutating operation (Write, Edit): authorized against the workspace
-    /// root only.
-    Mutate,
-}
 
 /// The one owning root of a locator, determined lexically before any
 /// symlink traversal.
@@ -121,16 +102,14 @@ enum OwningRoot {
     ManagedOutput,
 }
 
-/// Resolves one absolute runtime locator for `operation`.
+/// Resolves one absolute runtime locator for a runtime read operation.
 ///
 /// The locator must be absolute; its lexical owning root is determined
 /// first, the locator is canonicalized, and the canonical result must
 /// remain inside that same owning root (see the module documentation).
-/// For [`LocatorOperation::Read`] the target must exist and is
-/// canonicalized directly; for [`LocatorOperation::Mutate`] the target may
-/// not exist yet, so the deepest existing ancestor is canonicalized and
-/// the remaining components are appended — a symlinked parent can never
-/// escape the workspace.
+/// The target must exist and is canonicalized directly. Native model-facing
+/// mutation uses its own cwd-oriented effective-target resolver and asks
+/// [`ManagedToolOutput`] whether that target is runtime-owned.
 ///
 /// # Errors
 ///
@@ -139,7 +118,6 @@ pub fn resolve(
     workspace: &Workspace,
     tool_output: &ManagedToolOutput,
     locator: &str,
-    operation: LocatorOperation,
 ) -> Result<PathBuf, LocatorError> {
     let path = Path::new(locator);
     if !path.is_absolute() {
@@ -157,11 +135,8 @@ pub fn resolve(
     } else {
         return Err(LocatorError::OutsideAuthorizedRoots(locator.to_owned()));
     };
-    let canonical = match operation {
-        LocatorOperation::Read => std::fs::canonicalize(path),
-        LocatorOperation::Mutate => canonicalize_deepest_existing(path),
-    }
-    .map_err(|error| LocatorError::Unresolvable(locator.to_owned(), error.to_string()))?;
+    let canonical = std::fs::canonicalize(path)
+        .map_err(|error| LocatorError::Unresolvable(locator.to_owned(), error.to_string()))?;
     match owner {
         OwningRoot::Workspace => {
             if canonical.starts_with(workspace.root()) {
@@ -180,12 +155,7 @@ pub fn resolve(
                 // turn the read-only region into mutation authority.
                 return Err(LocatorError::OutsideAuthorizedRoots(locator.to_owned()));
             }
-            match operation {
-                LocatorOperation::Read => Ok(canonical),
-                LocatorOperation::Mutate => {
-                    Err(LocatorError::ManagedOutputReadOnly(locator.to_owned()))
-                }
-            }
+            Ok(canonical)
         }
     }
 }
@@ -213,30 +183,9 @@ fn normalize_lexical(path: &Path) -> PathBuf {
     normalized
 }
 
-/// Canonicalizes the deepest existing ancestor of `path` and appends the
-/// remaining components, so non-existent targets (Write) resolve
-/// deterministically through symlinked parent directories.
-fn canonicalize_deepest_existing(path: &Path) -> std::io::Result<PathBuf> {
-    if path.exists() {
-        return std::fs::canonicalize(path);
-    }
-    let Some(parent) = path.parent() else {
-        return std::fs::canonicalize(path);
-    };
-    let file_name = path
-        .file_name()
-        .map(std::ffi::OsStr::to_os_string)
-        .unwrap_or_default();
-    if parent == path {
-        return std::fs::canonicalize(path);
-    }
-    let canonical_parent = canonicalize_deepest_existing(parent)?;
-    Ok(canonical_parent.join(file_name))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{LocatorError, LocatorOperation, resolve};
+    use super::{LocatorError, resolve};
     use crate::runtime::identity::ConversationId;
     use crate::tools::managed_output::ManagedToolOutput;
     use crate::tools::workspace::Workspace;
@@ -272,68 +221,34 @@ mod tests {
     }
 
     #[test]
-    fn relative_locators_are_rejected_for_every_operation() {
+    fn relative_locators_are_rejected() {
         let roots = roots();
-        for operation in [LocatorOperation::Read, LocatorOperation::Mutate] {
-            for locator in ["file.txt", "sub/file.txt", "../escape", "./x", ""] {
-                assert!(
-                    matches!(
-                        resolve(&roots.workspace, &roots.tool_output, locator, operation),
-                        Err(LocatorError::NotAbsolute(_))
-                    ),
-                    "{locator:?} must be rejected for {operation:?}"
-                );
-            }
+        for locator in ["file.txt", "sub/file.txt", "../escape", "./x", ""] {
+            assert!(
+                matches!(
+                    resolve(&roots.workspace, &roots.tool_output, locator),
+                    Err(LocatorError::NotAbsolute(_))
+                ),
+                "{locator:?} must be rejected"
+            );
         }
     }
 
     #[test]
-    fn workspace_locators_are_authorized_for_read_and_mutate() {
+    fn workspace_locators_are_authorized_for_read() {
         let roots = roots();
         let existing = roots.workspace.root().join("file.txt");
-        let resolved = resolve(
-            &roots.workspace,
-            &roots.tool_output,
-            &absolute(&existing),
-            LocatorOperation::Read,
-        )
-        .expect("read inside the workspace");
+        let resolved = resolve(&roots.workspace, &roots.tool_output, &absolute(&existing))
+            .expect("read inside the workspace");
         assert_eq!(resolved, existing.canonicalize().expect("canonical"));
-        let missing = roots.workspace.root().join("new/deep/file.txt");
-        let resolved = resolve(
-            &roots.workspace,
-            &roots.tool_output,
-            &absolute(&missing),
-            LocatorOperation::Mutate,
-        )
-        .expect("write to a not-yet-existing workspace path");
-        assert!(resolved.starts_with(roots.workspace.root()));
     }
 
     #[test]
-    fn managed_output_is_read_only() {
+    fn managed_output_is_readable() {
         let roots = roots();
         let spill = roots.tool_output.root().join("results/result_1.txt");
         let locator = absolute(&spill);
-        resolve(
-            &roots.workspace,
-            &roots.tool_output,
-            &locator,
-            LocatorOperation::Read,
-        )
-        .expect("read of managed output");
-        assert!(
-            matches!(
-                resolve(
-                    &roots.workspace,
-                    &roots.tool_output,
-                    &locator,
-                    LocatorOperation::Mutate
-                ),
-                Err(LocatorError::ManagedOutputReadOnly(_))
-            ),
-            "mutation of the managed tool-output root is rejected by the authority contract"
-        );
+        resolve(&roots.workspace, &roots.tool_output, &locator).expect("read of managed output");
     }
 
     #[test]
@@ -345,20 +260,10 @@ mod tests {
         let outside = tempfile::tempdir().expect("outside");
         fs::write(outside.path().join("outside.txt"), "outside").expect("outside file");
         let outside_locator = absolute(&outside.path().join("outside.txt"));
-        for operation in [LocatorOperation::Read, LocatorOperation::Mutate] {
-            assert!(
-                matches!(
-                    resolve(
-                        &roots.workspace,
-                        &roots.tool_output,
-                        &outside_locator,
-                        operation
-                    ),
-                    Err(LocatorError::OutsideAuthorizedRoots(_))
-                ),
-                "absolute syntax is not authorization ({operation:?})"
-            );
-        }
+        assert!(matches!(
+            resolve(&roots.workspace, &roots.tool_output, &outside_locator),
+            Err(LocatorError::OutsideAuthorizedRoots(_))
+        ));
         // The enclosing runtime-private directory of the managed-output
         // root is not implicitly opened.
         let enclosing = roots
@@ -370,12 +275,7 @@ mod tests {
         fs::write(&enclosing, "private").expect("private file");
         assert!(
             matches!(
-                resolve(
-                    &roots.workspace,
-                    &roots.tool_output,
-                    &absolute(&enclosing),
-                    LocatorOperation::Read
-                ),
+                resolve(&roots.workspace, &roots.tool_output, &absolute(&enclosing),),
                 Err(LocatorError::OutsideAuthorizedRoots(_))
             ),
             "the runtime-private sibling of the managed root stays closed"
@@ -390,27 +290,12 @@ mod tests {
         let outside = tempfile::tempdir().expect("outside");
         fs::write(outside.path().join("secret.txt"), "secret").expect("secret");
 
-        // A symlink inside the workspace pointing outside it: rejected for
-        // both reads and not-yet-existing mutation targets below it.
+        // A symlink inside the workspace pointing outside it is rejected for
+        // reads.
         symlink(outside.path(), roots.workspace.root().join("linked")).expect("workspace symlink");
         let read_locator = absolute(&roots.workspace.root().join("linked/secret.txt"));
         assert!(matches!(
-            resolve(
-                &roots.workspace,
-                &roots.tool_output,
-                &read_locator,
-                LocatorOperation::Read
-            ),
-            Err(LocatorError::OutsideAuthorizedRoots(_))
-        ));
-        let write_locator = absolute(&roots.workspace.root().join("linked/new.txt"));
-        assert!(matches!(
-            resolve(
-                &roots.workspace,
-                &roots.tool_output,
-                &write_locator,
-                LocatorOperation::Mutate
-            ),
+            resolve(&roots.workspace, &roots.tool_output, &read_locator,),
             Err(LocatorError::OutsideAuthorizedRoots(_))
         ));
 
@@ -419,12 +304,7 @@ mod tests {
         symlink(outside.path(), roots.tool_output.root().join("linked")).expect("managed symlink");
         let managed_locator = absolute(&roots.tool_output.root().join("linked/secret.txt"));
         assert!(matches!(
-            resolve(
-                &roots.workspace,
-                &roots.tool_output,
-                &managed_locator,
-                LocatorOperation::Read
-            ),
+            resolve(&roots.workspace, &roots.tool_output, &managed_locator,),
             Err(LocatorError::OutsideAuthorizedRoots(_))
         ));
     }
@@ -451,33 +331,11 @@ mod tests {
         let locator = absolute(&roots.tool_output.root().join("workspace-alias/file.txt"));
         assert!(
             matches!(
-                resolve(
-                    &roots.workspace,
-                    &roots.tool_output,
-                    &locator,
-                    LocatorOperation::Read
-                ),
+                resolve(&roots.workspace, &roots.tool_output, &locator,),
                 Err(LocatorError::OutsideAuthorizedRoots(_))
             ),
             "managed -> workspace transfers no read authority"
         );
-        // managed descendant symlink -> workspace new mutation target:
-        // Mutate rejected (it would escape the read-only region AND
-        // cross roots).
-        let locator = absolute(&roots.tool_output.root().join("workspace-alias/new.txt"));
-        assert!(
-            matches!(
-                resolve(
-                    &roots.workspace,
-                    &roots.tool_output,
-                    &locator,
-                    LocatorOperation::Mutate
-                ),
-                Err(LocatorError::OutsideAuthorizedRoots(_))
-            ),
-            "managed -> workspace transfers no mutation authority"
-        );
-
         // workspace descendant symlink -> managed file: Read rejected even
         // though the managed target is readable.
         let spill = roots.tool_output.open_spill().expect("spill");
@@ -489,38 +347,17 @@ mod tests {
         let locator = absolute(&results_alias.join(spill_path.file_name().expect("spill name")));
         assert!(
             matches!(
-                resolve(
-                    &roots.workspace,
-                    &roots.tool_output,
-                    &locator,
-                    LocatorOperation::Read
-                ),
+                resolve(&roots.workspace, &roots.tool_output, &locator,),
                 Err(LocatorError::OutsideAuthorizedRoots(_))
             ),
             "workspace -> managed transfers no read authority"
-        );
-        // workspace descendant symlink -> managed mutation target:
-        // rejected by the same-root invariant before the read-only rule
-        // even applies.
-        let locator = absolute(&results_alias.join("forged.txt"));
-        assert!(
-            matches!(
-                resolve(
-                    &roots.workspace,
-                    &roots.tool_output,
-                    &locator,
-                    LocatorOperation::Mutate
-                ),
-                Err(LocatorError::OutsideAuthorizedRoots(_))
-            ),
-            "workspace -> managed transfers no mutation authority"
         );
     }
 
     /// A same-root internal symlink stays coherent: a workspace symlink
     /// whose target remains inside the workspace resolves and is readable,
     /// and a managed-root-internal symlink to a real managed file is
-    /// readable but never mutable.
+    /// readable.
     #[cfg(unix)]
     #[test]
     fn same_root_internal_symlinks_stay_coherent() {
@@ -533,13 +370,8 @@ mod tests {
         )
         .expect("workspace internal symlink");
         let locator = absolute(&roots.workspace.root().join("internal.txt"));
-        let resolved = resolve(
-            &roots.workspace,
-            &roots.tool_output,
-            &locator,
-            LocatorOperation::Read,
-        )
-        .expect("a same-root workspace symlink resolves");
+        let resolved = resolve(&roots.workspace, &roots.tool_output, &locator)
+            .expect("a same-root workspace symlink resolves");
         assert!(resolved.starts_with(roots.workspace.root()));
 
         // Lexical `..` / `.` normalization: the owning root is determined
@@ -547,12 +379,7 @@ mod tests {
         // keeps its workspace owner and `/workspace/../<managed>` can
         // never impersonate the workspace.
         let locator = format!("{}/sub/../file.txt", absolute(roots.workspace.root()));
-        resolve(
-            &roots.workspace,
-            &roots.tool_output,
-            &locator,
-            LocatorOperation::Read,
-        )
-        .expect("a lexically normalized workspace locator resolves");
+        resolve(&roots.workspace, &roots.tool_output, &locator)
+            .expect("a lexically normalized workspace locator resolves");
     }
 }

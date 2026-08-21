@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::tools::managed_output::ManagedToolOutput;
 use crate::tools::types::{ToolExecutionResult, ToolExecutionStatus, ToolResultContent};
 
 /// Resolves one model-facing file path against the authoritative execution
@@ -17,6 +18,41 @@ pub fn resolve_path(cwd: &Path, requested: &str) -> PathBuf {
     }
 }
 
+/// One filesystem target prepared for a native whole-file mutation.
+///
+/// The path is resolved once, before any parent directory or temporary-file
+/// side effect. Write/Edit pass this same value through to `atomic_commit`,
+/// so the ownership decision and the committed target cannot diverge merely
+/// because a final or ancestor symlink is involved.
+#[derive(Debug)]
+pub struct MutationTarget {
+    path: PathBuf,
+}
+
+impl MutationTarget {
+    /// The effective absolute host path that will be replaced.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+/// Resolves and authorizes one native mutation target before side effects.
+///
+/// This is deliberately not a workspace sandbox. `ManagedToolOutput` owns
+/// the only model-mutation exception: its runtime-owned namespace is
+/// read-only even though Read/Grep/Glob can inspect it.
+pub fn prepare_mutation_target(
+    requested: &Path,
+    tool_output: &ManagedToolOutput,
+) -> Result<MutationTarget, String> {
+    let effective = resolve_effective_path(requested)?;
+    tool_output
+        .ensure_model_mutation_allowed(&effective)
+        .map_err(|error| error.to_string())?;
+    Ok(MutationTarget { path: effective })
+}
+
 /// The one file-mutation commit of the native tool plane.
 ///
 /// Write and Edit both replace a whole file with a whole new content
@@ -26,59 +62,80 @@ pub fn resolve_path(cwd: &Path, requested: &str) -> PathBuf {
 /// therefore observes either the previous file or the complete new one, and
 /// a failed commit leaves no temporary file behind.
 ///
-/// When the final path component is a symlink, the commit target is the
-/// symlink's destination rather than the link itself. This preserves ordinary
-/// write-through filesystem semantics while retaining atomic replacement of
-/// the destination file.
-pub fn atomic_commit(target: &Path, content: &[u8]) -> Result<(), String> {
-    let commit_target = follow_final_symlink(target)?;
-    let parent = commit_target
+/// `prepare_mutation_target` resolves final and ancestor symlinks before this
+/// function is called. The prepared target is therefore both the path that
+/// passed the managed-output ownership check and the path committed here;
+/// ordinary write-through semantics are retained without replacing a link.
+pub fn atomic_commit(target: &MutationTarget, content: &[u8]) -> Result<(), String> {
+    let parent = target
+        .path
         .parent()
-        .ok_or_else(|| format!("{} has no parent directory", commit_target.display()))?;
+        .ok_or_else(|| format!("{} has no parent directory", target.path.display()))?;
     let temp = create_temp_in(parent)?;
     if let Err(error) = std::fs::write(&temp, content) {
         let _ = std::fs::remove_file(&temp);
         return Err(format!("cannot write {}: {error}", temp.display()));
     }
-    if let Err(error) = std::fs::rename(&temp, &commit_target) {
+    if let Err(error) = std::fs::rename(&temp, &target.path) {
         let _ = std::fs::remove_file(&temp);
-        return Err(format!(
-            "cannot persist {}: {error}",
-            commit_target.display()
-        ));
+        return Err(format!("cannot persist {}: {error}", target.path.display()));
     }
     Ok(())
 }
 
-/// Resolves an existing final-component symlink without changing the path
-/// when the target is an ordinary file or a not-yet-created file.
-fn follow_final_symlink(target: &Path) -> Result<PathBuf, String> {
-    let metadata = match std::fs::symlink_metadata(target) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(target.to_path_buf());
+/// Resolves all existing symlink components and preserves the effective
+/// destination of a dangling final symlink or a not-yet-created descendant.
+fn resolve_effective_path(target: &Path) -> Result<PathBuf, String> {
+    let mut candidate = target.to_path_buf();
+    for _ in 0..40 {
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                let link = std::fs::read_link(&candidate)
+                    .map_err(|error| format!("cannot resolve {}: {error}", target.display()))?;
+                candidate = if link.is_absolute() {
+                    link
+                } else {
+                    candidate
+                        .parent()
+                        .ok_or_else(|| format!("{} has no parent directory", target.display()))?
+                        .join(link)
+                };
+            }
+            Ok(_) => {
+                return std::fs::canonicalize(&candidate)
+                    .map_err(|error| format!("cannot resolve {}: {error}", target.display()));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return canonicalize_deepest_existing(&candidate)
+                    .map_err(|error| format!("cannot resolve {}: {error}", target.display()));
+            }
+            Err(error) => return Err(format!("cannot inspect {}: {error}", target.display())),
         }
-        Err(error) => return Err(format!("cannot inspect {}: {error}", target.display())),
-    };
-    if !metadata.file_type().is_symlink() {
-        return Ok(target.to_path_buf());
     }
-    let link = std::fs::read_link(target)
-        .map_err(|error| format!("cannot resolve {}: {error}", target.display()))?;
-    let destination = if link.is_absolute() {
-        link
-    } else {
-        target
-            .parent()
-            .ok_or_else(|| format!("{} has no parent directory", target.display()))?
-            .join(link)
-    };
-    if destination.exists() {
-        std::fs::canonicalize(&destination)
-            .map_err(|error| format!("cannot resolve {}: {error}", target.display()))
-    } else {
-        Ok(destination)
+    Err(format!(
+        "cannot resolve {}: too many symlink hops",
+        target.display()
+    ))
+}
+
+/// Canonicalizes the deepest existing ancestor and appends the remaining
+/// components. This follows symlinked ancestors without requiring the final
+/// mutation target to exist yet.
+fn canonicalize_deepest_existing(path: &Path) -> std::io::Result<PathBuf> {
+    if path.exists() {
+        return std::fs::canonicalize(path);
     }
+    let Some(parent) = path.parent() else {
+        return std::fs::canonicalize(path);
+    };
+    if parent == path {
+        return std::fs::canonicalize(path);
+    }
+    let file_name = path
+        .file_name()
+        .map(std::ffi::OsStr::to_os_string)
+        .unwrap_or_default();
+    Ok(canonicalize_deepest_existing(parent)?.join(file_name))
 }
 
 /// Creates a unique temporary file inside `parent` for the atomic commit.

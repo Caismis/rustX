@@ -485,18 +485,20 @@ tools/schema.rs            JSON Schema validation, the reserved __rustx_
                            reserved invocation metadata extraction
 tools/workspace.rs         Workspace: the canonical runtime-owned workspace
                            boundary (canonicalized root)
-tools/locator.rs           runtime-owned locator authority for managed-output
-                           checks and unrelated runtime invariants: absolute
-                           locators, explicit authorized roots, lexical
-                           owning-root determination before canonicalization,
-                           same-root canonical-target authority, no symlink
-                           escape or cross-root authority transfer
+tools/locator.rs           runtime-owned read locator authority for advertised
+                           managed-output paths and unrelated runtime
+                           invariants: absolute locators, explicit authorized
+                           roots, lexical owning-root determination before
+                           canonicalization, same-root canonical-target
+                           authority, no symlink escape or cross-root
+                           authority transfer
 tools/managed_output.rs    ManagedToolOutput: the conversation-owned managed
                            tool-output store: lazy foreground result spills
                            (`results/result_N.txt`, monotonic sequence,
                            `create_new`) and the dispatch-allocated
                            background live-output channel
-                           (`tasks/exec_N.output`)
+                           (`tasks/exec_N.output`); owns model-mutation
+                           rejection for its runtime-owned namespace
 tools/artifacts.rs         ArtifactStore: conversation-owned opaque monotonic
                            artifact ids with streaming spooling (genuine
                            semantic artifacts only — never textual overflow)
@@ -1470,9 +1472,10 @@ For Read, Write, Edit, Grep, and Glob, a relative model path is joined to
 the authoritative execution cwd (`Workspace::root()` in the current runtime)
 and an absolute path is used as an ordinary host filesystem path. These five
 tools do not impose the locator workspace-containment policy. `Workspace`
-remains the runtime/Bash cwd authority, and `tools/locator.rs` remains the
-managed-output authority used by unrelated runtime invariants; neither is a
-hidden second policy for these native file tools. Final-component symlinks
+remains the runtime/Bash cwd authority. `tools/locator.rs` resolves
+runtime-advertised managed-output paths for reads, while `ManagedToolOutput`
+owns the narrow model-mutation rejection; neither is a hidden second policy
+for ordinary native file paths. Final-component symlinks
 are followed for atomic Write/Edit commits so the link itself is not
 replaced.
 

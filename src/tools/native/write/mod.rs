@@ -3,7 +3,8 @@
 //! Write resolves relative paths against the execution cwd, creates missing
 //! parent directories, and commits a complete UTF-8 snapshot atomically.
 //! Absolute paths are ordinary host filesystem paths and are not subject to
-//! the workspace containment policy used by unrelated runtime subsystems.
+//! the workspace containment policy. Runtime-owned `ManagedToolOutput` paths
+//! remain read-only to model-originated mutation.
 
 mod input;
 
@@ -11,7 +12,9 @@ use futures_util::future::BoxFuture;
 
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
-use crate::tools::native::support::{atomic_commit, failed_result, resolve_path, success_text};
+use crate::tools::native::support::{
+    atomic_commit, failed_result, prepare_mutation_target, resolve_path, success_text,
+};
 use crate::tools::types::ToolInvocationPolicy;
 use crate::tools::types::{ToolExecutionResult, ToolInvocation};
 
@@ -55,13 +58,17 @@ fn run_write(
         Ok(input) => input,
         Err(error) => return failed_result(error),
     };
-    let target = resolve_path(context.workspace.root(), &input.path);
-    if let Some(parent) = target.parent()
+    let requested = resolve_path(context.workspace.root(), &input.path);
+    let target = match prepare_mutation_target(&requested, context.tool_output) {
+        Ok(target) => target,
+        Err(error) => return failed_result(error),
+    };
+    if let Some(parent) = target.path().parent()
         && let Err(error) = std::fs::create_dir_all(parent)
     {
         return failed_result(format!(
             "cannot create parent directories for {}: {error}",
-            target.display()
+            target.path().display()
         ));
     }
     if let Err(error) = atomic_commit(&target, input.content.as_bytes()) {

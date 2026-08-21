@@ -89,10 +89,11 @@ pub struct ToolExecutionContext<'a> {
     /// The conversation-owned artifact store for genuine semantic file
     /// artifacts (never for oversized textual output).
     pub artifacts: &'a ArtifactStore,
-    /// The conversation-owned managed tool-output store: the read-only
-    /// region of auxiliary textual output — lazy result spills of oversized
+    /// The conversation-owned managed tool-output store: the runtime-owned
+    /// auxiliary textual output region — lazy result spills of oversized
     /// foreground output, and the dispatch-allocated live-output channel of
-    /// background executions.
+    /// background executions. Read/Grep/Glob may inspect it; Write/Edit are
+    /// rejected by its model-mutation guard.
     pub tool_output: &'a ManagedToolOutput,
     /// The explicit authorized tool environment.
     pub environment: &'a ToolEnvironment,

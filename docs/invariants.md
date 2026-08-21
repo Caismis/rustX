@@ -1179,8 +1179,10 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   authoritative execution cwd (`Workspace::root()`) and use absolute paths
   as ordinary host filesystem paths. They no longer impose workspace
   containment. Workspace remains the runtime/Bash cwd authority, while
-  `locator.rs` remains available to managed-output checks and unrelated
-  runtime invariants. Final-component symlinks are followed by atomic
+  `locator.rs` remains the runtime read resolver for advertised managed-output
+  paths and unrelated runtime invariants; `ManagedToolOutput` owns the narrow
+  model-mutation rejection for that namespace. Final-component symlinks are
+  followed by atomic
   Write/Edit commits so the link itself is not replaced.
 - The model-facing contracts of the six ordinary native tools are
   `read {path, offset?, limit?}`, `write {path, content}`, `edit {path,
@@ -1197,9 +1199,9 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   with `Workspace::root().join(path)` and use absolute `path` values
   directly. Resolution is a small native file-tool boundary, not a second
   authorization system. An invalid filesystem operation is a normal failed
-  result, never an Agent Loop failure. The separate locator authority still
-  protects runtime-owned managed output where the runtime itself requires
-  that invariant.
+  result, never an Agent Loop failure. Read/Grep/Glob may inspect advertised
+  managed output, while ManagedToolOutput rejects model-originated Write/Edit
+  mutations of that runtime-owned namespace.
 - **One Edit invocation is one atomic transformation from one original file
   snapshot to one final file snapshot.** Every `oldText` is resolved against
   that same snapshot; exact matching is preferred and an NFKC-based fallback

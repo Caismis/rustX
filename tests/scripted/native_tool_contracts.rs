@@ -5,10 +5,21 @@
 //! by its registration before canonical schema validation; no provider or
 //! Agent Loop branch knows about those spellings.
 
-use super::common;
+use super::{common, support};
+use rustx::agent::{AgentCancellation, AgentExecution, AgentExecutionRequest};
+use rustx::events::types::{AttemptOutcome, RuntimeEvent};
+use rustx::message::types::{MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
+use rustx::model::event::ModelEvent;
+use rustx::model::finish::ModelFinishReason;
 use rustx::runtime::identity::ToolCallId;
+use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId};
+use rustx::runtime::types::CancellationReason;
 use rustx::tools::executor::PreflightOutcome;
-use rustx::tools::types::ToolCall;
+use rustx::tools::types::{
+    ToolCall, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionStatus, ToolInvocationMode,
+    ToolInvocationPolicy,
+};
+use std::sync::Arc;
 
 const NATIVE_TOOL_NAMES: [&str; 7] = [
     "read",
@@ -204,4 +215,416 @@ fn edit_normalization_cannot_consume_reserved_or_unrelated_fields() {
         serde_json::json!({"path": "file.txt", "edits": 42}),
     );
     assert!(matches!(unrelated, PreflightOutcome::Rejected { .. }));
+}
+
+#[test]
+fn optional_native_properties_are_absent_not_nullable_and_registry_metadata_stays_private() {
+    let fixture = common::native_fixture();
+    for name in ["read", "grep", "glob"] {
+        let schema = definition(&fixture, name).input_schema;
+        for property in schema["properties"]
+            .as_object()
+            .expect("properties")
+            .values()
+        {
+            assert_ne!(property["type"], serde_json::json!(["null"]));
+        }
+        assert!(schema["properties"]["__rustx_execution"].is_null());
+        assert!(!schema.to_string().contains("__rustx_execution"));
+    }
+    for definition in fixture.registry.model_definitions() {
+        assert!(
+            !definition
+                .input_schema
+                .to_string()
+                .contains("__rustx_execution"),
+            "default native definitions stay provider-neutral: {}",
+            definition.name
+        );
+    }
+}
+
+#[test]
+fn native_tools_preserve_legal_execution_policies_and_fixed_background_task_policy() {
+    use rustx::runtime::identity::{ConversationId, ToolId};
+    use rustx::tools::executor::ToolRegistry;
+    use rustx::tools::native::{NativeToolPolicies, NativeToolResources, register_native_tools};
+    use rustx::tools::runtime::{ConversationRuntimeConfig, ConversationToolRuntime};
+
+    for execution in [
+        ToolExecutionPolicy::ForegroundOnly,
+        ToolExecutionPolicy::BackgroundOnly,
+        ToolExecutionPolicy::ModelSelectable,
+    ] {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let runtime = ConversationToolRuntime::from_config(
+            ConversationId::new("policy-conversation"),
+            ConversationRuntimeConfig::new(&workspace, dir.path().join("artifacts")),
+        )
+        .expect("runtime");
+        let mut registry = ToolRegistry::new();
+        register_native_tools(
+            &mut registry,
+            NativeToolResources {
+                background: runtime.background().clone(),
+                subagents: None,
+            },
+            NativeToolPolicies::uniform(ToolInvocationPolicy::new(
+                execution,
+                ToolConcurrencyPolicy::Sequential,
+            )),
+        )
+        .expect("ordinary native policy registration");
+
+        let read = registry
+            .definitions()
+            .into_iter()
+            .find(|definition| definition.name == "read")
+            .expect("read definition");
+        assert_eq!(read.execution_policy, execution);
+        let arguments = if execution == ToolExecutionPolicy::ModelSelectable {
+            serde_json::json!({"path": "a.txt", "__rustx_execution": "foreground"})
+        } else {
+            serde_json::json!({"path": "a.txt"})
+        };
+        let outcome = registry
+            .preflight(&ToolCall {
+                id: ToolCallId::new("policy-call"),
+                tool_id: ToolId::new("tool-read"),
+                name: "read".to_owned(),
+                arguments,
+            })
+            .expect("policy preflight");
+        let PreflightOutcome::Ready(prepared) = outcome else {
+            panic!("read must preflight under {execution:?}");
+        };
+        assert_eq!(
+            prepared.invocation.mode,
+            if execution == ToolExecutionPolicy::BackgroundOnly {
+                ToolInvocationMode::Background
+            } else {
+                ToolInvocationMode::Foreground
+            }
+        );
+
+        let background_task = registry
+            .definitions()
+            .into_iter()
+            .find(|definition| definition.name == "background_task")
+            .expect("background_task definition");
+        assert_eq!(
+            background_task.execution_policy,
+            ToolExecutionPolicy::ForegroundOnly
+        );
+        assert_eq!(
+            background_task.concurrency_policy,
+            ToolConcurrencyPolicy::Sequential
+        );
+    }
+}
+
+#[test]
+fn independent_native_execution_policies_coexist_in_one_registry() {
+    use rustx::tools::executor::ToolRegistry;
+    use rustx::tools::native::{NativeToolPolicies, NativeToolResources, register_native_tools};
+    use rustx::tools::runtime::{ConversationRuntimeConfig, ConversationToolRuntime};
+
+    let dir = tempfile::tempdir().expect("temporary policy runtime");
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let runtime = ConversationToolRuntime::from_config(
+        ConversationId::new("independent-policy-conversation"),
+        ConversationRuntimeConfig::new(&workspace, dir.path().join("artifacts")),
+    )
+    .expect("runtime");
+    let policies = NativeToolPolicies {
+        read: ToolInvocationPolicy::new(
+            ToolExecutionPolicy::ForegroundOnly,
+            ToolConcurrencyPolicy::Sequential,
+        ),
+        write: ToolInvocationPolicy::new(
+            ToolExecutionPolicy::BackgroundOnly,
+            ToolConcurrencyPolicy::Parallel,
+        ),
+        edit: ToolInvocationPolicy::new(
+            ToolExecutionPolicy::ModelSelectable,
+            ToolConcurrencyPolicy::Sequential,
+        ),
+        glob: ToolInvocationPolicy::new(
+            ToolExecutionPolicy::ForegroundOnly,
+            ToolConcurrencyPolicy::Parallel,
+        ),
+        grep: ToolInvocationPolicy::new(
+            ToolExecutionPolicy::BackgroundOnly,
+            ToolConcurrencyPolicy::Sequential,
+        ),
+        bash: ToolInvocationPolicy::new(
+            ToolExecutionPolicy::ForegroundOnly,
+            ToolConcurrencyPolicy::Parallel,
+        ),
+    };
+    let mut registry = ToolRegistry::new();
+    register_native_tools(
+        &mut registry,
+        NativeToolResources {
+            background: runtime.background().clone(),
+            subagents: None,
+        },
+        policies,
+    )
+    .expect("independent native policy registration");
+    let definitions = registry.definitions();
+    let policy = |name: &str| {
+        definitions
+            .iter()
+            .find(|definition| definition.name == name)
+            .expect("native definition")
+    };
+    assert_eq!(
+        policy("read").execution_policy,
+        ToolExecutionPolicy::ForegroundOnly
+    );
+    assert_eq!(
+        policy("write").execution_policy,
+        ToolExecutionPolicy::BackgroundOnly
+    );
+    assert_eq!(
+        policy("edit").execution_policy,
+        ToolExecutionPolicy::ModelSelectable
+    );
+    assert_eq!(
+        policy("read").concurrency_policy,
+        ToolConcurrencyPolicy::Sequential
+    );
+    assert_eq!(
+        policy("write").concurrency_policy,
+        ToolConcurrencyPolicy::Parallel
+    );
+    assert_eq!(
+        policy("edit").concurrency_policy,
+        ToolConcurrencyPolicy::Sequential
+    );
+    assert_eq!(
+        policy("glob").concurrency_policy,
+        ToolConcurrencyPolicy::Parallel
+    );
+    assert_eq!(
+        policy("grep").execution_policy,
+        ToolExecutionPolicy::BackgroundOnly
+    );
+    assert_eq!(
+        policy("grep").concurrency_policy,
+        ToolConcurrencyPolicy::Sequential
+    );
+}
+
+fn native_tool_turn(call: &support::fake::ScriptedCall) -> Vec<Vec<support::fake::FakeStep>> {
+    let mut first = vec![support::fake::FakeStep::Emit(ModelEvent::Started)];
+    first.extend(
+        support::fake::tool_call_events(0, call)
+            .into_iter()
+            .map(support::fake::FakeStep::Emit),
+    );
+    first.push(support::fake::FakeStep::Emit(ModelEvent::Completed {
+        finish_reason: ModelFinishReason::ToolCalls,
+        usage: None,
+    }));
+    vec![
+        first,
+        vec![
+            support::fake::FakeStep::Emit(ModelEvent::Started),
+            support::fake::FakeStep::Emit(ModelEvent::TextDelta {
+                block_index: rustx::message::types::ContentBlockIndex::new(0),
+                text: "done".to_owned(),
+            }),
+            support::fake::FakeStep::Emit(ModelEvent::Completed {
+                finish_reason: ModelFinishReason::Stop,
+                usage: None,
+            }),
+        ],
+    ]
+}
+
+fn native_request(
+    model: &Arc<support::fake::FakeModel>,
+    conversation_id: &ConversationId,
+) -> AgentExecutionRequest {
+    AgentExecutionRequest {
+        agent_id: AgentId::new("agent-native-contract"),
+        conversation_id: conversation_id.clone(),
+        attempt_id: AttemptId::new("attempt-native-contract"),
+        conversation: rustx::conversation::ConversationState::from_messages(vec![
+            MessageBlock::User(UserMessageBlock {
+                id: MessageId::new("message-native-contract"),
+                content: vec![UserContentBlock::Text(rustx::message::content::TextBlock {
+                    text: "inspect".to_owned(),
+                })],
+                source: UserSource::Human,
+                kind: rustx::message::types::InboundKind::Message,
+                timestamp: None,
+            }),
+        ])
+        .expect("bootstrap conversation"),
+        initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
+        timezone: None,
+        model: support::attempt_model(model.clone(), "native-contract-model"),
+    }
+}
+
+fn native_context_runtime(model: &Arc<support::fake::FakeModel>) -> rustx::context::ContextRuntime {
+    rustx::context::ContextRuntime::for_attempt(
+        rustx::context::SessionContextPolicy {
+            reserve_tokens: 0,
+            keep_recent_tokens: 0,
+            summary_output_cap: None,
+        },
+        Arc::new(rustx::context::DefaultTokenEstimator),
+        rustx::context::AgentStatusComposer::default(),
+        &support::attempt_model(model.clone(), "native-contract-model"),
+    )
+    .expect("context runtime")
+}
+
+async fn run_native_script(
+    fixture: &common::NativeFixture,
+    call: support::fake::ScriptedCall,
+) -> common::DurableExecutionAudit {
+    let model = support::fake::fake_model(native_tool_turn(&call));
+    let capability = common::capability_lease(fixture.registry.clone(), &fixture.runtime).await;
+    let (lease, coordinator) = capability.into_lease_and_coordinator();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let result = AgentExecution::new(
+        native_request(&model, fixture.runtime.conversation_id()),
+        lease,
+        &cancellation,
+        native_context_runtime(&model),
+        &fixture.runtime,
+        rustx::agent::AttemptLifecycle::inert(),
+    )
+    .expect("conversation identity matches the tool runtime")
+    .run()
+    .await;
+    let audit = common::durable_agent_result(result, fixture.store.as_ref());
+    drop(coordinator);
+    audit
+}
+
+#[tokio::test]
+async fn native_agent_loop_invocation_has_one_start_and_one_completion_in_order() {
+    let fixture = common::native_fixture();
+    std::fs::write(
+        fixture.runtime.workspace().root().join("read.txt"),
+        "hello\n",
+    )
+    .expect("fixture");
+    let audit = run_native_script(
+        &fixture,
+        support::fake::ScriptedCall {
+            id: "call-native-read",
+            tool_id: "tool-read",
+            name: "read",
+            arguments: serde_json::json!({"path": "read.txt"}),
+        },
+    )
+    .await;
+
+    let started_positions: Vec<usize> = audit
+        .event_history
+        .iter()
+        .enumerate()
+        .filter_map(|(index, event)| match event {
+            RuntimeEvent::ToolExecutionStarted { tool_call_id, .. }
+                if tool_call_id.as_str() == "call-native-read" =>
+            {
+                Some(index)
+            }
+            _ => None,
+        })
+        .collect();
+    let completed_positions: Vec<usize> = audit
+        .event_history
+        .iter()
+        .enumerate()
+        .filter_map(|(index, event)| match event {
+            RuntimeEvent::ToolExecutionCompleted { tool_call_id, .. }
+                if tool_call_id.as_str() == "call-native-read" =>
+            {
+                Some(index)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(started_positions.len(), 1, "one native start event");
+    assert_eq!(completed_positions.len(), 1, "one native completion event");
+    assert!(started_positions[0] < completed_positions[0]);
+
+    let tool_message = audit
+        .messages()
+        .iter()
+        .find_map(|message| match message {
+            MessageBlock::Tool(tool) if tool.tool_call_id.as_str() == "call-native-read" => {
+                Some(tool)
+            }
+            _ => None,
+        })
+        .expect("committed native tool result");
+    assert_eq!(tool_message.result.status, ToolExecutionStatus::Success);
+    assert_eq!(
+        tool_message.result.content[0],
+        rustx::tools::types::ToolResultContent::Text(rustx::message::content::TextBlock {
+            text: "hello\n".to_owned(),
+        })
+    );
+    assert!(matches!(audit.outcome, AttemptOutcome::Completed { .. }));
+}
+
+#[tokio::test]
+async fn native_agent_loop_preflight_rejection_settles_without_starting_an_executor() {
+    let fixture = common::native_fixture();
+    let audit = run_native_script(
+        &fixture,
+        support::fake::ScriptedCall {
+            id: "call-invalid-write",
+            tool_id: "tool-write",
+            name: "write",
+            arguments: serde_json::json!({
+                "path": "must-not-be-created.txt",
+                "content": "x",
+                "unknown": true
+            }),
+        },
+    )
+    .await;
+
+    assert!(!audit.event_history.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::ToolExecutionStarted { tool_call_id, .. }
+                if tool_call_id.as_str() == "call-invalid-write"
+        )
+    }));
+    let tool_message = audit
+        .messages()
+        .iter()
+        .find_map(|message| match message {
+            MessageBlock::Tool(tool) if tool.tool_call_id.as_str() == "call-invalid-write" => {
+                Some(tool)
+            }
+            _ => None,
+        })
+        .expect("rejected result slot");
+    assert!(matches!(
+        tool_message.result.status,
+        ToolExecutionStatus::Failed { .. }
+    ));
+    assert!(
+        !fixture
+            .runtime
+            .workspace()
+            .root()
+            .join("must-not-be-created.txt")
+            .exists()
+    );
 }

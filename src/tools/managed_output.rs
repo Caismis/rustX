@@ -39,9 +39,10 @@
 //! **not** the enclosing runtime-private directory: the runtime-private
 //! region also holds the durable conversation database and semantic
 //! artifact internals, which must never become model-readable merely
-//! because textual output files are. The filesystem locator authority
-//! ([`crate::tools::locator`]) authorizes exactly this root for read-only
-//! operations (Read/Grep/Glob) and rejects Write/Edit against it.
+//! because textual output files are. The runtime locator
+//! ([`crate::tools::locator`]) resolves advertised paths for read-only
+//! operations (Read/Grep/Glob), while this type owns the separate invariant
+//! that model-originated Write/Edit mutations are rejected for this root.
 //!
 //! # Allocation
 //!
@@ -88,6 +89,9 @@ pub enum ManagedOutputError {
     SequenceExhausted,
     /// An output file cannot be opened.
     OpenFailed(String),
+    /// A model-originated mutation attempted to target the managed-output
+    /// namespace, which is runtime-owned read-only storage.
+    ModelMutationReadOnly(String),
 }
 
 impl core::fmt::Display for ManagedOutputError {
@@ -104,6 +108,10 @@ impl core::fmt::Display for ManagedOutputError {
                 write!(f, "the managed tool-output sequence space is exhausted")
             }
             Self::OpenFailed(message) => write!(f, "cannot open an output file: {message}"),
+            Self::ModelMutationReadOnly(path) => write!(
+                f,
+                "filesystem path {path:?} is inside the managed tool-output root, which is read-only auxiliary storage; Write/Edit never mutate it"
+            ),
         }
     }
 }
@@ -148,9 +156,9 @@ impl ManagedToolOutput {
     ///
     /// The root and its two dedicated subdirectories (`results/` for
     /// result spills, `tasks/` for background execution output) are created
-    /// when missing, and the root is canonicalized once, so the locator
-    /// authority compares every managed-output locator against one
-    /// canonical root. A pre-existing symlink at the root or at either
+    /// when missing, and the root is canonicalized once, so runtime read
+    /// locators and the model-mutation guard compare every managed-output
+    /// path against one canonical root. A pre-existing symlink at the root or at either
     /// dedicated subdirectory is rejected: the managed region must be real
     /// owned directories, never aliases of another filesystem region,
     /// because the canonical root becomes an authorized model-readable
@@ -244,11 +252,32 @@ impl ManagedToolOutput {
     /// The canonical managed tool-output root.
     ///
     /// This root — and nothing outside it, in particular not the enclosing
-    /// runtime-private directory — is the read-only filesystem region the
-    /// locator authority opens to the model.
+    /// runtime-private directory — is the read-only filesystem region exposed
+    /// to model Read/Grep/Glob. Write/Edit mutation ownership is enforced by
+    /// [`Self::ensure_model_mutation_allowed`].
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Rejects a model-originated mutation whose already-resolved effective
+    /// target belongs to this runtime-owned namespace.
+    ///
+    /// Native file tools intentionally accept arbitrary cwd-relative and
+    /// absolute host paths. This is the one narrow exception: the managed
+    /// output root remains readable/searchable by Read/Grep/Glob, but Write/Edit
+    /// may never mutate it. The caller must pass the effective target after
+    /// filesystem symlinks and non-existent descendants have been resolved.
+    pub(crate) fn ensure_model_mutation_allowed(
+        &self,
+        effective_target: &Path,
+    ) -> Result<(), ManagedOutputError> {
+        if effective_target.starts_with(&self.root) {
+            return Err(ManagedOutputError::ModelMutationReadOnly(
+                effective_target.display().to_string(),
+            ));
+        }
+        Ok(())
     }
 
     /// Allocates and opens one result spill for streaming complete output.

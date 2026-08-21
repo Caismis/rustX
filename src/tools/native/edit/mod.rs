@@ -3,18 +3,21 @@
 //! Edit is a precise, atomic mutation primitive. All anchors are resolved
 //! against one original snapshot, exact matching is preferred, and a
 //! NFKC-based fuzzy fallback is used only when exact matching cannot find an
-//! anchor. Any validation failure leaves the target unchanged.
+//! anchor for that individual edit. Any validation failure leaves the target
+//! unchanged; runtime-owned `ManagedToolOutput` paths are read-only.
 
 mod input;
 
 use std::ops::Range;
 
 use futures_util::future::BoxFuture;
-use unicode_normalization::UnicodeNormalization;
+use unicode_normalization::char::{canonical_combining_class, compose, decompose_compatible};
 
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
-use crate::tools::native::support::{atomic_commit, failed_result, resolve_path, success_text};
+use crate::tools::native::support::{
+    atomic_commit, failed_result, prepare_mutation_target, resolve_path, success_text,
+};
 use crate::tools::types::ToolInvocationPolicy;
 use crate::tools::types::{ToolExecutionResult, ToolInvocation};
 
@@ -59,15 +62,21 @@ fn run_edit(
         Ok(input) => input,
         Err(error) => return failed_result(error),
     };
-    let target = resolve_path(context.workspace.root(), &input.path);
-    let bytes = match std::fs::read(&target) {
+    let requested = resolve_path(context.workspace.root(), &input.path);
+    let target = match prepare_mutation_target(&requested, context.tool_output) {
+        Ok(target) => target,
+        Err(error) => return failed_result(error),
+    };
+    let bytes = match std::fs::read(target.path()) {
         Ok(bytes) => bytes,
-        Err(error) => return failed_result(format!("cannot read {}: {error}", target.display())),
+        Err(error) => {
+            return failed_result(format!("cannot read {}: {error}", target.path().display()));
+        }
     };
     let Ok(original_with_bom) = String::from_utf8(bytes) else {
         return failed_result(format!(
             "{} is not a UTF-8 text file; Edit never operates on binary content",
-            target.display()
+            target.path().display()
         ));
     };
     let (bom, original_body) = strip_bom(&original_with_bom);
@@ -77,15 +86,11 @@ fn run_edit(
         Ok(planned) => planned,
         Err(error) => return failed_result(error),
     };
-    let updated_normalized = if planned.used_fuzzy {
-        apply_replacements_preserving_unchanged_lines(
-            &normalized,
-            &normalize_for_fuzzy_match(&normalized),
-            &planned.edits,
-        )
-    } else {
-        apply_replacements(&normalized, &planned.edits)
-    };
+    // Every planned range is expressed in the original LF-normalized
+    // snapshot. Applying directly to that snapshot preserves all source
+    // representation outside the selected ranges, including text on a line
+    // that required fuzzy matching elsewhere.
+    let updated_normalized = apply_replacements(&normalized, &planned.edits);
     let updated_body = restore_line_endings(&updated_normalized, ending);
     let updated = format!("{bom}{updated_body}");
     if updated == original_with_bom {
@@ -106,7 +111,6 @@ fn run_edit(
 
 struct PlannedEdits {
     edits: Vec<PlannedEdit>,
-    used_fuzzy: bool,
 }
 
 struct PlannedEdit {
@@ -130,34 +134,36 @@ fn plan(original: &str, edits: &[EditReplacement], path: &str) -> Result<Planned
         })
         .collect();
 
-    let mut needs_fuzzy = false;
+    let mut fuzzy_projection = None;
+    let mut planned = Vec::with_capacity(normalized_edits.len());
     for (index, edit) in normalized_edits.iter().enumerate() {
-        match unique_match(original, &edit.old_text) {
-            MatchTarget::Unique(_) => {}
-            MatchTarget::Missing => needs_fuzzy = true,
+        // Matching strategy is selected independently for each edit. Once an
+        // exact match is unique it is locked to the original snapshot and
+        // never reconsidered in fuzzy space.
+        let range = match unique_match(original, &edit.old_text) {
+            MatchTarget::Unique(range) => range,
             MatchTarget::Ambiguous(count) => {
                 return Err(ambiguous_error(path, index, edits.len(), count));
             }
-        }
-    }
-
-    let replacement_base = if needs_fuzzy {
-        normalize_for_fuzzy_match(original)
-    } else {
-        original.to_owned()
-    };
-    let mut planned = Vec::with_capacity(normalized_edits.len());
-    for (index, edit) in normalized_edits.iter().enumerate() {
-        let old_text = if needs_fuzzy {
-            normalize_for_fuzzy_match(&edit.old_text)
-        } else {
-            edit.old_text.clone()
-        };
-        let range = match unique_match(&replacement_base, &old_text) {
-            MatchTarget::Unique(range) => range,
-            MatchTarget::Missing => return Err(not_found_error(path, index, edits.len())),
-            MatchTarget::Ambiguous(count) => {
-                return Err(ambiguous_error(path, index, edits.len(), count));
+            MatchTarget::Missing => {
+                let projection =
+                    fuzzy_projection.get_or_insert_with(|| FuzzyProjection::new(original));
+                let fuzzy_old_text = normalize_for_fuzzy_match(&edit.old_text);
+                if fuzzy_old_text.is_empty() {
+                    return Err(not_found_error(path, index, edits.len()));
+                }
+                let fuzzy_range = match unique_match(&projection.text, &fuzzy_old_text) {
+                    MatchTarget::Unique(range) => range,
+                    MatchTarget::Missing => {
+                        return Err(not_found_error(path, index, edits.len()));
+                    }
+                    MatchTarget::Ambiguous(count) => {
+                        return Err(ambiguous_error(path, index, edits.len(), count));
+                    }
+                };
+                projection
+                    .original_range(&fuzzy_range)
+                    .ok_or_else(|| not_found_error(path, index, edits.len()))?
             }
         };
         planned.push(PlannedEdit {
@@ -175,10 +181,7 @@ fn plan(original: &str, edits: &[EditReplacement], path: &str) -> Result<Planned
             ));
         }
     }
-    Ok(PlannedEdits {
-        edits: planned,
-        used_fuzzy: needs_fuzzy,
-    })
+    Ok(PlannedEdits { edits: planned })
 }
 
 struct EditReplacementOwned {
@@ -188,7 +191,9 @@ struct EditReplacementOwned {
 
 /// Counts non-overlapping occurrences, matching `split(oldText).len() - 1`.
 fn unique_match(content: &str, old_text: &str) -> MatchTarget {
-    debug_assert!(!old_text.is_empty());
+    if old_text.is_empty() {
+        return MatchTarget::Missing;
+    }
     let occurrences = content.split(old_text).count().saturating_sub(1);
     match occurrences {
         0 => MatchTarget::Missing,
@@ -245,105 +250,196 @@ fn apply_replacements(content: &str, replacements: &[PlannedEdit]) -> String {
 }
 
 #[derive(Clone, Copy)]
-struct LineSpan {
+struct SourceSpan {
     start: usize,
     end: usize,
 }
 
-fn split_lines_with_endings(content: &str) -> Vec<&str> {
-    content
-        .match_indices('\n')
-        .scan(0, |start, (index, _)| {
-            let line = &content[*start..=index];
-            *start = index + 1;
-            Some(line)
-        })
-        .chain({
-            let end = content.len();
-            let last_start = content.rfind('\n').map_or(0, |index| index + 1);
-            (last_start < end).then(|| &content[last_start..end])
-        })
-        .collect()
+/// A fuzzy-normalized projection with an explicit mapping for every
+/// normalized Unicode scalar back to the original LF-normalized snapshot.
+/// The projection is used only to locate a missing exact anchor; replacements
+/// are always applied to the original string through `original_range`.
+struct FuzzyProjection {
+    text: String,
+    byte_starts: Vec<usize>,
+    source_spans: Vec<SourceSpan>,
 }
 
-fn line_spans(content: &str) -> Vec<LineSpan> {
-    let mut spans = Vec::new();
-    let mut start = 0;
-    for (index, _) in content.match_indices('\n') {
-        spans.push(LineSpan {
-            start,
-            end: index + 1,
-        });
-        start = index + 1;
-    }
-    if start < content.len() {
-        spans.push(LineSpan {
-            start,
-            end: content.len(),
-        });
-    }
-    spans
-}
+impl FuzzyProjection {
+    fn new(source: &str) -> Self {
+        let projected: Vec<_> = nfkc_with_mapping(source)
+            .into_iter()
+            .map(|normalized| (normalized.character, normalized.span))
+            .collect();
 
-fn replacement_line_range(lines: &[LineSpan], replacement: &PlannedEdit) -> (usize, usize) {
-    let start = lines
-        .iter()
-        .position(|line| {
-            replacement.range.start >= line.start && replacement.range.start < line.end
-        })
-        .expect("planned replacement starts inside the base content");
-    let end_offset = replacement.range.end.saturating_sub(1);
-    let end = lines
-        .iter()
-        .position(|line| end_offset >= line.start && end_offset < line.end)
-        .expect("planned replacement ends inside the base content");
-    (start, end + 1)
-}
-
-fn apply_replacements_preserving_unchanged_lines(
-    original: &str,
-    base: &str,
-    replacements: &[PlannedEdit],
-) -> String {
-    let original_lines = split_lines_with_endings(original);
-    let base_spans = line_spans(base);
-    debug_assert_eq!(original_lines.len(), base_spans.len());
-    let mut groups: Vec<(usize, usize, Vec<&PlannedEdit>)> = Vec::new();
-    for replacement in replacements {
-        let (start, end) = replacement_line_range(&base_spans, replacement);
-        if let Some(group) = groups.last_mut()
-            && start < group.1
+        let mut trimmed = Vec::with_capacity(projected.len());
+        let mut line: Vec<(char, SourceSpan)> = Vec::new();
+        for (character, span) in projected {
+            if character == '\n' {
+                while line
+                    .last()
+                    .is_some_and(|(character, _)| character.is_whitespace())
+                {
+                    line.pop();
+                }
+                trimmed.append(&mut line);
+                trimmed.push((character, span));
+            } else {
+                line.push((character, span));
+            }
+        }
+        while line
+            .last()
+            .is_some_and(|(character, _)| character.is_whitespace())
         {
-            group.1 = group.1.max(end);
-            group.2.push(replacement);
-        } else {
-            groups.push((start, end, vec![replacement]));
+            line.pop();
+        }
+        trimmed.append(&mut line);
+
+        let mut text = String::new();
+        let mut byte_starts = Vec::with_capacity(trimmed.len());
+        let mut source_spans = Vec::with_capacity(trimmed.len());
+        for (character, span) in trimmed {
+            byte_starts.push(text.len());
+            text.push(fuzzy_character(character));
+            source_spans.push(span);
+        }
+        Self {
+            text,
+            byte_starts,
+            source_spans,
         }
     }
 
-    let mut result = String::new();
-    let mut original_line = 0;
-    for (start, end, group_replacements) in groups {
-        result.push_str(&original_lines[original_line..start].concat());
-        let group_start = base_spans[start].start;
-        let group_end = base_spans[end - 1].end;
-        let group = apply_replacements(
-            &base[group_start..group_end],
-            &group_replacements
-                .iter()
-                .map(|replacement| PlannedEdit {
-                    index: replacement.index,
-                    range: (replacement.range.start - group_start)
-                        ..(replacement.range.end - group_start),
-                    replacement: replacement.replacement.clone(),
-                })
-                .collect::<Vec<_>>(),
-        );
-        result.push_str(&group);
-        original_line = end;
+    fn original_range(&self, normalized_range: &Range<usize>) -> Option<Range<usize>> {
+        if normalized_range.is_empty() || normalized_range.end > self.text.len() {
+            return None;
+        }
+        let start = self
+            .byte_starts
+            .binary_search(&normalized_range.start)
+            .ok()?;
+        let end = if normalized_range.end == self.text.len() {
+            self.source_spans.len()
+        } else {
+            self.byte_starts.binary_search(&normalized_range.end).ok()?
+        };
+        if start >= end {
+            return None;
+        }
+        Some(self.source_spans[start].start..self.source_spans[end - 1].end)
     }
-    result.push_str(&original_lines[original_line..].concat());
-    result
+}
+
+#[derive(Clone, Copy)]
+struct LabeledCharacter {
+    character: char,
+    span: SourceSpan,
+}
+
+/// Produces NFKC while retaining an explicit source span for every normalized
+/// scalar. Decomposition is labeled before canonical reordering and
+/// recomposition, so both compatibility expansion (for example `ﬃ` -> `ffi`)
+/// and composition across source-character boundaries retain enough mapping
+/// information to address the original snapshot.
+fn nfkc_with_mapping(source: &str) -> Vec<LabeledCharacter> {
+    let mut decomposed = Vec::new();
+    for (start, character) in source.char_indices() {
+        let span = SourceSpan {
+            start,
+            end: start + character.len_utf8(),
+        };
+        decompose_compatible(character, |decomposed_character| {
+            decomposed.push(LabeledCharacter {
+                character: decomposed_character,
+                span,
+            });
+        });
+    }
+
+    // Match the normalization crate's stable canonical reordering while
+    // preserving the source span carried by every decomposed scalar.
+    let mut ordered = Vec::with_capacity(decomposed.len());
+    let mut pending: Vec<LabeledCharacter> = Vec::new();
+    for labeled in decomposed {
+        if canonical_combining_class(labeled.character) == 0 {
+            pending.sort_by_key(|entry| canonical_combining_class(entry.character));
+            ordered.append(&mut pending);
+            ordered.push(labeled);
+        } else {
+            pending.push(labeled);
+        }
+    }
+    pending.sort_by_key(|entry| canonical_combining_class(entry.character));
+    ordered.append(&mut pending);
+
+    let mut normalized = Vec::with_capacity(ordered.len());
+    let mut composee = None;
+    let mut last_combining_class = None;
+    let mut blocked: Vec<LabeledCharacter> = Vec::new();
+    for labeled in ordered {
+        let combining_class = canonical_combining_class(labeled.character);
+        let Some(current) = composee else {
+            if combining_class == 0 {
+                composee = Some(labeled);
+            } else {
+                normalized.push(labeled);
+            }
+            continue;
+        };
+
+        match last_combining_class {
+            None => match compose(current.character, labeled.character) {
+                Some(result) => {
+                    composee = Some(LabeledCharacter {
+                        character: result,
+                        span: merge_spans(current.span, labeled.span),
+                    });
+                }
+                None if combining_class == 0 => {
+                    normalized.push(current);
+                    composee = Some(labeled);
+                }
+                None => {
+                    blocked.push(labeled);
+                    last_combining_class = Some(combining_class);
+                }
+            },
+            Some(previous_class) => {
+                if previous_class >= combining_class {
+                    if combining_class == 0 {
+                        normalized.push(current);
+                        normalized.append(&mut blocked);
+                        composee = Some(labeled);
+                        last_combining_class = None;
+                    } else {
+                        blocked.push(labeled);
+                        last_combining_class = Some(combining_class);
+                    }
+                } else if let Some(result) = compose(current.character, labeled.character) {
+                    composee = Some(LabeledCharacter {
+                        character: result,
+                        span: merge_spans(current.span, labeled.span),
+                    });
+                } else {
+                    blocked.push(labeled);
+                    last_combining_class = Some(combining_class);
+                }
+            }
+        }
+    }
+    if let Some(current) = composee {
+        normalized.push(current);
+    }
+    normalized.append(&mut blocked);
+    normalized
+}
+
+fn merge_spans(left: SourceSpan, right: SourceSpan) -> SourceSpan {
+    SourceSpan {
+        start: left.start.min(right.start),
+        end: left.end.max(right.end),
+    }
 }
 
 fn strip_bom(content: &str) -> (&str, &str) {
@@ -385,18 +481,15 @@ fn restore_line_endings(text: &str, ending: LineEnding) -> String {
 }
 
 fn normalize_for_fuzzy_match(text: &str) -> String {
-    let nfkc: String = text.nfkc().collect();
-    nfkc.split('\n')
-        .map(str::trim_end)
-        .collect::<Vec<_>>()
-        .join("\n")
-        .chars()
-        .map(|character| match character {
-            '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}' => '\'',
-            '\u{201C}' | '\u{201D}' | '\u{201E}' | '\u{201F}' => '"',
-            '\u{2010}'..='\u{2015}' | '\u{2212}' => '-',
-            '\u{00A0}' | '\u{2002}'..='\u{200A}' | '\u{202F}' | '\u{205F}' | '\u{3000}' => ' ',
-            other => other,
-        })
-        .collect()
+    FuzzyProjection::new(text).text
+}
+
+fn fuzzy_character(character: char) -> char {
+    match character {
+        '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}' => '\'',
+        '\u{201C}' | '\u{201D}' | '\u{201E}' | '\u{201F}' => '"',
+        '\u{2010}'..='\u{2015}' | '\u{2212}' => '-',
+        '\u{00A0}' | '\u{2002}'..='\u{200A}' | '\u{202F}' | '\u{205F}' | '\u{3000}' => ' ',
+        other => other,
+    }
 }
