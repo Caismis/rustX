@@ -83,7 +83,12 @@ import {
   renderOrphanExecutions,
 } from "./components/activity.ts";
 import { ModelSelector } from "./components/model-selector.ts";
-import { renderFooter, workingStatus } from "./components/status.ts";
+import {
+  renderFooter,
+  renderStartup,
+  startupVisible,
+  workingStatus,
+} from "./components/status.ts";
 import { renderTranscript } from "./components/transcript.ts";
 import {
   type PresentationPreferences,
@@ -124,6 +129,7 @@ export class RustxTuiApp {
   readonly #terminationGraceMs: number | undefined;
 
   readonly #tui: TUI;
+  readonly #startup = new Container();
   readonly #transcript = new Container();
   readonly #activity = new Container();
   readonly #notices = new Container();
@@ -138,6 +144,7 @@ export class RustxTuiApp {
   #finished = false;
   #started = false;
   #restarting = false;
+  #submissionOrdinal = 0;
   #removeStateListener: (() => void) | undefined;
   #removeCloseListener: (() => void) | undefined;
   #resolveExit: ((code: number) => void) | undefined;
@@ -162,6 +169,7 @@ export class RustxTuiApp {
       diagnostics: () => this.#diagnostics(),
     });
 
+    this.#tui.addChild(this.#startup);
     this.#tui.addChild(this.#transcript);
     this.#tui.addChild(this.#activity);
     this.#tui.addChild(this.#notices);
@@ -239,6 +247,20 @@ export class RustxTuiApp {
         );
       }
       this.#tui.addInputListener((data) => {
+        // Ctrl+L is presentation-only input. `/model` remains the canonical
+        // semantic command, and its complete CommandOutcome comes back
+        // through the one app-level interpreter below.
+        if (matchesKey(data, "ctrl+l")) {
+          // Do not steal this key from a focused overlay. Pi will deliver it
+          // to the overlay, where it is ordinary non-editing input.
+          if (this.#overlay !== undefined) {
+            return undefined;
+          }
+          void this.#dispatcher
+            .submit("/model")
+            .then((outcome) => this.#handleOutcome(outcome));
+          return { consume: true };
+        }
         // Ctrl+C is a cancellation *intent*, routed through the protocol like
         // any other; it never kills the runtime behind the runtime's back.
         if (matchesKey(data, "ctrl+c")) {
@@ -281,7 +303,7 @@ export class RustxTuiApp {
 
     // Optimistic echo, explicitly transient: it is reconciled away by the
     // runtime's authoritative inbound fact and is never canonical history.
-    const key = `local-${Date.now()}-${line.length}`;
+    const key = `local-${++this.#submissionOrdinal}`;
     const optimistic = !line.startsWith("/");
     if (optimistic) {
       this.#session.updateState((state) =>
@@ -355,10 +377,7 @@ export class RustxTuiApp {
     if (this.#restarting) return;
     const state = this.#session.state;
     if (state?.attempt !== undefined && state.attempt.phase.type !== "settled") {
-      const outcome = await this.#dispatcher.submit("/cancel");
-      if (outcome.kind === "message") {
-        this.#note(outcome.level, outcome.text);
-      }
+      await this.#handleOutcome(await this.#dispatcher.submit("/cancel"));
       return;
     }
     await this.quit();
@@ -858,6 +877,24 @@ export class RustxTuiApp {
     // Correlated once per render and shared: the transcript and the activity
     // area must agree on which calls have a transcript anchor.
     const correlation = correlateTools(state);
+
+    // The welcome block is useful only before the first real turn. Session
+    // metadata is refreshed from the native Session projection and is never
+    // reconstructed from client or attachment identifiers.
+    this.#startup.clear();
+    if (startupVisible(state)) {
+      this.#startup.addChild(
+        new Text(
+          renderStartup(
+            state,
+            this.#session.sessionInfo,
+            this.#tui.terminal.columns,
+          ),
+          1,
+          0,
+        ),
+      );
+    }
 
     this.#transcript.clear();
     for (const block of renderTranscript(state, this.#preferences, correlation)) {

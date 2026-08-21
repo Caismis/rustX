@@ -171,13 +171,13 @@ describe("snapshot reconstruction", () => {
     // running execution, because it is what the runtime is actually waiting on.
     assert.match(screen, /Waiting for approval of bash…/);
 
-    // Footer: session model, the attempt's frozen model, turn, usage, counts
+    // Footer: session model, the attempt's frozen model, usage, counts
     assert.match(screen, /beta\/model-b/);
     assert.match(screen, /attempt alpha\/model-a/);
-    assert.match(screen, /running · turn 3/);
-    assert.match(screen, /12\.5kin 840out/);
-    assert.match(screen, /inbox 1/);
-    assert.match(screen, /bg 1/);
+    assert.match(screen, /Waiting for approval of bash…/);
+    assert.match(screen, /↑12\.5k ↓840/);
+    assert.match(screen, /queued 1/);
+    assert.match(screen, /background 1/);
   });
 
   it("is identical whether the state is fresh or replaced in place", () => {

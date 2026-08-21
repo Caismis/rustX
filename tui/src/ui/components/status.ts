@@ -22,14 +22,18 @@
  */
 
 import type { PresentationState } from "../../presentation/state.ts";
-import type { SessionView } from "../../protocol/types.ts";
+import type {
+  ModelInvocationView,
+  RuntimeClientOutcome,
+  SessionView,
+} from "../../protocol/types.ts";
 import { correlateTools, runningTools } from "../../presentation/tools.ts";
 import {
   activeBackground,
-  outcomeLabel,
+  describeReasoning,
   unavailableCapabilities,
 } from "../../presentation/selectors.ts";
-import { role, style, plainWidth } from "../theme.ts";
+import { role, style, plainText, plainWidth } from "../theme.ts";
 
 /**
  * The working label, or `undefined` when the runtime is not working.
@@ -87,7 +91,7 @@ export function workingStatus(state: PresentationState): string | undefined {
     }
   }
 
-  return `Working… (turn ${attempt.turn})`;
+  return "Working…";
 }
 
 // ---------------------------------------------------------------------------
@@ -156,10 +160,12 @@ const MAX_FOOTER_LINES = 2;
 /**
  * The footer, laid out for the available width.
  *
- * Everything here is a runtime fact plus the client's own connection state,
- * which the client genuinely owns. Nothing is computed that rustX does not
- * publish: there is no context-window percentage, no cost, and no provider
- * price table, because the Runtime Client publishes none of those.
+ * The footer follows Pi's compact status rhythm while keeping the M9.4
+ * Session and model distinctions visible. Context usage is the latest
+ * runtime/provider-published input usage divided by the context window
+ * published for that model; it is not a client-recomputed history occupancy.
+ * Nothing here reads a catalog file, talks to a provider, or exposes client
+ * plumbing.
  */
 export function renderFooter(
   state: PresentationState,
@@ -188,33 +194,41 @@ export function footerSegments(
     });
   }
 
-  if (attempt !== undefined) {
+  segments.push({
+    text: role.meta(`provider ${providerLabel(state.sessionModel.effective)}`),
+    priority: 1,
+  });
+
+  const working = workingStatus(state);
+  if (working !== undefined) {
+    segments.push({ text: role.pending(working), priority: 0 });
+  } else if (attempt?.phase.type === "settled") {
     segments.push({
-      text:
-        attempt.phase.type === "settled"
-          ? role.meta(outcomeLabel(attempt.phase.outcome))
-          : role.pending(`${attempt.phase.type} · turn ${attempt.turn}`),
+      text: outcomeTone(attempt.phase.outcome),
       priority: 1,
     });
-    if (attempt.lastUsage !== undefined) {
-      segments.push({
-        text: role.meta(
-          `${compact(attempt.lastUsage.input_tokens)}in ${compact(attempt.lastUsage.output_tokens)}out`,
-        ),
-        priority: 2,
-      });
-    } else if (attempt.phase.type !== "settled") {
-      segments.push({ text: role.meta("usage pending"), priority: 3 });
-    }
   }
+
+  if (attempt?.lastUsage !== undefined) {
+    segments.push({
+      text: role.meta(
+        `↑${compact(attempt.lastUsage.input_tokens)} ↓${compact(attempt.lastUsage.output_tokens)}`,
+      ),
+      priority: 2,
+    });
+  } else if (attempt !== undefined && attempt.phase.type !== "settled") {
+    segments.push({ text: role.meta("tokens pending"), priority: 3 });
+  }
+
+  segments.push({ text: role.meta(contextLabel(state)), priority: 1 });
 
   const pending = (state.inbound.pending ?? []).length;
   if (pending > 0) {
-    segments.push({ text: role.pending(`inbox ${pending}`), priority: 1 });
+    segments.push({ text: role.pending(`queued ${pending}`), priority: 1 });
   }
   const background = activeBackground(state).length;
   if (background > 0) {
-    segments.push({ text: style.magenta(`bg ${background}`), priority: 1 });
+    segments.push({ text: style.magenta(`background ${background}`), priority: 1 });
   }
   const interactions = state.pendingInteractions.length;
   if (interactions > 0) {
@@ -224,25 +238,25 @@ export function footerSegments(
     });
   }
   if (state.runtimeShutdown) {
-    segments.push({ text: role.error("shutting down"), priority: 0 });
+    segments.push({ text: role.error("draining"), priority: 0 });
   }
-  segments.push({ text: role.meta(`cap r${state.capabilities.revision}`), priority: 3 });
   const unavailable = unavailableCapabilities(state);
   if (unavailable.length > 0) {
     segments.push({
       text: role.warning(
-        `${unavailable.length} cap unavailable (${unavailable
-          .map((entry) =>
-            entry.source.type === "mcp"
-              ? `mcp ${entry.source.server_id}`
-              : entry.source.type,
-          )
-          .join(", ")})`,
+        `${unavailable.length} ${unavailable.length === 1 ? "optional capability" : "optional capabilities"} unavailable`,
       ),
       priority: 2,
     });
   }
-  segments.push({ text: role.chrome(connectionState), priority: 1 });
+  segments.push({
+    text: role.chrome(connectionState === "connected" ? "online" : "offline"),
+    priority: 1,
+  });
+  segments.push({
+    text: role.meta("Ctrl+L model · /help commands"),
+    priority: 3,
+  });
   return segments;
 }
 
@@ -298,5 +312,107 @@ function compact(tokens: number): string {
   if (tokens < 10_000) {
     return String(tokens);
   }
-  return `${(tokens / 1_000).toFixed(1)}k`;
+  const thousands = Number((tokens / 1_000).toFixed(1));
+  return `${thousands}k`;
+}
+
+/** Whether the compact welcome block still has a real turn to introduce. */
+export function startupVisible(state: PresentationState): boolean {
+  return state.transcript.length === 0 && state.pendingSubmissions.length === 0;
+}
+
+/**
+ * A compact context indicator based only on the latest published usage.
+ *
+ * The numerator is not a tokenization of the transcript. It is the input
+ * token count the runtime published for the latest attempt, and the
+ * denominator is the published context window for that attempt's frozen
+ * model. With no published usage yet, the numerator stays unknown.
+ */
+export function contextLabel(state: PresentationState): string {
+  const usage = state.attempt?.lastUsage;
+  const window =
+    usage === undefined
+      ? state.sessionModel.effective.contextWindow
+      : state.attempt?.model.primary.contextWindow ??
+        state.sessionModel.effective.contextWindow;
+  if (usage === undefined || window <= 0) {
+    return `context —/${compact(window)}`;
+  }
+  const percentage = Math.min(100, Math.round((usage.input_tokens / window) * 100));
+  return `context ${percentage}%/${compact(window)}`;
+}
+
+/** The model's display provider, derived from the published model reference. */
+export function providerLabel(model: ModelInvocationView): string {
+  const separator = model.model.indexOf("/");
+  const provider = separator > 0 ? model.model.slice(0, separator) : undefined;
+  return provider === undefined ? protocolLabel(model.protocol) : provider;
+}
+
+/** The published protocol's human-facing label. This is cosmetic only. */
+export function protocolLabel(protocol: ModelInvocationView["protocol"]): string {
+  switch (protocol) {
+    case "openai_chat_completions":
+      return "Chat Completions";
+    case "openai_responses":
+      return "Responses";
+    case "anthropic_messages":
+      return "Messages";
+    default:
+      return protocol;
+  }
+}
+
+function outcomeTone(outcome: RuntimeClientOutcome): string {
+  switch (outcome.type) {
+    case "completed":
+      return role.success("ready");
+    case "cancelled":
+      return role.warning("cancelled");
+    case "timed_out":
+      return role.warning("timed out");
+    case "limit_exceeded":
+      return role.warning("limit exceeded");
+    case "failed":
+      return role.error("failed");
+    default:
+      return role.meta("settled");
+  }
+}
+
+/**
+ * The compact welcome block shown before the first real transcript turn.
+ *
+ * It uses the effective model and native Session projection only. Attachment
+ * ids, cursors, request ids, capability revisions, and storage paths stay in
+ * `/debug` or out of the client entirely.
+ */
+export function renderStartup(
+  state: PresentationState,
+  session?: SessionView,
+  width = 120,
+): string {
+  const model = state.sessionModel.effective;
+  const lines = [
+    role.strong("rustX"),
+    `${role.meta("model")} ${role.accent(model.model)}`,
+    `${role.meta(`provider ${providerLabel(model)} · ${protocolLabel(model.protocol)}`)} · ${role.meta(contextLabel(state))} · ${role.meta(`reasoning ${describeReasoning(model)}`)}`,
+  ];
+  if (session !== undefined) {
+    lines.push(
+      `${role.meta("session")} ${role.accent(session.name)} · ${role.meta(`node ${session.active_node}`)}`,
+    );
+  }
+  lines.push(
+    role.meta("Ctrl+L model · Esc cancel · Ctrl+T reasoning · Ctrl+O tools · /help commands"),
+  );
+  return lines.map((line) => fit(line, width)).join("\n");
+}
+
+function fit(text: string, width: number): string {
+  if (plainWidth(text) <= width) {
+    return text;
+  }
+  return `${[...plainText(text)].slice(0, Math.max(0, width - 1)).join("")}…`;
 }

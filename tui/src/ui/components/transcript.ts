@@ -37,6 +37,7 @@ import type {
   TranscriptCommitted,
   TranscriptEntry,
 } from "../../presentation/state.ts";
+import type { RuntimeClientOutcome } from "../../protocol/types.ts";
 import {
   type ToolCorrelation,
   correlateTools,
@@ -95,6 +96,10 @@ export function renderTranscript(
   for (const entry of state.transcript) {
     blocks.push(...renderEntryBlocks(entry, context));
   }
+  const attemptOutcome = renderAttemptOutcome(state);
+  if (attemptOutcome !== undefined) {
+    blocks.push(attemptOutcome);
+  }
   for (const pending of state.pendingSubmissions) {
     // Explicitly marked unacknowledged so it can never read as canonical
     // history. The runtime's own inbound fact replaces it.
@@ -108,6 +113,79 @@ export function renderTranscript(
     });
   }
   return blocks;
+}
+
+/**
+ * Renders a terminal non-success attempt outcome beside the interrupted
+ * conversation. The outcome is already authoritative in the projection;
+ * missing assistant text, EOF, detach, or restart never becomes a failure
+ * here.
+ */
+export function renderAttemptOutcome(
+  state: PresentationState,
+): TranscriptBlock | undefined {
+  const phase = state.attempt?.phase;
+  if (phase?.type !== "settled" || phase.outcome.type === "completed") {
+    return undefined;
+  }
+
+  const { heading, detail, colour } = describeOutcome(phase.outcome);
+  const lines = [colour(`▌ ${heading}`)];
+  if (detail !== undefined && detail.length > 0) {
+    lines.push(...bar(bound(detail), colour));
+  }
+  return {
+    kind: "text",
+    key: `attempt:${state.attempt!.attemptId}:outcome`,
+    text: lines.join("\n"),
+  };
+}
+
+function describeOutcome(
+  outcome: Exclude<RuntimeClientOutcome, { type: "completed" }>,
+): {
+  heading: string;
+  detail?: string;
+  colour: (text: string) => string;
+} {
+  switch (outcome.type) {
+    case "cancelled":
+      return {
+        heading: `cancelled · ${outcome.reason}`,
+        colour: role.warning,
+      };
+    case "timed_out":
+      return { heading: "timed out", colour: role.warning };
+    case "limit_exceeded":
+      return {
+        heading: `limit exceeded · ${outcome.limit}`,
+        colour: role.warning,
+      };
+    case "failed":
+      if (outcome.error.type === "model") {
+        return {
+          heading: `request failed · ${outcome.error.kind}`,
+          detail: outcome.error.message,
+          colour: role.error,
+        };
+      }
+      return {
+        heading: `runtime failed · ${outcome.error.error.type}`,
+        detail: outcome.error.error.message ?? outcome.error.error.name,
+        colour: role.error,
+      };
+    default:
+      return { heading: "request settled", colour: role.meta };
+  }
+}
+
+const OUTCOME_DETAIL_LIMIT = 512;
+
+function bound(text: string): string {
+  if (text.length <= OUTCOME_DETAIL_LIMIT) {
+    return text;
+  }
+  return `${text.slice(0, OUTCOME_DETAIL_LIMIT - 1)}…`;
 }
 
 /** The independently styled blocks of one transcript entry. */
