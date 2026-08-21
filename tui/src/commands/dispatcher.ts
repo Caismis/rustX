@@ -10,9 +10,10 @@
  *        +-- plain text -> submit_inbound
  * ```
  *
- * The dispatcher produces *outcomes* — text to show, an overlay to open, a
- * quit request — rather than touching the terminal itself. That keeps it
- * testable without a real terminal and keeps Pi at the outermost layer.
+ * The dispatcher produces *typed presentation intents* — an inspection view,
+ * transient feedback, an overlay to open, or a quit request — rather than
+ * touching the terminal itself. That keeps it testable without a real
+ * terminal and keeps Pi at the outermost layer.
  *
  * What it must never do: read `models.json`, resolve a credential, execute a
  * tool, read a `SKILL.md`, compose an Agent Status, drain a mailbox, or reach
@@ -51,7 +52,8 @@ import type {
 /** What the dispatcher wants the UI to do next. */
 export type CommandOutcome =
   | { kind: "none" }
-  | { kind: "message"; level: "info" | "error"; text: string }
+  | { kind: "inspect"; title: string; body: string }
+  | { kind: "transient"; level: "info" | "error"; text: string }
   | { kind: "choose_model"; models: CatalogModelView[] }
   | {
       kind: "choose_session";
@@ -174,13 +176,13 @@ export class CommandDispatcher {
   async #dispatch(name: string, argument: string): Promise<CommandOutcome> {
     const state = this.#context.session.state;
     if (state === undefined) {
-      return { kind: "message", level: "error", text: "not attached yet" };
+      return transient("error", "not attached yet");
     }
 
     try {
       switch (name) {
         case "/help":
-          return info(renderHelp());
+          return inspect("Help", renderHelp());
         case "/model":
           return await this.#model(state, argument);
         case "/new":
@@ -198,13 +200,13 @@ export class CommandDispatcher {
         case "/tree":
           return await this.#tree();
         case "/tools":
-          return info(renderTools(state));
+          return inspect("Tools", renderTools(state));
         case "/skills":
-          return info(renderSkills(state));
+          return inspect("Skills", renderSkills(state));
         case "/status":
-          return info(renderStatus(state));
+          return inspect("Runtime status", renderStatus(state));
         case "/debug":
-          return info(renderDebug(state, this.#context.diagnostics()));
+          return inspect("Client diagnostics", renderDebug(state, this.#context.diagnostics()));
         case "/reasoning":
           return reasoningPreference(argument);
         case "/expand":
@@ -216,11 +218,7 @@ export class CommandDispatcher {
         case "/quit":
           return { kind: "quit" };
         default:
-          return {
-            kind: "message",
-            level: "error",
-            text: `unknown command ${name}. Try /help.`,
-          };
+          return transient("error", `unknown command ${name}. Try /help.`);
       }
     } catch (error) {
       return failure(error);
@@ -291,7 +289,8 @@ export class CommandDispatcher {
 
   async #sessionInfo(): Promise<CommandOutcome> {
     const session = await this.#context.session.refreshSession();
-    return info(
+    return inspect(
+      "Session",
       [
         `session ${session.name} (${session.id})`,
         `active node ${session.active_node}`,
@@ -302,9 +301,9 @@ export class CommandDispatcher {
   }
 
   async #name(argument: string): Promise<CommandOutcome> {
-    if (argument.trim().length === 0) return info("usage: /name <text>");
+    if (argument.trim().length === 0) return transient("error", "usage: /name <text>");
     const session = await this.#context.session.nameSession(argument);
-    return info(`session renamed to ${session.name}`);
+    return transient("info", `session renamed to ${session.name}`);
   }
 
   async #fork(): Promise<CommandOutcome> {
@@ -346,7 +345,7 @@ export class CommandDispatcher {
     // `show` is answered from the projection alone; every other spelling
     // needs the runtime's authoritative catalog.
     if (argument === "show") {
-      return info(renderModel(state));
+      return inspect("Model", renderModel(state));
     }
     const catalog = await this.#context.session.modelCatalog();
     const models = catalog.models ?? [];
@@ -357,11 +356,10 @@ export class CommandDispatcher {
     const chosen = models.find((model) => model.model === argument);
     if (chosen === undefined) {
       const known = models.map((model) => model.model).join(", ");
-      return {
-        kind: "message",
-        level: "error",
-        text: `${argument} is not in the runtime's catalog. Selectable: ${known || "none"}`,
-      };
+      return transient(
+        "error",
+        `${argument} is not in the runtime's catalog. Selectable: ${known || "none"}`,
+      );
     }
     return this.selectModel(chosen);
   }
@@ -377,7 +375,7 @@ export class CommandDispatcher {
     try {
       const current = this.#context.session.state?.sessionModel.configured;
       if (current === undefined) {
-        return { kind: "message", level: "error", text: "not attached yet" };
+        return transient("error", "not attached yet");
       }
 
       // `/model X` is a deliberate whole-state replacement: the selected
@@ -399,7 +397,8 @@ export class CommandDispatcher {
         attempt !== undefined && attempt.phase.type === "running"
           ? `\nThe running attempt stays on ${attempt.model.primary.model}; the change applies to the next attempt.`
           : "";
-      return info(
+      return transient(
+        "info",
         `session model is now ${updated.configured.model}\nprimary overrides reset to the selected model defaults; summary model policy preserved\n${capabilitySummary(updated.effective)}${note}`,
       );
     } catch (error) {
@@ -412,12 +411,14 @@ export class CommandDispatcher {
       // Cancellation of one background execution is a request. Acceptance is
       // not settlement: the terminal fact arrives later, from the runtime.
       const accepted = await this.#context.session.cancelBackground(argument);
-      return info(
+      return transient(
+        "info",
         `cancellation requested for ${accepted.execution_id} (registry state: ${accepted.state})\nThis is acceptance, not settlement.`,
       );
     }
     const attemptId = await this.#context.session.cancelCurrentAttempt();
-    return info(
+    return transient(
+      "info",
       `cancellation requested for attempt ${attemptId}\nThis is acceptance; the runtime owns the terminal settlement.`,
     );
   }
@@ -425,7 +426,7 @@ export class CommandDispatcher {
   async #approve(argument: string): Promise<CommandOutcome> {
     const parts = argument.split(/\s+/).filter((part) => part.length > 0);
     if (parts.length < 2) {
-      return info("usage: /approve <interaction-id> <allow|deny> [reason]");
+      return transient("error", "usage: /approve <interaction-id> <allow|deny> [reason]");
     }
     const interactionId = parts[0]!;
     const decision = parts[1]!;
@@ -433,7 +434,7 @@ export class CommandDispatcher {
     let approval: ApprovalDecision;
     if (decision === "allow") {
       if (reasonParts.length > 0) {
-        return info("allow does not accept a replacement argument or reason");
+        return transient("error", "allow does not accept a replacement argument or reason");
       }
       approval = { type: "allow" };
     } else if (decision === "deny") {
@@ -442,11 +443,11 @@ export class CommandDispatcher {
         reason: reasonParts.join(" ") || "denied by Runtime Client",
       };
     } else {
-      return info("usage: /approve <interaction-id> <allow|deny> [reason]");
+      return transient("error", "usage: /approve <interaction-id> <allow|deny> [reason]");
     }
     const response: InteractionResponse = { type: "approval", decision: approval };
     await this.#context.session.respondInteraction(interactionId, response);
-    return info(`response accepted for interaction ${interactionId}`);
+    return transient("info", `response accepted for interaction ${interactionId}`);
   }
 }
 
@@ -472,11 +473,7 @@ function reasoningPreference(argument: string): CommandOutcome {
         preference: { type: "reasoning", visible: false },
       };
     default:
-      return {
-        kind: "message",
-        level: "error",
-        text: "usage: /reasoning [on|off]",
-      };
+      return transient("error", "usage: /reasoning [on|off]");
   }
 }
 
@@ -536,11 +533,18 @@ function expandPreference(argument: string): CommandOutcome {
 }
 
 function usage(spelling: string): CommandOutcome {
-  return { kind: "message", level: "error", text: `usage: ${spelling}` };
+  return transient("error", `usage: ${spelling}`);
 }
 
-function info(text: string): CommandOutcome {
-  return { kind: "message", level: "info", text };
+function inspect(title: string, body: string): CommandOutcome {
+  return { kind: "inspect", title, body };
+}
+
+function transient(
+  level: "info" | "error",
+  text: string,
+): CommandOutcome {
+  return { kind: "transient", level, text };
 }
 
 function failure(error: unknown): CommandOutcome {
@@ -548,13 +552,9 @@ function failure(error: unknown): CommandOutcome {
     if (error.error.type === "session_restart_required") {
       return { kind: "replacement_required", message: error.error.message };
     }
-    return { kind: "message", level: "error", text: error.message };
+    return transient("error", error.message);
   }
-  return {
-    kind: "message",
-    level: "error",
-    text: (error as Error).message ?? String(error),
-  };
+  return transient("error", (error as Error).message ?? String(error));
 }
 
 // ---------------------------------------------------------------------------

@@ -95,13 +95,6 @@ export interface AttemptPresentation {
   foreground: ForegroundToolExecution[];
 }
 
-/** A transient client-side note. Never mistaken for a runtime fact. */
-export interface ClientNotice {
-  key: string;
-  level: "info" | "error";
-  text: string;
-}
-
 /**
  * One locally submitted inbound message awaiting its runtime identity.
  *
@@ -135,7 +128,6 @@ export interface PresentationState {
   /** True once runtime drain begins; shutdown responses complete at quiescence. */
   runtimeShutdown: boolean;
   pendingSubmissions: PendingSubmission[];
-  notices: ClientNotice[];
 }
 
 /** Whether the attempt is doing work the UI should show as busy. */

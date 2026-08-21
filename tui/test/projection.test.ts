@@ -11,7 +11,6 @@ import { describe, it } from "node:test";
 import {
   reduce,
   replaceFromSnapshot,
-  withNotice,
   withPendingSubmission,
 } from "../src/presentation/projection.ts";
 import type { PresentationState, StreamingMessage } from "../src/presentation/state.ts";
@@ -561,9 +560,8 @@ describe("presentation projection", () => {
     assert.equal(state.inbound.pending?.[0]?.message.id, "m1");
   });
 
-  it("carries only transient client state across an authoritative repair", () => {
+  it("does not carry TUI feedback through an authoritative repair", () => {
     let state = withPendingSubmission(initial(), "local-1", "queued");
-    state = withNotice(state, { key: "n1", level: "error", text: "boom" });
     state = fold(state, [
       { type: "attempt_started", attempt_id: "a1", model: attemptModel("beta/model-b") },
     ]);
@@ -574,14 +572,14 @@ describe("presentation projection", () => {
         model: sessionModel("beta/model-b"),
       }),
       100,
-      { notices: state.notices, pendingSubmissions: state.pendingSubmissions },
+      { pendingSubmissions: state.pendingSubmissions },
     );
 
     assert.equal(repaired.cursor, 100);
     assert.equal(repaired.transcript.length, 1);
     assert.equal(repaired.attempt, undefined, "the snapshot is authoritative");
-    assert.equal(repaired.notices.length, 1);
     assert.equal(repaired.pendingSubmissions.length, 1);
+    assert.equal("notices" in repaired, false);
   });
 
   it("is reconstructable from a snapshot alone", () => {

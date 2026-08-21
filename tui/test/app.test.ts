@@ -51,6 +51,7 @@ function fakeSession(
   return {
     state,
     onState: () => () => {},
+    onSnapshot: () => () => {},
     updateState: () => {},
     shutdown: async () => {},
     waitForAttemptSettlement: waitForSettlement,
@@ -212,6 +213,14 @@ describe("RustxTuiApp lifecycle", () => {
     });
     const running = app.run();
 
+    // Inspection overlay: Esc closes it and must not reach /cancel, even
+    // though the authoritative presentation says an attempt is unsettled.
+    process.stdin.emit("data", "/help\r");
+    await waitForApplicationContinuation();
+    process.stdin.emit("data", "\u001b");
+    await waitForPiEscapeDisambiguation();
+    assert.equal(cancelled, 0);
+
     // Overlay open: Esc closes it and must not reach /cancel, even though
     // the authoritative presentation says an attempt is unsettled.
     process.stdin.emit("data", "/resume\r");
@@ -224,6 +233,51 @@ describe("RustxTuiApp lifecycle", () => {
     assert.equal(cancelled, 0);
 
     // No overlay: the same Esc input reaches the existing /cancel route once.
+    process.stdin.emit("data", "\u001b");
+    await waitForPiEscapeDisambiguation();
+    assert.equal(cancelled, 1);
+
+    await app.quit();
+    await running;
+  });
+
+  it("closes stale inspection focus when an authoritative snapshot replaces the attachment", async () => {
+    let cancelled = 0;
+    let snapshotListener!: () => void;
+    const state = {
+      ...emptyPresentationState(sessionModel("alpha/model-a")),
+      attempt: {
+        ...attemptView(),
+        phase: { type: "running" as const },
+      },
+    };
+    const session = fakeSession(async () => {}, state);
+    const api = session as unknown as {
+      onSnapshot: (listener: () => void) => () => void;
+      cancelCurrentAttempt: () => Promise<string>;
+    };
+    api.onSnapshot = (listener) => {
+      snapshotListener = listener;
+      return () => {};
+    };
+    api.cancelCurrentAttempt = async () => {
+      cancelled += 1;
+      return "a1";
+    };
+
+    const app = new RustxTuiApp({
+      session,
+      connection: fakeConnection(),
+      child: fakeChild([]),
+    });
+    const running = app.run();
+
+    process.stdin.emit("data", "/help\r");
+    await waitForApplicationContinuation();
+    snapshotListener();
+
+    // The snapshot callback closes the old inspection before Escape is
+    // interpreted as cancellation intent.
     process.stdin.emit("data", "\u001b");
     await waitForPiEscapeDisambiguation();
     assert.equal(cancelled, 1);

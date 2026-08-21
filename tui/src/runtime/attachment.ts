@@ -90,10 +90,12 @@ export interface SessionSwitch {
 }
 
 type StateListener = (state: PresentationState) => void;
+type SnapshotListener = () => void;
 
 export class RuntimeClientAttachment {
   readonly #connection: RuntimeClientConnection;
   readonly #listeners = new Set<StateListener>();
+  readonly #snapshotListeners = new Set<SnapshotListener>();
   #state: PresentationState | undefined;
   #identity: AttachmentIdentity | undefined;
   #sessionInfo: SessionView | undefined;
@@ -127,6 +129,12 @@ export class RuntimeClientAttachment {
   onState(listener: StateListener): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
+  }
+
+  /** Subscribes to authoritative projection replacement, including resync. */
+  onSnapshot(listener: SnapshotListener): () => void {
+    this.#snapshotListeners.add(listener);
+    return () => this.#snapshotListeners.delete(listener);
   }
 
   /**
@@ -573,10 +581,12 @@ export class RuntimeClientAttachment {
       this.#state === undefined
         ? undefined
         : {
-            notices: this.#state.notices,
             pendingSubmissions: this.#state.pendingSubmissions,
           },
     );
+    for (const listener of this.#snapshotListeners) {
+      listener();
+    }
     this.#publish();
   }
 

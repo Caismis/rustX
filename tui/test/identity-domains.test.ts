@@ -288,8 +288,8 @@ describe("/expand addresses one domain at a time", () => {
   it("rejects a background or interaction request with no identity", async () => {
     for (const argument of ["background", "interaction"]) {
       const outcome = await expand(argument);
-      assert.equal(outcome.kind, "message", argument);
-      assert.equal(outcome.kind === "message" ? outcome.level : "", "error");
+      assert.equal(outcome.kind, "transient", argument);
+      assert.equal(outcome.kind === "transient" ? outcome.level : "", "error");
     }
   });
 

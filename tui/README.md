@@ -146,6 +146,47 @@ carries the durable Session metadata and live status instead.
 | `ui/preferences.ts` | reasoning visibility and expanded cards | anything the runtime owns |
 | `ui/` | Pi components and rendering | every fact it displays |
 
+## Presentation surfaces
+
+The dispatcher classifies client information by presentation intent before it
+reaches Pi. The app owns the rendering mechanics; none of these client-side
+surfaces are Runtime Client facts or canonical conversation history.
+
+| Surface | Semantics and lifetime |
+| --- | --- |
+| **Inspection** | One reusable focused viewport for substantial read-only Markdown. It is bounded and scrollable with Up/Down, PageUp/PageDown, Home/End, and Escape. |
+| **Picker** | Existing focused selectors and approval interactions remain overlays with their existing selection and focus semantics. |
+| **Transient** | One current item, owned by the app. New feedback replaces old feedback; any input acknowledges it, and attachment/session replacement clears it. Rendering is bounded to three lines and uses no wall-clock timer. |
+| **Local scrollback** | Deliberately not implemented. These client events have no honest interleaving point with runtime conversation history, so they use the finite transient surface instead of a second local event store. |
+| **Preference** | Reasoning visibility and expansion choices stay in client display preferences and never become runtime messages. |
+| **Control** | Canonical commands still go through the Runtime Client. Their short acknowledgement is transient; runtime status and settlement remain authoritative runtime projection. |
+| **Quit** | Shutdown is a control intent. Lifecycle failures remain visible as transient errors and are never turned into fake transcript messages. |
+
+The command-to-surface classification is:
+
+| Command | Final surface |
+| --- | --- |
+| `/help`, `/session`, `/tools`, `/skills`, `/status`, `/debug` | inspection |
+| `/model show` | inspection |
+| `/model` and `/model list` | picker; the selection result is transient |
+| `/resume` | picker; a direct session id is a control operation with transient result |
+| `/fork`, `/tree` | picker; the selected session operation has transient/replacement feedback |
+| `/new`, `/clone` | control with transient/replacement feedback |
+| `/name <text>`, `/model <provider/model>` | control with transient result |
+| `/cancel`, `/approve` | control with transient acceptance/validation result |
+| `/reasoning`, `/expand` | preference |
+| `/quit` | quit |
+| invalid, unknown, or empty-result command feedback | transient |
+
+Inspection and transient state live outside `PresentationState`: an
+authoritative snapshot or event-stream resync reconstructs runtime-derived
+projection state and does not carry arbitrary client feedback. Replacing an
+attachment or switching Session closes a stale inspection and clears the
+transient item before the destination projection is shown. The canonical
+transcript remains reconstructed only from runtime-published message facts;
+client output never becomes a `MessageBlock`, a model request payload, or a
+Runtime Client protocol event.
+
 ## Commands
 
 The TUI's current slash-command surface is grouped by purpose:
@@ -211,7 +252,7 @@ nothing but the screen. They send no request, and they are also bound to keys:
 | Key | Effect |
 | --- | --- |
 | `ctrl+l` | open the same model selector as `/model` |
-| `escape` | close the active overlay, or request cancellation for an unsettled attempt when idle |
+| `escape` | the focused overlay closes first; with no overlay, request cancellation for an unsettled attempt |
 | `ctrl+c` | cancellation intent for the active attempt, or quit when idle |
 | `ctrl+o` | expand or collapse the most recent tool card |
 | `ctrl+t` | show or hide model reasoning |

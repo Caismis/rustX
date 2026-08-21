@@ -56,7 +56,6 @@ import {
   type PreferenceChange,
 } from "../commands/dispatcher.ts";
 import {
-  withNotice,
   withPendingSubmission,
 } from "../presentation/projection.ts";
 import { correlateTools } from "../presentation/tools.ts";
@@ -83,6 +82,8 @@ import {
   renderOrphanExecutions,
 } from "./components/activity.ts";
 import { ModelSelector } from "./components/model-selector.ts";
+import { InspectionView } from "./components/inspection-view.ts";
+import { TransientFeedbackSurface } from "./components/transient-feedback.ts";
 import {
   renderFooter,
   renderStartup,
@@ -132,7 +133,7 @@ export class RustxTuiApp {
   readonly #startup = new Container();
   readonly #transcript = new Container();
   readonly #activity = new Container();
-  readonly #notices = new Container();
+  readonly #transient = new TransientFeedbackSurface();
   readonly #footer = new Text("", 1, 0);
   readonly #editor: Editor;
   readonly #loader: Loader;
@@ -146,6 +147,7 @@ export class RustxTuiApp {
   #restarting = false;
   #submissionOrdinal = 0;
   #removeStateListener: (() => void) | undefined;
+  #removeSnapshotListener: (() => void) | undefined;
   #removeCloseListener: (() => void) | undefined;
   #resolveExit: ((code: number) => void) | undefined;
 
@@ -172,7 +174,7 @@ export class RustxTuiApp {
     this.#tui.addChild(this.#startup);
     this.#tui.addChild(this.#transcript);
     this.#tui.addChild(this.#activity);
-    this.#tui.addChild(this.#notices);
+    this.#tui.addChild(this.#transient);
     this.#tui.addChild(new Spacer(1));
     this.#tui.addChild(this.#editor);
     this.#tui.addChild(this.#footer);
@@ -185,18 +187,21 @@ export class RustxTuiApp {
     connection: RuntimeClientConnection,
     child: ChildRuntimeProcess,
   ): void {
+    this.#resetLocalSurfaces();
     this.#removeStateListener?.();
+    this.#removeSnapshotListener?.();
     this.#removeCloseListener?.();
     this.#session = session;
     this.#connection = connection;
     this.#child = child;
     this.#dispatcher.setSession(session);
+    this.#removeSnapshotListener = session.onSnapshot(() => this.#resetLocalSurfaces());
     this.#removeStateListener = session.onState((state) => this.#renderState(state));
     this.#removeCloseListener = connection.onClose((error) => {
       if (this.#restarting) return;
       // Transport loss is not cancellation. It only ends observation, so the
       // client says exactly that and stops accepting input.
-      this.#note(
+      this.#showTransient(
         "error",
         `${error.message}\nThe runtime is no longer observable from this client.`,
       );
@@ -242,11 +247,14 @@ export class RustxTuiApp {
             if (refreshed !== undefined) this.#renderState(refreshed);
           },
           (error: unknown) => {
-            this.#note("error", `session metadata unavailable: ${(error as Error).message}`);
+            this.#showTransient("error", `session metadata unavailable: ${(error as Error).message}`);
           },
         );
       }
       this.#tui.addInputListener((data) => {
+        // Any user input acknowledges the one current transient feedback item.
+        // A later command or lifecycle result may replace it explicitly.
+        this.#acknowledgeTransient();
         // Ctrl+L is presentation-only input. `/model` remains the canonical
         // semantic command, and its complete CommandOutcome comes back
         // through the one app-level interpreter below.
@@ -318,8 +326,11 @@ export class RustxTuiApp {
     outcome: Awaited<ReturnType<CommandDispatcher["submit"]>>,
   ): Promise<void> {
     switch (outcome.kind) {
-      case "message":
-        this.#note(outcome.level, outcome.text);
+      case "inspect":
+        this.#showInspection(outcome.title, outcome.body);
+        break;
+      case "transient":
+        this.#showTransient(outcome.level, outcome.text);
         break;
       case "choose_model":
         this.#showModelSelector(outcome.models);
@@ -362,6 +373,7 @@ export class RustxTuiApp {
   }
 
   async #onEscape(): Promise<void> {
+    this.#acknowledgeTransient();
     if (this.#overlay !== undefined) {
       this.#closeOverlay();
       return;
@@ -374,6 +386,7 @@ export class RustxTuiApp {
   }
 
   async #onInterrupt(): Promise<void> {
+    this.#acknowledgeTransient();
     if (this.#restarting) return;
     const state = this.#session.state;
     if (state?.attempt !== undefined && state.attempt.phase.type !== "settled") {
@@ -403,7 +416,7 @@ export class RustxTuiApp {
     }
     this.#quitting = true;
     this.#editor.disableSubmit = true;
-    this.#note("info", "shutting the runtime down…");
+    this.#showTransient("info", "shutting the runtime down…");
 
     const attempt = this.#session.state?.attempt;
     const unsettledAttemptId =
@@ -415,7 +428,7 @@ export class RustxTuiApp {
       await this.#session.shutdown();
     } catch (error) {
       lifecycleFailure = true;
-      this.#note("error", `shutdown request failed: ${(error as Error).message}`);
+      this.#showTransient("error", `shutdown request failed: ${(error as Error).message}`);
     }
 
     if (!lifecycleFailure && unsettledAttemptId !== undefined) {
@@ -423,7 +436,7 @@ export class RustxTuiApp {
         await this.#session.waitForAttemptSettlement(unsettledAttemptId);
       } catch (error) {
         lifecycleFailure = true;
-        this.#note(
+        this.#showTransient(
           "error",
           `attempt settlement was not observed: ${(error as Error).message}`,
         );
@@ -437,6 +450,26 @@ export class RustxTuiApp {
       this.#exitCode = 1;
     }
     this.#finish(this.#exitCode);
+  }
+
+  /** Opens the shared focused surface for substantial read-only information. */
+  #showInspection(title: string, body: string): void {
+    this.#closeOverlay();
+    const viewportLines = Math.max(
+      1,
+      Math.floor(this.#tui.terminal.rows * 0.7) - 3,
+    );
+    const inspection = new InspectionView({ title, body, viewportLines });
+    const handle = this.#tui.showOverlay(inspection, {
+      width: "85%",
+      maxHeight: "70%",
+      anchor: "center",
+    });
+    this.#overlay = handle;
+    inspection.onChange = () => this.#tui.requestRender();
+    inspection.onClose = () => this.#closeOverlay();
+    handle.focus();
+    this.#tui.requestRender();
   }
 
   /**
@@ -474,7 +507,7 @@ export class RustxTuiApp {
     selector.onSelect = (model) => {
       close();
       void this.#dispatcher.selectModel(model).then((outcome) => this.#handleOutcome(outcome)).catch((error: unknown) => {
-        this.#note("error", `model selection failed: ${errorMessage(error)}`);
+        this.#showTransient("error", `model selection failed: ${errorMessage(error)}`);
       });
     };
 
@@ -488,7 +521,7 @@ export class RustxTuiApp {
     query: string,
   ): void {
     if (sessions.length === 0) {
-      this.#note("info", "no persisted sessions are available");
+      this.#showTransient("info", "no persisted sessions are available");
       return;
     }
     let currentQuery = query;
@@ -513,7 +546,7 @@ export class RustxTuiApp {
         selector.replacePage(page.sessions, page.nextOffset);
       }).catch((error: unknown) => {
         if (serial !== requestSerial) return;
-        this.#note("error", `session search failed: ${errorMessage(error)}`);
+        this.#showTransient("error", `session search failed: ${errorMessage(error)}`);
         selector.replacePage([], undefined);
       });
     };
@@ -526,7 +559,7 @@ export class RustxTuiApp {
         currentNextOffset = page.nextOffset;
         selector.appendPage(page.sessions, page.nextOffset);
       }).catch((error: unknown) => {
-        this.#note("error", `session page failed: ${errorMessage(error)}`);
+        this.#showTransient("error", `session page failed: ${errorMessage(error)}`);
         selector.appendPage([], currentNextOffset);
       });
     };
@@ -535,7 +568,7 @@ export class RustxTuiApp {
       void this.#dispatcher.selectSession(session.id)
         .then((outcome) => this.#handleOutcome(outcome))
         .catch((error: unknown) => {
-          this.#note("error", `session selection failed: ${errorMessage(error)}`);
+          this.#showTransient("error", `session selection failed: ${errorMessage(error)}`);
         });
     };
     handle.focus();
@@ -549,7 +582,7 @@ export class RustxTuiApp {
     nextOffset?: number,
   ): void {
     if (boundaries.length === 0) {
-      this.#note(
+      this.#showTransient(
         "info",
         "the active lineage has no committed user-message boundary",
       );
@@ -572,7 +605,7 @@ export class RustxTuiApp {
         currentNextOffset = page.nextHistoryOffset;
         selector.appendPage(page.branchableMessages, page.nextHistoryOffset);
       }).catch((error: unknown) => {
-        this.#note("error", `history page failed: ${errorMessage(error)}`);
+        this.#showTransient("error", `history page failed: ${errorMessage(error)}`);
         selector.appendPage([], currentNextOffset);
       });
     };
@@ -584,7 +617,7 @@ export class RustxTuiApp {
       void request
         .then((outcome) => this.#handleOutcome(outcome))
         .catch((error: unknown) => {
-          this.#note("error", `session switch failed: ${errorMessage(error)}`);
+          this.#showTransient("error", `session switch failed: ${errorMessage(error)}`);
         });
     };
     handle.focus();
@@ -624,7 +657,7 @@ export class RustxTuiApp {
           nextHistoryOffset: page.nextHistoryOffset,
         });
       }).catch((error: unknown) => {
-        this.#note("error", `tree page failed: ${errorMessage(error)}`);
+        this.#showTransient("error", `tree page failed: ${errorMessage(error)}`);
         selector.retryPage();
       });
     };
@@ -636,7 +669,7 @@ export class RustxTuiApp {
       void request
         .then((outcome) => this.#handleOutcome(outcome))
         .catch((error: unknown) => {
-          this.#note("error", `session switch failed: ${errorMessage(error)}`);
+          this.#showTransient("error", `session switch failed: ${errorMessage(error)}`);
         });
     };
     handle.focus();
@@ -654,7 +687,7 @@ export class RustxTuiApp {
 
   async #applySessionSwitch(change: SessionSwitch): Promise<void> {
     if (!change.restartRequired) {
-      this.#note(
+      this.#showTransient(
         "info",
         `active session: ${change.session.name} · node ${change.session.active_node}`,
       );
@@ -662,7 +695,7 @@ export class RustxTuiApp {
     }
     const restart = this.#restartRuntime;
     if (restart === undefined) {
-      this.#note("error", "the runtime cannot be replaced by this attachment");
+      this.#showTransient("error", "the runtime cannot be replaced by this attachment");
       this.#editor.disableSubmit = true;
       this.#finish(1);
       return;
@@ -670,7 +703,7 @@ export class RustxTuiApp {
 
     this.#restarting = true;
     this.#editor.disableSubmit = true;
-    this.#note(
+    this.#showTransient(
       change.restartDiagnostic === undefined ? "info" : "error",
       change.restartDiagnostic === undefined
         ? `switching to session ${change.session.name}…`
@@ -698,14 +731,14 @@ export class RustxTuiApp {
         }
         this.#editor.setText(editorText(change.editorContent));
       }
-      this.#note(
+      this.#showTransient(
         "info",
         `active session: ${authoritative.name} · node ${authoritative.active_node}`,
       );
       const state = this.#session.state;
       if (state !== undefined) this.#renderState(state);
     } catch (error) {
-      this.#note("error", `session switch failed: ${errorMessage(error)}`);
+      this.#showTransient("error", `session switch failed: ${errorMessage(error)}`);
       this.#editor.disableSubmit = true;
       this.#finish(1);
     } finally {
@@ -727,7 +760,7 @@ export class RustxTuiApp {
     this.#restarting = true;
     this.#editor.disableSubmit = true;
     this.#closeOverlay();
-    this.#note("error", `the active Session attachment must be replaced: ${message}`);
+    this.#showTransient("error", `the active Session attachment must be replaced: ${message}`);
     if (restart === undefined) {
       this.#finish(1);
       return;
@@ -744,14 +777,14 @@ export class RustxTuiApp {
       const next = await restart();
       this.#bindRuntime(next.session, next.connection, next.child);
       const authoritative = await next.session.refreshSession();
-      this.#note(
+      this.#showTransient(
         "info",
         `attached to authoritative Session ${authoritative.name} · node ${authoritative.active_node}`,
       );
       const state = this.#session.state;
       if (state !== undefined) this.#renderState(state);
     } catch (error) {
-      this.#note("error", `Session attachment replacement failed: ${errorMessage(error)}`);
+      this.#showTransient("error", `Session attachment replacement failed: ${errorMessage(error)}`);
       this.#editor.disableSubmit = true;
       this.#finish(1);
     } finally {
@@ -860,10 +893,25 @@ export class RustxTuiApp {
       : withToggledToolCall(this.#preferences, latest);
   }
 
-  #note(level: "info" | "error", text: string): void {
-    this.#session.updateState((state) =>
-      withNotice(state, { key: `note-${state.notices.length}`, level, text }),
-    );
+  #showTransient(level: "info" | "error", text: string): void {
+    this.#transient.replace({ level, text });
+    this.#tui.requestRender();
+  }
+
+  #acknowledgeTransient(): void {
+    if (this.#transient.feedback === undefined) {
+      return;
+    }
+    this.#transient.acknowledge();
+    this.#tui.requestRender();
+  }
+
+  #resetLocalSurfaces(): void {
+    this.#closeOverlay();
+    this.#transient.clear();
+    if (this.#started) {
+      this.#tui.requestRender();
+    }
   }
 
   /**
@@ -933,20 +981,6 @@ export class RustxTuiApp {
       this.#loader.setMessage(working);
       this.#loader.start();
       this.#activity.addChild(this.#loader);
-    }
-
-    this.#notices.clear();
-    // Only the most recent notices are shown; client chatter never grows
-    // without bound and never competes with runtime facts for the screen.
-    for (const notice of state.notices.slice(-4)) {
-      this.#notices.addChild(
-        new Markdown(
-          notice.level === "error" ? style.red(notice.text) : notice.text,
-          1,
-          0,
-          markdownTheme,
-        ),
-      );
     }
 
     this.#footer.setText(
