@@ -281,6 +281,7 @@ use crate::conversation::ConversationState;
 use crate::conversation::SurfaceRevision;
 use crate::durable::{
     ConversationStore, ConversationStoreError, InboundDraft, SurfaceUserMessageBoundary,
+    SurfaceUserMessageBoundaryPage,
 };
 use crate::events::types::RuntimeEvent;
 use crate::message::types::{InboundKind, MessageBlock, UserContentBlock, UserSource};
@@ -3187,6 +3188,25 @@ impl ConversationRuntime {
         self.inner.store.load_user_message_boundaries(through)
     }
 
+    /// Reads one bounded page of historical user-message boundaries for the
+    /// native Session tree projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns the durable store error when the selected revision is not
+    /// retained, its canonical facts cannot be read, or the page limit is
+    /// invalid.
+    pub fn historical_user_message_boundaries_page(
+        &self,
+        through: SurfaceRevision,
+        offset: usize,
+        limit: usize,
+    ) -> Result<SurfaceUserMessageBoundaryPage, ConversationStoreError> {
+        self.inner
+            .store
+            .load_user_message_boundaries_page(through, offset, limit)
+    }
+
     /// Selects the current committed Surface head and materializes that exact
     /// revision. The head read is the clone linearization point; a later
     /// append or compaction creates a later revision and cannot mutate this
@@ -3488,6 +3508,14 @@ pub enum ModelUpdateError {
     /// Product persistence rejected a valid live candidate before mutation.
     PersistenceFailed {
         /// The human-readable persistence diagnostic.
+        message: String,
+    },
+    /// Product persistence crossed its catalog visibility commit point but
+    /// could not prove the final durability barrier. The live candidate was
+    /// not installed; the attachment must be replaced and rebuilt from the
+    /// catalog authority.
+    SessionRestartRequired {
+        /// The bounded replacement diagnostic.
         message: String,
     },
 }

@@ -100,7 +100,10 @@ pub enum SessionNodeOriginView {
     },
 }
 
-/// The bounded authoritative Runtime Client view of one Session.
+/// The bounded authoritative Runtime Client metadata view of one Session.
+///
+/// Graph nodes are intentionally returned only through the paged
+/// `session_tree_get` projection.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionView {
     /// Session identity.
@@ -113,8 +116,10 @@ pub struct SessionView {
     pub updated_at: chrono::DateTime<chrono::Utc>,
     /// Active node identity.
     pub active_node: String,
-    /// All persisted graph nodes.
-    pub nodes: Vec<SessionNodeView>,
+    /// Conversation identity owned by the active node.
+    pub active_conversation_id: ConversationId,
+    /// Number of nodes in the Session graph, without embedding the graph.
+    pub node_count: usize,
 }
 
 /// One bounded row in the `/resume` selector.
@@ -145,12 +150,26 @@ pub struct SessionUserMessageBoundaryView {
 /// the Rust-owned `LocalSessionSupervisor`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeClientSessionRequest {
-    /// Read bounded persisted session metadata.
-    List,
+    /// Read one bounded, searchable persisted-session page.
+    List {
+        /// Optional case-insensitive query over Session id/name.
+        query: Option<String>,
+        /// Number of matching rows already consumed.
+        offset: usize,
+        /// Requested page size, bounded by the native owner.
+        limit: usize,
+    },
     /// Read the active Session metadata.
     Get,
-    /// Read the active Session graph and branchable historical boundaries.
-    Tree,
+    /// Read one bounded active Session graph/history page.
+    Tree {
+        /// Number of graph nodes already consumed.
+        node_offset: usize,
+        /// Number of historical boundaries already consumed.
+        history_offset: usize,
+        /// Requested page size for both projections.
+        limit: usize,
+    },
     /// Change metadata only.
     Name(String),
     /// Create a new empty Session.
@@ -386,6 +405,13 @@ pub enum RuntimeClientRequest {
     SessionList {
         /// Attachment-scoped request id.
         id: RequestId,
+        /// Optional case-insensitive Session id/name query.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
+        /// Number of matching rows already consumed.
+        offset: usize,
+        /// Requested bounded page size.
+        limit: usize,
     },
     /// Read the active native Session metadata for `/session`.
     SessionGet {
@@ -396,6 +422,12 @@ pub enum RuntimeClientRequest {
     SessionTreeGet {
         /// Attachment-scoped request id.
         id: RequestId,
+        /// Number of graph nodes already consumed.
+        node_offset: usize,
+        /// Number of historical boundaries already consumed.
+        history_offset: usize,
+        /// Requested bounded page size.
+        limit: usize,
     },
     /// Rename active Session metadata.
     SessionName {
@@ -583,9 +615,27 @@ impl RuntimeClientRequest {
     #[must_use]
     pub fn session_request(&self) -> Option<RuntimeClientSessionRequest> {
         match self {
-            Self::SessionList { .. } => Some(RuntimeClientSessionRequest::List),
+            Self::SessionList {
+                query,
+                offset,
+                limit,
+                ..
+            } => Some(RuntimeClientSessionRequest::List {
+                query: query.clone(),
+                offset: *offset,
+                limit: *limit,
+            }),
             Self::SessionGet { .. } => Some(RuntimeClientSessionRequest::Get),
-            Self::SessionTreeGet { .. } => Some(RuntimeClientSessionRequest::Tree),
+            Self::SessionTreeGet {
+                node_offset,
+                history_offset,
+                limit,
+                ..
+            } => Some(RuntimeClientSessionRequest::Tree {
+                node_offset: *node_offset,
+                history_offset: *history_offset,
+                limit: *limit,
+            }),
             Self::SessionName { name, .. } => Some(RuntimeClientSessionRequest::Name(name.clone())),
             Self::SessionNew { .. } => Some(RuntimeClientSessionRequest::New),
             Self::SessionSelect {
@@ -704,6 +754,9 @@ pub enum RuntimeClientResult {
     SessionList {
         /// Session metadata rows.
         sessions: Vec<SessionSummaryView>,
+        /// Offset for the next page, when more matching rows exist.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        next_offset: Option<usize>,
     },
     /// Active native Session metadata for `/session`.
     Session {
@@ -712,10 +765,18 @@ pub enum RuntimeClientResult {
     },
     /// Active Session graph plus historical branch boundaries.
     SessionTree {
-        /// The authoritative graph snapshot.
+        /// The active Session metadata.
         session: SessionView,
+        /// One bounded graph-node page.
+        nodes: Vec<SessionNodeView>,
+        /// Offset for the next graph-node page.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        next_node_offset: Option<usize>,
         /// Branchable user-message boundaries.
         branchable_messages: Vec<SessionUserMessageBoundaryView>,
+        /// Offset for the next historical-boundary page.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        next_history_offset: Option<usize>,
     },
     /// A metadata change or a newly selected/created lineage.
     SessionChanged {
@@ -855,6 +916,13 @@ pub enum RuntimeClientError {
     /// active selection.
     SessionFailure {
         /// Bounded product-level diagnostic.
+        message: String,
+    },
+    /// The native Session owner has crossed a terminal replacement boundary.
+    /// The current attachment must be closed and replaced; this is not an
+    /// ordinary recoverable Session failure.
+    SessionRestartRequired {
+        /// Bounded replacement diagnostic.
         message: String,
     },
 }
@@ -1094,6 +1162,9 @@ mod tests {
             RuntimeClientError::RuntimeShutdown,
             RuntimeClientError::SessionFailure {
                 message: "destination publication failed".to_owned(),
+            },
+            RuntimeClientError::SessionRestartRequired {
+                message: "the old attachment must be replaced".to_owned(),
             },
         ];
         for error in cases {

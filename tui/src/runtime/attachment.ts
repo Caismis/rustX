@@ -52,6 +52,7 @@ import {
   type RuntimeClientSnapshot,
   type RuntimeClientOutcome,
   type SessionSummaryView,
+  type SessionNodeView,
   type SessionUserMessageBoundaryView,
   type SessionView,
   type SessionNodeId,
@@ -64,6 +65,9 @@ import {
   type ToolExecutionId,
   type UserContentBlock,
 } from "../protocol/types.ts";
+
+/** Native owner bound for one Session list/tree response. */
+export const SESSION_PROJECTION_PAGE_LIMIT = 32;
 
 export interface RuntimeClientAttachmentOptions {
   connection: RuntimeClientConnection;
@@ -402,27 +406,62 @@ export class RuntimeClientAttachment {
   }
 
   /** Lists bounded persisted Sessions for `/resume`. */
-  async listSessions(): Promise<SessionSummaryView[]> {
-    const result = await this.#connection.request({ method: "session_list" });
+  async listSessions(
+    query?: string,
+    offset = 0,
+    limit = SESSION_PROJECTION_PAGE_LIMIT,
+  ): Promise<{ sessions: SessionSummaryView[]; nextOffset?: number }> {
+    const result = await this.#connection.request({
+      method: "session_list",
+      query: query === undefined || query.length === 0 ? undefined : query,
+      offset,
+      limit,
+    });
     if (result.type !== "session_list") {
       throw new Error(`session_list returned ${result.type}`);
     }
-    return result.sessions;
+    return { sessions: result.sessions, nextOffset: result.next_offset };
   }
 
   /** Reads the active graph and native historical fork boundaries. */
   async sessionTree(): Promise<{
     session: SessionView;
+    nodes: SessionNodeView[];
+    nextNodeOffset?: number;
     branchableMessages: SessionUserMessageBoundaryView[];
+    nextHistoryOffset?: number;
   }> {
-    const result = await this.#connection.request({ method: "session_tree_get" });
+    return this.sessionTreePage();
+  }
+
+  /** Reads one bounded active graph/history page from the native owner. */
+  async sessionTreePage(
+    nodeOffset = 0,
+    historyOffset = 0,
+    limit = SESSION_PROJECTION_PAGE_LIMIT,
+  ): Promise<{
+    session: SessionView;
+    nodes: SessionNodeView[];
+    nextNodeOffset?: number;
+    branchableMessages: SessionUserMessageBoundaryView[];
+    nextHistoryOffset?: number;
+  }> {
+    const result = await this.#connection.request({
+      method: "session_tree_get",
+      node_offset: nodeOffset,
+      history_offset: historyOffset,
+      limit,
+    });
     if (result.type !== "session_tree") {
       throw new Error(`session_tree_get returned ${result.type}`);
     }
     this.#sessionInfo = result.session;
     return {
       session: result.session,
+      nodes: result.nodes,
+      nextNodeOffset: result.next_node_offset,
       branchableMessages: result.branchable_messages,
+      nextHistoryOffset: result.next_history_offset,
     };
   }
 

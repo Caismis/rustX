@@ -38,9 +38,10 @@ pub use config::{
 };
 pub use serve::{ProcessOutcome, run_process, serve};
 pub use session::{
-    HistoricalConversationSnapshot, SESSION_CATALOG_SCHEMA_VERSION, SessionCatalog, SessionError,
-    SessionId, SessionNode, SessionNodeId, SessionNodeOrigin, SessionSnapshot, SessionSummary,
-    SessionUserMessageBoundary,
+    CatalogCommitError, HistoricalConversationSnapshot, SESSION_CATALOG_SCHEMA_VERSION,
+    SESSION_LIST_PAGE_LIMIT, SESSION_TREE_PAGE_LIMIT, SessionCatalog, SessionError, SessionId,
+    SessionListPage, SessionNode, SessionNodeId, SessionNodeOrigin, SessionNodePage,
+    SessionSnapshot, SessionSummary, SessionUserMessageBoundary, SessionUserMessageBoundaryPage,
 };
 pub use supervisor::{
     LocalSessionSupervisor, SessionSupervisorError, SessionSwitchResult, SessionTreeResult,

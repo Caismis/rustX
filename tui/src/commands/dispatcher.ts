@@ -40,6 +40,7 @@ import type {
   CatalogModelView,
   InteractionId,
   InteractionResponse,
+  SessionNodeView,
   SessionSummaryView,
   SessionUserMessageBoundaryView,
   SessionView,
@@ -52,14 +53,27 @@ export type CommandOutcome =
   | { kind: "none" }
   | { kind: "message"; level: "info" | "error"; text: string }
   | { kind: "choose_model"; models: CatalogModelView[] }
-  | { kind: "choose_session"; sessions: SessionSummaryView[] }
-  | { kind: "choose_fork"; boundaries: SessionUserMessageBoundaryView[] }
+  | {
+      kind: "choose_session";
+      sessions: SessionSummaryView[];
+      nextOffset?: number;
+      query: string;
+    }
+  | {
+      kind: "choose_fork";
+      boundaries: SessionUserMessageBoundaryView[];
+      nextOffset?: number;
+    }
   | {
       kind: "choose_tree";
       session: SessionView;
+      nodes: SessionNodeView[];
+      nextNodeOffset?: number;
       boundaries: SessionUserMessageBoundaryView[];
+      nextHistoryOffset?: number;
     }
   | { kind: "session_switch"; change: SessionSwitch }
+  | { kind: "replacement_required"; message: string }
   | {
       /** A client display preference. Never a runtime request. */
       kind: "preference";
@@ -266,22 +280,23 @@ export class CommandDispatcher {
 
   async #resume(argument: string): Promise<CommandOutcome> {
     if (argument.length > 0) return this.selectSession(argument);
+    const page = await this.#context.session.listSessions();
     return {
       kind: "choose_session",
-      sessions: await this.#context.session.listSessions(),
+      sessions: page.sessions,
+      nextOffset: page.nextOffset,
+      query: "",
     };
   }
 
   async #sessionInfo(): Promise<CommandOutcome> {
     const session = await this.#context.session.refreshSession();
-    const active = session.nodes.find((node) => node.id === session.active_node);
     return info(
       [
         `session ${session.name} (${session.id})`,
         `active node ${session.active_node}`,
-        `conversation ${active?.conversation_id ?? "unknown"}`,
-        `parent ${active?.parent ?? "root"} · origin ${active?.origin.type ?? "unknown"}`,
-        `nodes ${session.nodes.length}`,
+        `conversation ${session.active_conversation_id}`,
+        `nodes ${session.node_count}`,
       ].join("\n"),
     );
   }
@@ -294,7 +309,11 @@ export class CommandDispatcher {
 
   async #fork(): Promise<CommandOutcome> {
     const tree = await this.#context.session.sessionTree();
-    return { kind: "choose_fork", boundaries: tree.branchableMessages };
+    return {
+      kind: "choose_fork",
+      boundaries: tree.branchableMessages,
+      nextOffset: tree.nextHistoryOffset,
+    };
   }
 
   async #tree(): Promise<CommandOutcome> {
@@ -302,7 +321,10 @@ export class CommandDispatcher {
     return {
       kind: "choose_tree",
       session: tree.session,
+      nodes: tree.nodes,
+      nextNodeOffset: tree.nextNodeOffset,
       boundaries: tree.branchableMessages,
+      nextHistoryOffset: tree.nextHistoryOffset,
     };
   }
 
@@ -519,6 +541,9 @@ function info(text: string): CommandOutcome {
 
 function failure(error: unknown): CommandOutcome {
   if (error instanceof RuntimeRequestError) {
+    if (error.error.type === "session_restart_required") {
+      return { kind: "replacement_required", message: error.error.message };
+    }
     return { kind: "message", level: "error", text: error.message };
   }
   return {

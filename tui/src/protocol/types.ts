@@ -447,7 +447,8 @@ export interface SessionView {
   created_at: string;
   updated_at: string;
   active_node: SessionNodeId;
-  nodes: SessionNodeView[];
+  active_conversation_id: ConversationId;
+  node_count: number;
 }
 
 export interface SessionSummaryView {
@@ -887,9 +888,21 @@ export type RuntimeClientRequest =
   | { method: "model_catalog_get"; id: RequestId }
   | { method: "model_get"; id: RequestId }
   | { method: "model_set"; id: RequestId; config: SessionModelConfig }
-  | { method: "session_list"; id: RequestId }
+  | {
+      method: "session_list";
+      id: RequestId;
+      query?: string;
+      offset: number;
+      limit: number;
+    }
   | { method: "session_get"; id: RequestId }
-  | { method: "session_tree_get"; id: RequestId }
+  | {
+      method: "session_tree_get";
+      id: RequestId;
+      node_offset: number;
+      history_offset: number;
+      limit: number;
+    }
   | { method: "session_name"; id: RequestId; name: string }
   | { method: "session_new"; id: RequestId }
   | {
@@ -996,12 +1009,19 @@ export type RuntimeClientResult =
   | { type: "model_catalog"; catalog: ModelCatalogView }
   | { type: "model"; model: SessionModelView }
   | { type: "model_set"; model: SessionModelView }
-  | { type: "session_list"; sessions: SessionSummaryView[] }
+  | {
+      type: "session_list";
+      sessions: SessionSummaryView[];
+      next_offset?: number;
+    }
   | { type: "session"; session: SessionView }
   | {
       type: "session_tree";
       session: SessionView;
+      nodes: SessionNodeView[];
+      next_node_offset?: number;
       branchable_messages: SessionUserMessageBoundaryView[];
+      next_history_offset?: number;
     }
   | {
       type: "session_changed";
@@ -1048,7 +1068,8 @@ export type RuntimeClientError =
   | { type: "invalid_model_configuration"; message: string }
   | { type: "projection_exhausted" }
   | { type: "runtime_failure"; message: string }
-  | { type: "session_failure"; message: string };
+  | { type: "session_failure"; message: string }
+  | { type: "session_restart_required"; message: string };
 
 export interface RuntimeClientResponse {
   id: RequestId;
@@ -1174,6 +1195,8 @@ export function describeProtocolError(error: RuntimeClientError): string {
       return `runtime failure: ${error.message}`;
     case "session_failure":
       return `session operation failed: ${error.message}`;
+    case "session_restart_required":
+      return `the active Session runtime must be replaced: ${error.message}`;
     default:
       // A future runtime may add a category. Report it rather than crash.
       return `unrecognized protocol error: ${JSON.stringify(error)}`;

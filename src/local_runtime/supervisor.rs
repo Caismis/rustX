@@ -24,8 +24,8 @@ use crate::runtime_client::types::{
 };
 
 use super::session::{
-    HistoricalConversationSnapshot, SessionCatalog, SessionError, SessionId, SessionNodeId,
-    SessionSnapshot, SessionSummary, SessionUserMessageBoundary,
+    HistoricalConversationSnapshot, SessionCatalog, SessionError, SessionId, SessionListPage,
+    SessionNodeId, SessionSnapshot, SessionSummary, SessionUserMessageBoundary,
 };
 
 /// The result of a product transition that changes the active lineage.
@@ -44,13 +44,31 @@ pub struct SessionSwitchResult {
 pub struct SessionTreeResult {
     /// Current Session graph metadata.
     pub session: SessionSnapshot,
+    /// Bounded graph-node page.
+    pub nodes: Vec<super::session::SessionNode>,
+    /// Offset for the next graph-node page.
+    pub next_node_offset: Option<usize>,
     /// Historical user-message boundaries available for a new node.
     pub branchable_messages: Vec<SessionUserMessageBoundary>,
+    /// Offset for the next historical-boundary page.
+    pub next_history_offset: Option<usize>,
+}
+
+/// The explicit runtime attachment state owned by the Session supervisor.
+///
+/// `NotInstalled` exists only during native composition, before the one
+/// recovered runtime is handed to the supervisor. Once `Live` quiesces for a
+/// replacement, the state is absorbing for this process attachment: it can
+/// never silently become live again.
+enum RuntimeAttachmentState {
+    NotInstalled,
+    Live(ConversationRuntime),
+    ReplacementRequired { detail: String },
 }
 
 struct SupervisorState {
     catalog: SessionCatalog,
-    active_runtime: Option<ConversationRuntime>,
+    runtime: RuntimeAttachmentState,
 }
 
 /// The single local product owner of session metadata, graph state, active
@@ -75,9 +93,29 @@ impl LocalSessionSupervisor {
         Self {
             state: Arc::new(tokio::sync::Mutex::new(SupervisorState {
                 catalog,
-                active_runtime: None,
+                runtime: RuntimeAttachmentState::NotInstalled,
             })),
         }
+    }
+
+    /// Arms a deterministic pre-visibility catalog fault for unit tests.
+    #[cfg(test)]
+    pub(crate) async fn arm_catalog_write_fault_before_rename(&self) {
+        self.state
+            .lock()
+            .await
+            .catalog
+            .arm_write_fault_before_rename();
+    }
+
+    /// Arms a deterministic post-visibility durability fault for unit tests.
+    #[cfg(test)]
+    pub(crate) async fn arm_catalog_write_fault_after_rename(&self) {
+        self.state
+            .lock()
+            .await
+            .catalog
+            .arm_write_fault_after_rename();
     }
 
     /// Installs the one active runtime after it has been composed and
@@ -92,8 +130,18 @@ impl LocalSessionSupervisor {
         runtime: ConversationRuntime,
     ) -> Result<(), SessionSupervisorError> {
         let mut state = self.state.lock().await;
-        if state.active_runtime.is_some() {
-            return Err(SessionSupervisorError::RuntimeAlreadyInstalled);
+        if !matches!(&state.runtime, RuntimeAttachmentState::NotInstalled) {
+            return match &state.runtime {
+                RuntimeAttachmentState::Live(_) => {
+                    Err(SessionSupervisorError::RuntimeAlreadyInstalled)
+                }
+                RuntimeAttachmentState::ReplacementRequired { detail } => {
+                    Err(SessionSupervisorError::RestartRequired {
+                        detail: detail.clone(),
+                    })
+                }
+                RuntimeAttachmentState::NotInstalled => unreachable!(),
+            };
         }
         let (_, node, _) = state.catalog.active_lineage()?;
         if node.conversation_id != *runtime.conversation_id() {
@@ -102,13 +150,28 @@ impl LocalSessionSupervisor {
                 runtime: runtime.conversation_id().clone(),
             });
         }
-        state.active_runtime = Some(runtime);
+        state.runtime = RuntimeAttachmentState::Live(runtime);
         Ok(())
     }
 
-    /// Returns the bounded `/resume` metadata projection.
-    pub async fn list(&self) -> Vec<SessionSummary> {
-        self.state.lock().await.catalog.list()
+    /// Returns one bounded `/resume` metadata page.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionSupervisorError`] when the native page bound is
+    /// invalid or the catalog cannot be read.
+    pub async fn list(
+        &self,
+        query: Option<String>,
+        offset: usize,
+        limit: usize,
+    ) -> Result<SessionListPage, SessionSupervisorError> {
+        Ok(self
+            .state
+            .lock()
+            .await
+            .catalog
+            .list_page(query.as_deref(), offset, limit)?)
     }
 
     /// Returns the authoritative `/session` metadata projection.
@@ -127,14 +190,23 @@ impl LocalSessionSupervisor {
     ///
     /// Returns [`SessionSupervisorError`] when the active runtime or durable
     /// historical surface cannot be read.
-    pub async fn tree(&self) -> Result<SessionTreeResult, SessionSupervisorError> {
+    pub async fn tree(
+        &self,
+        node_offset: usize,
+        history_offset: usize,
+        limit: usize,
+    ) -> Result<SessionTreeResult, SessionSupervisorError> {
         let state = self.state.lock().await;
         let session = state.catalog.active_snapshot()?;
         let source = current_head(&state)?;
-        let branchable_messages = branchable_messages(&source, state.active_runtime.as_ref())?;
+        let node_page = state.catalog.node_page(&session.id, node_offset, limit)?;
+        let history_page = branchable_messages(&source, &state.runtime, history_offset, limit)?;
         Ok(SessionTreeResult {
             session,
-            branchable_messages,
+            nodes: node_page.nodes,
+            next_node_offset: node_page.next_offset,
+            branchable_messages: history_page.boundaries,
+            next_history_offset: history_page.next_offset,
         })
     }
 
@@ -147,8 +219,17 @@ impl LocalSessionSupervisor {
     /// invalid.
     pub async fn rename(&self, name: String) -> Result<SessionSnapshot, SessionSupervisorError> {
         let mut state = self.state.lock().await;
+        ensure_live(&state.runtime)?;
         let session_id = state.catalog.active_snapshot()?.id;
-        Ok(state.catalog.rename(&session_id, &name)?)
+        match state.catalog.rename(&session_id, &name) {
+            Ok(snapshot) => Ok(snapshot),
+            Err(error) if error.committed() => {
+                let detail = error.to_string();
+                mark_replacement_required(&mut state, detail.clone());
+                Err(SessionSupervisorError::RestartRequired { detail })
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
     /// Creates a new empty Session and switches to it.
@@ -159,6 +240,7 @@ impl LocalSessionSupervisor {
     /// quiescence, or catalog publication fails.
     pub async fn new_session(&self) -> Result<SessionSwitchResult, SessionSupervisorError> {
         let mut state = self.state.lock().await;
+        ensure_live(&state.runtime)?;
         let (_, _, template) = state.catalog.active_lineage()?;
         let prepared = state.catalog.prepare_session(&template, &[])?;
         let origin = super::session::SessionNodeOrigin::New;
@@ -192,6 +274,7 @@ impl LocalSessionSupervisor {
         node_id: Option<SessionNodeId>,
     ) -> Result<SessionSwitchResult, SessionSupervisorError> {
         let mut state = self.state.lock().await;
+        ensure_live(&state.runtime)?;
         let current = state.catalog.active_snapshot()?;
         let requested_node = match node_id.clone() {
             Some(node_id) => node_id,
@@ -230,6 +313,7 @@ impl LocalSessionSupervisor {
     /// quiescence, or destination publication fails.
     pub async fn clone_active(&self) -> Result<SessionSwitchResult, SessionSupervisorError> {
         let mut state = self.state.lock().await;
+        ensure_live(&state.runtime)?;
         let (source_session, source_node, template) = state.catalog.active_lineage()?;
         let source = current_head(&state)?;
         let prepared = state.catalog.prepare_clone_session(&template, &source)?;
@@ -267,6 +351,7 @@ impl LocalSessionSupervisor {
         message_id: MessageId,
     ) -> Result<SessionSwitchResult, SessionSupervisorError> {
         let mut state = self.state.lock().await;
+        ensure_live(&state.runtime)?;
         let (source_session, source_node, template) = state.catalog.active_lineage()?;
         let source = historical_snapshot(&state, surface_revision)?;
         let (prepared, editor_content) =
@@ -309,6 +394,7 @@ impl LocalSessionSupervisor {
         message_id: MessageId,
     ) -> Result<SessionSwitchResult, SessionSupervisorError> {
         let mut state = self.state.lock().await;
+        ensure_live(&state.runtime)?;
         let (source_session, source_node, template) = state.catalog.active_lineage()?;
         let source = historical_snapshot(&state, surface_revision)?;
         let (prepared, editor_content) = state.catalog.prepare_tree_node_at_user_message(
@@ -342,8 +428,18 @@ impl LocalSessionSupervisor {
     }
 
     async fn quiesce_old(&self, state: &mut SupervisorState) -> Result<(), SessionSupervisorError> {
-        let Some(runtime) = state.active_runtime.clone() else {
-            return Err(SessionSupervisorError::NoActiveRuntime);
+        let runtime = match &state.runtime {
+            RuntimeAttachmentState::Live(runtime) => runtime.clone(),
+            RuntimeAttachmentState::NotInstalled => {
+                return Err(SessionSupervisorError::RestartRequired {
+                    detail: "the local Session attachment has no installed runtime".to_owned(),
+                });
+            }
+            RuntimeAttachmentState::ReplacementRequired { detail } => {
+                return Err(SessionSupervisorError::RestartRequired {
+                    detail: detail.clone(),
+                });
+            }
         };
         // `ConversationRuntime::shutdown` is the linearization point for
         // replacement: success means no attempt, foreground tool,
@@ -354,7 +450,11 @@ impl LocalSessionSupervisor {
             .shutdown()
             .await
             .map_err(SessionSupervisorError::Shutdown)?;
-        state.active_runtime = None;
+        mark_replacement_required(
+            state,
+            "the old ConversationRuntime reached quiescence; this attachment must be replaced"
+                .to_owned(),
+        );
         Ok(())
     }
 }
@@ -362,9 +462,7 @@ impl LocalSessionSupervisor {
 fn current_head(
     state: &SupervisorState,
 ) -> Result<HistoricalConversationSnapshot, SessionSupervisorError> {
-    let Some(runtime) = state.active_runtime.as_ref() else {
-        return Err(SessionSupervisorError::NoActiveRuntime);
-    };
+    let runtime = live_runtime(&state.runtime)?;
     let (surface_revision, messages) = runtime
         .historical_head_snapshot()
         .map_err(SessionSupervisorError::Store)?;
@@ -379,9 +477,7 @@ fn historical_snapshot(
     state: &SupervisorState,
     surface_revision: SurfaceRevision,
 ) -> Result<HistoricalConversationSnapshot, SessionSupervisorError> {
-    let Some(runtime) = state.active_runtime.as_ref() else {
-        return Err(SessionSupervisorError::NoActiveRuntime);
-    };
+    let runtime = live_runtime(&state.runtime)?;
     let messages = runtime
         .historical_surface_snapshot(surface_revision)
         .map_err(SessionSupervisorError::Store)?;
@@ -394,23 +490,49 @@ fn historical_snapshot(
 
 fn branchable_messages(
     head: &HistoricalConversationSnapshot,
-    runtime: Option<&ConversationRuntime>,
-) -> Result<Vec<SessionUserMessageBoundary>, SessionSupervisorError> {
-    let Some(runtime) = runtime else {
-        return Err(SessionSupervisorError::NoActiveRuntime);
-    };
+    state: &RuntimeAttachmentState,
+    offset: usize,
+    limit: usize,
+) -> Result<super::session::SessionUserMessageBoundaryPage, SessionSupervisorError> {
+    let runtime = live_runtime(state)?;
     runtime
-        .historical_user_message_boundaries(head.surface_revision)
+        .historical_user_message_boundaries_page(head.surface_revision, offset, limit)
         .map_err(SessionSupervisorError::Store)
-        .map(|boundaries| {
-            boundaries
+        .map(|page| super::session::SessionUserMessageBoundaryPage {
+            boundaries: page
+                .boundaries
                 .into_iter()
                 .map(|boundary| SessionUserMessageBoundary {
                     surface_revision: boundary.surface_revision,
                     message: boundary.message,
                 })
-                .collect()
+                .collect(),
+            next_offset: page.next_offset,
         })
+}
+
+fn live_runtime(
+    state: &RuntimeAttachmentState,
+) -> Result<&ConversationRuntime, SessionSupervisorError> {
+    match state {
+        RuntimeAttachmentState::Live(runtime) => Ok(runtime),
+        RuntimeAttachmentState::NotInstalled => Err(SessionSupervisorError::RestartRequired {
+            detail: "the local Session attachment has no installed runtime".to_owned(),
+        }),
+        RuntimeAttachmentState::ReplacementRequired { detail } => {
+            Err(SessionSupervisorError::RestartRequired {
+                detail: detail.clone(),
+            })
+        }
+    }
+}
+
+fn ensure_live(state: &RuntimeAttachmentState) -> Result<(), SessionSupervisorError> {
+    live_runtime(state).map(|_| ())
+}
+
+fn mark_replacement_required(state: &mut SupervisorState, detail: String) {
+    state.runtime = RuntimeAttachmentState::ReplacementRequired { detail };
 }
 
 /// A native Session-supervisor failure.
@@ -422,10 +544,10 @@ pub enum SessionSupervisorError {
     Store(crate::durable::ConversationStoreError),
     /// The old runtime did not reach quiescence.
     Shutdown(ShutdownError),
-    /// No live runtime remains in this process after a switch.
-    NoActiveRuntime,
-    /// Catalog publication failed after the old runtime was quiesced. The
-    /// process attachment is no longer usable and must be restarted.
+    /// The process attachment has no usable live runtime and must be
+    /// replaced. This covers both a completed quiescent switch and a catalog
+    /// mutation whose visibility commit crossed but whose durability barrier
+    /// was uncertain.
     RestartRequired { detail: String },
     /// A second runtime was offered to one product instance.
     RuntimeAlreadyInstalled,
@@ -448,10 +570,9 @@ impl core::fmt::Display for SessionSupervisorError {
             Self::Session(error) => error.fmt(f),
             Self::Store(error) => write!(f, "session history: {error}"),
             Self::Shutdown(error) => write!(f, "runtime did not reach quiescence: {error:?}"),
-            Self::NoActiveRuntime => f.write_str("no active ConversationRuntime remains"),
             Self::RestartRequired { detail } => write!(
                 f,
-                "session publication failed after quiescing the old runtime; restart the process: {detail}"
+                "this Session attachment requires process replacement: {detail}"
             ),
             Self::RuntimeAlreadyInstalled => {
                 f.write_str("the local product already owns an active ConversationRuntime")
@@ -473,18 +594,29 @@ fn publication_failure(error: &SessionError) -> SessionSupervisorError {
 }
 
 impl RuntimeClientSessionControl for LocalSessionSupervisor {
+    #[allow(clippy::too_many_lines)]
     fn handle(&self, request: RuntimeClientSessionRequest) -> SessionControlFuture {
         let supervisor = self.clone();
         Box::pin(async move {
             let result = match request {
-                RuntimeClientSessionRequest::List => RuntimeClientResult::SessionList {
-                    sessions: supervisor
-                        .list()
+                RuntimeClientSessionRequest::List {
+                    query,
+                    offset,
+                    limit,
+                } => {
+                    let page = supervisor
+                        .list(query, offset, limit)
                         .await
-                        .into_iter()
-                        .map(session_summary_view)
-                        .collect(),
-                },
+                        .map_err(|error| session_error(&error))?;
+                    RuntimeClientResult::SessionList {
+                        sessions: page
+                            .sessions
+                            .into_iter()
+                            .map(session_summary_view)
+                            .collect(),
+                        next_offset: page.next_offset,
+                    }
+                }
                 RuntimeClientSessionRequest::Get => RuntimeClientResult::Session {
                     session: session_view(
                         supervisor
@@ -493,13 +625,19 @@ impl RuntimeClientSessionControl for LocalSessionSupervisor {
                             .map_err(|error| session_error(&error))?,
                     ),
                 },
-                RuntimeClientSessionRequest::Tree => {
+                RuntimeClientSessionRequest::Tree {
+                    node_offset,
+                    history_offset,
+                    limit,
+                } => {
                     let tree = supervisor
-                        .tree()
+                        .tree(node_offset, history_offset, limit)
                         .await
                         .map_err(|error| session_error(&error))?;
                     RuntimeClientResult::SessionTree {
                         session: session_view(tree.session),
+                        nodes: tree.nodes.into_iter().map(session_node_view).collect(),
+                        next_node_offset: tree.next_node_offset,
                         branchable_messages: tree
                             .branchable_messages
                             .into_iter()
@@ -508,6 +646,7 @@ impl RuntimeClientSessionControl for LocalSessionSupervisor {
                                 message: boundary.message,
                             })
                             .collect(),
+                        next_history_offset: tree.next_history_offset,
                     }
                 }
                 RuntimeClientSessionRequest::Name(name) => RuntimeClientResult::SessionChanged {
@@ -578,15 +717,28 @@ impl RuntimeClientSessionControl for LocalSessionSupervisor {
             .map_err(|_| RuntimeClientError::SessionFailure {
                 message: "a Session transition is already in progress".to_owned(),
             })?;
-        if state.active_runtime.is_none() {
-            return Err(RuntimeClientError::SessionFailure {
-                message: "no active ConversationRuntime owns this Session product".to_owned(),
-            });
+        ensure_live(&state.runtime).map_err(|error| session_error(&error))?;
+        match state.catalog.persist_active_model(config) {
+            Ok(()) => Ok(()),
+            Err(error) if error.committed() => {
+                let detail = error.to_string();
+                mark_replacement_required(&mut state, detail.clone());
+                Err(RuntimeClientError::SessionRestartRequired { message: detail })
+            }
+            Err(error) => Err(RuntimeClientError::SessionFailure {
+                message: error.to_string(),
+            }),
         }
-        state
-            .catalog
-            .persist_active_model(config)
-            .map_err(|error| session_error(&SessionSupervisorError::Session(error)))
+    }
+
+    fn ensure_live(&self) -> Result<(), RuntimeClientError> {
+        let state = self
+            .state
+            .try_lock()
+            .map_err(|_| RuntimeClientError::SessionFailure {
+                message: "a Session transition is already in progress".to_owned(),
+            })?;
+        ensure_live(&state.runtime).map_err(|error| session_error(&error))
     }
 }
 
@@ -615,43 +767,51 @@ fn session_view(snapshot: SessionSnapshot) -> SessionView {
         created_at: snapshot.created_at,
         updated_at: snapshot.updated_at,
         active_node: snapshot.active_node.as_str().to_owned(),
-        nodes: snapshot
-            .nodes
-            .into_iter()
-            .map(|node| SessionNodeView {
-                id: node.id.as_str().to_owned(),
-                parent: node.parent.map(|parent| parent.as_str().to_owned()),
-                conversation_id: node.conversation_id,
-                origin: match node.origin {
-                    super::session::SessionNodeOrigin::New => SessionNodeOriginView::New,
-                    super::session::SessionNodeOrigin::Clone {
-                        source_session,
-                        source_node,
-                        source_surface_revision,
-                    } => SessionNodeOriginView::Clone {
-                        source_session: source_session.as_str().to_owned(),
-                        source_node: source_node.as_str().to_owned(),
-                        source_surface_revision,
-                    },
-                    super::session::SessionNodeOrigin::Fork {
-                        source_session,
-                        source_node,
-                        source_surface_revision,
-                        source_user_message,
-                    } => SessionNodeOriginView::Fork {
-                        source_session: source_session.as_str().to_owned(),
-                        source_node: source_node.as_str().to_owned(),
-                        source_surface_revision,
-                        source_user_message,
-                    },
-                },
-            })
-            .collect(),
+        active_conversation_id: snapshot.active_conversation_id,
+        node_count: snapshot.node_count,
+    }
+}
+
+fn session_node_view(node: super::session::SessionNode) -> SessionNodeView {
+    SessionNodeView {
+        id: node.id.as_str().to_owned(),
+        parent: node.parent.map(|parent| parent.as_str().to_owned()),
+        conversation_id: node.conversation_id,
+        origin: match node.origin {
+            super::session::SessionNodeOrigin::New => SessionNodeOriginView::New,
+            super::session::SessionNodeOrigin::Clone {
+                source_session,
+                source_node,
+                source_surface_revision,
+            } => SessionNodeOriginView::Clone {
+                source_session: source_session.as_str().to_owned(),
+                source_node: source_node.as_str().to_owned(),
+                source_surface_revision,
+            },
+            super::session::SessionNodeOrigin::Fork {
+                source_session,
+                source_node,
+                source_surface_revision,
+                source_user_message,
+            } => SessionNodeOriginView::Fork {
+                source_session: source_session.as_str().to_owned(),
+                source_node: source_node.as_str().to_owned(),
+                source_surface_revision,
+                source_user_message,
+            },
+        },
     }
 }
 
 fn session_error(error: &SessionSupervisorError) -> RuntimeClientError {
-    RuntimeClientError::SessionFailure {
-        message: error.to_string(),
+    match error {
+        SessionSupervisorError::RestartRequired { detail } => {
+            RuntimeClientError::SessionRestartRequired {
+                message: detail.clone(),
+            }
+        }
+        _ => RuntimeClientError::SessionFailure {
+            message: error.to_string(),
+        },
     }
 }

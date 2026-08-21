@@ -118,6 +118,15 @@ pub struct SurfaceUserMessageBoundary {
     pub message: UserMessageBlock,
 }
 
+/// A bounded page of retained user-message boundaries.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SurfaceUserMessageBoundaryPage {
+    /// The requested boundary rows.
+    pub boundaries: Vec<SurfaceUserMessageBoundary>,
+    /// Offset for the next page, when more rows exist.
+    pub next_offset: Option<usize>,
+}
+
 /// The semantic input to one atomic canonical compaction transition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompactionCommitInput {
@@ -573,6 +582,18 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         through: SurfaceRevision,
     ) -> Result<Vec<SurfaceUserMessageBoundary>, ConversationStoreError>;
+
+    /// Loads one bounded page of ordinary inbound user-message boundaries.
+    ///
+    /// The page is ordered by first appearance in the selected retained
+    /// Surface history. The offset/limit seam belongs specifically to the
+    /// Session tree projection; it is not a general durable pagination API.
+    fn load_user_message_boundaries_page(
+        &self,
+        through: SurfaceRevision,
+        offset: usize,
+        limit: usize,
+    ) -> Result<SurfaceUserMessageBoundaryPage, ConversationStoreError>;
 
     /// Appends one canonical [`MessageBlock`] to the durable Message Ledger.
     ///

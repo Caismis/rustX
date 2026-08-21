@@ -216,6 +216,19 @@ pub trait RuntimeClientSessionControl: Send + Sync {
     /// Returns a typed Runtime Client error when the product metadata cannot
     /// be durably updated.
     fn persist_model(&self, config: SessionModelConfig) -> Result<(), RuntimeClientError>;
+
+    /// Fences conversation/runtime operations after the native Session owner
+    /// has reached its terminal replacement-required state. Read-only native
+    /// Session metadata requests are handled through `handle` and may remain
+    /// available; ordinary runtime operations must not use the stale runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeClientError::SessionRestartRequired`] when this
+    /// attachment can no longer use its conversation runtime.
+    fn ensure_live(&self) -> Result<(), RuntimeClientError> {
+        Ok(())
+    }
 }
 
 /// The host-owned attachment state.
@@ -360,6 +373,7 @@ impl ClientInner {
         protocol_version: u16,
     ) -> Result<(super::attachment::RuntimeAttachment, RuntimeClientResult), RuntimeClientError>
     {
+        self.ensure_session_runtime_live()?;
         if protocol_version != RUNTIME_CLIENT_PROTOCOL_VERSION_V1 {
             return Err(RuntimeClientError::UnsupportedProtocolVersion {
                 supported: RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
@@ -450,6 +464,7 @@ impl ClientInner {
         &self,
         content: Vec<crate::message::types::UserContentBlock>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.ensure_session_runtime_live()?;
         let admission = self
             .runtime
             .submit_inbound(content)
@@ -488,6 +503,7 @@ impl ClientInner {
     /// Returns [`RuntimeClientError::NoCurrentAttempt`] when no attempt
     /// is currently cancellable.
     pub(crate) fn cancel_current_attempt(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.ensure_session_runtime_live()?;
         let attempt_id = {
             let state = self.lock_state();
             let Some(attempt) = state.projection.snapshot_ref().attempt.as_ref() else {
@@ -522,6 +538,7 @@ impl ClientInner {
         interaction_id: &InteractionId,
         response: InteractionResponse,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.ensure_session_runtime_live()?;
         self.runtime
             .respond_interaction(interaction_id, response)
             .map(|()| RuntimeClientResult::InteractionResponseAccepted {
@@ -548,6 +565,7 @@ impl ClientInner {
         &self,
     ) -> Result<(super::snapshot::RuntimeClientSnapshot, RuntimeClientCursor), RuntimeClientError>
     {
+        self.ensure_session_runtime_live()?;
         let state = self.lock_state();
         state.projection.snapshot()
     }
@@ -594,6 +612,7 @@ impl ClientInner {
         attachment_id: &AttachmentId,
         after_cursor: RuntimeClientCursor,
     ) -> Result<(EventSubscription, RuntimeClientResult), RuntimeClientError> {
+        self.ensure_session_runtime_live()?;
         self.ensure_worker();
         let mut state = self.lock_state();
         let previous_subscriber = match &state.attachment {
@@ -632,6 +651,7 @@ impl ClientInner {
     /// Returns [`RuntimeClientError::ProjectionExhausted`] once the
     /// observation stream is over.
     pub(crate) fn capability(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.ensure_session_runtime_live()?;
         let state = self.lock_state();
         let snapshot = state.projection.snapshot_ref_checked()?;
         Ok(RuntimeClientResult::Capability {
@@ -650,6 +670,7 @@ impl ClientInner {
     /// Returns [`RuntimeClientError::ProjectionExhausted`] when the
     /// observation stream is over.
     pub(crate) fn model_catalog(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.ensure_session_runtime_live()?;
         let state = self.lock_state();
         state.projection.snapshot_ref_checked()?;
         drop(state);
@@ -666,6 +687,7 @@ impl ClientInner {
     /// Returns [`RuntimeClientError::ProjectionExhausted`] when the
     /// observation stream is over.
     pub(crate) fn model_get(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.ensure_session_runtime_live()?;
         let state = self.lock_state();
         let snapshot = state.projection.snapshot_ref_checked()?;
         Ok(RuntimeClientResult::Model {
@@ -701,6 +723,7 @@ impl ClientInner {
         &self,
         config: SessionModelConfig,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.ensure_session_runtime_live()?;
         let state = self.lock_state();
         state.projection.snapshot_ref_checked()?;
         drop(state);
@@ -709,10 +732,13 @@ impl ClientInner {
             .runtime
             .model_set_with_persistence(config, |config| {
                 if let Some(control) = control {
-                    control.persist_model(config).map_err(|error| {
-                        ModelUpdateError::PersistenceFailed {
-                            message: format!("cannot persist active Session model: {error:?}"),
+                    control.persist_model(config).map_err(|error| match error {
+                        RuntimeClientError::SessionRestartRequired { message } => {
+                            ModelUpdateError::SessionRestartRequired { message }
                         }
+                        error => ModelUpdateError::PersistenceFailed {
+                            message: format!("cannot persist active Session model: {error:?}"),
+                        },
                     })?;
                 }
                 Ok(())
@@ -729,6 +755,9 @@ impl ClientInner {
                 }
                 ModelUpdateError::PersistenceFailed { message } => {
                     RuntimeClientError::SessionFailure { message }
+                }
+                ModelUpdateError::SessionRestartRequired { message } => {
+                    RuntimeClientError::SessionRestartRequired { message }
                 }
             })?;
         Ok(RuntimeClientResult::ModelSet {
@@ -747,6 +776,7 @@ impl ClientInner {
         &self,
         execution_id: &ToolExecutionId,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.ensure_session_runtime_live()?;
         let Some(snapshot) = self.runtime.background_status(execution_id) else {
             return Err(RuntimeClientError::UnknownBackgroundExecution {
                 execution_id: execution_id.clone(),
@@ -769,6 +799,7 @@ impl ClientInner {
         &self,
         execution_id: &ToolExecutionId,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.ensure_session_runtime_live()?;
         let Some(snapshot) = self.runtime.background_cancel(execution_id) else {
             return Err(RuntimeClientError::UnknownBackgroundExecution {
                 execution_id: execution_id.clone(),
@@ -790,6 +821,7 @@ impl ClientInner {
         &self,
         subagent_id: &crate::runtime::identity::SubagentId,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.ensure_session_runtime_live()?;
         let Some(snapshot) = self.runtime.subagent_status(subagent_id) else {
             return Err(RuntimeClientError::UnknownSubagent {
                 subagent_id: subagent_id.clone(),
@@ -812,6 +844,7 @@ impl ClientInner {
         &self,
         subagent_id: &crate::runtime::identity::SubagentId,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.ensure_session_runtime_live()?;
         let Some(snapshot) = self.runtime.subagent_cancel(subagent_id) else {
             return Err(RuntimeClientError::UnknownSubagent {
                 subagent_id: subagent_id.clone(),
@@ -832,6 +865,7 @@ impl ClientInner {
     /// not yet activated: an inert conversation has no runtime lifecycle
     /// to end, so the request is refused and nothing is published.
     pub(crate) async fn shutdown(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.ensure_session_runtime_live()?;
         self.runtime.shutdown().await.map_err(|error| match error {
             crate::runtime::conversation_runtime::ShutdownError::Inactive => {
                 RuntimeClientError::InvalidState {
@@ -860,6 +894,12 @@ impl ClientInner {
             });
         };
         control.handle(request).await
+    }
+
+    fn ensure_session_runtime_live(&self) -> Result<(), RuntimeClientError> {
+        self.session_control
+            .as_ref()
+            .map_or(Ok(()), |control| control.ensure_live())
     }
 }
 
@@ -1521,6 +1561,7 @@ mod tests {
         AgentStatusSectionId, AgentStatusSectionProvider, ContextError, DefaultTokenEstimator,
         TokenEstimator,
     };
+    use crate::local_runtime::{LocalConversationConfig, LocalSessionSupervisor, SessionCatalog};
     use crate::message::content::TextBlock;
     use crate::message::types::{
         ContentBlockIndex, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
@@ -1538,6 +1579,7 @@ mod tests {
     use crate::runtime::identity::{AgentId, ConversationId, ToolCallId, ToolExecutionId, ToolId};
     use crate::runtime::request_history::RequestHistory;
     use crate::runtime::types::RuntimeClock;
+    use crate::runtime_client::endpoint::RuntimeClientEndpoint;
     use crate::runtime_client::event::RuntimeClientEvent;
     use crate::runtime_client::host::HostConstructionError;
     use crate::runtime_client::snapshot::RuntimeClientAttemptPhase;
@@ -5085,6 +5127,263 @@ mod tests {
                 workspace,
             },
         )
+    }
+
+    /// Builds the real Runtime Client/session-owner boundary over a scripted
+    /// runtime. The catalog is deliberately separate from the fixture's
+    /// private conversation store: this test exercises the ownership seam,
+    /// while the supervisor still gets the same `ConversationId` identity.
+    async fn local_session_endpoint(
+        scripts: Vec<Vec<GatedStep>>,
+        probe: Option<CoordinatorProbe>,
+    ) -> (
+        Arc<GatedAdapter>,
+        RuntimeOnlyFixture,
+        RuntimeClientEndpoint,
+        Arc<LocalSessionSupervisor>,
+        tempfile::TempDir,
+        LocalConversationConfig,
+    ) {
+        let (adapter, fixture) = runtime_only_fixture(scripts, ToolRegistry::new(), probe).await;
+        let catalog_root = tempfile::tempdir().expect("catalog root");
+        let config = LocalConversationConfig::from_json_slice(
+            br#"{
+              "conversationId": "conv-host",
+              "agentId": "agent-a",
+              "model": {"model": "scripted/scripted"},
+              "context": {"reserveTokens": 0, "keepRecentTokens": 0}
+            }"#,
+        )
+        .expect("session config");
+        let catalog = SessionCatalog::open(catalog_root.path(), &config).expect("catalog");
+        let supervisor = Arc::new(LocalSessionSupervisor::new(catalog));
+        let host = RuntimeClientHost::new_with_session_control(
+            RuntimeClientHostConfig {
+                runtime: fixture.runtime.clone(),
+                replay_limit: None,
+            },
+            supervisor.clone(),
+        )
+        .expect("session-aware host");
+        fixture.runtime.activate();
+        supervisor
+            .install_runtime(fixture.runtime.clone())
+            .await
+            .expect("install runtime");
+        (
+            adapter,
+            fixture,
+            RuntimeClientEndpoint::new(host),
+            supervisor,
+            catalog_root,
+            config,
+        )
+    }
+
+    fn initialize_endpoint(endpoint: &RuntimeClientEndpoint) {
+        let response = endpoint.handle_request(RuntimeClientRequest::Initialize {
+            id: crate::runtime_client::RequestId::new(1),
+            protocol_version: crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+        });
+        assert!(response.error.is_none(), "initialize failed: {response:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn catalog_publication_outcomes_fence_the_runtime_client_typed() {
+        for post_rename in [false, true] {
+            let (_adapter, _fixture, endpoint, supervisor, catalog_root, config) =
+                local_session_endpoint(Vec::new(), None).await;
+            initialize_endpoint(&endpoint);
+            let initial = endpoint
+                .handle_request_async(RuntimeClientRequest::SessionGet {
+                    id: crate::runtime_client::RequestId::new(10),
+                })
+                .await;
+            let Some(RuntimeClientResult::Session { session: initial }) = initial.result else {
+                panic!("initial metadata must be readable: {initial:?}");
+            };
+            if post_rename {
+                supervisor.arm_catalog_write_fault_after_rename().await;
+            } else {
+                supervisor.arm_catalog_write_fault_before_rename().await;
+            }
+
+            let response = endpoint
+                .handle_request_async(RuntimeClientRequest::SessionNew {
+                    id: crate::runtime_client::RequestId::new(2),
+                })
+                .await;
+            assert!(
+                matches!(
+                    response.error,
+                    Some(RuntimeClientError::SessionRestartRequired { .. })
+                ),
+                "unexpected first transition response: {response:?}"
+            );
+
+            // A repeated replacement request is fenced by the absorbing
+            // supervisor state, rather than being treated as another normal
+            // Session failure.
+            let duplicate = endpoint
+                .handle_request_async(RuntimeClientRequest::SessionNew {
+                    id: crate::runtime_client::RequestId::new(3),
+                })
+                .await;
+            assert!(matches!(
+                duplicate.error,
+                Some(RuntimeClientError::SessionRestartRequired { .. })
+            ));
+
+            let stale_snapshot = endpoint.handle_request(RuntimeClientRequest::SnapshotGet {
+                id: crate::runtime_client::RequestId::new(4),
+            });
+            assert!(matches!(
+                stale_snapshot.error,
+                Some(RuntimeClientError::SessionRestartRequired { .. })
+            ));
+
+            let same_node = endpoint
+                .handle_request_async(RuntimeClientRequest::SessionSelect {
+                    id: crate::runtime_client::RequestId::new(11),
+                    session_id: initial.id,
+                    node_id: Some(initial.active_node),
+                })
+                .await;
+            assert!(matches!(
+                same_node.error,
+                Some(RuntimeClientError::SessionRestartRequired { .. })
+            ));
+
+            let list = endpoint
+                .handle_request_async(RuntimeClientRequest::SessionList {
+                    id: crate::runtime_client::RequestId::new(5),
+                    query: None,
+                    offset: 0,
+                    limit: crate::local_runtime::SESSION_LIST_PAGE_LIMIT,
+                })
+                .await;
+            let Some(RuntimeClientResult::SessionList { sessions, .. }) = list.result else {
+                panic!("bounded metadata remains readable: {list:?}");
+            };
+            assert_eq!(sessions.len(), if post_rename { 2 } else { 1 });
+
+            if post_rename {
+                let reopened = SessionCatalog::open(catalog_root.path(), &config)
+                    .expect("reopen visible catalog");
+                assert_eq!(
+                    reopened
+                        .list_page(None, 0, crate::local_runtime::SESSION_LIST_PAGE_LIMIT)
+                        .expect("reopened page")
+                        .sessions
+                        .len(),
+                    2,
+                    "post-rename failure still leaves the new catalog visible"
+                );
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn model_catalog_visibility_uncertainty_fences_the_live_runtime_typed() {
+        let (_adapter, fixture, endpoint, supervisor, catalog_root, config) =
+            local_session_endpoint(Vec::new(), None).await;
+        initialize_endpoint(&endpoint);
+        let before = fixture.runtime.model_config();
+        let candidate = marked_model_config(&fixture.runtime, "post-rename");
+        supervisor.arm_catalog_write_fault_after_rename().await;
+
+        let response = endpoint.handle_request(RuntimeClientRequest::ModelSet {
+            id: crate::runtime_client::RequestId::new(2),
+            config: Box::new(candidate.clone()),
+        });
+        assert!(matches!(
+            response.error,
+            Some(RuntimeClientError::SessionRestartRequired { .. })
+        ));
+        assert_eq!(
+            fixture.runtime.model_config(),
+            before,
+            "the live runtime candidate is not installed after catalog publication uncertainty"
+        );
+
+        let reopened = SessionCatalog::open(catalog_root.path(), &config).expect("reopen catalog");
+        let (_, _, reopened_config) = reopened.active_lineage().expect("active lineage");
+        assert_eq!(
+            reopened_config.model, candidate,
+            "the catalog crossed visibility even though its durability barrier was uncertain"
+        );
+        let stale = endpoint.handle_request(RuntimeClientRequest::SnapshotGet {
+            id: crate::runtime_client::RequestId::new(3),
+        });
+        assert!(matches!(
+            stale.error,
+            Some(RuntimeClientError::SessionRestartRequired { .. })
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn session_switch_waits_for_real_attempt_task_quiescence_before_catalog_visibility() {
+        let (release_tx, release_rx) = model_release();
+        let attempt_exit_gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        attempt_exit_gate.arm();
+        let (adapter, fixture, _endpoint, supervisor, catalog_root, config) =
+            local_session_endpoint(
+                vec![vec![
+                    GatedStep::Emit(ModelEvent::Started),
+                    GatedStep::ParkUntilReleased(release_rx),
+                    GatedStep::Emit(ModelEvent::Completed {
+                        finish_reason: ModelFinishReason::Stop,
+                        usage: None,
+                    }),
+                ]],
+                Some(CoordinatorProbe {
+                    attempt_exit_gate: Some(attempt_exit_gate.clone()),
+                    ..CoordinatorProbe::default()
+                }),
+            )
+            .await;
+        let before = SessionCatalog::open(catalog_root.path(), &config)
+            .expect("open catalog before switch")
+            .active_snapshot()
+            .expect("active snapshot before switch");
+
+        fixture
+            .runtime
+            .submit_inbound(submit_content("unsettled turn"))
+            .expect("real turn accepted");
+        await_adapter_request_count(&adapter, 1).await;
+
+        let switch_supervisor = supervisor.clone();
+        let switch = tokio::spawn(async move { switch_supervisor.new_session().await });
+        let entered = {
+            let gate = attempt_exit_gate.clone();
+            tokio::task::spawn_blocking(move || gate.wait_entered())
+        };
+        entered.await.expect("attempt exit gate entered");
+
+        let observed = SessionCatalog::open(catalog_root.path(), &config)
+            .expect("observe catalog while old task is unsettled")
+            .active_snapshot()
+            .expect("active snapshot while old task is unsettled");
+        assert_eq!(observed.id, before.id);
+        assert!(!switch.is_finished(), "switch waits for quiescence");
+
+        // The provider is cancellation-aware; releasing the model gate is
+        // not what completes the switch. The attempt-exit gate is the exact
+        // runtime ownership boundary that shutdown must await.
+        let _ = release_tx.send(true);
+        let release_exit = {
+            let gate = attempt_exit_gate.clone();
+            tokio::task::spawn_blocking(move || gate.release())
+        };
+        release_exit.await.expect("release attempt task exit");
+        let result = switch.await.expect("switch task");
+        assert!(result.is_ok(), "quiescence precedes successful publication");
+        let after = SessionCatalog::open(catalog_root.path(), &config)
+            .expect("reopen catalog after switch")
+            .active_snapshot()
+            .expect("active snapshot after switch");
+        assert_ne!(after.id, before.id);
     }
 
     /// A marker-bearing alternate session model configuration.

@@ -8,6 +8,7 @@ import {
   SessionSelector,
 } from "../src/ui/components/session-selector.ts";
 import { TreeSelector } from "../src/ui/components/tree-selector.ts";
+import type { SessionNodeView } from "../src/protocol/types.ts";
 import { plainText } from "../src/ui/theme.ts";
 import { sessionView } from "./support/fixtures.ts";
 
@@ -75,18 +76,21 @@ describe("native Session selectors", () => {
   });
 
   it("distinguishes activating a node from creating a branch", () => {
+    const root: SessionNodeView = {
+      id: "node-1",
+      conversation_id: "conv-test",
+      origin: { type: "new" },
+    };
+    const branch: SessionNodeView = {
+      id: "node-2",
+      parent: "node-1",
+      conversation_id: "conv-2",
+      origin: { type: "fork", source_session: "session-1", source_node: "node-1", source_surface_revision: 4, source_user_message: "user-c" },
+    };
     const session = sessionView({
-      nodes: [
-        ...sessionView().nodes,
-        {
-          id: "node-2",
-          parent: "node-1",
-          conversation_id: "conv-2",
-          origin: { type: "fork", source_session: "session-1", source_node: "node-1", source_surface_revision: 4, source_user_message: "user-c" },
-        },
-      ],
+      node_count: 2,
     });
-    const selector = new TreeSelector({ session, boundaries: [boundary] });
+    const selector = new TreeSelector({ session, nodes: [root, branch], boundaries: [boundary] });
     const selections: string[] = [];
     selector.onSelect = (selection) => {
       selections.push(selection.kind);
@@ -105,7 +109,11 @@ describe("native Session selectors", () => {
   });
 
   it("renders a root node with the root glyph", () => {
-    const selector = new TreeSelector({ session: sessionView(), boundaries: [] });
+    const selector = new TreeSelector({
+      session: sessionView(),
+      nodes: [{ id: "node-1", conversation_id: "conv-test", origin: { type: "new" } }],
+      boundaries: [],
+    });
     const rendered = selector.render(120).map(plainText).join("\n");
 
     assert.match(rendered, /├─ node-1/);

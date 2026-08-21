@@ -177,7 +177,8 @@ describe("footer", () => {
         created_at: "2026-08-21T00:00:00Z",
         updated_at: "2026-08-21T00:00:00Z",
         active_node: "node-3",
-        nodes: [],
+        active_conversation_id: "conv-3",
+        node_count: 1,
       },
     );
     assert.match(rendered, /session review branch/);

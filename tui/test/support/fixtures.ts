@@ -149,19 +149,14 @@ export function snapshot(
 export function sessionView(
   overrides: Partial<SessionView> = {},
 ): SessionView {
-  const node: SessionNodeView = {
-    id: "node-1",
-    parent: undefined,
-    conversation_id: "conv-test",
-    origin: { type: "new" },
-  };
   return {
     id: "session-1",
     name: "New session",
     created_at: "2026-08-21T00:00:00Z",
     updated_at: "2026-08-21T00:00:00Z",
     active_node: "node-1",
-    nodes: [node],
+    active_conversation_id: "conv-test",
+    node_count: 1,
     ...overrides,
   };
 }

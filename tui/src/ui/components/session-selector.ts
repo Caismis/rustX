@@ -22,6 +22,8 @@ const VISIBLE_ROWS = 8;
 
 export interface SessionSelectorOptions {
   sessions: SessionSummaryView[];
+  nextOffset?: number;
+  query?: string;
 }
 
 export class SessionSelector implements Component, Focusable {
@@ -29,13 +31,36 @@ export class SessionSelector implements Component, Focusable {
   onSelect?: (session: SessionSummaryView) => void;
   onCancel?: () => void;
   onChange?: () => void;
+  onQueryChange?: (query: string) => void;
+  onLoadMore?: () => void;
 
-  readonly #sessions: SessionSummaryView[];
-  #query = "";
+  #sessions: SessionSummaryView[];
+  #nextOffset: number | undefined;
+  #query: string;
   #selected = 0;
+  #loading = false;
 
   constructor(options: SessionSelectorOptions) {
     this.#sessions = options.sessions;
+    this.#nextOffset = options.nextOffset;
+    this.#query = options.query ?? "";
+  }
+
+  /** Replaces the current native page after a query change. */
+  replacePage(sessions: SessionSummaryView[], nextOffset?: number): void {
+    this.#sessions = sessions;
+    this.#nextOffset = nextOffset;
+    this.#selected = 0;
+    this.#loading = false;
+    this.onChange?.();
+  }
+
+  /** Appends one native continuation page. */
+  appendPage(sessions: SessionSummaryView[], nextOffset?: number): void {
+    this.#sessions = [...this.#sessions, ...sessions];
+    this.#nextOffset = nextOffset;
+    this.#loading = false;
+    this.onChange?.();
   }
 
   invalidate(): void {
@@ -65,14 +90,24 @@ export class SessionSelector implements Component, Focusable {
     } else if (matchesKey(data, "up")) {
       this.#move(-1, visible.length);
     } else if (matchesKey(data, "down")) {
+      if (
+        this.#selected >= visible.length - 1 &&
+        this.#nextOffset !== undefined &&
+        !this.#loading
+      ) {
+        this.#loading = true;
+        this.onLoadMore?.();
+      }
       this.#move(1, visible.length);
     } else if (matchesKey(data, "backspace")) {
       this.#query = this.#query.slice(0, -1);
       this.#selected = 0;
+      this.onQueryChange?.(this.#query);
       this.onChange?.();
     } else if (isPrintable(data)) {
       this.#query += data;
       this.#selected = 0;
+      this.onQueryChange?.(this.#query);
       this.onChange?.();
     }
   }
@@ -106,6 +141,9 @@ export class SessionSelector implements Component, Focusable {
       if (visible.length > VISIBLE_ROWS) {
         lines.push(role.meta(`${this.#selected + 1}/${visible.length}`));
       }
+      if (this.#nextOffset !== undefined) {
+        lines.push(role.meta("↓ load more matching Sessions"));
+      }
     }
     lines.push("", role.meta("↑↓ navigate · Enter select · Esc close"));
     return lines.map((line) => truncateToWidth(line, width, "…"));
@@ -121,6 +159,7 @@ export class SessionSelector implements Component, Focusable {
 export interface BoundarySelectorOptions {
   boundaries: SessionUserMessageBoundaryView[];
   title: string;
+  nextOffset?: number;
 }
 
 export class BoundarySelector implements Component, Focusable {
@@ -128,20 +167,35 @@ export class BoundarySelector implements Component, Focusable {
   onSelect?: (boundary: SessionUserMessageBoundaryView) => void;
   onCancel?: () => void;
   onChange?: () => void;
+  onLoadMore?: () => void;
 
-  readonly #boundaries: SessionUserMessageBoundaryView[];
+  #boundaries: SessionUserMessageBoundaryView[];
+  #nextOffset: number | undefined;
   readonly #title: string;
   #query = "";
   #selected = 0;
+  #loading = false;
 
   constructor(options: BoundarySelectorOptions) {
     this.#boundaries = options.boundaries;
+    this.#nextOffset = options.nextOffset;
     this.#title = options.title;
     this.#selected = Math.max(0, this.#boundaries.length - 1);
   }
 
   invalidate(): void {
     // The selector has no cached render state.
+  }
+
+  /** Appends one bounded native history page. */
+  appendPage(
+    boundaries: SessionUserMessageBoundaryView[],
+    nextOffset?: number,
+  ): void {
+    this.#boundaries = [...this.#boundaries, ...boundaries];
+    this.#nextOffset = nextOffset;
+    this.#loading = false;
+    this.onChange?.();
   }
 
   private visible(): SessionUserMessageBoundaryView[] {
@@ -158,7 +212,17 @@ export class BoundarySelector implements Component, Focusable {
       const boundary = visible[this.#selected];
       if (boundary !== undefined) this.onSelect?.(boundary);
     } else if (matchesKey(data, "up")) this.#move(-1, visible.length);
-    else if (matchesKey(data, "down")) this.#move(1, visible.length);
+    else if (matchesKey(data, "down")) {
+      if (
+        this.#selected >= visible.length - 1 &&
+        this.#nextOffset !== undefined &&
+        !this.#loading
+      ) {
+        this.#loading = true;
+        this.onLoadMore?.();
+      }
+      this.#move(1, visible.length);
+    }
     else if (matchesKey(data, "backspace")) {
       this.#query = this.#query.slice(0, -1);
       this.#selected = 0;
@@ -189,6 +253,9 @@ export class BoundarySelector implements Component, Focusable {
         lines.push(`${marker} ${index === this.#selected ? style.bold(message) : message}`);
         lines.push(`    ${role.meta(`revision ${boundary.surface_revision} · ${index + 1}/${visible.length}`)}`);
       });
+      if (this.#nextOffset !== undefined) {
+        lines.push(role.meta("↓ load more committed boundaries"));
+      }
     }
     lines.push("", role.meta("↑↓ navigate · Enter select · Esc close"));
     return lines.map((line) => truncateToWidth(line, width, "…"));

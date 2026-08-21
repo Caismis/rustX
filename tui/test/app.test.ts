@@ -11,12 +11,13 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { RustxTuiApp } from "../src/ui/app.ts";
-import { ConnectionClosedError } from "../src/runtime/connection.ts";
+import { ConnectionClosedError, RuntimeRequestError } from "../src/runtime/connection.ts";
 import { emptyPresentationState } from "../src/presentation/projection.ts";
 import type { ChildRuntimeProcess } from "../src/runtime/child-process.ts";
 import type { RuntimeClientConnection } from "../src/runtime/connection.ts";
 import type { RuntimeClientAttachment } from "../src/runtime/attachment.ts";
-import { sessionModel, sessionView } from "./support/fixtures.ts";
+import type { SessionSummaryView } from "../src/protocol/types.ts";
+import { attemptView, sessionModel, sessionView } from "./support/fixtures.ts";
 
 function fakeConnection(
   onClose?: (listener: (error: ConnectionClosedError) => void) => void,
@@ -62,6 +63,14 @@ function fakeChild(log: string[]): ChildRuntimeProcess {
     exited: undefined,
     pid: 1,
   } as unknown as ChildRuntimeProcess;
+}
+
+function tick(): Promise<void> {
+  // Pi's ProcessTerminal deliberately coalesces raw stdin for 10ms so an
+  // escape byte can be distinguished from the prefix of a longer sequence.
+  // Wait for that parser boundary rather than racing it with the next test
+  // input.
+  return new Promise((resolve) => setTimeout(resolve, 20));
 }
 
 describe("RustxTuiApp lifecycle", () => {
@@ -144,5 +153,124 @@ describe("RustxTuiApp lifecycle", () => {
 
     assert.equal(await running, 1);
     assert.deepEqual(log, ["close_stdin", "wait_exit", "restart"]);
+  });
+
+  it("keeps Esc precedence at the app input-routing boundary", async () => {
+    let cancelled = 0;
+    const runningState = {
+      ...emptyPresentationState(sessionModel("alpha/model-a")),
+      attempt: {
+        ...attemptView(),
+        phase: { type: "running" as const },
+      },
+    };
+    const session = fakeSession(async () => {}, runningState);
+    const sessionApi = session as unknown as {
+      cancelCurrentAttempt: () => Promise<string>;
+      listSessions: () => Promise<{ sessions: SessionSummaryView[]; nextOffset?: number }>;
+      refreshSession: () => Promise<ReturnType<typeof sessionView>>;
+    };
+    sessionApi.cancelCurrentAttempt = async () => {
+      cancelled += 1;
+      return "a1";
+    };
+    sessionApi.listSessions = async () => ({
+      sessions: [{
+        id: "session-1",
+        name: "current",
+        updated_at: "2026-08-21T00:00:00Z",
+        active_node: "node-1",
+        active: true,
+      }],
+    });
+    sessionApi.refreshSession = async () => sessionView();
+
+    const app = new RustxTuiApp({
+      session,
+      connection: fakeConnection(),
+      child: fakeChild([]),
+    });
+    const running = app.run();
+
+    // Overlay open: Esc closes it and must not reach /cancel, even though
+    // the authoritative presentation says an attempt is unsettled.
+    process.stdin.emit("data", "/resume\r");
+    await tick();
+    process.stdin.emit("data", "\u001b");
+    await tick();
+    assert.equal(cancelled, 0);
+
+    // No overlay: the same Esc input reaches the existing /cancel route once.
+    process.stdin.emit("data", "\u001b");
+    await tick();
+    assert.equal(cancelled, 1);
+
+    await app.quit();
+    await running;
+  });
+
+  it("replaces a terminal Session attachment from the authoritative restart", async () => {
+    const log: string[] = [];
+    const oldSession = fakeSession(
+      async () => {},
+      emptyPresentationState(sessionModel("alpha/model-a")),
+    );
+    const oldApi = oldSession as unknown as {
+      newSession: () => Promise<never>;
+      detach: () => Promise<void>;
+      refreshSession: () => Promise<ReturnType<typeof sessionView>>;
+    };
+    oldApi.newSession = async () => {
+      throw new RuntimeRequestError({
+        type: "session_restart_required",
+        message: "catalog visibility committed; durability uncertain",
+      });
+    };
+    oldApi.detach = async () => {
+      log.push("detach");
+    };
+    oldApi.refreshSession = async () => sessionView();
+
+    const nextSession = fakeSession(
+      async () => {},
+      emptyPresentationState(sessionModel("alpha/model-a")),
+    );
+    const nextApi = nextSession as unknown as {
+      refreshSession: () => Promise<ReturnType<typeof sessionView>>;
+    };
+    nextApi.refreshSession = async () => {
+      log.push("refresh_authoritative");
+      return sessionView({ id: "session-2", name: "authoritative destination" });
+    };
+
+    const app = new RustxTuiApp({
+      session: oldSession,
+      connection: fakeConnection(),
+      child: fakeChild(log),
+      restartRuntime: async () => {
+        log.push("restart");
+        return {
+          session: nextSession,
+          connection: fakeConnection(),
+          child: fakeChild(log),
+        };
+      },
+    });
+    const running = app.run();
+    process.stdin.emit("data", "/new\r");
+    for (let index = 0; index < 10 && !log.includes("refresh_authoritative"); index += 1) {
+      await tick();
+    }
+
+    assert.deepEqual(log.slice(0, 4), [
+      "detach",
+      "close_stdin",
+      "wait_exit",
+      "restart",
+    ]);
+    assert.ok(log.includes("refresh_authoritative"));
+
+    await app.quit();
+    await running;
   });
 });

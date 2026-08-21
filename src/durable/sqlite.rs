@@ -35,6 +35,7 @@ use super::inbox::{
     AcceptedInbound, CanonicalMessagePage, CompactionCommitInput, ConversationStore,
     ConversationStoreError, DurableConversationHead, EventPage, InboundDraft, PendingBatch,
     PendingInboundItem, RequestSnapshotPage, SurfaceUserMessageBoundary,
+    SurfaceUserMessageBoundaryPage,
 };
 
 /// The only schema accepted by this pre-production store. Incompatible
@@ -717,6 +718,16 @@ impl ConversationStore for SqliteConversationStore {
     ) -> Result<Vec<SurfaceUserMessageBoundary>, ConversationStoreError> {
         let connection = self.lock()?;
         load_user_message_boundaries(&connection, through)
+    }
+
+    fn load_user_message_boundaries_page(
+        &self,
+        through: SurfaceRevision,
+        offset: usize,
+        limit: usize,
+    ) -> Result<SurfaceUserMessageBoundaryPage, ConversationStoreError> {
+        let connection = self.lock()?;
+        load_user_message_boundaries_page(&connection, through, offset, limit)
     }
 
     fn append_canonical(&self, message: &MessageBlock) -> Result<(), ConversationStoreError> {
@@ -2214,9 +2225,28 @@ fn load_user_message_boundaries(
     connection: &Connection,
     through: SurfaceRevision,
 ) -> Result<Vec<SurfaceUserMessageBoundary>, ConversationStoreError> {
+    Ok(load_user_message_boundaries_page_internal(connection, through, None)?.boundaries)
+}
+
+#[allow(clippy::too_many_lines)]
+fn load_user_message_boundaries_page_internal(
+    connection: &Connection,
+    through: SurfaceRevision,
+    page: Option<(usize, usize)>,
+) -> Result<SurfaceUserMessageBoundaryPage, ConversationStoreError> {
+    if let Some((_, limit)) = page
+        && limit == 0
+    {
+        return Err(storage(
+            "historical user-message boundary page limit must be positive",
+        ));
+    }
     let Some((head_revision, _, head_active_json)) = read_surface_head(connection)? else {
         if through == SurfaceRevision::INITIAL {
-            return Ok(Vec::new());
+            return Ok(SurfaceUserMessageBoundaryPage {
+                boundaries: Vec::new(),
+                next_offset: None,
+            });
         }
         return Err(ConversationStoreError::InvalidReference(format!(
             "Surface revision {through} has no durable head"
@@ -2238,6 +2268,7 @@ fn load_user_message_boundaries(
         .collect();
     let mut active = Vec::new();
     let mut boundaries = Vec::new();
+    let mut boundary_count = 0_usize;
     let mut seen = BTreeSet::new();
     let mut statement = connection
         .prepare(
@@ -2291,10 +2322,19 @@ fn load_user_message_boundaries(
             && user.kind == InboundKind::Message
             && seen.insert(message_id)
         {
-            boundaries.push(SurfaceUserMessageBoundary {
+            let boundary = SurfaceUserMessageBoundary {
                 surface_revision: SurfaceRevision::new(expected_revision),
                 message: user.clone(),
+            };
+            let include = page.is_none_or(|(offset, limit)| {
+                boundary_count >= offset && boundary_count < offset.saturating_add(limit)
             });
+            if include {
+                boundaries.push(boundary);
+            }
+            boundary_count = boundary_count
+                .checked_add(1)
+                .ok_or_else(|| storage("historical user-message boundary count exhausted"))?;
         }
         expected_revision = expected_revision
             .checked_add(1)
@@ -2317,7 +2357,23 @@ fn load_user_message_boundaries(
             )));
         }
     }
-    Ok(boundaries)
+    let next_offset = page.and_then(|(offset, _)| {
+        let end = offset.saturating_add(boundaries.len());
+        (end < boundary_count).then_some(end)
+    });
+    Ok(SurfaceUserMessageBoundaryPage {
+        boundaries,
+        next_offset,
+    })
+}
+
+fn load_user_message_boundaries_page(
+    connection: &Connection,
+    through: SurfaceRevision,
+    offset: usize,
+    limit: usize,
+) -> Result<SurfaceUserMessageBoundaryPage, ConversationStoreError> {
+    load_user_message_boundaries_page_internal(connection, through, Some((offset, limit)))
 }
 
 fn validate_surface_operation_references_from_ledger(

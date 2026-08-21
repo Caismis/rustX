@@ -197,16 +197,16 @@ impl ServerHandler for FixtureServer {
         Cow::Owned(self.versions())
     }
 
-    async fn discover(
+    fn discover(
         &self,
         _context: RequestContext<RoleServer>,
-    ) -> Result<DiscoverResult, rmcp::ErrorData> {
+    ) -> impl std::future::Future<Output = Result<DiscoverResult, rmcp::ErrorData>> + Send {
         // Overridden only so the advertised set matches `versions()` even
         // when the fixture narrows it.
-        Ok(DiscoverResult::from_server_info(
+        std::future::ready(Ok(DiscoverResult::from_server_info(
             self.versions(),
             self.get_info(),
-        ))
+        )))
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {

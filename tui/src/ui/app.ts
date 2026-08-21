@@ -271,6 +271,7 @@ export class RustxTuiApp {
   }
 
   async #onSubmit(text: string): Promise<void> {
+    if (this.#restarting || this.#finished) return;
     const line = text.trim();
     if (line.length === 0) {
       return;
@@ -302,20 +303,30 @@ export class RustxTuiApp {
         this.#showModelSelector(outcome.models);
         break;
       case "choose_session":
-        this.#showSessionSelector(outcome.sessions);
+        this.#showSessionSelector(outcome.sessions, outcome.nextOffset, outcome.query);
         break;
       case "choose_fork":
         this.#showBoundarySelector(
           outcome.boundaries,
           "Fork from user message",
           "fork",
+          outcome.nextOffset,
         );
         break;
       case "choose_tree":
-        this.#showTreeSelector(outcome.session, outcome.boundaries);
+        this.#showTreeSelector(
+          outcome.session,
+          outcome.nodes,
+          outcome.nextNodeOffset,
+          outcome.boundaries,
+          outcome.nextHistoryOffset,
+        );
         break;
       case "session_switch":
         await this.#applySessionSwitch(outcome.change);
+        break;
+      case "replacement_required":
+        await this.#applyReplacementRequired(outcome.message);
         break;
       case "preference":
         this.#applyPreference(outcome.preference);
@@ -341,6 +352,7 @@ export class RustxTuiApp {
   }
 
   async #onInterrupt(): Promise<void> {
+    if (this.#restarting) return;
     const state = this.#session.state;
     if (state?.attempt !== undefined && state.attempt.phase.type !== "settled") {
       const outcome = await this.#dispatcher.submit("/cancel");
@@ -455,12 +467,19 @@ export class RustxTuiApp {
     this.#tui.requestRender();
   }
 
-  #showSessionSelector(sessions: SessionSummaryView[]): void {
+  #showSessionSelector(
+    sessions: SessionSummaryView[],
+    nextOffset: number | undefined,
+    query: string,
+  ): void {
     if (sessions.length === 0) {
       this.#note("info", "no persisted sessions are available");
       return;
     }
-    const selector = new SessionSelector({ sessions });
+    let currentQuery = query;
+    let currentNextOffset = nextOffset;
+    let requestSerial = 0;
+    const selector = new SessionSelector({ sessions, nextOffset, query });
     const handle = this.#tui.showOverlay(selector, {
       width: "80%",
       maxHeight: "70%",
@@ -469,6 +488,33 @@ export class RustxTuiApp {
     this.#overlay = handle;
     selector.onChange = () => this.#tui.requestRender();
     selector.onCancel = () => this.#closeOverlay();
+    selector.onQueryChange = (nextQuery) => {
+      currentQuery = nextQuery;
+      currentNextOffset = undefined;
+      const serial = ++requestSerial;
+      void this.#session.listSessions(nextQuery, 0).then((page) => {
+        if (serial !== requestSerial) return;
+        currentNextOffset = page.nextOffset;
+        selector.replacePage(page.sessions, page.nextOffset);
+      }).catch((error: unknown) => {
+        if (serial !== requestSerial) return;
+        this.#note("error", `session search failed: ${errorMessage(error)}`);
+        selector.replacePage([], undefined);
+      });
+    };
+    selector.onLoadMore = () => {
+      const offset = currentNextOffset;
+      if (offset === undefined) return;
+      const serial = requestSerial;
+      void this.#session.listSessions(currentQuery, offset).then((page) => {
+        if (serial !== requestSerial) return;
+        currentNextOffset = page.nextOffset;
+        selector.appendPage(page.sessions, page.nextOffset);
+      }).catch((error: unknown) => {
+        this.#note("error", `session page failed: ${errorMessage(error)}`);
+        selector.appendPage([], currentNextOffset);
+      });
+    };
     selector.onSelect = (session) => {
       this.#closeOverlay();
       void this.#dispatcher.selectSession(session.id)
@@ -485,6 +531,7 @@ export class RustxTuiApp {
     boundaries: SessionUserMessageBoundaryView[],
     title: string,
     operation: "fork" | "tree",
+    nextOffset?: number,
   ): void {
     if (boundaries.length === 0) {
       this.#note(
@@ -493,7 +540,8 @@ export class RustxTuiApp {
       );
       return;
     }
-    const selector = new BoundarySelector({ boundaries, title });
+    let currentNextOffset = nextOffset;
+    const selector = new BoundarySelector({ boundaries, title, nextOffset });
     const handle = this.#tui.showOverlay(selector, {
       width: "80%",
       maxHeight: "70%",
@@ -502,6 +550,17 @@ export class RustxTuiApp {
     this.#overlay = handle;
     selector.onChange = () => this.#tui.requestRender();
     selector.onCancel = () => this.#closeOverlay();
+    selector.onLoadMore = () => {
+      const offset = currentNextOffset;
+      if (offset === undefined) return;
+      void this.#session.sessionTreePage(0, offset).then((page) => {
+        currentNextOffset = page.nextHistoryOffset;
+        selector.appendPage(page.branchableMessages, page.nextHistoryOffset);
+      }).catch((error: unknown) => {
+        this.#note("error", `history page failed: ${errorMessage(error)}`);
+        selector.appendPage([], currentNextOffset);
+      });
+    };
     selector.onSelect = (boundary) => {
       this.#closeOverlay();
       const request = operation === "fork"
@@ -519,9 +578,20 @@ export class RustxTuiApp {
 
   #showTreeSelector(
     session: SessionView,
+    nodes: import("../protocol/types.ts").SessionNodeView[],
+    nextNodeOffset: number | undefined,
     boundaries: SessionUserMessageBoundaryView[],
+    nextHistoryOffset: number | undefined,
   ): void {
-    const selector = new TreeSelector({ session, boundaries });
+    let currentNodeOffset = nextNodeOffset;
+    let currentHistoryOffset = nextHistoryOffset;
+    const selector = new TreeSelector({
+      session,
+      nodes,
+      nextNodeOffset,
+      boundaries,
+      nextHistoryOffset,
+    });
     const handle = this.#tui.showOverlay(selector, {
       width: "80%",
       maxHeight: "70%",
@@ -530,6 +600,28 @@ export class RustxTuiApp {
     this.#overlay = handle;
     selector.onChange = () => this.#tui.requestRender();
     selector.onCancel = () => this.#closeOverlay();
+    selector.onLoadMore = () => {
+      const nodeOffset = currentNodeOffset ?? nodes.length;
+      const historyOffset = currentHistoryOffset ?? boundaries.length;
+      void this.#session.sessionTreePage(nodeOffset, historyOffset).then((page) => {
+        currentNodeOffset = page.nextNodeOffset;
+        currentHistoryOffset = page.nextHistoryOffset;
+        selector.appendPage({
+          nodes: page.nodes,
+          nextNodeOffset: page.nextNodeOffset,
+          boundaries: page.branchableMessages,
+          nextHistoryOffset: page.nextHistoryOffset,
+        });
+      }).catch((error: unknown) => {
+        this.#note("error", `tree page failed: ${errorMessage(error)}`);
+        selector.appendPage({
+          nodes: [],
+          nextNodeOffset: currentNodeOffset,
+          boundaries: [],
+          nextHistoryOffset: currentHistoryOffset,
+        });
+      });
+    };
     selector.onSelect = (selection: TreeSelection) => {
       this.#closeOverlay();
       const request = selection.kind === "node"
@@ -573,13 +665,14 @@ export class RustxTuiApp {
     this.#restarting = true;
     this.#editor.disableSubmit = true;
     this.#note("info", `switching to session ${change.session.name}…`);
+    const oldSession = this.#session;
     const oldConnection = this.#connection;
     const oldChild = this.#child;
     try {
       // Rust has already reached its semantic quiescence point before it
       // returned this result. Closing here only releases the old process
       // attachment; it is never the cancellation operation.
-      oldConnection.close();
+      await this.#detachOldAttachment(oldSession, oldConnection);
       oldChild.closeStdin();
       await oldChild.waitOrTerminate(this.#terminationGraceMs);
 
@@ -602,6 +695,65 @@ export class RustxTuiApp {
         this.#editor.disableSubmit = this.#quitting;
       }
     }
+  }
+
+  /**
+   * Replaces an attachment after Rust reports its terminal Session state.
+   * The restarted process reads the catalog again; this method deliberately
+   * does not infer a destination Session from the failed command.
+   */
+  async #applyReplacementRequired(message: string): Promise<void> {
+    if (this.#restarting || this.#finished) return;
+    const restart = this.#restartRuntime;
+    this.#restarting = true;
+    this.#editor.disableSubmit = true;
+    this.#closeOverlay();
+    this.#note("error", `the active Session attachment must be replaced: ${message}`);
+    if (restart === undefined) {
+      this.#finish(1);
+      return;
+    }
+
+    const oldSession = this.#session;
+    const oldConnection = this.#connection;
+    const oldChild = this.#child;
+    try {
+      await this.#detachOldAttachment(oldSession, oldConnection);
+      oldChild.closeStdin();
+      await oldChild.waitOrTerminate(this.#terminationGraceMs);
+
+      const next = await restart();
+      this.#bindRuntime(next.session, next.connection, next.child);
+      const authoritative = await next.session.refreshSession();
+      this.#note(
+        "info",
+        `attached to authoritative Session ${authoritative.name} · node ${authoritative.active_node}`,
+      );
+      const state = this.#session.state;
+      if (state !== undefined) this.#renderState(state);
+    } catch (error) {
+      this.#note("error", `Session attachment replacement failed: ${errorMessage(error)}`);
+      this.#editor.disableSubmit = true;
+      this.#finish(1);
+    } finally {
+      this.#restarting = false;
+      if (!this.#finished) {
+        this.#editor.disableSubmit = this.#quitting;
+      }
+    }
+  }
+
+  async #detachOldAttachment(
+    session: RuntimeClientAttachment,
+    connection: RuntimeClientConnection,
+  ): Promise<void> {
+    try {
+      await session.detach();
+    } catch {
+      // The transport may already be closing. Closing it still releases the
+      // client-side attachment and never claims semantic cancellation.
+    }
+    connection.close();
   }
 
   /**

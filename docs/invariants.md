@@ -3184,3 +3184,76 @@ Child processes must receive an explicit environment. Runtime-private secrets mu
 ## Runtime persistence
 
 A stopped runtime may retain a writable filesystem layer as a warm cache, but the writable layer is never the source of truth for durable conversation facts.
+
+## Native local Session lifecycle and branching (M9.4 / Issue #88)
+
+The user-facing `Session` owner is `LocalSessionSupervisor`, not
+`ConversationRuntime`, `RuntimeClient`, or the TUI. It owns the
+`SessionCatalog`, Session graph, active `SessionNode`, and exactly one linear
+`ConversationRuntime` attachment. Each graph node owns a distinct
+`ConversationId`; `ConversationSurface`, the Message Ledger, Request Snapshot,
+Event Journal, and runtime execution remain linear and branch-unaware.
+
+### Publication and replacement linearization
+
+The native replacement sequence has these ordered points:
+
+1. Source preparation selects an exact retained `SurfaceRevision` (or current
+   head) and materializes the immutable seed. The source can mutate after this
+   read without changing the prepared destination.
+2. The old runtime reaches semantic quiescence only when
+   `ConversationRuntime::shutdown().await` returns successfully. Until that
+   happens, no replacement Session/node selection may become catalog-visible.
+3. Catalog visibility commits at `fs::rename(temp, catalog.json)` after the
+   temporary file has been written and fsynced.
+4. The post-rename parent-directory `File::open(parent).sync_all()` is the
+   durability barrier. It strengthens persistence but is after visibility.
+
+`CatalogCommitError::NotCommitted` means the rename did not happen: the old
+catalog file and in-memory document remain authoritative. A
+`CommittedButDurabilityUncertain` outcome means rename did happen. The catalog
+updates its in-memory document to the new document before returning that
+error, and callers must treat the publication as visible but durability
+uncertain. It is never represented as “nothing changed”. For a replacement,
+both outcomes after old-runtime quiescence enter the terminal
+`ReplacementRequired` attachment state; a fresh process must be composed from
+the catalog that is actually on disk. Metadata-only model/name mutations may
+continue after a pre-commit failure, but a post-commit durability uncertainty
+fences the attachment too, so a live runtime cannot silently diverge from
+published metadata.
+
+The supervisor attachment state is explicit and absorbing:
+
+```text
+NotInstalled -> Live(runtime) -> ReplacementRequired
+```
+
+Only composition may perform `NotInstalled -> Live`. Replacement operations
+first prepare and preflight privately, then quiesce the old runtime, then
+publish. Once quiescence succeeds, duplicate/stale runtime-dependent requests,
+including selecting the same node, return typed replacement-required failure;
+they cannot treat the missing runtime as a healthy `Option::None`. Read-only
+Session list and active metadata remain available while terminal so the
+restarting owner can inspect authoritative state. Runtime-backed tree/history
+and execution/model operations are fenced.
+
+The Runtime Client preserves this distinction with
+`session_restart_required` beside ordinary `session_failure`. The TUI stops
+input, detaches/closes the stale attachment, waits for the old process to
+exit, restarts through the existing Rust-owned catalog, attaches to the
+lineage selected by the restarted process, refreshes `session_get`, and only
+then resumes presentation. It never derives the destination from stale
+picker/component state. Transport loss and ordinary cancellation remain
+separate lifecycle outcomes.
+
+### Bounded native projections
+
+The native owner, not TypeScript rendering, enforces the projection bounds.
+`session_list` accepts an optional case-insensitive Session id/name query,
+bounded `limit`, and offset continuation. Rows are ordered by ascending
+Session id. `session_tree_get` returns bounded
+node and historical user-message pages, each with its own continuation offset;
+nodes are deterministic `SessionNodeId` order and boundaries retain their
+canonical first-appearance order. `SessionView` contains active metadata and a
+node count, not the entire graph. Continuations make older Sessions and
+history reachable without imposing a permanent global Session maximum.

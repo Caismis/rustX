@@ -4,6 +4,7 @@
 //! Protocol responses are the synchronization points: no readiness sleeps or
 //! timing assumptions are involved.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use rustx::durable::ConversationStore;
@@ -85,6 +86,35 @@ fn request_id(value: u64) -> RequestId {
     RequestId::new(value)
 }
 
+fn workspace_snapshot(root: &std::path::Path) -> BTreeMap<String, Vec<u8>> {
+    fn visit(
+        root: &std::path::Path,
+        directory: &std::path::Path,
+        snapshot: &mut BTreeMap<String, Vec<u8>>,
+    ) {
+        for entry in std::fs::read_dir(directory).expect("read workspace directory") {
+            let entry = entry.expect("workspace entry");
+            let path = entry.path();
+            let relative = path
+                .strip_prefix(root)
+                .expect("workspace path is beneath root")
+                .to_string_lossy()
+                .into_owned();
+            let file_type = entry.file_type().expect("workspace entry type");
+            if file_type.is_dir() {
+                snapshot.insert(format!("{relative}/"), Vec::new());
+                visit(root, &path, snapshot);
+            } else if file_type.is_file() {
+                snapshot.insert(relative, std::fs::read(&path).expect("read workspace file"));
+            }
+        }
+    }
+
+    let mut snapshot = BTreeMap::new();
+    visit(root, root, &mut snapshot);
+    snapshot
+}
+
 async fn session_request(
     endpoint: &rustx::runtime_client::RuntimeClientEndpoint,
     request: RuntimeClientRequest,
@@ -97,6 +127,10 @@ async fn session_request(
 async fn native_new_resume_name_and_quiescence_are_product_operations() {
     let root = tempfile::tempdir().expect("temp root");
     let paths = paths(root.path());
+    let workspace = paths.workspace.clone();
+    std::fs::write(workspace.join("workspace-owned.txt"), b"do not branch me")
+        .expect("workspace marker");
+    let workspace_before = workspace_snapshot(&workspace);
     let dependencies = dependencies();
 
     let product = LocalSessionProduct::compose(&paths, &dependencies)
@@ -120,7 +154,7 @@ async fn native_new_resume_name_and_quiescence_are_product_operations() {
         panic!("session_get must return native metadata: {current:?}");
     };
     let root_session = root_view.id.clone();
-    let root_conversation = root_view.nodes[0].conversation_id.clone();
+    let root_conversation = root_view.active_conversation_id.clone();
 
     let renamed = session_request(
         &endpoint,
@@ -149,12 +183,14 @@ async fn native_new_resume_name_and_quiescence_are_product_operations() {
 
     let catalog = SessionCatalog::open(root.path().join("runtime").as_path(), &config())
         .expect("read catalog");
-    assert_eq!(catalog.list().len(), 1);
-    let root_node = root_view
-        .nodes
-        .iter()
-        .find(|node| node.id == root_view.active_node)
-        .expect("root active node");
+    assert_eq!(
+        catalog
+            .list_page(None, 0, rustx::local_runtime::SESSION_LIST_PAGE_LIMIT)
+            .expect("list page")
+            .sessions
+            .len(),
+        1
+    );
     let root_id = root_session.clone();
     let root_store_path = root
         .path()
@@ -162,13 +198,11 @@ async fn native_new_resume_name_and_quiescence_are_product_operations() {
         .join("sessions")
         .join(&root_id)
         .join("conversations")
-        .join(root_node.conversation_id.as_str())
+        .join(root_conversation.as_str())
         .join("conversation.sqlite");
-    let root_store = rustx::durable::SqliteConversationStore::open(
-        root_node.conversation_id.clone(),
-        &root_store_path,
-    )
-    .expect("root store");
+    let root_store =
+        rustx::durable::SqliteConversationStore::open(root_conversation.clone(), &root_store_path)
+            .expect("root store");
     let canonical_before = root_store.load_canonical().expect("canonical before new");
 
     let created = session_request(
@@ -186,7 +220,7 @@ async fn native_new_resume_name_and_quiescence_are_product_operations() {
     };
     assert!(restart_required);
     assert_ne!(new_view.id, root_session);
-    assert_ne!(new_view.nodes[0].conversation_id, root_conversation);
+    assert_ne!(new_view.active_conversation_id, root_conversation);
 
     // A duplicate command cannot publish a second transition after the
     // first command has released the only active runtime.
@@ -197,7 +231,7 @@ async fn native_new_resume_name_and_quiescence_are_product_operations() {
     .await;
     assert!(matches!(
         duplicate.error,
-        Some(RuntimeClientError::SessionFailure { .. })
+        Some(RuntimeClientError::SessionRestartRequired { .. })
     ));
     assert_eq!(
         root_store
@@ -208,7 +242,14 @@ async fn native_new_resume_name_and_quiescence_are_product_operations() {
     );
     let catalog_after_new = SessionCatalog::open(root.path().join("runtime").as_path(), &config())
         .expect("reopen catalog after new");
-    assert_eq!(catalog_after_new.list().len(), 2);
+    assert_eq!(
+        catalog_after_new
+            .list_page(None, 0, rustx::local_runtime::SESSION_LIST_PAGE_LIMIT)
+            .expect("list page")
+            .sessions
+            .len(),
+        2
+    );
 
     drop(endpoint);
     drop(product);
@@ -220,7 +261,7 @@ async fn native_new_resume_name_and_quiescence_are_product_operations() {
         .expect("compose selected new session");
     assert_eq!(
         resumed.runtime().conversation_id().as_str(),
-        new_view.nodes[0].conversation_id.as_str()
+        new_view.active_conversation_id.as_str()
     );
     let resumed_endpoint = resumed.endpoint();
     let initialized = resumed_endpoint.handle_request(RuntimeClientRequest::Initialize {
@@ -277,6 +318,11 @@ async fn native_new_resume_name_and_quiescence_are_product_operations() {
     };
     assert!(snapshot.attempt.is_none());
     assert!(snapshot.background.is_empty());
+    assert_eq!(
+        workspace_snapshot(&workspace),
+        workspace_before,
+        "Session branching and replacement never mutate workspace state"
+    );
 }
 
 fn config() -> rustx::local_runtime::LocalConversationConfig {

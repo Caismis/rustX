@@ -20,7 +20,10 @@ export type TreeSelection =
 
 export interface TreeSelectorOptions {
   session: SessionView;
+  nodes: SessionNodeView[];
+  nextNodeOffset?: number;
   boundaries: SessionUserMessageBoundaryView[];
+  nextHistoryOffset?: number;
 }
 
 export class TreeSelector implements Component, Focusable {
@@ -28,16 +31,39 @@ export class TreeSelector implements Component, Focusable {
   onSelect?: (selection: TreeSelection) => void;
   onCancel?: () => void;
   onChange?: () => void;
+  onLoadMore?: () => void;
 
   readonly #session: SessionView;
-  readonly #boundaries: SessionUserMessageBoundaryView[];
+  #nodes: SessionNodeView[];
+  #nextNodeOffset: number | undefined;
+  #boundaries: SessionUserMessageBoundaryView[];
+  #nextHistoryOffset: number | undefined;
   #query = "";
   #selected = 0;
+  #loading = false;
 
   constructor(options: TreeSelectorOptions) {
     this.#session = options.session;
+    this.#nodes = options.nodes;
+    this.#nextNodeOffset = options.nextNodeOffset;
     this.#boundaries = options.boundaries;
+    this.#nextHistoryOffset = options.nextHistoryOffset;
     this.#selected = Math.max(0, this.items().length - 1);
+  }
+
+  /** Appends bounded native node/history pages after a continuation request. */
+  appendPage(options: {
+    nodes: SessionNodeView[];
+    nextNodeOffset?: number;
+    boundaries: SessionUserMessageBoundaryView[];
+    nextHistoryOffset?: number;
+  }): void {
+    this.#nodes = [...this.#nodes, ...options.nodes];
+    this.#nextNodeOffset = options.nextNodeOffset;
+    this.#boundaries = [...this.#boundaries, ...options.boundaries];
+    this.#nextHistoryOffset = options.nextHistoryOffset;
+    this.#loading = false;
+    this.onChange?.();
   }
 
   invalidate(): void {
@@ -45,7 +71,7 @@ export class TreeSelector implements Component, Focusable {
   }
 
   private items(): TreeSelection[] {
-    const items: TreeSelection[] = this.#session.nodes.map((node) => ({
+    const items: TreeSelection[] = this.#nodes.map((node) => ({
       kind: "node",
       node,
     }));
@@ -66,7 +92,17 @@ export class TreeSelector implements Component, Focusable {
       const selected = visible[this.#selected];
       if (selected !== undefined) this.onSelect?.(selected);
     } else if (matchesKey(data, "up")) this.#move(-1, visible.length);
-    else if (matchesKey(data, "down")) this.#move(1, visible.length);
+    else if (matchesKey(data, "down")) {
+      if (
+        this.#selected >= visible.length - 1 &&
+        (this.#nextNodeOffset !== undefined || this.#nextHistoryOffset !== undefined) &&
+        !this.#loading
+      ) {
+        this.#loading = true;
+        this.onLoadMore?.();
+      }
+      this.#move(1, visible.length);
+    }
     else if (matchesKey(data, "backspace")) {
       this.#query = this.#query.slice(0, -1);
       this.#selected = 0;
@@ -103,6 +139,9 @@ export class TreeSelector implements Component, Focusable {
           lines.push(`      ${role.meta(`revision ${item.boundary.surface_revision}`)}`);
         }
       });
+      if (this.#nextNodeOffset !== undefined || this.#nextHistoryOffset !== undefined) {
+        lines.push(role.meta("↓ load more native tree/history rows"));
+      }
     }
     lines.push("", role.meta("↑↓ navigate · Enter select · Esc close"));
     return lines.map((line) => truncateToWidth(line, width, "…"));

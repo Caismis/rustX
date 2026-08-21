@@ -517,6 +517,7 @@ describe("CommandDispatcher", () => {
     peer.respond(3, {
       type: "session_tree",
       session: sessionView(),
+      nodes: [],
       branchable_messages: [
         {
           surface_revision: 3,
@@ -544,6 +545,7 @@ describe("CommandDispatcher", () => {
           },
         },
       ],
+      nextOffset: undefined,
     });
   });
 

@@ -3141,7 +3141,8 @@ runtime's lifecycle gate.
 
 `LocalSessionSupervisor` is the only native user-level Session owner. It owns
 the persisted `SessionCatalog`, Session metadata, the Session graph, the
-active Session/SessionNode selection, and the one live runtime handle:
+active Session/SessionNode selection, and the explicit runtime attachment
+state:
 
 ```text
 Runtime Client / TUI intent
@@ -3151,7 +3152,7 @@ LocalSessionSupervisor
   +-- SessionCatalog + SessionGraph
   +-- active SessionId / SessionNodeId
   +-- SessionNode -> ConversationId
-  +-- one active ConversationRuntime
+  +-- RuntimeAttachmentState: Live(runtime) or ReplacementRequired
           |
           v
 linear Conversation Ledger + ConversationSurface + snapshots + journal
@@ -3169,9 +3170,22 @@ SQLite conversation database is independently bound to its own
 root node only after its durable conversation seed is valid. `/name` commits
 metadata only. `/resume` selects persisted metadata, `/tree` selects a node or
 prepares a new node, and both replace the active process attachment only after
-`ConversationRuntime::shutdown()` has returned successfully. The TUI renders
-typed projections and owns only picker query/focus/editor state; it never
-opens the catalog or a conversation database.
+`ConversationRuntime::shutdown()` has returned successfully. The supervisor's
+runtime attachment is explicit: it is `NotInstalled` during composition,
+`Live(runtime)` while usable, and `ReplacementRequired` after old-runtime
+quiescence or any terminal publication outcome. The last state is absorbing;
+`Option<ConversationRuntime>` is not used as an implicit lifecycle state.
+
+The TUI renders typed projections and owns only picker query/focus/editor
+state; it never opens the catalog or a conversation database. Ordinary
+Session metadata is a bounded native projection: `/resume` accepts an optional
+case-insensitive id/name query and an offset with a native maximum page size,
+and returns a continuation offset. Rows are ordered by Session identity.
+`/session` returns active metadata only,
+not the graph. `/tree` returns independently bounded node and historical
+user-message pages with deterministic continuations. Older Sessions and
+historical boundaries remain reachable by continuation; there is no arbitrary
+global Session cap.
 
 Historical materialization is an explicit durable boundary:
 
@@ -3195,18 +3209,44 @@ cannot change the destination seed.
 Destination seeds remap `MessageId` and `ToolCallId` once, preserving internal
 tool-result correlations. They do not copy AttemptIds, Request Snapshots,
 Event Journal lifecycle facts, Pending Inbound, cancellation state, active or
-background executions, or live interactions. A destination becomes visible
-only after private seed creation and atomic catalog publication both succeed;
-failed preparation leaves at most an unreferenced private directory.
+background executions, or live interactions. A prepared destination becomes
+catalog-visible at the rename commit after private seed creation; the
+publication operation reports full success only after the parent-directory
+durability barrier. A pre-rename failure leaves at most an unreferenced
+private directory, while a post-rename barrier failure is the explicit
+visible-but-durability-uncertain outcome described below.
 
-The linearization points are explicit: clone/fork choose the durable source
-revision at the historical read; runtime replacement is the successful
-quiescence result; active-node/session publication is the catalog atomic
-rename after quiescence; destination publication is the same catalog commit
-after seed validation. Session recovery then opens the selected ConversationId
-and uses the ordinary ConversationRuntime recovery path. Session metadata never
-proves that old work is still live, and ambiguous old provider/tool work is
-not silently replayed.
+The linearization points are explicit and ordered:
+
+1. **Source snapshot selection.** Clone/fork/tree preparation reads an exact
+   retained `SurfaceRevision` (or the current head) and materializes the
+   immutable source messages before destination preparation. Later source
+   mutations cannot change that seed.
+2. **Old-runtime quiescence.** A replacement awaits
+   `ConversationRuntime::shutdown()`. Its successful return is the point at
+   which the old runtime no longer owns unsettled execution. No active
+   Session/node selection is published before this await completes.
+3. **Catalog visibility commit.** `SessionCatalog` writes and fsyncs a
+   temporary document, then `fs::rename(temp, catalog.json)` makes the next
+   document visible. Rename is the publication commit point, not the later
+   directory barrier.
+4. **Catalog durability barrier.** The catalog opens its parent directory and
+   calls `sync_all()` after rename. A failure here is
+   `CommittedButDurabilityUncertain`: the new document is already visible, the
+   in-memory catalog adopts it, and the owning operation returns a typed
+   replacement-required outcome. It is never reported as an ordinary
+   pre-commit failure or as “nothing changed”.
+
+`NotCommitted` means rename did not complete; the previous file and in-memory
+document remain authoritative. Once old-runtime quiescence has succeeded,
+even a `NotCommitted` destination publication failure leaves the process
+attachment `ReplacementRequired`, because the old runtime is gone. Session
+recovery then opens the catalog's actually authoritative selected
+`ConversationId`; the restarted Rust process/native composition is the
+authority, and the TUI refreshes metadata after attaching rather than
+reconstructing the result from stale client assumptions. Historical
+nonterminal provider/tool work is not auto-run merely because its node was
+previously active.
 
 Startup failure ownership (Issue #81): failures that prove the core runtime
 itself cannot be constructed — startup files, model catalog/credentials/

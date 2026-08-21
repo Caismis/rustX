@@ -8,14 +8,20 @@
 //!
 //! The catalog is Rust-owned durable product metadata. It is not a TUI cache,
 //! and no client receives a storage path. Destination publication follows one
-//! small commit protocol:
+//! small commit protocol with an explicit visibility point:
 //!
 //! ```text
 //! prepare private conversation database + validate seed
-//!     -> atomically replace catalog metadata
-//!     -> destination becomes selectable
+//!     -> write/fsync temporary catalog
+//!     -> rename temporary catalog (visibility commit point)
+//!     -> destination is visible to catalog readers
+//!     -> fsync parent directory (durability barrier)
+//!     -> publication success is reported
 //! ```
 //!
+//! A pre-rename failure leaves the old document authoritative. A post-rename
+//! durability failure reports that visibility committed but durability is
+//! uncertain and keeps the in-memory document aligned with the visible file.
 //! A failed preparation or catalog write cannot leave a visible catalog entry
 //! pointing at an unusable conversation.
 
@@ -23,6 +29,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -39,6 +47,12 @@ use super::config::LocalConversationConfig;
 
 /// The persisted native session-catalog schema.
 pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 1;
+
+/// The largest page a native Session list request may return.
+pub const SESSION_LIST_PAGE_LIMIT: usize = 32;
+
+/// The largest page a native Session tree/history request may return.
+pub const SESSION_TREE_PAGE_LIMIT: usize = 32;
 
 macro_rules! session_id_type {
     ($(#[$meta:meta])* $name:ident) => {
@@ -120,7 +134,11 @@ pub struct SessionNode {
     pub origin: SessionNodeOrigin,
 }
 
-/// A bounded public snapshot of one Session.
+/// Bounded authoritative metadata for one Session.
+///
+/// The graph is deliberately not embedded here. Callers that need the graph
+/// use the bounded tree page seam below, so `/session`, switch results, and
+/// restart metadata never materialize every historical node.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionSnapshot {
     /// Session identity.
@@ -133,8 +151,37 @@ pub struct SessionSnapshot {
     pub updated_at: DateTime<Utc>,
     /// The active node selected in this Session.
     pub active_node: SessionNodeId,
-    /// All persisted nodes, in deterministic node-id order.
+    /// The conversation owned by the active node.
+    pub active_conversation_id: ConversationId,
+    /// Number of persisted nodes, useful metadata for a bounded tree view.
+    pub node_count: usize,
+}
+
+/// A bounded page of persisted Session summaries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionListPage {
+    /// Rows in deterministic Session-id order.
+    pub sessions: Vec<SessionSummary>,
+    /// Offset for the next page, when more matching rows exist.
+    pub next_offset: Option<usize>,
+}
+
+/// A bounded page of nodes in one Session graph.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionNodePage {
+    /// Nodes in deterministic node-id order.
     pub nodes: Vec<SessionNode>,
+    /// Offset for the next page, when more nodes exist.
+    pub next_offset: Option<usize>,
+}
+
+/// A bounded page of historical branchable user-message boundaries.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionUserMessageBoundaryPage {
+    /// Boundaries in their first-appearance order.
+    pub boundaries: Vec<SessionUserMessageBoundary>,
+    /// Offset for the next page, when more boundaries exist.
+    pub next_offset: Option<usize>,
 }
 
 /// One bounded row in the `/resume` selector.
@@ -218,6 +265,8 @@ pub struct SessionCatalog {
     root: PathBuf,
     path: PathBuf,
     document: CatalogDocument,
+    #[cfg(test)]
+    write_fault: Arc<Mutex<Option<CatalogWriteFault>>>,
 }
 
 impl SessionCatalog {
@@ -253,6 +302,8 @@ impl SessionCatalog {
                 root,
                 path,
                 document,
+                #[cfg(test)]
+                write_fault: Arc::new(Mutex::new(None)),
             });
         }
 
@@ -300,25 +351,84 @@ impl SessionCatalog {
             root,
             path,
             document,
+            #[cfg(test)]
+            write_fault: Arc::new(Mutex::new(None)),
         };
         catalog.persist(&catalog.document)?;
         Ok(catalog)
     }
 
-    /// Returns all persisted sessions in deterministic metadata order.
-    #[must_use]
-    pub fn list(&self) -> Vec<SessionSummary> {
-        self.document
-            .sessions
-            .values()
-            .map(|session| SessionSummary {
+    /// Arms one deterministic catalog-write fault for the next mutation.
+    #[cfg(test)]
+    pub(crate) fn arm_write_fault_before_rename(&self) {
+        *self
+            .write_fault
+            .lock()
+            .expect("catalog write fault lock poisoned") = Some(CatalogWriteFault::BeforeRename);
+    }
+
+    /// Arms one deterministic post-rename durability fault for the next
+    /// mutation.
+    #[cfg(test)]
+    pub(crate) fn arm_write_fault_after_rename(&self) {
+        *self
+            .write_fault
+            .lock()
+            .expect("catalog write fault lock poisoned") = Some(CatalogWriteFault::AfterRename);
+    }
+
+    /// Returns one bounded, searchable Session-list page.
+    ///
+    /// Ordering is ascending Session identity. The offset is a domain-specific
+    /// continuation: there is no global maximum number of Sessions, and
+    /// callers can reach older matching rows by requesting the returned
+    /// offset. Only the requested page is materialized for the projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError`] when the requested page size is outside the
+    /// native bound.
+    pub fn list_page(
+        &self,
+        query: Option<&str>,
+        offset: usize,
+        limit: usize,
+    ) -> Result<SessionListPage, SessionError> {
+        validate_page_limit(limit, SESSION_LIST_PAGE_LIMIT)?;
+        let query = query.map(|value| value.trim().to_lowercase());
+        let mut matching = 0_usize;
+        let mut page = Vec::with_capacity(limit);
+        let mut has_more = false;
+        for session in self.document.sessions.values() {
+            let matches = query.as_ref().is_none_or(|query| {
+                session.id.as_str().to_lowercase().contains(query)
+                    || session.name.to_lowercase().contains(query)
+            });
+            if !matches {
+                continue;
+            }
+            if matching < offset {
+                matching += 1;
+                continue;
+            }
+            if page.len() == limit {
+                has_more = true;
+                break;
+            }
+            page.push(SessionSummary {
                 id: session.id.clone(),
                 name: session.name.clone(),
                 updated_at: session.updated_at,
                 active_node: session.active_node.clone(),
                 active: session.id == self.document.active_session,
-            })
-            .collect()
+            });
+            matching += 1;
+        }
+        let next_offset = has_more.then_some(offset + page.len());
+        Ok(SessionListPage {
+            sessions: page,
+            next_offset,
+        })
     }
 
     /// Returns the active Session snapshot.
@@ -344,7 +454,34 @@ impl SessionCatalog {
                 .ok_or_else(|| SessionError::UnknownSession {
                     session_id: id.clone(),
                 })?;
-        Ok(snapshot_of(session))
+        snapshot_of(session)
+    }
+
+    /// Returns one bounded page of graph nodes.
+    pub(crate) fn node_page(
+        &self,
+        session_id: &SessionId,
+        offset: usize,
+        limit: usize,
+    ) -> Result<SessionNodePage, SessionError> {
+        validate_page_limit(limit, SESSION_TREE_PAGE_LIMIT)?;
+        let session =
+            self.document
+                .sessions
+                .get(session_id)
+                .ok_or_else(|| SessionError::UnknownSession {
+                    session_id: session_id.clone(),
+                })?;
+        let nodes = session
+            .nodes
+            .values()
+            .skip(offset)
+            .take(limit)
+            .cloned()
+            .collect::<Vec<_>>();
+        let next_offset =
+            (offset + nodes.len() < session.nodes.len()).then_some(offset + nodes.len());
+        Ok(SessionNodePage { nodes, next_offset })
     }
 
     /// Returns the active Session and node configuration needed by native
@@ -835,16 +972,40 @@ impl SessionCatalog {
 
     fn commit(&mut self, next: CatalogDocument) -> Result<(), SessionError> {
         validate_document(&next)?;
-        self.persist(&next)?;
-        self.document = next;
-        Ok(())
+        match self.persist(&next) {
+            Ok(()) => {
+                self.document = next;
+                Ok(())
+            }
+            Err(
+                error @ SessionError::CatalogCommit {
+                    error: CatalogCommitError::CommittedButDurabilityUncertain { .. },
+                },
+            ) => {
+                // `rename` has already made `next` the visible catalog
+                // document. Keep the in-process authority aligned even
+                // though the directory durability barrier could not be
+                // proven, then surface the distinct post-commit outcome.
+                self.document = next;
+                Err(error)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn persist(&self, document: &CatalogDocument) -> Result<(), SessionError> {
-        let bytes = serde_json::to_vec_pretty(document).map_err(|error| SessionError::Catalog {
-            detail: format!("cannot encode catalog: {error}"),
-        })?;
-        atomic_write(&self.path, &bytes)
+        let bytes =
+            serde_json::to_vec_pretty(document).map_err(|error| SessionError::CatalogCommit {
+                error: CatalogCommitError::NotCommitted {
+                    path: self.path.clone(),
+                    detail: format!("cannot encode catalog: {error}"),
+                },
+            })?;
+        #[cfg(test)]
+        let result = atomic_write(&self.path, &bytes, &self.write_fault);
+        #[cfg(not(test))]
+        let result = atomic_write(&self.path, &bytes);
+        result.map_err(SessionError::from)
     }
 }
 
@@ -950,15 +1111,24 @@ fn remap_message(
     }
 }
 
-fn snapshot_of(session: &PersistedSession) -> SessionSnapshot {
-    SessionSnapshot {
+fn snapshot_of(session: &PersistedSession) -> Result<SessionSnapshot, SessionError> {
+    let active_node =
+        session
+            .nodes
+            .get(&session.active_node)
+            .ok_or_else(|| SessionError::UnknownNode {
+                session_id: session.id.clone(),
+                node_id: session.active_node.clone(),
+            })?;
+    Ok(SessionSnapshot {
         id: session.id.clone(),
         name: session.name.clone(),
         created_at: session.created_at,
         updated_at: session.updated_at,
         active_node: session.active_node.clone(),
-        nodes: session.nodes.values().cloned().collect(),
-    }
+        active_conversation_id: active_node.conversation_id.clone(),
+        node_count: session.nodes.len(),
+    })
 }
 
 fn validate_document(document: &CatalogDocument) -> Result<(), SessionError> {
@@ -1124,12 +1294,18 @@ fn initialize_database(
     store.initialize(seed).map_err(SessionError::Store)
 }
 
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), SessionError> {
-    let parent = path.parent().ok_or_else(|| SessionError::Io {
-        path: path.to_path_buf(),
-        detail: "catalog has no parent".to_owned(),
-    })?;
-    fs::create_dir_all(parent).map_err(|error| SessionError::Io {
+fn atomic_write(
+    path: &Path,
+    bytes: &[u8],
+    #[cfg(test)] write_fault: &Arc<Mutex<Option<CatalogWriteFault>>>,
+) -> Result<(), CatalogCommitError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| CatalogCommitError::NotCommitted {
+            path: path.to_path_buf(),
+            detail: "catalog has no parent".to_owned(),
+        })?;
+    fs::create_dir_all(parent).map_err(|error| CatalogCommitError::NotCommitted {
         path: parent.to_path_buf(),
         detail: error.to_string(),
     })?;
@@ -1139,30 +1315,90 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), SessionError> {
         .truncate(true)
         .write(true)
         .open(&temporary)
-        .map_err(|error| SessionError::Io {
+        .map_err(|error| CatalogCommitError::NotCommitted {
             path: temporary.clone(),
             detail: error.to_string(),
         })?;
-    file.write_all(bytes).map_err(|error| SessionError::Io {
-        path: temporary.clone(),
-        detail: error.to_string(),
-    })?;
-    file.sync_all().map_err(|error| SessionError::Io {
-        path: temporary.clone(),
-        detail: error.to_string(),
-    })?;
-    fs::rename(&temporary, path).map_err(|error| SessionError::Io {
+    file.write_all(bytes)
+        .map_err(|error| CatalogCommitError::NotCommitted {
+            path: temporary.clone(),
+            detail: error.to_string(),
+        })?;
+    file.sync_all()
+        .map_err(|error| CatalogCommitError::NotCommitted {
+            path: temporary.clone(),
+            detail: error.to_string(),
+        })?;
+    #[cfg(test)]
+    let write_fault = take_write_fault(write_fault);
+    #[cfg(test)]
+    if write_fault == Some(CatalogWriteFault::BeforeRename) {
+        return Err(CatalogCommitError::NotCommitted {
+            path: temporary,
+            detail: "deterministic fault before catalog visibility rename".to_owned(),
+        });
+    }
+    fs::rename(&temporary, path).map_err(|error| CatalogCommitError::NotCommitted {
         path: path.to_path_buf(),
         detail: error.to_string(),
     })?;
-    let directory = File::open(parent).map_err(|error| SessionError::Io {
-        path: parent.to_path_buf(),
-        detail: error.to_string(),
+    // The rename above is the visibility commit point. Every error after it
+    // is therefore a different outcome from a pre-commit write failure.
+    #[cfg(test)]
+    if write_fault == Some(CatalogWriteFault::AfterRename) {
+        return Err(CatalogCommitError::CommittedButDurabilityUncertain {
+            path: path.to_path_buf(),
+            detail: "deterministic fault after catalog visibility rename".to_owned(),
+        });
+    }
+    let directory = File::open(parent).map_err(|error| {
+        CatalogCommitError::CommittedButDurabilityUncertain {
+            path: parent.to_path_buf(),
+            detail: error.to_string(),
+        }
     })?;
-    directory.sync_all().map_err(|error| SessionError::Io {
-        path: parent.to_path_buf(),
-        detail: error.to_string(),
-    })
+    directory.sync_all().map_err(
+        |error| CatalogCommitError::CommittedButDurabilityUncertain {
+            path: parent.to_path_buf(),
+            detail: error.to_string(),
+        },
+    )?;
+    Ok(())
+}
+
+fn validate_page_limit(limit: usize, maximum: usize) -> Result<(), SessionError> {
+    if limit == 0 || limit > maximum {
+        return Err(SessionError::Catalog {
+            detail: format!("page limit must be between 1 and {maximum}"),
+        });
+    }
+    Ok(())
+}
+
+/// The result classification of the catalog visibility/durability protocol.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CatalogCommitError {
+    /// The visibility rename did not complete. The previous catalog remains
+    /// authoritative and the in-memory document is unchanged.
+    NotCommitted { path: PathBuf, detail: String },
+    /// The visibility rename completed, but the parent-directory durability
+    /// barrier did not. The new catalog is visible; durability is uncertain.
+    CommittedButDurabilityUncertain { path: PathBuf, detail: String },
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CatalogWriteFault {
+    BeforeRename,
+    AfterRename,
+}
+
+#[cfg(test)]
+fn take_write_fault(fault: &Arc<Mutex<Option<CatalogWriteFault>>>) -> Option<CatalogWriteFault> {
+    fault
+        .lock()
+        .expect("catalog write fault lock poisoned")
+        .take()
 }
 
 /// A native Session-domain failure.
@@ -1170,6 +1406,10 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), SessionError> {
 pub enum SessionError {
     /// A storage operation failed.
     Io { path: PathBuf, detail: String },
+    /// The catalog publication outcome is explicit: either visibility was not
+    /// crossed, or it was crossed but the final durability barrier was not
+    /// proven.
+    CatalogCommit { error: CatalogCommitError },
     /// The catalog or its graph is malformed.
     Catalog { detail: String },
     /// Durable conversation storage rejected a seed or validation read.
@@ -1193,6 +1433,18 @@ impl core::fmt::Display for SessionError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Io { path, detail } => write!(f, "session storage {}: {detail}", path.display()),
+            Self::CatalogCommit { error } => match error {
+                CatalogCommitError::NotCommitted { path, detail } => write!(
+                    f,
+                    "session catalog publication did not commit at {}: {detail}",
+                    path.display()
+                ),
+                CatalogCommitError::CommittedButDurabilityUncertain { path, detail } => write!(
+                    f,
+                    "session catalog visibility committed at {}, but durability is uncertain: {detail}",
+                    path.display()
+                ),
+            },
             Self::Catalog { detail } => write!(f, "session catalog: {detail}"),
             Self::Store(error) => write!(f, "conversation seed: {error}"),
             Self::Seed { detail } => write!(f, "conversation seed: {detail}"),
@@ -1215,11 +1467,35 @@ impl core::fmt::Display for SessionError {
 
 impl std::error::Error for SessionError {}
 
+impl From<CatalogCommitError> for SessionError {
+    fn from(error: CatalogCommitError) -> Self {
+        Self::CatalogCommit { error }
+    }
+}
+
+impl SessionError {
+    /// Whether this error crossed the catalog visibility commit point.
+    #[must_use]
+    pub fn committed(&self) -> bool {
+        matches!(
+            self,
+            Self::CatalogCommit {
+                error: CatalogCommitError::CommittedButDurabilityUncertain { .. }
+            }
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{HistoricalConversationSnapshot, SessionCatalog, SessionError, SessionNodeOrigin};
-    use crate::conversation::SurfaceRevision;
-    use crate::durable::{ConversationStore, SqliteConversationStore};
+    use std::collections::BTreeSet;
+
+    use super::{
+        CatalogCommitError, HistoricalConversationSnapshot, SessionCatalog, SessionError,
+        SessionNodeOrigin,
+    };
+    use crate::conversation::{SurfaceRevision, SurfaceSpan};
+    use crate::durable::{CompactionCommitInput, ConversationStore, SqliteConversationStore};
     use crate::local_runtime::LocalConversationConfig;
     use crate::message::content::TextBlock;
     use crate::message::types::{
@@ -1227,7 +1503,9 @@ mod tests {
         SystemMessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
     use crate::runtime::identity::{ConversationId, MessageId, ToolCallId, ToolId};
+    use crate::runtime::types::{TokenMeasurement, TokenMeasurementSource};
     use crate::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus};
+    use chrono::{TimeZone, Utc};
     use tempfile::TempDir;
 
     const CONFIG: &str = r#"{
@@ -1357,10 +1635,17 @@ mod tests {
 
         assert_ne!(snapshot.id, source_session);
         assert_ne!(
-            snapshot.nodes[0].conversation_id, source_conversation,
+            snapshot.active_conversation_id, source_conversation,
             "new Session must own a new ConversationId"
         );
-        assert_eq!(catalog.list().len(), 2);
+        assert_eq!(
+            catalog
+                .list_page(None, 0, super::SESSION_LIST_PAGE_LIMIT)
+                .expect("list page")
+                .sessions
+                .len(),
+            2
+        );
         assert_eq!(
             source_store
                 .load_canonical()
@@ -1372,7 +1657,11 @@ mod tests {
             .rename(&new_session_id, "review branch")
             .expect("rename metadata");
         assert_eq!(renamed.name, "review branch");
-        let new_node = &renamed.nodes[0];
+        let new_nodes = catalog
+            .node_page(&new_session_id, 0, super::SESSION_TREE_PAGE_LIMIT)
+            .expect("new node page")
+            .nodes;
+        let new_node = &new_nodes[0];
         let new_store = store_for(&catalog, &new_session_id, &new_node.conversation_id);
         assert!(
             new_store
@@ -1381,6 +1670,122 @@ mod tests {
                 .is_empty(),
             "new starts with only the intended empty bootstrap state"
         );
+    }
+
+    #[test]
+    fn session_list_projection_is_bounded_searchable_and_continuable() {
+        let (_directory, mut catalog, config) = open_catalog();
+        for index in 0..3 {
+            let prepared = catalog
+                .prepare_session(&config, &[])
+                .expect("prepare paged session");
+            catalog
+                .publish_session(
+                    &prepared,
+                    &format!("paged session {index}"),
+                    SessionNodeOrigin::New,
+                )
+                .expect("publish paged session");
+        }
+
+        let first = catalog
+            .list_page(None, 0, 2)
+            .expect("first bounded Session page");
+        assert_eq!(first.sessions.len(), 2);
+        assert_eq!(first.next_offset, Some(2));
+        let second = catalog
+            .list_page(None, first.next_offset.expect("continuation"), 2)
+            .expect("second bounded Session page");
+        assert_eq!(second.sessions.len(), 2);
+        assert_eq!(second.next_offset, None);
+        let ids = first
+            .sessions
+            .into_iter()
+            .chain(second.sessions)
+            .map(|summary| summary.id)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            ids.len(),
+            4,
+            "older Sessions remain reachable by continuation"
+        );
+
+        let filtered = catalog
+            .list_page(Some("paged session 1"), 0, 2)
+            .expect("searchable bounded Session page");
+        assert_eq!(filtered.sessions.len(), 1);
+        assert_eq!(filtered.sessions[0].name, "paged session 1");
+        assert!(matches!(
+            catalog.list_page(None, 0, 0),
+            Err(SessionError::Catalog { .. })
+        ));
+    }
+
+    #[test]
+    fn tree_and_history_projections_are_bounded_and_continuable() {
+        let (_directory, mut catalog, config) = open_catalog();
+        let history = source_history();
+        let (source_conversation, source_session, source_node) = append_history(&catalog, &history);
+        let source_store = store_for(&catalog, &source_session, &source_conversation);
+        let revision = source_store.load_head().expect("source head").revision;
+        let source = HistoricalConversationSnapshot {
+            conversation_id: source_conversation,
+            surface_revision: revision,
+            messages: source_store
+                .load_surface_snapshot(revision)
+                .expect("historical source"),
+        };
+        let (prepared, _) = catalog
+            .prepare_tree_node_at_user_message(
+                &source_session,
+                &config,
+                &source,
+                &MessageId::new("source-user-c"),
+            )
+            .expect("prepare tree node");
+        catalog
+            .publish_node(
+                &source_session,
+                &prepared,
+                source_node.clone(),
+                SessionNodeOrigin::Fork {
+                    source_session: source_session.clone(),
+                    source_node: source_node.clone(),
+                    source_surface_revision: revision,
+                    source_user_message: MessageId::new("source-user-c"),
+                },
+            )
+            .expect("publish tree node");
+
+        let node_first = catalog
+            .node_page(&source_session, 0, 1)
+            .expect("first bounded tree page");
+        assert_eq!(node_first.nodes.len(), 1);
+        assert_eq!(node_first.next_offset, Some(1));
+        let node_second = catalog
+            .node_page(
+                &source_session,
+                node_first.next_offset.expect("tree continuation"),
+                1,
+            )
+            .expect("second bounded tree page");
+        assert_eq!(node_second.nodes.len(), 1);
+        assert_eq!(node_second.next_offset, None);
+
+        let history_first = source_store
+            .load_user_message_boundaries_page(revision, 0, 1)
+            .expect("first bounded history page");
+        assert_eq!(history_first.boundaries.len(), 1);
+        assert_eq!(history_first.next_offset, Some(1));
+        let history_second = source_store
+            .load_user_message_boundaries_page(
+                revision,
+                history_first.next_offset.expect("history continuation"),
+                1,
+            )
+            .expect("second bounded history page");
+        assert_eq!(history_second.boundaries.len(), 1);
+        assert_eq!(history_second.next_offset, None);
     }
 
     #[test]
@@ -1396,6 +1801,67 @@ mod tests {
         let reopened = SessionCatalog::open(directory.path(), &config).expect("reopen catalog");
         let (_, _, reopened_config) = reopened.active_lineage().expect("active lineage");
         assert_eq!(reopened_config.model, model);
+    }
+
+    #[test]
+    fn catalog_fault_before_rename_keeps_memory_and_file_on_old_document() {
+        let (directory, mut catalog, config) = open_catalog();
+        let before = catalog.active_snapshot().expect("initial snapshot");
+
+        catalog.arm_write_fault_before_rename();
+        let error = catalog
+            .rename(&before.id, "not published")
+            .expect_err("the deterministic pre-rename fault must fail");
+        assert!(matches!(
+            error,
+            SessionError::CatalogCommit {
+                error: CatalogCommitError::NotCommitted { .. }
+            }
+        ));
+        assert_eq!(
+            catalog.active_snapshot().expect("in-memory snapshot"),
+            before,
+            "a pre-commit failure leaves the in-process document unchanged"
+        );
+        let reopened = SessionCatalog::open(directory.path(), &config).expect("reopen catalog");
+        assert_eq!(
+            reopened.active_snapshot().expect("reopened snapshot"),
+            before
+        );
+
+        // The failed metadata mutation did not poison the catalog: absent
+        // runtime quiescence, the same attachment remains usable.
+        let retried = catalog
+            .rename(&before.id, "published after retry")
+            .expect("ordinary metadata remains usable after pre-commit failure");
+        assert_eq!(retried.name, "published after retry");
+    }
+
+    #[test]
+    fn catalog_fault_after_rename_keeps_memory_coherent_and_reports_uncertain_durability() {
+        let (directory, mut catalog, config) = open_catalog();
+        let before = catalog.active_snapshot().expect("initial snapshot");
+
+        catalog.arm_write_fault_after_rename();
+        let error = catalog
+            .rename(&before.id, "visible but uncertain")
+            .expect_err("the deterministic post-rename fault must fail");
+        assert!(matches!(
+            error,
+            SessionError::CatalogCommit {
+                error: CatalogCommitError::CommittedButDurabilityUncertain { .. }
+            }
+        ));
+        let in_memory = catalog
+            .active_snapshot()
+            .expect("committed in-memory snapshot");
+        assert_eq!(in_memory.name, "visible but uncertain");
+        let reopened = SessionCatalog::open(directory.path(), &config).expect("reopen catalog");
+        assert_eq!(
+            reopened.active_snapshot().expect("reopened snapshot").name,
+            "visible but uncertain",
+            "the file crossed the visibility commit point even though durability was uncertain"
+        );
     }
 
     #[test]
@@ -1487,11 +1953,151 @@ mod tests {
             )
             .expect("publish clone");
         assert_eq!(destination.id, destination_session);
+        assert_eq!(destination.active_conversation_id, destination_conversation);
+        assert_ne!(source_conversation, destination.active_conversation_id);
+    }
+
+    #[test]
+    fn failed_clone_and_fork_publication_is_not_visible() {
+        let (_directory, mut catalog, config) = open_catalog();
+        let history = source_history();
+        let (source_conversation, source_session, source_node) = append_history(&catalog, &history);
+        let source_store = store_for(&catalog, &source_session, &source_conversation);
+        let revision = source_store.load_head().expect("source head").revision;
+        let source = HistoricalConversationSnapshot {
+            conversation_id: source_conversation,
+            surface_revision: revision,
+            messages: source_store
+                .load_surface_snapshot(revision)
+                .expect("source snapshot"),
+        };
+
+        let clone = catalog
+            .prepare_clone_session(&config, &source)
+            .expect("prepare clone");
+        catalog.arm_write_fault_before_rename();
+        assert!(matches!(
+            catalog.publish_session(
+                &clone,
+                "failed clone",
+                SessionNodeOrigin::Clone {
+                    source_session: source_session.clone(),
+                    source_node: source_node.clone(),
+                    source_surface_revision: revision,
+                },
+            ),
+            Err(SessionError::CatalogCommit {
+                error: CatalogCommitError::NotCommitted { .. }
+            })
+        ));
         assert_eq!(
-            destination.nodes[0].conversation_id,
-            destination_conversation
+            catalog
+                .list_page(None, 0, super::SESSION_LIST_PAGE_LIMIT)
+                .expect("visible Session page")
+                .sessions
+                .len(),
+            1,
+            "failed clone publication does not expose a half-created Session"
         );
-        assert_ne!(source_conversation, destination.nodes[0].conversation_id);
+
+        let (fork, _) = catalog
+            .prepare_fork_session(&config, &source, &MessageId::new("source-user-c"))
+            .expect("prepare fork");
+        catalog.arm_write_fault_before_rename();
+        assert!(matches!(
+            catalog.publish_session(
+                &fork,
+                "failed fork",
+                SessionNodeOrigin::Fork {
+                    source_session,
+                    source_node,
+                    source_surface_revision: revision,
+                    source_user_message: MessageId::new("source-user-c"),
+                },
+            ),
+            Err(SessionError::CatalogCommit {
+                error: CatalogCommitError::NotCommitted { .. }
+            })
+        ));
+        assert_eq!(
+            catalog
+                .active_snapshot()
+                .expect("source remains active")
+                .node_count,
+            1,
+            "failed fork publication does not expose a half-created node"
+        );
+    }
+
+    #[test]
+    fn clone_and_fork_use_retained_surface_revision_after_real_compaction() {
+        let (_directory, catalog, config) = open_catalog();
+        let history = source_history();
+        let (source_conversation, source_session, _source_node) =
+            append_history(&catalog, &history);
+        let source_store = store_for(&catalog, &source_session, &source_conversation);
+        let retained_revision = source_store.load_head().expect("source head").revision;
+        source_store
+            .commit_compaction(CompactionCommitInput {
+                summary: UserMessageBlock {
+                    id: MessageId::new("compaction-summary"),
+                    content: vec![text("compacted A")],
+                    source: UserSource::Runtime,
+                    kind: InboundKind::CompactionSummary,
+                    timestamp: None,
+                },
+                span: SurfaceSpan::new(
+                    MessageId::new("source-user-a"),
+                    MessageId::new("source-user-a"),
+                ),
+                expected_revision: retained_revision,
+                tokens_before: TokenMeasurement {
+                    input_tokens: 64,
+                    source: TokenMeasurementSource::Estimated,
+                },
+                estimated_tokens_after: 32,
+                attempt_id: None,
+                turn_id: None,
+                timestamp: Utc.with_ymd_and_hms(2026, 8, 21, 12, 0, 0).unwrap(),
+            })
+            .expect("real compaction commit");
+        let retained = HistoricalConversationSnapshot {
+            conversation_id: source_conversation,
+            surface_revision: retained_revision,
+            messages: source_store
+                .load_surface_snapshot(retained_revision)
+                .expect("retained pre-compaction Surface"),
+        };
+        assert_eq!(retained.messages.len(), history.len());
+
+        let prepared_clone = catalog
+            .prepare_clone_session(&config, &retained)
+            .expect("clone retained revision");
+        let clone_store = store_for(
+            &catalog,
+            &prepared_clone.session_id,
+            &prepared_clone.conversation_id,
+        );
+        assert_eq!(
+            clone_store.load_canonical().expect("clone history").len(),
+            history.len(),
+            "clone reads the retained pre-compaction revision rather than the compacted head"
+        );
+
+        let (prepared_fork, editor_content) = catalog
+            .prepare_fork_session(&config, &retained, &MessageId::new("source-user-c"))
+            .expect("fork retained revision");
+        assert_eq!(editor_content, vec![text("C")]);
+        let fork_store = store_for(
+            &catalog,
+            &prepared_fork.session_id,
+            &prepared_fork.conversation_id,
+        );
+        assert_eq!(
+            fork_store.load_canonical().expect("fork history").len(),
+            history.len() - 1,
+            "fork stops immediately before the selected retained user boundary"
+        );
     }
 
     #[test]
@@ -1592,17 +2198,29 @@ mod tests {
                 },
             )
             .expect("publish tree node");
-        assert_eq!(snapshot.nodes.len(), 2);
-        assert_eq!(snapshot.active_node, snapshot.nodes[1].id);
-        assert_ne!(snapshot.nodes[0].conversation_id, branch_conversation);
+        assert_eq!(snapshot.node_count, 2);
+        assert_eq!(snapshot.active_conversation_id, branch_conversation);
+        let nodes = catalog
+            .node_page(&source_session, 0, super::SESSION_TREE_PAGE_LIMIT)
+            .expect("tree node page")
+            .nodes;
+        assert_eq!(snapshot.active_node, nodes[1].id);
+        assert_ne!(nodes[0].conversation_id, branch_conversation);
         assert!(
-            snapshot
-                .nodes
+            nodes
                 .iter()
                 .all(|node| node.conversation_id != source_conversation
                     || node.origin == SessionNodeOrigin::New)
         );
-        assert_eq!(catalog.list().len(), 1, "tree branch stays in one Session");
+        assert_eq!(
+            catalog
+                .list_page(None, 0, super::SESSION_LIST_PAGE_LIMIT)
+                .expect("list page")
+                .sessions
+                .len(),
+            1,
+            "tree branch stays in one Session"
+        );
 
         // Session and node ordinals are independent domains. A new Session
         // after a tree branch must not reuse the branch's globally unique
@@ -1614,7 +2232,124 @@ mod tests {
         catalog
             .publish_session(&new_session, "after branch", SessionNodeOrigin::New)
             .expect("publish new session after tree branch");
-        assert_eq!(catalog.list().len(), 2);
+        assert_eq!(
+            catalog
+                .list_page(None, 0, super::SESSION_LIST_PAGE_LIMIT)
+                .expect("list page")
+                .sessions
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn tree_nodes_switch_between_independent_lineages_without_rewind() {
+        let (_directory, mut catalog, config) = open_catalog();
+        let history = source_history();
+        let (source_conversation, source_session, source_node) = append_history(&catalog, &history);
+        let source_store = store_for(&catalog, &source_session, &source_conversation);
+        let revision = source_store.load_head().expect("source head").revision;
+        let source = HistoricalConversationSnapshot {
+            conversation_id: source_conversation.clone(),
+            surface_revision: revision,
+            messages: source_store
+                .load_surface_snapshot(revision)
+                .expect("historical source"),
+        };
+
+        let (prepared_a, _) = catalog
+            .prepare_tree_node_at_user_message(
+                &source_session,
+                &config,
+                &source,
+                &MessageId::new("source-user-a"),
+            )
+            .expect("prepare branch A");
+        catalog
+            .publish_node(
+                &source_session,
+                &prepared_a,
+                source_node.clone(),
+                SessionNodeOrigin::Fork {
+                    source_session: source_session.clone(),
+                    source_node: source_node.clone(),
+                    source_surface_revision: revision,
+                    source_user_message: MessageId::new("source-user-a"),
+                },
+            )
+            .expect("publish branch A");
+        let (prepared_b, _) = catalog
+            .prepare_tree_node_at_user_message(
+                &source_session,
+                &config,
+                &source,
+                &MessageId::new("source-user-c"),
+            )
+            .expect("prepare branch B");
+        catalog
+            .publish_node(
+                &source_session,
+                &prepared_b,
+                source_node.clone(),
+                SessionNodeOrigin::Fork {
+                    source_session: source_session.clone(),
+                    source_node: source_node.clone(),
+                    source_surface_revision: revision,
+                    source_user_message: MessageId::new("source-user-c"),
+                },
+            )
+            .expect("publish branch B");
+
+        let nodes = catalog
+            .node_page(&source_session, 0, super::SESSION_TREE_PAGE_LIMIT)
+            .expect("all branch nodes")
+            .nodes;
+        assert_eq!(nodes.len(), 3);
+        let branch_a = &nodes[1];
+        let branch_b = &nodes[2];
+        assert_ne!(branch_a.conversation_id, branch_b.conversation_id);
+        let destination_store_a = store_for(&catalog, &source_session, &branch_a.conversation_id);
+        let destination_store_b = store_for(&catalog, &source_session, &branch_b.conversation_id);
+        destination_store_a
+            .append_canonical(&user("branch-a-late", "A later"))
+            .expect("mutate branch A");
+        destination_store_b
+            .append_canonical(&user("branch-b-late", "B later"))
+            .expect("mutate branch B");
+
+        let selected_a = catalog
+            .select(&source_session, Some(&branch_a.id))
+            .expect("select branch A");
+        assert_eq!(selected_a.active_conversation_id, branch_a.conversation_id);
+        let selected_b = catalog
+            .select(&source_session, Some(&branch_b.id))
+            .expect("select branch B");
+        assert_eq!(selected_b.active_conversation_id, branch_b.conversation_id);
+        let selected_a_again = catalog
+            .select(&source_session, Some(&branch_a.id))
+            .expect("select branch A again");
+        assert_eq!(
+            selected_a_again.active_conversation_id,
+            branch_a.conversation_id
+        );
+
+        let ids_a = destination_store_a
+            .load_canonical()
+            .expect("branch A history")
+            .into_iter()
+            .map(|message| super::message_id_of(&message))
+            .collect::<BTreeSet<_>>();
+        let ids_b = destination_store_b
+            .load_canonical()
+            .expect("branch B history")
+            .into_iter()
+            .map(|message| super::message_id_of(&message))
+            .collect::<BTreeSet<_>>();
+        assert!(ids_a.contains(&MessageId::new("branch-a-late")));
+        assert!(!ids_a.contains(&MessageId::new("branch-b-late")));
+        assert!(ids_b.contains(&MessageId::new("branch-b-late")));
+        assert!(!ids_b.contains(&MessageId::new("branch-a-late")));
     }
 
     #[test]
