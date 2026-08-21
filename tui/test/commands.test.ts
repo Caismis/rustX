@@ -12,12 +12,14 @@ import { describe, it } from "node:test";
 import { SlashCommandAutocompleteProvider, commandPrefix } from "../src/commands/autocomplete.ts";
 import { CommandDispatcher } from "../src/commands/dispatcher.ts";
 import { COMMANDS, parseCommandLine } from "../src/commands/registry.ts";
+import { emptyPresentationState } from "../src/presentation/projection.ts";
 import { RuntimeClientConnection } from "../src/runtime/connection.ts";
 import { RuntimeClientAttachment } from "../src/runtime/attachment.ts";
 import { TransientFeedbackSurface } from "../src/ui/components/transient-feedback.ts";
 import { ArgumentError, parseArguments } from "../src/cli.ts";
 import {
   attemptModel,
+  catalogModel,
   capabilities,
   sessionModel,
   sessionView,
@@ -33,6 +35,17 @@ const NO_DIAGNOSTICS = () => ({
   pendingRequests: 0,
   resyncCount: 0,
 });
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
 
 async function harness(initial = snapshot()) {
   const peer = new ScriptedPeer();
@@ -322,6 +335,53 @@ describe("CommandDispatcher", () => {
       assert.match(rendered, /next attempt/);
       assert.ok(surface.render(80).length <= 3);
     }
+  });
+
+  it("keeps a two-phase model command on its admitted attachment", async () => {
+    const catalogStarted = deferred<undefined>();
+    const catalogResponse = deferred<{
+      models: ReturnType<typeof catalogModel>[];
+    }>();
+    let aCatalog = 0;
+    let aModelSet = 0;
+    let bModelSet = 0;
+    const sessionA = {
+      state: emptyPresentationState(sessionModel("alpha/model-a")),
+      modelCatalog: async () => {
+        aCatalog += 1;
+        catalogStarted.resolve(undefined);
+        return catalogResponse.promise;
+      },
+      modelSet: async () => {
+        aModelSet += 1;
+        return sessionModel("beta/model-b");
+      },
+    } as unknown as RuntimeClientAttachment;
+    const sessionB = {
+      state: emptyPresentationState(sessionModel("alpha/model-a")),
+      modelSet: async () => {
+        bModelSet += 1;
+        return sessionModel("beta/model-b");
+      },
+    } as unknown as RuntimeClientAttachment;
+    const dispatcher = new CommandDispatcher({
+      session: sessionA,
+      diagnostics: NO_DIAGNOSTICS,
+    });
+
+    const changing = dispatcher.submit("/model beta/model-b");
+    await catalogStarted.promise;
+
+    // Rebinding changes admission for future invocations while the admitted
+    // two-phase command is still waiting on A's catalog response.
+    dispatcher.setSession(sessionB);
+    catalogResponse.resolve({ models: [catalogModel("beta/model-b")] });
+
+    const outcome = await changing;
+    assert.equal(outcome.kind, "transient");
+    assert.equal(aCatalog, 1);
+    assert.equal(aModelSet, 1, "the admitted command completes on A");
+    assert.equal(bModelSet, 0, "the admitted command must never retarget B");
   });
 
   it("rejects a model the runtime catalog does not offer", async () => {

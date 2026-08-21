@@ -195,6 +195,12 @@ transcript remains reconstructed only from runtime-published message facts;
 client output never becomes a `MessageBlock`, a model request payload, or a
 Runtime Client protocol event.
 
+Command routing has a separate ownership boundary: rebinding the dispatcher
+changes admission only for future invocations. Each admitted command captures
+its `RuntimeClientAttachment` before its first await and passes that exact
+attachment through every later phase, so a catalog response from attachment A
+cannot cause a follow-up mutation on attachment B.
+
 ## Commands
 
 The TUI's current slash-command surface is grouped by purpose:
