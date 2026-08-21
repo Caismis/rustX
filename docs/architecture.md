@@ -1468,14 +1468,17 @@ grep   { pattern, path?, glob?, ignoreCase?, literal?, context?, limit? }
 bash   { command, timeout? }                  timeout is in seconds
 ```
 
-For Read, Write, Edit, Grep, and Glob, a relative model path is joined to
-the authoritative execution cwd (`Workspace::root()` in the current runtime)
-and an absolute path is used as an ordinary host filesystem path. These five
-tools do not impose the locator workspace-containment policy. `Workspace`
-remains the runtime/Bash cwd authority. `tools/locator.rs` resolves
-runtime-advertised managed-output paths for reads, while `ManagedToolOutput`
-owns the narrow model-mutation rejection; neither is a hidden second policy
-for ordinary native file paths. Final-component symlinks
+For Read, Write, Edit, Grep, and Glob, a relative model path is interpreted
+against and lexically normalized from the authoritative execution cwd
+(`Workspace::root()` in the current runtime); an absolute path is likewise
+lexically normalized as an ordinary host filesystem path. `.` and `..` are
+resolved before filesystem existence or symlink behavior, so missing
+intermediate components cannot change path meaning. These five tools do not
+impose the locator workspace-containment policy. `Workspace` remains the
+runtime/Bash cwd authority. `tools/locator.rs` resolves runtime-advertised
+managed-output paths for reads, while `ManagedToolOutput` owns the narrow
+model-mutation rejection; neither is a hidden second policy for ordinary
+native file paths. Final-component symlinks
 are followed for atomic Write/Edit commits so the link itself is not
 replaced.
 

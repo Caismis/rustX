@@ -1177,8 +1177,9 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
 
 - Native Read/Write/Edit/Grep/Glob resolve relative model paths against the
   authoritative execution cwd (`Workspace::root()`) and use absolute paths
-  as ordinary host filesystem paths. They no longer impose workspace
-  containment. Workspace remains the runtime/Bash cwd authority, while
+  as ordinary host filesystem paths. Both forms are lexically normalized for
+  `.` and `..` before filesystem behavior, without requiring intermediate
+  components to exist. They no longer impose workspace containment. Workspace remains the runtime/Bash cwd authority, while
   `locator.rs` remains the runtime read resolver for advertised managed-output
   paths and unrelated runtime invariants; `ManagedToolOutput` owns the narrow
   model-mutation rejection for that namespace. Final-component symlinks are

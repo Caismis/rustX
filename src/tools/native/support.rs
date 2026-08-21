@@ -5,17 +5,54 @@ use std::path::{Path, PathBuf};
 use crate::tools::managed_output::ManagedToolOutput;
 use crate::tools::types::{ToolExecutionResult, ToolExecutionStatus, ToolResultContent};
 
-/// Resolves one model-facing file path against the authoritative execution
-/// directory. Absolute paths remain host filesystem paths; relative paths are
-/// interpreted from `cwd` without applying a containment policy.
+/// Interprets one model-facing file path against the authoritative execution
+/// directory and lexically normalizes it.
+///
+/// This is a syntax-only boundary: it resolves relative paths against `cwd`,
+/// removes `.` and `..` components without consulting the filesystem, and
+/// leaves symlink/effective-target resolution to the mutation layer. Absolute
+/// paths remain ordinary host filesystem paths and no containment policy is
+/// applied.
 #[must_use]
-pub fn resolve_path(cwd: &Path, requested: &str) -> PathBuf {
+pub fn interpret_path(cwd: &Path, requested: &str) -> PathBuf {
     let path = Path::new(requested);
-    if path.is_absolute() {
+    let interpreted = if path.is_absolute() {
         path.to_path_buf()
     } else {
         cwd.join(path)
+    };
+    lexical_normalize(&interpreted)
+}
+
+/// Removes `.` and `..` components without traversing the filesystem.
+///
+/// The native execution cwd is absolute, so the result of
+/// [`interpret_path`] is absolute. The component handling nevertheless keeps
+/// relative `..` components when called with a relative path, which preserves
+/// the standard `Path` semantics and avoids string-based path rewriting.
+#[must_use]
+fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            std::path::Component::RootDir => normalized.push(component.as_os_str()),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                let can_pop = normalized
+                    .components()
+                    .next_back()
+                    .is_some_and(|last| matches!(last, std::path::Component::Normal(_)));
+                if can_pop {
+                    normalized.pop();
+                } else if !normalized.has_root() {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            std::path::Component::Normal(name) => normalized.push(name),
+        }
     }
+    normalized
 }
 
 /// One filesystem target prepared for a native whole-file mutation.
@@ -42,11 +79,13 @@ impl MutationTarget {
 /// This is deliberately not a workspace sandbox. `ManagedToolOutput` owns
 /// the only model-mutation exception: its runtime-owned namespace is
 /// read-only even though Read/Grep/Glob can inspect it.
+/// `interpreted` is the already absolute, lexically normalized result of
+/// [`interpret_path`].
 pub fn prepare_mutation_target(
-    requested: &Path,
+    interpreted: &Path,
     tool_output: &ManagedToolOutput,
 ) -> Result<MutationTarget, String> {
-    let effective = resolve_effective_path(requested)?;
+    let effective = resolve_effective_path(interpreted)?;
     tool_output
         .ensure_model_mutation_allowed(&effective)
         .map_err(|error| error.to_string())?;
@@ -86,13 +125,13 @@ pub fn atomic_commit(target: &MutationTarget, content: &[u8]) -> Result<(), Stri
 /// Resolves all existing symlink components and preserves the effective
 /// destination of a dangling final symlink or a not-yet-created descendant.
 fn resolve_effective_path(target: &Path) -> Result<PathBuf, String> {
-    let mut candidate = target.to_path_buf();
+    let mut candidate = lexical_normalize(target);
     for _ in 0..40 {
         match std::fs::symlink_metadata(&candidate) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 let link = std::fs::read_link(&candidate)
                     .map_err(|error| format!("cannot resolve {}: {error}", target.display()))?;
-                candidate = if link.is_absolute() {
+                let destination = if link.is_absolute() {
                     link
                 } else {
                     candidate
@@ -100,6 +139,12 @@ fn resolve_effective_path(target: &Path) -> Result<PathBuf, String> {
                         .ok_or_else(|| format!("{} has no parent directory", target.display()))?
                         .join(link)
                 };
+                // Symlink targets are still path syntax. Normalize their
+                // lexical `.`/`..` components before checking existence so a
+                // dangling destination has the same deterministic effective
+                // target regardless of whether an intermediate component
+                // happens to exist.
+                candidate = lexical_normalize(&destination);
             }
             Ok(_) => {
                 return std::fs::canonicalize(&candidate)

@@ -13,7 +13,7 @@ use futures_util::future::BoxFuture;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
 use crate::tools::native::support::{
-    atomic_commit, failed_result, prepare_mutation_target, resolve_path, success_text,
+    atomic_commit, failed_result, interpret_path, prepare_mutation_target, success_text,
 };
 use crate::tools::types::ToolInvocationPolicy;
 use crate::tools::types::{ToolExecutionResult, ToolInvocation};
@@ -58,7 +58,7 @@ fn run_write(
         Ok(input) => input,
         Err(error) => return failed_result(error),
     };
-    let requested = resolve_path(context.workspace.root(), &input.path);
+    let requested = interpret_path(context.workspace.root(), &input.path);
     let target = match prepare_mutation_target(&requested, context.tool_output) {
         Ok(target) => target,
         Err(error) => return failed_result(error),

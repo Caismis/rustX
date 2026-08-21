@@ -16,7 +16,7 @@ use unicode_normalization::char::{canonical_combining_class, compose, decompose_
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
 use crate::tools::native::support::{
-    atomic_commit, failed_result, prepare_mutation_target, resolve_path, success_text,
+    atomic_commit, failed_result, interpret_path, prepare_mutation_target, success_text,
 };
 use crate::tools::types::ToolInvocationPolicy;
 use crate::tools::types::{ToolExecutionResult, ToolInvocation};
@@ -62,7 +62,7 @@ fn run_edit(
         Ok(input) => input,
         Err(error) => return failed_result(error),
     };
-    let requested = resolve_path(context.workspace.root(), &input.path);
+    let requested = interpret_path(context.workspace.root(), &input.path);
     let target = match prepare_mutation_target(&requested, context.tool_output) {
         Ok(target) => target,
         Err(error) => return failed_result(error),
@@ -161,9 +161,15 @@ fn plan(original: &str, edits: &[EditReplacement], path: &str) -> Result<Planned
                         return Err(ambiguous_error(path, index, edits.len(), count));
                     }
                 };
-                projection
-                    .original_range(&fuzzy_range)
-                    .ok_or_else(|| not_found_error(path, index, edits.len()))?
+                match projection.original_range(&fuzzy_range) {
+                    Ok(range) => range,
+                    Err(FuzzyRangeError::Invalid) => {
+                        return Err(not_found_error(path, index, edits.len()));
+                    }
+                    Err(FuzzyRangeError::Unsafe) => {
+                        return Err(unsafe_fuzzy_error(path, index, edits.len()));
+                    }
+                }
             }
         };
         planned.push(PlannedEdit {
@@ -241,6 +247,18 @@ fn no_change_error(path: &str, total: usize) -> String {
     }
 }
 
+fn unsafe_fuzzy_error(path: &str, index: usize, total: usize) -> String {
+    if total == 1 {
+        format!(
+            "Could not safely map the fuzzy match in {path} to one original source range. Please provide more context."
+        )
+    } else {
+        format!(
+            "Could not safely map edits[{index}] in {path} to one original source range. Please provide more context."
+        )
+    }
+}
+
 fn apply_replacements(content: &str, replacements: &[PlannedEdit]) -> String {
     let mut result = content.to_owned();
     for replacement in replacements.iter().rev() {
@@ -263,6 +281,11 @@ struct FuzzyProjection {
     text: String,
     byte_starts: Vec<usize>,
     source_spans: Vec<SourceSpan>,
+}
+
+enum FuzzyRangeError {
+    Invalid,
+    Unsafe,
 }
 
 impl FuzzyProjection {
@@ -311,23 +334,49 @@ impl FuzzyProjection {
         }
     }
 
-    fn original_range(&self, normalized_range: &Range<usize>) -> Option<Range<usize>> {
+    fn original_range(
+        &self,
+        normalized_range: &Range<usize>,
+    ) -> Result<Range<usize>, FuzzyRangeError> {
         if normalized_range.is_empty() || normalized_range.end > self.text.len() {
-            return None;
+            return Err(FuzzyRangeError::Invalid);
         }
         let start = self
             .byte_starts
             .binary_search(&normalized_range.start)
-            .ok()?;
+            .map_err(|_| FuzzyRangeError::Invalid)?;
         let end = if normalized_range.end == self.text.len() {
             self.source_spans.len()
         } else {
-            self.byte_starts.binary_search(&normalized_range.end).ok()?
+            self.byte_starts
+                .binary_search(&normalized_range.end)
+                .map_err(|_| FuzzyRangeError::Invalid)?
         };
         if start >= end {
-            return None;
+            return Err(FuzzyRangeError::Invalid);
         }
-        Some(self.source_spans[start].start..self.source_spans[end - 1].end)
+        let matched_spans = &self.source_spans[start..end];
+        let Some(candidate_start) = matched_spans.iter().map(|span| span.start).min() else {
+            return Err(FuzzyRangeError::Invalid);
+        };
+        let Some(candidate_end) = matched_spans.iter().map(|span| span.end).max() else {
+            return Err(FuzzyRangeError::Invalid);
+        };
+
+        // A normalized scalar outside the selected match must not claim any
+        // source byte that the candidate replacement would remove. This is
+        // essential for compatibility expansions such as `ﬃ` -> `ffi` and
+        // for canonical reordering, where a normalized substring can span
+        // source material represented by another normalized scalar.
+        let unsafe_overlap = self.source_spans.iter().enumerate().any(|(index, span)| {
+            let outside_match = index < start || index >= end;
+            outside_match && span.start < candidate_end && candidate_start < span.end
+        });
+        if unsafe_overlap {
+            return Err(FuzzyRangeError::Unsafe);
+        }
+
+        Ok(candidate_start..candidate_end)
     }
 }
 

@@ -27,8 +27,9 @@
 //! inherited:
 //!
 //! - **Root resolution.** An omitted `path` means the execution cwd; a
-//!   relative path is joined to that cwd and an absolute path is used as a
-//!   host filesystem path. Enumeration never leaves the resolved root.
+//!   relative path is interpreted against that cwd and lexically normalized,
+//!   while an absolute path is lexically normalized as an ordinary host
+//!   filesystem path. Enumeration never leaves the resolved root.
 //! - **Ignore files are not applied.** `.gitignore`, `.ignore`, git's global
 //!   excludes, and `.git/info/exclude` have no effect. A file under the
 //!   resolved root is part of the search universe because it exists, not
@@ -59,7 +60,7 @@ mod traversal;
 
 use std::path::PathBuf;
 
-use crate::tools::native::support::resolve_path;
+use crate::tools::native::support::interpret_path;
 use std::path::Path;
 
 pub(super) use traversal::SearchFile;
@@ -84,10 +85,10 @@ impl SearchRoot {
     /// Returns a deterministic filesystem diagnostic when the path cannot be
     /// resolved or is neither a file nor a directory.
     pub(super) fn resolve(cwd: &Path, path: Option<&str>) -> Result<Self, String> {
-        let Some(requested) = path else {
-            return Ok(Self::Directory(cwd.to_path_buf()));
-        };
-        let absolute = resolve_path(cwd, requested);
+        let absolute = path.map_or_else(
+            || interpret_path(cwd, "."),
+            |requested| interpret_path(cwd, requested),
+        );
         if absolute.is_dir() {
             return Ok(Self::Directory(absolute));
         }

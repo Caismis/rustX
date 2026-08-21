@@ -13,7 +13,7 @@ use std::fmt::Write as _;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::{MAX_READ_LINES, NATIVE_FILE_TOOL_MAX_BYTES};
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
-use crate::tools::native::support::{failed_result, resolve_path, success_text};
+use crate::tools::native::support::{failed_result, interpret_path, success_text};
 use crate::tools::types::ToolInvocationPolicy;
 use crate::tools::types::{ToolExecutionResult, ToolInvocation, TruncationState};
 
@@ -57,7 +57,7 @@ fn run_read(
         Ok(input) => input,
         Err(error) => return failed_result(error),
     };
-    let target = resolve_path(context.workspace.root(), &input.path);
+    let target = interpret_path(context.workspace.root(), &input.path);
     let bytes = match std::fs::read(&target) {
         Ok(bytes) => bytes,
         Err(error) => return failed_result(format!("cannot read {}: {error}", target.display())),

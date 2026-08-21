@@ -232,6 +232,99 @@ async fn read_normalizes_zero_offset_and_reports_user_page_continuation() {
 }
 
 #[tokio::test]
+async fn native_tools_interpret_dot_and_dotdot_lexically_before_filesystem_access() {
+    let fixture = native_fixture();
+    let root = fixture.runtime.workspace().root();
+
+    let write = run_tool(
+        &fixture,
+        "write",
+        serde_json::json!({
+            "path": "missing/../target.txt",
+            "content": "initial"
+        }),
+    )
+    .await;
+    assert!(matches!(write.status, ToolExecutionStatus::Success));
+    assert_eq!(
+        std::fs::read_to_string(root.join("target.txt")).unwrap(),
+        "initial"
+    );
+    assert!(!root.join("missing").exists());
+
+    let read = run_tool(
+        &fixture,
+        "read",
+        serde_json::json!({"path": "./missing/../target.txt"}),
+    )
+    .await;
+    assert_eq!(text_content(&read), "initial");
+
+    let edit_result = run_tool(
+        &fixture,
+        "edit",
+        serde_json::json!({
+            "path": "./sub/../target.txt",
+            "edits": [edit("initial", "edited")]
+        }),
+    )
+    .await;
+    assert!(matches!(edit_result.status, ToolExecutionStatus::Success));
+    assert_eq!(
+        std::fs::read_to_string(root.join("target.txt")).unwrap(),
+        "edited"
+    );
+    assert!(!root.join("sub").exists());
+
+    let absolute = fixture
+        .dir()
+        .path()
+        .join("missing-absolute/../absolute.txt");
+    let absolute_result = run_tool(
+        &fixture,
+        "write",
+        serde_json::json!({
+            "path": absolute.to_str().expect("utf8 absolute path"),
+            "content": "absolute"
+        }),
+    )
+    .await;
+    assert!(matches!(
+        absolute_result.status,
+        ToolExecutionStatus::Success
+    ));
+    assert_eq!(
+        std::fs::read_to_string(fixture.dir().path().join("absolute.txt")).unwrap(),
+        "absolute"
+    );
+    assert!(!fixture.dir().path().join("missing-absolute").exists());
+
+    let search_root = root.join("search");
+    std::fs::create_dir_all(&search_root).expect("search root");
+    std::fs::write(search_root.join("hit.txt"), "needle\n").expect("search fixture");
+    let grep = run_tool(
+        &fixture,
+        "grep",
+        serde_json::json!({
+            "pattern": "needle",
+            "path": "missing/../search"
+        }),
+    )
+    .await;
+    assert_eq!(text_content(&grep), "hit.txt:1: needle");
+    let glob = run_tool(
+        &fixture,
+        "glob",
+        serde_json::json!({
+            "pattern": "*.txt",
+            "path": "./missing/../search"
+        }),
+    )
+    .await;
+    assert_eq!(text_content(&glob), "hit.txt");
+}
+
+#[tokio::test]
 async fn read_uses_contiguous_complete_line_head_for_line_and_byte_limits() {
     let fixture = native_fixture();
     let exact_lines: Vec<String> = (1..=2000).map(|index| format!("exact-{index}")).collect();
@@ -497,6 +590,19 @@ async fn managed_output_descendants_are_rejected_before_parent_creation() {
     .await;
     assert_failed_contains(&lexical_result, "managed tool-output root");
     assert!(!root.join("results/lexical.txt").exists());
+
+    let lexical_missing = root.join("tasks/missing/../results/lexical-missing.txt");
+    let lexical_missing_result = run_tool(
+        &fixture,
+        "write",
+        serde_json::json!({
+            "path": lexical_missing.to_str().expect("utf8 lexical managed path"),
+            "content": "blocked"
+        }),
+    )
+    .await;
+    assert_failed_contains(&lexical_missing_result, "managed tool-output root");
+    assert!(!root.join("tasks/missing").exists());
 }
 
 #[cfg(unix)]
@@ -558,6 +664,21 @@ async fn managed_output_symlink_mutations_are_rejected_without_side_effects() {
     .await;
     assert_failed_contains(&dangling_result, "managed tool-output root");
     assert!(!dangling_target.exists());
+
+    let lexical_link = workspace_path(&fixture, "managed-lexical-link");
+    symlink(managed_root.join("tasks"), &lexical_link).expect("lexical ancestor symlink");
+    let lexical_target = lexical_link.join("../managed-lexical-link/lexical-managed.txt");
+    let lexical_result = run_tool(
+        &fixture,
+        "write",
+        serde_json::json!({
+            "path": lexical_target.to_str().expect("utf8 lexical symlink path"),
+            "content": "blocked"
+        }),
+    )
+    .await;
+    assert_failed_contains(&lexical_result, "managed tool-output root");
+    assert!(!managed_root.join("tasks/lexical-managed.txt").exists());
 }
 
 #[cfg(unix)]
@@ -583,6 +704,41 @@ async fn write_creates_parents_for_a_dangling_symlink_destination() {
             .file_type()
             .is_symlink()
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn dangling_symlink_destination_with_lexical_parent_is_written_through() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = native_fixture();
+    let existing_parent = fixture.dir().path().join("symlink-parent");
+    std::fs::create_dir_all(&existing_parent).expect("symlink parent");
+    let destination = existing_parent.join("../symlink-destination/deep/file.txt");
+    let link = workspace_path(&fixture, "lexical-dangling-link.txt");
+    symlink(&destination, &link).expect("dangling lexical destination link");
+
+    let result = run_tool(
+        &fixture,
+        "write",
+        serde_json::json!({
+            "path": "lexical-dangling-link.txt",
+            "content": "written"
+        }),
+    )
+    .await;
+    assert!(matches!(result.status, ToolExecutionStatus::Success));
+    assert_eq!(
+        std::fs::read_to_string(
+            fixture
+                .dir()
+                .path()
+                .join("symlink-destination/deep/file.txt")
+        )
+        .unwrap(),
+        "written"
+    );
+    assert_eq!(std::fs::read_to_string(link).unwrap(), "written");
 }
 
 // ---------------------------------------------------------------------------
@@ -808,6 +964,84 @@ async fn edit_fuzzy_mapping_preserves_unrelated_source_representation() {
         std::fs::read_to_string(hangul_path).unwrap(),
         "before X after"
     );
+}
+
+#[tokio::test]
+async fn edit_rejects_unsafe_partial_normalization_ranges_without_mutation() {
+    let fixture = native_fixture();
+
+    let expansion_path = workspace_path(&fixture, "unsafe-expansion.txt");
+    let expansion_original = "before ﬃ after";
+    std::fs::write(&expansion_path, expansion_original).expect("expansion fixture");
+    let partial = run_tool(
+        &fixture,
+        "edit",
+        serde_json::json!({
+            "path": "unsafe-expansion.txt",
+            "edits": [edit("ff", "X")]
+        }),
+    )
+    .await;
+    assert_failed_contains(&partial, "safely map");
+    assert_eq!(
+        std::fs::read_to_string(&expansion_path).unwrap(),
+        expansion_original
+    );
+
+    let combining_path = workspace_path(&fixture, "unsafe-combining.txt");
+    let combining_original = "before a\u{301}\u{323} after";
+    std::fs::write(&combining_path, combining_original).expect("combining fixture");
+    let partial = run_tool(
+        &fixture,
+        "edit",
+        serde_json::json!({
+            "path": "unsafe-combining.txt",
+            "edits": [edit("ạ", "X")]
+        }),
+    )
+    .await;
+    assert_failed_contains(&partial, "safely map");
+    assert_eq!(
+        std::fs::read_to_string(&combining_path).unwrap(),
+        combining_original
+    );
+}
+
+#[tokio::test]
+async fn edit_accepts_safe_full_normalized_ranges_but_rejects_unsafe_mixed_edits_atomically() {
+    let fixture = native_fixture();
+
+    let safe_path = workspace_path(&fixture, "safe-combining.txt");
+    std::fs::write(&safe_path, "before a\u{301}\u{323} after").expect("safe fixture");
+    let safe = run_tool(
+        &fixture,
+        "edit",
+        serde_json::json!({
+            "path": "safe-combining.txt",
+            "edits": [edit("ạ\u{301}", "X")]
+        }),
+    )
+    .await;
+    assert!(matches!(safe.status, ToolExecutionStatus::Success));
+    assert_eq!(
+        std::fs::read_to_string(safe_path).unwrap(),
+        "before X after"
+    );
+
+    let mixed_path = workspace_path(&fixture, "unsafe-mixed.txt");
+    let mixed_original = "exact\nbefore ﬃ after";
+    std::fs::write(&mixed_path, mixed_original).expect("mixed fixture");
+    let mixed = run_tool(
+        &fixture,
+        "edit",
+        serde_json::json!({
+            "path": "unsafe-mixed.txt",
+            "edits": [edit("exact", "changed"), edit("ff", "X")]
+        }),
+    )
+    .await;
+    assert_failed_contains(&mixed, "safely map");
+    assert_eq!(std::fs::read_to_string(mixed_path).unwrap(), mixed_original);
 }
 
 #[tokio::test]
