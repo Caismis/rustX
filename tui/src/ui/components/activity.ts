@@ -3,7 +3,7 @@
  *
  * ```text
  * transcript   what was said, and every tool call that was said
- * activity     background executions, pending approvals, orphaned executions
+ * activity     background executions, pending HITL interactions, orphaned executions
  * ```
  *
  * A foreground tool call is deliberately *not* here. It belongs to the
@@ -43,6 +43,7 @@ import type { PresentationState } from "../../presentation/state.ts";
 import type { ToolCorrelation } from "../../presentation/tools.ts";
 import {
   activeBackground,
+  focusedInteraction,
   isBackgroundTerminal,
   originLabel,
 } from "../../presentation/selectors.ts";
@@ -182,14 +183,33 @@ export function renderInteractionSection(
   if (state.pendingInteractions.length === 0) {
     return "";
   }
+  const approvals = state.pendingInteractions.filter(
+    (interaction) => interaction.kind.type === "approval",
+  ).length;
+  const questions = state.pendingInteractions.length - approvals;
+  const header =
+    questions === 0
+      ? `Approval required · ${approvals} pending`
+      : approvals === 0
+        ? `Answer required · ${questions} pending`
+        : `Human input required · ${state.pendingInteractions.length} pending`;
+  const commands: string[] = [];
+  if (approvals > 0) {
+    commands.push("/approve <interaction-id> <allow|deny> [reason]");
+  }
+  if (questions > 0) {
+    commands.push("/answer <interaction-id> <choice|text> <value>");
+  }
+  const focused = focusedInteraction(state);
   return [
-    role.pending(
-      `Approval required · ${state.pendingInteractions.length} pending`,
-    ),
+    role.pending(header),
+    ...(focused === undefined
+      ? []
+      : [role.accent(`Focused interaction: ${focused.id} · ordinary input answers this request`)]),
     ...state.pendingInteractions.map((interaction) =>
-      renderInteraction(interaction, preferences),
+      renderInteraction(interaction, preferences, interaction.id === focused?.id),
     ),
-    role.meta("/approve <interaction-id> <allow|deny> [reason]"),
+    ...commands.map((command) => role.meta(command)),
     role.meta("/expand interaction <interaction-id> to see the full request"),
   ].join("\n");
 }
@@ -213,9 +233,19 @@ export function renderInteractionSection(
 function renderInteraction(
   interaction: InteractionRequest,
   preferences: PresentationPreferences,
+  focused: boolean,
 ): string {
-  if (interaction.kind.type !== "approval") {
-    return `${role.pending("?")} interaction ${interaction.id}`;
+  if (interaction.kind.type === "question") {
+    const choices =
+      interaction.kind.choices === undefined || interaction.kind.choices.length === 0
+        ? []
+        : interaction.kind.choices.map((choice, index) => `${index + 1}. ${choice}`);
+    return [
+      `${focused ? role.accent("→") : role.pending("?")} ${role.toolTitle(style.bold("Question"))} ${role.meta(interaction.id)}`,
+      `  ${role.meta(clipText(interaction.kind.prompt, HEADER_BUDGET.maxChars))}`,
+      ...choices.map((choice) => `  ${role.accent(choice)}`),
+      `  ${role.meta(interaction.kind.allow_free_text ? "free text allowed" : "choose one listed value")}`,
+    ].join("\n");
   }
   const kind = interaction.kind;
   // Keyed by `InteractionId`, its own preference domain. A `ToolCallId` or a
@@ -228,7 +258,7 @@ function renderInteraction(
     budget: preferences.previewBudget,
   };
   return [
-    `${role.pending("?")} ${role.toolTitle(style.bold(clipText(kind.tool_name, HEADER_BUDGET.maxChars)))} ${role.meta(interaction.id)}`,
+    `${focused ? role.accent("→") : role.pending("?")} ${role.toolTitle(style.bold(clipText(kind.tool_name, HEADER_BUDGET.maxChars)))} ${role.meta(interaction.id)}`,
     `  ${role.meta(`${kind.mode} · ${originLabel(kind.origin)} · call ${kind.call_id}`)}`,
     ...preview(toLines(kind.reason), context, "reason line").map(
       (line) => `  ${line}`,

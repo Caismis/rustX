@@ -138,20 +138,20 @@ mod unix_tests {
                 mode: rustx::tools::types::ToolInvocationMode::Foreground,
                 arguments: serde_json::json!({}),
             },
-            rustx::tools::executor::ToolExecutionContext {
-                conversation_id: bundle.conversation_id(),
-                execution_id: None,
-                cancellation: rustx::runtime::ExecutionCancellation::detached(
+            rustx::tools::executor::ToolExecutionContext::new(
+                bundle.conversation_id(),
+                None,
+                rustx::runtime::ExecutionCancellation::detached(
                     rustx::runtime::CancellationSignal::new(),
                     rustx::runtime::types::CancellationReason::UserRequested,
                 ),
-                workspace: bundle.workspace(),
-                progress: &NoProgress,
-                artifacts: bundle.artifacts(),
-                tool_output: bundle.tool_output(),
-                environment: bundle.environment(),
-                skill_resources: None,
-            },
+                bundle.workspace(),
+                &NoProgress,
+                bundle.artifacts(),
+                bundle.tool_output(),
+                bundle.environment(),
+                None,
+            ),
         )
         .await
     }

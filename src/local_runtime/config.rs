@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::context::SessionContextPolicy;
 use crate::model::session::SessionModelConfig;
+use crate::runtime::ApprovalMode;
 use crate::runtime::identity::{AgentId, McpServerId};
 use crate::tools::environment::{ToolEnvironment, ToolEnvironmentError};
 use crate::tools::mcp::{McpServerBinding, McpServerBindings, McpTransportConfig};
@@ -41,6 +42,10 @@ pub struct CurrentRuntimeConfig {
     pub agent_id: AgentId,
     /// The default model used when a brand-new Session is created.
     pub model: SessionModelConfig,
+    /// The current runtime-wide approval control mode. This is launch
+    /// configuration, never Session history.
+    #[serde(default)]
+    pub approval_mode: ApprovalMode,
     /// The current IANA timezone used by the temporal Agent Status
     /// section. The process/system local timezone is never consulted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -57,7 +62,8 @@ pub struct CurrentRuntimeConfig {
     /// copy-pasteable from an MCP server's own documentation.
     #[serde(default)]
     pub mcp_tool_policies: BTreeMap<McpServerId, InvocationPolicyDocument>,
-    /// The per-tool execution policies of the native tool plane.
+    /// The per-tool execution, concurrency, and approval policies of the
+    /// native tool plane.
     #[serde(default)]
     pub native_tools: NativeToolPoliciesDocument,
     /// The current base authorized tool environment.
@@ -79,6 +85,7 @@ const fn default_schema_version() -> u32 {
 fn default_tools() -> Vec<String> {
     [
         "background_task",
+        "ask_user",
         "read",
         "write",
         "edit",
@@ -239,10 +246,12 @@ pub struct ContextPolicyDocument {
     pub summary_output_cap: Option<u32>,
 }
 
-/// The per-tool execution policies of the native tool plane.
+/// The per-tool execution, concurrency, and approval policies of the native
+/// tool plane.
 ///
-/// The runtime intrinsic `background_task` is deliberately outside this set:
-/// its foreground-only sequential policy is enforced by the registry itself.
+/// The runtime intrinsics `background_task` and `ask_user` are deliberately
+/// outside this set: their fixed foreground-only, sequential, approval-never
+/// policies are enforced by the registry itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 pub struct NativeToolPoliciesDocument {
@@ -283,13 +292,41 @@ pub struct InvocationPolicyDocument {
     pub execution: ExecutionPolicyDocument,
     /// In-batch scheduling policy.
     pub concurrency: ConcurrencyPolicyDocument,
+    /// Human approval behavior for otherwise eligible calls.
+    pub approval: ApprovalPolicyDocument,
 }
 
 impl InvocationPolicyDocument {
     /// The runtime policy this document expresses.
     #[must_use]
     pub const fn to_policy(self) -> ToolInvocationPolicy {
-        ToolInvocationPolicy::new(self.execution.to_policy(), self.concurrency.to_policy())
+        ToolInvocationPolicy::new(
+            self.execution.to_policy(),
+            self.concurrency.to_policy(),
+            self.approval.to_policy(),
+        )
+    }
+}
+
+/// The configurable HITL approval policy of one Tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalPolicyDocument {
+    /// Execute without an approval interaction.
+    #[default]
+    Never,
+    /// Require an approval interaction before execution.
+    Always,
+}
+
+impl ApprovalPolicyDocument {
+    /// The runtime policy this document expresses.
+    #[must_use]
+    pub const fn to_policy(self) -> crate::tools::types::ToolApprovalPolicy {
+        match self {
+            Self::Never => crate::tools::types::ToolApprovalPolicy::Never,
+            Self::Always => crate::tools::types::ToolApprovalPolicy::Always,
+        }
     }
 }
 
@@ -529,6 +566,7 @@ mod tests {
     #[test]
     fn minimal_configuration_parses() {
         let config = CurrentRuntimeConfig::from_json_slice(MINIMAL.as_bytes()).expect("valid");
+        assert_eq!(config.approval_mode, crate::runtime::ApprovalMode::Policy);
         assert_eq!(config.context_policy().reserve_tokens, 1024);
         assert!(config.mcp_bindings().expect("bindings").is_empty());
         assert!(
@@ -537,6 +575,21 @@ mod tests {
                 .expect("environment")
                 .authorized_entries()
                 .is_empty()
+        );
+    }
+
+    /// `ApprovalMode` is current runtime configuration and accepts the
+    /// explicit `FullAccess` spelling without becoming Session state.
+    #[test]
+    fn approval_mode_is_current_configuration_with_policy_default() {
+        let json = MINIMAL.replace(
+            r#""agentId": "agent-a""#,
+            r#""agentId": "agent-a", "approvalMode": "full_access""#,
+        );
+        let config = CurrentRuntimeConfig::from_json_slice(json.as_bytes()).expect("valid");
+        assert_eq!(
+            config.approval_mode,
+            crate::runtime::ApprovalMode::FullAccess
         );
     }
 

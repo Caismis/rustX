@@ -35,8 +35,9 @@ pub use background::{
 };
 pub use environment::{ToolEnvironment, ToolEnvironmentError};
 pub use executor::{
-    BACKGROUND_TASK_TOOL_NAME, PreflightOutcome, PreparedInvocation, ProgressReporter,
-    ToolExecutionContext, ToolExecutor, ToolPreflightError, ToolRegistry, ToolRegistryError,
+    ASK_USER_TOOL_NAME, BACKGROUND_TASK_TOOL_NAME, PreflightOutcome, PreparedInvocation,
+    ProgressReporter, ToolExecutionContext, ToolExecutor, ToolPreflightError, ToolRegistry,
+    ToolRegistryError,
 };
 pub use locator::LocatorError;
 pub use managed_output::{BackgroundOutput, ManagedOutputError, ManagedToolOutput, ResultSpill};
@@ -47,9 +48,9 @@ pub use schema::{
     validate_business_arguments, validate_canonical_schema,
 };
 pub use types::{
-    ManagedOutputContinuation, ModelToolDefinition, ToolCall, ToolCallStart, ToolConcurrencyPolicy,
-    ToolDefinition, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
-    ToolInvocationMode, ToolInvocationPolicy, ToolOrigin, ToolProgress, ToolReplayPolicy,
-    ToolResultContent, TruncationState,
+    ManagedOutputContinuation, ModelToolDefinition, ToolApprovalPolicy, ToolCall, ToolCallStart,
+    ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
+    ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolInvocationPolicy, ToolOrigin,
+    ToolProgress, ToolReplayPolicy, ToolResultContent, TruncationState,
 };
 pub use workspace::{Workspace, WorkspaceError};

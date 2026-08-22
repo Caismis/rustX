@@ -111,6 +111,7 @@ async fn run_with_control(
         tool_output: &tool_output,
         environment: &ToolEnvironment::new(),
         skill_resources: None,
+        question_requester: None,
     };
     let invocation = match timeout_seconds {
         Some(seconds) => invocation_with_timeout(&command, seconds),

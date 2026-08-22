@@ -67,6 +67,7 @@ use crate::runtime::identity::AttemptId;
 use crate::runtime::identity::InteractionId;
 use crate::runtime::inbound::{InboundBatch, InboundItem};
 use crate::runtime::interaction::{InteractionOutcome, InteractionRequest};
+use crate::runtime::types::ApprovalMode;
 use crate::tools::background::BackgroundExecutionSnapshot;
 
 /// One runtime-owned semantic observation.
@@ -134,6 +135,17 @@ pub(crate) enum ConversationObservation {
     SessionModelChanged {
         /// The redacted session model state after the update.
         model: Box<SessionModelView>,
+    },
+    /// The runtime approval control state changed. `effective` is the mode
+    /// admitted by the current attempt boundary; `pending` is the latest
+    /// desired mode when it differs and the runtime is busy.
+    ApprovalModeChanged {
+        /// The authoritative effective mode.
+        effective: ApprovalMode,
+        /// The pending desired mode, when reconciliation waits for settlement.
+        pending: Option<ApprovalMode>,
+        /// The monotonic control-plane revision.
+        revision: u64,
     },
     /// Runtime drain began and new semantic admission closed.
     Shutdown,

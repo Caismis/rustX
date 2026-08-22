@@ -260,6 +260,7 @@ impl RuntimeClientFixtureBuilder {
             agent_id: AgentId::new("agent-a"),
             model: session_model,
             timezone: None,
+            approval_mode: rustx::runtime::ApprovalMode::Policy,
             context: ConversationContextConfig {
                 policy: self.context_policy,
                 estimator,

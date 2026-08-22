@@ -2711,6 +2711,7 @@ impl<'a> AgentExecution<'a> {
                 origin: &prepared.origin,
                 mode: invocation.mode,
                 arguments: &invocation.arguments,
+                approval_policy: prepared.approval,
             };
             // A policy future is allowed to settle, but its result is not
             // consumed after cancellation becomes observable at this
@@ -2734,7 +2735,11 @@ impl<'a> AgentExecution<'a> {
                     let facts = view.approval_facts(reason);
                     let outcome = self
                         .lifecycle
-                        .request_approval(self.request.attempt_id.clone(), facts, self.cancellation)
+                        .request_approval(
+                            self.request.attempt_id.clone(),
+                            facts,
+                            self.cancellation.execution_cancellation(),
+                        )
                         .await;
                     // The interaction terminal winner owns the rendezvous,
                     // but it never grants execution authority. Apply the
@@ -2751,6 +2756,9 @@ impl<'a> AgentExecution<'a> {
                                         PreToolResolution::Denied(reason)
                                     }
                                 },
+                                InteractionResponse::Question { .. } => PreToolResolution::Denied(
+                                    "approval interaction returned a Question response".to_owned(),
+                                ),
                             },
                             InteractionOutcome::Cancelled { reason } => {
                                 PreToolResolution::Cancelled(reason)
@@ -2997,16 +3005,24 @@ impl<'a> AgentExecution<'a> {
         let executor = self.tool_registry().executor(&invocation.tool_id);
         let buffer =
             ForegroundProgressBuffer::new(invocation.call_id.clone(), invocation.tool_id.clone());
-        let context = ToolExecutionContext {
-            conversation_id: &self.request.conversation_id,
-            execution_id: None,
-            cancellation: self.cancellation.execution_cancellation(),
-            workspace: self.tool_runtime.workspace(),
-            progress: &buffer,
-            artifacts: self.tool_runtime.artifacts(),
-            tool_output: self.tool_runtime.tool_output(),
-            environment: self.capability.snapshot().effective_environment(),
-            skill_resources: Some(self.capability.snapshot().skills().resources()),
+        let context = ToolExecutionContext::new(
+            &self.request.conversation_id,
+            None,
+            self.cancellation.execution_cancellation(),
+            self.tool_runtime.workspace(),
+            &buffer,
+            self.tool_runtime.artifacts(),
+            self.tool_runtime.tool_output(),
+            self.capability.snapshot().effective_environment(),
+            Some(self.capability.snapshot().skills().resources()),
+        );
+        let context = match self.lifecycle.native_question_requester(
+            self.request.attempt_id.clone(),
+            self.cancellation.execution_cancellation(),
+            self.turn,
+        ) {
+            Some(requester) => context.with_question_requester(requester),
+            None => context,
         };
         let future = executor.execute(invocation.clone(), context);
         tokio::pin!(future);
@@ -4078,6 +4094,7 @@ mod tests {
                 input_schema: serde_json::json!({"type": "object"}),
                 execution_policy: ToolExecutionPolicy::ForegroundOnly,
                 concurrency_policy: ToolConcurrencyPolicy::Sequential,
+                approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
                 replay_policy: ToolReplayPolicy::Never,
                 origin: ToolOrigin::Builtin,
             }
@@ -5740,6 +5757,7 @@ mod tests {
                         input_schema: serde_json::json!({"type": "object"}),
                         execution_policy: ToolExecutionPolicy::ModelSelectable,
                         concurrency_policy: ToolConcurrencyPolicy::Sequential,
+                        approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
                         replay_policy: ToolReplayPolicy::Never,
                         origin: ToolOrigin::Builtin,
                     },

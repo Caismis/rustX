@@ -274,6 +274,7 @@ fn native_tools_preserve_legal_execution_policies_and_fixed_background_task_poli
             NativeToolPolicies::uniform(ToolInvocationPolicy::new(
                 execution,
                 ToolConcurrencyPolicy::Sequential,
+                rustx::tools::types::ToolApprovalPolicy::Never,
             )),
         )
         .expect("ordinary native policy registration");
@@ -343,26 +344,32 @@ fn independent_native_execution_policies_coexist_in_one_registry() {
         read: ToolInvocationPolicy::new(
             ToolExecutionPolicy::ForegroundOnly,
             ToolConcurrencyPolicy::Sequential,
+            rustx::tools::types::ToolApprovalPolicy::Never,
         ),
         write: ToolInvocationPolicy::new(
             ToolExecutionPolicy::BackgroundOnly,
             ToolConcurrencyPolicy::Parallel,
+            rustx::tools::types::ToolApprovalPolicy::Never,
         ),
         edit: ToolInvocationPolicy::new(
             ToolExecutionPolicy::ModelSelectable,
             ToolConcurrencyPolicy::Sequential,
+            rustx::tools::types::ToolApprovalPolicy::Never,
         ),
         glob: ToolInvocationPolicy::new(
             ToolExecutionPolicy::ForegroundOnly,
             ToolConcurrencyPolicy::Parallel,
+            rustx::tools::types::ToolApprovalPolicy::Never,
         ),
         grep: ToolInvocationPolicy::new(
             ToolExecutionPolicy::BackgroundOnly,
             ToolConcurrencyPolicy::Sequential,
+            rustx::tools::types::ToolApprovalPolicy::Never,
         ),
         bash: ToolInvocationPolicy::new(
             ToolExecutionPolicy::ForegroundOnly,
             ToolConcurrencyPolicy::Parallel,
+            rustx::tools::types::ToolApprovalPolicy::Never,
         ),
     };
     let mut registry = ToolRegistry::new();

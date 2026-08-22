@@ -28,6 +28,7 @@ use futures_util::future::BoxFuture;
 
 use crate::runtime::cancellation::ExecutionCancellation;
 use crate::runtime::identity::{ConversationId, ToolExecutionId, ToolId};
+use crate::runtime::interaction::QuestionRequester;
 use crate::tools::artifacts::ArtifactStore;
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::managed_output::ManagedToolOutput;
@@ -36,8 +37,8 @@ use crate::tools::schema::{
     validate_business_arguments, validate_canonical_schema,
 };
 use crate::tools::types::{
-    ModelToolDefinition, ToolCall, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionResult,
-    ToolInvocation, ToolOrigin, ToolProgress,
+    ModelToolDefinition, ToolApprovalPolicy, ToolCall, ToolConcurrencyPolicy, ToolDefinition,
+    ToolExecutionResult, ToolInvocation, ToolOrigin, ToolProgress,
 };
 use crate::tools::workspace::Workspace;
 
@@ -58,12 +59,15 @@ pub trait ProgressReporter: Send + Sync {
 /// The runtime-owned execution context of one tool invocation.
 ///
 /// The context provides the concrete resources the current contract needs —
-/// conversation identity, execution identity when background, the runtime
-/// cancellation signal, the workspace boundary, the progress reporter, the
-/// artifact store, the managed tool-output store, and the explicit
-/// authorized environment. Executor-
-/// specific resources (process ids, MCP SDK types, Python runtime objects)
-/// belong inside executor implementations and never appear here.
+/// conversation identity, execution identity when background, the read-only
+/// runtime cancellation view, the workspace boundary, the progress reporter,
+/// the artifact store, the managed tool-output store, and the explicit
+/// authorized environment. The native `ask_user` executor additionally
+/// receives one crate-private, attempt-bound Question requester. It cannot
+/// obtain the Agent Loop's cancellation authority or any generic interaction
+/// extension seam. Executor-specific resources (process ids, MCP SDK types,
+/// Python runtime objects) belong inside executor implementations and never
+/// appear here.
 pub struct ToolExecutionContext<'a> {
     /// The owning conversation of the invocation.
     pub conversation_id: &'a ConversationId,
@@ -72,7 +76,7 @@ pub struct ToolExecutionContext<'a> {
     pub execution_id: Option<&'a ToolExecutionId>,
     /// The cancellation view of the execution: the runtime cancellation
     /// signal plus a **live** read of the owning authority's absorbing
-    /// cause. Foreground executions view their attempt's `AgentCancellation`;
+    /// cause. Foreground executions view their attempt's cancellation owner;
     /// background executions view their conversation-owned background record.
     ///
     /// The cause is read through this view at settlement time, never copied
@@ -101,6 +105,58 @@ pub struct ToolExecutionContext<'a> {
     /// Read resolves these through the ordinary tool contract; clients never
     /// receive their host paths.
     pub skill_resources: Option<&'a crate::skills::SkillResourceMap>,
+    /// The one bounded native Question capability. This is intentionally not
+    /// public: generic `ToolExecutor` implementations can observe only
+    /// [`ExecutionCancellation`], while the native `ask_user` path receives a
+    /// runtime-bound requester through an internal construction seam.
+    pub(crate) question_requester: Option<QuestionRequester>,
+}
+
+impl<'a> ToolExecutionContext<'a> {
+    /// Constructs a detached execution context without native interaction
+    /// authority. Runtime-owned foreground dispatch adds its bounded
+    /// Question requester through the crate-private builder below.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        conversation_id: &'a ConversationId,
+        execution_id: Option<&'a ToolExecutionId>,
+        cancellation: ExecutionCancellation,
+        workspace: &'a Workspace,
+        progress: &'a dyn ProgressReporter,
+        artifacts: &'a ArtifactStore,
+        tool_output: &'a ManagedToolOutput,
+        environment: &'a ToolEnvironment,
+        skill_resources: Option<&'a crate::skills::SkillResourceMap>,
+    ) -> Self {
+        Self {
+            conversation_id,
+            execution_id,
+            cancellation,
+            workspace,
+            progress,
+            artifacts,
+            tool_output,
+            environment,
+            skill_resources,
+            question_requester: None,
+        }
+    }
+
+    /// Adds the one runtime-bound native Question requester.
+    #[must_use]
+    pub(crate) fn with_question_requester(mut self, requester: QuestionRequester) -> Self {
+        self.question_requester = Some(requester);
+        self
+    }
+
+    /// Returns the bounded requester to the native `ask_user` implementation.
+    /// The concrete type and this accessor are crate-private, so external
+    /// `ToolExecutor` implementations cannot acquire native interaction
+    /// authority.
+    pub(crate) fn question_requester(&self) -> Option<&QuestionRequester> {
+        self.question_requester.as_ref()
+    }
 }
 
 /// One executable tool.
@@ -221,6 +277,8 @@ pub struct PreparedInvocation {
     pub invocation: ToolInvocation,
     /// The tool's concurrency policy for batch scheduling.
     pub concurrency: ToolConcurrencyPolicy,
+    /// The tool's configured approval policy.
+    pub approval: ToolApprovalPolicy,
     /// The canonical registry-resolved origin of the tool.
     ///
     /// It is taken from the same resolved [`ToolDefinition`] that produced
@@ -300,6 +358,8 @@ impl ToolRegistration {
 
 /// The name of the runtime intrinsic background inspection tool.
 pub const BACKGROUND_TASK_TOOL_NAME: &str = "background_task";
+/// The native human-question tool.
+pub const ASK_USER_TOOL_NAME: &str = "ask_user";
 
 impl ToolRegistry {
     /// Creates an empty registry.
@@ -318,8 +378,8 @@ impl ToolRegistry {
     /// `ToolId`s and duplicate model-facing names are rejected, empty
     /// identities are rejected, the canonical input schema must be a valid
     /// root object schema with no reserved `__rustx_*` property, and the
-    /// runtime intrinsic `background_task` is fixed to
-    /// `ForegroundOnly` + `Sequential` and may never be background-capable.
+    /// runtime intrinsics are fixed to foreground-only, sequential execution;
+    /// `ask_user` is also fixed to approval-never.
     ///
     /// # Errors
     ///
@@ -336,8 +396,8 @@ impl ToolRegistry {
     ///
     /// Runtime metadata has already been removed when the normalizer runs,
     /// and the normalized value is still validated against the one canonical
-    /// schema before an executor can receive it. Native Edit is currently the
-    /// only consumer.
+    /// schema before an executor can receive it. Native Edit and `ask_user`
+    /// use this seam for tool-owned argument normalization.
     pub(crate) fn register_with_argument_normalizer(
         &mut self,
         definition: ToolDefinition,
@@ -379,6 +439,17 @@ impl ToolRegistry {
             return Err(ToolRegistryError::InvalidPolicy(format!(
                 "the runtime intrinsic {BACKGROUND_TASK_TOOL_NAME} is fixed to \
                  foreground-only sequential execution and may never be background-dispatchable"
+            )));
+        }
+        if definition.name == ASK_USER_TOOL_NAME
+            && (definition.execution_policy
+                != crate::tools::types::ToolExecutionPolicy::ForegroundOnly
+                || definition.concurrency_policy != ToolConcurrencyPolicy::Sequential
+                || definition.approval_policy != ToolApprovalPolicy::Never)
+        {
+            return Err(ToolRegistryError::InvalidPolicy(format!(
+                "the runtime intrinsic {ASK_USER_TOOL_NAME} is fixed to foreground-only, \
+                 sequential execution with approval disabled"
             )));
         }
         self.by_id.insert(definition.id.clone(), self.entries.len());
@@ -551,6 +622,7 @@ impl ToolRegistry {
                 arguments: normalized,
             },
             concurrency: entry.definition.concurrency_policy,
+            approval: entry.definition.approval_policy,
             origin: entry.definition.origin.clone(),
         }))
     }
@@ -636,6 +708,7 @@ mod tests {
             input_schema: schema,
             execution_policy: execution,
             concurrency_policy: concurrency,
+            approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
         }
@@ -1191,6 +1264,7 @@ mod tests {
             tool_output: &tool_output,
             environment: &ToolEnvironment::new(),
             skill_resources: None,
+            question_requester: None,
         };
         let executor = registry.executor(&prepared.invocation.tool_id);
         let _result = executor

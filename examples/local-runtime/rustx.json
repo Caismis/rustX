@@ -12,6 +12,7 @@
       "mode": "session"
     }
   },
+  "approvalMode": "policy",
   "timezone": "Asia/Shanghai",
   "context": {
     "reserveTokens": 4096,
@@ -48,6 +49,7 @@
   "mcpToolPolicies": {},
   "defaultTools": [
     "background_task",
+    "ask_user",
     "read",
     "write",
     "edit",

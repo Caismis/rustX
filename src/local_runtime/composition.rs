@@ -428,6 +428,7 @@ impl LocalConversationCore {
             agent_id: runtime_config.agent_id.clone(),
             model,
             timezone: runtime_config.timezone,
+            approval_mode: runtime_config.approval_mode,
             context: ConversationContextConfig {
                 policy: runtime_config.context_policy(),
                 estimator: Arc::clone(&dependencies.estimator),
@@ -555,6 +556,7 @@ impl LocalConversationCore {
             agent_id: spec.child_agent_id.clone(),
             model,
             timezone: spec.timezone,
+            approval_mode: crate::runtime::ApprovalMode::Policy,
             context: ConversationContextConfig {
                 policy: spec.context,
                 estimator: Arc::clone(&dependencies.estimator),

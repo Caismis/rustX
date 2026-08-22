@@ -36,7 +36,7 @@ use crate::runtime::identity::{
 };
 use crate::runtime::inbound::InboundSequence;
 use crate::runtime::interaction::InteractionRequest;
-use crate::runtime::types::TokenMeasurement;
+use crate::runtime::types::{ApprovalMode, TokenMeasurement};
 use crate::tools::background::BackgroundLifecycle;
 use crate::tools::types::{
     ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionResult, ToolOrigin, ToolProgress,
@@ -68,6 +68,14 @@ pub struct RuntimeClientSnapshot {
     /// Whether runtime drain has begun and new inbound admission is closed.
     /// The correlated shutdown response resolves only after quiescence.
     pub shutting_down: bool,
+    /// The authoritative mode used by the current attempt boundary.
+    pub effective_approval_mode: ApprovalMode,
+    /// The latest requested mode when it is waiting for an attempt to settle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_approval_mode: Option<ApprovalMode>,
+    /// The runtime control-plane revision of the mode state.
+    #[serde(default)]
+    pub approval_mode_revision: u64,
     /// The runtime's durable-authority failure, when it has entered the
     /// explicit degraded state. While set, no new durable admission/execution
     /// work may begin.
@@ -545,6 +553,8 @@ pub struct RuntimeClientTool {
     pub execution_policy: ToolExecutionPolicy,
     /// How calls within one batch are scheduled.
     pub concurrency_policy: ToolConcurrencyPolicy,
+    /// Whether execution requires a native approval interaction.
+    pub approval_policy: crate::tools::types::ToolApprovalPolicy,
     /// The replay policy.
     pub replay_policy: ToolReplayPolicy,
     /// Where the tool comes from.

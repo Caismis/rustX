@@ -96,6 +96,16 @@ export const COMMANDS: readonly CommandSpec[] = [
     description: "Answer one runtime-owned approval interaction.",
     argumentHint: "<interaction-id> <allow|deny> [reason]",
   },
+  {
+    name: "/answer",
+    description: "Answer one runtime-owned Question interaction.",
+    argumentHint: "<interaction-id> <choice|text> <value>",
+  },
+  {
+    name: "/approval",
+    description: "Request the runtime ApprovalMode.",
+    argumentHint: "<policy|full_access>",
+  },
   { name: "/quit", description: "Shut down the runtime and exit cleanly." },
 ];
 

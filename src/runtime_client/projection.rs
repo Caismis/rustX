@@ -111,6 +111,7 @@ use crate::model::session::{AttemptModelView, SessionModelView};
 use crate::runtime::identity::{AttemptId, ConversationId, ToolCallId};
 use crate::runtime::inbound::InboundItem;
 use crate::runtime::observation::ConversationObservation;
+use crate::runtime::types::ApprovalMode;
 use crate::tools::background::BackgroundExecutionSnapshot;
 use crate::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus};
 
@@ -211,6 +212,9 @@ impl RuntimeClientProjection {
             snapshot: RuntimeClientSnapshot {
                 conversation_id,
                 shutting_down: false,
+                effective_approval_mode: ApprovalMode::Policy,
+                pending_approval_mode: None,
+                approval_mode_revision: 0,
                 durability_failure: None,
                 messages: initial_messages,
                 attempt: None,
@@ -271,6 +275,11 @@ impl RuntimeClientProjection {
         seed: &crate::runtime::conversation_runtime::RuntimeBootstrapSnapshot,
     ) {
         self.snapshot.shutting_down = seed.shutting_down;
+        self.snapshot.effective_approval_mode = seed.approval_mode.effective;
+        self.snapshot.pending_approval_mode = (seed.approval_mode.effective
+            != seed.approval_mode.desired)
+            .then_some(seed.approval_mode.desired);
+        self.snapshot.approval_mode_revision = seed.approval_mode.revision;
         self.snapshot.inbound.pending =
             seed.inbound_pending.iter().map(inbound_item_view).collect();
         self.snapshot
@@ -430,6 +439,20 @@ impl RuntimeClientProjection {
             ConversationObservation::SessionModelChanged { model } => {
                 self.snapshot.model = (*model).clone();
                 vec![RuntimeClientEvent::SessionModelChanged { model }]
+            }
+            ConversationObservation::ApprovalModeChanged {
+                effective,
+                pending,
+                revision,
+            } => {
+                self.snapshot.effective_approval_mode = effective;
+                self.snapshot.pending_approval_mode = pending;
+                self.snapshot.approval_mode_revision = revision;
+                vec![RuntimeClientEvent::ApprovalModeChanged {
+                    effective_approval_mode: effective,
+                    pending_approval_mode: pending,
+                    revision,
+                }]
             }
             ConversationObservation::Shutdown => {
                 self.snapshot.shutting_down = true;
@@ -1299,6 +1322,7 @@ pub(crate) fn capability_view(
             input_schema: definition.input_schema.clone(),
             execution_policy: definition.execution_policy,
             concurrency_policy: definition.concurrency_policy,
+            approval_policy: definition.approval_policy,
             replay_policy: definition.replay_policy,
             origin: definition.origin.clone(),
         };

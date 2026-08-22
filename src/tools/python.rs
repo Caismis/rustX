@@ -82,8 +82,8 @@ use crate::skills::environments::{ENVIRONMENT_COMMAND_TIMEOUT, RUNTIME_PROBE_TIM
 use crate::tools::environment::{ToolEnvironment, ToolEnvironmentOverlay};
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::types::{
-    ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus,
-    ToolInvocation, ToolInvocationPolicy, ToolResultContent,
+    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionResult,
+    ToolExecutionStatus, ToolInvocation, ToolInvocationPolicy, ToolResultContent,
 };
 use crate::tools::workspace::Workspace;
 
@@ -181,6 +181,12 @@ struct ToolManifest {
     entrypoint: String,
     execution: String,
     concurrency: String,
+    #[serde(default = "default_approval_policy")]
+    approval: String,
+}
+
+fn default_approval_policy() -> String {
+    "never".to_owned()
 }
 
 /// An immutable finite package snapshot.
@@ -297,6 +303,7 @@ fn discover_package(directory: &str, root: &Path) -> Result<PythonToolPackage, P
     let policy = ToolInvocationPolicy::new(
         parse_execution(&manifest.execution)?,
         parse_concurrency(&manifest.concurrency)?,
+        parse_approval(&manifest.approval)?,
     );
     let schema: serde_json::Value = serde_json::from_slice(&input_schema)
         .map_err(|error| PythonToolError::InvalidPackage(format!("input.schema.json: {error}")))?;
@@ -438,6 +445,16 @@ fn parse_concurrency(value: &str) -> Result<ToolConcurrencyPolicy, PythonToolErr
         "parallel" => Ok(ToolConcurrencyPolicy::Parallel),
         _ => Err(PythonToolError::InvalidPackage(format!(
             "invalid concurrency policy {value:?}"
+        ))),
+    }
+}
+
+fn parse_approval(value: &str) -> Result<ToolApprovalPolicy, PythonToolError> {
+    match value {
+        "never" => Ok(ToolApprovalPolicy::Never),
+        "always" => Ok(ToolApprovalPolicy::Always),
+        _ => Err(PythonToolError::InvalidPackage(format!(
+            "invalid approval policy {value:?}"
         ))),
     }
 }
@@ -2470,6 +2487,7 @@ mod tests {
                 tool_output: tool_runtime.tool_output(),
                 environment: tool_runtime.environment(),
                 skill_resources: None,
+                question_requester: None,
             },
         )
         .await

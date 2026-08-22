@@ -58,6 +58,9 @@ export function emptyPresentationState(
     capabilities: { revision: 0, tools: [], skills: [] },
     sessionModel,
     runtimeShutdown: false,
+    effectiveApprovalMode: "policy",
+    pendingApprovalMode: undefined,
+    approvalModeRevision: 0,
     pendingSubmissions: [],
   };
 }
@@ -146,6 +149,9 @@ export function replaceFromSnapshot(
     capabilities: snapshot.capabilities,
     sessionModel: snapshot.model,
     runtimeShutdown: snapshot.shutting_down,
+    effectiveApprovalMode: snapshot.effective_approval_mode,
+    pendingApprovalMode: snapshot.pending_approval_mode,
+    approvalModeRevision: snapshot.approval_mode_revision,
     pendingSubmissions: carry?.pendingSubmissions ?? [],
   };
 }
@@ -209,6 +215,12 @@ export function reduce(
       next.pendingInteractions = state.pendingInteractions.filter(
         (interaction) => interaction.id !== event.interaction_id,
       );
+      return next;
+
+    case "approval_mode_changed":
+      next.effectiveApprovalMode = event.effective_approval_mode;
+      next.pendingApprovalMode = event.pending_approval_mode;
+      next.approvalModeRevision = event.revision;
       return next;
 
     case "context_compacted":

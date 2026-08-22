@@ -56,8 +56,16 @@ export function workingStatus(state: PresentationState): string | undefined {
     (interaction) => interaction.attempt_id === attempt.attemptId,
   );
   if (waiting.length > 0) {
+    const questions = waiting.filter((interaction) => interaction.kind.type === "question");
+    const approvals = waiting.length - questions.length;
+    if (questions.length > 0 && approvals === 0) {
+      return questions.length === 1 ? "Waiting for an answer…" : `Waiting for ${questions.length} answers…`;
+    }
+    if (questions.length > 0) {
+      return `Waiting for ${waiting.length} human responses…`;
+    }
     return waiting.length === 1
-      ? `Waiting for approval of ${waiting[0]!.kind.tool_name}…`
+      ? `Waiting for approval of ${waiting[0]!.kind.type === "approval" ? waiting[0]!.kind.tool_name : "tool"}…`
       : `Waiting for ${waiting.length} approvals…`;
   }
 
@@ -222,6 +230,17 @@ export function footerSegments(
 
   segments.push({ text: role.meta(contextLabel(state)), priority: 1 });
 
+  const approvalLabel =
+    state.effectiveApprovalMode === "full_access" ? "FULL ACCESS" : "policy";
+  const approvalPending =
+    state.pendingApprovalMode === undefined
+      ? ""
+      : ` → ${state.pendingApprovalMode === "full_access" ? "FULL ACCESS" : "policy"}`;
+  segments.push({
+    text: role.pending(`approval ${approvalLabel}${approvalPending}`),
+    priority: 0,
+  });
+
   const pending = (state.inbound.pending ?? []).length;
   if (pending > 0) {
     segments.push({ text: role.pending(`queued ${pending}`), priority: 1 });
@@ -233,7 +252,7 @@ export function footerSegments(
   const interactions = state.pendingInteractions.length;
   if (interactions > 0) {
     segments.push({
-      text: role.pending(`approvals ${interactions}`),
+      text: role.pending(`human input ${interactions}`),
       priority: 0,
     });
   }

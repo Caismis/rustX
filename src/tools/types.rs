@@ -4,7 +4,7 @@
 //! definitions, the calls the current agent issues, the normalized
 //! execution results, and the runtime-owned invocation data delivered to
 //! executors. The canonical [`ToolDefinition`] is tool-owned and carries the
-//! two independent execution policy axes; the provider-neutral compiled
+//! three independent execution policy axes; the provider-neutral compiled
 //! [`ModelToolDefinition`] is what actually reaches a model request.
 //! Execution scheduling and executors are runtime-owned (M3+); native, MCP,
 //! and Python executors reuse the same contract. No external
@@ -18,13 +18,15 @@ use crate::runtime::types::CancellationReason;
 /// The canonical runtime/tool contract of one registered tool.
 ///
 /// The definition is owned by the tool plane's registry, which pairs it with
-/// an executor. The two policy axes are independent:
+/// an executor. The three policy axes are independent:
 ///
 /// - [`ToolExecutionPolicy`] decides who owns the execution: foreground work
 ///   is attempt-owned and settles before the attempt continues, background
 ///   work is conversation-owned and detached after accepted dispatch.
 /// - [`ToolConcurrencyPolicy`] decides how calls of one batch are scheduled
 ///   relative to each other.
+/// - [`ToolApprovalPolicy`] decides whether an eligible invocation needs a
+///   native human approval before the executor starts.
 ///
 /// The `input_schema` is the original canonical JSON Schema document owned by
 /// the tool. The runtime validates it at registration and never mutates it:
@@ -48,6 +50,9 @@ pub struct ToolDefinition {
     /// How calls of this tool within one batch are scheduled relative to
     /// each other.
     pub concurrency_policy: ToolConcurrencyPolicy,
+    /// Whether execution requires a native approval interaction.
+    #[serde(default)]
+    pub approval_policy: ToolApprovalPolicy,
     /// Replay policy; `Never` is the safe default.
     #[serde(default)]
     pub replay_policy: ToolReplayPolicy,
@@ -99,7 +104,7 @@ pub enum ToolConcurrencyPolicy {
     Parallel,
 }
 
-/// The two origin-independent policy axes attached to an external tool
+/// The three origin-independent policy axes attached to an external tool
 /// configuration. Native tools use the concrete `NativeToolPolicies` table;
 /// MCP servers and Python manifests carry this value directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,6 +113,9 @@ pub struct ToolInvocationPolicy {
     pub execution: ToolExecutionPolicy,
     /// In-batch scheduling policy.
     pub concurrency: ToolConcurrencyPolicy,
+    /// Whether a human approval is required before execution.
+    #[serde(default)]
+    pub approval: ToolApprovalPolicy,
 }
 
 impl Default for ToolInvocationPolicy {
@@ -115,19 +123,41 @@ impl Default for ToolInvocationPolicy {
         Self::new(
             ToolExecutionPolicy::ForegroundOnly,
             ToolConcurrencyPolicy::Sequential,
+            ToolApprovalPolicy::Never,
         )
     }
 }
 
 impl ToolInvocationPolicy {
-    /// Creates a policy from the two canonical axes.
+    /// Creates a policy from the three canonical axes.
     #[must_use]
-    pub const fn new(execution: ToolExecutionPolicy, concurrency: ToolConcurrencyPolicy) -> Self {
+    pub const fn new(
+        execution: ToolExecutionPolicy,
+        concurrency: ToolConcurrencyPolicy,
+        approval: ToolApprovalPolicy,
+    ) -> Self {
         Self {
             execution,
             concurrency,
+            approval,
         }
     }
+}
+
+/// Whether a resolved tool invocation requires a native approval interaction.
+///
+/// Denial is intentionally not part of this policy. A tool that is not
+/// eligible belongs to availability/authorization and is rejected before
+/// approval; HITL only decides whether an otherwise eligible invocation needs
+/// a human decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolApprovalPolicy {
+    /// Execute without an approval interaction.
+    #[default]
+    Never,
+    /// Publish an approval interaction before execution.
+    Always,
 }
 
 /// The resolved execution ownership of one canonical invocation.
@@ -481,8 +511,8 @@ pub struct ModelToolDefinition {
 #[cfg(test)]
 mod tests {
     use super::{
-        ToolCall, ToolCallStart, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
-        ToolExecutionStatus, ToolReplayPolicy, TruncationState,
+        ToolApprovalPolicy, ToolCall, ToolCallStart, ToolDefinition, ToolExecutionPolicy,
+        ToolExecutionResult, ToolExecutionStatus, ToolReplayPolicy, TruncationState,
     };
     use crate::runtime::identity::{McpServerId, ToolCallId, ToolId};
     use serde_json::json;
@@ -532,6 +562,7 @@ mod tests {
             input_schema: json!({"type": "object"}),
             execution_policy: ToolExecutionPolicy::ModelSelectable,
             concurrency_policy: ToolConcurrencyPolicy::Parallel,
+            approval_policy: ToolApprovalPolicy::Always,
             replay_policy: ToolReplayPolicy::Never,
             origin: crate::tools::types::ToolOrigin::Mcp {
                 server_id: McpServerId::new("mcp-fs"),

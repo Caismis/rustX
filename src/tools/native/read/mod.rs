@@ -339,6 +339,7 @@ mod tests {
             tool_output: &tool_output,
             environment: &environment,
             skill_resources: Some(snapshot.resources()),
+            question_requester: None,
         };
         let result = ReadTool
             .execute(

@@ -34,6 +34,7 @@ use crate::model::session::{AttemptModelView, SessionModelView};
 use crate::runtime::identity::{AttemptId, MessageId, ToolCallId, ToolExecutionId, ToolId};
 use crate::runtime::inbound::InboundSequence;
 use crate::runtime::interaction::{InteractionOutcome, InteractionRequest};
+use crate::runtime::types::ApprovalMode;
 use crate::runtime::types::{CancellationReason, RuntimeError};
 use crate::tools::types::{ToolCall, ToolCallStart, ToolExecutionResult, ToolProgress};
 
@@ -99,6 +100,16 @@ pub enum RuntimeClientEvent {
         interaction_id: crate::runtime::identity::InteractionId,
         /// The exact terminal rendezvous outcome.
         outcome: InteractionOutcome,
+    },
+    /// The authoritative runtime `ApprovalMode` control state changed.
+    ApprovalModeChanged {
+        /// The mode effective for the current/next attempt boundary.
+        effective_approval_mode: ApprovalMode,
+        /// The latest desired mode when it is pending reconciliation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pending_approval_mode: Option<ApprovalMode>,
+        /// The monotonic control-plane revision.
+        revision: u64,
     },
     /// A canonical runtime summary and Surface replacement were committed
     /// after automatic compaction.

@@ -57,6 +57,7 @@ use crate::runtime::identity::InteractionId;
 use crate::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolExecutionId};
 use crate::runtime::inbound::InboundSequence;
 use crate::runtime::interaction::InteractionResponse;
+use crate::runtime::types::ApprovalMode;
 
 /// The protocol view of one native Session graph node.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -401,6 +402,13 @@ pub enum RuntimeClientRequest {
         /// The complete desired session model configuration.
         config: Box<SessionModelConfig>,
     },
+    /// Request a runtime `ApprovalMode` transition.
+    ApprovalModeSet {
+        /// Attachment-scoped request id.
+        id: RequestId,
+        /// The latest desired runtime approval mode.
+        mode: ApprovalMode,
+    },
     /// List persisted native Sessions for `/resume`.
     SessionList {
         /// Attachment-scoped request id.
@@ -541,6 +549,7 @@ impl RuntimeClientRequest {
             | Self::ModelCatalogGet { id, .. }
             | Self::ModelGet { id, .. }
             | Self::ModelSet { id, .. }
+            | Self::ApprovalModeSet { id, .. }
             | Self::SessionList { id, .. }
             | Self::SessionGet { id, .. }
             | Self::SessionTreeGet { id, .. }
@@ -573,6 +582,7 @@ impl RuntimeClientRequest {
             Self::ModelCatalogGet { .. } => "model_catalog_get",
             Self::ModelGet { .. } => "model_get",
             Self::ModelSet { .. } => "model_set",
+            Self::ApprovalModeSet { .. } => "approval_mode_set",
             Self::SessionList { .. } => "session_list",
             Self::SessionGet { .. } => "session_get",
             Self::SessionTreeGet { .. } => "session_tree_get",
@@ -814,6 +824,16 @@ pub enum RuntimeClientResult {
         /// The redacted session model view after the update.
         model: Box<SessionModelView>,
     },
+    /// `approval_mode_set` succeeded.
+    ApprovalModeSet {
+        /// The authoritative effective mode.
+        effective_approval_mode: ApprovalMode,
+        /// The desired mode when it is pending reconciliation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pending_approval_mode: Option<ApprovalMode>,
+        /// The monotonic control-plane revision.
+        revision: u64,
+    },
     /// `background_status` succeeded.
     BackgroundStatus {
         /// The canonical registry snapshot of the execution.
@@ -881,6 +901,13 @@ pub enum RuntimeClientError {
     /// The response was typed but invalid for the pending interaction.
     InteractionInvalidResponse {
         /// The bounded validation diagnostic.
+        message: String,
+    },
+    /// The runtime has not been activated for an `ApprovalMode` update.
+    ApprovalModeInactive,
+    /// The runtime's durability authority rejected an `ApprovalMode` update.
+    ApprovalModeDurabilityFailed {
+        /// The bounded durability diagnostic.
         message: String,
     },
     /// The referenced background execution does not exist in the

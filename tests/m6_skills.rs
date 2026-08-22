@@ -358,28 +358,29 @@ async fn bash_cd_cannot_redefine_the_skill_root() {
         arguments: serde_json::json!({"command": "cd /tmp && pwd"}),
     };
     let result = {
-        let context = rustx::tools::executor::ToolExecutionContext {
-            conversation_id: &conversation_id,
-            execution_id: None,
-            cancellation: rustx::runtime::ExecutionCancellation::detached(
+        let artifacts_store =
+            rustx::tools::artifacts::ArtifactStore::new(conversation_id.clone(), &artifacts)
+                .expect("artifacts");
+        let tool_output = rustx::tools::managed_output::ManagedToolOutput::new(
+            conversation_id.clone(),
+            artifacts.join("tool-output"),
+        )
+        .expect("managed tool output");
+        let environment = rustx::tools::environment::ToolEnvironment::new();
+        let context = rustx::tools::executor::ToolExecutionContext::new(
+            &conversation_id,
+            None,
+            rustx::runtime::ExecutionCancellation::detached(
                 rustx::runtime::CancellationSignal::new(),
                 rustx::runtime::types::CancellationReason::UserRequested,
             ),
-            workspace: &workspace,
-            progress: &common::NoopProgress,
-            artifacts: &rustx::tools::artifacts::ArtifactStore::new(
-                conversation_id.clone(),
-                &artifacts,
-            )
-            .expect("artifacts"),
-            tool_output: &rustx::tools::managed_output::ManagedToolOutput::new(
-                conversation_id.clone(),
-                artifacts.join("tool-output"),
-            )
-            .expect("managed tool output"),
-            environment: &rustx::tools::environment::ToolEnvironment::new(),
-            skill_resources: None,
-        };
+            &workspace,
+            &common::NoopProgress,
+            &artifacts_store,
+            &tool_output,
+            &environment,
+            None,
+        );
         executor.execute(invocation, context).await
     };
     assert!(matches!(

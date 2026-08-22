@@ -344,6 +344,7 @@ mod tests {
             input_schema: schema,
             execution_policy: policy,
             concurrency_policy: ToolConcurrencyPolicy::Sequential,
+            approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
         }

@@ -159,10 +159,16 @@ impl ExecutionCancellation {
         self.cause.cause()
     }
 
-    /// The underlying runtime cancellation signal, for executors that hand
-    /// it to a child operation (a supervised process, a nested runner).
+    /// The underlying runtime cancellation signal, for internal runtime
+    /// executors that hand it to a child operation (a supervised process, a
+    /// nested runner).
+    ///
+    /// This is deliberately crate-private. A public `ToolExecutor` receives
+    /// [`ExecutionCancellation`] as a read-only observation view and must
+    /// not be able to obtain the trigger that can cancel its owning Agent
+    /// Loop attempt.
     #[must_use]
-    pub fn signal(&self) -> CancellationSignal {
+    pub(crate) fn signal(&self) -> CancellationSignal {
         self.signal.clone()
     }
 }

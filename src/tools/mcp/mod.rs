@@ -1250,6 +1250,7 @@ pub fn definitions(
                 input_schema: tool.input_schema,
                 execution_policy: policy.execution,
                 concurrency_policy: policy.concurrency,
+                approval_policy: policy.approval,
                 replay_policy: ToolReplayPolicy::Never,
                 origin: ToolOrigin::Mcp {
                     server_id: server_id.clone(),
