@@ -204,6 +204,8 @@ The ownership contract is:
 | Response transport | Runtime Client |
 | Rendering/input | TUI projection |
 | Attempt cancellation | `AgentCancellation` |
+| Tool cancellation observation | `ExecutionCancellation` read-only view |
+| Native Question capability | crate-private runtime-bound `QuestionRequester` |
 | Drain/quiescence | `ConversationRuntime` / `ConversationLifecycle` |
 | Crash recovery | M9 recovery authority |
 
@@ -212,7 +214,8 @@ The ownership contract is:
 - `AttemptLifecycle` always contains exactly one typed `PreToolPolicy`. A
   runtime-created attempt receives one concrete native binding to its
   conversation-owned `InteractionCoordinator`; production callers cannot
-  replace that owner with an arbitrary rendezvous. A standalone inert
+  replace that owner with an arbitrary rendezvous. No public
+  generic interaction trait is exposed. A standalone inert
   execution has no interaction provider and fails `Ask` closed. The
   runtime-created policy is derived from the effective `ApprovalMode`:
   `Policy` consults the resolved Tool's `Never`/`Always`
@@ -224,6 +227,12 @@ The ownership contract is:
   arguments, and after the Assistant `ToolCall` has committed canonically.
   Its `PreToolView` is read-only and contains no mutation handle, executor,
   cancellation owner, or dispatch capability.
+- `ToolRegistry::preflight` is the final `ask_user` argument contract. Its
+  tool-owned normalizer validates bounded Question facts and emits a
+  canonical explicit `allow_free_text` mode before schema validation. A
+  successful `PreparedInvocation` therefore cannot contain an empty,
+  duplicate, or oversized choice list, an invalid answer mode, or text outside
+  the Unicode-character bounds used by the Question response validator.
 - `Allow`, `Deny { reason }`, and `Ask { reason }` are the complete decision
   vocabulary. An approval request exposes only immutable decision facts. A
   response has no replacement argument field. Therefore `ToolCallId`,
@@ -257,9 +266,10 @@ mutate runtime state. A response/cancellation winner only decides the
 rendezvous; it does not bypass Agent Loop cancellation or tool-start rules.
 
 `AgentCancellation` is the only cancellation-cause authority for an
-attempt-owned interaction. The coordinator retains that owning handle only to
-consume its already-selected first-winner cause at the terminal boundary; it
-does not rank or replace causes. A response that arrives after cancellation
+attempt-owned interaction. The coordinator retains only an
+`ExecutionCancellation` observation view to consume its already-selected
+first-winner cause at the terminal boundary; it never receives the owning
+handle and does not rank or replace causes. A response that arrives after cancellation
 has become observable records the same `Cancelled { reason }` outcome and is
 rejected as `interaction_not_pending`, even if the waiter has not yet polled
 its cancellation future. Runtime drain requests `RuntimeShutdown` as a
@@ -325,8 +335,9 @@ exactly-once settlement just as it does for Approval.
 
 `ask_user` is an ordinary native Tool, not an Agent Loop Question branch. Its
 fixed policy is foreground-only, sequential, and approval-never. Its executor
-requests a Question through the same coordinator and returns a normal
-ToolResult, so the model continues through the existing Tool Plane. It has no
+receives only the crate-private bounded Question requester, requests a
+Question through the same coordinator, and returns a normal ToolResult, so the
+model continues through the existing Tool Plane. It has no
 filesystem/network/process authority and cannot recursively request Approval.
 
 ### Runtime Client and TUI projection

@@ -311,14 +311,20 @@ The ownership table is:
 | Response transport | Runtime Client |
 | Rendering and input | TUI projection |
 | Attempt cancellation | `AgentCancellation` |
+| Tool cancellation observation | `ExecutionCancellation` read-only view |
+| Native Question capability | crate-private `QuestionRequester` bound by the Agent Loop attempt |
 | Runtime drain and quiescence | `ConversationRuntime` / `ConversationLifecycle` |
 | Crash recovery | existing M9 recovery owner |
 
 The pre-tool seam is total and typed: every `AttemptLifecycle` carries one
 `PreToolPolicy`, while a runtime-created attempt receives one concrete native
 binding to its owning `InteractionCoordinator`. The binding is not a
-replaceable production rendezvous strategy; a standalone inert execution has
-no interaction provider and therefore fails an `Ask` closed. The configured
+replaceable production rendezvous strategy, and no public generic interaction
+trait exists. The only Tool Plane consumer is native `ask_user`, which gets a
+crate-private `QuestionRequester` containing the attempt identity, the
+read-only `ExecutionCancellation` view, and that coordinator. A standalone
+inert execution has no interaction provider and therefore fails an `Ask`
+closed. The configured
 `ToolApprovalPolicy` is resolved only after exact registry preflight. The
 runtime-wide `ApprovalMode` then computes effective approval: `Policy` keeps
 the Tool's `Never`/`Always` value, while `FullAccess` maps eligible calls to
@@ -326,9 +332,13 @@ the Tool's `Never`/`Always` value, while `FullAccess` maps eligible calls to
 permission language, risk-classification engine, allowlist, routing layer, or
 form framework.
 `PreToolPolicy` runs only after registry identity resolution, reserved metadata
-stripping, and business-argument validation, and after the Assistant
-`ToolCall` is canonical. It cannot resolve a tool, dispatch it, or alter the
-prepared invocation.
+stripping, tool-owned semantic normalization, and business-argument
+validation, and after the Assistant `ToolCall` is canonical. For `ask_user`,
+preflight turns a bare prompt into canonical `allow_free_text: true`, derives
+choice-only mode as `false`, and rejects empty/duplicate/oversized choices
+before a `PreparedInvocation` can be returned. The executor consumes that
+canonical invocation; it cannot rediscover model-argument validity. The
+policy cannot resolve a tool, dispatch it, or alter the prepared invocation.
 
 Question is a separate bounded interaction kind, not an approval variant. The
 native `ask_user` Tool uses the ordinary Tool Plane path and fixed
@@ -399,9 +409,9 @@ the leaf observation callback. Thus an empty pending map is not quiescence,
 and no interaction callback can begin after `Quiescent`.
 
 `AgentCancellation` remains the sole cause authority for an attempt-owned
-interaction. The coordinator retains the owning handle to consume its
-already-selected first-winner reason at this boundary, but performs no cause
-arbitration of its own. A response that arrives after cancellation is
+interaction. The coordinator retains only an `ExecutionCancellation` view to
+consume the already-selected first-winner reason at this boundary; it never
+receives the owner or performs cause arbitration of its own. A response that arrives after cancellation is
 observable cannot publish `Answered`; it is rejected as `not_pending` after
 the matching `Cancelled { reason }` transition. During drain,
 `ConversationRuntime` requests `RuntimeShutdown`, reads the active attempt's
@@ -443,7 +453,7 @@ executor `Failed`.
 
 The real `ConversationRuntime::shutdown()` path is covered by a deterministic
 regression: it observes the Runtime Client pending event, linearizes
-`Running -> Draining`, cancels the interaction through runtime-owned
+`Running -> Draining`, requests cancellation through runtime-owned
 `AgentCancellation`, and remains incomplete while a test gate holds the
 waiter handoff after pending-map removal. Only after the interaction waiter,
 AgentExecution, attempt task, and projection settlement release their counted

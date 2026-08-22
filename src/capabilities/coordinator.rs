@@ -2324,10 +2324,7 @@ mod mcp_race_tests {
                 tool_output: runtime_bundle.tool_output(),
                 environment: runtime_bundle.environment(),
                 skill_resources: None,
-                interaction: None,
-                attempt_id: None,
-                turn: 0,
-                agent_cancellation: None,
+                question_requester: None,
             },
         )
         .await;

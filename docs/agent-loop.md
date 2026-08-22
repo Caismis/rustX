@@ -715,7 +715,10 @@ second counted settlement admission. This composes with M9c drain without a
 second lifecycle or shutdown participant framework.
 
 The coordinator does not arbitrate cancellation causes. Each runtime-owned
-pending interaction retains the owning attempt's `AgentCancellation` handle.
+pending interaction retains an `ExecutionCancellation` observation view, not
+the owning attempt's `AgentCancellation` handle. Generic ToolExecutors receive
+that read-only execution view only; the native `ask_user` path receives a
+crate-private `QuestionRequester` bound to the same attempt and coordinator.
 If that authority has already selected a cause before a waiter or client
 response reaches the terminal transition, the interaction records the same
 `Cancelled { reason }` outcome and the response is `interaction_not_pending`;
@@ -728,13 +731,16 @@ settlement. `UserRequested` therefore survives a later drain, while
 The interaction domain is provider-independent and bounded to Approval and
 Question in 0.1. Question is not a pre-tool Agent Loop branch: the native
 `ask_user` capability is an ordinary foreground/sequential/approval-never
-Tool whose executor requests a Question from the same coordinator and returns
-the typed answer as an ordinary ToolResult. Questions carry only a bounded
+Tool whose executor requests a Question through that bounded requester and
+the same coordinator, then returns the typed answer as an ordinary ToolResult.
+Questions carry only a bounded
 prompt, optional finite choices, and an optional free-text flag. In the native
 tool contract, a bare prompt means open-ended free text; a supplied non-empty
-choice list is choice-only unless `allow_free_text: true` is explicit. Schema
-and runtime validation reject empty lists and invalid answer modes before an
-interaction provider is consulted. Generic forms/workflows, provider SDK
+choice list is choice-only unless `allow_free_text: true` is explicit. The
+Registry normalizer and canonical schema reject empty lists, duplicates,
+Unicode-bound violations, and invalid answer modes before an interaction
+provider is consulted. The executor never revalidates model arguments after
+preflight. Generic forms/workflows, provider SDK
 payloads, argument rewriting, and a generalized permission language are not
 part of this seam.
 

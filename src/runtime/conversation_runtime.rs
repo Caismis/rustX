@@ -5873,7 +5873,8 @@ mod tests {
                     arguments: serde_json::json!({}),
                     reason: "must not publish after drain".to_owned(),
                 },
-                &AgentCancellation::new(CancellationReason::RuntimeShutdown),
+                AgentCancellation::new(CancellationReason::RuntimeShutdown)
+                    .execution_cancellation(),
             )
             .await;
         assert_eq!(late_interaction, InteractionOutcome::Unavailable);
@@ -8005,6 +8006,17 @@ mod tests {
         .await;
         failure_thread.join().expect("failure thread joins");
 
+        // The runner-owned start boundary transitions the durable ownership
+        // record from Starting to Running immediately before executor start.
+        // Wait on that explicit watch rather than sampling a scheduler race.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            started.wait_for(|is_started| *is_started),
+        )
+        .await
+        .expect("runner start wait exceeded liveness guard")
+        .expect("start channel stays open");
+
         // The owned execution exists with a durable ownership fact and
         // keeps its settlement authority.
         let snapshot = runtime
@@ -8025,13 +8037,6 @@ mod tests {
             )),
             "the ownership durable fact committed before the failure"
         );
-        tokio::time::timeout(
-            std::time::Duration::from_secs(120),
-            started.wait_for(|is_started| *is_started),
-        )
-        .await
-        .expect("runner start wait exceeded liveness guard")
-        .expect("start channel stays open");
         release.send_replace(true);
         runtime
             .tool_runtime()

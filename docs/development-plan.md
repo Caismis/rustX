@@ -1087,11 +1087,16 @@ and makes `ask_user` return an explicit failed ToolResult; detach never
 answers, denies, or cancels an already-published interaction.
 
 The native `ask_user` capability is an ordinary foreground, sequential,
-approval-never Tool. Its executor requests one bounded Question (prompt,
-optional finite choices, optional free text) through this same coordinator
-and returns a normal ToolResult. It has no filesystem/network/process
-authority and no recursive approval path. Availability, activation, approval,
-ApprovalMode, execution, and concurrency remain separate facts.
+approval-never Tool. Its executor receives only a crate-private,
+attempt-bound `QuestionRequester`, whose cancellation input is the read-only
+`ExecutionCancellation` view. It requests one bounded Question (prompt,
+optional finite choices, optional free text) through this same coordinator and
+returns a normal ToolResult. Its semantic argument normalizer runs in
+`ToolRegistry::preflight`, so a successful `PreparedInvocation` is already an
+answerable Question. It has no filesystem/network/process authority, no
+attempt-cancellation authority, and no recursive approval path. Availability,
+activation, approval, ApprovalMode, execution, and concurrency remain
+separate facts.
 
 Interaction IDs derive from the already non-reused `AttemptId` domain plus a
 per-attempt ordinal. Pending interactions are process-owned observations, not

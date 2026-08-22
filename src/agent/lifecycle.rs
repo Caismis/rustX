@@ -147,15 +147,17 @@ use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
 
-use crate::agent::cancellation::AgentCancellation;
 use crate::context::{AcceptedContext, DeferredContextProducer, UserMessageProposal};
 use crate::conversation::SurfaceRevision;
+use crate::runtime::cancellation::ExecutionCancellation;
 use crate::runtime::identity::{
     AttemptId, CertifiedExtensionIdentity, ConversationId, ToolCallId, ToolId,
 };
 #[cfg(test)]
 use crate::runtime::interaction::TestInteractionRendezvous;
-use crate::runtime::interaction::{ApprovalFacts, InteractionCoordinator, InteractionOutcome};
+use crate::runtime::interaction::{
+    ApprovalFacts, InteractionCoordinator, InteractionOutcome, QuestionRequester,
+};
 use crate::runtime::types::ApprovalMode;
 use crate::tools::types::{
     ToolApprovalPolicy, ToolExecutionResult, ToolInvocationMode, ToolOrigin,
@@ -351,7 +353,7 @@ impl InteractionBinding {
         &self,
         attempt_id: AttemptId,
         facts: ApprovalFacts,
-        cancellation: &AgentCancellation,
+        cancellation: ExecutionCancellation,
     ) -> InteractionOutcome {
         match self {
             Self::Unavailable => InteractionOutcome::Unavailable,
@@ -365,12 +367,19 @@ impl InteractionBinding {
         }
     }
 
-    fn native_coordinator(&self) -> Option<Arc<dyn crate::runtime::ToolInteraction>> {
+    fn native_question_requester(
+        &self,
+        attempt_id: AttemptId,
+        cancellation: ExecutionCancellation,
+        turn: u32,
+    ) -> Option<QuestionRequester> {
         match self {
-            Self::Native(coordinator) => {
-                let coordinator: Arc<dyn crate::runtime::ToolInteraction> = coordinator.clone();
-                Some(coordinator)
-            }
+            Self::Native(coordinator) => Some(QuestionRequester::new(
+                Arc::clone(coordinator),
+                attempt_id,
+                cancellation,
+                turn,
+            )),
             Self::Unavailable => None,
             #[cfg(test)]
             Self::Test(_) => None,
@@ -732,19 +741,24 @@ impl AttemptLifecycle {
         &self,
         attempt_id: AttemptId,
         facts: ApprovalFacts,
-        cancellation: &AgentCancellation,
+        cancellation: ExecutionCancellation,
     ) -> InteractionOutcome {
         self.interaction
             .request_approval(attempt_id, facts, cancellation)
             .await
     }
 
-    /// Clones the runtime-owned coordinator for a native tool that needs to
-    /// publish a Question interaction through the same authority.
-    pub(crate) fn native_interaction_coordinator(
+    /// Binds the one native Question capability for a foreground invocation.
+    /// The returned value is crate-private and carries only a read-only
+    /// cancellation view; it never exposes the attempt cancellation owner.
+    pub(crate) fn native_question_requester(
         &self,
-    ) -> Option<Arc<dyn crate::runtime::ToolInteraction>> {
-        self.interaction.native_coordinator()
+        attempt_id: AttemptId,
+        cancellation: ExecutionCancellation,
+        turn: u32,
+    ) -> Option<QuestionRequester> {
+        self.interaction
+            .native_question_requester(attempt_id, cancellation, turn)
     }
 
     /// Binds the observer that speaks for the **native** runtime observation

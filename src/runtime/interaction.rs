@@ -23,11 +23,12 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+#[cfg(test)]
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
-use crate::agent::cancellation::AgentCancellation;
+use crate::runtime::cancellation::ExecutionCancellation;
 use crate::runtime::identity::{AttemptId, ConversationId, InteractionId, ToolCallId, ToolId};
 use crate::runtime::types::{CancellationReason, ConversationLifecycle, LifecycleAdmission};
 use crate::tools::types::{ToolInvocationMode, ToolOrigin};
@@ -231,8 +232,10 @@ impl QuestionFacts {
         if self.prompt.is_empty() {
             return Err("prompt must not be empty".to_owned());
         }
-        if self.prompt.len() > MAX_QUESTION_PROMPT_BYTES {
-            return Err(format!("prompt exceeds {MAX_QUESTION_PROMPT_BYTES} bytes"));
+        if self.prompt.chars().count() > MAX_QUESTION_PROMPT_CHARS {
+            return Err(format!(
+                "prompt exceeds {MAX_QUESTION_PROMPT_CHARS} characters"
+            ));
         }
         let Some(choices) = self.choices.as_ref() else {
             if self.allow_free_text {
@@ -250,10 +253,10 @@ impl QuestionFacts {
         }
         if choices
             .iter()
-            .any(|choice| choice.is_empty() || choice.len() > MAX_QUESTION_CHOICE_BYTES)
+            .any(|choice| choice.is_empty() || choice.chars().count() > MAX_QUESTION_CHOICE_CHARS)
         {
             return Err(format!(
-                "each choice must be non-empty and at most {MAX_QUESTION_CHOICE_BYTES} bytes"
+                "each choice must be non-empty and at most {MAX_QUESTION_CHOICE_CHARS} characters"
             ));
         }
         let mut unique = std::collections::BTreeSet::new();
@@ -306,11 +309,11 @@ pub(crate) trait InteractionObserver: Send + Sync {
 /// without making an alternate production owner configurable.
 #[cfg(test)]
 pub(crate) trait TestInteractionRendezvous: Send + Sync {
-    fn request_approval<'a>(
-        &'a self,
+    fn request_approval(
+        &self,
         facts: ApprovalFacts,
-        cancellation: &'a AgentCancellation,
-    ) -> BoxFuture<'a, InteractionOutcome>;
+        cancellation: ExecutionCancellation,
+    ) -> BoxFuture<'_, InteractionOutcome>;
 }
 
 /// A published interaction ticket owned by the semantic operation that is
@@ -375,11 +378,13 @@ impl Drop for WaiterPayload {
 
 struct PendingInteraction {
     request: InteractionRequest,
-    /// The owning attempt cancellation authority. This is the same handle
-    /// used by the waiter and lets a response that arrives after cancellation
-    /// became observable consume the already-selected cause instead of
-    /// publishing an `Answered` terminal outcome.
-    cancellation: AgentCancellation,
+    /// A read-only view of the owning cancellation authority. This is the
+    /// same live view used by the waiter and lets a response that arrives
+    /// after cancellation became observable consume the already-selected
+    /// cause instead of publishing an `Answered` terminal outcome. The
+    /// coordinator never receives the authority that can request or
+    /// arbitrate cancellation.
+    cancellation: ExecutionCancellation,
     sender: oneshot::Sender<WaiterPayload>,
     admission: LifecycleAdmission,
 }
@@ -442,8 +447,7 @@ impl InteractionSettleGate {
 /// Test-only gate after an owning cancellation has become observable by the
 /// waiter, but before that waiter attempts the coordinator terminal
 /// transition. It proves that runtime drain can settle the pending entry using
-/// the already-selected `AgentCancellation` cause without relying on waiter
-/// scheduling.
+/// the already-selected owner cause without relying on waiter scheduling.
 #[cfg(test)]
 #[derive(Debug, Default)]
 pub(crate) struct InteractionWaitCancellationGate {
@@ -520,28 +524,44 @@ pub(crate) struct InteractionCoordinator {
     wait_cancellation_gate: Mutex<Option<Arc<InteractionWaitCancellationGate>>>,
 }
 
-/// The narrow native interaction capability made available to runtime-owned
-/// tools. The concrete coordinator remains the sole implementation and sole
-/// authority; this trait only prevents the public tool execution context from
-/// exposing its private synchronization state.
-pub trait ToolInteraction: Send + Sync {
-    /// Publishes and awaits one Question through the existing coordinator.
-    fn request_question<'a>(
-        &'a self,
-        attempt_id: AttemptId,
-        facts: QuestionFacts,
-        cancellation: &'a AgentCancellation,
-    ) -> BoxFuture<'a, InteractionOutcome>;
+/// The bounded native Question capability bound to one Agent Loop attempt.
+///
+/// This is intentionally a concrete crate-private value rather than a public
+/// generic interaction trait. It carries only the attempt identity, a read-only
+/// execution-cancellation view, and the one conversation-owned coordinator.
+/// Its sole operation is to publish and await a Question; it cannot request
+/// cancellation, arbitrate model-turn start, settle Approval, or mutate
+/// canonical history.
+#[derive(Clone)]
+pub(crate) struct QuestionRequester {
+    coordinator: Arc<InteractionCoordinator>,
+    attempt_id: AttemptId,
+    cancellation: ExecutionCancellation,
+    turn: u32,
 }
 
-impl ToolInteraction for InteractionCoordinator {
-    fn request_question<'a>(
-        &'a self,
+impl QuestionRequester {
+    pub(crate) fn new(
+        coordinator: Arc<InteractionCoordinator>,
         attempt_id: AttemptId,
-        facts: QuestionFacts,
-        cancellation: &'a AgentCancellation,
-    ) -> BoxFuture<'a, InteractionOutcome> {
-        Box::pin(self.request_question(attempt_id, facts, cancellation))
+        cancellation: ExecutionCancellation,
+        turn: u32,
+    ) -> Self {
+        Self {
+            coordinator,
+            attempt_id,
+            cancellation,
+            turn,
+        }
+    }
+
+    /// Publishes and awaits one bounded Question through the existing
+    /// runtime-owned coordinator.
+    pub(crate) async fn request_question(&self, mut facts: QuestionFacts) -> InteractionOutcome {
+        facts.turn = self.turn;
+        self.coordinator
+            .request_question(self.attempt_id.clone(), facts, self.cancellation.clone())
+            .await
     }
 }
 
@@ -666,7 +686,7 @@ impl InteractionCoordinator {
         &self,
         attempt_id: AttemptId,
         facts: ApprovalFacts,
-        cancellation: &AgentCancellation,
+        cancellation: &ExecutionCancellation,
     ) -> Result<InteractionTicket, InteractionOutcome> {
         let id = self.allocate_id(&attempt_id)?;
         let request = facts.into_request(self.conversation_id.clone(), attempt_id, id.clone());
@@ -701,7 +721,7 @@ impl InteractionCoordinator {
         &self,
         attempt_id: AttemptId,
         facts: QuestionFacts,
-        cancellation: &AgentCancellation,
+        cancellation: &ExecutionCancellation,
     ) -> Result<InteractionTicket, InteractionOutcome> {
         if !validate_question_facts(&facts) {
             return Err(InteractionOutcome::Unavailable);
@@ -738,7 +758,9 @@ impl InteractionCoordinator {
         attempt_id: AttemptId,
         facts: ApprovalFacts,
     ) -> Result<InteractionTicket, InteractionOutcome> {
-        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let owner =
+            crate::agent::cancellation::AgentCancellation::new(CancellationReason::UserRequested);
+        let cancellation = owner.execution_cancellation();
         self.publish_approval_with_cancellation(attempt_id, facts, &cancellation)
     }
 
@@ -747,9 +769,9 @@ impl InteractionCoordinator {
         &self,
         attempt_id: AttemptId,
         facts: ApprovalFacts,
-        cancellation: &AgentCancellation,
+        cancellation: ExecutionCancellation,
     ) -> InteractionOutcome {
-        let ticket = match self.publish_approval_with_cancellation(attempt_id, facts, cancellation)
+        let ticket = match self.publish_approval_with_cancellation(attempt_id, facts, &cancellation)
         {
             Ok(ticket) => ticket,
             Err(outcome) => return outcome,
@@ -763,9 +785,9 @@ impl InteractionCoordinator {
         &self,
         attempt_id: AttemptId,
         facts: QuestionFacts,
-        cancellation: &AgentCancellation,
+        cancellation: ExecutionCancellation,
     ) -> InteractionOutcome {
-        let ticket = match self.publish_question_with_cancellation(attempt_id, facts, cancellation)
+        let ticket = match self.publish_question_with_cancellation(attempt_id, facts, &cancellation)
         {
             Ok(ticket) => ticket,
             Err(outcome) => return outcome,
@@ -778,7 +800,7 @@ impl InteractionCoordinator {
     async fn wait(
         &self,
         ticket: InteractionTicket,
-        cancellation: &AgentCancellation,
+        cancellation: ExecutionCancellation,
     ) -> InteractionOutcome {
         let InteractionTicket { id, mut receiver } = ticket;
         let payload = tokio::select! {
@@ -925,7 +947,7 @@ impl InteractionCoordinator {
         };
         let cancellation_won = validate_response && pending.cancellation.is_cancelled();
         if cancellation_won {
-            // AgentCancellation owns cause arbitration. A response that
+            // The owning AgentCancellation owns cause arbitration. A response that
             // arrives after that authority has already won can only trigger
             // the same cancellation terminal outcome; it cannot publish an
             // Answered result and leave the interaction out of sync with its
@@ -1001,11 +1023,11 @@ impl core::fmt::Display for InteractionError {
 
 impl std::error::Error for InteractionError {}
 
-const MAX_RESPONSE_REASON_BYTES: usize = 1024;
-const MAX_QUESTION_PROMPT_BYTES: usize = 4096;
+const MAX_RESPONSE_REASON_CHARS: usize = 1024;
+const MAX_QUESTION_PROMPT_CHARS: usize = 4096;
 const MAX_QUESTION_CHOICES: usize = 32;
-const MAX_QUESTION_CHOICE_BYTES: usize = 256;
-const MAX_QUESTION_ANSWER_BYTES: usize = 4096;
+const MAX_QUESTION_CHOICE_CHARS: usize = 256;
+const MAX_QUESTION_ANSWER_CHARS: usize = 4096;
 
 fn validate_question_facts(facts: &QuestionFacts) -> bool {
     facts.validate().is_ok()
@@ -1018,11 +1040,11 @@ fn validate_response_for(
     match (&request.kind, response) {
         (InteractionKind::Approval { .. }, InteractionResponse::Approval { decision }) => {
             if let ApprovalDecision::Deny { reason } = decision
-                && reason.len() > MAX_RESPONSE_REASON_BYTES
+                && reason.chars().count() > MAX_RESPONSE_REASON_CHARS
             {
                 return Err(InteractionError::InvalidResponse {
                     message: format!(
-                        "approval denial reason exceeds {MAX_RESPONSE_REASON_BYTES} bytes"
+                        "approval denial reason exceeds {MAX_RESPONSE_REASON_CHARS} characters"
                     ),
                 });
             }
@@ -1040,10 +1062,10 @@ fn validate_response_for(
                 QuestionAnswer::Choice { value } => ("choice", value),
                 QuestionAnswer::FreeText { value } => ("free text", value),
             };
-            if value.is_empty() || value.len() > MAX_QUESTION_ANSWER_BYTES {
+            if value.is_empty() || value.chars().count() > MAX_QUESTION_ANSWER_CHARS {
                 return Err(InteractionError::InvalidResponse {
                     message: format!(
-                        "{kind} answer is empty or exceeds {MAX_QUESTION_ANSWER_BYTES} bytes"
+                        "{kind} answer is empty or exceeds {MAX_QUESTION_ANSWER_CHARS} characters"
                     ),
                 });
             }
@@ -1076,8 +1098,10 @@ fn validate_response_for(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::cancellation::AgentCancellation;
     use crate::runtime::identity::ConversationId;
     use crate::runtime::types::ConversationLifecycleState;
+    use tokio::sync::oneshot;
 
     fn facts(call: &str) -> ApprovalFacts {
         ApprovalFacts {
@@ -1113,7 +1137,8 @@ mod tests {
         coordinator: &InteractionCoordinator,
         attempt: &str,
     ) -> Result<InteractionTicket, InteractionOutcome> {
-        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let cancellation =
+            AgentCancellation::new(CancellationReason::UserRequested).execution_cancellation();
         coordinator.publish_question_with_cancellation(
             AttemptId::new(attempt),
             question_facts(),
@@ -1138,6 +1163,20 @@ mod tests {
                 .unwrap()
                 .push((id.clone(), outcome.clone()));
         }
+    }
+
+    struct PendingIdObserver {
+        sender: Mutex<Option<oneshot::Sender<InteractionId>>>,
+    }
+
+    impl InteractionObserver for PendingIdObserver {
+        fn on_pending(&self, request: &InteractionRequest) {
+            if let Some(sender) = self.sender.lock().unwrap().take() {
+                let _ = sender.send(request.id.clone());
+            }
+        }
+
+        fn on_settled(&self, _id: &InteractionId, _outcome: &InteractionOutcome) {}
     }
 
     fn coordinator() -> Arc<InteractionCoordinator> {
@@ -1222,7 +1261,7 @@ mod tests {
             .expect("provider is available");
         let id = ticket.id.clone();
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-        let wait = coordinator.wait(ticket, &cancellation);
+        let wait = coordinator.wait(ticket, cancellation.execution_cancellation());
         let response = InteractionResponse::Approval {
             decision: ApprovalDecision::Allow,
         };
@@ -1255,7 +1294,7 @@ mod tests {
         assert_eq!(request.id, id);
         assert!(matches!(request.kind, InteractionKind::Question { .. }));
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-        let waiter = coordinator.wait(ticket, &cancellation);
+        let waiter = coordinator.wait(ticket, cancellation.execution_cancellation());
         let response = InteractionResponse::Question {
             answer: QuestionAnswer::Choice {
                 value: "staging".to_owned(),
@@ -1278,13 +1317,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bounded_question_requester_observes_owner_cancellation_only() {
+        let coordinator = coordinator();
+        coordinator.set_provider_available(true);
+        let (pending_sender, pending_receiver) = oneshot::channel();
+        coordinator.install_observer(Arc::new(PendingIdObserver {
+            sender: Mutex::new(Some(pending_sender)),
+        }));
+        let owner = AgentCancellation::new(CancellationReason::UserRequested);
+        let requester = QuestionRequester::new(
+            coordinator.clone(),
+            AttemptId::new("bounded-question-attempt"),
+            owner.execution_cancellation(),
+            9,
+        );
+        let waiter =
+            tokio::spawn(async move { requester.request_question(question_facts()).await });
+        let interaction_id = pending_receiver.await.expect("Question was published");
+        assert!(owner.request_cancel(CancellationReason::RuntimeShutdown));
+        assert_eq!(
+            waiter.await.expect("Question waiter"),
+            InteractionOutcome::Cancelled {
+                reason: CancellationReason::RuntimeShutdown
+            }
+        );
+        assert_eq!(
+            coordinator.respond(
+                &interaction_id,
+                InteractionResponse::Question {
+                    answer: QuestionAnswer::Choice {
+                        value: "staging".to_owned(),
+                    },
+                },
+            ),
+            Err(InteractionError::NotPending { interaction_id })
+        );
+    }
+
+    #[tokio::test]
     async fn question_rejects_answers_outside_its_declared_vocabulary() {
         let coordinator = coordinator();
         coordinator.set_provider_available(true);
         let ticket = publish_question(&coordinator, "question-validation").expect("published");
         let id = ticket.id.clone();
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-        let waiter = coordinator.wait(ticket, &cancellation);
+        let waiter = coordinator.wait(ticket, cancellation.execution_cancellation());
         assert!(matches!(
             coordinator.respond(
                 &id,
@@ -1318,13 +1395,15 @@ mod tests {
             .publish_question_with_cancellation(
                 AttemptId::new("question-cancel"),
                 question_facts(),
-                &cancellation,
+                &cancellation.execution_cancellation(),
             )
             .expect("published");
         let id = ticket.id.clone();
         assert!(cancellation.request_cancel(CancellationReason::RuntimeShutdown));
         assert_eq!(
-            coordinator.wait(ticket, &cancellation).await,
+            coordinator
+                .wait(ticket, cancellation.execution_cancellation())
+                .await,
             InteractionOutcome::Cancelled {
                 reason: CancellationReason::RuntimeShutdown
             }
@@ -1399,7 +1478,9 @@ mod tests {
 
         let cancellation = AgentCancellation::new(CancellationReason::RuntimeShutdown);
         assert_eq!(
-            coordinator.wait(ticket, &cancellation).await,
+            coordinator
+                .wait(ticket, cancellation.execution_cancellation())
+                .await,
             InteractionOutcome::Answered { response }
         );
     }
@@ -1416,7 +1497,7 @@ mod tests {
             .publish_approval_with_cancellation(
                 AttemptId::new("conversation-attempt-1"),
                 facts("c1"),
-                &cancellation,
+                &cancellation.execution_cancellation(),
             )
             .expect("provider is available");
         let id = ticket.id.clone();
@@ -1426,10 +1507,11 @@ mod tests {
 
         let waiter_coordinator = Arc::clone(&coordinator);
         let waiter_cancellation = cancellation.clone();
-        let waiter =
-            tokio::spawn(
-                async move { waiter_coordinator.wait(ticket, &waiter_cancellation).await },
-            );
+        let waiter = tokio::spawn(async move {
+            waiter_coordinator
+                .wait(ticket, waiter_cancellation.execution_cancellation())
+                .await
+        });
 
         assert!(cancellation.request_cancel(CancellationReason::UserRequested));
         let waiter_gate_for_wait = waiter_gate.clone();
@@ -1471,7 +1553,7 @@ mod tests {
             .expect("provider is available");
         let id = ticket.id.clone();
         let cancellation = AgentCancellation::new(CancellationReason::RuntimeShutdown);
-        let wait = coordinator.wait(ticket, &cancellation);
+        let wait = coordinator.wait(ticket, cancellation.execution_cancellation());
         assert!(cancellation.request_cancel(CancellationReason::RuntimeShutdown));
         assert_eq!(
             wait.await,
@@ -1542,7 +1624,9 @@ mod tests {
 
         let cancellation = AgentCancellation::new(CancellationReason::RuntimeShutdown);
         assert_eq!(
-            coordinator.wait(ticket, &cancellation).await,
+            coordinator
+                .wait(ticket, cancellation.execution_cancellation())
+                .await,
             InteractionOutcome::Cancelled {
                 reason: CancellationReason::RuntimeShutdown
             }
@@ -1572,7 +1656,9 @@ mod tests {
 
         let cancellation = AgentCancellation::new(CancellationReason::RuntimeShutdown);
         assert_eq!(
-            coordinator.wait(ticket, &cancellation).await,
+            coordinator
+                .wait(ticket, cancellation.execution_cancellation())
+                .await,
             InteractionOutcome::Cancelled {
                 reason: CancellationReason::RuntimeShutdown
             }
@@ -1647,7 +1733,9 @@ mod tests {
 
         let cancellation = AgentCancellation::new(CancellationReason::RuntimeShutdown);
         assert!(matches!(
-            coordinator.wait(ticket, &cancellation).await,
+            coordinator
+                .wait(ticket, cancellation.execution_cancellation())
+                .await,
             InteractionOutcome::Answered { .. }
         ));
         assert_eq!(
@@ -1742,7 +1830,7 @@ mod tests {
         assert_eq!(coordinator.pending_snapshot()[0].id, id);
 
         let cancellation = AgentCancellation::new(CancellationReason::RuntimeShutdown);
-        let wait = coordinator.wait(ticket, &cancellation);
+        let wait = coordinator.wait(ticket, cancellation.execution_cancellation());
         coordinator.set_provider_available(true);
         coordinator
             .respond(

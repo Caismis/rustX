@@ -798,24 +798,20 @@ pub async fn run_tool_with_cancellation(
     };
     let executor = fixture.registry.executor(&prepared.invocation.tool_id);
     let reporter = NoopProgress;
-    let context = ToolExecutionContext {
-        conversation_id: fixture.runtime.conversation_id(),
-        execution_id: None,
-        cancellation: rustx::runtime::ExecutionCancellation::detached(
+    let context = ToolExecutionContext::new(
+        fixture.runtime.conversation_id(),
+        None,
+        rustx::runtime::ExecutionCancellation::detached(
             cancellation,
             rustx::runtime::types::CancellationReason::UserRequested,
         ),
-        workspace: fixture.runtime.workspace(),
-        progress: &reporter,
-        artifacts: fixture.runtime.artifacts(),
-        tool_output: fixture.runtime.tool_output(),
-        environment: fixture.runtime.environment(),
-        skill_resources: None,
-        interaction: None,
-        attempt_id: None,
-        turn: 0,
-        agent_cancellation: None,
-    };
+        fixture.runtime.workspace(),
+        &reporter,
+        fixture.runtime.artifacts(),
+        fixture.runtime.tool_output(),
+        fixture.runtime.environment(),
+        None,
+    );
     executor.execute(prepared.invocation, context).await
 }
 
@@ -846,24 +842,20 @@ pub async fn run_tool(
     };
     let executor = fixture.registry.executor(&prepared.invocation.tool_id);
     let reporter = NoopProgress;
-    let context = ToolExecutionContext {
-        conversation_id: fixture.runtime.conversation_id(),
-        execution_id: None,
-        cancellation: rustx::runtime::ExecutionCancellation::detached(
+    let context = ToolExecutionContext::new(
+        fixture.runtime.conversation_id(),
+        None,
+        rustx::runtime::ExecutionCancellation::detached(
             rustx::runtime::CancellationSignal::new(),
             rustx::runtime::types::CancellationReason::UserRequested,
         ),
-        workspace: fixture.runtime.workspace(),
-        progress: &reporter,
-        artifacts: fixture.runtime.artifacts(),
-        tool_output: fixture.runtime.tool_output(),
-        environment: fixture.runtime.environment(),
-        skill_resources: None,
-        interaction: None,
-        attempt_id: None,
-        turn: 0,
-        agent_cancellation: None,
-    };
+        fixture.runtime.workspace(),
+        &reporter,
+        fixture.runtime.artifacts(),
+        fixture.runtime.tool_output(),
+        fixture.runtime.environment(),
+        None,
+    );
     executor.execute(prepared.invocation, context).await
 }
 

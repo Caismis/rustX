@@ -49,6 +49,7 @@ use rustx::message::types::{
 };
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
+use rustx::runtime::ExecutionCancellation;
 use rustx::runtime::identity::{
     AgentId, AttemptId, CertifiedExtensionIdentity, ContextContributorIdentity, ConversationId,
     MessageId, NativeContextContributor, ToolCallId, ToolId,
@@ -250,11 +251,11 @@ impl ScriptedInteractionRendezvous {
 }
 
 impl TestInteractionRendezvous for ScriptedInteractionRendezvous {
-    fn request_approval<'a>(
-        &'a self,
+    fn request_approval(
+        &self,
         facts: ApprovalFacts,
-        cancellation: &'a AgentCancellation,
-    ) -> BoxFuture<'a, InteractionOutcome> {
+        cancellation: ExecutionCancellation,
+    ) -> BoxFuture<'_, InteractionOutcome> {
         let count = {
             let mut requests = self.requests.lock().expect("interaction requests lock");
             requests.push(facts);

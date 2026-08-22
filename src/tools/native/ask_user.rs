@@ -23,19 +23,26 @@ use crate::tools::types::{
 /// The canonical model-facing name of the native question tool.
 pub const ASK_USER_NAME: &str = crate::tools::executor::ASK_USER_TOOL_NAME;
 
-/// The normalized model-facing input contract of `ask_user`.
-#[derive(Debug)]
+/// The canonical, preflight-normalized input contract of `ask_user`.
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 struct AskUserInput {
     /// The question shown to the user.
     prompt: String,
     /// Optional finite answer choices.
+    #[serde(skip_serializing_if = "Option::is_none")]
     choices: Option<Vec<String>>,
     /// Whether a free-text answer is accepted.
     allow_free_text: bool,
 }
 
 impl AskUserInput {
-    fn parse(arguments: &serde_json::Value) -> Result<Self, String> {
+    /// Parses, validates, and normalizes model arguments at the registry
+    /// preflight boundary. The returned value always contains an explicit
+    /// `allow_free_text` mode, so a successful `PreparedInvocation` is an
+    /// answerable Question and the executor need not rediscover semantic
+    /// argument errors.
+    fn from_wire(arguments: &serde_json::Value) -> Result<Self, String> {
         let wire: AskUserInputWire = serde_json::from_value(arguments.clone())
             .map_err(|error| format!("invalid ask_user arguments: {error}"))?;
         let choices = match wire.choices {
@@ -79,6 +86,12 @@ impl AskUserInput {
             .validate()
             .map_err(|error| format!("invalid ask_user arguments: {error}"))?;
         Ok(input)
+    }
+
+    fn normalize(arguments: &serde_json::Value) -> Result<serde_json::Value, String> {
+        let input = Self::from_wire(arguments)?;
+        serde_json::to_value(input)
+            .map_err(|error| format!("failed to normalize ask_user arguments: {error}"))
     }
 
     fn question_facts(&self, turn: u32) -> QuestionFacts {
@@ -196,6 +209,7 @@ impl JsonSchema for AskUserInput {
 #[must_use]
 pub(super) fn registration() -> NativeToolRegistration {
     NativeToolRegistration::new(definition(), std::sync::Arc::new(AskUserExecutor))
+        .with_normalizer(AskUserInput::normalize)
 }
 
 fn definition() -> ToolDefinition {
@@ -221,26 +235,18 @@ impl ToolExecutor for AskUserExecutor {
         context: ToolExecutionContext<'a>,
     ) -> BoxFuture<'a, ToolExecutionResult> {
         Box::pin(async move {
-            let input = match AskUserInput::parse(&invocation.arguments) {
+            let input: AskUserInput = match serde_json::from_value(invocation.arguments) {
                 Ok(input) => input,
-                Err(error) => return failed_result(error),
+                Err(error) => {
+                    return failed_result(format!(
+                        "ask_user received an invocation that was not preflight-normalized: {error}"
+                    ));
+                }
             };
-            let Some(attempt_id) = context.attempt_id else {
-                return failed_result("ask_user requires an active Agent Loop attempt");
-            };
-            let Some(cancellation) = context.agent_cancellation else {
-                return failed_result("ask_user requires an active attempt cancellation authority");
-            };
-            let facts = input.question_facts(context.turn);
-            if let Err(error) = facts.validate() {
-                return failed_result(format!("invalid ask_user arguments: {error}"));
-            }
-            let Some(interaction) = context.interaction.as_ref() else {
+            let Some(requester) = context.question_requester() else {
                 return failed_result("ask_user interaction provider unavailable");
             };
-            let outcome = interaction
-                .request_question(attempt_id.clone(), facts, cancellation)
-                .await;
+            let outcome = requester.request_question(input.question_facts(0)).await;
             match outcome {
                 InteractionOutcome::Answered {
                     response: InteractionResponse::Question { answer },
@@ -276,20 +282,18 @@ fn answer_result(answer: QuestionAnswer) -> ToolExecutionResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::AgentCancellation;
     use crate::runtime::identity::{AttemptId, ConversationId, InteractionId, ToolCallId, ToolId};
     use crate::runtime::interaction::{
-        InteractionCoordinator, InteractionObserver, InteractionRequest,
+        InteractionCoordinator, InteractionObserver, InteractionRequest, QuestionRequester,
     };
     use crate::runtime::types::{CancellationReason, ConversationLifecycle};
-    use crate::runtime::{InteractionKind, ToolInteraction};
+    use crate::runtime::{CancellationSignal, ExecutionCancellation, InteractionKind};
     use crate::tools::artifacts::ArtifactStore;
     use crate::tools::environment::ToolEnvironment;
     use crate::tools::executor::{PreflightOutcome, ToolRegistry};
     use crate::tools::managed_output::ManagedToolOutput;
     use crate::tools::types::{ToolCall, ToolInvocationMode};
     use crate::tools::workspace::Workspace;
-    use futures_util::future::ready;
     use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
     use tokio::sync::oneshot;
@@ -300,30 +304,11 @@ mod tests {
         fn report(&self, _progress: crate::tools::types::ToolProgress) {}
     }
 
-    struct ScriptedQuestion;
-
-    impl crate::runtime::ToolInteraction for ScriptedQuestion {
-        fn request_question<'a>(
-            &'a self,
-            _attempt_id: AttemptId,
-            _facts: QuestionFacts,
-            _cancellation: &'a AgentCancellation,
-        ) -> BoxFuture<'a, InteractionOutcome> {
-            Box::pin(ready(InteractionOutcome::Answered {
-                response: InteractionResponse::Question {
-                    answer: QuestionAnswer::FreeText {
-                        value: "typed answer".to_owned(),
-                    },
-                },
-            }))
-        }
-    }
-
-    fn context<'a>(
-        dir: &'a TempDir,
-        interaction: Option<std::sync::Arc<dyn crate::runtime::ToolInteraction>>,
-        cancellation: &'a AgentCancellation,
-    ) -> ToolExecutionContext<'a> {
+    fn context(
+        dir: &TempDir,
+        requester: Option<QuestionRequester>,
+        cancellation: ExecutionCancellation,
+    ) -> ToolExecutionContext<'_> {
         let workspace = Box::leak(Box::new(Workspace::new(dir.path()).expect("workspace")));
         let conversation_id = ConversationId::new("ask-user-test");
         let artifacts = Box::leak(Box::new(
@@ -337,24 +322,20 @@ mod tests {
         let environment = Box::leak(Box::new(ToolEnvironment::new()));
         let progress = Box::leak(Box::new(NoopProgress));
         let conversation_id = Box::leak(Box::new(conversation_id));
-        let attempt_id = Box::leak(Box::new(AttemptId::new("ask-user-attempt")));
-        ToolExecutionContext {
+        let context = ToolExecutionContext::new(
             conversation_id,
-            execution_id: None,
-            cancellation: crate::runtime::ExecutionCancellation::detached(
-                cancellation.signal(),
-                cancellation.reason(),
-            ),
+            None,
+            cancellation,
             workspace,
             progress,
             artifacts,
             tool_output,
             environment,
-            skill_resources: None,
-            interaction,
-            attempt_id: Some(attempt_id),
-            turn: 1,
-            agent_cancellation: Some(cancellation),
+            None,
+        );
+        match requester {
+            Some(requester) => context.with_question_requester(requester),
+            None => context,
         }
     }
 
@@ -373,8 +354,13 @@ mod tests {
 
     fn registry() -> ToolRegistry {
         let mut registry = ToolRegistry::new();
+        let registration = registration();
         registry
-            .register(definition(), Arc::new(AskUserExecutor))
+            .register_with_argument_normalizer(
+                registration.definition,
+                registration.executor,
+                registration.normalizer,
+            )
             .expect("ask_user registration");
         registry
     }
@@ -434,10 +420,18 @@ mod tests {
             sender: Mutex::new(Some(pending_sender)),
         }));
 
-        let interaction: Arc<dyn ToolInteraction> = coordinator.clone();
         let dir = tempfile::tempdir().expect("temp dir");
-        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-        let context = context(&dir, Some(interaction), &cancellation);
+        let cancellation = ExecutionCancellation::detached(
+            CancellationSignal::new(),
+            CancellationReason::UserRequested,
+        );
+        let requester = QuestionRequester::new(
+            coordinator.clone(),
+            AttemptId::new("ask-user-production-attempt"),
+            cancellation.clone(),
+            1,
+        );
+        let context = context(&dir, Some(requester), cancellation);
         let executor = registry.executor(&prepared.invocation.tool_id);
         let mut execution = Box::pin(executor.execute(prepared.invocation, context));
         let request = tokio::select! {
@@ -455,8 +449,9 @@ mod tests {
     fn schema_and_preflight_agree_on_the_three_question_modes() {
         let schema = definition().input_schema;
         assert!(schema.get("anyOf").is_some(), "mode branches are explicit");
+        let validator = jsonschema::Validator::new(&schema).expect("valid ask_user schema");
 
-        for arguments in [
+        let valid_arguments = [
             serde_json::json!({"prompt": "What should I call it?"}),
             serde_json::json!({
                 "prompt": "Where should I deploy?",
@@ -467,48 +462,154 @@ mod tests {
                 "choices": ["staging", "production"],
                 "allow_free_text": true
             }),
-        ] {
+        ];
+        for arguments in valid_arguments {
+            assert!(validator.is_valid(&arguments));
             assert!(matches!(preflight(arguments), PreflightOutcome::Ready(_)));
         }
 
         for arguments in [
-            serde_json::json!({"prompt": "Choose", "choices": []}),
             serde_json::json!({"prompt": "Choose", "allow_free_text": false}),
-            serde_json::json!({
-                "prompt": "Choose",
-                "choices": ["a"],
-                "allow_free_text": null
-            }),
+            serde_json::json!({"prompt": "Choose", "choices": []}),
+            serde_json::json!({"prompt": "Choose", "choices": ["a"], "allow_free_text": null}),
+            serde_json::json!({"prompt": "Choose", "unknown": true}),
         ] {
+            assert!(!validator.is_valid(&arguments));
             assert!(matches!(
                 preflight(arguments),
                 PreflightOutcome::Rejected { .. }
             ));
         }
+
+        let PreflightOutcome::Ready(bare) = preflight(serde_json::json!({
+            "prompt": "What should I call it?"
+        })) else {
+            panic!("bare prompt should preflight");
+        };
+        assert_eq!(bare.invocation.arguments["allow_free_text"], true);
+
+        let PreflightOutcome::Ready(choice_only) = preflight(serde_json::json!({
+            "prompt": "Where?",
+            "choices": ["staging", "production"]
+        })) else {
+            panic!("choice-only question should preflight");
+        };
+        assert_eq!(choice_only.invocation.arguments["allow_free_text"], false);
+
+        let PreflightOutcome::Ready(mixed) = preflight(serde_json::json!({
+            "prompt": "Where?",
+            "choices": ["staging", "production"],
+            "allow_free_text": true
+        })) else {
+            panic!("mixed question should preflight");
+        };
+        assert_eq!(mixed.invocation.arguments["allow_free_text"], true);
     }
 
     #[test]
-    fn invalid_answer_modes_have_clear_argument_errors() {
-        let empty_choices = AskUserInput::parse(&serde_json::json!({
-            "prompt": "Choose",
-            "choices": []
-        }))
-        .expect_err("empty choices are invalid");
-        assert!(empty_choices.contains("choices must contain at least one"));
+    fn invalid_arguments_are_rejected_by_registry_preflight() {
+        for (arguments, message) in [
+            (
+                serde_json::json!({"prompt": "Choose", "choices": []}),
+                "choices must contain at least one",
+            ),
+            (
+                serde_json::json!({"prompt": "Choose", "allow_free_text": false}),
+                "allow_free_text must be true",
+            ),
+            (
+                serde_json::json!({"prompt": "Choose", "allow_free_text": null}),
+                "allow_free_text must be a boolean",
+            ),
+            (
+                serde_json::json!({"prompt": "Choose", "choices": ["a", "a"]}),
+                "choices must not contain duplicates",
+            ),
+        ] {
+            let PreflightOutcome::Rejected { error, .. } = preflight(arguments) else {
+                panic!("invalid ask_user arguments must be rejected during preflight");
+            };
+            assert!(
+                error.contains(message),
+                "{error:?} does not contain {message:?}"
+            );
+        }
+    }
 
-        let disabled_open_ended = AskUserInput::parse(&serde_json::json!({
-            "prompt": "Choose",
-            "allow_free_text": false
-        }))
-        .expect_err("an open-ended question must allow free text");
-        assert!(disabled_open_ended.contains("allow_free_text must be true"));
+    #[test]
+    fn preflight_uses_unicode_scalar_question_bounds() {
+        let maximum_prompt = "🙂".repeat(4096);
+        assert!(matches!(
+            preflight(serde_json::json!({"prompt": maximum_prompt})),
+            PreflightOutcome::Ready(_)
+        ));
+        let oversized_prompt = "🙂".repeat(4097);
+        let PreflightOutcome::Rejected { error, .. } =
+            preflight(serde_json::json!({"prompt": oversized_prompt}))
+        else {
+            panic!("prompt over the character bound must be rejected at preflight");
+        };
+        assert!(error.contains("4096 characters"), "{error}");
 
-        let null_mode = AskUserInput::parse(&serde_json::json!({
+        let maximum_choice = "界".repeat(256);
+        assert!(matches!(
+            preflight(serde_json::json!({
+                "prompt": "Choose",
+                "choices": [maximum_choice]
+            })),
+            PreflightOutcome::Ready(_)
+        ));
+        let oversized_choice = "界".repeat(257);
+        let PreflightOutcome::Rejected { error, .. } = preflight(serde_json::json!({
             "prompt": "Choose",
-            "allow_free_text": null
-        }))
-        .expect_err("null is not an answer mode");
-        assert!(null_mode.contains("allow_free_text must be a boolean"));
+            "choices": [oversized_choice]
+        })) else {
+            panic!("choice over the character bound must be rejected at preflight");
+        };
+        assert!(error.contains("256 characters"), "{error}");
+    }
+
+    #[test]
+    fn registry_preflight_rejects_structural_and_semantic_question_errors() {
+        for arguments in [
+            serde_json::json!({"prompt": ""}),
+            serde_json::json!({"prompt": "Choose", "choices": [""]}),
+            serde_json::json!({"prompt": "Choose", "choices": ["a", "a"]}),
+            serde_json::json!({"prompt": "Choose", "choices": "a"}),
+            serde_json::json!({"prompt": "Choose", "choices": null}),
+            serde_json::json!({"prompt": "Choose", "allow_free_text": null}),
+            serde_json::json!({"prompt": "Choose", "unknown": true}),
+            serde_json::json!({"prompt": 7}),
+            serde_json::json!({"prompt": "Choose", "allow_free_text": "yes"}),
+            serde_json::json!({"prompt": "Choose", "choices": ["a"], "allow_free_text": 1}),
+        ] {
+            assert!(
+                matches!(preflight(arguments), PreflightOutcome::Rejected { .. }),
+                "invalid ask_user arguments must never become Ready"
+            );
+        }
+
+        let too_many_choices = (0..=32)
+            .map(|index| format!("choice-{index}"))
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            preflight(serde_json::json!({
+                "prompt": "Choose",
+                "choices": too_many_choices
+            })),
+            PreflightOutcome::Rejected { .. }
+        ));
+
+        let maximum_choices = (0..32)
+            .map(|index| format!("choice-{index}"))
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            preflight(serde_json::json!({
+                "prompt": "Choose",
+                "choices": maximum_choices
+            })),
+            PreflightOutcome::Ready(_)
+        ));
     }
 
     #[tokio::test]
@@ -585,53 +686,89 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invalid_arguments_fail_before_provider_lookup() {
+    async fn production_path_cancellation_returns_one_cancelled_tool_result() {
+        let registry = registry();
+        let PreflightOutcome::Ready(prepared) = registry
+            .preflight(&ToolCall {
+                id: ToolCallId::new("ask-user-cancel-call"),
+                tool_id: ToolId::new("tool-ask-user"),
+                name: ASK_USER_NAME.to_owned(),
+                arguments: serde_json::json!({"prompt": "Continue?"}),
+            })
+            .expect("ask_user identity resolves")
+        else {
+            panic!("valid ask_user arguments must preflight");
+        };
+        let lifecycle = ConversationLifecycle::new();
+        assert!(lifecycle.activate());
+        let coordinator = Arc::new(InteractionCoordinator::new(
+            ConversationId::new("ask-user-cancel-conversation"),
+            lifecycle,
+        ));
+        coordinator.set_provider_available(true);
+        let (pending_sender, pending_receiver) = oneshot::channel();
+        coordinator.install_observer(Arc::new(PendingProbe {
+            sender: Mutex::new(Some(pending_sender)),
+        }));
+        let signal = CancellationSignal::new();
+        let cancellation =
+            ExecutionCancellation::detached(signal.clone(), CancellationReason::RuntimeShutdown);
+        let requester = QuestionRequester::new(
+            coordinator.clone(),
+            AttemptId::new("ask-user-cancel-attempt"),
+            cancellation.clone(),
+            1,
+        );
         let dir = tempfile::tempdir().expect("temp dir");
-        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-        let context = context(&dir, None, &cancellation);
-        let result = AskUserExecutor
-            .execute(
-                ToolInvocation {
-                    arguments: serde_json::json!({
-                        "prompt": "Choose",
-                        "choices": []
-                    }),
-                    ..invocation()
+        let context = context(&dir, Some(requester), cancellation);
+        let executor = registry.executor(&prepared.invocation.tool_id);
+        let mut execution = Box::pin(executor.execute(prepared.invocation, context));
+        let request = tokio::select! {
+            request = pending_receiver => request.expect("Question was published"),
+            result = &mut execution => panic!("ask_user settled before cancellation: {result:?}"),
+        };
+        signal.cancel();
+        let result = execution.await;
+        assert!(matches!(
+            result.status,
+            ToolExecutionStatus::Cancelled {
+                reason: CancellationReason::RuntimeShutdown
+            }
+        ));
+        assert_eq!(coordinator.pending_count(), 0);
+        assert!(matches!(
+            coordinator.respond(
+                &request.id,
+                InteractionResponse::Question {
+                    answer: QuestionAnswer::FreeText {
+                        value: "late".to_owned(),
+                    },
                 },
-                context,
-            )
-            .await;
-        let ToolExecutionStatus::Failed { error } = result.status else {
-            panic!("invalid arguments must fail as a ToolResult");
+            ),
+            Err(crate::runtime::interaction::InteractionError::NotPending { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn invalid_arguments_fail_at_preflight_before_provider_lookup() {
+        let PreflightOutcome::Rejected { error, .. } = preflight(serde_json::json!({
+            "prompt": "Choose",
+            "choices": []
+        })) else {
+            panic!("invalid arguments must fail at preflight");
         };
         assert!(error.contains("choices must contain at least one"));
         assert!(!error.contains("provider unavailable"));
     }
 
     #[tokio::test]
-    async fn ask_user_returns_a_normal_success_tool_result() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-        let context = context(
-            &dir,
-            Some(std::sync::Arc::new(ScriptedQuestion)),
-            &cancellation,
-        );
-        let result = AskUserExecutor.execute(invocation(), context).await;
-        assert_eq!(result.status, ToolExecutionStatus::Success);
-        assert_eq!(
-            result.content,
-            vec![crate::tools::types::ToolResultContent::Json {
-                value: serde_json::json!({"answer": "typed answer", "kind": "free_text"})
-            }]
-        );
-    }
-
-    #[tokio::test]
     async fn ask_user_fails_explicitly_without_an_interaction_provider() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-        let context = context(&dir, None, &cancellation);
+        let cancellation = ExecutionCancellation::detached(
+            CancellationSignal::new(),
+            CancellationReason::UserRequested,
+        );
+        let context = context(&dir, None, cancellation);
         let result = AskUserExecutor.execute(invocation(), context).await;
         assert!(matches!(result.status, ToolExecutionStatus::Failed { .. }));
     }

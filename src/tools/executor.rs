@@ -26,10 +26,9 @@ use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
 
-use crate::agent::cancellation::AgentCancellation;
-use crate::runtime::ToolInteraction;
 use crate::runtime::cancellation::ExecutionCancellation;
 use crate::runtime::identity::{ConversationId, ToolExecutionId, ToolId};
+use crate::runtime::interaction::QuestionRequester;
 use crate::tools::artifacts::ArtifactStore;
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::managed_output::ManagedToolOutput;
@@ -60,12 +59,15 @@ pub trait ProgressReporter: Send + Sync {
 /// The runtime-owned execution context of one tool invocation.
 ///
 /// The context provides the concrete resources the current contract needs —
-/// conversation identity, execution identity when background, the runtime
-/// cancellation signal, the workspace boundary, the progress reporter, the
-/// artifact store, the managed tool-output store, and the explicit
-/// authorized environment. Executor-
-/// specific resources (process ids, MCP SDK types, Python runtime objects)
-/// belong inside executor implementations and never appear here.
+/// conversation identity, execution identity when background, the read-only
+/// runtime cancellation view, the workspace boundary, the progress reporter,
+/// the artifact store, the managed tool-output store, and the explicit
+/// authorized environment. The native `ask_user` executor additionally
+/// receives one crate-private, attempt-bound Question requester. It cannot
+/// obtain the Agent Loop's cancellation authority or any generic interaction
+/// extension seam. Executor-specific resources (process ids, MCP SDK types,
+/// Python runtime objects) belong inside executor implementations and never
+/// appear here.
 pub struct ToolExecutionContext<'a> {
     /// The owning conversation of the invocation.
     pub conversation_id: &'a ConversationId,
@@ -74,7 +76,7 @@ pub struct ToolExecutionContext<'a> {
     pub execution_id: Option<&'a ToolExecutionId>,
     /// The cancellation view of the execution: the runtime cancellation
     /// signal plus a **live** read of the owning authority's absorbing
-    /// cause. Foreground executions view their attempt's `AgentCancellation`;
+    /// cause. Foreground executions view their attempt's cancellation owner;
     /// background executions view their conversation-owned background record.
     ///
     /// The cause is read through this view at settlement time, never copied
@@ -103,17 +105,58 @@ pub struct ToolExecutionContext<'a> {
     /// Read resolves these through the ordinary tool contract; clients never
     /// receive their host paths.
     pub skill_resources: Option<&'a crate::skills::SkillResourceMap>,
-    /// The native interaction capability of the owning runtime, when this
-    /// invocation is running inside an Agent Loop attempt. The concrete
-    /// coordinator remains runtime-owned; this narrow trait exposes only the
-    /// bounded Question request needed by `ask_user`.
-    pub interaction: Option<Arc<dyn ToolInteraction>>,
-    /// The owning Agent Loop attempt identity for native interactions.
-    pub attempt_id: Option<&'a crate::runtime::identity::AttemptId>,
-    /// The current Agent Loop turn for native interactions.
-    pub turn: u32,
-    /// The owning attempt cancellation authority for native interactions.
-    pub agent_cancellation: Option<&'a AgentCancellation>,
+    /// The one bounded native Question capability. This is intentionally not
+    /// public: generic `ToolExecutor` implementations can observe only
+    /// [`ExecutionCancellation`], while the native `ask_user` path receives a
+    /// runtime-bound requester through an internal construction seam.
+    pub(crate) question_requester: Option<QuestionRequester>,
+}
+
+impl<'a> ToolExecutionContext<'a> {
+    /// Constructs a detached execution context without native interaction
+    /// authority. Runtime-owned foreground dispatch adds its bounded
+    /// Question requester through the crate-private builder below.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        conversation_id: &'a ConversationId,
+        execution_id: Option<&'a ToolExecutionId>,
+        cancellation: ExecutionCancellation,
+        workspace: &'a Workspace,
+        progress: &'a dyn ProgressReporter,
+        artifacts: &'a ArtifactStore,
+        tool_output: &'a ManagedToolOutput,
+        environment: &'a ToolEnvironment,
+        skill_resources: Option<&'a crate::skills::SkillResourceMap>,
+    ) -> Self {
+        Self {
+            conversation_id,
+            execution_id,
+            cancellation,
+            workspace,
+            progress,
+            artifacts,
+            tool_output,
+            environment,
+            skill_resources,
+            question_requester: None,
+        }
+    }
+
+    /// Adds the one runtime-bound native Question requester.
+    #[must_use]
+    pub(crate) fn with_question_requester(mut self, requester: QuestionRequester) -> Self {
+        self.question_requester = Some(requester);
+        self
+    }
+
+    /// Returns the bounded requester to the native `ask_user` implementation.
+    /// The concrete type and this accessor are crate-private, so external
+    /// `ToolExecutor` implementations cannot acquire native interaction
+    /// authority.
+    pub(crate) fn question_requester(&self) -> Option<&QuestionRequester> {
+        self.question_requester.as_ref()
+    }
 }
 
 /// One executable tool.
@@ -353,8 +396,8 @@ impl ToolRegistry {
     ///
     /// Runtime metadata has already been removed when the normalizer runs,
     /// and the normalized value is still validated against the one canonical
-    /// schema before an executor can receive it. Native Edit is currently the
-    /// only consumer.
+    /// schema before an executor can receive it. Native Edit and `ask_user`
+    /// use this seam for tool-owned argument normalization.
     pub(crate) fn register_with_argument_normalizer(
         &mut self,
         definition: ToolDefinition,
@@ -1221,10 +1264,7 @@ mod tests {
             tool_output: &tool_output,
             environment: &ToolEnvironment::new(),
             skill_resources: None,
-            interaction: None,
-            attempt_id: None,
-            turn: 0,
-            agent_cancellation: None,
+            question_requester: None,
         };
         let executor = registry.executor(&prepared.invocation.tool_id);
         let _result = executor

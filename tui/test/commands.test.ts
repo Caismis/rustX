@@ -324,6 +324,7 @@ describe("CommandDispatcher", () => {
     for (const command of COMMANDS) {
       assert.ok(outcome.body.includes(command.name), command.name);
     }
+    assert.match(outcome.body, /focused runtime interaction/);
   });
 
   it("renders /model show from the runtime-owned session state", async () => {

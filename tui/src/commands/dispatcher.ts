@@ -795,7 +795,7 @@ export function renderHelp(): string {
     "### Commands",
     ...rows,
     "",
-    "Anything else is submitted to the runtime as an inbound message.",
+    "Plain text answers the focused runtime interaction when one is pending; otherwise it is submitted as an inbound message.",
   ].join("\n");
 }
 
