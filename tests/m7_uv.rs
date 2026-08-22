@@ -108,6 +108,10 @@ async fn production_uv_materializes_a_local_tool_environment() {
             tool_output: runtime.tool_output(),
             environment: runtime.environment(),
             skill_resources: None,
+            interaction: None,
+            attempt_id: None,
+            turn: 0,
+            agent_cancellation: None,
         },
     )
     .await;
@@ -297,6 +301,10 @@ async fn conflicting_local_dependencies_isolate_versions_and_materialize_offline
                 tool_output: runtime.tool_output(),
                 environment: runtime.environment(),
                 skill_resources: None,
+                interaction: None,
+                attempt_id: None,
+                turn: 0,
+                agent_cancellation: None,
             },
         )
         .await;

@@ -123,6 +123,9 @@ impl RuntimeAttachment {
             RuntimeClientRequest::ModelCatalogGet { .. } => self.inner.model_catalog(),
             RuntimeClientRequest::ModelGet { .. } => self.inner.model_get(),
             RuntimeClientRequest::ModelSet { config, .. } => self.inner.model_set(*config),
+            RuntimeClientRequest::ApprovalModeSet { mode, .. } => {
+                self.inner.approval_mode_set(mode)
+            }
             RuntimeClientRequest::SessionList { .. }
             | RuntimeClientRequest::SessionGet { .. }
             | RuntimeClientRequest::SessionTreeGet { .. }

@@ -648,7 +648,7 @@ observer failure can never prevent a committed Assistant `ToolCall` batch from
 receiving its complete canonical `ToolMessage` result batch, and it can never
 strand a later sibling's result.
 
-### PreToolPolicy and native approval (M9.2 / Issue #64)
+### PreToolPolicy and native HITL (M9.2 / Issue #100)
 
 Pre-tool approval is a typed seam in `AttemptLifecycle`, not a wrapper around
 `ToolExecutor`:
@@ -671,9 +671,10 @@ model ToolCall
 The attempt always carries one required policy. A runtime-created attempt is
 bound to its one concrete, conversation-owned `InteractionCoordinator`; that
 native owner is not a replaceable production rendezvous strategy. Standalone
-inert execution has no interaction provider and fails `Ask` closed.
-`AlwaysAllow` is the identity policy for the current product, which has no
-native rule requiring approval. The policy sees only the
+inert execution has no interaction provider and fails `Ask` closed. The
+runtime-created policy is derived from the admitted effective `ApprovalMode`:
+`Policy` consults the resolved Tool's `ToolApprovalPolicy`, while `FullAccess`
+maps effective approval to `Never` only. The policy sees only the
 conversation/attempt/turn, call and resolved tool identities, safe name,
 origin, mode, and validated business arguments. It cannot resolve registry
 facts, mutate canonical state, dispatch a tool, receive cancellation
@@ -724,9 +725,26 @@ active attempt's first-winner reason and propagates it to pending interaction
 settlement. `UserRequested` therefore survives a later drain, while
 `RuntimeShutdown` is recorded consistently when it wins first.
 
-The interaction domain is provider-independent and bounded to Approval in
-0.1. Questions/forms, provider SDK payloads, argument rewriting, and a
-generalized permission language are not part of this seam.
+The interaction domain is provider-independent and bounded to Approval and
+Question in 0.1. Question is not a pre-tool Agent Loop branch: the native
+`ask_user` capability is an ordinary foreground/sequential/approval-never
+Tool whose executor requests a Question from the same coordinator and returns
+the typed answer as an ordinary ToolResult. Questions carry only a bounded
+prompt, optional finite choices, and an optional free-text flag. Generic
+forms/workflows, provider SDK payloads, argument rewriting, and a generalized
+permission language are not part of this seam.
+
+`FullAccess` is runtime control state, not Tool authorization. It cannot
+activate disabled or excluded Tools, bypass execution ownership or
+concurrency policy, grant authority, or auto-answer a pending Approval or
+Question. While an attempt is busy, `desired_approval_mode` changes and
+`effective_approval_mode` remains frozen; after terminal settlement the
+runtime reconciles the latest desired value before admitting the next attempt.
+The current runtime/project configuration may set `approvalMode` (default
+`policy`), but Session history never persists `FullAccess`.
+
+Availability, activation, approval, approval mode, execution ownership, and
+concurrency are separate facts. No one of them is inferred from another.
 
 ### Request Snapshot implications
 
@@ -750,7 +768,7 @@ assembly, never a re-execution handle.
 | `ContextContributor` (#55) | finite immutable `ContributorInputSnapshot` | bounded typed proposals | canonical state, identity, provenance, lanes, ordering | Context Assembly |
 | `PreStepPolicy` (#56) | final immutable `AcceptedContext` + attempt/turn/revision identity | `Enter` / `Reject { reason }` | history, Surface, `MessageId`s, tool identity/arguments, cancellation, provider dispatch, terminal state | Agent Loop |
 | `PreToolPolicy` (#64) | immutable preflight-resolved `PreToolView` | `Allow` / `Deny { reason }` / `Ask { reason }` | registry resolution, canonical state, tool identity/arguments, cancellation, executor start | Agent Loop / attempt lifecycle |
-| `InteractionCoordinator` (#64) | immutable Approval facts | one response/cancellation rendezvous | Agent Loop scheduling, canonical history, ToolCall arguments, executor state | ConversationRuntime |
+| `InteractionCoordinator` (#100) | immutable Approval or Question facts | one typed response/cancellation rendezvous | Agent Loop scheduling, canonical history, ToolCall arguments, executor state | ConversationRuntime |
 | `ToolResultObserver` (#56) | immutable finalized `ToolExecutionResult` + canonical `ToolCallId`, batch position, stable `ToolId`/`ToolOrigin`, and the read-only `ObservedToolInvocation` (mode + validated arguments) | bounded deferred `UserMessageProposal`s | the result, the `ToolCall`, `ToolMessage` count, history, cancellation, terminal state, the Effective System Prompt, **and its own provenance/lane/identity** | Agent Loop / tool batch |
 | Deferred context staging | ordered transient proposals + their bound producer reference | candidate input of the next Context Assembly | Ledger and Surface directly; the semantics of what it stages; whether a named extension is trusted | Agent Loop |
 | Context admission | final accepted context | canonical `User` facts + Surface advancement | arbitrary history | Agent Loop + `ConversationState` |
@@ -767,9 +785,9 @@ These are absent by decision, not as TODO compatibility hooks:
   `ToolResultObservation` is immutable by construction.
 - **Pre-tool argument or identity rewriting** — a committed Assistant
   `ToolCall` (`id`, `tool_id`, `name`, `arguments`) is a conversation fact.
-- **Question/forms, generalized permission/risk policy, and provider-specific
-  interaction payloads** — Issue #64 deliberately implements only bounded
-  native Approval.
+- **Generic forms/workflows, generalized permission/risk policy, and
+  provider-specific interaction payloads** — Issue #100 deliberately keeps
+  Question bounded and makes `ask_user` an ordinary Tool Plane capability.
 - **Subagent lifecycle observation** — Issue #60 owns the native subagent
   runtime; the observation seam follows the owner.
 - **`TurnStoppingPolicy` / forced continuation** — no native owner exists.

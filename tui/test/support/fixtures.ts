@@ -47,6 +47,23 @@ export function approvalInteraction(
   };
 }
 
+export function questionInteraction(
+  id = "attempt-1-interaction-question-1",
+): InteractionRequest {
+  return {
+    id,
+    conversation_id: "conv-test",
+    attempt_id: "attempt-1",
+    turn: 3,
+    kind: {
+      type: "question",
+      prompt: "Which environment should I use?",
+      choices: ["staging", "production"],
+      allow_free_text: false,
+    },
+  };
+}
+
 export function invocation(
   model: string,
   overrides: Partial<ModelInvocationView> = {},
@@ -102,6 +119,7 @@ export function capabilities(revision: number): CapabilityView {
       input_schema: { type: "object" },
       execution_policy: "model_selectable" as const,
       concurrency_policy: "sequential" as const,
+      approval_policy: "never" as const,
       replay_policy: "never" as const,
       origin: "builtin" as const,
     },
@@ -112,6 +130,7 @@ export function capabilities(revision: number): CapabilityView {
       input_schema: { type: "object" },
       execution_policy: "foreground_only" as const,
       concurrency_policy: "parallel" as const,
+      approval_policy: "always" as const,
       replay_policy: "idempotent" as const,
       origin: { mcp: { server_id: "corpus" } },
     },
@@ -137,6 +156,8 @@ export function snapshot(
   return {
     conversation_id: "conv-test",
     shutting_down: false,
+    effective_approval_mode: "policy",
+    approval_mode_revision: 0,
     messages: [],
     inbound: { pending: [] },
     pending_interactions: [],

@@ -179,7 +179,7 @@ The command-to-surface classification is:
 | `/fork`, `/tree` | picker; the selected session operation has transient/replacement feedback |
 | `/new`, `/clone` | control with transient/replacement feedback |
 | `/name <text>`, `/model <provider/model>` | control with transient result |
-| `/cancel`, `/approve` | control with transient acceptance/validation result |
+| `/cancel`, `/approve`, `/answer`, `/approval` | control with transient acceptance/validation result |
 | `/reasoning`, `/expand` | preference |
 | `/quit` | quit |
 | invalid, unknown, or empty-result command feedback | transient |
@@ -244,7 +244,10 @@ does not implement a parallel Session system.
 - `/cancel [execution-id]` — request cancellation of the current attempt, or
   a background execution by id.
 - `/approve <interaction-id> <allow|deny> [reason]` — answer one runtime-owned
-  approval interaction.
+  Approval interaction.
+- `/answer <interaction-id> <choice|text> <value>` — answer one runtime-owned
+  Question interaction.
+- `/approval <policy|full_access>` — request the runtime ApprovalMode.
 - `/debug` — show bounded presentation and protocol diagnostics.
 - `/reasoning [on|off]` — change the display preference for model reasoning;
   it does not change runtime model configuration.
@@ -263,8 +266,10 @@ searchable selector over `model_catalog_get` and applies a choice through
 `/tools` and `/skills` read the capability projection; `/status` prints the
 runtime's own Agent Status rendering; `/debug` shows bounded diagnostics and
 never a credential; `/approve` sends a finite typed response to one
-runtime-owned Approval interaction. The TUI never edits the displayed tool
-arguments or keeps a local approval outcome.
+runtime-owned Approval interaction, `/answer` sends a typed Question response,
+and `/approval` requests a runtime control-plane mode change. The TUI never
+edits displayed Tool arguments, suppresses pending prompts, auto-answers them,
+or keeps a local outcome.
 
 `/reasoning [on|off]` and `/expand [latest|all|none|<tool-call-id>|background
 <exec-id>|interaction <interaction-id>]` are the two commands that touch
@@ -289,17 +294,28 @@ file read, and no client-side Skill execution. Shell, file, and Skill behaviour
 must travel through the real rustX tool and capability path, and rustX has not
 yet defined a client-facing attachment contract.
 
-## Native approvals
+## Native HITL
 
-Pending approvals arrive as runtime-owned `interaction_pending` events and in
+Pending Approval and Question interactions arrive as runtime-owned
+`interaction_pending` events and in
 the authoritative `snapshot.pending_interactions` view. The presentation
 reducer sorts and replaces those facts like every other projection value;
 reconnect/resync discards local assumptions and rebuilds the list from the
 snapshot. The renderer shows the immutable tool identity, mode, reason, and
-validated arguments. `/approve <interaction-id> allow` or
-`/approve <interaction-id> deny [reason]` sends only the typed Runtime Client
-`interaction_respond` request. It never invokes a tool, mutates arguments,
-infers an outcome from detach/EOF, or callbacks into the Agent Loop.
+validated arguments for Approval, and the bounded prompt, finite choices, and
+free-text flag for Question. `/approve` sends only an Approval response;
+`/answer` sends only a Question response. Neither invokes a Tool, mutates
+arguments, infers an outcome from detach/EOF, or callbacks into the Agent
+Loop.
+
+The footer displays authoritative `approval policy` or `approval FULL ACCESS`
+and shows a pending arrow when the runtime has accepted a busy-time mode
+request. Full Access is not a local prompt suppression switch: it changes
+only effective approval for eligible Tool calls. It cannot activate disabled
+Tools, restore excluded Tools, bypass execution/concurrency restrictions, or
+answer a pending interaction. `/tools` displays each Tool's independent
+execution, concurrency, and approval policy; availability and activation are
+shown separately.
 
 ## The model selector
 

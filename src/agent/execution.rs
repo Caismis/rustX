@@ -2711,6 +2711,7 @@ impl<'a> AgentExecution<'a> {
                 origin: &prepared.origin,
                 mode: invocation.mode,
                 arguments: &invocation.arguments,
+                approval_policy: prepared.approval,
             };
             // A policy future is allowed to settle, but its result is not
             // consumed after cancellation becomes observable at this
@@ -2751,6 +2752,9 @@ impl<'a> AgentExecution<'a> {
                                         PreToolResolution::Denied(reason)
                                     }
                                 },
+                                InteractionResponse::Question { .. } => PreToolResolution::Denied(
+                                    "approval interaction returned a Question response".to_owned(),
+                                ),
                             },
                             InteractionOutcome::Cancelled { reason } => {
                                 PreToolResolution::Cancelled(reason)
@@ -3007,6 +3011,10 @@ impl<'a> AgentExecution<'a> {
             tool_output: self.tool_runtime.tool_output(),
             environment: self.capability.snapshot().effective_environment(),
             skill_resources: Some(self.capability.snapshot().skills().resources()),
+            interaction: self.lifecycle.native_interaction_coordinator(),
+            attempt_id: Some(&self.request.attempt_id),
+            turn: self.turn,
+            agent_cancellation: Some(self.cancellation),
         };
         let future = executor.execute(invocation.clone(), context);
         tokio::pin!(future);
@@ -4078,6 +4086,7 @@ mod tests {
                 input_schema: serde_json::json!({"type": "object"}),
                 execution_policy: ToolExecutionPolicy::ForegroundOnly,
                 concurrency_policy: ToolConcurrencyPolicy::Sequential,
+                approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
                 replay_policy: ToolReplayPolicy::Never,
                 origin: ToolOrigin::Builtin,
             }
@@ -5740,6 +5749,7 @@ mod tests {
                         input_schema: serde_json::json!({"type": "object"}),
                         execution_policy: ToolExecutionPolicy::ModelSelectable,
                         concurrency_policy: ToolConcurrencyPolicy::Sequential,
+                        approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
                         replay_policy: ToolReplayPolicy::Never,
                         origin: ToolOrigin::Builtin,
                     },

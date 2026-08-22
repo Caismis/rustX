@@ -39,9 +39,11 @@ import type { PresentationState } from "../presentation/state.ts";
 import { COMMANDS, parseCommandLine } from "./registry.ts";
 import type {
   ApprovalDecision,
+  ApprovalMode,
   CatalogModelView,
   InteractionId,
   InteractionResponse,
+  QuestionAnswer,
   SessionNodeView,
   SessionSummaryView,
   SessionUserMessageBoundaryView,
@@ -228,6 +230,10 @@ export class CommandDispatcher {
           return await this.#cancel(session, argument);
         case "/approve":
           return await this.#approve(session, argument);
+        case "/answer":
+          return await this.#answer(session, argument);
+        case "/approval":
+          return await this.#approvalMode(session, argument);
         case "/quit":
           return { kind: "quit" };
         default:
@@ -526,6 +532,52 @@ export class CommandDispatcher {
     await session.respondInteraction(interactionId, response);
     return transient("info", `response accepted for interaction ${interactionId}`);
   }
+
+  async #answer(
+    session: RuntimeClientAttachment,
+    argument: string,
+  ): Promise<CommandOutcome> {
+    const parts = argument.split(/\s+/).filter((part) => part.length > 0);
+    if (parts.length < 3) {
+      return transient("error", "usage: /answer <interaction-id> <choice|text> <value>");
+    }
+    const interactionId = parts[0]!;
+    const answerKind = parts[1]!;
+    const value = parts.slice(2).join(" ");
+    let answer: QuestionAnswer;
+    if (answerKind === "choice") {
+      answer = { type: "choice", value };
+    } else if (answerKind === "text") {
+      answer = { type: "free_text", value };
+    } else {
+      return transient("error", "usage: /answer <interaction-id> <choice|text> <value>");
+    }
+    const response: InteractionResponse = { type: "question", answer };
+    await session.respondInteraction(interactionId, response);
+    return transient("info", `response accepted for interaction ${interactionId}`);
+  }
+
+  async #approvalMode(
+    session: RuntimeClientAttachment,
+    argument: string,
+  ): Promise<CommandOutcome> {
+    let mode: ApprovalMode;
+    if (argument === "policy") {
+      mode = "policy";
+    } else if (argument === "full_access") {
+      mode = "full_access";
+    } else {
+      return transient("error", "usage: /approval <policy|full_access>");
+    }
+    const result = await session.approvalModeSet(mode);
+    if (result.pendingApprovalMode !== undefined) {
+      return transient(
+        "info",
+        `ApprovalMode request accepted: effective ${result.effectiveApprovalMode}, pending ${result.pendingApprovalMode}`,
+      );
+    }
+    return transient("info", `ApprovalMode is now ${result.effectiveApprovalMode}`);
+  }
 }
 
 /**
@@ -776,7 +828,7 @@ function appendToolGroups(
     for (const tool of group.tools) {
       lines.push(
         `- \`${tool.name}\` — ${tool.description}`,
-        `  - execution: ${tool.execution_policy}, concurrency: ${tool.concurrency_policy}, replay: ${tool.replay_policy}`,
+        `  - execution: ${tool.execution_policy}, concurrency: ${tool.concurrency_policy}, approval: ${tool.approval_policy}, replay: ${tool.replay_policy}`,
         `  - origin: ${originLabel(tool.origin)}`,
       );
     }

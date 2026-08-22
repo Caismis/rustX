@@ -9,8 +9,8 @@ use rustx::tools::environment::{ToolEnvironment, ToolEnvironmentOverlay};
 use rustx::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
 use rustx::tools::python::PythonToolDiscovery;
 use rustx::tools::types::{
-    ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
-    ToolInvocation, ToolInvocationPolicy, ToolOrigin, ToolReplayPolicy,
+    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
+    ToolExecutionResult, ToolInvocation, ToolInvocationPolicy, ToolOrigin, ToolReplayPolicy,
 };
 
 struct NoopExecutor;
@@ -121,6 +121,7 @@ fn composed_registry_rejects_global_name_collisions() {
         input_schema: schema.clone(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         concurrency_policy: ToolConcurrencyPolicy::Sequential,
+        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     };
@@ -163,6 +164,7 @@ fn external_policy_and_progress_are_provider_neutral() {
     let policy = ToolInvocationPolicy::new(
         ToolExecutionPolicy::BackgroundOnly,
         ToolConcurrencyPolicy::Parallel,
+        ToolApprovalPolicy::Never,
     );
     assert_eq!(policy.execution, ToolExecutionPolicy::BackgroundOnly);
     let progress = rustx::tools::types::ToolProgress {

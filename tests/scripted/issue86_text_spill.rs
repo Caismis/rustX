@@ -75,6 +75,7 @@ fn fixture() -> IssueFixture {
         NativeToolPolicies::uniform(ToolInvocationPolicy::new(
             ToolExecutionPolicy::ModelSelectable,
             ToolConcurrencyPolicy::Sequential,
+            rustx::tools::types::ToolApprovalPolicy::Never,
         )),
     )
     .expect("native tools");

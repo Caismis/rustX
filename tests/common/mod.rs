@@ -442,6 +442,7 @@ pub fn tool(name: &str, id: &str) -> rustx::tools::types::ToolDefinition {
         input_schema: serde_json::json!({"type": "object", "properties": {}}),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         concurrency_policy: ToolConcurrencyPolicy::Sequential,
+        approval_policy: rustx::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Idempotent,
         origin: ToolOrigin::Mcp {
             server_id: rustx::runtime::identity::McpServerId::new("mcp-test"),
@@ -671,6 +672,7 @@ pub fn tool_policies(
         input_schema: serde_json::json!({"type": "object", "properties": {}}),
         execution_policy: execution,
         concurrency_policy: concurrency,
+        approval_policy: rustx::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     }
@@ -809,6 +811,10 @@ pub async fn run_tool_with_cancellation(
         tool_output: fixture.runtime.tool_output(),
         environment: fixture.runtime.environment(),
         skill_resources: None,
+        interaction: None,
+        attempt_id: None,
+        turn: 0,
+        agent_cancellation: None,
     };
     executor.execute(prepared.invocation, context).await
 }
@@ -853,6 +859,10 @@ pub async fn run_tool(
         tool_output: fixture.runtime.tool_output(),
         environment: fixture.runtime.environment(),
         skill_resources: None,
+        interaction: None,
+        attempt_id: None,
+        turn: 0,
+        agent_cancellation: None,
     };
     executor.execute(prepared.invocation, context).await
 }

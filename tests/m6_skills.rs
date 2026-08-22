@@ -379,6 +379,10 @@ async fn bash_cd_cannot_redefine_the_skill_root() {
             .expect("managed tool output"),
             environment: &rustx::tools::environment::ToolEnvironment::new(),
             skill_resources: None,
+            interaction: None,
+            attempt_id: None,
+            turn: 0,
+            agent_cancellation: None,
         };
         executor.execute(invocation, context).await
     };

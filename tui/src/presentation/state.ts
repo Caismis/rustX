@@ -19,6 +19,7 @@
 
 import type {
   AgentStatusView,
+  ApprovalMode,
   AttemptId,
   AttemptModelView,
   CapabilityView,
@@ -127,6 +128,10 @@ export interface PresentationState {
   sessionModel: SessionModelView;
   /** True once runtime drain begins; shutdown responses complete at quiescence. */
   runtimeShutdown: boolean;
+  /** Runtime-authoritative ApprovalMode control state. */
+  effectiveApprovalMode: ApprovalMode;
+  pendingApprovalMode?: ApprovalMode;
+  approvalModeRevision: number;
   pendingSubmissions: PendingSubmission[];
 }
 

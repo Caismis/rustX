@@ -97,6 +97,8 @@ describe("command registry", () => {
         "/expand",
         "/cancel",
         "/approve",
+        "/answer",
+        "/approval",
         "/quit",
       ],
     );
@@ -860,6 +862,52 @@ describe("CommandDispatcher", () => {
     assert.equal(outcome.kind, "transient");
     if (outcome.kind === "transient") {
       assert.match(outcome.text, /response accepted/);
+    }
+  });
+
+  it("sends a typed Question answer through Runtime Client", async () => {
+    const { peer, dispatcher } = await harness();
+    const responding = dispatcher.submit(
+      "/answer attempt-1-interaction-1 choice alpha value",
+    );
+    await peer.awaitRequests(3);
+
+    assert.deepEqual(
+      peer.requests[2]?.method === "interaction_respond"
+        ? peer.requests[2].response
+        : null,
+      {
+        type: "question",
+        answer: { type: "choice", value: "alpha value" },
+      },
+    );
+    peer.respond(3, {
+      type: "interaction_response_accepted",
+      interaction_id: "attempt-1-interaction-1",
+    });
+    assert.equal((await responding).kind, "transient");
+  });
+
+  it("requests ApprovalMode through the runtime and reports pending reconciliation", async () => {
+    const { peer, dispatcher } = await harness();
+    const changing = dispatcher.submit("/approval full_access");
+    await peer.awaitRequests(3);
+    assert.deepEqual(
+      peer.requests[2]?.method === "approval_mode_set"
+        ? peer.requests[2].mode
+        : null,
+      "full_access",
+    );
+    peer.respond(3, {
+      type: "approval_mode_set",
+      effective_approval_mode: "policy",
+      pending_approval_mode: "full_access",
+      revision: 1,
+    });
+    const outcome = await changing;
+    assert.equal(outcome.kind, "transient");
+    if (outcome.kind === "transient") {
+      assert.match(outcome.text, /pending full_access/);
     }
   });
 

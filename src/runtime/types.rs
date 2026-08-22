@@ -11,6 +11,34 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// The runtime-wide control state for tool approval behavior.
+///
+/// `Policy` consults each resolved Tool's
+/// [`ToolApprovalPolicy`](crate::tools::types::ToolApprovalPolicy).
+/// `FullAccess` changes only the effective approval result to `Never`; it
+/// never changes availability, activation, execution ownership, concurrency,
+/// or tool authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalMode {
+    /// Use each Tool's configured approval policy.
+    #[default]
+    Policy,
+    /// Bypass approval prompts for eligible tool calls only.
+    FullAccess,
+}
+
+/// The authoritative effective/desired `ApprovalMode` control-plane view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalModeState {
+    /// The mode admitted by the current attempt boundary.
+    pub effective: ApprovalMode,
+    /// The latest requested mode.
+    pub desired: ApprovalMode,
+    /// Monotonic runtime-control revision; idempotent requests do not advance it.
+    pub revision: u64,
+}
+
 /// The authoritative lifecycle state of one conversation runtime.
 ///
 /// `Running -> Draining` is the single drain linearization point. The

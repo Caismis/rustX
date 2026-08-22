@@ -302,8 +302,9 @@ use crate::runtime::interaction::{
 use crate::runtime::observation::{ConversationObservation, PendingObservations};
 use crate::runtime::request_history::RequestHistory;
 use crate::runtime::types::{
-    CancellationReason, ConversationLifecycle, ConversationLifecycleState, DurabilityFailureCommit,
-    DurabilityGate, DurableOperation, RuntimeClock, SystemClock,
+    ApprovalMode, ApprovalModeState, CancellationReason, ConversationLifecycle,
+    ConversationLifecycleState, DurabilityFailureCommit, DurabilityGate, DurableOperation,
+    RuntimeClock, SystemClock,
 };
 use crate::tools::background::{BackgroundExecutionSnapshot, BackgroundObserver};
 use crate::tools::runtime::ConversationToolRuntime;
@@ -499,6 +500,8 @@ pub struct RuntimeConversationConfig {
     pub model: SessionModelState,
     /// The per-conversation IANA timezone, when known.
     pub timezone: Option<Tz>,
+    /// The launch-scoped runtime approval mode.
+    pub approval_mode: ApprovalMode,
     /// The shared context-plane pieces.
     pub context: ConversationContextConfig,
     /// The conversation tool runtime (owns the canonical mailbox and the
@@ -628,6 +631,12 @@ struct CoordinatorState {
     /// model update and an attempt admission can never interleave
     /// ambiguously: whichever acquires the lock first linearizes first.
     model: SessionModelState,
+    /// The effective mode frozen for the currently admitted attempt boundary.
+    effective_approval_mode: ApprovalMode,
+    /// The latest requested runtime control mode.
+    desired_approval_mode: ApprovalMode,
+    /// Monotonic control-plane revision; idempotent requests do not advance it.
+    approval_mode_revision: u64,
     /// The one canonical conversation state, owned by the coordinator
     /// **only between attempts**.
     ///
@@ -1009,8 +1018,9 @@ pub(crate) struct RuntimeInner {
     #[cfg(test)]
     probe: Mutex<Option<CoordinatorProbe>>,
     /// Test-only one-shot pre-tool policy injection for a runtime-created
-    /// attempt. Production always constructs the required `AlwaysAllow`
-    /// policy; this hook never changes the production configuration surface.
+    /// attempt. Production constructs the required policy from the admitted
+    /// effective `ApprovalMode`; this hook never changes the production
+    /// configuration surface.
     #[cfg(test)]
     test_pre_tool_policy: Mutex<Option<Arc<dyn crate::agent::PreToolPolicy>>>,
 }
@@ -1331,6 +1341,43 @@ impl RuntimeInner {
         )
     }
 
+    fn approval_mode_state(state: &CoordinatorState) -> ApprovalModeState {
+        ApprovalModeState {
+            effective: state.effective_approval_mode,
+            desired: state.desired_approval_mode,
+            revision: state.approval_mode_revision,
+        }
+    }
+
+    /// Reconciles the latest desired mode only after the current attempt has
+    /// fully crossed its terminal settlement boundary. This is deliberately
+    /// called while the coordinator lock is held and before the next
+    /// admission can freeze an effective mode.
+    fn reconcile_approval_mode(&self, state: &mut CoordinatorState) {
+        if state.current_attempt.is_some()
+            || state.effective_approval_mode == state.desired_approval_mode
+        {
+            return;
+        }
+        state.effective_approval_mode = state.desired_approval_mode;
+        state.approval_mode_revision = state.approval_mode_revision.saturating_add(1);
+        self.observe(ConversationObservation::ApprovalModeChanged {
+            effective: state.effective_approval_mode,
+            pending: None,
+            revision: state.approval_mode_revision,
+        });
+    }
+
+    fn observe_approval_mode(&self, state: &CoordinatorState) {
+        let pending = (state.effective_approval_mode != state.desired_approval_mode)
+            .then_some(state.desired_approval_mode);
+        self.observe(ConversationObservation::ApprovalModeChanged {
+            effective: state.effective_approval_mode,
+            pending,
+            revision: state.approval_mode_revision,
+        });
+    }
+
     /// Publishes one semantic observation into the shared leaf queue,
     /// when a projection consumer exists and the queue is open.
     ///
@@ -1507,6 +1554,7 @@ impl RuntimeInner {
         // shutdown projection seed is necessarily false.
         let shutting_down = false;
         let model = state.model.view();
+        let approval_mode = RuntimeInner::approval_mode_state(&state);
         let observer: Arc<RuntimeObserver> = Arc::new(RuntimeObserver::new(self));
         // Interaction pending state is an ephemeral runtime observation, but
         // it still participates in the same bootstrap cut as every other
@@ -1550,6 +1598,7 @@ impl RuntimeInner {
             shutting_down,
             messages,
             model,
+            approval_mode,
             inbound_pending,
             background,
             subagents,
@@ -1628,6 +1677,7 @@ impl RuntimeInner {
         fresh: Option<FreshInboundTurn>,
         cancellation: &AgentCancellation,
         model: AttemptModelSnapshot,
+        approval_mode: ApprovalMode,
     ) -> crate::agent::AgentExecutionResult {
         let lease = self.capability.acquire_attempt_lease();
         let observer = RuntimeObserver::new(self);
@@ -1650,7 +1700,8 @@ impl RuntimeInner {
             model,
         };
         let lifecycle = crate::agent::AttemptLifecycle::inert()
-            .with_native_interaction(self.interaction.clone());
+            .with_native_interaction(self.interaction.clone())
+            .with_approval_mode(approval_mode);
         #[cfg(test)]
         let lifecycle = {
             let test_policy = self
@@ -1752,6 +1803,7 @@ impl RuntimeInner {
             {
                 state.current_attempt = None;
             }
+            self.reconcile_approval_mode(&mut state);
             self.settlement.notify_one();
             // Test-only gate: the conversation state is restored and the
             // current-attempt slot is cleared, but the next-admission
@@ -2065,6 +2117,7 @@ impl RuntimeInner {
         // reconstructed only from its own frozen durable facts and is never
         // rewritten to resemble the new configuration.
         let model = state.model.snapshot();
+        let approval_mode = state.effective_approval_mode;
         self.observe(ConversationObservation::AttemptModelFrozen {
             attempt_id: attempt_id.clone(),
             model: Box::new(model.view()),
@@ -2091,6 +2144,7 @@ impl RuntimeInner {
                     fresh,
                     &cancellation,
                     model,
+                    approval_mode,
                 )
                 .await;
             inner.finish_attempt(attempt_id, result);
@@ -2493,6 +2547,9 @@ impl ConversationRuntime {
             executor,
             state: Mutex::new(CoordinatorState {
                 model: config.model,
+                effective_approval_mode: config.approval_mode,
+                desired_approval_mode: config.approval_mode,
+                approval_mode_revision: 0,
                 conversation: Some(conversation),
                 current_attempt: None,
                 next_attempt_seq,
@@ -2993,6 +3050,48 @@ impl ConversationRuntime {
         self.inner.lock_state().model.catalog_view()
     }
 
+    /// Reads the authoritative effective/desired `ApprovalMode` control state.
+    #[must_use]
+    pub fn approval_mode_state(&self) -> ApprovalModeState {
+        RuntimeInner::approval_mode_state(&self.inner.lock_state())
+    }
+
+    /// Requests a runtime `ApprovalMode` transition.
+    ///
+    /// While an attempt is active, only `desired` changes; the active
+    /// attempt's effective mode remains frozen. Settlement reconciles the
+    /// latest desired mode before the next admission can freeze it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApprovalModeUpdateError::Inactive`] when the runtime has not
+    /// been activated, or [`ApprovalModeUpdateError::DurabilityFailed`] when
+    /// its durable authority is in the absorbing failed state.
+    pub fn approval_mode_set(
+        &self,
+        mode: ApprovalMode,
+    ) -> Result<ApprovalModeState, ApprovalModeUpdateError> {
+        let mut state = self.inner.lock_state();
+        if !self.inner.lifecycle.is_running() {
+            return Err(ApprovalModeUpdateError::Inactive);
+        }
+        if let Some(failure) = self.inner.durability_gate.failure() {
+            return Err(ApprovalModeUpdateError::DurabilityFailed {
+                message: failure.diagnostic,
+            });
+        }
+        if state.desired_approval_mode == mode {
+            return Ok(RuntimeInner::approval_mode_state(&state));
+        }
+        state.desired_approval_mode = mode;
+        state.approval_mode_revision = state.approval_mode_revision.saturating_add(1);
+        if state.current_attempt.is_none() {
+            state.effective_approval_mode = mode;
+        }
+        self.inner.observe_approval_mode(&state);
+        Ok(RuntimeInner::approval_mode_state(&state))
+    }
+
     /// Replaces the authoritative session model configuration.
     ///
     /// # Lifecycle
@@ -3414,6 +3513,8 @@ pub(crate) struct RuntimeBootstrapSnapshot {
     pub messages: Vec<MessageBlock>,
     /// The authoritative session model view.
     pub model: SessionModelView,
+    /// The authoritative effective/desired `ApprovalMode` state at the cut.
+    pub approval_mode: ApprovalModeState,
     /// The currently pending inbound items, in mailbox sequence order.
     pub inbound_pending: Vec<InboundItem>,
     /// The authoritative background execution records at the cut.
@@ -3522,6 +3623,18 @@ pub enum ModelUpdateError {
     /// catalog authority.
     SessionRestartRequired {
         /// The bounded replacement diagnostic.
+        message: String,
+    },
+}
+
+/// A runtime `ApprovalMode` control update failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApprovalModeUpdateError {
+    /// The runtime has not been activated.
+    Inactive,
+    /// The runtime's durable authority failed persistently.
+    DurabilityFailed {
+        /// The human-readable failure diagnostic.
         message: String,
     },
 }
@@ -3838,9 +3951,10 @@ impl ConversationRuntime {
     }
 
     /// Installs one test-only pre-tool policy for the next runtime-created
-    /// attempt. The production runtime always uses `AlwaysAllow`; this hook
-    /// exists solely to exercise the real `ConversationRuntime` ownership and
-    /// drain path without exposing a public policy factory.
+    /// attempt. Production derives the policy from the admitted effective
+    /// `ApprovalMode`; this hook exists solely to exercise the real
+    /// `ConversationRuntime` ownership and drain path without exposing a
+    /// public policy factory.
     #[cfg(test)]
     pub(crate) fn install_test_pre_tool_policy(
         &self,
@@ -3872,6 +3986,7 @@ mod tests {
     use crate::message::content::TextBlock;
     use crate::message::types::{InboundKind, MessageBlock, UserContentBlock, UserSource};
     use crate::model::adapter::ModelAdapter;
+    use crate::runtime::ApprovalMode;
     use crate::runtime::identity::{
         AgentId, AttemptId, ConversationId, SubagentId, ToolCallId, ToolId,
     };
@@ -3891,7 +4006,9 @@ mod tests {
         RUNTIME_CLIENT_PROTOCOL_VERSION_V1, RequestId, RuntimeClientError,
         RuntimeClientProtocolEvent, RuntimeClientRequest, RuntimeClientResult,
     };
-    use crate::scripted_suites::support::fake::{FakeModel, FakeStep, FakeTool, success_result};
+    use crate::scripted_suites::support::fake::{
+        FakeModel, FakeStep, FakeTool, model_release, success_result,
+    };
     use crate::scripted_suites::support::model::scripted_session_model;
     use crate::tools::executor::ToolRegistry;
     use crate::tools::types::{
@@ -3941,8 +4058,8 @@ mod tests {
 
     /// Test-only policy used by the real `ConversationRuntime` interaction
     /// shutdown regression. It is deliberately a concrete one-shot policy:
-    /// production runtime construction still installs `AlwaysAllow` and has
-    /// no policy factory in its public configuration.
+    /// production runtime construction derives approval from its effective
+    /// `ApprovalMode` and has no policy factory in its public configuration.
     struct RuntimeAskPolicy;
 
     impl PreToolPolicy for RuntimeAskPolicy {
@@ -4013,6 +4130,7 @@ mod tests {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter),
             timezone: None,
+            approval_mode: ApprovalMode::Policy,
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -4092,6 +4210,7 @@ mod tests {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter),
             timezone: None,
+            approval_mode: ApprovalMode::Policy,
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -4187,6 +4306,7 @@ mod tests {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter),
             timezone: None,
+            approval_mode: ApprovalMode::Policy,
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -4293,6 +4413,7 @@ mod tests {
             agent_id: runtime_agent.clone(),
             model: scripted_session_model(adapter),
             timezone: None,
+            approval_mode: ApprovalMode::Policy,
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -4827,6 +4948,160 @@ mod tests {
         );
     }
 
+    /// `ApprovalMode` is a runtime control-plane value: busy changes coalesce
+    /// in `desired`, the active attempt keeps its admitted `effective` mode,
+    /// and settlement reconciles before the next admission can begin.
+    #[allow(clippy::too_many_lines)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn approval_mode_settlement_reconciliation_precedes_next_admission() {
+        use crate::model::event::ModelEvent;
+        use crate::model::finish::ModelFinishReason;
+
+        let (release_sender, release_receiver) = model_release();
+        let scripts = vec![
+            vec![
+                FakeStep::ParkUntilReleased(release_receiver),
+                FakeStep::Emit(ModelEvent::Completed {
+                    finish_reason: ModelFinishReason::Stop,
+                    usage: None,
+                }),
+            ],
+            one_turn_script(),
+        ];
+        let settlement_gate = Arc::new(super::Gate::default());
+        let probe = CoordinatorProbe {
+            settlement_gate: Some(settlement_gate.clone()),
+            ..CoordinatorProbe::default()
+        };
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (runtime, model) = headless_runtime(&dir, scripts, None, Some(probe)).await;
+        let pending = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(pending.clone())
+            .expect("bridge install");
+        runtime.activate();
+
+        assert_eq!(
+            runtime.approval_mode_state(),
+            crate::runtime::ApprovalModeState {
+                effective: ApprovalMode::Policy,
+                desired: ApprovalMode::Policy,
+                revision: 0,
+            }
+        );
+
+        runtime
+            .submit_inbound(text_content("first"))
+            .expect("first inbound");
+        let mut parked = model.parked();
+        within_liveness_guard("first model park", parked.wait_for(|is_parked| *is_parked))
+            .await
+            .expect("model park watch remains open");
+        runtime
+            .submit_inbound(text_content("second"))
+            .expect("second inbound remains queued");
+
+        let full_access = runtime
+            .approval_mode_set(ApprovalMode::FullAccess)
+            .expect("FullAccess request");
+        assert_eq!(full_access.effective, ApprovalMode::Policy);
+        assert_eq!(full_access.desired, ApprovalMode::FullAccess);
+        assert_eq!(full_access.revision, 1);
+
+        let idempotent = runtime
+            .approval_mode_set(ApprovalMode::FullAccess)
+            .expect("idempotent FullAccess request");
+        assert_eq!(idempotent, full_access);
+
+        let coalesced_policy = runtime
+            .approval_mode_set(ApprovalMode::Policy)
+            .expect("intermediate Policy request");
+        assert_eq!(coalesced_policy.revision, 2);
+        assert_eq!(coalesced_policy.effective, ApprovalMode::Policy);
+        assert_eq!(coalesced_policy.desired, ApprovalMode::Policy);
+        let latest = runtime
+            .approval_mode_set(ApprovalMode::FullAccess)
+            .expect("latest FullAccess request");
+        assert_eq!(latest.revision, 3);
+        assert_eq!(latest.effective, ApprovalMode::Policy);
+        assert_eq!(latest.desired, ApprovalMode::FullAccess);
+
+        settlement_gate.arm();
+        release_sender.send(true).expect("release first model");
+        within_liveness_guard(
+            "settlement reconciliation gate",
+            tokio::task::spawn_blocking({
+                let settlement_gate = settlement_gate.clone();
+                move || settlement_gate.wait_entered()
+            }),
+        )
+        .await
+        .expect("settlement gate task");
+        runtime.settlement_signal().notified().await;
+
+        let before_next_admission = pending.drain();
+        assert!(before_next_admission.iter().any(|observation| matches!(
+            observation,
+            ConversationObservation::ApprovalModeChanged {
+                effective: ApprovalMode::FullAccess,
+                pending: None,
+                revision: 4,
+            }
+        )));
+        assert_eq!(
+            model.requests().len(),
+            1,
+            "the queued attempt cannot be admitted before reconciliation gate release"
+        );
+
+        settlement_gate.release();
+        let mut emitted = model.emitted();
+        within_liveness_guard(
+            "next model admission",
+            emitted.wait_for(|count| *count >= 4),
+        )
+        .await
+        .expect("model emission watch remains open");
+        assert_eq!(
+            runtime.approval_mode_state(),
+            crate::runtime::ApprovalModeState {
+                effective: ApprovalMode::FullAccess,
+                desired: ApprovalMode::FullAccess,
+                revision: 4,
+            }
+        );
+        let mut terminal_count = before_next_admission
+            .iter()
+            .filter(|observation| {
+                matches!(
+                    observation,
+                    ConversationObservation::Event { event, .. } if is_terminal_event(event)
+                )
+            })
+            .count();
+        let _observations = await_observation(&pending, |observation| {
+            if matches!(
+                observation,
+                ConversationObservation::Event { event, .. } if is_terminal_event(event)
+            ) {
+                terminal_count += 1;
+            }
+            terminal_count == 2
+        })
+        .await;
+        assert_eq!(terminal_count, 2);
+        runtime.settlement_signal().notified().await;
+        assert!(!runtime.has_current_attempt());
+        assert!(before_next_admission.iter().any(|observation| matches!(
+            observation,
+            ConversationObservation::ApprovalModeChanged {
+                effective: ApprovalMode::FullAccess,
+                pending: None,
+                revision: 4,
+            }
+        )));
+    }
+
     /// The mailbox and every full-store operation are derived from one
     /// `ConversationStoreBinding`. Two independent stores may happen to use
     /// the same `ConversationId`, but there is no production constructor that
@@ -4914,6 +5189,7 @@ mod tests {
             input_schema: serde_json::json!({"type": "object", "properties": {"text": {"type": "string"}}}),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
             concurrency_policy: crate::tools::types::ToolConcurrencyPolicy::default(),
+            approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
         };
@@ -5334,6 +5610,7 @@ mod tests {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(Arc::new(FakeModel::new(Vec::new()))),
             timezone: None,
+            approval_mode: ApprovalMode::Policy,
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -5392,6 +5669,7 @@ mod tests {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(Arc::new(FakeModel::new(Vec::new()))),
             timezone: None,
+            approval_mode: ApprovalMode::Policy,
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -5455,6 +5733,7 @@ mod tests {
             }),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
             concurrency_policy: ToolConcurrencyPolicy::default(),
+            approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
         };
@@ -5736,6 +6015,7 @@ mod tests {
             }),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
             concurrency_policy: ToolConcurrencyPolicy::default(),
+            approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
         };
@@ -8268,6 +8548,7 @@ mod tests {
             }),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
             concurrency_policy: ToolConcurrencyPolicy::Sequential,
+            approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
         };
@@ -9370,6 +9651,7 @@ mod tests {
             }),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
             concurrency_policy: ToolConcurrencyPolicy::Sequential,
+            approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
         };
@@ -9499,6 +9781,7 @@ mod tests {
             input_schema: serde_json::json!({"type": "object"}),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
             concurrency_policy: ToolConcurrencyPolicy::Parallel,
+            approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
         };
@@ -9681,6 +9964,7 @@ mod tests {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter),
             timezone: None,
+            approval_mode: ApprovalMode::Policy,
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,

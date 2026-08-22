@@ -339,6 +339,10 @@ mod tests {
             tool_output: &tool_output,
             environment: &environment,
             skill_resources: Some(snapshot.resources()),
+            interaction: None,
+            attempt_id: None,
+            turn: 0,
+            agent_cancellation: None,
         };
         let result = ReadTool
             .execute(

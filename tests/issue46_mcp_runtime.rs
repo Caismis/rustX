@@ -151,6 +151,10 @@ mod unix_tests {
                 tool_output: bundle.tool_output(),
                 environment: bundle.environment(),
                 skill_resources: None,
+                interaction: None,
+                attempt_id: None,
+                turn: 0,
+                agent_cancellation: None,
             },
         )
         .await

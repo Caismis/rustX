@@ -765,6 +765,33 @@ impl ClientInner {
         })
     }
 
+    /// Requests the authoritative runtime `ApprovalMode` transition.
+    pub(crate) fn approval_mode_set(
+        &self,
+        mode: crate::runtime::ApprovalMode,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.ensure_session_runtime_live()?;
+        let state = self.lock_state();
+        state.projection.snapshot_ref_checked()?;
+        drop(state);
+        let state = self
+            .runtime
+            .approval_mode_set(mode)
+            .map_err(|error| match error {
+                crate::runtime::ApprovalModeUpdateError::Inactive => {
+                    RuntimeClientError::ApprovalModeInactive
+                }
+                crate::runtime::ApprovalModeUpdateError::DurabilityFailed { message } => {
+                    RuntimeClientError::ApprovalModeDurabilityFailed { message }
+                }
+            })?;
+        Ok(RuntimeClientResult::ApprovalModeSet {
+            effective_approval_mode: state.effective,
+            pending_approval_mode: (state.effective != state.desired).then_some(state.desired),
+            revision: state.revision,
+        })
+    }
+
     /// Inspects one background execution through the conversation runtime's
     /// authoritative registry.
     ///
@@ -1288,6 +1315,20 @@ impl RuntimeClientHost {
         self.inner.model_set(config)
     }
 
+    /// Requests the runtime `ApprovalMode` transition through the authoritative
+    /// runtime control plane.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed Runtime Client error when the runtime is inactive,
+    /// durably failed, or its projection is no longer serviceable.
+    pub fn approval_mode_set(
+        &self,
+        mode: crate::runtime::ApprovalMode,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.inner.approval_mode_set(mode)
+    }
+
     /// Inspects one background execution through the authoritative
     /// registry.
     ///
@@ -1757,6 +1798,7 @@ mod tests {
                         input_schema: serde_json::json!({"type": "object"}),
                         execution_policy: ToolExecutionPolicy::ModelSelectable,
                         concurrency_policy: ToolConcurrencyPolicy::Sequential,
+                        approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
                         replay_policy: ToolReplayPolicy::Never,
                         origin: ToolOrigin::Builtin,
                     },
@@ -1938,6 +1980,7 @@ mod tests {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter.clone()),
             timezone: None,
+            approval_mode: crate::runtime::ApprovalMode::Policy,
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -2014,6 +2057,7 @@ mod tests {
                 agent_id: AgentId::new("agent-a"),
                 model: scripted_session_model(adapter.clone()),
                 timezone: None,
+                approval_mode: crate::runtime::ApprovalMode::Policy,
                 context: ConversationContextConfig {
                     policy: crate::context::SessionContextPolicy {
                         reserve_tokens: 0,
@@ -5017,6 +5061,7 @@ mod tests {
             agent_id: AgentId::new("agent-a"),
             model: crate::scripted_suites::support::model::scripted_session_model(adapter.clone()),
             timezone: None,
+            approval_mode: crate::runtime::ApprovalMode::Policy,
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -5097,6 +5142,7 @@ mod tests {
                     adapter.clone(),
                 ),
                 timezone: None,
+                approval_mode: crate::runtime::ApprovalMode::Policy,
                 context: ConversationContextConfig {
                     policy: crate::context::SessionContextPolicy {
                         reserve_tokens: 0,
@@ -5203,6 +5249,7 @@ mod tests {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter.clone()),
             timezone: None,
+            approval_mode: crate::runtime::ApprovalMode::Policy,
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -6271,6 +6318,7 @@ mod tests {
             agent_id: AgentId::new("agent-claim"),
             model: scripted_session_model(fixture.adapter.clone()),
             timezone: None,
+            approval_mode: crate::runtime::ApprovalMode::Policy,
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,

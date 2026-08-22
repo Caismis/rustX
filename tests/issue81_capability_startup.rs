@@ -205,6 +205,10 @@ async fn prove_native_tool_executes(runtime: &LocalConversationRuntime) {
             tool_output: tool_runtime.tool_output(),
             environment: tool_runtime.environment(),
             skill_resources: None,
+            interaction: None,
+            attempt_id: None,
+            turn: 0,
+            agent_cancellation: None,
         },
     )
     .await;

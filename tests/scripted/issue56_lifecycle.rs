@@ -56,8 +56,9 @@ use rustx::runtime::identity::{
 use rustx::runtime::types::{CancellationReason, ConversationLifecycle, RuntimeError};
 use rustx::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
 use rustx::tools::types::{
-    ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
-    ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolOrigin, ToolReplayPolicy,
+    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
+    ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolOrigin,
+    ToolReplayPolicy,
 };
 use support::fake::{FakeModel, FakeStep, ScriptedCall, fake_model, tool_call_events};
 
@@ -2002,6 +2003,7 @@ async fn invalid_preflight_never_reaches_pre_tool_policy() {
         }),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         concurrency_policy: ToolConcurrencyPolicy::Sequential,
+        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     };

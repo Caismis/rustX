@@ -272,7 +272,7 @@ conversation. The async client shutdown request awaits the runtime operation;
 the `RuntimeShutdown` projection event marks admission closure, while the
 `shutdown_completed` response marks successful quiescence.
 
-## 1.3 Native interaction and approval coordination (M9.2 / Issue #64)
+## 1.3 Native interaction and approval coordination (M9.2 / Issue #100)
 
 rustX has one provider-independent human-interaction plane. It is a
 conversation-owned rendezvous, not a second execution engine:
@@ -280,7 +280,9 @@ conversation-owned rendezvous, not a second execution engine:
 ```text
 ToolRegistry preflight
   -> canonical Assistant ToolCall commit
-  -> AttemptLifecycle::pre_tool (immutable PreToolView)
+  -> effective ToolApprovalPolicy / ApprovalMode
+       Never ------------------------------┐
+       Always -> AttemptLifecycle::pre_tool│
        Allow ------------------------------┐
        Deny -> one typed denied result      │
        Ask -> InteractionCoordinator       │
@@ -316,15 +318,52 @@ The pre-tool seam is total and typed: every `AttemptLifecycle` carries one
 `PreToolPolicy`, while a runtime-created attempt receives one concrete native
 binding to its owning `InteractionCoordinator`. The binding is not a
 replaceable production rendezvous strategy; a standalone inert execution has
-no interaction provider and therefore fails an `Ask` closed. `AlwaysAllow` is
-the identity policy because the current product has no native rule saying
-that a specific tool requires approval. This issue does not add a permission
-language, risk-classification engine, allowlist, routing layer, or form
-framework.
+no interaction provider and therefore fails an `Ask` closed. The configured
+`ToolApprovalPolicy` is resolved only after exact registry preflight. The
+runtime-wide `ApprovalMode` then computes effective approval: `Policy` keeps
+the Tool's `Never`/`Always` value, while `FullAccess` maps eligible calls to
+`Never` without changing any Tool definition. This issue does not add a
+permission language, risk-classification engine, allowlist, routing layer, or
+form framework.
 `PreToolPolicy` runs only after registry identity resolution, reserved metadata
 stripping, and business-argument validation, and after the Assistant
 `ToolCall` is canonical. It cannot resolve a tool, dispatch it, or alter the
 prepared invocation.
+
+Question is a separate bounded interaction kind, not an approval variant. The
+native `ask_user` Tool uses the ordinary Tool Plane path and fixed
+foreground/sequential/approval-never policy:
+
+```text
+Assistant ToolCall(ask_user)
+  -> ToolRegistry preflight
+  -> ordinary executor
+  -> InteractionCoordinator Question(prompt, finite choices, free-text flag)
+  -> Runtime Client / TUI typed QuestionAnswer
+  -> ordinary ToolResult
+  -> model continuation
+```
+
+It has no filesystem, network, process, or authorization authority and never
+creates a recursive approval request. With no interaction-capable client it
+returns an explicit failed ToolResult. Approval responses contain only
+`Allow`/`Deny`; Question answers contain only a validated choice or bounded
+free text. Neither response can replace the original Tool arguments.
+
+The runtime control plane exposes `effective_approval_mode` and a pending
+desired mode. A busy attempt freezes the effective mode it admitted; later
+requests coalesce in `desired_approval_mode` and reconcile only after terminal
+settlement, before the next attempt admission. Requesting `FullAccess` never
+auto-answers a pending Approval, activates a disabled Tool, restores an
+excluded Tool, or bypasses execution/concurrency restrictions. `ApprovalMode`
+is current runtime configuration (`approvalMode`, default `policy`) and is not
+Session history; resume uses the current configuration.
+
+These are intentionally distinct runtime facts:
+
+```text
+availability != activation != approval != approval mode != execution != concurrency
+```
 
 An approval request contains only immutable, decision-relevant facts:
 conversation/attempt/turn identity, `ToolCallId`, resolved `ToolId`, safe tool
@@ -435,9 +474,10 @@ runtime/identity.rs        strong IDs (ConversationId, MessageId, AgentId,
                            InteractionId, ToolCallId, ToolExecutionId, ToolVersionId,
                            McpServerId, SkillId, SkillVersionId, ArtifactId)
                            and CapabilityRevision
-runtime/interaction.rs     provider-independent native Approval request,
-                           response/outcome, coordinator pending registry,
-                           terminal rendezvous, and Runtime Client observation
+runtime/interaction.rs     provider-independent native Approval and bounded
+                           Question requests, typed responses/outcomes,
+                           coordinator pending registry, terminal rendezvous,
+                           and Runtime Client observation
 runtime/cancellation.rs   CancellationSignal: the one runtime-owned
                            cancellation primitive shared by model adapters,
                            compaction, foreground tool execution, and
@@ -466,8 +506,8 @@ message/types.rs           MessageBlock (System/User/Assistant/Tool), provenance
                            UserMessageBlock.timestamp (persisted inbound
                            instant; absent for derived compaction summaries),
                            ContentBlockIndex, content enums per role
-tools/types.rs             ToolDefinition (id, name, description, canonical
-                           input schema, ToolInvocationPolicy,
+                           input schema, ToolInvocationPolicy with independent
+                           execution/concurrency/approval axes,
                            ToolReplayPolicy, ToolOrigin), ModelToolDefinition
                            (the compiled model-facing definition), ToolCall,
                            ToolCallStart, ToolInvocation (stripped/validated
@@ -1315,11 +1355,11 @@ committer: a later pre-step rejection or cancellation prevents the deferred
 context from ever becoming canonical.
 
 Tool-execution wrappers/middleware, post-tool result replacement, pre-tool
-argument or identity rewriting, question/form frameworks, generalized
+argument or identity rewriting, generic question/form frameworks, generalized
 permission/risk policy, subagent lifecycle observation (#60), and
 turn-stopping/forced continuation are intentionally absent. The bounded
-native `PreToolPolicy`/Approval seam is implemented by M9.2 above; it does not
-expand into those frameworks.
+native Approval and Question seams are implemented by M9.2/#100 above; they do
+not expand into those frameworks.
 `docs/agent-loop.md` section 4.3 carries the full authority matrix.
 
 #### M5 implementation (native tool plane)
@@ -1328,7 +1368,7 @@ The M5 implementation freezes the canonical tool plane boundary in
 `src/tools` and replaces the provisional M3 `Tool` trait:
 
 ```text
-canonical ToolDefinition (tool-owned schema + two policy axes)
+canonical ToolDefinition (tool-owned schema + three policy axes)
         |
 validating ToolRegistry (definition + Arc<dyn ToolExecutor>)
         |
@@ -1342,7 +1382,7 @@ ToolExecutor::execute(ToolInvocation, ToolExecutionContext)
 ToolExecutionResult
 ```
 
-The two policy axes are independent:
+The three policy axes are independent:
 
 - [`ToolExecutionPolicy`] (`ForegroundOnly` / `BackgroundOnly` /
   `ModelSelectable`) decides ownership and settlement: foreground work is
@@ -1351,6 +1391,10 @@ The two policy axes are independent:
 - [`ToolConcurrencyPolicy`] (`Sequential` / `Parallel`) decides scheduling
   within one tool-call batch: a `Sequential` invocation is an exclusive
   barrier, adjacent `Parallel` invocations run as one group.
+- [`ToolApprovalPolicy`] (`Never` / `Always`) decides whether an eligible
+  invocation publishes a native Approval before the executor starts. The
+  runtime `ApprovalMode` is a separate control-plane override: `Policy`
+  consults this axis and `FullAccess` makes effective approval `Never` only.
 
 The canonical input schema is tool-owned and never mutated. For
 `ModelSelectable` tools the model-facing compiler decorates a clone with the

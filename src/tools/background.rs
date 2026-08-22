@@ -1809,6 +1809,10 @@ impl ConversationBackgroundRegistry {
                 tool_output: &resources.tool_output,
                 environment: &captured.environment,
                 skill_resources: captured.skill_resources.as_deref(),
+                interaction: None,
+                attempt_id: None,
+                turn: 0,
+                agent_cancellation: None,
             };
             let result = executor.execute(invocation, context).await;
             registry.settle_terminal(&execution_id, &result);
@@ -3392,6 +3396,10 @@ mod tests {
                     tool_output: &foreground_output,
                     environment: &foreground_environment,
                     skill_resources: Some(resources_a.as_ref()),
+                    interaction: None,
+                    attempt_id: None,
+                    turn: 0,
+                    agent_cancellation: None,
                 },
             )
             .await;
@@ -3732,6 +3740,10 @@ mod tests {
                     tool_output: &tool_output,
                     environment: &ToolEnvironment::new(),
                     skill_resources: None,
+                    interaction: None,
+                    attempt_id: None,
+                    turn: 0,
+                    agent_cancellation: None,
                 },
             )
             .await;
@@ -3773,6 +3785,10 @@ mod tests {
                     tool_output: &tool_output,
                     environment: &ToolEnvironment::new(),
                     skill_resources: None,
+                    interaction: None,
+                    attempt_id: None,
+                    turn: 0,
+                    agent_cancellation: None,
                 },
             )
             .await;

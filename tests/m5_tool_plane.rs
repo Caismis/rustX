@@ -112,6 +112,10 @@ async fn run_tool_unchecked(
                 tool_output: fixture.runtime.tool_output(),
                 environment: fixture.runtime.environment(),
                 skill_resources: None,
+                interaction: None,
+                attempt_id: None,
+                turn: 0,
+                agent_cancellation: None,
             },
         )
         .await

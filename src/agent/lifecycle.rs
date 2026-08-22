@@ -134,9 +134,10 @@
 //! - **Post-tool result replacement/blocking**: `ToolResultObservation` is
 //!   immutable by construction. A finalized result is a canonical fact by the
 //!   time an observer sees it.
-//! - **Question/forms** (Issue #64's non-goal), **subagent lifecycle** (Issue
-//!   #60), and **turn-stopping/forced continuation**: each needs a concrete
-//!   native owner first.
+//! - **Generic forms/workflows**, **subagent lifecycle** (Issue #60), and
+//!   **turn-stopping/forced continuation**: each remains outside this bounded
+//!   pre-tool seam. The native `ask_user` Tool owns its Question interaction
+//!   through the normal Tool Plane instead of adding an Agent Loop branch.
 //!
 //! [`AgentExecutionObserver`](super::AgentExecutionObserver) is a different
 //! responsibility and stays a read-only projection observer of committed
@@ -155,7 +156,10 @@ use crate::runtime::identity::{
 #[cfg(test)]
 use crate::runtime::interaction::TestInteractionRendezvous;
 use crate::runtime::interaction::{ApprovalFacts, InteractionCoordinator, InteractionOutcome};
-use crate::tools::types::{ToolExecutionResult, ToolInvocationMode, ToolOrigin};
+use crate::runtime::types::ApprovalMode;
+use crate::tools::types::{
+    ToolApprovalPolicy, ToolExecutionResult, ToolInvocationMode, ToolOrigin,
+};
 
 /// The bounded failure of one lifecycle extension invocation.
 ///
@@ -304,6 +308,8 @@ pub struct PreToolView<'a> {
     pub mode: ToolInvocationMode,
     /// The schema-validated business arguments.
     pub arguments: &'a serde_json::Value,
+    /// The tool-owned approval policy resolved by preflight.
+    pub approval_policy: ToolApprovalPolicy,
 }
 
 impl PreToolView<'_> {
@@ -358,6 +364,18 @@ impl InteractionBinding {
             Self::Test(rendezvous) => rendezvous.request_approval(facts, cancellation).await,
         }
     }
+
+    fn native_coordinator(&self) -> Option<Arc<dyn crate::runtime::ToolInteraction>> {
+        match self {
+            Self::Native(coordinator) => {
+                let coordinator: Arc<dyn crate::runtime::ToolInteraction> = coordinator.clone();
+                Some(coordinator)
+            }
+            Self::Unavailable => None,
+            #[cfg(test)]
+            Self::Test(_) => None,
+        }
+    }
 }
 
 /// The finite decision of the one pre-tool policy owner.
@@ -388,18 +406,38 @@ pub trait PreToolPolicy: Send + Sync {
     ) -> BoxFuture<'a, Result<PreToolDecision, LifecycleError>>;
 }
 
-/// The identity pre-tool policy. It preserves the default runtime behavior:
-/// no native product rule exists yet, so every already-preflighted call is
-/// eligible for the existing tool-start frontier.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct AlwaysAllow;
+/// The runtime-owned effective approval evaluator.
+///
+/// This policy only selects whether the already-preflighted invocation enters
+/// the existing approval rendezvous. It never changes availability, arguments,
+/// execution ownership, or concurrency.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ConfiguredApprovalPolicy {
+    mode: ApprovalMode,
+}
 
-impl PreToolPolicy for AlwaysAllow {
+impl ConfiguredApprovalPolicy {
+    pub(crate) const fn new(mode: ApprovalMode) -> Self {
+        Self { mode }
+    }
+}
+
+impl PreToolPolicy for ConfiguredApprovalPolicy {
     fn evaluate<'a>(
         &'a self,
-        _view: &'a PreToolView<'a>,
+        view: &'a PreToolView<'a>,
     ) -> BoxFuture<'a, Result<PreToolDecision, LifecycleError>> {
-        Box::pin(async { Ok(PreToolDecision::Allow) })
+        Box::pin(async move {
+            if self.mode == ApprovalMode::FullAccess
+                || view.approval_policy == ToolApprovalPolicy::Never
+            {
+                Ok(PreToolDecision::Allow)
+            } else {
+                Ok(PreToolDecision::Ask {
+                    reason: "tool approval policy requires approval".to_owned(),
+                })
+            }
+        })
     }
 }
 
@@ -639,7 +677,7 @@ impl AttemptLifecycle {
     pub fn inert() -> Self {
         Self {
             pre_step: Arc::new(AlwaysEnter),
-            pre_tool: Arc::new(AlwaysAllow),
+            pre_tool: Arc::new(ConfiguredApprovalPolicy::new(ApprovalMode::Policy)),
             interaction: InteractionBinding::Unavailable,
             tool_results: Vec::new(),
         }
@@ -656,6 +694,14 @@ impl AttemptLifecycle {
     #[must_use]
     pub fn with_pre_tool_policy(mut self, policy: Arc<dyn PreToolPolicy>) -> Self {
         self.pre_tool = policy;
+        self
+    }
+
+    /// Applies the runtime's effective approval mode to the built-in
+    /// pre-tool policy. Test/custom policies can still replace this seam
+    /// explicitly with [`Self::with_pre_tool_policy`].
+    pub(crate) fn with_approval_mode(mut self, mode: ApprovalMode) -> Self {
+        self.pre_tool = Arc::new(ConfiguredApprovalPolicy::new(mode));
         self
     }
 
@@ -691,6 +737,14 @@ impl AttemptLifecycle {
         self.interaction
             .request_approval(attempt_id, facts, cancellation)
             .await
+    }
+
+    /// Clones the runtime-owned coordinator for a native tool that needs to
+    /// publish a Question interaction through the same authority.
+    pub(crate) fn native_interaction_coordinator(
+        &self,
+    ) -> Option<Arc<dyn crate::runtime::ToolInteraction>> {
+        self.interaction.native_coordinator()
     }
 
     /// Binds the observer that speaks for the **native** runtime observation
@@ -790,5 +844,89 @@ impl AttemptLifecycle {
     #[must_use]
     pub fn tool_result_observers(&self) -> &[RegisteredToolResultObserver] {
         &self.tool_results
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ConfiguredApprovalPolicy, PreToolDecision, PreToolPolicy, PreToolView};
+    use crate::runtime::ApprovalMode;
+    use crate::runtime::identity::{AttemptId, ConversationId, ToolCallId, ToolId};
+    use crate::tools::types::{ToolApprovalPolicy, ToolInvocationMode, ToolOrigin};
+
+    fn view<'a>(
+        conversation_id: &'a ConversationId,
+        attempt_id: &'a AttemptId,
+        call_id: &'a ToolCallId,
+        tool_id: &'a ToolId,
+        origin: &'a ToolOrigin,
+        arguments: &'a serde_json::Value,
+        approval_policy: ToolApprovalPolicy,
+    ) -> PreToolView<'a> {
+        PreToolView {
+            conversation_id,
+            attempt_id,
+            turn: 1,
+            call_id,
+            tool_id,
+            tool_name: "write",
+            origin,
+            mode: ToolInvocationMode::Foreground,
+            arguments,
+            approval_policy,
+        }
+    }
+
+    #[tokio::test]
+    async fn approval_mode_changes_only_the_effective_approval_decision() {
+        let conversation_id = ConversationId::new("approval-policy-conversation");
+        let attempt_id = AttemptId::new("approval-policy-attempt");
+        let call_id = ToolCallId::new("approval-policy-call");
+        let tool_id = ToolId::new("tool-write");
+        let origin = ToolOrigin::Builtin;
+        let arguments = serde_json::json!({"path": "same.txt", "content": "same"});
+
+        let never = view(
+            &conversation_id,
+            &attempt_id,
+            &call_id,
+            &tool_id,
+            &origin,
+            &arguments,
+            ToolApprovalPolicy::Never,
+        );
+        assert!(matches!(
+            ConfiguredApprovalPolicy::new(ApprovalMode::Policy)
+                .evaluate(&never)
+                .await
+                .expect("policy evaluation"),
+            PreToolDecision::Allow
+        ));
+
+        let always = view(
+            &conversation_id,
+            &attempt_id,
+            &call_id,
+            &tool_id,
+            &origin,
+            &arguments,
+            ToolApprovalPolicy::Always,
+        );
+        assert!(matches!(
+            ConfiguredApprovalPolicy::new(ApprovalMode::Policy)
+                .evaluate(&always)
+                .await
+                .expect("policy evaluation"),
+            PreToolDecision::Ask { .. }
+        ));
+        assert!(matches!(
+            ConfiguredApprovalPolicy::new(ApprovalMode::FullAccess)
+                .evaluate(&always)
+                .await
+                .expect("full access evaluation"),
+            PreToolDecision::Allow
+        ));
+        assert_eq!(always.arguments, &arguments);
+        assert_eq!(always.approval_policy, ToolApprovalPolicy::Always);
     }
 }

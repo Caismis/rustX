@@ -1,4 +1,5 @@
-//! Native, provider-independent human interaction coordination (Issue #64).
+//! Native, provider-independent human interaction coordination (Issue #100,
+//! extending the Issue #64 approval seam).
 //!
 //! An interaction is a small runtime-owned rendezvous.  The coordinator owns
 //! identity allocation, pending publication, the one terminal transition,
@@ -6,7 +7,7 @@
 //! history, or a tool executor.
 //!
 //! ```text
-//! pre-tool policy -> approval facts -> InteractionCoordinator
+//! pre-tool policy/tool -> typed interaction facts -> InteractionCoordinator
 //!                                      |
 //!                               Runtime Client projection
 //!                                      |
@@ -22,7 +23,6 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-#[cfg(test)]
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
@@ -33,10 +33,6 @@ use crate::runtime::types::{CancellationReason, ConversationLifecycle, Lifecycle
 use crate::tools::types::{ToolInvocationMode, ToolOrigin};
 
 /// The bounded native interaction vocabulary of the 0.1 protocol.
-///
-/// Approval is the only concrete interaction in this release.  A question
-/// or form framework is intentionally not part of the native contract until
-/// a real runtime owner needs one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InteractionKind {
@@ -57,6 +53,17 @@ pub enum InteractionKind {
         arguments: serde_json::Value,
         /// The native policy's bounded explanation for asking.
         reason: String,
+    },
+    /// Ask the user one bounded question. This is deliberately not a generic
+    /// form or workflow vocabulary.
+    Question {
+        /// The bounded human-facing prompt.
+        prompt: String,
+        /// Optional finite choice labels.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        choices: Option<Vec<String>>,
+        /// Whether a free-text answer is accepted in addition to choices.
+        allow_free_text: bool,
     },
 }
 
@@ -99,6 +106,27 @@ pub enum InteractionResponse {
     Approval {
         /// The finite approval decision.  It has no tool arguments.
         decision: ApprovalDecision,
+    },
+    /// The response to a Question request.
+    Question {
+        /// The typed answer, with no tool-argument replacement channel.
+        answer: QuestionAnswer,
+    },
+}
+
+/// The finite typed answer accepted by a Question interaction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum QuestionAnswer {
+    /// A selected value from the request's finite choices.
+    Choice {
+        /// The exact selected choice value.
+        value: String,
+    },
+    /// A bounded free-text response.
+    FreeText {
+        /// The user's text.
+        value: String,
     },
 }
 
@@ -169,6 +197,40 @@ impl ApprovalFacts {
                 mode: self.mode,
                 arguments: self.arguments,
                 reason: self.reason,
+            },
+        }
+    }
+}
+
+/// The bounded facts used to construct one Question request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuestionFacts {
+    /// The model turn or tool turn that owns the question.
+    pub turn: u32,
+    /// The bounded prompt.
+    pub prompt: String,
+    /// Optional finite choices.
+    pub choices: Option<Vec<String>>,
+    /// Whether free text is accepted.
+    pub allow_free_text: bool,
+}
+
+impl QuestionFacts {
+    fn into_request(
+        self,
+        conversation_id: ConversationId,
+        attempt_id: AttemptId,
+        id: InteractionId,
+    ) -> InteractionRequest {
+        InteractionRequest {
+            id,
+            conversation_id,
+            attempt_id,
+            turn: self.turn,
+            kind: InteractionKind::Question {
+                prompt: self.prompt,
+                choices: self.choices,
+                allow_free_text: self.allow_free_text,
             },
         }
     }
@@ -411,6 +473,31 @@ pub(crate) struct InteractionCoordinator {
     wait_cancellation_gate: Mutex<Option<Arc<InteractionWaitCancellationGate>>>,
 }
 
+/// The narrow native interaction capability made available to runtime-owned
+/// tools. The concrete coordinator remains the sole implementation and sole
+/// authority; this trait only prevents the public tool execution context from
+/// exposing its private synchronization state.
+pub trait ToolInteraction: Send + Sync {
+    /// Publishes and awaits one Question through the existing coordinator.
+    fn request_question<'a>(
+        &'a self,
+        attempt_id: AttemptId,
+        facts: QuestionFacts,
+        cancellation: &'a AgentCancellation,
+    ) -> BoxFuture<'a, InteractionOutcome>;
+}
+
+impl ToolInteraction for InteractionCoordinator {
+    fn request_question<'a>(
+        &'a self,
+        attempt_id: AttemptId,
+        facts: QuestionFacts,
+        cancellation: &'a AgentCancellation,
+    ) -> BoxFuture<'a, InteractionOutcome> {
+        Box::pin(self.request_question(attempt_id, facts, cancellation))
+    }
+}
+
 impl core::fmt::Debug for InteractionCoordinator {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("InteractionCoordinator")
@@ -560,6 +647,44 @@ impl InteractionCoordinator {
             .map_err(|_| InteractionOutcome::Unavailable)?
     }
 
+    /// Publishes one bounded Question request and returns the owner-owned
+    /// waiter. It uses the exact same lifecycle admission, identity,
+    /// publication, and terminal settlement path as Approval.
+    fn publish_question_with_cancellation(
+        &self,
+        attempt_id: AttemptId,
+        facts: QuestionFacts,
+        cancellation: &AgentCancellation,
+    ) -> Result<InteractionTicket, InteractionOutcome> {
+        if !validate_question_facts(&facts) {
+            return Err(InteractionOutcome::Unavailable);
+        }
+        let id = self.allocate_id(&attempt_id)?;
+        let request = facts.into_request(self.conversation_id.clone(), attempt_id, id.clone());
+        let (sender, receiver) = oneshot::channel();
+        self.lifecycle
+            .admit_running_commit(|admission| {
+                let mut state = self.state.lock().expect("interaction state poisoned");
+                if !state.provider_available {
+                    return Err(InteractionOutcome::Unavailable);
+                }
+                let previous = state.pending.insert(
+                    id.clone(),
+                    PendingInteraction {
+                        request: request.clone(),
+                        cancellation: cancellation.clone(),
+                        sender,
+                        admission,
+                    },
+                );
+                debug_assert!(previous.is_none(), "interaction identity was reused");
+                self.notify_pending(&request);
+                drop(state);
+                Ok(InteractionTicket { id, receiver })
+            })
+            .map_err(|_| InteractionOutcome::Unavailable)?
+    }
+
     #[cfg(test)]
     fn publish_approval(
         &self,
@@ -578,6 +703,22 @@ impl InteractionCoordinator {
         cancellation: &AgentCancellation,
     ) -> InteractionOutcome {
         let ticket = match self.publish_approval_with_cancellation(attempt_id, facts, cancellation)
+        {
+            Ok(ticket) => ticket,
+            Err(outcome) => return outcome,
+        };
+        self.wait(ticket, cancellation).await
+    }
+
+    /// Publishes and awaits one Question through the runtime-owned
+    /// coordinator.
+    pub(crate) async fn request_question(
+        &self,
+        attempt_id: AttemptId,
+        facts: QuestionFacts,
+        cancellation: &AgentCancellation,
+    ) -> InteractionOutcome {
+        let ticket = match self.publish_question_with_cancellation(attempt_id, facts, cancellation)
         {
             Ok(ticket) => ticket,
             Err(outcome) => return outcome,
@@ -620,7 +761,8 @@ impl InteractionCoordinator {
     ///
     /// Returns [`InteractionError::NotPending`] for a stale, duplicate, or
     /// already-cancelled identity, and [`InteractionError::InvalidResponse`]
-    /// when the typed response violates the bounded Approval contract.
+    /// when the typed response violates the bounded Approval or Question
+    /// contract.
     pub(crate) fn respond(
         &self,
         interaction_id: &InteractionId,
@@ -813,6 +955,33 @@ impl core::fmt::Display for InteractionError {
 impl std::error::Error for InteractionError {}
 
 const MAX_RESPONSE_REASON_BYTES: usize = 1024;
+const MAX_QUESTION_PROMPT_BYTES: usize = 4096;
+const MAX_QUESTION_CHOICES: usize = 32;
+const MAX_QUESTION_CHOICE_BYTES: usize = 256;
+const MAX_QUESTION_ANSWER_BYTES: usize = 4096;
+
+fn validate_question_facts(facts: &QuestionFacts) -> bool {
+    if facts.prompt.is_empty() || facts.prompt.len() > MAX_QUESTION_PROMPT_BYTES {
+        return false;
+    }
+    let Some(choices) = facts.choices.as_ref() else {
+        return facts.allow_free_text;
+    };
+    if choices.is_empty() || choices.len() > MAX_QUESTION_CHOICES {
+        return false;
+    }
+    if choices
+        .iter()
+        .any(|choice| choice.is_empty() || choice.len() > MAX_QUESTION_CHOICE_BYTES)
+    {
+        return false;
+    }
+    let mut unique = std::collections::BTreeSet::new();
+    if choices.iter().any(|choice| !unique.insert(choice)) {
+        return false;
+    }
+    true
+}
 
 fn validate_response_for(
     request: &InteractionRequest,
@@ -831,6 +1000,48 @@ fn validate_response_for(
             }
             Ok(())
         }
+        (
+            InteractionKind::Question {
+                choices,
+                allow_free_text,
+                ..
+            },
+            InteractionResponse::Question { answer },
+        ) => {
+            let (kind, value) = match answer {
+                QuestionAnswer::Choice { value } => ("choice", value),
+                QuestionAnswer::FreeText { value } => ("free text", value),
+            };
+            if value.is_empty() || value.len() > MAX_QUESTION_ANSWER_BYTES {
+                return Err(InteractionError::InvalidResponse {
+                    message: format!(
+                        "{kind} answer is empty or exceeds {MAX_QUESTION_ANSWER_BYTES} bytes"
+                    ),
+                });
+            }
+            match answer {
+                QuestionAnswer::Choice { .. } => {
+                    if choices
+                        .as_ref()
+                        .is_none_or(|choices| !choices.iter().any(|choice| choice == value))
+                    {
+                        return Err(InteractionError::InvalidResponse {
+                            message: "question choice is not one of the offered choices".to_owned(),
+                        });
+                    }
+                }
+                QuestionAnswer::FreeText { .. } if !allow_free_text => {
+                    return Err(InteractionError::InvalidResponse {
+                        message: "question does not accept free text".to_owned(),
+                    });
+                }
+                QuestionAnswer::FreeText { .. } => {}
+            }
+            Ok(())
+        }
+        _ => Err(InteractionError::InvalidResponse {
+            message: "interaction response type does not match the pending request".to_owned(),
+        }),
     }
 }
 
@@ -859,6 +1070,27 @@ mod tests {
         call: &str,
     ) -> Result<InteractionTicket, InteractionOutcome> {
         coordinator.publish_approval(AttemptId::new(attempt), facts(call))
+    }
+
+    fn question_facts() -> QuestionFacts {
+        QuestionFacts {
+            turn: 4,
+            prompt: "Choose a deployment target".to_owned(),
+            choices: Some(vec!["staging".to_owned(), "production".to_owned()]),
+            allow_free_text: false,
+        }
+    }
+
+    fn publish_question(
+        coordinator: &InteractionCoordinator,
+        attempt: &str,
+    ) -> Result<InteractionTicket, InteractionOutcome> {
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        coordinator.publish_question_with_cancellation(
+            AttemptId::new(attempt),
+            question_facts(),
+            &cancellation,
+        )
     }
 
     #[derive(Default)]
@@ -976,6 +1208,107 @@ mod tests {
                 InteractionResponse::Approval {
                     decision: ApprovalDecision::Allow,
                 }
+            ),
+            Err(InteractionError::NotPending { interaction_id: id })
+        );
+    }
+
+    #[tokio::test]
+    async fn question_publishes_once_and_accepts_one_typed_answer() {
+        let coordinator = coordinator();
+        coordinator.set_provider_available(true);
+        let ticket = publish_question(&coordinator, "question-attempt").expect("published");
+        let id = ticket.id.clone();
+        let request = coordinator
+            .pending_snapshot()
+            .into_iter()
+            .next()
+            .expect("one pending question");
+        assert_eq!(request.id, id);
+        assert!(matches!(request.kind, InteractionKind::Question { .. }));
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let waiter = coordinator.wait(ticket, &cancellation);
+        let response = InteractionResponse::Question {
+            answer: QuestionAnswer::Choice {
+                value: "staging".to_owned(),
+            },
+        };
+        coordinator
+            .respond(&id, response.clone())
+            .expect("answered");
+        assert_eq!(
+            waiter.await,
+            InteractionOutcome::Answered {
+                response: response.clone()
+            }
+        );
+        assert_eq!(coordinator.pending_count(), 0);
+        assert_eq!(
+            coordinator.respond(&id, response),
+            Err(InteractionError::NotPending { interaction_id: id })
+        );
+    }
+
+    #[tokio::test]
+    async fn question_rejects_answers_outside_its_declared_vocabulary() {
+        let coordinator = coordinator();
+        coordinator.set_provider_available(true);
+        let ticket = publish_question(&coordinator, "question-validation").expect("published");
+        let id = ticket.id.clone();
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let waiter = coordinator.wait(ticket, &cancellation);
+        assert!(matches!(
+            coordinator.respond(
+                &id,
+                InteractionResponse::Question {
+                    answer: QuestionAnswer::FreeText {
+                        value: "not allowed".to_owned(),
+                    },
+                },
+            ),
+            Err(InteractionError::InvalidResponse { .. })
+        ));
+        coordinator
+            .respond(
+                &id,
+                InteractionResponse::Question {
+                    answer: QuestionAnswer::Choice {
+                        value: "production".to_owned(),
+                    },
+                },
+            )
+            .expect("valid answer");
+        assert!(matches!(waiter.await, InteractionOutcome::Answered { .. }));
+    }
+
+    #[tokio::test]
+    async fn cancellation_racing_question_settles_once_and_late_answer_is_stale() {
+        let coordinator = coordinator();
+        coordinator.set_provider_available(true);
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let ticket = coordinator
+            .publish_question_with_cancellation(
+                AttemptId::new("question-cancel"),
+                question_facts(),
+                &cancellation,
+            )
+            .expect("published");
+        let id = ticket.id.clone();
+        assert!(cancellation.request_cancel(CancellationReason::RuntimeShutdown));
+        assert_eq!(
+            coordinator.wait(ticket, &cancellation).await,
+            InteractionOutcome::Cancelled {
+                reason: CancellationReason::RuntimeShutdown
+            }
+        );
+        assert_eq!(
+            coordinator.respond(
+                &id,
+                InteractionResponse::Question {
+                    answer: QuestionAnswer::Choice {
+                        value: "staging".to_owned(),
+                    },
+                },
             ),
             Err(InteractionError::NotPending { interaction_id: id })
         );

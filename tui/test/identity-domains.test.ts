@@ -92,18 +92,14 @@ function backgroundCard(preferences = defaultPreferences()): string {
  * so a cross-toggle would be visible rather than merely possible.
  */
 function interactionCard(preferences = defaultPreferences()): string {
+  const request = approvalInteraction(COLLIDING);
+  if (request.kind.type !== "approval") {
+    throw new Error("fixture must be an approval interaction");
+  }
   return plainText(
     renderInteractionSection(
       stateOf({
-        pending_interactions: [
-          {
-            ...approvalInteraction(COLLIDING),
-            kind: {
-              ...approvalInteraction(COLLIDING).kind,
-              reason: longBody,
-            },
-          },
-        ],
+        pending_interactions: [{ ...request, kind: { ...request.kind, reason: longBody } }],
       }),
       preferences,
     ),

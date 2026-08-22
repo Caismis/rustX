@@ -1043,7 +1043,7 @@ fact and the cached shutdown failure both linearize after it. No SQLite schema c
 required. M9.2 interaction coordination composes with this lifecycle
 contract; subagents (#60) and the DSH sidecar (#57) remain separate work.
 
-### M9.2 — Native human interaction and approval coordination (Issue #64, delivered)
+### M9.2 — Native human interaction and approval coordination (Issue #100, delivered)
 
 M9.2 adds one provider-independent, conversation-owned interaction plane.
 `InteractionCoordinator` owns non-reused interaction identities, the live
@@ -1057,6 +1057,11 @@ native binding to the owning `InteractionCoordinator`; production callers
 cannot replace that rendezvous owner. The policy sees the immutable facts
 already resolved by `ToolRegistry::preflight`, after the Assistant `ToolCall`
 canonical commit, and returns `Allow`, `Deny { reason }`, or `Ask { reason }`.
+Each Tool independently declares `ToolApprovalPolicy::Never` or `Always`.
+Runtime `ApprovalMode::Policy` consults that declaration; `FullAccess` changes
+effective approval to `Never` only and does not mutate Tool configuration or
+bypass availability, activation, execution ownership, concurrency, or
+authority.
 An Allow continues
 the exact original `PreparedInvocation`; no response can replace identity or
 arguments. A Deny produces one typed `ToolExecutionStatus::Denied` result
@@ -1072,11 +1077,21 @@ pending-map removal is not waiter or attempt settlement: Quiescent waits for
 the waiter handoff, projection callback, AgentExecution, and attempt task.
 
 Runtime Client v1 carries `interaction_respond`, typed acceptance/errors,
-pending/settled events, and `snapshot.pending_interactions`. The TUI remains a
-projection/client: it renders pending Approval facts and sends only the typed
-response. Snapshot/cursor/resubscribe remains the repair authority. A missing
-provider fails closed at publication; detach never answers, denies, or
-cancels an already-published interaction.
+pending/settled events, and `snapshot.pending_interactions`. It also projects
+authoritative effective and pending ApprovalMode state and accepts mode
+changes through runtime control. The TUI remains a projection/client: it
+renders pending Approval and Question facts and sends only typed responses;
+it never suppresses or auto-answers them. Snapshot/cursor/resubscribe remains
+the repair authority. A missing provider fails closed at Approval publication
+and makes `ask_user` return an explicit failed ToolResult; detach never
+answers, denies, or cancels an already-published interaction.
+
+The native `ask_user` capability is an ordinary foreground, sequential,
+approval-never Tool. Its executor requests one bounded Question (prompt,
+optional finite choices, optional free text) through this same coordinator
+and returns a normal ToolResult. It has no filesystem/network/process
+authority and no recursive approval path. Availability, activation, approval,
+ApprovalMode, execution, and concurrency remain separate facts.
 
 Interaction IDs derive from the already non-reused `AttemptId` domain plus a
 per-attempt ordinal. Pending interactions are process-owned observations, not
@@ -1096,7 +1111,7 @@ canonical-order tests; provider detach/unavailable behavior; Runtime Client
 snapshot/event/resync projection; crash/non-reuse tests; lifecycle drain and
 waiter-settlement tests; and TUI projection/render/typed-response tests.
 No permission framework, durable human workflow, provider-specific payload,
-generic runtime participant abstraction, or ask-user forms were added.
+generic runtime participant abstraction, or generic forms were added.
 
 ### M9.25 — Native async one-shot subagents (Issue #60, delivered)
 

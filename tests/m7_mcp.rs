@@ -118,6 +118,10 @@ mod unix_tests {
                 tool_output: runtime_bundle.tool_output(),
                 environment: runtime_bundle.environment(),
                 skill_resources: None,
+                interaction: None,
+                attempt_id: None,
+                turn: 0,
+                agent_cancellation: None,
             },
         )
         .await;
@@ -164,6 +168,10 @@ mod unix_tests {
                 tool_output: runtime_bundle.tool_output(),
                 environment: runtime_bundle.environment(),
                 skill_resources: None,
+                interaction: None,
+                attempt_id: None,
+                turn: 0,
+                agent_cancellation: None,
             },
         );
         tokio::pin!(slow_future);
@@ -293,6 +301,10 @@ mod unix_tests {
                 tool_output: runtime_bundle.tool_output(),
                 environment: runtime_bundle.environment(),
                 skill_resources: None,
+                interaction: None,
+                attempt_id: None,
+                turn: 0,
+                agent_cancellation: None,
             },
         )
         .await;
@@ -349,6 +361,10 @@ mod unix_tests {
                 tool_output: runtime_bundle.tool_output(),
                 environment: runtime_bundle.environment(),
                 skill_resources: None,
+                interaction: None,
+                attempt_id: None,
+                turn: 0,
+                agent_cancellation: None,
             },
         );
         tokio::pin!(slow_future);
