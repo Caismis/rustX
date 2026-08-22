@@ -21,6 +21,7 @@ import type { RuntimeClientAttachment } from "../src/runtime/attachment.ts";
 import type { SessionSummaryView } from "../src/protocol/types.ts";
 import {
   attemptView,
+  questionInteraction,
   catalogModel,
   sessionModel,
   sessionView,
@@ -337,6 +338,107 @@ describe("RustxTuiApp lifecycle", () => {
     process.stdin.emit("data", "\u001b");
     await waitForPiEscapeDisambiguation();
     assert.equal(cancelled, 1);
+
+    await app.quit();
+    await running;
+  });
+
+  it("routes ordinary editor input to a focused Question, never to inbound", async () => {
+    const question = questionInteraction();
+    const state = {
+      ...emptyPresentationState(sessionModel("alpha/model-a")),
+      attempt: {
+        ...attemptView(),
+        phase: { type: "running" as const },
+      },
+      pendingInteractions: [question],
+    };
+    const session = fakeSession(async () => {}, state);
+    const api = session as unknown as {
+      respondInteraction: (
+        interactionId: string,
+        response: unknown,
+      ) => Promise<void>;
+      submitInbound: () => Promise<never>;
+    };
+    let response!: (value: { id: string; response: unknown }) => void;
+    const responseObserved = new Promise<{ id: string; response: unknown }>((resolve) => {
+      response = resolve;
+    });
+    let submitted = 0;
+    api.respondInteraction = async (interactionId, typedResponse) => {
+      response({ id: interactionId, response: typedResponse });
+    };
+    api.submitInbound = async () => {
+      submitted += 1;
+      throw new Error("focused interaction input must not submit inbound");
+    };
+
+    const app = new RustxTuiApp({
+      session,
+      connection: fakeConnection(),
+      child: fakeChild([]),
+    });
+    const running = app.run();
+    process.stdin.emit("data", "production\r");
+
+    assert.deepEqual(await responseObserved, {
+      id: question.id,
+      response: {
+        type: "question",
+        answer: { type: "choice", value: "production" },
+      },
+    });
+    assert.equal(submitted, 0);
+
+    await app.quit();
+    await running;
+  });
+
+  it("keeps Escape and Ctrl+C on runtime cancellation while interaction focus is active", async () => {
+    const state = {
+      ...emptyPresentationState(sessionModel("alpha/model-a")),
+      pendingInteractions: [questionInteraction()],
+    };
+    const session = fakeSession(async () => {}, state);
+    const api = session as unknown as {
+      cancelCurrentAttempt: () => Promise<string>;
+      submitInbound: () => Promise<never>;
+    };
+    let cancelled = 0;
+    let submitted = 0;
+    let resolveCancellation!: () => void;
+    let cancellationObserved = new Promise<void>((resolve) => {
+      resolveCancellation = resolve;
+    });
+    api.cancelCurrentAttempt = async () => {
+      cancelled += 1;
+      resolveCancellation();
+      return "attempt-1";
+    };
+    api.submitInbound = async () => {
+      submitted += 1;
+      throw new Error("control input must not submit inbound");
+    };
+
+    const app = new RustxTuiApp({
+      session,
+      connection: fakeConnection(),
+      child: fakeChild([]),
+    });
+    const running = app.run();
+
+    process.stdin.emit("data", "\u001b");
+    await cancellationObserved;
+    assert.equal(cancelled, 1);
+
+    cancellationObserved = new Promise<void>((resolve) => {
+      resolveCancellation = resolve;
+    });
+    process.stdin.emit("data", "\u0003");
+    await cancellationObserved;
+    assert.equal(cancelled, 2);
+    assert.equal(submitted, 0);
 
     await app.quit();
     await running;

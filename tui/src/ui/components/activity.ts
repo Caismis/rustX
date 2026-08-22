@@ -43,6 +43,7 @@ import type { PresentationState } from "../../presentation/state.ts";
 import type { ToolCorrelation } from "../../presentation/tools.ts";
 import {
   activeBackground,
+  focusedInteraction,
   isBackgroundTerminal,
   originLabel,
 } from "../../presentation/selectors.ts";
@@ -199,10 +200,14 @@ export function renderInteractionSection(
   if (questions > 0) {
     commands.push("/answer <interaction-id> <choice|text> <value>");
   }
+  const focused = focusedInteraction(state);
   return [
     role.pending(header),
+    ...(focused === undefined
+      ? []
+      : [role.accent(`Focused interaction: ${focused.id} · ordinary input answers this request`)]),
     ...state.pendingInteractions.map((interaction) =>
-      renderInteraction(interaction, preferences),
+      renderInteraction(interaction, preferences, interaction.id === focused?.id),
     ),
     ...commands.map((command) => role.meta(command)),
     role.meta("/expand interaction <interaction-id> to see the full request"),
@@ -228,6 +233,7 @@ export function renderInteractionSection(
 function renderInteraction(
   interaction: InteractionRequest,
   preferences: PresentationPreferences,
+  focused: boolean,
 ): string {
   if (interaction.kind.type === "question") {
     const choices =
@@ -235,7 +241,7 @@ function renderInteraction(
         ? []
         : interaction.kind.choices.map((choice, index) => `${index + 1}. ${choice}`);
     return [
-      `${role.pending("?")} ${role.toolTitle(style.bold("Question"))} ${role.meta(interaction.id)}`,
+      `${focused ? role.accent("→") : role.pending("?")} ${role.toolTitle(style.bold("Question"))} ${role.meta(interaction.id)}`,
       `  ${role.meta(clipText(interaction.kind.prompt, HEADER_BUDGET.maxChars))}`,
       ...choices.map((choice) => `  ${role.accent(choice)}`),
       `  ${role.meta(interaction.kind.allow_free_text ? "free text allowed" : "choose one listed value")}`,
@@ -252,7 +258,7 @@ function renderInteraction(
     budget: preferences.previewBudget,
   };
   return [
-    `${role.pending("?")} ${role.toolTitle(style.bold(clipText(kind.tool_name, HEADER_BUDGET.maxChars)))} ${role.meta(interaction.id)}`,
+    `${focused ? role.accent("→") : role.pending("?")} ${role.toolTitle(style.bold(clipText(kind.tool_name, HEADER_BUDGET.maxChars)))} ${role.meta(interaction.id)}`,
     `  ${role.meta(`${kind.mode} · ${originLabel(kind.origin)} · call ${kind.call_id}`)}`,
     ...preview(toLines(kind.reason), context, "reason line").map(
       (line) => `  ${line}`,

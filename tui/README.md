@@ -278,16 +278,18 @@ nothing but the screen. They send no request, and they are also bound to keys:
 | Key | Effect |
 | --- | --- |
 | `ctrl+l` | open the same model selector as `/model` |
-| `escape` | the focused overlay closes first; with no overlay, request cancellation for an unsettled attempt |
-| `ctrl+c` | cancellation intent for the active attempt, or quit when idle |
+| `escape` | the focused overlay closes first; otherwise request runtime cancellation while an attempt or interaction is unsettled |
+| `ctrl+c` | request runtime cancellation while an attempt or interaction is active, or quit when idle |
 | `ctrl+o` | expand or collapse the most recent tool card |
 | `ctrl+t` | show or hide model reasoning |
 
 Escape precedence is an app-level ownership rule: a focused inspection or
-picker receives Escape first and closes, restoring editor focus. Only a later
-Escape with no overlay can become cancellation intent for an unsettled
-attempt. Authoritative resync uses the same rule in reverse by closing every
-overlay before any new input is interpreted.
+picker receives Escape first and closes, restoring editor focus. With no such
+overlay, an unsettled attempt or pending interaction makes Escape a runtime
+cancellation request; it never becomes an ordinary editor submission. The
+same rule applies to Ctrl+C while an interaction is focused. Authoritative
+resync uses the same rule in reverse by closing every overlay before any new
+input is interpreted.
 
 There is deliberately **no** `!bash`, no `@file` attachment, no client-side
 file read, and no client-side Skill execution. Shell, file, and Skill behaviour
@@ -307,6 +309,18 @@ free-text flag for Question. `/approve` sends only an Approval response;
 `/answer` sends only a Question response. Neither invokes a Tool, mutates
 arguments, infers an outcome from detach/EOF, or callbacks into the Agent
 Loop.
+
+When one or more interactions are pending, the TUI marks the interaction with
+the smallest `InteractionId` as focused. This selection is derived from the
+authoritative projection, so it is stable across reconnect and resync. Plain
+editor input is routed through the Runtime Client to that focused interaction
+instead of becoming a new inbound message: an exact Question choice is sent
+as a typed choice response, otherwise allowed free text is sent as a typed
+free-text response; a focused Approval accepts `allow` or `deny [reason]`.
+An invalid implicit response is reported transiently and does not submit a
+conversation message. Explicit `/answer`, `/approve`, and `/cancel` remain
+available for addressing a specific interaction or attempt. The TUI never
+settles, suppresses, or auto-answers an interaction locally.
 
 The footer displays authoritative `approval policy` or `approval FULL ACCESS`
 and shows a pending arrow when the runtime has accepted a busy-time mode

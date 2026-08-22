@@ -515,6 +515,19 @@ describe("activity area", () => {
     assert.match(rendered, /\/approve <interaction-id> <allow\|deny> \[reason\]/);
   });
 
+  it("marks the deterministic focused interaction for ordinary editor input", () => {
+    const later = questionInteraction("attempt-1-interaction-z");
+    const focused = questionInteraction("attempt-1-interaction-a");
+    const rendered = plainText(
+      renderInteractionSection(
+        stateOf({ pending_interactions: [later, focused] }),
+        prefs(),
+      ),
+    );
+    assert.match(rendered, /Focused interaction: attempt-1-interaction-a/);
+    assert.match(rendered, /ordinary input answers this request/);
+  });
+
   it("surfaces an execution whose stream was dropped", () => {
     const state = stateOf({
       attempt: attemptView({

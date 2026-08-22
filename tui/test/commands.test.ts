@@ -19,8 +19,10 @@ import { TransientFeedbackSurface } from "../src/ui/components/transient-feedbac
 import { ArgumentError, parseArguments } from "../src/cli.ts";
 import {
   attemptModel,
+  approvalInteraction,
   catalogModel,
   capabilities,
+  questionInteraction,
   sessionModel,
   sessionView,
   snapshot,
@@ -192,6 +194,123 @@ describe("CommandDispatcher", () => {
       inbound_sequence: 1,
     });
     assert.deepEqual(await submitting, { kind: "none" });
+  });
+
+  it("routes ordinary text to a focused Question instead of submit_inbound", async () => {
+    const { peer, dispatcher } = await harness(
+      snapshot({ pending_interactions: [questionInteraction()] }),
+    );
+    const responding = dispatcher.submit("production");
+    await peer.awaitRequests(3);
+
+    assert.equal(peer.requests[2]?.method, "interaction_respond");
+    assert.deepEqual(
+      peer.requests[2]?.method === "interaction_respond"
+        ? peer.requests[2].response
+        : null,
+      {
+        type: "question",
+        answer: { type: "choice", value: "production" },
+      },
+    );
+    assert.equal(
+      peer.requests.some((request) => request.method === "submit_inbound"),
+      false,
+    );
+    peer.respond(3, {
+      type: "interaction_response_accepted",
+      interaction_id: "attempt-1-interaction-question-1",
+    });
+    assert.equal((await responding).kind, "transient");
+  });
+
+  it("routes focused free text and focused approval through typed responses", async () => {
+    const openQuestion = questionInteraction("attempt-1-interaction-question-open");
+    assert.equal(openQuestion.kind.type, "question");
+    if (openQuestion.kind.type !== "question") return;
+    const { peer, dispatcher } = await harness(
+      snapshot({
+        pending_interactions: [
+          {
+            ...openQuestion,
+            kind: {
+              type: "question",
+              prompt: "What name should I use?",
+              allow_free_text: true,
+            },
+          },
+        ],
+      }),
+    );
+    const responding = dispatcher.submit("a private environment");
+    await peer.awaitRequests(3);
+    assert.deepEqual(
+      peer.requests[2]?.method === "interaction_respond"
+        ? peer.requests[2].response
+        : null,
+      {
+        type: "question",
+        answer: { type: "free_text", value: "a private environment" },
+      },
+    );
+    peer.respond(3, {
+      type: "interaction_response_accepted",
+      interaction_id: openQuestion.id,
+    });
+    assert.equal((await responding).kind, "transient");
+
+    const approval = approvalInteraction("attempt-1-interaction-approval-1");
+    const second = await harness(snapshot({ pending_interactions: [approval] }));
+    const approving = second.dispatcher.submit("deny because it is unsafe");
+    await second.peer.awaitRequests(3);
+    assert.deepEqual(
+      second.peer.requests[2]?.method === "interaction_respond"
+        ? second.peer.requests[2].response
+        : null,
+      {
+        type: "approval",
+        decision: { type: "deny", reason: "because it is unsafe" },
+      },
+    );
+    second.peer.respond(3, {
+      type: "interaction_response_accepted",
+      interaction_id: approval.id,
+    });
+    assert.equal((await approving).kind, "transient");
+  });
+
+  it("focuses the lexicographically smallest interaction when several are pending", async () => {
+    const first = questionInteraction("attempt-1-interaction-z");
+    const second = questionInteraction("attempt-1-interaction-a");
+    const { peer, dispatcher } = await harness(
+      snapshot({ pending_interactions: [first, second] }),
+    );
+    const responding = dispatcher.submit("production");
+    await peer.awaitRequests(3);
+    assert.equal(
+      peer.requests[2]?.method === "interaction_respond"
+        ? peer.requests[2].interaction_id
+        : undefined,
+      second.id,
+    );
+    peer.respond(3, {
+      type: "interaction_response_accepted",
+      interaction_id: second.id,
+    });
+    await responding;
+  });
+
+  it("does not turn an invalid focused choice into an inbound message", async () => {
+    const { peer, dispatcher } = await harness(
+      snapshot({ pending_interactions: [questionInteraction()] }),
+    );
+    const outcome = await dispatcher.submit("custom environment");
+    assert.equal(outcome.kind, "transient");
+    if (outcome.kind === "transient") {
+      assert.equal(outcome.level, "error");
+      assert.match(outcome.text, /focused question requires one of/);
+    }
+    assert.equal(peer.requests.length, 2);
   });
 
   it("renders /help from the command table", async () => {

@@ -216,6 +216,53 @@ pub struct QuestionFacts {
 }
 
 impl QuestionFacts {
+    /// Validates the bounded Question contract before publication.
+    ///
+    /// The native `ask_user` Tool uses this same validator before it checks
+    /// provider availability, so malformed model arguments become a clear
+    /// `ToolResult` failure rather than being reported as an unavailable
+    /// interaction provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded argument diagnostic when the prompt, choice list, or
+    /// answer mode cannot produce an answerable Question.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.prompt.is_empty() {
+            return Err("prompt must not be empty".to_owned());
+        }
+        if self.prompt.len() > MAX_QUESTION_PROMPT_BYTES {
+            return Err(format!("prompt exceeds {MAX_QUESTION_PROMPT_BYTES} bytes"));
+        }
+        let Some(choices) = self.choices.as_ref() else {
+            if self.allow_free_text {
+                return Ok(());
+            }
+            return Err("allow_free_text must be true when choices is omitted".to_owned());
+        };
+        if choices.is_empty() {
+            return Err("choices must contain at least one value when present".to_owned());
+        }
+        if choices.len() > MAX_QUESTION_CHOICES {
+            return Err(format!(
+                "choices must contain at most {MAX_QUESTION_CHOICES} values"
+            ));
+        }
+        if choices
+            .iter()
+            .any(|choice| choice.is_empty() || choice.len() > MAX_QUESTION_CHOICE_BYTES)
+        {
+            return Err(format!(
+                "each choice must be non-empty and at most {MAX_QUESTION_CHOICE_BYTES} bytes"
+            ));
+        }
+        let mut unique = std::collections::BTreeSet::new();
+        if choices.iter().any(|choice| !unique.insert(choice)) {
+            return Err("choices must not contain duplicates".to_owned());
+        }
+        Ok(())
+    }
+
     fn into_request(
         self,
         conversation_id: ConversationId,
@@ -961,26 +1008,7 @@ const MAX_QUESTION_CHOICE_BYTES: usize = 256;
 const MAX_QUESTION_ANSWER_BYTES: usize = 4096;
 
 fn validate_question_facts(facts: &QuestionFacts) -> bool {
-    if facts.prompt.is_empty() || facts.prompt.len() > MAX_QUESTION_PROMPT_BYTES {
-        return false;
-    }
-    let Some(choices) = facts.choices.as_ref() else {
-        return facts.allow_free_text;
-    };
-    if choices.is_empty() || choices.len() > MAX_QUESTION_CHOICES {
-        return false;
-    }
-    if choices
-        .iter()
-        .any(|choice| choice.is_empty() || choice.len() > MAX_QUESTION_CHOICE_BYTES)
-    {
-        return false;
-    }
-    let mut unique = std::collections::BTreeSet::new();
-    if choices.iter().any(|choice| !unique.insert(choice)) {
-        return false;
-    }
-    true
+    facts.validate().is_ok()
 }
 
 fn validate_response_for(

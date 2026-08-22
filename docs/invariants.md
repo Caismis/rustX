@@ -316,9 +316,12 @@ authoritative snapshot and cursor projection.
 
 Question is a separate bounded interaction kind. It contains a prompt,
 optional finite choices, and an optional free-text flag; its response is a
-typed choice or bounded free-text value. The existing coordinator owns its
-identity, pending map, cancellation race, and exactly-once settlement just as
-it does for Approval.
+typed choice or bounded free-text value. For the native `ask_user` contract, a
+bare prompt is open-ended, a supplied non-empty choice list is choice-only
+unless `allow_free_text: true` is explicit, and invalid combinations are
+rejected during schema/preflight validation before provider lookup. The
+existing coordinator owns its identity, pending map, cancellation race, and
+exactly-once settlement just as it does for Approval.
 
 `ask_user` is an ordinary native Tool, not an Agent Loop Question branch. Its
 fixed policy is foreground-only, sequential, and approval-never. Its executor
@@ -332,12 +335,15 @@ The Runtime Client carries native interaction facts through typed
 `interaction_respond`, `interaction_pending`, and `interaction_settled`
 messages plus `snapshot.pending_interactions`. Snapshot-at-cursor followed by
 subscribe-after-cursor remains the repair invariant. The TUI renders the
-runtime-owned pending approval and sends the typed response; it owns no
-pending truth, tool execution, arguments, cancellation, or local outcome
+runtime-owned pending approval and Question and sends typed responses; it owns
+no pending truth, tool execution, arguments, cancellation, or local outcome
 state. Approval responses contain only `Allow`/`Deny`; Question responses
-contain no Tool identity or argument replacement channel. The TUI renders both
-from authoritative projection state, sends typed responses through the Runtime
-Client, and never suppresses or auto-answers them locally.
+contain no Tool identity or argument replacement channel. When multiple
+interactions are pending, ordinary editor input targets the
+lexicographically-smallest `InteractionId`; explicit commands can address any
+id. The TUI renders both from authoritative projection state, sends typed
+responses through the Runtime Client, and never suppresses or auto-answers
+them locally.
 
 ### ApprovalMode control plane
 
