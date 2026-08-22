@@ -367,8 +367,9 @@ impl LocalConversationCore {
                 .map(|path| resolve_workspace_path(&paths.workspace, path)),
         );
 
-        // 9. The capability coordinator over the same conversation and
-        // workspace, the same base registry, and the same base environment.
+        // 9. Composition owns CLI/config precedence resolution. The
+        // coordinator receives only this already-resolved activation policy
+        // and applies it to the available capability registrations.
         let capability = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
             conversation_id: tool_runtime.conversation_id().clone(),
             workspace: tool_runtime.workspace().clone(),
@@ -710,9 +711,13 @@ impl LocalSessionProduct {
         let runtime_config = CurrentRuntimeConfig::from_json_slice(&config_bytes)?;
         let registry = load_model_registry(paths, dependencies)?;
         SessionModelState::new(registry.clone(), runtime_config.model.clone())?;
-        let catalog = match SessionCatalog::open_existing(&paths.runtime_root)? {
-            Some(catalog) => catalog,
-            None => SessionCatalog::create(&paths.runtime_root, &runtime_config.model)?,
+        let catalog = if let Some(catalog) = SessionCatalog::open_existing(&paths.runtime_root)? {
+            catalog
+        } else {
+            let state = SessionPersistentState {
+                model: runtime_config.model.clone(),
+            };
+            SessionCatalog::create(&paths.runtime_root, &state)?
         };
         let (session_id, node, session_state) = catalog
             .active_lineage()

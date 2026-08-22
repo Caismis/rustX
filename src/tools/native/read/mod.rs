@@ -257,11 +257,12 @@ fn format_size(bytes: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
     use std::sync::Arc;
 
     use super::{NAME, ReadTool};
     use crate::runtime::identity::{ConversationId, ToolCallId, ToolId};
-    use crate::skills::{SkillDiscovery, SkillDiscoveryConfig, SkillSnapshot};
+    use crate::skills::{SkillDiscovery, SkillDiscoveryConfig, SkillPackageError, SkillSnapshot};
     use crate::tools::artifacts::ArtifactStore;
     use crate::tools::environment::ToolEnvironment;
     use crate::tools::executor::{ProgressReporter, ToolExecutionContext, ToolExecutor};
@@ -299,6 +300,22 @@ mod tests {
         .discover()
         .expect("Skill discovery");
         let snapshot = SkillSnapshot::new(packages.into_iter().map(Arc::new).collect());
+        let skill_markdown = skill.join("SKILL.md");
+        let resources = snapshot.resources();
+        assert_eq!(
+            resources.resolve(Path::new(".rustx/skills/release-guide/SKILL.md")),
+            Some(skill_markdown.as_path())
+        );
+        for escaped in [
+            Path::new("../../outside"),
+            Path::new(".rustx/skills/release-guide/../../outside"),
+            Path::new("/outside"),
+        ] {
+            assert!(
+                resources.resolve(escaped).is_none(),
+                "Skill resource lookup must reject {escaped:?}"
+            );
+        }
 
         let conversation_id = ConversationId::new("read-skill");
         let artifacts_root = directory.path().join("artifacts");
@@ -343,5 +360,38 @@ mod tests {
             panic!("Read returned unexpected content: {result:?}");
         };
         assert!(text.text.contains("procedure"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn skill_resource_symlink_escape_is_rejected_before_mapping() {
+        let directory = tempfile::tempdir().expect("temporary root");
+        let workspace = Workspace::new(directory.path()).expect("workspace");
+        let skill_root = directory.path().join("configured-skills");
+        let skill = skill_root.join("escape-guide");
+        std::fs::create_dir_all(&skill).expect("Skill root");
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: escape-guide\ndescription: Escape guidance.\n---\nbody\n",
+        )
+        .expect("SKILL.md");
+        let outside = directory.path().join("outside.txt");
+        std::fs::write(&outside, "outside\n").expect("outside resource");
+        std::os::unix::fs::symlink(&outside, skill.join("references.md"))
+            .expect("resource symlink");
+
+        let error = SkillDiscovery::with_config(
+            &workspace,
+            SkillDiscoveryConfig {
+                automatic_roots: Vec::new(),
+                explicit_paths: vec![skill_root],
+            },
+        )
+        .discover()
+        .expect_err("Skill discovery must reject an escaping resource symlink");
+        assert!(matches!(
+            error,
+            SkillPackageError::UnsupportedSymlink { .. }
+        ));
     }
 }

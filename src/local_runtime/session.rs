@@ -328,7 +328,10 @@ impl SessionCatalog {
     ///
     /// Returns [`SessionError`] when the private conversation seed or catalog
     /// publication cannot be completed.
-    pub fn create(runtime_root: &Path, model: &SessionModelConfig) -> Result<Self, SessionError> {
+    pub(crate) fn create(
+        runtime_root: &Path,
+        state: &SessionPersistentState,
+    ) -> Result<Self, SessionError> {
         let root = runtime_root.join("sessions");
         fs::create_dir_all(&root).map_err(|error| SessionError::Io {
             path: root.clone(),
@@ -368,9 +371,7 @@ impl SessionCatalog {
                 updated_at: now,
                 active_node: node_id,
                 nodes,
-                state: SessionPersistentState {
-                    model: model.clone(),
-                },
+                state: state.clone(),
             },
         );
         let document = CatalogDocument {
@@ -1618,7 +1619,7 @@ mod tests {
     fn open_catalog() -> (TempDir, SessionCatalog, CurrentRuntimeConfig) {
         let directory = tempfile::tempdir().expect("temp directory");
         let config = config();
-        let catalog = SessionCatalog::create(directory.path(), &config.model).expect("catalog");
+        let catalog = SessionCatalog::create(directory.path(), &state()).expect("catalog");
         (directory, catalog, config)
     }
 
@@ -1858,7 +1859,13 @@ mod tests {
         current.model = serde_json::from_value(serde_json::json!("provider/current"))
             .expect("current model reference");
 
-        let mut catalog = SessionCatalog::create(directory.path(), &first).expect("catalog");
+        let mut catalog = SessionCatalog::create(
+            directory.path(),
+            &SessionPersistentState {
+                model: first.clone(),
+            },
+        )
+        .expect("catalog");
         catalog
             .persist_active_model(explicit.clone())
             .expect("persist explicit Session model");
@@ -1867,7 +1874,13 @@ mod tests {
         assert_eq!(resumed.model, explicit);
 
         let new_directory = tempfile::tempdir().expect("new Session root");
-        let fresh = SessionCatalog::create(new_directory.path(), &current).expect("new catalog");
+        let fresh = SessionCatalog::create(
+            new_directory.path(),
+            &SessionPersistentState {
+                model: current.clone(),
+            },
+        )
+        .expect("new catalog");
         let (_, _, fresh_state) = fresh.active_lineage().expect("fresh lineage");
         assert_eq!(fresh_state.model, current);
     }
@@ -1875,7 +1888,8 @@ mod tests {
     #[test]
     fn catalog_serialization_contains_no_current_runtime_configuration() {
         let directory = tempfile::tempdir().expect("temporary root");
-        let catalog = SessionCatalog::create(directory.path(), &config().model).expect("catalog");
+        let state = state();
+        let catalog = SessionCatalog::create(directory.path(), &state).expect("catalog");
         let bytes = fs::read(&catalog.path).expect("catalog bytes");
         let json = String::from_utf8(bytes).expect("catalog UTF-8");
         assert!(json.contains("\"state\""));
@@ -1895,6 +1909,16 @@ mod tests {
                 "durable Session state must not persist current runtime field {forbidden:?}"
             );
         }
+    }
+
+    #[test]
+    fn catalog_creation_persists_only_the_supplied_session_state() {
+        let directory = tempfile::tempdir().expect("temporary root");
+        let state = state();
+        let catalog = SessionCatalog::create(directory.path(), &state).expect("catalog");
+
+        let (_, _, persisted) = catalog.active_lineage().expect("active lineage");
+        assert_eq!(persisted, state);
     }
 
     #[test]

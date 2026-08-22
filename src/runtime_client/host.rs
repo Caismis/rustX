@@ -1563,6 +1563,7 @@ mod tests {
     };
     use crate::conversation::SurfaceRevision;
     use crate::durable::{ConversationStore, SqliteConversationStore};
+    use crate::local_runtime::session::SessionPersistentState;
     use crate::local_runtime::{CurrentRuntimeConfig, LocalSessionSupervisor, SessionCatalog};
     use crate::message::content::TextBlock;
     use crate::message::types::{
@@ -5263,7 +5264,13 @@ mod tests {
             }"#,
         )
         .expect("current runtime config");
-        let catalog = SessionCatalog::create(catalog_root.path(), &config.model).expect("catalog");
+        let catalog = SessionCatalog::create(
+            catalog_root.path(),
+            &SessionPersistentState {
+                model: config.model.clone(),
+            },
+        )
+        .expect("catalog");
         let supervisor = Arc::new(LocalSessionSupervisor::new(catalog, config.model.clone()));
         let host = RuntimeClientHost::new_with_session_control(
             RuntimeClientHostConfig {
