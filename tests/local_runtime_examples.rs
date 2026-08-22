@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use rustx::local_runtime::LocalConversationConfig;
+use rustx::local_runtime::CurrentRuntimeConfig;
 use rustx::model::catalog::{
     ChatReasoningReplay, MapCredentialEnvironment, ModelCatalog, ModelRef, ReasoningProfileId,
 };
@@ -66,34 +66,34 @@ fn committed_model_example_uses_the_production_catalog_contract() {
 }
 
 #[test]
-fn committed_baseline_session_selects_a_catalog_model_and_configures_runtime_policy() {
+fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_policy() {
     let catalog = ModelCatalog::from_json_slice(&read_example("models.json"))
         .expect("models.json must parse through ModelCatalog");
-    let session = LocalConversationConfig::from_json_slice(&read_example("session.json"))
-        .expect("session.json must parse through LocalConversationConfig");
+    let config = CurrentRuntimeConfig::from_json_slice(&read_example("rustx.json"))
+        .expect("rustx.json must parse through CurrentRuntimeConfig");
 
-    assert_eq!(session.model.model.to_string(), "example/demo-model");
+    assert_eq!(config.model.model.to_string(), "example/demo-model");
     catalog
-        .model(&session.model.model)
-        .expect("session model must exist in the example catalog");
+        .model(&config.model.model)
+        .expect("configured model must exist in the example catalog");
     assert_eq!(
-        session.model.reasoning_profile.as_ref().unwrap().as_str(),
+        config.model.reasoning_profile.as_ref().unwrap().as_str(),
         "off"
     );
     assert_eq!(
-        session.model.request_params["temperature"],
+        config.model.request_params["temperature"],
         serde_json::json!(0.1)
     );
-    assert_eq!(session.model.max_output_tokens, Some(2_048));
-    assert_eq!(session.model.summary_model, SummaryModelPolicy::Session);
-    assert_eq!(session.context.reserve_tokens, 4_096);
-    assert_eq!(session.context.keep_recent_tokens, 12_000);
-    assert_eq!(session.context.summary_output_cap, Some(1_024));
-    assert!(session.mcp_servers.is_empty());
-    assert!(session.mcp_tool_policies.is_empty());
-    assert_eq!(session.environment["RUSTX_EXAMPLE_MODE"], "local-runtime");
+    assert_eq!(config.model.max_output_tokens, Some(2_048));
+    assert_eq!(config.model.summary_model, SummaryModelPolicy::Session);
+    assert_eq!(config.context.reserve_tokens, 4_096);
+    assert_eq!(config.context.keep_recent_tokens, 12_000);
+    assert_eq!(config.context.summary_output_cap, Some(1_024));
+    assert!(config.mcp_servers.is_empty());
+    assert!(config.mcp_tool_policies.is_empty());
+    assert_eq!(config.environment["RUSTX_EXAMPLE_MODE"], "local-runtime");
 
-    let policies = session.native_tools.to_policies();
+    let policies = config.native_tools.to_policies();
     assert_eq!(policies.read.execution, ToolExecutionPolicy::ForegroundOnly);
     assert_eq!(policies.read.concurrency, ToolConcurrencyPolicy::Parallel);
     assert_eq!(

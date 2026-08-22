@@ -2,13 +2,13 @@
  * The bounded startup arguments of `rustx-tui`.
  *
  * ```text
- * rustx-tui --binary <path> --models <path> --session <path>
+ * rustx-tui --binary <path> --models <path> --config <path>
  *           --workspace <dir> --runtime-root <dir>
  * ```
  *
  * The four runtime paths are passed straight through to the Rust binary. This
  * client never opens, parses, validates, or defaults any of them: `models.json`
- * and the bootstrap conversation config are Rust-owned authorities, and
+ * and the current runtime config are Rust-owned authorities, and
  * reading them here would create a second one. Explicit arguments only — no
  * search path, no precedence, no profile discovery.
  */
@@ -16,7 +16,7 @@
 import type { RuntimePaths } from "./runtime/child-process.ts";
 
 export const USAGE = `usage: rustx-tui --binary <rustx> --models <models.json> \\
-                 --session <bootstrap-config.json> --workspace <dir> --runtime-root <dir>`;
+                 --config <rustx.json> --workspace <dir> --runtime-root <dir>`;
 
 export interface TuiArguments {
   binary: string;
@@ -33,7 +33,7 @@ export class ArgumentError extends Error {
 const FLAGS = [
   "--binary",
   "--models",
-  "--session",
+  "--config",
   "--workspace",
   "--runtime-root",
 ] as const;
@@ -77,7 +77,7 @@ export function parseArguments(argv: readonly string[]): TuiArguments {
     binary: required("--binary"),
     paths: {
       models: required("--models"),
-      session: required("--session"),
+      config: required("--config"),
       workspace: required("--workspace"),
       runtimeRoot: required("--runtime-root"),
     },

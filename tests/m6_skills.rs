@@ -9,8 +9,9 @@ use std::path::Path;
 
 use rustx::runtime::identity::SkillVersionId;
 use rustx::skills::{
-    DependencyError, SkillDiscovery, SkillPackageError, merge_dependency_manifests,
-    node_environment_digest, python_environment_digest, render_skill_catalog,
+    DependencyError, SkillDiscovery, SkillDiscoveryConfig, SkillPackageError,
+    merge_dependency_manifests, node_environment_digest, python_environment_digest,
+    render_skill_catalog,
 };
 use rustx::tools::workspace::Workspace;
 #[path = "common/mod.rs"]
@@ -46,7 +47,21 @@ fn fixture() -> (tempfile::TempDir, Workspace) {
 }
 
 fn discover(workspace: &Workspace) -> Vec<rustx::skills::SkillPackage> {
-    SkillDiscovery::new(workspace).discover().expect("discover")
+    project_discovery(workspace).discover().expect("discover")
+}
+
+/// Isolates the project-root tests from the developer's global Skill roots.
+fn project_discovery(workspace: &Workspace) -> SkillDiscovery {
+    SkillDiscovery::with_config(
+        workspace,
+        SkillDiscoveryConfig {
+            automatic_roots: vec![
+                workspace.root().join(".rustx/skills"),
+                workspace.root().join(".agents/skills"),
+            ],
+            explicit_paths: Vec::new(),
+        },
+    )
 }
 
 /// A missing `.agents/skills/` directory means an empty Skill set, not an
@@ -54,9 +69,7 @@ fn discover(workspace: &Workspace) -> Vec<rustx::skills::SkillPackage> {
 #[test]
 fn missing_skill_root_is_an_empty_skill_set() {
     let (_dir, workspace) = fixture();
-    let packages = SkillDiscovery::new(&workspace)
-        .discover()
-        .expect("discover");
+    let packages = project_discovery(&workspace).discover().expect("discover");
     assert!(packages.is_empty());
 }
 
@@ -110,7 +123,7 @@ fn name_must_match_the_parent_directory() {
         "---\nname: documents\ndescription: A skill.\n---\nbody\n",
     )
     .expect("SKILL.md");
-    let error = SkillDiscovery::new(&workspace)
+    let error = project_discovery(&workspace)
         .discover()
         .expect_err("rejected");
     assert!(matches!(
@@ -132,7 +145,7 @@ fn invalid_standard_names_are_rejected() {
             format!("---\nname: {bad}\ndescription: A skill.\n---\nbody\n"),
         )
         .expect("SKILL.md");
-        let error = SkillDiscovery::new(&workspace)
+        let error = project_discovery(&workspace)
             .discover()
             .expect_err("rejected");
         assert!(
@@ -154,7 +167,7 @@ fn empty_and_oversized_descriptions_are_rejected() {
     )
     .expect("SKILL.md");
     assert!(matches!(
-        SkillDiscovery::new(&workspace)
+        project_discovery(&workspace)
             .discover()
             .expect_err("rejected"),
         SkillPackageError::InvalidDescription { .. }
@@ -168,7 +181,7 @@ fn empty_and_oversized_descriptions_are_rejected() {
     )
     .expect("SKILL.md");
     assert!(matches!(
-        SkillDiscovery::new(&workspace)
+        project_discovery(&workspace)
             .discover()
             .expect_err("rejected"),
         SkillPackageError::InvalidDescription { .. }
@@ -186,7 +199,7 @@ fn malformed_yaml_is_rejected() {
     )
     .expect("SKILL.md");
     assert!(matches!(
-        SkillDiscovery::new(&workspace)
+        project_discovery(&workspace)
             .discover()
             .expect_err("rejected"),
         SkillPackageError::MalformedFrontmatter { .. }
@@ -198,7 +211,7 @@ fn malformed_yaml_is_rejected() {
     )
     .expect("SKILL.md");
     assert!(matches!(
-        SkillDiscovery::new(&workspace)
+        project_discovery(&workspace)
             .discover()
             .expect_err("rejected"),
         SkillPackageError::MalformedFrontmatter { .. }
@@ -218,7 +231,7 @@ fn malformed_metadata_is_rejected() {
     )
     .expect("SKILL.md");
     assert!(matches!(
-        SkillDiscovery::new(&workspace)
+        project_discovery(&workspace)
             .discover()
             .expect_err("rejected"),
         SkillPackageError::MalformedMetadata { .. }
@@ -231,7 +244,7 @@ fn malformed_metadata_is_rejected() {
 fn candidate_without_skill_markdown_is_rejected() {
     let (dir, workspace) = fixture();
     std::fs::create_dir_all(dir.path().join(".agents/skills/empty")).expect("dir");
-    let error = SkillDiscovery::new(&workspace)
+    let error = project_discovery(&workspace)
         .discover()
         .expect_err("rejected");
     assert!(matches!(
@@ -275,7 +288,7 @@ fn package_symlinks_are_rejected() {
     )
     .expect("symlink root");
     assert!(matches!(
-        SkillDiscovery::new(&workspace)
+        project_discovery(&workspace)
             .discover()
             .expect_err("rejected"),
         SkillPackageError::UnsupportedSymlink { .. }
@@ -289,7 +302,7 @@ fn package_symlinks_are_rejected() {
     )
     .expect("internal symlink");
     assert!(matches!(
-        SkillDiscovery::new(&workspace2)
+        project_discovery(&workspace2)
             .discover()
             .expect_err("rejected"),
         SkillPackageError::UnsupportedSymlink { .. }
@@ -365,6 +378,7 @@ async fn bash_cd_cannot_redefine_the_skill_root() {
             )
             .expect("managed tool output"),
             environment: &rustx::tools::environment::ToolEnvironment::new(),
+            skill_resources: None,
         };
         executor.execute(invocation, context).await
     };
@@ -693,7 +707,7 @@ fn malformed_dependency_declaration_fails_the_transaction() {
         &[("rustx.python-dependencies", r#"{"pypdf":"not a version"}"#)],
         "body\n",
     );
-    let error = SkillDiscovery::new(&workspace)
+    let error = project_discovery(&workspace)
         .discover()
         .expect_err("rejected");
     assert!(matches!(
@@ -733,8 +747,8 @@ fn catalog_rendering_is_exact_and_never_leaks_workspace_paths() {
     assert_eq!(
         rendered,
         "## Skills\n\n\
-         Skills are stored under `.agents/skills/`.\n\
-         Before using a skill, read `.agents/skills/<skill-name>/SKILL.md`\n\
+         Skills are stored under `.rustx/skills/`.\n\
+         Before using a skill, read `.rustx/skills/<skill-name>/SKILL.md`\n\
          with the Read tool.\n\n\
          Available skills:\n\
          \n- pdf: Create, edit, inspect, and transform PDF documents.\n- slides: Create and modify presentation decks."

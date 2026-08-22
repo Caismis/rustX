@@ -1346,8 +1346,12 @@ mod tests {
         let coordinator = crate::capabilities::CapabilityCoordinator::with_backend(
             crate::capabilities::CapabilityCoordinatorConfig {
                 conversation_id,
-                workspace,
+                workspace: workspace.clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
+                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                skill_discovery: crate::skills::SkillDiscoveryConfig::default_for_workspace(
+                    &workspace,
+                ),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: crate::tools::environment::ToolEnvironment::new(),
                 environment_store_root: dir.path().join("skill-env"),

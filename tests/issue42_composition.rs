@@ -46,8 +46,7 @@ const MODELS_JSON: &str = r#"{
   }
 }"#;
 
-const SESSION_JSON: &str = r#"{
-  "conversationId": "conv-composed",
+const RUNTIME_CONFIG_JSON: &str = r#"{
   "agentId": "agent-composed",
   "model": {"model": "local/composed-model"},
   "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
@@ -57,16 +56,22 @@ const SESSION_JSON: &str = r#"{
 
 /// Writes the startup files into a temporary root and returns the explicit
 /// paths.
-fn startup(root: &std::path::Path, models: &str, session: &str) -> LocalRuntimePaths {
+fn startup(root: &std::path::Path, models: &str, config: &str) -> LocalRuntimePaths {
     let workspace = root.join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
     let models_path = root.join("models.json");
-    let session_path = root.join("session.json");
+    let config_path = root.join("rustx.json");
     std::fs::write(&models_path, models).expect("models.json");
-    std::fs::write(&session_path, session).expect("session.json");
+    std::fs::write(&config_path, config).expect("rustx.json");
     LocalRuntimePaths {
         models: models_path,
-        session: session_path,
+        config: config_path,
+        skill_paths: Vec::new(),
+        no_skills: false,
+        no_builtin_tools: false,
+        no_tools: false,
+        tools: None,
+        exclude_tools: Vec::new(),
         workspace,
         runtime_root: root.join("private"),
     }
@@ -91,7 +96,7 @@ fn dependencies() -> LocalRuntimeDependencies {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn composition_owns_one_conversation_domain() {
     let root = tempfile::tempdir().expect("temp root");
-    let paths = startup(root.path(), MODELS_JSON, SESSION_JSON);
+    let paths = startup(root.path(), MODELS_JSON, RUNTIME_CONFIG_JSON);
     let runtime = LocalConversationRuntime::compose(&paths, &dependencies())
         .await
         .expect("composition succeeds");
@@ -99,7 +104,7 @@ async fn composition_owns_one_conversation_domain() {
     // One conversation identity, shared by the tool runtime, the capability
     // coordinator, and the host.
     let conversation = runtime.tool_runtime().conversation_id().clone();
-    assert_eq!(conversation.as_str(), "conv-composed");
+    assert_eq!(conversation.as_str(), "conversation-standalone");
     assert_eq!(runtime.host().conversation_id(), &conversation);
     let capability = runtime.capability().current_snapshot();
     assert_eq!(capability.conversation_id(), &conversation);
@@ -214,7 +219,7 @@ async fn composition_owns_one_conversation_domain() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn runtime_private_roots_stay_disjoint_from_the_workspace() {
     let root = tempfile::tempdir().expect("temp root");
-    let paths = startup(root.path(), MODELS_JSON, SESSION_JSON);
+    let paths = startup(root.path(), MODELS_JSON, RUNTIME_CONFIG_JSON);
     assert!(!paths.artifacts_root().starts_with(&paths.workspace));
     assert!(!paths.environment_store_root().starts_with(&paths.workspace));
     assert_ne!(paths.artifacts_root(), paths.environment_store_root());
@@ -250,7 +255,7 @@ async fn startup_configuration_failures_are_explicit() {
     let root = tempfile::tempdir().expect("temp root");
 
     // A missing catalog file.
-    let paths = startup(root.path(), MODELS_JSON, SESSION_JSON);
+    let paths = startup(root.path(), MODELS_JSON, RUNTIME_CONFIG_JSON);
     let missing = LocalRuntimePaths {
         models: root.path().join("absent.json"),
         ..paths.clone()
@@ -264,7 +269,7 @@ async fn startup_configuration_failures_are_explicit() {
 
     // A catalog without an explicit base URL.
     let no_base = MODELS_JSON.replace("\"baseUrl\": \"https://local.fixture.invalid/v1\",", "");
-    let paths = startup(&root.path().join("no-base"), &no_base, SESSION_JSON);
+    let paths = startup(&root.path().join("no-base"), &no_base, RUNTIME_CONFIG_JSON);
     assert!(matches!(
         LocalConversationRuntime::compose(&paths, &dependencies())
             .await
@@ -273,7 +278,11 @@ async fn startup_configuration_failures_are_explicit() {
     ));
 
     // An unresolved environment credential names only the variable.
-    let paths = startup(&root.path().join("no-env"), MODELS_JSON, SESSION_JSON);
+    let paths = startup(
+        &root.path().join("no-env"),
+        MODELS_JSON,
+        RUNTIME_CONFIG_JSON,
+    );
     let error = LocalConversationRuntime::compose(
         &paths,
         &LocalRuntimeDependencies {
@@ -287,8 +296,8 @@ async fn startup_configuration_failures_are_explicit() {
     assert!(!error.to_string().contains("composed-secret"));
 
     // A session selecting a model the catalog does not declare.
-    let bad_session = SESSION_JSON.replace("local/composed-model", "local/absent-model");
-    let paths = startup(&root.path().join("bad-model"), MODELS_JSON, &bad_session);
+    let bad_config = RUNTIME_CONFIG_JSON.replace("local/composed-model", "local/absent-model");
+    let paths = startup(&root.path().join("bad-model"), MODELS_JSON, &bad_config);
     assert!(matches!(
         LocalConversationRuntime::compose(&paths, &dependencies())
             .await
@@ -296,17 +305,17 @@ async fn startup_configuration_failures_are_explicit() {
         LocalRuntimeError::Model(_)
     ));
 
-    // A session config with an unknown field.
-    let bad_session = SESSION_JSON.replace(
+    // A current runtime config with an unknown field.
+    let bad_config = RUNTIME_CONFIG_JSON.replace(
         "\"agentId\": \"agent-composed\",",
         "\"agentId\": \"agent-composed\", \"futureKnob\": true,",
     );
-    let paths = startup(&root.path().join("bad-session"), MODELS_JSON, &bad_session);
+    let paths = startup(&root.path().join("bad-config"), MODELS_JSON, &bad_config);
     assert!(matches!(
         LocalConversationRuntime::compose(&paths, &dependencies())
             .await
             .expect_err("an unknown session field fails startup"),
-        LocalRuntimeError::Session(_)
+        LocalRuntimeError::RuntimeConfig(_)
     ));
 }
 
@@ -315,7 +324,7 @@ async fn startup_configuration_failures_are_explicit() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_endpoint_speaks_for_the_one_composed_host() {
     let root = tempfile::tempdir().expect("temp root");
-    let paths = startup(root.path(), MODELS_JSON, SESSION_JSON);
+    let paths = startup(root.path(), MODELS_JSON, RUNTIME_CONFIG_JSON);
     let runtime = LocalConversationRuntime::compose(&paths, &dependencies())
         .await
         .expect("composition succeeds");
@@ -333,7 +342,7 @@ async fn the_endpoint_speaks_for_the_one_composed_host() {
     else {
         panic!("the endpoint initializes: {response:?}");
     };
-    assert_eq!(conversation_id.as_str(), "conv-composed");
+    assert_eq!(conversation_id.as_str(), "conversation-standalone");
     assert_eq!(agent_id.as_str(), "agent-composed");
 
     // v1 admits at most one attachment: a second endpoint over the same host

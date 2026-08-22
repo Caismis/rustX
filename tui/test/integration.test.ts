@@ -5,7 +5,7 @@
  * RuntimeClientAttachment
  *   -> RuntimeClientConnection      (real JSONL framing)
  *   -> ChildRuntimeProcess          (real OS process)
- *   -> rustx --models ... --session ... --workspace ... --runtime-root ...
+ *   -> rustx --models ... --config ... --workspace ... --runtime-root ...
  *   -> real Runtime Client Protocol v1
  *   -> real local runtime composition (#42)
  * ```
@@ -94,8 +94,8 @@ function modelsJson(baseUrl: string): string {
   });
 }
 
-const SESSION_JSON = JSON.stringify({
-  conversationId: "conv-tui-integration",
+const RUNTIME_CONFIG_JSON = JSON.stringify({
+  schemaVersion: 2,
   agentId: "agent-tui-integration",
   model: { model: "fixture/integration-model" },
   context: { reserveTokens: 1024, keepRecentTokens: 8192 },
@@ -118,13 +118,13 @@ describe("real rustx child integration", { skip: SKIP }, () => {
     const workspace = fixture.path("workspace");
     mkdirSync(workspace, { recursive: true });
     writeFileSync(fixture.path("models.json"), modelsJson(provider.url("/v1")));
-    writeFileSync(fixture.path("session.json"), SESSION_JSON);
+    writeFileSync(fixture.path("rustx.json"), RUNTIME_CONFIG_JSON);
 
     const child = ChildRuntimeProcess.spawn({
       binary: BINARY,
       paths: {
         models: fixture.path("models.json"),
-        session: fixture.path("session.json"),
+        config: fixture.path("rustx.json"),
         workspace,
         runtimeRoot: fixture.path("private"),
       },
@@ -166,7 +166,7 @@ describe("real rustx child integration", { skip: SKIP }, () => {
 
     // --- spawn + initialize ------------------------------------------------
     const identity = await session.attach();
-    assert.equal(identity.conversationId, "conv-tui-integration");
+    assert.equal(identity.conversationId, "conversation-1");
     assert.equal(identity.agentId, "agent-tui-integration");
 
     const initial = session.state;
@@ -335,8 +335,8 @@ describe("real rustx child integration", { skip: SKIP }, () => {
 // Repeated compaction over the real stdio transport (Issue #27)
 // ---------------------------------------------------------------------------
 
-const COMPACTION_SESSION_JSON = JSON.stringify({
-  conversationId: "conv-tui-compaction",
+const COMPACTION_RUNTIME_CONFIG_JSON = JSON.stringify({
+  schemaVersion: 2,
   agentId: "agent-tui-compaction",
   model: { model: "fixture/integration-model" },
   context: { reserveTokens: 8_192, keepRecentTokens: 256 },
@@ -417,13 +417,16 @@ describe("real rustx child repeated compaction", { skip: SKIP }, () => {
       fixture.path("models.json"),
       compactionModelsJson(provider.url("/v1")),
     );
-    writeFileSync(fixture.path("session.json"), COMPACTION_SESSION_JSON);
+    writeFileSync(
+      fixture.path("rustx.json"),
+      COMPACTION_RUNTIME_CONFIG_JSON,
+    );
 
     const child = ChildRuntimeProcess.spawn({
       binary: BINARY,
       paths: {
         models: fixture.path("models.json"),
-        session: fixture.path("session.json"),
+        config: fixture.path("rustx.json"),
         workspace,
         runtimeRoot: fixture.path("private"),
       },

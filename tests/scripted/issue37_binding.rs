@@ -64,6 +64,8 @@ async fn new_bundle(conversation: &str) -> Bundle {
         conversation_id: runtime.conversation_id().clone(),
         workspace: runtime.workspace().clone(),
         base_tool_registry: Arc::new(ToolRegistry::new()),
+        tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+        skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
         mcp_servers: std::collections::BTreeMap::new(),
         base_environment: runtime.environment().clone(),
         environment_store_root: dir.path().join("skill-env"),

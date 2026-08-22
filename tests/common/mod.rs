@@ -808,6 +808,7 @@ pub async fn run_tool_with_cancellation(
         artifacts: fixture.runtime.artifacts(),
         tool_output: fixture.runtime.tool_output(),
         environment: fixture.runtime.environment(),
+        skill_resources: None,
     };
     executor.execute(prepared.invocation, context).await
 }
@@ -851,6 +852,7 @@ pub async fn run_tool(
         artifacts: fixture.runtime.artifacts(),
         tool_output: fixture.runtime.tool_output(),
         environment: fixture.runtime.environment(),
+        skill_resources: None,
     };
     executor.execute(prepared.invocation, context).await
 }
@@ -965,6 +967,8 @@ pub async fn capability_lease(
             conversation_id: tool_runtime.conversation_id().clone(),
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: std::sync::Arc::new(tools),
+            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+            skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: tool_runtime.environment().clone(),
             environment_store_root: dir.path().join("skill-env"),

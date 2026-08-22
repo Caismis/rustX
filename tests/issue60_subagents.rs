@@ -64,7 +64,6 @@ fn models_json(base_url: &str) -> String {
 }
 
 const SESSION_JSON: &str = r#"{
-  "conversationId": "conv-subagent",
   "agentId": "agent-parent",
   "model": {"model": "fixture/subagent-model"},
   "context": {"reserveTokens": 1024, "keepRecentTokens": 8192}
@@ -84,13 +83,13 @@ impl Process {
         let workspace = root.join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         std::fs::write(root.join("models.json"), models).expect("models.json");
-        std::fs::write(root.join("session.json"), session).expect("session.json");
+        std::fs::write(root.join("rustx.json"), session).expect("rustx.json");
         let mut command = tokio::process::Command::new(binary());
         command
             .arg("--models")
             .arg(root.join("models.json"))
-            .arg("--session")
-            .arg(root.join("session.json"))
+            .arg("--config")
+            .arg(root.join("rustx.json"))
             .arg("--workspace")
             .arg(&workspace)
             .arg("--runtime-root")

@@ -97,6 +97,10 @@ pub struct ToolExecutionContext<'a> {
     pub tool_output: &'a ManagedToolOutput,
     /// The explicit authorized tool environment.
     pub environment: &'a ToolEnvironment,
+    /// Runtime-owned virtual Skill resources authorized for this attempt.
+    /// Read resolves these through the ordinary tool contract; clients never
+    /// receive their host paths.
+    pub skill_resources: Option<&'a crate::skills::SkillResourceMap>,
 }
 
 /// One executable tool.
@@ -236,7 +240,7 @@ pub struct PreparedInvocation {
 /// disagree is a contract violation.
 #[derive(Default)]
 pub struct ToolRegistry {
-    entries: Vec<RegistryEntry>,
+    entries: Vec<ToolRegistration>,
     by_id: HashMap<ToolId, usize>,
     by_name: HashMap<String, usize>,
 }
@@ -270,10 +274,28 @@ impl Clone for ToolRegistry {
 pub(crate) type BusinessArgumentNormalizer =
     fn(&serde_json::Value) -> Result<serde_json::Value, String>;
 
-struct RegistryEntry {
-    definition: ToolDefinition,
-    executor: Arc<dyn ToolExecutor>,
-    normalizer: BusinessArgumentNormalizer,
+/// One validated available Tool registration passed to capability selection.
+///
+/// This remains runtime-internal: clients receive definitions only, while
+/// the capability coordinator retains the executor relationship until it
+/// derives the immutable active registry.
+#[derive(Clone)]
+pub(crate) struct ToolRegistration {
+    pub(crate) definition: ToolDefinition,
+    pub(crate) executor: Arc<dyn ToolExecutor>,
+    pub(crate) normalizer: BusinessArgumentNormalizer,
+}
+
+impl ToolRegistration {
+    /// Creates a registration for a discovered non-native Tool whose
+    /// arguments use the canonical schema unchanged.
+    pub(crate) fn plain(definition: ToolDefinition, executor: Arc<dyn ToolExecutor>) -> Self {
+        Self {
+            definition,
+            executor,
+            normalizer: identity_arguments,
+        }
+    }
 }
 
 /// The name of the runtime intrinsic background inspection tool.
@@ -362,7 +384,7 @@ impl ToolRegistry {
         self.by_id.insert(definition.id.clone(), self.entries.len());
         self.by_name
             .insert(definition.name.clone(), self.entries.len());
-        self.entries.push(RegistryEntry {
+        self.entries.push(ToolRegistration {
             definition,
             executor,
             normalizer,
@@ -388,6 +410,28 @@ impl ToolRegistry {
             composed.register(definition, executor)?;
         }
         Ok(composed)
+    }
+
+    /// Rebuilds a validated registry from a selected set of registrations.
+    /// The capability coordinator uses this after startup activation
+    /// selection; no inactive registration can enter the active registry.
+    pub(crate) fn from_registrations(
+        registrations: impl IntoIterator<Item = ToolRegistration>,
+    ) -> Result<Self, ToolRegistryError> {
+        let mut registry = Self::new();
+        for registration in registrations {
+            registry.register_with_argument_normalizer(
+                registration.definition,
+                registration.executor,
+                registration.normalizer,
+            )?;
+        }
+        Ok(registry)
+    }
+
+    /// Copies the validated registrations for capability-plane selection.
+    pub(crate) fn registrations(&self) -> Vec<ToolRegistration> {
+        self.entries.clone()
     }
 
     /// The canonical definitions of every registered tool in registration
@@ -528,7 +572,7 @@ impl ToolRegistry {
 
     /// Resolves a canonical call to its registered entry, requiring the id
     /// and the model-facing name to agree.
-    fn resolve_entry(&self, call: &ToolCall) -> Result<&RegistryEntry, ToolPreflightError> {
+    fn resolve_entry(&self, call: &ToolCall) -> Result<&ToolRegistration, ToolPreflightError> {
         let by_id = self.by_id.get(&call.tool_id).copied();
         let by_name = self.by_name.get(&call.name).copied();
         match (by_id, by_name) {
@@ -1146,6 +1190,7 @@ mod tests {
             artifacts: &artifacts,
             tool_output: &tool_output,
             environment: &ToolEnvironment::new(),
+            skill_resources: None,
         };
         let executor = registry.executor(&prepared.invocation.tool_id);
         let _result = executor

@@ -4,7 +4,7 @@
 //! assembly ([`LocalConversationCore`]) and two final paths: the
 //! interactive runtime (core + `RuntimeClientHost`) and the headless
 //! runtime (core, no `RuntimeClientHost`). These tests prove against the
-//! **real** production composition — the real catalog, session config,
+//! **real** production composition — the real catalog, current runtime config,
 //! provider bindings, tool plane, capability plane, and context pieces —
 //! that:
 //!
@@ -65,8 +65,7 @@ const MODELS_JSON: &str = r#"{
   }
 }"#;
 
-const SESSION_JSON: &str = r#"{
-  "conversationId": "conv-lifecycle",
+const RUNTIME_CONFIG_JSON: &str = r#"{
   "agentId": "agent-lifecycle",
   "model": {"model": "local/composed-model"},
   "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
@@ -76,16 +75,22 @@ const SESSION_JSON: &str = r#"{
 
 /// Writes the startup files into a temporary root and returns the explicit
 /// paths.
-fn startup(root: &std::path::Path, models: &str, session: &str) -> LocalRuntimePaths {
+fn startup(root: &std::path::Path, models: &str, config: &str) -> LocalRuntimePaths {
     let workspace = root.join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
     let models_path = root.join("models.json");
-    let session_path = root.join("session.json");
+    let config_path = root.join("rustx.json");
     std::fs::write(&models_path, models).expect("models.json");
-    std::fs::write(&session_path, session).expect("session.json");
+    std::fs::write(&config_path, config).expect("rustx.json");
     LocalRuntimePaths {
         models: models_path,
-        session: session_path,
+        config: config_path,
+        skill_paths: Vec::new(),
+        no_skills: false,
+        no_builtin_tools: false,
+        no_tools: false,
+        tools: None,
+        exclude_tools: Vec::new(),
         workspace,
         runtime_root: root.join("private"),
     }
@@ -155,7 +160,7 @@ fn semantic_projection(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn interactive_and_headless_share_one_semantic_composition() {
     let root = tempfile::tempdir().expect("temp root");
-    let paths = startup(root.path(), MODELS_JSON, SESSION_JSON);
+    let paths = startup(root.path(), MODELS_JSON, RUNTIME_CONFIG_JSON);
     let dependencies = dependencies();
 
     let interactive = LocalConversationRuntime::compose(&paths, &dependencies)
@@ -281,7 +286,6 @@ fn emulator_models_json(emulator: &ProviderEmulator) -> String {
 
 fn emulator_session_json() -> String {
     serde_json::json!({
-        "conversationId": "conv-headless",
         "agentId": "agent-headless",
         "model": {"model": format!("emulator/{CHAT_MODEL}")},
         "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},

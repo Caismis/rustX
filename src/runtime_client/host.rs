@@ -1563,7 +1563,7 @@ mod tests {
     };
     use crate::conversation::SurfaceRevision;
     use crate::durable::{ConversationStore, SqliteConversationStore};
-    use crate::local_runtime::{LocalConversationConfig, LocalSessionSupervisor, SessionCatalog};
+    use crate::local_runtime::{CurrentRuntimeConfig, LocalSessionSupervisor, SessionCatalog};
     use crate::message::content::TextBlock;
     use crate::message::types::{
         ContentBlockIndex, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
@@ -1916,6 +1916,11 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(tools),
+                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                skill_discovery: crate::skills::SkillDiscoveryConfig {
+                    automatic_roots: vec![workspace.join(".agents/skills")],
+                    explicit_paths: Vec::new(),
+                },
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
@@ -1989,6 +1994,11 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(ToolRegistry::new()),
+                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                skill_discovery: crate::skills::SkillDiscoveryConfig {
+                    automatic_roots: vec![workspace.join(".agents/skills")],
+                    explicit_paths: Vec::new(),
+                },
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
@@ -4982,6 +4992,11 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(ToolRegistry::new()),
+                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                skill_discovery: crate::skills::SkillDiscoveryConfig {
+                    automatic_roots: vec![workspace.join(".agents/skills")],
+                    explicit_paths: Vec::new(),
+                },
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
@@ -5054,6 +5069,11 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(ToolRegistry::new()),
+                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                skill_discovery: crate::skills::SkillDiscoveryConfig {
+                    automatic_roots: vec![workspace.join(".agents/skills")],
+                    explicit_paths: Vec::new(),
+                },
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
@@ -5125,9 +5145,26 @@ mod tests {
         tools: ToolRegistry,
         probe: Option<CoordinatorProbe>,
     ) -> (Arc<GatedAdapter>, RuntimeOnlyFixture) {
+        runtime_only_fixture_with_conversation_id(
+            scripts,
+            tools,
+            probe,
+            ConversationId::new("conv-host"),
+        )
+        .await
+    }
+
+    /// Builds the same runtime-only fixture with an explicit conversation
+    /// identity. Session-aware tests use the catalog's deterministic initial
+    /// identity instead of coupling the runtime to the old fixture label.
+    async fn runtime_only_fixture_with_conversation_id(
+        scripts: Vec<Vec<GatedStep>>,
+        tools: ToolRegistry,
+        probe: Option<CoordinatorProbe>,
+        conversation_id: ConversationId,
+    ) -> (Arc<GatedAdapter>, RuntimeOnlyFixture) {
         let adapter = Arc::new(GatedAdapter::new(scripts));
         let dir = tempfile::tempdir().expect("temp dir");
-        let conversation_id = ConversationId::new("conv-host");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
@@ -5141,6 +5178,11 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(tools),
+                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                skill_discovery: crate::skills::SkillDiscoveryConfig {
+                    automatic_roots: vec![workspace.join(".agents/skills")],
+                    explicit_paths: Vec::new(),
+                },
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
@@ -5197,21 +5239,26 @@ mod tests {
         RuntimeClientEndpoint,
         Arc<LocalSessionSupervisor>,
         tempfile::TempDir,
-        LocalConversationConfig,
+        CurrentRuntimeConfig,
     ) {
-        let (adapter, fixture) = runtime_only_fixture(scripts, ToolRegistry::new(), probe).await;
+        let (adapter, fixture) = runtime_only_fixture_with_conversation_id(
+            scripts,
+            ToolRegistry::new(),
+            probe,
+            ConversationId::new("conversation-1"),
+        )
+        .await;
         let catalog_root = tempfile::tempdir().expect("catalog root");
-        let config = LocalConversationConfig::from_json_slice(
+        let config = CurrentRuntimeConfig::from_json_slice(
             br#"{
-              "conversationId": "conv-host",
               "agentId": "agent-a",
               "model": {"model": "scripted/scripted"},
               "context": {"reserveTokens": 0, "keepRecentTokens": 0}
             }"#,
         )
-        .expect("session config");
-        let catalog = SessionCatalog::open(catalog_root.path(), &config).expect("catalog");
-        let supervisor = Arc::new(LocalSessionSupervisor::new(catalog));
+        .expect("current runtime config");
+        let catalog = SessionCatalog::open(catalog_root.path(), &config.model).expect("catalog");
+        let supervisor = Arc::new(LocalSessionSupervisor::new(catalog, config.model.clone()));
         let host = RuntimeClientHost::new_with_session_control(
             RuntimeClientHostConfig {
                 runtime: fixture.runtime.clone(),
@@ -5337,7 +5384,7 @@ mod tests {
             assert_eq!(sessions.len(), if post_rename { 2 } else { 1 });
 
             if post_rename {
-                let reopened = SessionCatalog::open(catalog_root.path(), &config)
+                let reopened = SessionCatalog::open(catalog_root.path(), &config.model)
                     .expect("reopen visible catalog");
                 assert_eq!(
                     reopened
@@ -5360,7 +5407,7 @@ mod tests {
         initialize_endpoint(&endpoint);
         let (revision, message_id, source_messages) =
             await_text_boundary(&fixture.runtime, &adapter, prompt).await;
-        let source = SessionCatalog::open(catalog_root.path(), &config)
+        let source = SessionCatalog::open(catalog_root.path(), &config.model)
             .expect("source catalog")
             .active_snapshot()
             .expect("source snapshot");
@@ -5382,7 +5429,8 @@ mod tests {
             "pre-commit failure has no transition result"
         );
 
-        let reopened = SessionCatalog::open(catalog_root.path(), &config).expect("reopen source");
+        let reopened =
+            SessionCatalog::open(catalog_root.path(), &config.model).expect("reopen source");
         assert_eq!(
             reopened
                 .active_snapshot()
@@ -5430,7 +5478,7 @@ mod tests {
         initialize_endpoint(&endpoint);
         let (revision, message_id, source_messages) =
             await_text_boundary(&fixture.runtime, &adapter, prompt).await;
-        let source = SessionCatalog::open(catalog_root.path(), &config)
+        let source = SessionCatalog::open(catalog_root.path(), &config.model)
             .expect("source catalog")
             .active_snapshot()
             .expect("source snapshot");
@@ -5455,7 +5503,8 @@ mod tests {
         assert!(diagnostic.contains("durability is uncertain"));
         assert_eq!(editor_content, Some(submit_content(prompt)));
 
-        let reopened = SessionCatalog::open(catalog_root.path(), &config).expect("reopen fork");
+        let reopened =
+            SessionCatalog::open(catalog_root.path(), &config.model).expect("reopen fork");
         let authoritative = reopened.active_snapshot().expect("authoritative fork");
         assert_eq!(authoritative.id.as_str(), session.id);
         assert_ne!(
@@ -5510,7 +5559,7 @@ mod tests {
         initialize_endpoint(&endpoint);
         let (revision, message_id, source_messages) =
             await_text_boundary(&fixture.runtime, &adapter, prompt).await;
-        let source = SessionCatalog::open(catalog_root.path(), &config)
+        let source = SessionCatalog::open(catalog_root.path(), &config.model)
             .expect("source catalog")
             .active_snapshot()
             .expect("source snapshot");
@@ -5537,7 +5586,8 @@ mod tests {
         assert_eq!(session.id, source.id.as_str());
         assert_ne!(session.active_node, source.active_node.as_str());
 
-        let reopened = SessionCatalog::open(catalog_root.path(), &config).expect("reopen tree");
+        let reopened =
+            SessionCatalog::open(catalog_root.path(), &config.model).expect("reopen tree");
         let authoritative = reopened.active_snapshot().expect("authoritative tree node");
         assert_eq!(authoritative.id, source.id);
         assert_eq!(authoritative.active_node.as_str(), session.active_node);
@@ -5586,7 +5636,8 @@ mod tests {
             "the live runtime candidate is not installed after catalog publication uncertainty"
         );
 
-        let reopened = SessionCatalog::open(catalog_root.path(), &config).expect("reopen catalog");
+        let reopened =
+            SessionCatalog::open(catalog_root.path(), &config.model).expect("reopen catalog");
         let (_, _, reopened_config) = reopened.active_lineage().expect("active lineage");
         assert_eq!(
             reopened_config.model, candidate,
@@ -5622,7 +5673,7 @@ mod tests {
                 }),
             )
             .await;
-        let before = SessionCatalog::open(catalog_root.path(), &config)
+        let before = SessionCatalog::open(catalog_root.path(), &config.model)
             .expect("open catalog before switch")
             .active_snapshot()
             .expect("active snapshot before switch");
@@ -5641,7 +5692,7 @@ mod tests {
         };
         entered.await.expect("attempt exit gate entered");
 
-        let observed = SessionCatalog::open(catalog_root.path(), &config)
+        let observed = SessionCatalog::open(catalog_root.path(), &config.model)
             .expect("observe catalog while old task is unsettled")
             .active_snapshot()
             .expect("active snapshot while old task is unsettled");
@@ -5659,7 +5710,7 @@ mod tests {
         release_exit.await.expect("release attempt task exit");
         let result = switch.await.expect("switch task");
         assert!(result.is_ok(), "quiescence precedes successful publication");
-        let after = SessionCatalog::open(catalog_root.path(), &config)
+        let after = SessionCatalog::open(catalog_root.path(), &config.model)
             .expect("reopen catalog after switch")
             .active_snapshot()
             .expect("active snapshot after switch");
@@ -6166,6 +6217,11 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(tools),
+                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                skill_discovery: crate::skills::SkillDiscoveryConfig {
+                    automatic_roots: vec![workspace.join(".agents/skills")],
+                    explicit_paths: Vec::new(),
+                },
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),

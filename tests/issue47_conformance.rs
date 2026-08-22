@@ -28,6 +28,7 @@
 
 mod common;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use common::provider_emulator::ProviderEmulator;
@@ -132,6 +133,10 @@ struct Setup {
     keep_recent_tokens: u64,
     /// The explicit summary-model policy, when the session declares one.
     summary_model: Option<String>,
+    /// Explicit Skill resources for this isolated provider fixture.
+    skill_paths: Vec<PathBuf>,
+    /// Keep the provider fixture independent from the invoking user's roots.
+    no_skills: bool,
 }
 
 impl Setup {
@@ -142,6 +147,8 @@ impl Setup {
             reserve_tokens: 1_024,
             keep_recent_tokens: 8_192,
             summary_model: None,
+            skill_paths: Vec::new(),
+            no_skills: true,
         }
     }
 }
@@ -163,12 +170,17 @@ impl Driver {
             models_json(emulator, setup),
         )
         .expect("models.json");
-        std::fs::write(root.path().join("session.json"), session_json(setup))
-            .expect("session.json");
+        std::fs::write(root.path().join("rustx.json"), session_json(setup)).expect("rustx.json");
 
         let paths = LocalRuntimePaths {
             models: root.path().join("models.json"),
-            session: root.path().join("session.json"),
+            config: root.path().join("rustx.json"),
+            skill_paths: setup.skill_paths.clone(),
+            no_skills: setup.no_skills,
+            no_builtin_tools: false,
+            no_tools: false,
+            tools: None,
+            exclude_tools: Vec::new(),
             workspace,
             runtime_root: root.path().join("private"),
         };
@@ -346,7 +358,6 @@ fn session_json(setup: &Setup) -> String {
         model["summaryModel"] = serde_json::json!({"mode": "explicit", "model": summary});
     }
     serde_json::json!({
-        "conversationId": "conv-issue47",
         "agentId": "agent-issue47",
         "model": model,
         "context": {
@@ -551,12 +562,9 @@ async fn a_real_skill_reaches_the_provider_and_is_read_by_the_real_tool() {
     else {
         return;
     };
-    let driver = Driver::start_in(
-        root,
-        &emulator,
-        &Setup::new(&format!("emulator/{CHAT_MODEL}")),
-    )
-    .await;
+    let mut setup = Setup::new(&format!("emulator/{CHAT_MODEL}"));
+    setup.skill_paths = vec![package];
+    let driver = Driver::start_in(root, &emulator, &setup).await;
 
     let (snapshot, _) = driver.host().snapshot().expect("snapshot");
     assert_eq!(
@@ -1227,10 +1235,16 @@ async fn a_crash_after_the_request_start_commit_never_resends_the_request() {
         models_json(&emulator, &setup),
     )
     .expect("models.json");
-    std::fs::write(root.path().join("session.json"), session_json(&setup)).expect("session.json");
+    std::fs::write(root.path().join("rustx.json"), session_json(&setup)).expect("rustx.json");
     let paths = LocalRuntimePaths {
         models: root.path().join("models.json"),
-        session: root.path().join("session.json"),
+        config: root.path().join("rustx.json"),
+        skill_paths: setup.skill_paths.clone(),
+        no_skills: setup.no_skills,
+        no_builtin_tools: false,
+        no_tools: false,
+        tools: None,
+        exclude_tools: Vec::new(),
         workspace,
         runtime_root: root.path().join("private"),
     };

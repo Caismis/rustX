@@ -452,8 +452,8 @@ impl std::error::Error for ConversationRuntimeError {}
 
 /// The shared context-plane pieces of one conversation runtime.
 ///
-/// These are the **session-owned static** pieces: the token estimator, the
-/// Agent Status composer, and the context policy (reserve tokens,
+/// These are the **composition-owned static** pieces: the token estimator, the
+/// Agent Status composer, and the current runtime context policy (reserve tokens,
 /// keep-recent target, summary output cap). They persist across attempts,
 /// and the model path and the Runtime Client projection share one composer.
 ///
@@ -468,7 +468,7 @@ impl std::error::Error for ConversationRuntimeError {}
 /// can survive a session model change.
 #[derive(Clone)]
 pub struct ConversationContextConfig {
-    /// The static session-owned context policy.
+    /// The current runtime context policy captured by this composition.
     pub policy: SessionContextPolicy,
     /// The deterministic token estimator.
     pub estimator: Arc<dyn TokenEstimator>,
@@ -2610,13 +2610,19 @@ impl ConversationRuntime {
         &self.inner.agent_id
     }
 
+    /// The current runtime timezone used by status and temporal context.
+    #[must_use]
+    pub fn timezone(&self) -> Option<chrono_tz::Tz> {
+        self.inner.timezone
+    }
+
     /// The one conversation tool runtime of this runtime.
     #[must_use]
     pub fn tool_runtime(&self) -> &ConversationToolRuntime {
         &self.inner.tool_runtime
     }
 
-    /// The shared session-owned context plane of this runtime.
+    /// The shared current-runtime context plane of this composition.
     ///
     /// The context policy, the token estimator, and the Agent Status
     /// composer persist across attempts; each attempt derives its
@@ -3990,6 +3996,8 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(base_tool_registry.unwrap_or_default()),
+                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
@@ -4067,6 +4075,8 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
+                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
@@ -4136,6 +4146,8 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
+                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
@@ -4240,6 +4252,8 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
+                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
@@ -5308,6 +5322,8 @@ mod tests {
                 conversation_id: other_runtime.conversation_id().clone(),
                 workspace: other_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
+                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: other_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
@@ -5364,6 +5380,8 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
+                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
@@ -9640,6 +9658,8 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
+                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),

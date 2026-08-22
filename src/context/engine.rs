@@ -50,7 +50,7 @@ use crate::runtime::inbound::FreshInboundTurn;
 use crate::runtime::types::{TokenMeasurement, TokenMeasurementSource};
 use crate::tools::types::ModelToolDefinition;
 
-/// The static session-owned context policy.
+/// The static current-runtime context policy.
 ///
 /// A conversation session owns the *policy* — the safety reserve, the
 /// uncompressed recent-history target, and the summary output safety cap —

@@ -11,7 +11,7 @@ The intended layout is:
 ```text
 examples/local-runtime/
 ├── models.json
-├── session.json
+├── rustx.json
 ├── workspace/
 │   └── .agents/
 │       └── tools/
@@ -29,9 +29,9 @@ examples/local-runtime/
 | Path | Owner and purpose |
 | --- | --- |
 | `models.json` | The runtime's provider/model authority: endpoint, credential source, model limits, capabilities, opaque request parameters, reasoning profiles, and protocol compatibility. |
-| `session.json` | One conversation's initial model selection and overrides, context policy, native-tool policies, MCP bindings, and authorized environment. |
+| `rustx.json` | The current runtime/project configuration: default model for new Sessions, context/timezone, native-tool policy and activation, MCP sources, Skill roots, and authorized environment. |
 | `workspace/` | The authoritative execution cwd and conventional project/source tree, including Skills and editable custom Python tool packages. Relative native file-tool paths resolve here. This is not a general filesystem sandbox for Read/Write/Edit/Grep/Glob. |
-| `workspace/.agents/tools/*` | Automatically discovered custom Python tool source packages; there is no separate registration entry in `session.json`. |
+| `workspace/.agents/tools/*` | Automatically discovered custom Python tool source packages; there is no separate registration entry in `rustx.json`. |
 | `.rustx/` (`runtime-root`) | Runtime-owned generated artifacts, immutable Python tool versions, environments, and Session storage. Keep it disjoint from `workspace/`; it is a separate ownership domain, not a promise that every file under it is unreachable through every filesystem mechanism. |
 
 Native Read/Write/Edit/Grep/Glob paths may be relative to the execution cwd or
@@ -90,16 +90,20 @@ from their names. Their exact `enabled` state and provider-owned
 `requestParams` are the contract. The illustrative `reasoning_effort` value
 must be changed if the real provider uses a different reasoning parameter.
 
-## `session.json`
+## `rustx.json`
 
-The baseline session selects `example/demo-model` using the canonical
+The baseline runtime config selects `example/demo-model` using the canonical
 `provider/model` identity. `models.json` supplies the available model and its
-defaults; `session.json.model` chooses this conversation's starting model and
+defaults; `rustx.json.model` supplies the default for a brand-new Session.
+An existing Session's explicitly selected model is persisted separately in
+the runtime-owned catalog and is never overwritten by this default.
+
+`rustx.json.model` chooses the starting model for a new Session and
 overrides its `temperature` and output budget. The baseline uses the simpler
 `summaryModel.mode = "session"` policy, so summaries follow the admitted
 attempt's primary model.
 
-`context` contains only session policy values (`reserveTokens`,
+`context` contains current runtime policy values (`reserveTokens`,
 `keepRecentTokens`, and `summaryOutputCap`). The selected model's
 `contextWindow` remains in `models.json`.
 
@@ -109,9 +113,21 @@ attempt's primary model.
 `sequential` or `parallel`. The runtime-intrinsic `background_task` tool is
 not configured in this table; its fixed policy comes from the runtime.
 
-The harmless `RUSTX_EXAMPLE_MODE` entry demonstrates the authorized session
+The harmless `RUSTX_EXAMPLE_MODE` entry demonstrates the authorized runtime
 environment. Keep provider credentials in `models.json`'s `apiKey` reference,
 not in this table.
+
+`defaultTools` controls native/built-in Tool activation. An empty list keeps
+built-ins available for truthful capability inspection while activating none.
+The command-line controls `--no-builtin-tools`, `--no-tools`, `--tools`, and
+`--exclude-tools` apply after discovery; availability and activation are
+separate runtime facts.
+
+Skills are discovered from the current user/global and project roots, plus any
+explicit `skills` paths in this file or repeatable `--skill` arguments.
+`disable-model-invocation: true`
+keeps a validated Skill in runtime resource state but omits it from the
+model-visible catalog.
 
 ## MCP servers
 
@@ -251,7 +267,7 @@ cargo build --bin rustx
 
 ./target/debug/rustx \
   --models ./examples/local-runtime/models.json \
-  --session ./examples/local-runtime/session.json \
+  --config ./examples/local-runtime/rustx.json \
   --workspace ./examples/local-runtime/workspace \
   --runtime-root ./examples/local-runtime/.rustx
 ```
@@ -269,7 +285,7 @@ pnpm --dir tui install --frozen-lockfile
 pnpm --dir tui start \
   --binary "$PWD/target/debug/rustx" \
   --models "$PWD/examples/local-runtime/models.json" \
-  --session "$PWD/examples/local-runtime/session.json" \
+  --config "$PWD/examples/local-runtime/rustx.json" \
   --workspace "$PWD/examples/local-runtime/workspace" \
   --runtime-root "$PWD/examples/local-runtime/.rustx"
 ```

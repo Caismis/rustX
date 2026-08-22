@@ -2,11 +2,12 @@
 //!
 //! # Skill root contract
 //!
-//! There is exactly one Skill root, anchored to the canonical Workspace
-//! root and never to Bash's mutable working directory:
+//! Current discovery is bounded to user/global and project roots, plus
+//! explicit configuration and CLI paths. Accepted package files are exposed
+//! to the model through the runtime-owned virtual namespace:
 //!
 //! ```text
-//! <workspace>/.agents/skills/<skill-name>/SKILL.md
+//! .rustx/skills/<skill-name>/SKILL.md
 //! ```
 //!
 //! Discovery is one level only: direct child directories of the Skill
@@ -15,10 +16,9 @@
 //!
 //! # Discovery semantics
 //!
-//! - a missing `.agents/skills/` directory means an empty Skill set, not an
-//!   error;
+//! - a missing automatic Skill root means an empty Skill set, not an error;
 //! - hidden direct entries (names beginning with `.`) are ignored;
-//! - ordinary unrelated files directly under `.agents/skills/` are
+//! - ordinary unrelated files directly under an automatic Skill root are
 //!   ignored;
 //! - each non-hidden candidate directory must contain `SKILL.md`;
 //! - malformed candidate packages fail the whole discovery transaction: one
@@ -50,13 +50,13 @@
 //! `description`; host absolute paths never appear in model-visible Skill
 //! metadata.
 //!
-//! # Workspace-file limitation
+//! # Resource boundary
 //!
-//! Skill packages are ordinary Workspace files. M6 freezes discovered
+//! Skill packages remain current filesystem resources. M6 freezes discovered
 //! identities, versions, catalog metadata, and dependency declarations at
-//! preparation time, but it does not snapshot-mount the package content: an
-//! external rewrite of `.agents/skills/...` after preparation is observed
-//! only at the next quiescent re-discovery.
+//! preparation time, and the capability snapshot maps accepted package files
+//! into the virtual namespace for runtime-owned Read. An external rewrite is
+//! observed only at the next quiescent re-discovery.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -68,6 +68,8 @@ use crate::tools::workspace::Workspace;
 
 /// The canonical Skill root directory name below the Workspace root.
 pub const SKILLS_DIRECTORY: &str = ".agents";
+/// The rustX project-local Skill root directory.
+pub const RUSTX_SKILLS_DIRECTORY: &str = ".rustx";
 pub const SKILLS_ROOT: &str = "skills";
 /// The canonical primary instructions file name of a Skill package.
 pub const SKILL_MARKDOWN_FILE: &str = "SKILL.md";
@@ -118,6 +120,15 @@ pub enum SkillPackageError {
     UnsupportedSymlink { path: String },
     /// A filesystem failure while reading the package.
     Io { path: String, detail: String },
+    /// Two current roots expose the same logical Skill identity.
+    DuplicateIdentity {
+        /// The logical Skill name.
+        name: String,
+        /// The first deterministic package root.
+        first: PathBuf,
+        /// The conflicting package root.
+        second: PathBuf,
+    },
 }
 
 impl core::fmt::Display for SkillPackageError {
@@ -166,6 +177,16 @@ impl core::fmt::Display for SkillPackageError {
                 write!(f, "skill package symlinks are rejected for M6: {path:?}")
             }
             Self::Io { path, detail } => write!(f, "cannot read {path:?}: {detail}"),
+            Self::DuplicateIdentity {
+                name,
+                first,
+                second,
+            } => write!(
+                f,
+                "skill {name:?} is defined by both {} and {}",
+                first.display(),
+                second.display()
+            ),
         }
     }
 }
@@ -190,6 +211,8 @@ pub struct SkillPackage {
     allowed_tools: Option<String>,
     dependencies: DependencyManifest,
     files: Vec<PathBuf>,
+    root: PathBuf,
+    disable_model_invocation: bool,
 }
 
 impl SkillPackage {
@@ -254,21 +277,77 @@ impl SkillPackage {
     pub fn files(&self) -> &[PathBuf] {
         &self.files
     }
+
+    /// The runtime-owned host root of this package. It never enters
+    /// model-visible metadata.
+    #[must_use]
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Whether this validated Skill is omitted from the model catalog.
+    #[must_use]
+    pub fn disable_model_invocation(&self) -> bool {
+        self.disable_model_invocation
+    }
 }
 
-/// Discovers Skill packages under the canonical project-local Skill root.
+/// Current Skill discovery roots and explicit package paths.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SkillDiscoveryConfig {
+    /// Automatic/default collection roots. Missing roots are empty.
+    pub automatic_roots: Vec<PathBuf>,
+    /// Explicit collection roots, package directories, or `SKILL.md` paths.
+    /// Missing explicit paths fail discovery.
+    pub explicit_paths: Vec<PathBuf>,
+}
+
+impl SkillDiscoveryConfig {
+    /// Returns the deterministic default user/global/project root order.
+    #[must_use]
+    pub fn default_for_workspace(workspace: &Workspace) -> Self {
+        default_discovery_config(workspace)
+    }
+}
+
+/// Maps virtual workspace-relative Skill resources to accepted host files.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SkillResourceMap {
+    pub(crate) entries: BTreeMap<PathBuf, PathBuf>,
+}
+
+impl SkillResourceMap {
+    /// Resolves one virtual Skill resource path.
+    #[must_use]
+    pub fn resolve(&self, path: &Path) -> Option<&Path> {
+        if path.is_absolute()
+            || path
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            return None;
+        }
+        self.entries.get(path).map(PathBuf::as_path)
+    }
+}
+
+/// Discovers Skill packages across the current bounded root set.
 #[derive(Debug, Clone)]
 pub struct SkillDiscovery {
-    workspace: Workspace,
+    config: SkillDiscoveryConfig,
 }
 
 impl SkillDiscovery {
     /// A discovery instance anchored to the canonical Workspace root.
     #[must_use]
     pub fn new(workspace: &Workspace) -> Self {
-        Self {
-            workspace: workspace.clone(),
-        }
+        Self::with_config(workspace, default_discovery_config(workspace))
+    }
+
+    /// Creates discovery with explicit current runtime roots.
+    #[must_use]
+    pub fn with_config(_workspace: &Workspace, config: SkillDiscoveryConfig) -> Self {
+        Self { config }
     }
 
     /// Discovers every valid Skill package.
@@ -282,54 +361,141 @@ impl SkillDiscovery {
     /// Returns [`SkillPackageError`] for a malformed Skill root or any
     /// malformed candidate package.
     pub fn discover(&self) -> Result<Vec<SkillPackage>, SkillPackageError> {
-        let skills_root = self
-            .workspace
-            .root()
-            .join(SKILLS_DIRECTORY)
-            .join(SKILLS_ROOT);
-        if !skills_root.exists() {
-            return Ok(Vec::new());
+        let mut candidates = Vec::<(String, PathBuf)>::new();
+        for root in &self.config.automatic_roots {
+            collect_root(root, false, &mut candidates)?;
         }
-        if !skills_root.is_dir() {
-            return Err(SkillPackageError::SkillRootNotDirectory(skills_root));
+        for path in &self.config.explicit_paths {
+            collect_root(path, true, &mut candidates)?;
         }
-        let mut candidates: Vec<(String, PathBuf)> = Vec::new();
-        let entries = std::fs::read_dir(&skills_root).map_err(|error| SkillPackageError::Io {
-            path: skills_root.display().to_string(),
-            detail: error.to_string(),
-        })?;
-        for entry in entries {
-            let entry = entry.map_err(|error| SkillPackageError::Io {
-                path: skills_root.display().to_string(),
-                detail: error.to_string(),
-            })?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with('.') {
-                continue;
-            }
-            let file_type = entry.file_type().map_err(|error| SkillPackageError::Io {
-                path: name.clone(),
-                detail: error.to_string(),
-            })?;
-            if file_type.is_symlink() {
-                // A symlinked package root is rejected for M6: the package
-                // root must be a real directory inside the Skill root.
-                return Err(SkillPackageError::UnsupportedSymlink {
-                    path: entry.path().display().to_string(),
+        candidates.sort();
+        let mut packages = Vec::with_capacity(candidates.len());
+        for (name, root) in candidates {
+            if let Some(previous) = packages
+                .iter()
+                .find(|package: &&SkillPackage| package.name() == name)
+            {
+                return Err(SkillPackageError::DuplicateIdentity {
+                    name,
+                    first: previous.root().to_path_buf(),
+                    second: root,
                 });
             }
-            if file_type.is_dir() {
-                candidates.push((name, entry.path()));
-            }
+            packages.push(discover_package(&root, &name)?);
         }
-        // Deterministic ordering by validated Skill name, independent of
-        // filesystem enumeration order.
-        candidates.sort_by(|left, right| left.0.cmp(&right.0));
-        candidates
-            .into_iter()
-            .map(|(name, root)| discover_package(&root, &name))
-            .collect()
+        packages.sort_by(|left, right| left.name().cmp(right.name()));
+        Ok(packages)
     }
+}
+
+fn default_discovery_config(workspace: &Workspace) -> SkillDiscoveryConfig {
+    let mut automatic_roots = Vec::new();
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        automatic_roots.push(home.join(RUSTX_SKILLS_DIRECTORY).join(SKILLS_ROOT));
+        automatic_roots.push(home.join(SKILLS_DIRECTORY).join(SKILLS_ROOT));
+    }
+    automatic_roots.push(
+        workspace
+            .root()
+            .join(RUSTX_SKILLS_DIRECTORY)
+            .join(SKILLS_ROOT),
+    );
+    automatic_roots.push(workspace.root().join(SKILLS_DIRECTORY).join(SKILLS_ROOT));
+    SkillDiscoveryConfig {
+        automatic_roots,
+        explicit_paths: Vec::new(),
+    }
+}
+
+fn collect_root(
+    path: &Path,
+    explicit: bool,
+    candidates: &mut Vec<(String, PathBuf)>,
+) -> Result<(), SkillPackageError> {
+    if !path.exists() {
+        if explicit {
+            return Err(SkillPackageError::Io {
+                path: path.display().to_string(),
+                detail: "explicit Skill path does not exist".to_owned(),
+            });
+        }
+        return Ok(());
+    }
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| SkillPackageError::Io {
+        path: path.display().to_string(),
+        detail: error.to_string(),
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err(SkillPackageError::UnsupportedSymlink {
+            path: path.display().to_string(),
+        });
+    }
+    if metadata.is_file() {
+        if path.file_name().and_then(|name| name.to_str()) != Some(SKILL_MARKDOWN_FILE) {
+            return Err(SkillPackageError::Io {
+                path: path.display().to_string(),
+                detail: "explicit Skill file must be named SKILL.md".to_owned(),
+            });
+        }
+        let Some(root) = path.parent() else {
+            return Err(SkillPackageError::Io {
+                path: path.display().to_string(),
+                detail: "explicit Skill file has no package directory".to_owned(),
+            });
+        };
+        let Some(name) = root.file_name().and_then(|name| name.to_str()) else {
+            return Err(SkillPackageError::Io {
+                path: root.display().to_string(),
+                detail: "explicit Skill package has no identity".to_owned(),
+            });
+        };
+        candidates.push((name.to_owned(), root.to_path_buf()));
+        return Ok(());
+    }
+    if !metadata.is_dir() {
+        return Err(SkillPackageError::SkillRootNotDirectory(path.to_path_buf()));
+    }
+    if path.join(SKILL_MARKDOWN_FILE).is_file() {
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            return Err(SkillPackageError::Io {
+                path: path.display().to_string(),
+                detail: "Skill package has no identity".to_owned(),
+            });
+        };
+        candidates.push((name.to_owned(), path.to_path_buf()));
+        return Ok(());
+    }
+    let entries = std::fs::read_dir(path).map_err(|error| SkillPackageError::Io {
+        path: path.display().to_string(),
+        detail: error.to_string(),
+    })?;
+    let mut children = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| SkillPackageError::Io {
+            path: path.display().to_string(),
+            detail: error.to_string(),
+        })?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        let file_type = entry.file_type().map_err(|error| SkillPackageError::Io {
+            path: entry.path().display().to_string(),
+            detail: error.to_string(),
+        })?;
+        if file_type.is_symlink() {
+            return Err(SkillPackageError::UnsupportedSymlink {
+                path: entry.path().display().to_string(),
+            });
+        }
+        if file_type.is_dir() {
+            children.push((name, entry.path()));
+        }
+    }
+    children.sort();
+    candidates.extend(children);
+    Ok(())
 }
 
 /// Parses, validates, and hashes one Skill package directory.
@@ -432,6 +598,8 @@ fn discover_package(root: &Path, directory_name: &str) -> Result<SkillPackage, S
         allowed_tools: frontmatter.allowed_tools,
         dependencies,
         files,
+        root: root.to_path_buf(),
+        disable_model_invocation: frontmatter.disable_model_invocation,
     })
 }
 
@@ -512,6 +680,7 @@ struct Frontmatter {
     license: Option<String>,
     compatibility: Option<String>,
     allowed_tools: Option<String>,
+    disable_model_invocation: bool,
 }
 
 /// The serde target of the standard frontmatter fields.
@@ -531,6 +700,8 @@ struct FrontmatterSerde {
     compatibility: Option<String>,
     #[serde(default, rename = "allowed-tools")]
     allowed_tools: Option<String>,
+    #[serde(default, rename = "disable-model-invocation")]
+    disable_model_invocation: bool,
 }
 
 /// The frontmatter parse outcome distinguishes a malformed YAML block from
@@ -609,6 +780,7 @@ fn parse_frontmatter(markdown: &str) -> Result<Frontmatter, FrontmatterFailure> 
         license: frontmatter.license,
         compatibility: frontmatter.compatibility,
         allowed_tools: frontmatter.allowed_tools,
+        disable_model_invocation: frontmatter.disable_model_invocation,
     })
 }
 
@@ -634,7 +806,23 @@ fn line_content(line: &str) -> &str {
 
 #[cfg(test)]
 mod frontmatter_tests {
-    use super::parse_frontmatter;
+    use std::sync::Arc;
+
+    use super::{SkillDiscovery, SkillDiscoveryConfig, parse_frontmatter};
+    use crate::skills::SkillSnapshot;
+    use crate::tools::Workspace;
+
+    fn write_skill(root: &std::path::Path, name: &str, description: &str, extra: &str) {
+        let directory = root.join(name);
+        std::fs::create_dir_all(&directory).expect("skill directory");
+        std::fs::write(
+            directory.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {description}{extra}\n---\nbody\n"),
+        )
+        .expect("skill file");
+        std::fs::write(directory.join("references.md"), "reference\n")
+            .expect("skill supporting resource");
+    }
 
     #[test]
     fn accepts_lf_and_crlf_delimiter_lines() {
@@ -660,5 +848,102 @@ mod frontmatter_tests {
         )
         .expect("quoted scalar");
         assert_eq!(parsed.description, "text --- remains scalar");
+    }
+
+    #[test]
+    fn discovery_merges_bounded_roots_in_deterministic_identity_order() {
+        let directory = tempfile::tempdir().expect("temporary root");
+        let workspace_root = directory.path().join("workspace");
+        std::fs::create_dir_all(&workspace_root).expect("workspace");
+        let workspace = Workspace::new(&workspace_root).expect("workspace");
+        let project_rustx = workspace.root().join(".rustx/skills");
+        let project_agents = workspace.root().join(".agents/skills");
+        let explicit = directory.path().join("explicit/skills");
+        write_skill(&project_agents, "zeta", "Zeta", "");
+        write_skill(&project_rustx, "alpha", "Alpha", "");
+        write_skill(&explicit, "middle", "Middle", "");
+
+        let packages = SkillDiscovery::with_config(
+            &workspace,
+            SkillDiscoveryConfig {
+                automatic_roots: vec![project_agents, project_rustx],
+                explicit_paths: vec![explicit],
+            },
+        )
+        .discover()
+        .expect("roots discover");
+        assert_eq!(
+            packages
+                .iter()
+                .map(super::SkillPackage::name)
+                .collect::<Vec<_>>(),
+            vec!["alpha", "middle", "zeta"]
+        );
+        assert_eq!(
+            packages[1].files(),
+            &[
+                std::path::PathBuf::from("SKILL.md"),
+                std::path::PathBuf::from("references.md")
+            ]
+        );
+    }
+
+    #[test]
+    fn no_automatic_roots_still_loads_explicit_skill_and_maps_resources() {
+        let directory = tempfile::tempdir().expect("temporary root");
+        let workspace_root = directory.path().join("workspace");
+        std::fs::create_dir_all(&workspace_root).expect("workspace");
+        let workspace = Workspace::new(&workspace_root).expect("workspace");
+        let explicit = directory.path().join("user/skills");
+        write_skill(
+            &explicit,
+            "private-guide",
+            "Private guide",
+            "\ndisable-model-invocation: true",
+        );
+        let packages = SkillDiscovery::with_config(
+            &workspace,
+            SkillDiscoveryConfig {
+                automatic_roots: Vec::new(),
+                explicit_paths: vec![explicit],
+            },
+        )
+        .discover()
+        .expect("explicit Skill path");
+        assert_eq!(packages.len(), 1);
+        assert!(packages[0].disable_model_invocation());
+        let snapshot = SkillSnapshot::new(packages.into_iter().map(Arc::new).collect());
+        assert_eq!(snapshot.packages().len(), 1);
+        assert!(snapshot.catalog_entries().is_empty());
+        assert!(snapshot.visible_bindings().is_empty());
+        assert_eq!(snapshot.bindings().len(), 1);
+        assert!(
+            snapshot
+                .resources()
+                .resolve(std::path::Path::new(".rustx/skills/private-guide/SKILL.md"))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn duplicate_skill_identity_fails_independently_of_root_enumeration_order() {
+        let directory = tempfile::tempdir().expect("temporary root");
+        let workspace_root = directory.path().join("workspace");
+        std::fs::create_dir_all(&workspace_root).expect("workspace");
+        let workspace = Workspace::new(&workspace_root).expect("workspace");
+        let first = directory.path().join("first");
+        let second = directory.path().join("second");
+        write_skill(&first, "same", "First", "");
+        write_skill(&second, "same", "Second", "");
+        let error = SkillDiscovery::with_config(
+            &workspace,
+            SkillDiscoveryConfig {
+                automatic_roots: vec![second, first],
+                explicit_paths: Vec::new(),
+            },
+        )
+        .discover()
+        .expect_err("duplicate identity");
+        assert!(error.to_string().contains("defined by both"));
     }
 }

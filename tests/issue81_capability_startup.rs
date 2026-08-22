@@ -50,7 +50,6 @@ const MODELS_JSON: &str = r#"{
 }"#;
 
 const SESSION_JSON: &str = r#"{
-  "conversationId": "conv-81",
   "agentId": "agent-81",
   "model": {"model": "local/composed-model"},
   "context": {"reserveTokens": 1024, "keepRecentTokens": 8192}
@@ -64,14 +63,20 @@ fn startup(root: &tempfile::TempDir, session: &str) -> (std::path::PathBuf, Loca
     let workspace = canonical.join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
     let models_path = canonical.join("models.json");
-    let session_path = canonical.join("session.json");
+    let session_path = canonical.join("rustx.json");
     std::fs::write(&models_path, MODELS_JSON).expect("models.json");
-    std::fs::write(&session_path, session).expect("session.json");
+    std::fs::write(&session_path, session).expect("rustx.json");
     (
         canonical.clone(),
         LocalRuntimePaths {
             models: models_path,
-            session: session_path,
+            config: session_path,
+            skill_paths: Vec::new(),
+            no_skills: false,
+            no_builtin_tools: false,
+            no_tools: false,
+            tools: None,
+            exclude_tools: Vec::new(),
             workspace,
             runtime_root: canonical.join("private"),
         },
@@ -199,6 +204,7 @@ async fn prove_native_tool_executes(runtime: &LocalConversationRuntime) {
             artifacts: tool_runtime.artifacts(),
             tool_output: tool_runtime.tool_output(),
             environment: tool_runtime.environment(),
+            skill_resources: None,
         },
     )
     .await;
@@ -285,7 +291,8 @@ async fn python_store_initialization_failure_is_isolated_from_runtime_startup() 
     write_python_package(&paths.workspace, "fixture-tool");
     // The deterministic filesystem conflict: a regular file where
     // `PythonToolStore` must create `m7-tools/tool-versions`.
-    let environments = paths.environment_store_root_for(&ConversationId::new("conv-81"));
+    let environments =
+        paths.environment_store_root_for(&ConversationId::new("conversation-standalone"));
     std::fs::create_dir_all(&environments).expect("environments root");
     std::fs::write(environments.join("m7-tools"), b"not a directory")
         .expect("conflicting regular file");
@@ -364,6 +371,8 @@ fn base_only_capability_setup_is_structurally_independent_of_python_storage() {
             conversation_id: rustx::runtime::identity::ConversationId::new("conv-81-base-only"),
             workspace: rustx::tools::Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
+            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+            skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: rustx::tools::environment::ToolEnvironment::new(),
             environment_store_root: store_root,
@@ -410,7 +419,7 @@ async fn a_corrupt_published_tool_version_marks_python_unavailable_and_keeps_the
         .pop()
         .expect("one package");
     let published = paths
-        .environment_store_root_for(&ConversationId::new("conv-81"))
+        .environment_store_root_for(&ConversationId::new("conversation-standalone"))
         .join("m7-tools/tool-versions")
         .join(package.tool_version_id.as_str());
     std::fs::create_dir_all(published.join("source")).expect("published source");
@@ -504,7 +513,6 @@ mod mcp {
     /// `bad` (a program that does not exist).
     fn session_with_two_servers(program: &str, args: &[String]) -> String {
         serde_json::json!({
-            "conversationId": "conv-81-mcp",
             "agentId": "agent-81",
             "model": {"model": "local/composed-model"},
             "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
@@ -614,7 +622,6 @@ mod mcp {
         let args =
             fixture::fixture_spawn_args("mcp::no_shared_mcp_revision_is_unavailable_not_fatal");
         let session = serde_json::json!({
-            "conversationId": "conv-81-nooverlap",
             "agentId": "agent-81",
             "model": {"model": "local/composed-model"},
             "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
@@ -682,7 +689,6 @@ mod mcp {
             "mcp::an_oversized_mcp_diagnostic_is_bounded_before_authoritative_state",
         );
         let session = serde_json::json!({
-            "conversationId": "conv-81-bounded",
             "agentId": "agent-81",
             "model": {"model": "local/composed-model"},
             "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
@@ -819,7 +825,6 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
     std::fs::write(root.path().join("models.json"), MODELS_JSON).expect("models.json");
     // ... and an MCP server whose program does not exist.
     let session = serde_json::json!({
-        "conversationId": "conv-81-process",
         "agentId": "agent-81",
         "model": {"model": "local/composed-model"},
         "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
@@ -831,14 +836,14 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
             },
         },
     });
-    std::fs::write(root.path().join("session.json"), session.to_string()).expect("session.json");
+    std::fs::write(root.path().join("rustx.json"), session.to_string()).expect("rustx.json");
 
     let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_rustx"));
     command
         .arg("--models")
         .arg(root.path().join("models.json"))
-        .arg("--session")
-        .arg(root.path().join("session.json"))
+        .arg("--config")
+        .arg(root.path().join("rustx.json"))
         .arg("--workspace")
         .arg(&workspace)
         .arg("--runtime-root")

@@ -9,6 +9,7 @@ mod input;
 
 use futures_util::future::BoxFuture;
 use std::fmt::Write as _;
+use std::path::Path;
 
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::{MAX_READ_LINES, NATIVE_FILE_TOOL_MAX_BYTES};
@@ -57,7 +58,21 @@ fn run_read(
         Ok(input) => input,
         Err(error) => return failed_result(error),
     };
-    let target = interpret_path(context.workspace.root(), &input.path);
+    let input_path = Path::new(&input.path);
+    let target = if is_virtual_skill_path(input_path) {
+        let Some(resources) = context.skill_resources else {
+            return failed_result("the runtime Skill resource namespace is unavailable");
+        };
+        let Some(target) = resources.resolve(input_path) else {
+            return failed_result(format!(
+                "Skill resource {} is not available in the current capability snapshot",
+                input.path
+            ));
+        };
+        target.to_path_buf()
+    } else {
+        interpret_path(context.workspace.root(), &input.path)
+    };
     let bytes = match std::fs::read(&target) {
         Ok(bytes) => bytes,
         Err(error) => return failed_result(format!("cannot read {}: {error}", target.display())),
@@ -143,6 +158,19 @@ fn run_read(
     )
 }
 
+fn is_virtual_skill_path(path: &Path) -> bool {
+    let mut components = path.components();
+    matches!(
+        components.next(),
+        Some(std::path::Component::Normal(component))
+            if component.to_str() == Some(".rustx")
+    ) && matches!(
+        components.next(),
+        Some(std::path::Component::Normal(component))
+            if component.to_str() == Some("skills")
+    )
+}
+
 struct ReadProjection<'a> {
     lines: Vec<&'a str>,
     shown_lines: usize,
@@ -225,4 +253,95 @@ fn truncate_head<'a>(lines: &[&'a str]) -> ReadProjection<'a> {
 
 fn format_size(bytes: usize) -> String {
     format!("{}.{:01}KB", bytes / 1024, bytes % 1024 * 10 / 1024)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::{NAME, ReadTool};
+    use crate::runtime::identity::{ConversationId, ToolCallId, ToolId};
+    use crate::skills::{SkillDiscovery, SkillDiscoveryConfig, SkillSnapshot};
+    use crate::tools::artifacts::ArtifactStore;
+    use crate::tools::environment::ToolEnvironment;
+    use crate::tools::executor::{ProgressReporter, ToolExecutionContext, ToolExecutor};
+    use crate::tools::managed_output::ManagedToolOutput;
+    use crate::tools::types::{
+        ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolProgress, ToolResultContent,
+    };
+    use crate::tools::workspace::Workspace;
+
+    struct NoProgress;
+
+    impl ProgressReporter for NoProgress {
+        fn report(&self, _progress: ToolProgress) {}
+    }
+
+    #[tokio::test]
+    async fn resolves_virtual_skill_resources_through_runtime_owned_read() {
+        let directory = tempfile::tempdir().expect("temporary root");
+        let workspace = Workspace::new(directory.path()).expect("workspace");
+        let skill_root = directory.path().join("configured-skills");
+        let skill = skill_root.join("release-guide");
+        std::fs::create_dir_all(&skill).expect("Skill root");
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: release-guide\ndescription: Release guidance.\n---\nprocedure\n",
+        )
+        .expect("SKILL.md");
+        let packages = SkillDiscovery::with_config(
+            &workspace,
+            SkillDiscoveryConfig {
+                automatic_roots: Vec::new(),
+                explicit_paths: vec![skill_root],
+            },
+        )
+        .discover()
+        .expect("Skill discovery");
+        let snapshot = SkillSnapshot::new(packages.into_iter().map(Arc::new).collect());
+
+        let conversation_id = ConversationId::new("read-skill");
+        let artifacts_root = directory.path().join("artifacts");
+        let artifacts =
+            ArtifactStore::new(conversation_id.clone(), &artifacts_root).expect("artifacts");
+        let tool_output =
+            ManagedToolOutput::new(conversation_id.clone(), artifacts_root.join("tool-output"))
+                .expect("managed output");
+        let progress = NoProgress;
+        let environment = ToolEnvironment::new();
+        let context = ToolExecutionContext {
+            conversation_id: &conversation_id,
+            execution_id: None,
+            cancellation: crate::runtime::ExecutionCancellation::detached(
+                crate::runtime::CancellationSignal::new(),
+                crate::runtime::types::CancellationReason::UserRequested,
+            ),
+            workspace: &workspace,
+            progress: &progress,
+            artifacts: &artifacts,
+            tool_output: &tool_output,
+            environment: &environment,
+            skill_resources: Some(snapshot.resources()),
+        };
+        let result = ReadTool
+            .execute(
+                ToolInvocation {
+                    call_id: ToolCallId::new("read-skill-call"),
+                    tool_id: ToolId::new("tool-read"),
+                    tool_name: NAME.to_owned(),
+                    mode: ToolInvocationMode::Foreground,
+                    arguments: serde_json::json!({
+                        "path": ".rustx/skills/release-guide/SKILL.md"
+                    }),
+                },
+                context,
+            )
+            .await;
+
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+        let Some(ToolResultContent::Text(text)) = result.content.first() else {
+            panic!("Read returned unexpected content: {result:?}");
+        };
+        assert!(text.text.contains("procedure"));
+    }
 }

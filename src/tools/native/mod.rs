@@ -156,13 +156,32 @@ pub fn register_native_tools(
     resources: NativeToolResources,
     policies: NativeToolPolicies,
 ) -> Result<(), ToolRegistryError> {
+    // The explicit composition of the native tool plane: every entry is a
+    // tool-owned registration, and this list is the only place that knows
+    // which native capabilities exist.
+    for registration in native_tool_registrations(resources, policies) {
+        let NativeToolRegistration {
+            definition,
+            executor,
+            normalizer,
+        } = registration;
+        registry.register_with_argument_normalizer(definition, executor, normalizer)?;
+    }
+    Ok(())
+}
+
+/// Builds every native Tool registration without activating any of them.
+///
+/// The capability coordinator uses this internal seam to keep all native
+/// tools available while applying the current startup activation policy.
+pub(crate) fn native_tool_registrations(
+    resources: NativeToolResources,
+    policies: NativeToolPolicies,
+) -> Vec<NativeToolRegistration> {
     let NativeToolResources {
         background,
         subagents,
     } = resources;
-    // The explicit composition of the native tool plane: every entry is a
-    // tool-owned registration, and this list is the only place that knows
-    // which native capabilities exist.
     let mut registrations = vec![
         background_task::registration(background),
         read::registration(policies.read),
@@ -177,15 +196,7 @@ pub fn register_native_tools(
     if let Some(subagents) = subagents {
         registrations.push(subagent::registration(subagents));
     }
-    for NativeToolRegistration {
-        definition,
-        executor,
-        normalizer,
-    } in registrations
-    {
-        registry.register_with_argument_normalizer(definition, executor, normalizer)?;
-    }
-    Ok(())
+    registrations
 }
 
 /// Registers exactly the deny-by-construction capability set of a subagent

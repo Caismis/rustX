@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use crate::conversation::SurfaceRevision;
 use crate::message::types::UserContentBlock;
+use crate::model::session::SessionModelConfig;
 use crate::runtime::conversation_runtime::{ConversationRuntime, ShutdownError};
 use crate::runtime::identity::MessageId;
 use crate::runtime_client::host::{RuntimeClientSessionControl, SessionControlFuture};
@@ -76,6 +77,8 @@ enum RuntimeAttachmentState {
 
 struct SupervisorState {
     catalog: SessionCatalog,
+    /// Current runtime default used only when creating a new Session.
+    default_model: SessionModelConfig,
     runtime: RuntimeAttachmentState,
 }
 
@@ -97,10 +100,11 @@ impl LocalSessionSupervisor {
     /// Creates a supervisor over a loaded native catalog. The active runtime
     /// is installed by the local product composition after ordinary recovery.
     #[must_use]
-    pub fn new(catalog: SessionCatalog) -> Self {
+    pub fn new(catalog: SessionCatalog, default_model: SessionModelConfig) -> Self {
         Self {
             state: Arc::new(tokio::sync::Mutex::new(SupervisorState {
                 catalog,
+                default_model,
                 runtime: RuntimeAttachmentState::NotInstalled,
             })),
         }
@@ -249,7 +253,9 @@ impl LocalSessionSupervisor {
     pub async fn new_session(&self) -> Result<SessionSwitchResult, SessionSupervisorError> {
         let mut state = self.state.lock().await;
         ensure_live(&state.runtime)?;
-        let (_, _, template) = state.catalog.active_lineage()?;
+        let template = super::session::SessionPersistentState {
+            model: state.default_model.clone(),
+        };
         let prepared = state.catalog.prepare_session(&template, &[])?;
         let origin = super::session::SessionNodeOrigin::New;
         state

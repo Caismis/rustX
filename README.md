@@ -35,10 +35,10 @@ production maturity.
 
 ## Quick start
 
-The runtime takes four explicit startup paths; it does not discover
-configuration from the current directory or from `~/.rustx`. Configure
+The runtime takes four explicit startup paths; it does not discover its
+runtime/project configuration from the current directory. Configure
 `examples/local-runtime/models.json` and
-`examples/local-runtime/session.json` in place, or copy the complete
+`examples/local-runtime/rustx.json` in place, or copy the complete
 `examples/local-runtime/` directory and adjust the paths below.
 
 The copyable example requires the Rust toolchain, Node LTS with nvm and
@@ -65,7 +65,7 @@ Launch the reference client with the example paths:
 pnpm --dir tui start \
   --binary "$PWD/target/debug/rustx" \
   --models "$PWD/examples/local-runtime/models.json" \
-  --session "$PWD/examples/local-runtime/session.json" \
+  --config "$PWD/examples/local-runtime/rustx.json" \
   --workspace "$PWD/examples/local-runtime/workspace" \
   --runtime-root "$PWD/examples/local-runtime/.rustx"
 ```
@@ -74,6 +74,15 @@ The example endpoint is a placeholder. Replace it with the endpoint for the
 selected provider before making a model request. The full configuration
 contract and custom Python-tool example are in
 [`examples/local-runtime/README.md`](examples/local-runtime/README.md).
+
+`--config rustx.json` is the current runtime/project configuration. Durable
+Session state lives separately under `--runtime-root`: it retains Session
+identity/history and the explicitly selected Session model, but never
+resurrects historical MCP, Tool, Skill, context, timezone, environment, or
+other launch-scoped settings. Runtime capability inspection reports available
+Tools separately from active model-visible Tools. The current roadmap is
+#96's configuration and activation foundation, followed by #100 approval/HITL,
+#98 Execution Modes, and #99 finer-grained capability leases.
 
 ## Runtime and reference client
 

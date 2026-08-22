@@ -22,6 +22,8 @@ pub enum CapabilityPreparationError {
     Mcp(String),
     /// The composed canonical registry was rejected as invalid or colliding.
     ToolRegistry(String),
+    /// Startup Tool activation selection was unknown, ambiguous, or invalid.
+    ToolActivation(String),
     /// Preparation was requested after the owning conversation runtime
     /// closed new capability admission.
     ConversationInactive,
@@ -40,6 +42,7 @@ impl core::fmt::Display for CapabilityPreparationError {
             Self::Environment(error) => write!(f, "{error}"),
             Self::Mcp(error) => write!(f, "MCP preparation failed: {error}"),
             Self::ToolRegistry(error) => write!(f, "tool registry composition failed: {error}"),
+            Self::ToolActivation(error) => write!(f, "tool activation failed: {error}"),
             Self::ConversationInactive => write!(
                 f,
                 "capability preparation is closed because the conversation runtime is draining"

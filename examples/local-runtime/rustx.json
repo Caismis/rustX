@@ -1,6 +1,5 @@
 {
-  "schemaVersion": 1,
-  "conversationId": "local-runtime-example",
+  "schemaVersion": 2,
   "agentId": "default-agent",
   "model": {
     "model": "example/demo-model",
@@ -47,6 +46,17 @@
   },
   "mcpServers": {},
   "mcpToolPolicies": {},
+  "defaultTools": [
+    "background_task",
+    "read",
+    "write",
+    "edit",
+    "glob",
+    "grep",
+    "bash",
+    "subagent"
+  ],
+  "skills": [],
   "environment": {
     "RUSTX_EXAMPLE_MODE": "local-runtime"
   }

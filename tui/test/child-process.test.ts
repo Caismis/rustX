@@ -24,7 +24,7 @@ chmodSync(FAKE_RUNTIME, 0o755);
 
 const PATHS: RuntimePaths = {
   models: "/models.json",
-  session: "/session.json",
+  config: "/rustx.json",
   workspace: "/ws",
   runtimeRoot: "/private",
 };
@@ -58,8 +58,8 @@ describe("ChildRuntimeProcess", () => {
     assert.deepEqual(JSON.parse((await output).trim()), [
       "--models",
       "/models.json",
-      "--session",
-      "/session.json",
+      "--config",
+      "/rustx.json",
       "--workspace",
       "/ws",
       "--runtime-root",

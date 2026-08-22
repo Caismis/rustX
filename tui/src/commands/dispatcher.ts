@@ -385,7 +385,7 @@ export class CommandDispatcher {
    * With no argument it opens the searchable selector over the runtime's
    * `model_catalog_get` result. With `show` it renders the projection's own
    * model view. With a model reference it reads the catalog and replaces the
-   * whole session configuration through `model_set`. It never parses a
+   * whole runtime configuration through `model_set`. It never parses a
    * provider catalog file, never touches a provider SDK, and never resolves
    * an API key.
    */

@@ -5,7 +5,7 @@
 //! explicit startup configuration
 //!         |
 //!         v
-//! ModelCatalog + LocalConversationConfig
+//! ModelCatalog + CurrentRuntimeConfig + SessionPersistentState
 //!         |
 //!         +--> authoritative session model state
 //!         +--> immutable resolved model bindings
@@ -70,7 +70,7 @@
 //! The boundary is ownership. Failures that prove the core runtime itself
 //! cannot be constructed remain fatal composition errors: unreadable or
 //! invalid startup files, model catalog/credential/binding failures, an
-//! invalid session configuration, workspace/private-store ownership
+//! invalid current runtime configuration, workspace/private-store ownership
 //! violations, native tool plane construction, and structurally invalid
 //! capability-plane configuration (a workspace-overlapping environment
 //! store, a malformed Skill, a dependency conflict, shared environment
@@ -100,7 +100,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::capabilities::{CapabilityCoordinator, CapabilityCoordinatorConfig};
+use crate::capabilities::{
+    CapabilityCoordinator, CapabilityCoordinatorConfig, ToolActivationPolicy,
+};
 use crate::context::{DefaultTokenEstimator, TokenEstimator};
 use crate::message::content::TextBlock;
 use crate::message::types::{MessageBlock, SystemAuthority, SystemMessageBlock};
@@ -113,17 +115,19 @@ use crate::runtime::conversation_runtime::{
     ConversationContextConfig, ConversationRuntime, ConversationRuntimeError,
     RuntimeConversationConfig,
 };
+use crate::runtime::identity::ConversationId;
 use crate::runtime_client::endpoint::RuntimeClientEndpoint;
 use crate::runtime_client::host::{
     HostConstructionError, RuntimeClientHost, RuntimeClientHostConfig, RuntimeClientSessionControl,
 };
+use crate::skills::SkillDiscoveryConfig;
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::executor::ToolRegistry;
 use crate::tools::native::{NativeToolResources, register_native_tools};
 use crate::tools::runtime::ConversationToolRuntime;
 
-use super::config::{LocalConversationConfig, LocalConversationConfigError};
-use super::session::{SessionCatalog, SessionError};
+use super::config::{CurrentRuntimeConfig, CurrentRuntimeConfigError};
+use super::session::{SessionCatalog, SessionError, SessionPersistentState};
 use super::supervisor::{LocalSessionSupervisor, SessionSupervisorError};
 
 /// The explicit startup paths of one local runtime process.
@@ -133,9 +137,21 @@ use super::supervisor::{LocalSessionSupervisor, SessionSupervisorError};
 pub struct LocalRuntimePaths {
     /// The model catalog (`models.json`) path.
     pub models: PathBuf,
-    /// The bootstrap conversation configuration path. Once a native Session
-    /// catalog exists, the catalog and graph are authoritative.
-    pub session: PathBuf,
+    /// The current runtime/project configuration path. It is read on every
+    /// process start, including Session resume.
+    pub config: PathBuf,
+    /// Repeatable explicit Skill package/root paths from the command line.
+    pub skill_paths: Vec<PathBuf>,
+    /// Disable automatic/default Skill roots while retaining explicit paths.
+    pub no_skills: bool,
+    /// Disable native/built-in tools from startup activation.
+    pub no_builtin_tools: bool,
+    /// Disable every active Tool while retaining available metadata.
+    pub no_tools: bool,
+    /// Strict startup Tool allowlist, when supplied.
+    pub tools: Option<Vec<String>>,
+    /// Final startup Tool exclusions.
+    pub exclude_tools: Vec<String>,
     /// The model-visible workspace root.
     pub workspace: PathBuf,
     /// The runtime-private root from which disjoint private subdirectories
@@ -240,20 +256,34 @@ impl LocalConversationCore {
         paths: &LocalRuntimePaths,
         dependencies: &LocalRuntimeDependencies,
     ) -> Result<Self, LocalRuntimeError> {
-        // 1. Read the explicit startup files.
-        let session_bytes = read_file(&paths.session)?;
-        let session = LocalConversationConfig::from_json_slice(&session_bytes)?;
-        Self::compose_from_config(paths, dependencies, session, paths.artifacts_root()).await
+        // This low-level path has no SessionCatalog control surface. It uses
+        // one deterministic standalone lineage so repeated composition over
+        // the same runtime root still recovers the same durable conversation.
+        let config_bytes = read_file(&paths.config)?;
+        let runtime_config = CurrentRuntimeConfig::from_json_slice(&config_bytes)?;
+        Self::compose_from_config(
+            paths,
+            dependencies,
+            runtime_config.clone(),
+            SessionPersistentState {
+                model: runtime_config.model.clone(),
+            },
+            ConversationId::new("conversation-standalone"),
+            paths.artifacts_root(),
+        )
+        .await
     }
 
-    /// Composes one selected native `SessionNode`'s linear conversation using
-    /// the same semantic runtime stack as the low-level path. The caller
-    /// supplies the node's persisted configuration and private artifact root;
-    /// this method never reads or writes `SessionCatalog` state.
+    /// Composes one selected native `SessionNode`'s linear conversation from
+    /// current runtime configuration plus the Session-local persistent state.
+    /// This method never reads or writes `SessionCatalog` state.
+    #[allow(clippy::too_many_lines)]
     pub(crate) async fn compose_from_config(
         paths: &LocalRuntimePaths,
         dependencies: &LocalRuntimeDependencies,
-        session: LocalConversationConfig,
+        runtime_config: CurrentRuntimeConfig,
+        session_state: SessionPersistentState,
+        conversation_id: ConversationId,
         artifacts_root: PathBuf,
     ) -> Result<Self, LocalRuntimeError> {
         // 1. Read the explicit model catalog. Session selection is already
@@ -267,25 +297,31 @@ impl LocalConversationCore {
         let resolved = catalog.resolve(dependencies.credentials.as_ref())?;
         let registry = ModelBindingRegistry::new(resolved)?;
 
-        // The session model state resolves and validates the initial
-        // selection now, so an unusable model fails startup rather than the
-        // first attempt.
-        let model = SessionModelState::new(registry, session.model.clone())?;
+        // Validate the current runtime default even when an existing Session
+        // supplies a different persisted model. A resume may preserve the
+        // Session-local choice, but it must never make an unusable current
+        // runtime configuration silently disappear.
+        SessionModelState::new(registry.clone(), runtime_config.model.clone())?;
+
+        // The Session model state resolves and validates the selected
+        // Session-local choice now, so an unusable model fails startup rather
+        // than the first attempt.
+        let model = SessionModelState::new(registry, session_state.model.clone())?;
 
         // 5-6. The conversation identity authority and the one conversation
         // tool runtime (workspace, runtime-private artifact root, canonical
         // mailbox, background registry, base authorized environment).
-        let base_environment = session.tool_environment()?;
-        let mut runtime_config = crate::tools::runtime::ConversationRuntimeConfig::new(
+        let base_environment = runtime_config.tool_environment()?;
+        let mut tool_runtime_config = crate::tools::runtime::ConversationRuntimeConfig::new(
             &paths.workspace,
             artifacts_root.clone(),
         );
-        runtime_config.environment = Some(base_environment.clone());
+        tool_runtime_config.environment = Some(base_environment.clone());
         let tool_runtime =
-            ConversationToolRuntime::from_config(session.conversation_id.clone(), runtime_config)
+            ConversationToolRuntime::from_config(conversation_id.clone(), tool_runtime_config)
                 .map_err(|error| LocalRuntimeError::ToolRuntime {
-                detail: format!("{error:?}"),
-            })?;
+                    detail: format!("{error:?}"),
+                })?;
 
         // 7-8. The base tool registry with the explicit native composition,
         // using *this* conversation's background registry for the
@@ -294,7 +330,7 @@ impl LocalConversationCore {
         let subagents = crate::runtime::subagent::SubagentRegistry::new(
             crate::runtime::subagent::SubagentRegistryConfig {
                 conversation_id: tool_runtime.conversation_id().clone(),
-                agent_id: session.agent_id.clone(),
+                agent_id: runtime_config.agent_id.clone(),
                 mailbox: tool_runtime.mailbox(),
                 clock: Arc::new(crate::runtime::types::SystemClock),
                 spawn: crate::runtime::subagent::SubagentSpawnPlan {
@@ -305,9 +341,9 @@ impl LocalConversationCore {
                     models: paths.models.clone(),
                     workspace: paths.workspace.clone(),
                     runtime_root: artifacts_root.clone(),
-                    model: session.model.clone(),
-                    timezone: session.timezone,
-                    context: session.context_policy(),
+                    model: session_state.model.clone(),
+                    timezone: runtime_config.timezone,
+                    context: runtime_config.context_policy(),
                 },
                 max_active: 4,
             },
@@ -319,11 +355,29 @@ impl LocalConversationCore {
                 background: tool_runtime.background().clone(),
                 subagents: Some(subagents.clone()),
             },
-            session.native_tools.to_policies(),
+            runtime_config.native_tools.to_policies(),
         )
         .map_err(|error| LocalRuntimeError::NativeTools {
             detail: format!("{error:?}"),
         })?;
+
+        let mut skill_discovery =
+            SkillDiscoveryConfig::default_for_workspace(tool_runtime.workspace());
+        if paths.no_skills {
+            skill_discovery.automatic_roots.clear();
+        }
+        skill_discovery.explicit_paths.extend(
+            runtime_config
+                .skills
+                .iter()
+                .map(|path| resolve_workspace_path(&paths.workspace, path)),
+        );
+        skill_discovery.explicit_paths.extend(
+            paths
+                .skill_paths
+                .iter()
+                .map(|path| resolve_workspace_path(&paths.workspace, path)),
+        );
 
         // 9. The capability coordinator over the same conversation and
         // workspace, the same base registry, and the same base environment.
@@ -331,9 +385,17 @@ impl LocalConversationCore {
             conversation_id: tool_runtime.conversation_id().clone(),
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: Arc::new(base_registry),
-            mcp_servers: session.mcp_bindings()?,
+            tool_activation: ToolActivationPolicy {
+                default_tools: Some(runtime_config.default_tools.clone()),
+                no_builtin_tools: paths.no_builtin_tools,
+                no_tools: paths.no_tools,
+                tools: paths.tools.clone(),
+                exclude_tools: paths.exclude_tools.clone(),
+            },
+            skill_discovery,
+            mcp_servers: runtime_config.mcp_bindings()?,
             base_environment,
-            environment_store_root: paths.environment_store_root_for(&session.conversation_id),
+            environment_store_root: paths.environment_store_root_for(&conversation_id),
         })
         .map_err(|error| LocalRuntimeError::Capability {
             detail: format!("{error:?}"),
@@ -374,11 +436,11 @@ impl LocalConversationCore {
         // **inactive**: the final composition path activates it after the
         // optional Runtime Client host binds.
         let runtime = ConversationRuntime::new(RuntimeConversationConfig {
-            agent_id: session.agent_id.clone(),
+            agent_id: runtime_config.agent_id.clone(),
             model,
-            timezone: session.timezone,
+            timezone: runtime_config.timezone,
             context: ConversationContextConfig {
-                policy: session.context_policy(),
+                policy: runtime_config.context_policy(),
                 estimator: Arc::clone(&dependencies.estimator),
                 status_composer: crate::context::AgentStatusComposer::default(),
             },
@@ -405,7 +467,7 @@ impl LocalConversationCore {
     /// differences made explicit and deny-by-construction:
     ///
     /// - the startup input is the typed [`SubagentChildSpec`], never a
-    ///   session configuration file;
+    ///   current runtime configuration file;
     /// - the base tool registry is exactly the profile's read-only set
     ///   (`Read`/`Glob`/`Grep`), registered through
     ///   [`register_subagent_child_tools`];
@@ -446,8 +508,8 @@ impl LocalConversationCore {
         // read-only workspace and the child-private runtime root. The
         // child authorizes no environment entries.
         let base_environment = ToolEnvironment::from_authorized(std::iter::empty())
-            .map_err(LocalConversationConfigError::Environment)
-            .map_err(LocalRuntimeError::Session)?;
+            .map_err(CurrentRuntimeConfigError::Environment)
+            .map_err(LocalRuntimeError::RuntimeConfig)?;
         let mut runtime_config = crate::tools::runtime::ConversationRuntimeConfig::new(
             &spec.workspace,
             spec.runtime_root.join("artifacts"),
@@ -477,6 +539,8 @@ impl LocalConversationCore {
             conversation_id: tool_runtime.conversation_id().clone(),
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: Arc::new(base_registry),
+            tool_activation: ToolActivationPolicy::default(),
+            skill_discovery: SkillDiscoveryConfig::default(),
             mcp_servers: crate::tools::mcp::McpServerBindings::default(),
             base_environment,
             environment_store_root: spec.runtime_root.join("environments"),
@@ -650,14 +714,16 @@ impl LocalSessionProduct {
         paths: &LocalRuntimePaths,
         dependencies: &LocalRuntimeDependencies,
     ) -> Result<Self, LocalRuntimeError> {
-        let bootstrap_bytes = read_file(&paths.session)?;
-        let bootstrap = LocalConversationConfig::from_json_slice(&bootstrap_bytes)?;
-        let catalog = SessionCatalog::open(&paths.runtime_root, &bootstrap)
+        // The current runtime/project configuration is always parsed before
+        // opening the durable catalog. A valid existing Session can never
+        // make an invalid or stale current config disappear.
+        let config_bytes = read_file(&paths.config)?;
+        let runtime_config = CurrentRuntimeConfig::from_json_slice(&config_bytes)?;
+        let catalog = SessionCatalog::open(&paths.runtime_root, &runtime_config.model)
             .map_err(LocalRuntimeError::SessionCatalog)?;
-        let (session_id, node, mut config) = catalog
+        let (session_id, node, session_state) = catalog
             .active_lineage()
             .map_err(LocalRuntimeError::SessionCatalog)?;
-        config.conversation_id = node.conversation_id.clone();
         let database_path = catalog.database_path(&session_id, &node.conversation_id);
         let artifacts_root = database_path
             .parent()
@@ -668,10 +734,19 @@ impl LocalSessionProduct {
             })?
             .to_path_buf();
 
-        let supervisor = Arc::new(LocalSessionSupervisor::new(catalog));
-        let core =
-            LocalConversationCore::compose_from_config(paths, dependencies, config, artifacts_root)
-                .await?;
+        let supervisor = Arc::new(LocalSessionSupervisor::new(
+            catalog,
+            runtime_config.model.clone(),
+        ));
+        let core = LocalConversationCore::compose_from_config(
+            paths,
+            dependencies,
+            runtime_config,
+            session_state,
+            node.conversation_id,
+            artifacts_root,
+        )
+        .await?;
         let runtime = core.into_interactive_with_session_control(supervisor.clone())?;
         supervisor
             .install_runtime(runtime.runtime().clone())
@@ -841,6 +916,14 @@ fn read_file(path: &Path) -> Result<Vec<u8>, LocalRuntimeError> {
     })
 }
 
+fn resolve_workspace_path(workspace: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        workspace.join(path)
+    }
+}
+
 /// A local runtime composition failure.
 ///
 /// Every variant is a *startup configuration* failure surfaced on stderr
@@ -858,8 +941,8 @@ pub enum LocalRuntimeError {
     Catalog(ModelCatalogError),
     /// A model binding or the initial session model could not be resolved.
     Model(ModelInvocationError),
-    /// The local session configuration is invalid.
-    Session(LocalConversationConfigError),
+    /// The current runtime/project configuration is invalid.
+    RuntimeConfig(CurrentRuntimeConfigError),
     /// The conversation tool runtime could not be constructed.
     ToolRuntime {
         /// The failure detail.
@@ -896,7 +979,7 @@ impl std::fmt::Display for LocalRuntimeError {
             Self::Io { path, detail } => write!(f, "cannot read {}: {detail}", path.display()),
             Self::Catalog(error) => write!(f, "model catalog: {error}"),
             Self::Model(error) => write!(f, "session model: {error}"),
-            Self::Session(error) => write!(f, "{error}"),
+            Self::RuntimeConfig(error) => write!(f, "{error}"),
             Self::ToolRuntime { detail } => write!(f, "conversation tool runtime: {detail}"),
             Self::NativeTools { detail } => write!(f, "native tool composition: {detail}"),
             Self::Capability { detail } => write!(f, "capability plane: {detail}"),
@@ -922,9 +1005,9 @@ impl From<ModelInvocationError> for LocalRuntimeError {
     }
 }
 
-impl From<LocalConversationConfigError> for LocalRuntimeError {
-    fn from(error: LocalConversationConfigError) -> Self {
-        Self::Session(error)
+impl From<CurrentRuntimeConfigError> for LocalRuntimeError {
+    fn from(error: CurrentRuntimeConfigError) -> Self {
+        Self::RuntimeConfig(error)
     }
 }
 

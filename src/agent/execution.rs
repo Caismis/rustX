@@ -3004,6 +3004,7 @@ impl<'a> AgentExecution<'a> {
             artifacts: self.tool_runtime.artifacts(),
             tool_output: self.tool_runtime.tool_output(),
             environment: self.capability.snapshot().effective_environment(),
+            skill_resources: Some(self.capability.snapshot().skills().resources()),
         };
         let future = executor.execute(invocation.clone(), context);
         tokio::pin!(future);
@@ -4328,6 +4329,8 @@ mod tests {
                 conversation_id: tool_runtime.conversation_id().clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: tools,
+                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("env-store"),

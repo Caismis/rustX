@@ -88,15 +88,15 @@ cargo build --bin rustx
 pnpm --dir tui start \
   --binary "$PWD/target/debug/rustx" \
   --models "$PWD/examples/local-runtime/models.json" \
-  --session "$PWD/examples/local-runtime/session.json" \
+  --config "$PWD/examples/local-runtime/rustx.json" \
   --workspace "$PWD/examples/local-runtime/workspace" \
   --runtime-root "$PWD/examples/local-runtime/.rustx"
 ```
 
-The four startup paths are passed straight through. The `--session` path is
-only the bootstrap conversation configuration; after startup the native
-SessionCatalog/SessionGraph under `--runtime-root` owns user sessions and
-lineages. **The client never opens,
+The four startup paths are passed straight through. The `--config` path is
+the current runtime/project configuration; after startup the native
+SessionCatalog/SessionGraph under `--runtime-root` owns durable user sessions
+and lineages. **The client never opens,
 parses, or interprets any of them** — `models.json` is a runtime-owned model
 authority, and reading it here would create a second one. Provider credentials
 are resolved by the Rust process from the environment it inherits. For the

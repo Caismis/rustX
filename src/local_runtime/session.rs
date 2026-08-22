@@ -41,12 +41,11 @@ use crate::message::types::{
     AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, ToolMessageBlock,
     UserContentBlock, UserMessageBlock,
 };
+use crate::model::session::SessionModelConfig;
 use crate::runtime::identity::{ConversationId, MessageId, ToolCallId};
 
-use super::config::LocalConversationConfig;
-
 /// The persisted native session-catalog schema.
-pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 1;
+pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 2;
 
 /// The largest page a native Session list request may return.
 pub const SESSION_LIST_PAGE_LIMIT: usize = 32;
@@ -231,8 +230,19 @@ pub(crate) struct PreparedLineage {
     pub(crate) session_id: SessionId,
     pub(crate) node_id: SessionNodeId,
     pub(crate) conversation_id: ConversationId,
-    pub(crate) config: LocalConversationConfig,
+    pub(crate) state: SessionPersistentState,
     pub(crate) database_path: PathBuf,
+}
+
+/// The intentionally small durable state owned by one Session.
+///
+/// Runtime/project configuration is never copied here. The selected model is
+/// the one Session-local user choice that survives restart and resume; all
+/// other execution settings are supplied by the current runtime composition.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) struct SessionPersistentState {
+    pub(crate) model: SessionModelConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -254,9 +264,8 @@ struct PersistedSession {
     updated_at: DateTime<Utc>,
     active_node: SessionNodeId,
     nodes: BTreeMap<SessionNodeId, SessionNode>,
-    /// Runtime configuration is native product state. It is copied when a
-    /// new Session/lineage is prepared, but never interpreted by the TUI.
-    config: LocalConversationConfig,
+    /// Only intentionally Session-local choices are persisted here.
+    state: SessionPersistentState,
 }
 
 /// The native durable `SessionCatalog` and graph authority.
@@ -275,12 +284,12 @@ impl SessionCatalog {
     ///
     /// # Errors
     ///
-    /// Returns [`SessionError`] when the catalog, bootstrap configuration, or
+    /// Returns [`SessionError`] when the catalog, current default model, or
     /// initial private conversation seed cannot be read, validated, or
     /// durably published.
     pub fn open(
         runtime_root: &Path,
-        bootstrap_config: &LocalConversationConfig,
+        default_model: &SessionModelConfig,
     ) -> Result<Self, SessionError> {
         let root = runtime_root.join("sessions");
         fs::create_dir_all(&root).map_err(|error| SessionError::Io {
@@ -307,15 +316,9 @@ impl SessionCatalog {
             });
         }
 
-        bootstrap_config
-            .validate()
-            .map_err(|error| SessionError::Catalog {
-                detail: error.to_string(),
-            })?;
-        validate_id(bootstrap_config.conversation_id.as_str(), "conversation")?;
         let session_id = SessionId::new("session-1");
         let node_id = SessionNodeId::new("node-1");
-        let conversation_id = bootstrap_config.conversation_id.clone();
+        let conversation_id = ConversationId::new("conversation-1");
         let database_path = conversation_database_path(&root, &session_id, &conversation_id);
         initialize_database(&database_path, &conversation_id, &[])?;
         let now = Utc::now();
@@ -337,7 +340,9 @@ impl SessionCatalog {
                 updated_at: now,
                 active_node: node_id,
                 nodes,
-                config: bootstrap_config.clone(),
+                state: SessionPersistentState {
+                    model: default_model.clone(),
+                },
             },
         );
         let document = CatalogDocument {
@@ -484,11 +489,11 @@ impl SessionCatalog {
         Ok(SessionNodePage { nodes, next_offset })
     }
 
-    /// Returns the active Session and node configuration needed by native
-    /// composition. No storage path is part of this public product view.
+    /// Returns the active Session node and its intentionally Session-local
+    /// state. Current runtime configuration is not part of this durable view.
     pub(crate) fn active_lineage(
         &self,
-    ) -> Result<(SessionId, SessionNode, LocalConversationConfig), SessionError> {
+    ) -> Result<(SessionId, SessionNode, SessionPersistentState), SessionError> {
         let session = self
             .document
             .sessions
@@ -504,15 +509,15 @@ impl SessionCatalog {
                     session_id: session.id.clone(),
                     node_id: session.active_node.clone(),
                 })?;
-        Ok((session.id.clone(), node.clone(), session.config.clone()))
+        Ok((session.id.clone(), node.clone(), session.state.clone()))
     }
 
-    /// Returns one named lineage and its conversation configuration.
+    /// Returns one named lineage and its Session-local state.
     pub(crate) fn lineage(
         &self,
         session_id: &SessionId,
         node_id: Option<&SessionNodeId>,
-    ) -> Result<(SessionNode, LocalConversationConfig), SessionError> {
+    ) -> Result<(SessionNode, SessionPersistentState), SessionError> {
         let session =
             self.document
                 .sessions
@@ -528,7 +533,7 @@ impl SessionCatalog {
                 session_id: session_id.clone(),
                 node_id: node_id.clone(),
             })?;
-        Ok((node.clone(), session.config.clone()))
+        Ok((node.clone(), session.state.clone()))
     }
 
     /// Returns the private database path for a known node.
@@ -575,7 +580,7 @@ impl SessionCatalog {
                 .ok_or(SessionError::UnknownSession {
                     session_id: active_session,
                 })?;
-        session.config.model = model;
+        session.state.model = model;
         session.updated_at = Utc::now();
         self.commit(next)
     }
@@ -605,7 +610,7 @@ impl SessionCatalog {
     /// Prepares a new independent Session with a fresh `ConversationId`.
     pub(crate) fn prepare_session(
         &self,
-        template: &LocalConversationConfig,
+        template: &SessionPersistentState,
         seed: &[MessageBlock],
     ) -> Result<PreparedLineage, SessionError> {
         let (session_id, node_id, conversation_id) = self.allocate_ids();
@@ -617,7 +622,7 @@ impl SessionCatalog {
     /// inputs to this preparation.
     pub(crate) fn prepare_clone_session(
         &self,
-        template: &LocalConversationConfig,
+        template: &SessionPersistentState,
         source: &HistoricalConversationSnapshot,
     ) -> Result<PreparedLineage, SessionError> {
         let (session_id, node_id, conversation_id) = self.allocate_ids();
@@ -629,7 +634,7 @@ impl SessionCatalog {
     /// user prompt for uncommitted editor restoration.
     pub(crate) fn prepare_fork_session(
         &self,
-        template: &LocalConversationConfig,
+        template: &SessionPersistentState,
         source: &HistoricalConversationSnapshot,
         message_id: &MessageId,
     ) -> Result<
@@ -668,7 +673,7 @@ impl SessionCatalog {
     pub(crate) fn prepare_tree_node_at_user_message(
         &self,
         session_id: &SessionId,
-        template: &LocalConversationConfig,
+        template: &SessionPersistentState,
         source: &HistoricalConversationSnapshot,
         message_id: &MessageId,
     ) -> Result<
@@ -718,14 +723,12 @@ impl SessionCatalog {
         };
         let seed = remap_seed(&conversation_id, &source.messages[..index])?;
         initialize_database(&database_path, &conversation_id, &seed)?;
-        let mut config = template.clone();
-        config.conversation_id = conversation_id.clone();
         Ok((
             PreparedLineage {
                 session_id: session_id.clone(),
                 node_id,
                 conversation_id,
-                config,
+                state: template.clone(),
                 database_path,
             },
             editor_content,
@@ -734,7 +737,7 @@ impl SessionCatalog {
 
     fn prepare_session_with_ids(
         &self,
-        template: &LocalConversationConfig,
+        template: &SessionPersistentState,
         session_id: SessionId,
         node_id: SessionNodeId,
         conversation_id: ConversationId,
@@ -742,13 +745,11 @@ impl SessionCatalog {
     ) -> Result<PreparedLineage, SessionError> {
         let database_path = conversation_database_path(&self.root, &session_id, &conversation_id);
         initialize_database(&database_path, &conversation_id, seed)?;
-        let mut config = template.clone();
-        config.conversation_id = conversation_id.clone();
         Ok(PreparedLineage {
             session_id,
             node_id,
             conversation_id,
-            config,
+            state: template.clone(),
             database_path,
         })
     }
@@ -862,16 +863,13 @@ impl SessionCatalog {
         let selected_node = node_id
             .cloned()
             .unwrap_or_else(|| session.active_node.clone());
-        session.active_node = selected_node.clone();
-        session.config.conversation_id = session
-            .nodes
-            .get(&selected_node)
-            .ok_or_else(|| SessionError::UnknownNode {
+        if !session.nodes.contains_key(&selected_node) {
+            return Err(SessionError::UnknownNode {
                 session_id: session_id.clone(),
-                node_id: selected_node.clone(),
-            })?
-            .conversation_id
-            .clone();
+                node_id: selected_node,
+            });
+        }
+        session.active_node = selected_node;
         session.updated_at = Utc::now();
         next.active_session = session_id.clone();
         Ok(next)
@@ -916,7 +914,7 @@ impl SessionCatalog {
                 updated_at: now,
                 active_node: prepared.node_id.clone(),
                 nodes,
-                config: prepared.config.clone(),
+                state: prepared.state.clone(),
             },
         );
         next.active_session = prepared.session_id.clone();
@@ -955,7 +953,6 @@ impl SessionCatalog {
                 node_id: parent,
             });
         }
-        session.config.conversation_id = prepared.conversation_id.clone();
         let node = SessionNode {
             id: prepared.node_id.clone(),
             parent: Some(parent),
@@ -1180,13 +1177,7 @@ fn validate_document(document: &CatalogDocument) -> Result<(), SessionError> {
                 detail: format!("session {session_id} has no nodes"),
             });
         }
-        validate_active_config(session_id, session)?;
-        session
-            .config
-            .validate()
-            .map_err(|error| SessionError::Catalog {
-                detail: format!("session {session_id} config: {error}"),
-            })?;
+        validate_active_node(session_id, session)?;
         for (node_id, node) in &session.nodes {
             validate_id(node_id.as_str(), "node")?;
             if node.id != *node_id {
@@ -1240,23 +1231,15 @@ fn validate_document(document: &CatalogDocument) -> Result<(), SessionError> {
     Ok(())
 }
 
-fn validate_active_config(
+fn validate_active_node(
     session_id: &SessionId,
     session: &PersistedSession,
 ) -> Result<(), SessionError> {
-    let Some(active_node) = session.nodes.get(&session.active_node) else {
+    if !session.nodes.contains_key(&session.active_node) {
         return Err(SessionError::Catalog {
             detail: format!(
                 "session {session_id} selects missing node {}",
                 session.active_node
-            ),
-        });
-    };
-    if session.config.conversation_id != active_node.conversation_id {
-        return Err(SessionError::Catalog {
-            detail: format!(
-                "session {session_id} config conversation {} disagrees with active node conversation {}",
-                session.config.conversation_id, active_node.conversation_id
             ),
         });
     }
@@ -1510,14 +1493,15 @@ impl SessionError {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::fs;
 
     use super::{
         CatalogCommitError, HistoricalConversationSnapshot, SessionCatalog, SessionError,
-        SessionNodeOrigin,
+        SessionNodeOrigin, SessionPersistentState,
     };
     use crate::conversation::{SurfaceRevision, SurfaceSpan};
     use crate::durable::{CompactionCommitInput, ConversationStore, SqliteConversationStore};
-    use crate::local_runtime::LocalConversationConfig;
+    use crate::local_runtime::CurrentRuntimeConfig;
     use crate::message::content::TextBlock;
     use crate::message::types::{
         AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, SystemAuthority,
@@ -1530,14 +1514,19 @@ mod tests {
     use tempfile::TempDir;
 
     const CONFIG: &str = r#"{
-        "conversationId": "conversation-root",
         "agentId": "agent-a",
         "model": {"model": "provider/model"},
         "context": {"reserveTokens": 1024, "keepRecentTokens": 4096}
     }"#;
 
-    fn config() -> LocalConversationConfig {
-        LocalConversationConfig::from_json_slice(CONFIG.as_bytes()).expect("valid test config")
+    fn config() -> CurrentRuntimeConfig {
+        CurrentRuntimeConfig::from_json_slice(CONFIG.as_bytes()).expect("valid test config")
+    }
+
+    fn state() -> SessionPersistentState {
+        SessionPersistentState {
+            model: config().model,
+        }
     }
 
     fn text(value: &str) -> UserContentBlock {
@@ -1598,10 +1587,10 @@ mod tests {
         ]
     }
 
-    fn open_catalog() -> (TempDir, SessionCatalog, LocalConversationConfig) {
+    fn open_catalog() -> (TempDir, SessionCatalog, CurrentRuntimeConfig) {
         let directory = tempfile::tempdir().expect("temp directory");
         let config = config();
-        let catalog = SessionCatalog::open(directory.path(), &config).expect("catalog");
+        let catalog = SessionCatalog::open(directory.path(), &config.model).expect("catalog");
         (directory, catalog, config)
     }
 
@@ -1639,7 +1628,7 @@ mod tests {
 
     #[test]
     fn new_and_name_publish_metadata_without_mutating_old_history() {
-        let (_directory, mut catalog, config) = open_catalog();
+        let (_directory, mut catalog, _config) = open_catalog();
         let history = source_history();
         let (source_conversation, source_session, _source_node) =
             append_history(&catalog, &history);
@@ -1647,7 +1636,7 @@ mod tests {
         let before = source_store.load_canonical().expect("source history");
 
         let prepared = catalog
-            .prepare_session(&config, &[])
+            .prepare_session(&state(), &[])
             .expect("prepare new session");
         let new_session_id = prepared.session_id.clone();
         let snapshot = catalog
@@ -1695,10 +1684,10 @@ mod tests {
 
     #[test]
     fn session_list_projection_is_bounded_searchable_and_continuable() {
-        let (_directory, mut catalog, config) = open_catalog();
+        let (_directory, mut catalog, _config) = open_catalog();
         for index in 0..3 {
             let prepared = catalog
-                .prepare_session(&config, &[])
+                .prepare_session(&state(), &[])
                 .expect("prepare paged session");
             catalog
                 .publish_session(
@@ -1744,7 +1733,7 @@ mod tests {
 
     #[test]
     fn tree_and_history_projections_are_bounded_and_continuable() {
-        let (_directory, mut catalog, config) = open_catalog();
+        let (_directory, mut catalog, _config) = open_catalog();
         let history = source_history();
         let (source_conversation, source_session, source_node) = append_history(&catalog, &history);
         let source_store = store_for(&catalog, &source_session, &source_conversation);
@@ -1759,7 +1748,7 @@ mod tests {
         let (prepared, _) = catalog
             .prepare_tree_node_at_user_message(
                 &source_session,
-                &config,
+                &state(),
                 &source,
                 &MessageId::new("source-user-c"),
             )
@@ -1819,9 +1808,60 @@ mod tests {
             .persist_active_model(model.clone())
             .expect("persist model metadata");
 
-        let reopened = SessionCatalog::open(directory.path(), &config).expect("reopen catalog");
-        let (_, _, reopened_config) = reopened.active_lineage().expect("active lineage");
-        assert_eq!(reopened_config.model, model);
+        let reopened =
+            SessionCatalog::open(directory.path(), &config.model).expect("reopen catalog");
+        let (_, _, reopened_state) = reopened.active_lineage().expect("active lineage");
+        assert_eq!(reopened_state.model, model);
+    }
+
+    #[test]
+    fn resume_keeps_explicit_session_model_but_new_catalog_uses_current_default() {
+        let directory = tempfile::tempdir().expect("temporary root");
+        let first = config().model;
+        let mut explicit = first.clone();
+        explicit.model = serde_json::from_value(serde_json::json!("provider/explicit"))
+            .expect("explicit model reference");
+        let mut current = first.clone();
+        current.model = serde_json::from_value(serde_json::json!("provider/current"))
+            .expect("current model reference");
+
+        let mut catalog = SessionCatalog::open(directory.path(), &first).expect("catalog");
+        catalog
+            .persist_active_model(explicit.clone())
+            .expect("persist explicit Session model");
+        let reopened = SessionCatalog::open(directory.path(), &current).expect("resume catalog");
+        let (_, _, resumed) = reopened.active_lineage().expect("resumed lineage");
+        assert_eq!(resumed.model, explicit);
+
+        let new_directory = tempfile::tempdir().expect("new Session root");
+        let fresh = SessionCatalog::open(new_directory.path(), &current).expect("new catalog");
+        let (_, _, fresh_state) = fresh.active_lineage().expect("fresh lineage");
+        assert_eq!(fresh_state.model, current);
+    }
+
+    #[test]
+    fn catalog_serialization_contains_no_current_runtime_configuration() {
+        let directory = tempfile::tempdir().expect("temporary root");
+        let catalog = SessionCatalog::open(directory.path(), &config().model).expect("catalog");
+        let bytes = fs::read(&catalog.path).expect("catalog bytes");
+        let json = String::from_utf8(bytes).expect("catalog UTF-8");
+        assert!(json.contains("\"state\""));
+        assert!(json.contains("\"model\""));
+        for forbidden in [
+            "agent_id",
+            "timezone",
+            "context",
+            "mcp_servers",
+            "native_tools",
+            "environment",
+            "skills",
+            "default_tools",
+        ] {
+            assert!(
+                !json.contains(forbidden),
+                "durable Session state must not persist current runtime field {forbidden:?}"
+            );
+        }
     }
 
     #[test]
@@ -1844,7 +1884,8 @@ mod tests {
             before,
             "a pre-commit failure leaves the in-process document unchanged"
         );
-        let reopened = SessionCatalog::open(directory.path(), &config).expect("reopen catalog");
+        let reopened =
+            SessionCatalog::open(directory.path(), &config.model).expect("reopen catalog");
         assert_eq!(
             reopened.active_snapshot().expect("reopened snapshot"),
             before
@@ -1877,7 +1918,8 @@ mod tests {
             .active_snapshot()
             .expect("committed in-memory snapshot");
         assert_eq!(in_memory.name, "visible but uncertain");
-        let reopened = SessionCatalog::open(directory.path(), &config).expect("reopen catalog");
+        let reopened =
+            SessionCatalog::open(directory.path(), &config.model).expect("reopen catalog");
         assert_eq!(
             reopened.active_snapshot().expect("reopened snapshot").name,
             "visible but uncertain",
@@ -1887,7 +1929,7 @@ mod tests {
 
     #[test]
     fn clone_uses_exact_revision_and_isolates_execution_identity_domains() {
-        let (_directory, mut catalog, config) = open_catalog();
+        let (_directory, mut catalog, _config) = open_catalog();
         let history = source_history();
         let (source_conversation, source_session, source_node) = append_history(&catalog, &history);
         let source_store = store_for(&catalog, &source_session, &source_conversation);
@@ -1901,7 +1943,7 @@ mod tests {
         };
 
         let prepared = catalog
-            .prepare_clone_session(&config, &source_snapshot)
+            .prepare_clone_session(&state(), &source_snapshot)
             .expect("prepare exact clone");
         let destination_session = prepared.session_id.clone();
         let destination_conversation = prepared.conversation_id.clone();
@@ -1980,7 +2022,7 @@ mod tests {
 
     #[test]
     fn failed_clone_and_fork_publication_is_not_visible() {
-        let (_directory, mut catalog, config) = open_catalog();
+        let (_directory, mut catalog, _config) = open_catalog();
         let history = source_history();
         let (source_conversation, source_session, source_node) = append_history(&catalog, &history);
         let source_store = store_for(&catalog, &source_session, &source_conversation);
@@ -1994,7 +2036,7 @@ mod tests {
         };
 
         let clone = catalog
-            .prepare_clone_session(&config, &source)
+            .prepare_clone_session(&state(), &source)
             .expect("prepare clone");
         catalog.arm_write_fault_before_rename();
         assert!(matches!(
@@ -2022,7 +2064,7 @@ mod tests {
         );
 
         let (fork, _) = catalog
-            .prepare_fork_session(&config, &source, &MessageId::new("source-user-c"))
+            .prepare_fork_session(&state(), &source, &MessageId::new("source-user-c"))
             .expect("prepare fork");
         catalog.arm_write_fault_before_rename();
         assert!(matches!(
@@ -2052,7 +2094,7 @@ mod tests {
 
     #[test]
     fn clone_and_fork_use_retained_surface_revision_after_real_compaction() {
-        let (_directory, catalog, config) = open_catalog();
+        let (_directory, catalog, _config) = open_catalog();
         let history = source_history();
         let (source_conversation, source_session, _source_node) =
             append_history(&catalog, &history);
@@ -2092,7 +2134,7 @@ mod tests {
         assert_eq!(retained.messages.len(), history.len());
 
         let prepared_clone = catalog
-            .prepare_clone_session(&config, &retained)
+            .prepare_clone_session(&state(), &retained)
             .expect("clone retained revision");
         let clone_store = store_for(
             &catalog,
@@ -2106,7 +2148,7 @@ mod tests {
         );
 
         let (prepared_fork, editor_content) = catalog
-            .prepare_fork_session(&config, &retained, &MessageId::new("source-user-c"))
+            .prepare_fork_session(&state(), &retained, &MessageId::new("source-user-c"))
             .expect("fork retained revision");
         assert_eq!(editor_content, vec![text("C")]);
         let fork_store = store_for(
@@ -2123,7 +2165,7 @@ mod tests {
 
     #[test]
     fn fork_seeds_before_user_and_returns_uncommitted_prompt() {
-        let (_directory, catalog, config) = open_catalog();
+        let (_directory, catalog, _config) = open_catalog();
         let history = source_history();
         let (source_conversation, source_session, _source_node) =
             append_history(&catalog, &history);
@@ -2138,7 +2180,7 @@ mod tests {
         };
 
         let (prepared, editor_content) = catalog
-            .prepare_fork_session(&config, &source, &MessageId::new("source-user-c"))
+            .prepare_fork_session(&state(), &source, &MessageId::new("source-user-c"))
             .expect("prepare fork");
         assert_eq!(editor_content, vec![text("C")]);
         let destination_store =
@@ -2168,7 +2210,7 @@ mod tests {
 
     #[test]
     fn tree_branch_is_a_distinct_linear_node_and_failed_publication_is_invisible() {
-        let (_directory, mut catalog, config) = open_catalog();
+        let (_directory, mut catalog, _config) = open_catalog();
         let history = source_history();
         let (source_conversation, source_session, source_node) = append_history(&catalog, &history);
         let source_store = store_for(&catalog, &source_session, &source_conversation);
@@ -2183,7 +2225,7 @@ mod tests {
 
         let before_failed = catalog.snapshot(&source_session).expect("source snapshot");
         let failed = catalog
-            .prepare_session(&config, &[])
+            .prepare_session(&state(), &[])
             .expect("prepare private destination");
         std::fs::remove_file(&failed.database_path).expect("remove private seed");
         assert!(matches!(
@@ -2200,7 +2242,7 @@ mod tests {
         let (prepared, _editor) = catalog
             .prepare_tree_node_at_user_message(
                 &source_session,
-                &config,
+                &state(),
                 &source,
                 &MessageId::new("source-user-c"),
             )
@@ -2247,7 +2289,7 @@ mod tests {
         // after a tree branch must not reuse the branch's globally unique
         // SessionNodeId.
         let new_session = catalog
-            .prepare_session(&config, &[])
+            .prepare_session(&state(), &[])
             .expect("prepare new session after tree branch");
         assert_ne!(new_session.node_id, snapshot.active_node);
         catalog
@@ -2266,7 +2308,7 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn tree_nodes_switch_between_independent_lineages_without_rewind() {
-        let (_directory, mut catalog, config) = open_catalog();
+        let (_directory, mut catalog, _config) = open_catalog();
         let history = source_history();
         let (source_conversation, source_session, source_node) = append_history(&catalog, &history);
         let source_store = store_for(&catalog, &source_session, &source_conversation);
@@ -2282,7 +2324,7 @@ mod tests {
         let (prepared_a, _) = catalog
             .prepare_tree_node_at_user_message(
                 &source_session,
-                &config,
+                &state(),
                 &source,
                 &MessageId::new("source-user-a"),
             )
@@ -2303,7 +2345,7 @@ mod tests {
         let (prepared_b, _) = catalog
             .prepare_tree_node_at_user_message(
                 &source_session,
-                &config,
+                &state(),
                 &source,
                 &MessageId::new("source-user-c"),
             )

@@ -1793,6 +1793,7 @@ impl ConversationBackgroundRegistry {
                 artifacts: &resources.artifacts,
                 tool_output: &resources.tool_output,
                 environment: &environment,
+                skill_resources: None,
             };
             let result = executor.execute(invocation, context).await;
             registry.settle_terminal(&execution_id, &result);
@@ -3530,6 +3531,7 @@ mod tests {
                     artifacts: &fixture.registry.resources().artifacts,
                     tool_output: &tool_output,
                     environment: &ToolEnvironment::new(),
+                    skill_resources: None,
                 },
             )
             .await;
@@ -3570,6 +3572,7 @@ mod tests {
                     artifacts: &fixture.registry.resources().artifacts,
                     tool_output: &tool_output,
                     environment: &ToolEnvironment::new(),
+                    skill_resources: None,
                 },
             )
             .await;

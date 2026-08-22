@@ -53,7 +53,6 @@ const MODELS: &str = r#"{
 }"#;
 
 const BOOTSTRAP: &str = r#"{
-  "conversationId": "conversation-issue88-root",
   "agentId": "agent-issue88",
   "model": {"model": "local/test-model"},
   "context": {"reserveTokens": 1024, "keepRecentTokens": 4096}
@@ -63,10 +62,16 @@ fn paths(root: &std::path::Path) -> LocalRuntimePaths {
     let workspace = root.join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
     std::fs::write(root.join("models.json"), MODELS).expect("models");
-    std::fs::write(root.join("bootstrap.json"), BOOTSTRAP).expect("bootstrap");
+    std::fs::write(root.join("rustx.json"), BOOTSTRAP).expect("rustx.json");
     LocalRuntimePaths {
         models: root.join("models.json"),
-        session: root.join("bootstrap.json"),
+        config: root.join("rustx.json"),
+        skill_paths: Vec::new(),
+        no_skills: false,
+        no_builtin_tools: false,
+        no_tools: false,
+        tools: None,
+        exclude_tools: Vec::new(),
         workspace,
         runtime_root: root.join("runtime"),
     }
@@ -177,11 +182,11 @@ async fn native_new_resume_name_and_quiescence_are_product_operations() {
         )),
     });
     let Some(RuntimeClientResult::ModelSet { model }) = model_set.result else {
-        panic!("model_set must update the active Session config: {model_set:?}");
+        panic!("model_set must update the active Session model: {model_set:?}");
     };
     assert_eq!(model.configured.model.to_string(), "local/second-model");
 
-    let catalog = SessionCatalog::open(root.path().join("runtime").as_path(), &config())
+    let catalog = SessionCatalog::open(root.path().join("runtime").as_path(), &config().model)
         .expect("read catalog");
     assert_eq!(
         catalog
@@ -240,8 +245,9 @@ async fn native_new_resume_name_and_quiescence_are_product_operations() {
         canonical_before,
         "new never rewinds the previous lineage"
     );
-    let catalog_after_new = SessionCatalog::open(root.path().join("runtime").as_path(), &config())
-        .expect("reopen catalog after new");
+    let catalog_after_new =
+        SessionCatalog::open(root.path().join("runtime").as_path(), &config().model)
+            .expect("reopen catalog after new");
     assert_eq!(
         catalog_after_new
             .list_page(None, 0, rustx::local_runtime::SESSION_LIST_PAGE_LIMIT)
@@ -273,7 +279,8 @@ async fn native_new_resume_name_and_quiescence_are_product_operations() {
     };
     assert_eq!(
         snapshot.model.configured.model.to_string(),
-        "local/second-model"
+        "local/test-model",
+        "a new Session uses the current runtime default, not the previous Session choice"
     );
 
     // `/resume` selects the old persisted Session through the native owner;
@@ -325,7 +332,7 @@ async fn native_new_resume_name_and_quiescence_are_product_operations() {
     );
 }
 
-fn config() -> rustx::local_runtime::LocalConversationConfig {
-    rustx::local_runtime::LocalConversationConfig::from_json_slice(BOOTSTRAP.as_bytes())
+fn config() -> rustx::local_runtime::CurrentRuntimeConfig {
+    rustx::local_runtime::CurrentRuntimeConfig::from_json_slice(BOOTSTRAP.as_bytes())
         .expect("bootstrap config")
 }

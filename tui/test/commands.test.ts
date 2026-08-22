@@ -884,8 +884,8 @@ describe("CLI arguments", () => {
     "/usr/bin/rustx",
     "--models",
     "/m.json",
-    "--session",
-    "/s.json",
+    "--config",
+    "/rustx.json",
     "--workspace",
     "/ws",
     "--runtime-root",
@@ -897,7 +897,7 @@ describe("CLI arguments", () => {
     assert.equal(parsed.binary, "/usr/bin/rustx");
     assert.deepEqual(parsed.paths, {
       models: "/m.json",
-      session: "/s.json",
+      config: "/rustx.json",
       workspace: "/ws",
       runtimeRoot: "/private",
     });
