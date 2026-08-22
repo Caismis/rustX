@@ -123,6 +123,22 @@ impl SkillSnapshot {
         &self.resources
     }
 
+    /// Whether two snapshots have the same execution-semantic Skill state.
+    ///
+    /// Skill identity/version bindings describe package provenance, while the
+    /// resource map describes where the admitted virtual files resolve for
+    /// the current runtime. Both facts are required for rediscovery to be a
+    /// no-op: identical package content moved to another current root must
+    /// replace the active snapshot rather than leave Read pointing at the old
+    /// host path.
+    #[must_use]
+    pub fn semantically_equivalent(&self, other: &Self) -> bool {
+        self.bindings == other.bindings
+            && self.visible_bindings == other.visible_bindings
+            && self.catalog == other.catalog
+            && self.resources == other.resources
+    }
+
     /// The rendered catalog text, or `None` when no Skill is active (the
     /// caller produces no Skill context proposal).
     #[must_use]

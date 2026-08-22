@@ -368,6 +368,7 @@ async fn bash_background_cancellation_uses_the_same_process_group_path() {
             &invocation,
             &executor,
             rustx::tools::environment::ToolEnvironment::new(),
+            None,
         )
         .expect("prepare");
     let outcome = registry
@@ -426,6 +427,7 @@ async fn bash_natural_exit_beats_late_cancel_in_the_registry() {
             &invocation,
             &executor,
             rustx::tools::environment::ToolEnvironment::new(),
+            None,
         )
         .expect("prepare");
     let outcome = registry

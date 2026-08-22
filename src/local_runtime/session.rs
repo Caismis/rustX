@@ -279,18 +279,56 @@ pub struct SessionCatalog {
 }
 
 impl SessionCatalog {
-    /// Opens the native catalog, creating and publishing a root Session when
-    /// this product root has no catalog yet.
+    /// Opens the native catalog when this product root already has one.
+    ///
+    /// This path never creates durable Session state. First-Session
+    /// publication is an explicit operation performed only after the
+    /// composition layer has validated the initial Session-local model.
     ///
     /// # Errors
     ///
-    /// Returns [`SessionError`] when the catalog, current default model, or
-    /// initial private conversation seed cannot be read, validated, or
-    /// durably published.
-    pub fn open(
-        runtime_root: &Path,
-        default_model: &SessionModelConfig,
-    ) -> Result<Self, SessionError> {
+    /// Returns [`SessionError`] when the catalog cannot be read or validated.
+    pub fn open_existing(runtime_root: &Path) -> Result<Option<Self>, SessionError> {
+        let root = runtime_root.join("sessions");
+        fs::create_dir_all(&root).map_err(|error| SessionError::Io {
+            path: root.clone(),
+            detail: error.to_string(),
+        })?;
+        let path = root.join("catalog.json");
+        if !path.exists() {
+            return Ok(None);
+        }
+
+        let bytes = fs::read(&path).map_err(|error| SessionError::Io {
+            path: path.clone(),
+            detail: error.to_string(),
+        })?;
+        let document: CatalogDocument =
+            serde_json::from_slice(&bytes).map_err(|error| SessionError::Catalog {
+                detail: format!("cannot decode {}: {error}", path.display()),
+            })?;
+        validate_document(&document)?;
+        Ok(Some(Self {
+            root,
+            path,
+            document,
+            #[cfg(test)]
+            write_fault: Arc::new(Mutex::new(None)),
+        }))
+    }
+
+    /// Creates and publishes the first root Session with an already-validated
+    /// Session-local model.
+    ///
+    /// Model catalog resolution deliberately does not happen here. The
+    /// composition layer owns that authority and must complete it before
+    /// calling this mutating Session-domain operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError`] when the private conversation seed or catalog
+    /// publication cannot be completed.
+    pub fn create(runtime_root: &Path, model: &SessionModelConfig) -> Result<Self, SessionError> {
         let root = runtime_root.join("sessions");
         fs::create_dir_all(&root).map_err(|error| SessionError::Io {
             path: root.clone(),
@@ -298,21 +336,11 @@ impl SessionCatalog {
         })?;
         let path = root.join("catalog.json");
         if path.exists() {
-            let bytes = fs::read(&path).map_err(|error| SessionError::Io {
-                path: path.clone(),
-                detail: error.to_string(),
-            })?;
-            let document: CatalogDocument =
-                serde_json::from_slice(&bytes).map_err(|error| SessionError::Catalog {
-                    detail: format!("cannot decode {}: {error}", path.display()),
-                })?;
-            validate_document(&document)?;
-            return Ok(Self {
-                root,
-                path,
-                document,
-                #[cfg(test)]
-                write_fault: Arc::new(Mutex::new(None)),
+            return Err(SessionError::Catalog {
+                detail: format!(
+                    "cannot create first Session: {} already exists",
+                    path.display()
+                ),
             });
         }
 
@@ -341,7 +369,7 @@ impl SessionCatalog {
                 active_node: node_id,
                 nodes,
                 state: SessionPersistentState {
-                    model: default_model.clone(),
+                    model: model.clone(),
                 },
             },
         );
@@ -1590,8 +1618,14 @@ mod tests {
     fn open_catalog() -> (TempDir, SessionCatalog, CurrentRuntimeConfig) {
         let directory = tempfile::tempdir().expect("temp directory");
         let config = config();
-        let catalog = SessionCatalog::open(directory.path(), &config.model).expect("catalog");
+        let catalog = SessionCatalog::create(directory.path(), &config.model).expect("catalog");
         (directory, catalog, config)
+    }
+
+    fn reopen_catalog(root: &std::path::Path) -> SessionCatalog {
+        SessionCatalog::open_existing(root)
+            .expect("open catalog")
+            .expect("catalog exists")
     }
 
     fn append_history(
@@ -1800,16 +1834,15 @@ mod tests {
 
     #[test]
     fn accepted_model_configuration_is_catalog_metadata_for_runtime_replacement() {
-        let (directory, mut catalog, config) = open_catalog();
-        let mut model = config.model.clone();
+        let (directory, mut catalog, _config) = open_catalog();
+        let mut model = config().model.clone();
         model.model = serde_json::from_value(serde_json::json!("provider/next-model"))
             .expect("model reference");
         catalog
             .persist_active_model(model.clone())
             .expect("persist model metadata");
 
-        let reopened =
-            SessionCatalog::open(directory.path(), &config.model).expect("reopen catalog");
+        let reopened = reopen_catalog(directory.path());
         let (_, _, reopened_state) = reopened.active_lineage().expect("active lineage");
         assert_eq!(reopened_state.model, model);
     }
@@ -1825,16 +1858,16 @@ mod tests {
         current.model = serde_json::from_value(serde_json::json!("provider/current"))
             .expect("current model reference");
 
-        let mut catalog = SessionCatalog::open(directory.path(), &first).expect("catalog");
+        let mut catalog = SessionCatalog::create(directory.path(), &first).expect("catalog");
         catalog
             .persist_active_model(explicit.clone())
             .expect("persist explicit Session model");
-        let reopened = SessionCatalog::open(directory.path(), &current).expect("resume catalog");
+        let reopened = reopen_catalog(directory.path());
         let (_, _, resumed) = reopened.active_lineage().expect("resumed lineage");
         assert_eq!(resumed.model, explicit);
 
         let new_directory = tempfile::tempdir().expect("new Session root");
-        let fresh = SessionCatalog::open(new_directory.path(), &current).expect("new catalog");
+        let fresh = SessionCatalog::create(new_directory.path(), &current).expect("new catalog");
         let (_, _, fresh_state) = fresh.active_lineage().expect("fresh lineage");
         assert_eq!(fresh_state.model, current);
     }
@@ -1842,7 +1875,7 @@ mod tests {
     #[test]
     fn catalog_serialization_contains_no_current_runtime_configuration() {
         let directory = tempfile::tempdir().expect("temporary root");
-        let catalog = SessionCatalog::open(directory.path(), &config().model).expect("catalog");
+        let catalog = SessionCatalog::create(directory.path(), &config().model).expect("catalog");
         let bytes = fs::read(&catalog.path).expect("catalog bytes");
         let json = String::from_utf8(bytes).expect("catalog UTF-8");
         assert!(json.contains("\"state\""));
@@ -1866,7 +1899,7 @@ mod tests {
 
     #[test]
     fn catalog_fault_before_rename_keeps_memory_and_file_on_old_document() {
-        let (directory, mut catalog, config) = open_catalog();
+        let (directory, mut catalog, _config) = open_catalog();
         let before = catalog.active_snapshot().expect("initial snapshot");
 
         catalog.arm_write_fault_before_rename();
@@ -1884,8 +1917,7 @@ mod tests {
             before,
             "a pre-commit failure leaves the in-process document unchanged"
         );
-        let reopened =
-            SessionCatalog::open(directory.path(), &config.model).expect("reopen catalog");
+        let reopened = reopen_catalog(directory.path());
         assert_eq!(
             reopened.active_snapshot().expect("reopened snapshot"),
             before
@@ -1901,7 +1933,7 @@ mod tests {
 
     #[test]
     fn catalog_fault_after_rename_keeps_memory_coherent_and_reports_uncertain_durability() {
-        let (directory, mut catalog, config) = open_catalog();
+        let (directory, mut catalog, _config) = open_catalog();
         let before = catalog.active_snapshot().expect("initial snapshot");
 
         catalog.arm_write_fault_after_rename();
@@ -1918,8 +1950,7 @@ mod tests {
             .active_snapshot()
             .expect("committed in-memory snapshot");
         assert_eq!(in_memory.name, "visible but uncertain");
-        let reopened =
-            SessionCatalog::open(directory.path(), &config.model).expect("reopen catalog");
+        let reopened = reopen_catalog(directory.path());
         assert_eq!(
             reopened.active_snapshot().expect("reopened snapshot").name,
             "visible but uncertain",

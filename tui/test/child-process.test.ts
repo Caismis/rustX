@@ -67,6 +67,46 @@ describe("ChildRuntimeProcess", () => {
     ]);
   });
 
+  it("forwards startup Tool and Skill controls in deterministic order", async () => {
+    const child = ChildRuntimeProcess.spawn({
+      binary: FAKE_RUNTIME,
+      paths: PATHS,
+      startup: {
+        skillPaths: ["/skills/first", "relative/second"],
+        noSkills: true,
+        noBuiltinTools: true,
+        noTools: true,
+        tools: "read,search",
+        excludeTools: "search",
+      },
+    });
+    const output = readAll(child);
+    child.closeStdin();
+    await child.wait();
+
+    assert.deepEqual(JSON.parse((await output).trim()), [
+      "--models",
+      "/models.json",
+      "--config",
+      "/rustx.json",
+      "--workspace",
+      "/ws",
+      "--runtime-root",
+      "/private",
+      "--skill",
+      "/skills/first",
+      "--skill",
+      "relative/second",
+      "--no-skills",
+      "--no-builtin-tools",
+      "--no-tools",
+      "--tools",
+      "read,search",
+      "--exclude-tools",
+      "search",
+    ]);
+  });
+
   it("exits cleanly on stdin EOF", async () => {
     const child = spawn({ FAKE_EXIT_CODE: "0" });
     child.closeStdin();

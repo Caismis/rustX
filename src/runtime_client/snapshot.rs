@@ -477,7 +477,9 @@ pub struct CapabilityView {
     /// model activation.
     #[serde(default)]
     pub available_tools: Vec<RuntimeClientTool>,
-    /// The deterministic Skill catalog ordered by Skill name.
+    /// The deterministic model-visible Skill catalog ordered by Skill name.
+    /// Skills hidden by `disable-model-invocation` remain in the runtime
+    /// capability manifest and resource snapshot but are omitted here.
     #[serde(default)]
     pub skills: Vec<RuntimeClientSkill>,
     /// The typed availability of every evaluated optional capability

@@ -186,7 +186,8 @@ async fn native_new_resume_name_and_quiescence_are_product_operations() {
     };
     assert_eq!(model.configured.model.to_string(), "local/second-model");
 
-    let catalog = SessionCatalog::open(root.path().join("runtime").as_path(), &config().model)
+    let catalog = SessionCatalog::open_existing(root.path().join("runtime").as_path())
+        .expect("open catalog")
         .expect("read catalog");
     assert_eq!(
         catalog
@@ -245,9 +246,9 @@ async fn native_new_resume_name_and_quiescence_are_product_operations() {
         canonical_before,
         "new never rewinds the previous lineage"
     );
-    let catalog_after_new =
-        SessionCatalog::open(root.path().join("runtime").as_path(), &config().model)
-            .expect("reopen catalog after new");
+    let catalog_after_new = SessionCatalog::open_existing(root.path().join("runtime").as_path())
+        .expect("open catalog after new")
+        .expect("reopen catalog after new");
     assert_eq!(
         catalog_after_new
             .list_page(None, 0, rustx::local_runtime::SESSION_LIST_PAGE_LIMIT)
@@ -330,9 +331,4 @@ async fn native_new_resume_name_and_quiescence_are_product_operations() {
         workspace_before,
         "Session branching and replacement never mutate workspace state"
     );
-}
-
-fn config() -> rustx::local_runtime::CurrentRuntimeConfig {
-    rustx::local_runtime::CurrentRuntimeConfig::from_json_slice(BOOTSTRAP.as_bytes())
-        .expect("bootstrap config")
 }

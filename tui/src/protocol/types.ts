@@ -654,6 +654,7 @@ export interface CapabilityView {
   tools?: RuntimeClientTool[];
   /** Every currently available Tool, including inactive Tools. */
   available_tools?: RuntimeClientTool[];
+  /** The model-visible Skill catalog; hidden runtime Skills are omitted. */
   skills?: RuntimeClientSkill[];
   /** Typed availability of every evaluated optional capability source. */
   sources?: CapabilitySourceView[];

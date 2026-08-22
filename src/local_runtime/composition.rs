@@ -261,9 +261,11 @@ impl LocalConversationCore {
         // the same runtime root still recovers the same durable conversation.
         let config_bytes = read_file(&paths.config)?;
         let runtime_config = CurrentRuntimeConfig::from_json_slice(&config_bytes)?;
+        let registry = load_model_registry(paths, dependencies)?;
         Self::compose_from_config(
             paths,
             dependencies,
+            registry,
             runtime_config.clone(),
             SessionPersistentState {
                 model: runtime_config.model.clone(),
@@ -281,31 +283,17 @@ impl LocalConversationCore {
     pub(crate) async fn compose_from_config(
         paths: &LocalRuntimePaths,
         dependencies: &LocalRuntimeDependencies,
+        registry: ModelBindingRegistry,
         runtime_config: CurrentRuntimeConfig,
         session_state: SessionPersistentState,
         conversation_id: ConversationId,
         artifacts_root: PathBuf,
     ) -> Result<Self, LocalRuntimeError> {
-        // 1. Read the explicit model catalog. Session selection is already
-        // resolved by LocalSessionSupervisor before this composition call.
-        let catalog_bytes = read_file(&paths.models)?;
-
-        // 2. Load and validate the model catalog.
-        let catalog = ModelCatalog::from_json_slice(&catalog_bytes)?;
-
-        // 3. Resolve startup credentials and build every model binding.
-        let resolved = catalog.resolve(dependencies.credentials.as_ref())?;
-        let registry = ModelBindingRegistry::new(resolved)?;
-
-        // Validate the current runtime default even when an existing Session
-        // supplies a different persisted model. A resume may preserve the
-        // Session-local choice, but it must never make an unusable current
-        // runtime configuration silently disappear.
+        // The current runtime default was validated by the composition
+        // caller before any first-Session publication. Validate it here too
+        // for direct low-level callers, while the selected durable Session
+        // model remains an independent Session-local choice.
         SessionModelState::new(registry.clone(), runtime_config.model.clone())?;
-
-        // The Session model state resolves and validates the selected
-        // Session-local choice now, so an unusable model fails startup rather
-        // than the first attempt.
         let model = SessionModelState::new(registry, session_state.model.clone())?;
 
         // 5-6. The conversation identity authority and the one conversation
@@ -714,13 +702,18 @@ impl LocalSessionProduct {
         paths: &LocalRuntimePaths,
         dependencies: &LocalRuntimeDependencies,
     ) -> Result<Self, LocalRuntimeError> {
-        // The current runtime/project configuration is always parsed before
-        // opening the durable catalog. A valid existing Session can never
-        // make an invalid or stale current config disappear.
+        // The current runtime/project configuration and current ModelCatalog
+        // are resolved before opening or creating durable Session state. A
+        // failed first launch therefore cannot publish an invalid initial
+        // Session-local model.
         let config_bytes = read_file(&paths.config)?;
         let runtime_config = CurrentRuntimeConfig::from_json_slice(&config_bytes)?;
-        let catalog = SessionCatalog::open(&paths.runtime_root, &runtime_config.model)
-            .map_err(LocalRuntimeError::SessionCatalog)?;
+        let registry = load_model_registry(paths, dependencies)?;
+        SessionModelState::new(registry.clone(), runtime_config.model.clone())?;
+        let catalog = match SessionCatalog::open_existing(&paths.runtime_root)? {
+            Some(catalog) => catalog,
+            None => SessionCatalog::create(&paths.runtime_root, &runtime_config.model)?,
+        };
         let (session_id, node, session_state) = catalog
             .active_lineage()
             .map_err(LocalRuntimeError::SessionCatalog)?;
@@ -741,6 +734,7 @@ impl LocalSessionProduct {
         let core = LocalConversationCore::compose_from_config(
             paths,
             dependencies,
+            registry,
             runtime_config,
             session_state,
             node.conversation_id,
@@ -914,6 +908,20 @@ fn read_file(path: &Path) -> Result<Vec<u8>, LocalRuntimeError> {
         path: path.to_path_buf(),
         detail: error.to_string(),
     })
+}
+
+/// Loads the current model catalog and constructs its resolved binding
+/// authority. This is intentionally a composition concern, not a
+/// `SessionCatalog` concern: callers can validate the current runtime default
+/// before publishing a first durable Session.
+fn load_model_registry(
+    paths: &LocalRuntimePaths,
+    dependencies: &LocalRuntimeDependencies,
+) -> Result<ModelBindingRegistry, LocalRuntimeError> {
+    let catalog_bytes = read_file(&paths.models)?;
+    let catalog = ModelCatalog::from_json_slice(&catalog_bytes)?;
+    let resolved = catalog.resolve(dependencies.credentials.as_ref())?;
+    Ok(ModelBindingRegistry::new(resolved)?)
 }
 
 fn resolve_workspace_path(workspace: &Path, path: &Path) -> PathBuf {

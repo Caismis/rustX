@@ -3163,6 +3163,13 @@ settings, while the selected Session model remains durable. A new Session
 uses the current runtime model default; clone/fork/tree operations copy only
 the intentionally Session-local state.
 
+On a fresh runtime root, composition resolves and validates the current model
+catalog and default model before it calls the mutating first-Session
+publication path. A failed first launch therefore cannot publish a durable
+root Session containing an invalid model. Existing Session models are then
+validated separately and remain authoritative for resume; current defaults
+are still validated on every launch without overwriting them.
+
 The capability coordinator remains the only candidate/commit owner. Its
 candidate preparation builds one available Tool catalog from native, MCP,
 Python, and future source registrations, applies hard eligibility, then
@@ -3191,7 +3198,12 @@ with `disable-model-invocation: true` remains discovered and validated but is
 omitted from the model-visible catalog. The catalog exposes compact names
 and descriptions; the model reads an accepted Skill's `SKILL.md` on demand
 through ordinary runtime-owned Read semantics. The TUI only projects the
-typed available/active Tool and Skill state.
+typed available/active Tool and Skill state. The full Skill binding set is
+retained in the attempt `CapabilitiesManifest`, while only visible bindings
+are projected to model-facing Skill catalogs. The virtual-to-host Skill
+resource map is part of Skill snapshot semantic equality, and background
+ownership captures that map before detachment alongside the effective
+environment; execution ownership cannot retarget capability resources.
 
 #### Native Session lifecycle and branching (M9.4 / Issue #88)
 

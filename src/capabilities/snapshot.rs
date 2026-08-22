@@ -179,7 +179,11 @@ impl CapabilitySnapshot {
     pub fn to_capabilities_manifest(&self) -> CapabilitiesManifest {
         CapabilitiesManifest {
             revision: self.revision,
-            skills: self.skills.visible_bindings().to_vec(),
+            // Manifest provenance is the complete immutable capability set.
+            // Model visibility is projected separately through
+            // `catalog_entries()`/`skill_catalog()` and the Runtime Client;
+            // `disable-model-invocation` must not erase runtime ownership.
+            skills: self.skills.bindings().to_vec(),
             tools: self
                 .tool_registry
                 .definitions()

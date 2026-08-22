@@ -103,6 +103,12 @@ are resolved by the Rust process from the environment it inherits. For the
 complete copyable configuration and Python-tool example, see
 [`examples/local-runtime/README.md`](../examples/local-runtime/README.md).
 
+The TUI may also forward the runtime's bounded startup controls:
+`--skill <path>` (repeatable), `--no-skills`, `--no-builtin-tools`,
+`--no-tools`, `--tools <a,b,c>`, and `--exclude-tools <a,b,c>`. It preserves
+their supplied values and order; Rust owns discovery, validation, activation,
+and all semantic errors.
+
 ## Startup sequence
 
 ```text
@@ -228,7 +234,8 @@ does not implement a parallel Session system.
 
 - `/model [show|provider/model]` — open the searchable model selector, show the
   current model view, or select a model directly.
-- `/tools` — show the active runtime tool catalog.
+- `/tools` — show the runtime-published Active Tools and the Available but
+  inactive Tools separately.
 - `/skills` — show the active Skill catalog.
 - `/status` — show the runtime-composed Agent Status and diagnostics.
 

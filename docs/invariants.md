@@ -669,6 +669,12 @@ that a live child produced an Interrupted physical result.
   settings, approval settings reserved for #100, and future capability
   sources therefore come from the current launch. A valid old Session can
   never make an invalid current configuration disappear.
+- **First-Session publication follows model validation.** On a fresh
+  `runtime-root`, composition loads the current `models.json` and validates
+  the current runtime default before creating or publishing the root Session.
+  A failed first launch cannot leave a durable Session containing an invalid
+  model that poisons a later corrected launch. Existing Session models are
+  validated independently and are never replaced by the current default.
 - **Model ownership is split deliberately.** The current runtime model is
   the default for a brand-new Session. An explicitly selected Session model
   is persisted and wins when that Session resumes. Clone/fork/tree creation
@@ -692,7 +698,17 @@ that a live child produced an Interrupted physical result.
   snapshot but is omitted from the model-visible catalog. The model reads
   accepted Skill resources through the runtime-owned virtual `.rustx/skills/`
   namespace and ordinary Read semantics; host absolute paths are not
-  published to the client or model.
+  published to the client or model. The virtual-to-host resource map is part
+  of active Skill snapshot equality, so relocating identical package content
+  creates a new capability revision rather than leaving Read pointed at an
+  old root. The complete Skill bindings remain in `CapabilitiesManifest`
+  provenance; visibility affects only model-facing projections.
+- **Background ownership preserves capability resources.** Before the
+  background ownership commit, the Agent Loop captures the admitted attempt's
+  immutable effective environment and Skill resource map. The detached
+  runner owns those exact values and never looks up a later capability
+  snapshot, so foreground and background Read have the same resource
+  semantics.
 - **Coordinator and lease ownership do not move.** `CapabilityCoordinator`
   remains the sole candidate/commit authority. An admitted attempt retains
   one immutable capability snapshot until terminal settlement. #96 does not

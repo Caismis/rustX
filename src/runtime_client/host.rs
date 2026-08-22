@@ -2904,6 +2904,7 @@ mod tests {
                 },
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
+                None,
             )
             .expect("prepare");
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = fixture
@@ -3355,6 +3356,7 @@ mod tests {
                 },
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
+                None,
             )
             .expect("prepare");
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = runtime
@@ -3489,6 +3491,7 @@ mod tests {
                 },
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
+                None,
             )
             .expect("prepare");
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = registry
@@ -3596,6 +3599,7 @@ mod tests {
                 },
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
+                None,
             )
             .expect("prepare");
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = fixture
@@ -4077,6 +4081,7 @@ mod tests {
                 },
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
+                None,
             )
             .expect("prepare");
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = fixture
@@ -4161,6 +4166,7 @@ mod tests {
                 },
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
+                None,
             )
             .expect("prepare");
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = fixture
@@ -5257,7 +5263,7 @@ mod tests {
             }"#,
         )
         .expect("current runtime config");
-        let catalog = SessionCatalog::open(catalog_root.path(), &config.model).expect("catalog");
+        let catalog = SessionCatalog::create(catalog_root.path(), &config.model).expect("catalog");
         let supervisor = Arc::new(LocalSessionSupervisor::new(catalog, config.model.clone()));
         let host = RuntimeClientHost::new_with_session_control(
             RuntimeClientHostConfig {
@@ -5293,7 +5299,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn catalog_publication_outcomes_fence_the_runtime_client_typed() {
         for post_rename in [false, true] {
-            let (_adapter, _fixture, endpoint, supervisor, catalog_root, config) =
+            let (_adapter, _fixture, endpoint, supervisor, catalog_root, _config) =
                 local_session_endpoint(Vec::new(), None).await;
             initialize_endpoint(&endpoint);
             let initial = endpoint
@@ -5384,7 +5390,8 @@ mod tests {
             assert_eq!(sessions.len(), if post_rename { 2 } else { 1 });
 
             if post_rename {
-                let reopened = SessionCatalog::open(catalog_root.path(), &config.model)
+                let reopened = SessionCatalog::open_existing(catalog_root.path())
+                    .expect("open visible catalog")
                     .expect("reopen visible catalog");
                 assert_eq!(
                     reopened
@@ -5402,12 +5409,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn fork_pre_rename_failure_is_terminal_without_committed_draft() {
         let prompt = "fork-draft-exact-pre-7f3b";
-        let (adapter, fixture, endpoint, supervisor, catalog_root, config) =
+        let (adapter, fixture, endpoint, supervisor, catalog_root, _config) =
             local_session_endpoint(vec![one_turn_stop()], None).await;
         initialize_endpoint(&endpoint);
         let (revision, message_id, source_messages) =
             await_text_boundary(&fixture.runtime, &adapter, prompt).await;
-        let source = SessionCatalog::open(catalog_root.path(), &config.model)
+        let source = SessionCatalog::open_existing(catalog_root.path())
+            .expect("open source catalog")
             .expect("source catalog")
             .active_snapshot()
             .expect("source snapshot");
@@ -5429,8 +5437,9 @@ mod tests {
             "pre-commit failure has no transition result"
         );
 
-        let reopened =
-            SessionCatalog::open(catalog_root.path(), &config.model).expect("reopen source");
+        let reopened = SessionCatalog::open_existing(catalog_root.path())
+            .expect("open source")
+            .expect("reopen source");
         assert_eq!(
             reopened
                 .active_snapshot()
@@ -5473,12 +5482,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn fork_post_rename_failure_carries_exact_uncommitted_editor_payload() {
         let prompt = "fork-draft-exact-7f3b";
-        let (adapter, fixture, endpoint, supervisor, catalog_root, config) =
+        let (adapter, fixture, endpoint, supervisor, catalog_root, _config) =
             local_session_endpoint(vec![one_turn_stop()], None).await;
         initialize_endpoint(&endpoint);
         let (revision, message_id, source_messages) =
             await_text_boundary(&fixture.runtime, &adapter, prompt).await;
-        let source = SessionCatalog::open(catalog_root.path(), &config.model)
+        let source = SessionCatalog::open_existing(catalog_root.path())
+            .expect("open source catalog")
             .expect("source catalog")
             .active_snapshot()
             .expect("source snapshot");
@@ -5503,8 +5513,9 @@ mod tests {
         assert!(diagnostic.contains("durability is uncertain"));
         assert_eq!(editor_content, Some(submit_content(prompt)));
 
-        let reopened =
-            SessionCatalog::open(catalog_root.path(), &config.model).expect("reopen fork");
+        let reopened = SessionCatalog::open_existing(catalog_root.path())
+            .expect("open fork")
+            .expect("reopen fork");
         let authoritative = reopened.active_snapshot().expect("authoritative fork");
         assert_eq!(authoritative.id.as_str(), session.id);
         assert_ne!(
@@ -5554,12 +5565,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn tree_post_rename_failure_carries_exact_uncommitted_editor_payload() {
         let prompt = "tree-draft-exact-7f3b";
-        let (adapter, fixture, endpoint, supervisor, catalog_root, config) =
+        let (adapter, fixture, endpoint, supervisor, catalog_root, _config) =
             local_session_endpoint(vec![one_turn_stop()], None).await;
         initialize_endpoint(&endpoint);
         let (revision, message_id, source_messages) =
             await_text_boundary(&fixture.runtime, &adapter, prompt).await;
-        let source = SessionCatalog::open(catalog_root.path(), &config.model)
+        let source = SessionCatalog::open_existing(catalog_root.path())
+            .expect("open source catalog")
             .expect("source catalog")
             .active_snapshot()
             .expect("source snapshot");
@@ -5586,8 +5598,9 @@ mod tests {
         assert_eq!(session.id, source.id.as_str());
         assert_ne!(session.active_node, source.active_node.as_str());
 
-        let reopened =
-            SessionCatalog::open(catalog_root.path(), &config.model).expect("reopen tree");
+        let reopened = SessionCatalog::open_existing(catalog_root.path())
+            .expect("open tree")
+            .expect("reopen tree");
         let authoritative = reopened.active_snapshot().expect("authoritative tree node");
         assert_eq!(authoritative.id, source.id);
         assert_eq!(authoritative.active_node.as_str(), session.active_node);
@@ -5615,7 +5628,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn model_catalog_visibility_uncertainty_fences_the_live_runtime_typed() {
-        let (_adapter, fixture, endpoint, supervisor, catalog_root, config) =
+        let (_adapter, fixture, endpoint, supervisor, catalog_root, _config) =
             local_session_endpoint(Vec::new(), None).await;
         initialize_endpoint(&endpoint);
         let before = fixture.runtime.model_config();
@@ -5636,8 +5649,9 @@ mod tests {
             "the live runtime candidate is not installed after catalog publication uncertainty"
         );
 
-        let reopened =
-            SessionCatalog::open(catalog_root.path(), &config.model).expect("reopen catalog");
+        let reopened = SessionCatalog::open_existing(catalog_root.path())
+            .expect("open catalog")
+            .expect("reopen catalog");
         let (_, _, reopened_config) = reopened.active_lineage().expect("active lineage");
         assert_eq!(
             reopened_config.model, candidate,
@@ -5657,7 +5671,7 @@ mod tests {
         let (release_tx, release_rx) = model_release();
         let attempt_exit_gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
         attempt_exit_gate.arm();
-        let (adapter, fixture, _endpoint, supervisor, catalog_root, config) =
+        let (adapter, fixture, _endpoint, supervisor, catalog_root, _config) =
             local_session_endpoint(
                 vec![vec![
                     GatedStep::Emit(ModelEvent::Started),
@@ -5673,8 +5687,9 @@ mod tests {
                 }),
             )
             .await;
-        let before = SessionCatalog::open(catalog_root.path(), &config.model)
+        let before = SessionCatalog::open_existing(catalog_root.path())
             .expect("open catalog before switch")
+            .expect("catalog before switch")
             .active_snapshot()
             .expect("active snapshot before switch");
 
@@ -5692,8 +5707,9 @@ mod tests {
         };
         entered.await.expect("attempt exit gate entered");
 
-        let observed = SessionCatalog::open(catalog_root.path(), &config.model)
+        let observed = SessionCatalog::open_existing(catalog_root.path())
             .expect("observe catalog while old task is unsettled")
+            .expect("catalog while old task is unsettled")
             .active_snapshot()
             .expect("active snapshot while old task is unsettled");
         assert_eq!(observed.id, before.id);
@@ -5710,7 +5726,8 @@ mod tests {
         release_exit.await.expect("release attempt task exit");
         let result = switch.await.expect("switch task");
         assert!(result.is_ok(), "quiescence precedes successful publication");
-        let after = SessionCatalog::open(catalog_root.path(), &config.model)
+        let after = SessionCatalog::open_existing(catalog_root.path())
+            .expect("open catalog after switch")
             .expect("reopen catalog after switch")
             .active_snapshot()
             .expect("active snapshot after switch");
@@ -5990,6 +6007,7 @@ mod tests {
                 },
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
+                None,
             )
             .expect("preparation is allowed before activation");
         let refused = registry.commit_dispatch(prepared, &CancellationSignal::new());
@@ -6083,6 +6101,7 @@ mod tests {
                         },
                         &executor,
                         crate::tools::environment::ToolEnvironment::new(),
+                        None,
                     )
                     .expect("prepare"),
                 &CancellationSignal::new(),
@@ -6156,6 +6175,7 @@ mod tests {
                 &claim_background_invocation("call-lost-wakeup"),
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
+                None,
             )
             .expect("prepare");
         let outcome = registry
@@ -6288,6 +6308,7 @@ mod tests {
                 &claim_background_invocation("call-committed"),
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
+                None,
             )
             .expect("prepare");
         let outcome = registry
@@ -6360,6 +6381,7 @@ mod tests {
                 &claim_background_invocation("call-prepared"),
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
+                None,
             )
             .expect("prepare");
         assert!(
@@ -6424,6 +6446,7 @@ mod tests {
                 &claim_background_invocation("call-race-a"),
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
+                None,
             )
             .expect("prepare");
         let hook = Arc::new(crate::tools::background::test_sync::CommitBoundaryHook::default());
@@ -6540,6 +6563,7 @@ mod tests {
                 &claim_background_invocation("call-race-b"),
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
+                None,
             )
             .expect("preparation is still allowed");
         let refused = registry
@@ -6565,6 +6589,7 @@ mod tests {
                 &claim_background_invocation("call-race-b-2"),
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
+                None,
             )
             .expect("prepare after activation");
         let outcome = registry
@@ -6682,6 +6707,7 @@ mod tests {
                 &claim_background_invocation("call-activation-pre"),
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
+                None,
             )
             .expect("prepare");
         let refused = registry
@@ -6733,6 +6759,7 @@ mod tests {
                 &claim_background_invocation("call-activation-post"),
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
+                None,
             )
             .expect("prepare");
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = registry
@@ -6814,6 +6841,7 @@ mod tests {
                 &claim_background_invocation("call-epoch-b"),
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
+                None,
             )
             .expect("prepare");
         let commit_registry = registry.clone();

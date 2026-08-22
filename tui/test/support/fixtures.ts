@@ -94,30 +94,32 @@ export function sessionModel(
 }
 
 export function capabilities(revision: number): CapabilityView {
+  const tools = [
+    {
+      id: "tool-bash",
+      name: "bash",
+      description: "Run a shell command in the workspace.",
+      input_schema: { type: "object" },
+      execution_policy: "model_selectable" as const,
+      concurrency_policy: "sequential" as const,
+      replay_policy: "never" as const,
+      origin: "builtin" as const,
+    },
+    {
+      id: "tool-mcp-search",
+      name: "search",
+      description: "Search an indexed corpus.",
+      input_schema: { type: "object" },
+      execution_policy: "foreground_only" as const,
+      concurrency_policy: "parallel" as const,
+      replay_policy: "idempotent" as const,
+      origin: { mcp: { server_id: "corpus" } },
+    },
+  ];
   return {
     revision,
-    tools: [
-      {
-        id: "tool-bash",
-        name: "bash",
-        description: "Run a shell command in the workspace.",
-        input_schema: { type: "object" },
-        execution_policy: "model_selectable",
-        concurrency_policy: "sequential",
-        replay_policy: "never",
-        origin: "builtin",
-      },
-      {
-        id: "tool-mcp-search",
-        name: "search",
-        description: "Search an indexed corpus.",
-        input_schema: { type: "object" },
-        execution_policy: "foreground_only",
-        concurrency_policy: "parallel",
-        replay_policy: "idempotent",
-        origin: { mcp: { server_id: "corpus" } },
-      },
-    ],
+    tools,
+    available_tools: tools,
     skills: [
       {
         id: "skill-review",

@@ -302,3 +302,62 @@ async fn invalid_current_config_is_rejected_even_when_a_catalog_exists() {
         "invalid current config must fail before catalog resume: {result:?}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn invalid_first_boot_model_does_not_publish_a_poisoned_session() {
+    let root = tempfile::tempdir().expect("root");
+    let config_path = root.path().join("rustx.json");
+    let skills_root = root.path().join("configured-skills");
+    std::fs::create_dir_all(&skills_root).expect("Skill root");
+    std::fs::write(root.path().join("models.json"), MODELS).expect("models");
+    let startup = paths(root.path(), &config_path);
+
+    std::fs::write(
+        &config_path,
+        config_json(
+            "local/missing",
+            11,
+            "UTC",
+            "invalid-first-boot",
+            &skills_root,
+            &[],
+            false,
+        ),
+    )
+    .expect("invalid first config");
+    let error = LocalSessionProduct::compose(&startup, &dependencies())
+        .await
+        .expect_err("missing current model must fail before Session publication");
+    assert!(matches!(error, LocalRuntimeError::Model(_)));
+    assert!(
+        !root.path().join("runtime/sessions/catalog.json").exists(),
+        "a failed first launch must not publish a root Session"
+    );
+
+    std::fs::write(
+        &config_path,
+        config_json(
+            "local/model-a",
+            11,
+            "UTC",
+            "corrected",
+            &skills_root,
+            &[],
+            false,
+        ),
+    )
+    .expect("corrected config");
+    let product = LocalSessionProduct::compose(&startup, &dependencies())
+        .await
+        .expect("corrected config must reuse the runtime root");
+    assert_eq!(
+        product.runtime().model_view().configured.model.to_string(),
+        "local/model-a"
+    );
+    drop(product);
+
+    let catalog = std::fs::read_to_string(startup.runtime_root.join("sessions/catalog.json"))
+        .expect("corrected startup published a root Session");
+    assert!(catalog.contains("local/model-a"));
+    assert!(!catalog.contains("local/missing"));
+}

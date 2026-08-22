@@ -6789,6 +6789,7 @@ mod tests {
                 &invocation,
                 executor,
                 crate::tools::environment::ToolEnvironment::new(),
+                None,
             )
             .expect("prepare");
         let crate::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
@@ -7494,6 +7495,7 @@ mod tests {
                 &invocation,
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
+                None,
             )
             .expect("prepare");
         let error = runtime
@@ -7651,6 +7653,7 @@ mod tests {
                 &invocation,
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
+                None,
             )
             .expect("prepare");
         let commit_background_registry = background.clone();
@@ -7805,6 +7808,7 @@ mod tests {
                 &invocation,
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
+                None,
             )
             .expect("prepare");
         let crate::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
@@ -8073,6 +8077,7 @@ mod tests {
                 &invocation,
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
+                None,
             )
             .expect("prepare");
         match runtime.tool_runtime().background().commit_dispatch(
@@ -9230,6 +9235,7 @@ mod tests {
                 &invocation,
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
+                None,
             )
             .expect("prepare");
         let crate::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =

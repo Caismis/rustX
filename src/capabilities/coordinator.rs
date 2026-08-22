@@ -1410,7 +1410,7 @@ fn candidate_is_noop(
     candidate: &PreparedCapabilityCandidate,
     current: &CapabilitySnapshot,
 ) -> bool {
-    candidate.skills.bindings() == current.skills().bindings()
+    candidate.skills.semantically_equivalent(current.skills())
         && candidate.candidate_registry.definitions() == current.tool_registry().definitions()
         && candidate.available_tools.as_ref() == current.available_tools()
         && candidate.python.as_ref().map(|env| env.digest.clone())
@@ -1556,7 +1556,12 @@ body
             workspace: workspace.clone(),
             base_tool_registry: Arc::new(ToolRegistry::new()),
             tool_activation: crate::capabilities::ToolActivationPolicy::default(),
-            skill_discovery: crate::skills::SkillDiscoveryConfig::default_for_workspace(&workspace),
+            // Keep this unit fixture independent of the developer's HOME:
+            // the relocation proof owns both current roots explicitly.
+            skill_discovery: crate::skills::SkillDiscoveryConfig {
+                automatic_roots: vec![workspace.root().join(".agents/skills")],
+                explicit_paths: Vec::new(),
+            },
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: dir.path().join("skill-env"),
@@ -1567,6 +1572,46 @@ body
 
     async fn prepare(coordinator: &CapabilityCoordinator) -> super::PreparedCapabilityCandidate {
         coordinator.prepare_candidate().await.expect("prepare")
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn relocating_identical_skill_resources_is_a_new_capability_revision() {
+        let (dir, mut coordinator) = coordinator();
+        let first = coordinator
+            .commit(prepare(&coordinator).await)
+            .expect("first commit");
+        let resource_path = std::path::Path::new(".rustx/skills/pdf/SKILL.md");
+        let root_a = dir.path().join("workspace/.agents/skills");
+        let root_b = dir.path().join("relocated-skills");
+        std::fs::create_dir_all(&root_b).expect("root B");
+        std::fs::rename(root_a.join("pdf"), root_b.join("pdf")).expect("relocate Skill");
+
+        // The package content and version identity are unchanged. Only the
+        // current runtime resource mapping moved, so rediscovery must not be
+        // treated as an activation no-op.
+        let inner = Arc::get_mut(&mut coordinator.inner).expect("unshared coordinator");
+        inner.skill_discovery = crate::skills::SkillDiscoveryConfig {
+            automatic_roots: vec![root_b.clone()],
+            explicit_paths: Vec::new(),
+        };
+        let candidate = prepare(&coordinator).await;
+        let second = coordinator.commit(candidate).expect("relocated commit");
+        assert_eq!(first.revision(), CapabilityRevision::new(1));
+        assert_eq!(second.revision(), CapabilityRevision::new(2));
+        assert_eq!(first.skills().bindings(), second.skills().bindings());
+        assert_ne!(
+            first.skills().resources(),
+            second.skills().resources(),
+            "the executable virtual-resource mapping changed"
+        );
+        assert_eq!(
+            second
+                .skills()
+                .resources()
+                .resolve(resource_path)
+                .expect("relocated Read resource"),
+            root_b.join("pdf/SKILL.md").as_path()
+        );
     }
 
     /// Attempt acquisition wins first: the commit is parked inside its

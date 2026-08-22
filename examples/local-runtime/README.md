@@ -121,7 +121,9 @@ not in this table.
 built-ins available for truthful capability inspection while activating none.
 The command-line controls `--no-builtin-tools`, `--no-tools`, `--tools`, and
 `--exclude-tools` apply after discovery; availability and activation are
-separate runtime facts.
+separate runtime facts. The reference TUI accepts and forwards these controls,
+as well as repeatable `--skill <path>` and `--no-skills`; it does not interpret
+their values.
 
 Skills are discovered from the current user/global and project roots, plus any
 explicit `skills` paths in this file or repeatable `--skill` arguments.
