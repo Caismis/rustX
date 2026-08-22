@@ -12,15 +12,18 @@ use crate::capabilities::availability::{
 };
 use crate::capabilities::error::{CapabilityCommitError, CapabilityPreparationError};
 use crate::capabilities::snapshot::CapabilitySnapshot;
+use crate::capabilities::tools::{AvailableToolCatalog, ToolActivationPolicy, select_tools};
 use crate::runtime::identity::{CapabilityRevision, ConversationId, McpServerId};
 use crate::runtime::process_runner::RunnerBackedProcessRunner;
 use crate::runtime::types::ConversationLifecycle;
 use crate::skills::environments::{
     EnvironmentStore, RunnerBackedSkillEnvironmentBackend, SkillEnvironmentBackend,
 };
-use crate::skills::{SkillDiscovery, SkillSnapshot, merge_dependency_manifests};
+use crate::skills::{
+    SkillDiscovery, SkillDiscoveryConfig, SkillSnapshot, merge_dependency_manifests,
+};
 use crate::tools::environment::{ToolEnvironment, ToolEnvironmentOverlay};
-use crate::tools::executor::ToolRegistry;
+use crate::tools::executor::{ToolRegistration, ToolRegistry};
 use crate::tools::mcp::{McpInvalidationState, McpServerBindings, McpServerRuntime};
 use crate::tools::python::{PythonToolDiscovery, PythonToolExecutor, PythonToolStore};
 use crate::tools::workspace::Workspace;
@@ -34,6 +37,11 @@ pub struct CapabilityCoordinatorConfig {
     pub workspace: Workspace,
     /// The deterministic native/runtime registry used as the composition base.
     pub base_tool_registry: Arc<ToolRegistry>,
+    /// Current startup availability/activation policy. It is not durable
+    /// Session state and is re-applied for every process composition.
+    pub tool_activation: ToolActivationPolicy,
+    /// Current automatic and explicit Skill resource roots.
+    pub skill_discovery: SkillDiscoveryConfig,
     /// The immutable configured MCP server set for this coordinator, keyed
     /// by the one authoritative server identity.
     pub mcp_servers: McpServerBindings,
@@ -77,6 +85,8 @@ struct CoordinatorInner {
     conversation_id: ConversationId,
     workspace: Workspace,
     base_tool_registry: Arc<ToolRegistry>,
+    tool_activation: ToolActivationPolicy,
+    skill_discovery: SkillDiscoveryConfig,
     mcp_servers: McpServerBindings,
     mcp_runtimes: tokio::sync::Mutex<BTreeMap<McpServerId, Arc<McpServerRuntime>>>,
     /// The ownership cancellation root of every in-flight conversation-owned
@@ -200,6 +210,7 @@ pub struct PreparedCapabilityCandidate {
     node: Option<crate::skills::environments::NodeEnvironment>,
     effective_environment: ToolEnvironment,
     candidate_registry: Arc<ToolRegistry>,
+    available_tools: Arc<AvailableToolCatalog>,
     mcp_epochs: BTreeMap<McpServerId, u64>,
     /// The per-source availability outcome of this preparation (Issue
     /// #81). Only sources whose state is [`CapabilitySourceState::Ready`]
@@ -212,6 +223,12 @@ impl PreparedCapabilityCandidate {
     #[must_use]
     pub fn availability(&self) -> &CapabilityAvailability {
         &self.availability
+    }
+
+    /// The complete available Tool catalog, including inactive Tools.
+    #[must_use]
+    pub fn available_tools(&self) -> &AvailableToolCatalog {
+        &self.available_tools
     }
 
     /// The discovered and validated Skill packages of the candidate.
@@ -300,6 +317,8 @@ impl CapabilityCoordinator {
             ));
         }
         let mcp_servers = config.mcp_servers;
+        let tool_activation = config.tool_activation;
+        let skill_discovery = config.skill_discovery;
         // Only the Python store *location* is computed here; the store
         // itself is opened inside the optional Python preparation
         // boundary (Issue #81), never in core construction.
@@ -310,6 +329,9 @@ impl CapabilityCoordinator {
             config.workspace.root().to_path_buf(),
             CapabilityRevision::default(),
             config.base_tool_registry.clone(),
+            Arc::new(AvailableToolCatalog::new(
+                config.base_tool_registry.definitions(),
+            )),
             initial_skills,
             None,
             None,
@@ -320,6 +342,8 @@ impl CapabilityCoordinator {
                 conversation_id: config.conversation_id,
                 workspace: config.workspace,
                 base_tool_registry: config.base_tool_registry,
+                tool_activation,
+                skill_discovery,
                 mcp_servers,
                 mcp_runtimes: tokio::sync::Mutex::new(BTreeMap::new()),
                 mcp_preparation_cancellation: crate::runtime::cancellation::CancellationSignal::new(
@@ -518,7 +542,9 @@ impl CapabilityCoordinator {
             .lock()
             .expect("capability state lock poisoned")
             .revision;
-        let packages = SkillDiscovery::new(&self.inner.workspace).discover()?;
+        let packages =
+            SkillDiscovery::with_config(&self.inner.workspace, self.inner.skill_discovery.clone())
+                .discover()?;
         let merged = merge_dependency_manifests(&packages)?;
         let python = self
             .inner
@@ -560,6 +586,8 @@ impl CapabilityCoordinator {
                 Vec::new()
             }
         };
+        let mut discovered_tools = Vec::<ToolRegistration>::new();
+        discovered_tools.extend(self.inner.base_tool_registry.registrations());
         let mut mcp_tools = Vec::new();
         let mut mcp_epochs = BTreeMap::new();
         // `BTreeMap` iteration is the deterministic identity order.
@@ -582,12 +610,15 @@ impl CapabilityCoordinator {
             }
         }
         mcp_tools.extend(python_tools);
-        let candidate_registry = Arc::new(
-            self.inner
-                .base_tool_registry
-                .compose(mcp_tools)
-                .map_err(|error| CapabilityPreparationError::ToolRegistry(error.to_string()))?,
+        discovered_tools.extend(
+            mcp_tools
+                .into_iter()
+                .map(|(definition, executor)| ToolRegistration::plain(definition, executor)),
         );
+        let (available_tools, candidate_registry) =
+            select_tools(&discovered_tools, &self.inner.tool_activation)
+                .map_err(CapabilityPreparationError::ToolActivation)?;
+        let candidate_registry = Arc::new(candidate_registry);
         Ok(PreparedCapabilityCandidate {
             base_revision,
             skills,
@@ -595,6 +626,7 @@ impl CapabilityCoordinator {
             node,
             effective_environment,
             candidate_registry,
+            available_tools: Arc::new(available_tools),
             mcp_epochs,
             availability,
         })
@@ -771,12 +803,11 @@ impl CapabilityCoordinator {
             .lock()
             .expect("capability state lock poisoned")
             .revision;
-        let candidate_registry = Arc::new(
-            self.inner
-                .base_tool_registry
-                .compose(Vec::new())
-                .map_err(|error| CapabilityPreparationError::ToolRegistry(error.to_string()))?,
-        );
+        let base_registrations = self.inner.base_tool_registry.registrations();
+        let (available_tools, candidate_registry) =
+            select_tools(&base_registrations, &self.inner.tool_activation)
+                .map_err(CapabilityPreparationError::ToolActivation)?;
+        let candidate_registry = Arc::new(candidate_registry);
         Ok(PreparedCapabilityCandidate {
             base_revision,
             skills: Arc::new(SkillSnapshot::new(Vec::new())),
@@ -784,6 +815,7 @@ impl CapabilityCoordinator {
             node: None,
             effective_environment: self.inner.base_environment.clone(),
             candidate_registry,
+            available_tools: Arc::new(available_tools),
             mcp_epochs: BTreeMap::new(),
             availability: CapabilityAvailability::new(),
         })
@@ -1120,6 +1152,7 @@ impl CapabilityCoordinator {
                 self.inner.workspace.root().to_path_buf(),
                 revision,
                 candidate.candidate_registry,
+                candidate.available_tools,
                 candidate.skills,
                 candidate.python,
                 candidate.node,
@@ -1377,8 +1410,9 @@ fn candidate_is_noop(
     candidate: &PreparedCapabilityCandidate,
     current: &CapabilitySnapshot,
 ) -> bool {
-    candidate.skills.bindings() == current.skills().bindings()
+    candidate.skills.semantically_equivalent(current.skills())
         && candidate.candidate_registry.definitions() == current.tool_registry().definitions()
+        && candidate.available_tools.as_ref() == current.available_tools()
         && candidate.python.as_ref().map(|env| env.digest.clone())
             == current.python_environment().map(|env| env.digest.clone())
         && candidate.node.as_ref().map(|env| env.digest.clone())
@@ -1519,8 +1553,15 @@ body
         let workspace = Workspace::new(&workspace_root).expect("workspace");
         let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
             conversation_id: crate::runtime::identity::ConversationId::new("conv-test"),
-            workspace,
+            workspace: workspace.clone(),
             base_tool_registry: Arc::new(ToolRegistry::new()),
+            tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+            // Keep this unit fixture independent of the developer's HOME:
+            // the relocation proof owns both current roots explicitly.
+            skill_discovery: crate::skills::SkillDiscoveryConfig {
+                automatic_roots: vec![workspace.root().join(".agents/skills")],
+                explicit_paths: Vec::new(),
+            },
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: dir.path().join("skill-env"),
@@ -1531,6 +1572,46 @@ body
 
     async fn prepare(coordinator: &CapabilityCoordinator) -> super::PreparedCapabilityCandidate {
         coordinator.prepare_candidate().await.expect("prepare")
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn relocating_identical_skill_resources_is_a_new_capability_revision() {
+        let (dir, mut coordinator) = coordinator();
+        let first = coordinator
+            .commit(prepare(&coordinator).await)
+            .expect("first commit");
+        let resource_path = std::path::Path::new(".rustx/skills/pdf/SKILL.md");
+        let root_a = dir.path().join("workspace/.agents/skills");
+        let root_b = dir.path().join("relocated-skills");
+        std::fs::create_dir_all(&root_b).expect("root B");
+        std::fs::rename(root_a.join("pdf"), root_b.join("pdf")).expect("relocate Skill");
+
+        // The package content and version identity are unchanged. Only the
+        // current runtime resource mapping moved, so rediscovery must not be
+        // treated as an activation no-op.
+        let inner = Arc::get_mut(&mut coordinator.inner).expect("unshared coordinator");
+        inner.skill_discovery = crate::skills::SkillDiscoveryConfig {
+            automatic_roots: vec![root_b.clone()],
+            explicit_paths: Vec::new(),
+        };
+        let candidate = prepare(&coordinator).await;
+        let second = coordinator.commit(candidate).expect("relocated commit");
+        assert_eq!(first.revision(), CapabilityRevision::new(1));
+        assert_eq!(second.revision(), CapabilityRevision::new(2));
+        assert_eq!(first.skills().bindings(), second.skills().bindings());
+        assert_ne!(
+            first.skills().resources(),
+            second.skills().resources(),
+            "the executable virtual-resource mapping changed"
+        );
+        assert_eq!(
+            second
+                .skills()
+                .resources()
+                .resolve(resource_path)
+                .expect("relocated Read resource"),
+            root_b.join("pdf/SKILL.md").as_path()
+        );
     }
 
     /// Attempt acquisition wins first: the commit is parked inside its
@@ -1673,6 +1754,8 @@ body
             conversation_id: crate::runtime::identity::ConversationId::new("conv-lazy-store"),
             workspace: Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(ToolRegistry::new()),
+            tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+            skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: store_root,
@@ -1785,6 +1868,8 @@ mod mcp_race_tests {
             conversation_id: ConversationId::new("mcp-race"),
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
+            tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+            skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::from([(
                 server_id.clone(),
                 crate::tools::mcp::McpServerBinding {
@@ -1854,6 +1939,8 @@ mod mcp_race_tests {
             conversation_id: ConversationId::new("mcp-drain"),
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
+            tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+            skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
             mcp_servers,
             base_environment: ToolEnvironment::new(),
             environment_store_root: dir.path().join("skill-env"),
@@ -2235,6 +2322,7 @@ mod mcp_race_tests {
                 artifacts: runtime_bundle.artifacts(),
                 tool_output: runtime_bundle.tool_output(),
                 environment: runtime_bundle.environment(),
+                skill_resources: None,
             },
         )
         .await;

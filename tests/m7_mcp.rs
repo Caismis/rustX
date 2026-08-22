@@ -117,6 +117,7 @@ mod unix_tests {
                 artifacts: runtime_bundle.artifacts(),
                 tool_output: runtime_bundle.tool_output(),
                 environment: runtime_bundle.environment(),
+                skill_resources: None,
             },
         )
         .await;
@@ -162,6 +163,7 @@ mod unix_tests {
                 artifacts: runtime_bundle.artifacts(),
                 tool_output: runtime_bundle.tool_output(),
                 environment: runtime_bundle.environment(),
+                skill_resources: None,
             },
         );
         tokio::pin!(slow_future);
@@ -290,6 +292,7 @@ mod unix_tests {
                 artifacts: runtime_bundle.artifacts(),
                 tool_output: runtime_bundle.tool_output(),
                 environment: runtime_bundle.environment(),
+                skill_resources: None,
             },
         )
         .await;
@@ -345,6 +348,7 @@ mod unix_tests {
                 artifacts: runtime_bundle.artifacts(),
                 tool_output: runtime_bundle.tool_output(),
                 environment: runtime_bundle.environment(),
+                skill_resources: None,
             },
         );
         tokio::pin!(slow_future);

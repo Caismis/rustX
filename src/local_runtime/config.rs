@@ -1,10 +1,9 @@
-//! The bounded explicit local conversation configuration (Issue #42).
+//! The bounded explicit current runtime/project configuration (Issue #96).
 //!
-//! This is deliberately **not** M10 configuration discovery. There is no
-//! global/project search path, no precedence chain, no named product
-//! profile, no interactive editor, no credential store, and no manifest
-//! migration layer: the local runtime is handed explicit file paths and
-//! reads exactly those files.
+//! This is deliberately a current-runtime input, never durable Session state.
+//! It is read for every process start, including resume, so changing MCP,
+//! Skill, Tool, environment, context, timezone, or agent settings takes
+//! effect without rewriting the Session catalog.
 //!
 //! Unknown fields are rejected everywhere. A typo must fail startup loudly
 //! rather than silently changing runtime semantics.
@@ -17,33 +16,36 @@ use serde::{Deserialize, Serialize};
 
 use crate::context::SessionContextPolicy;
 use crate::model::session::SessionModelConfig;
-use crate::runtime::identity::{AgentId, ConversationId, McpServerId};
+use crate::runtime::identity::{AgentId, McpServerId};
 use crate::tools::environment::{ToolEnvironment, ToolEnvironmentError};
 use crate::tools::mcp::{McpServerBinding, McpServerBindings, McpTransportConfig};
 use crate::tools::native::NativeToolPolicies;
 use crate::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy, ToolInvocationPolicy};
 
-/// The only local conversation schema version this runtime accepts.
-pub const LOCAL_CONVERSATION_SCHEMA_VERSION: u32 = 1;
+/// The only current runtime configuration schema version this runtime accepts.
+pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 2;
 
-/// The explicit local conversation configuration of one conversation runtime.
+/// The explicit current runtime/project configuration.
+///
+/// No field in this type is persisted by [`SessionCatalog`](super::session::SessionCatalog).
+/// The selected Session contributes its separate [`SessionModelConfig`] state
+/// during composition; every other field here remains current launch-scoped
+/// runtime state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct LocalConversationConfig {
-    /// The conversation schema version.
+pub struct CurrentRuntimeConfig {
+    /// The runtime configuration schema version.
     #[serde(default = "default_schema_version")]
     pub schema_version: u32,
-    /// The conversation identity this process owns.
-    pub conversation_id: ConversationId,
     /// The agent executed by attempts of this conversation.
     pub agent_id: AgentId,
-    /// The initial authoritative session model configuration.
+    /// The default model used when a brand-new Session is created.
     pub model: SessionModelConfig,
-    /// The conversation IANA timezone used by the temporal Agent Status
+    /// The current IANA timezone used by the temporal Agent Status
     /// section. The process/system local timezone is never consulted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timezone: Option<Tz>,
-    /// The static session-owned context policy.
+    /// The current runtime context policy.
     pub context: ContextPolicyDocument,
     /// The ecosystem-compatible named MCP server map, keyed by server
     /// identity exactly as mainstream MCP clients spell it.
@@ -58,28 +60,50 @@ pub struct LocalConversationConfig {
     /// The per-tool execution policies of the native tool plane.
     #[serde(default)]
     pub native_tools: NativeToolPoliciesDocument,
-    /// The base authorized tool environment of the conversation.
+    /// The current base authorized tool environment.
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
+    /// Native/built-in tool names active by default. An empty list disables
+    /// default built-in activation while leaving those tools available.
+    #[serde(default = "default_tools")]
+    pub default_tools: Vec<String>,
+    /// Explicit Skill roots or package paths supplied by the project config.
+    #[serde(default)]
+    pub skills: Vec<PathBuf>,
 }
 
 const fn default_schema_version() -> u32 {
-    LOCAL_CONVERSATION_SCHEMA_VERSION
+    CURRENT_RUNTIME_SCHEMA_VERSION
 }
 
-impl LocalConversationConfig {
-    /// Parses and validates a session configuration from JSON bytes.
+fn default_tools() -> Vec<String> {
+    [
+        "background_task",
+        "read",
+        "write",
+        "edit",
+        "glob",
+        "grep",
+        "bash",
+        "subagent",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
+}
+
+impl CurrentRuntimeConfig {
+    /// Parses and validates current runtime configuration from JSON bytes.
     ///
     /// # Errors
     ///
-    /// Returns [`LocalConversationConfigError::Syntax`] for malformed JSON or
+    /// Returns [`CurrentRuntimeConfigError::Syntax`] for malformed JSON or
     /// unknown fields, and a specific validation error otherwise.
-    pub fn from_json_slice(bytes: &[u8]) -> Result<Self, LocalConversationConfigError> {
-        let config: Self = serde_json::from_slice(bytes).map_err(|error| {
-            LocalConversationConfigError::Syntax {
+    pub fn from_json_slice(bytes: &[u8]) -> Result<Self, CurrentRuntimeConfigError> {
+        let config: Self =
+            serde_json::from_slice(bytes).map_err(|error| CurrentRuntimeConfigError::Syntax {
                 detail: error.to_string(),
-            }
-        })?;
+            })?;
         config.validate()?;
         Ok(config)
     }
@@ -89,21 +113,26 @@ impl LocalConversationConfig {
     /// # Errors
     ///
     /// Returns the first validation failure.
-    pub fn validate(&self) -> Result<(), LocalConversationConfigError> {
-        if self.schema_version != LOCAL_CONVERSATION_SCHEMA_VERSION {
-            return Err(LocalConversationConfigError::UnsupportedSchemaVersion {
-                supported: LOCAL_CONVERSATION_SCHEMA_VERSION,
+    pub fn validate(&self) -> Result<(), CurrentRuntimeConfigError> {
+        if self.schema_version != CURRENT_RUNTIME_SCHEMA_VERSION {
+            return Err(CurrentRuntimeConfigError::UnsupportedSchemaVersion {
+                supported: CURRENT_RUNTIME_SCHEMA_VERSION,
                 found: self.schema_version,
             });
         }
-        if self.conversation_id.as_str().is_empty() || self.agent_id.as_str().is_empty() {
-            return Err(LocalConversationConfigError::Invalid {
-                detail: "conversationId and agentId must be non-empty".to_owned(),
+        if self.agent_id.as_str().is_empty() {
+            return Err(CurrentRuntimeConfigError::Invalid {
+                detail: "agentId must be non-empty".to_owned(),
             });
         }
         if self.context.summary_output_cap == Some(0) {
-            return Err(LocalConversationConfigError::Invalid {
+            return Err(CurrentRuntimeConfigError::Invalid {
                 detail: "context.summaryOutputCap must be positive when present".to_owned(),
+            });
+        }
+        if self.default_tools.iter().any(|name| name.trim().is_empty()) {
+            return Err(CurrentRuntimeConfigError::Invalid {
+                detail: "defaultTools entries must be non-empty names".to_owned(),
             });
         }
         // Duplicate MCP identity is structurally impossible: `mcpServers` is
@@ -114,7 +143,7 @@ impl LocalConversationConfig {
         Ok(())
     }
 
-    /// The static session context policy this configuration expresses.
+    /// The context policy supplied to the current runtime composition.
     #[must_use]
     pub const fn context_policy(&self) -> SessionContextPolicy {
         SessionContextPolicy {
@@ -128,15 +157,15 @@ impl LocalConversationConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`LocalConversationConfigError::Environment`] when an entry is
+    /// Returns [`CurrentRuntimeConfigError::Environment`] when an entry is
     /// malformed or claims a runtime-owned key.
-    pub fn tool_environment(&self) -> Result<ToolEnvironment, LocalConversationConfigError> {
+    pub fn tool_environment(&self) -> Result<ToolEnvironment, CurrentRuntimeConfigError> {
         ToolEnvironment::from_authorized(
             self.environment
                 .iter()
                 .map(|(key, value)| (key.clone(), value.clone())),
         )
-        .map_err(LocalConversationConfigError::Environment)
+        .map_err(CurrentRuntimeConfigError::Environment)
     }
 
     /// The typed MCP runtime bindings this configuration expresses.
@@ -148,13 +177,13 @@ impl LocalConversationConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`LocalConversationConfigError::Invalid`] when an entry is
+    /// Returns [`CurrentRuntimeConfigError::Invalid`] when an entry is
     /// ambiguous, contradictory, or incomplete, or when the policy overlay
     /// names a server that `mcpServers` does not declare.
-    pub fn mcp_bindings(&self) -> Result<McpServerBindings, LocalConversationConfigError> {
+    pub fn mcp_bindings(&self) -> Result<McpServerBindings, CurrentRuntimeConfigError> {
         for server_id in self.mcp_tool_policies.keys() {
             if !self.mcp_servers.contains_key(server_id) {
-                return Err(LocalConversationConfigError::Invalid {
+                return Err(CurrentRuntimeConfigError::Invalid {
                     detail: format!(
                         "mcpToolPolicies names {server_id}, which mcpServers does not declare"
                     ),
@@ -165,12 +194,12 @@ impl LocalConversationConfig {
             .iter()
             .map(|(server_id, document)| {
                 if server_id.as_str().is_empty() {
-                    return Err(LocalConversationConfigError::Invalid {
+                    return Err(CurrentRuntimeConfigError::Invalid {
                         detail: "mcpServers keys must be non-empty server identities".to_owned(),
                     });
                 }
                 let transport = document.to_transport().map_err(|detail| {
-                    LocalConversationConfigError::Invalid {
+                    CurrentRuntimeConfigError::Invalid {
                         detail: format!("mcpServers.{server_id}: {detail}"),
                     }
                 })?;
@@ -191,7 +220,7 @@ impl LocalConversationConfig {
     }
 }
 
-/// The static session-owned context policy document.
+/// The static current-runtime context policy document.
 ///
 /// There is deliberately no context window here: the window belongs to the
 /// selected model and is derived per attempt from that attempt's immutable
@@ -440,10 +469,10 @@ impl McpServerDocument {
     }
 }
 
-/// A local conversation configuration failure.
+/// A current runtime configuration failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LocalConversationConfigError {
-    /// The document is not valid JSON for the conversation schema.
+pub enum CurrentRuntimeConfigError {
+    /// The document is not valid JSON for the runtime schema.
     Syntax {
         /// The parser detail.
         detail: String,
@@ -464,18 +493,18 @@ pub enum LocalConversationConfigError {
     Environment(ToolEnvironmentError),
 }
 
-impl std::fmt::Display for LocalConversationConfigError {
+impl std::fmt::Display for CurrentRuntimeConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Syntax { detail } => {
-                write!(f, "malformed local conversation config: {detail}")
+                write!(f, "malformed current runtime config: {detail}")
             }
             Self::UnsupportedSchemaVersion { supported, found } => write!(
                 f,
-                "unsupported local conversation schemaVersion {found}; this runtime speaks {supported}"
+                "unsupported current runtime schemaVersion {found}; this runtime speaks {supported}"
             ),
             Self::Invalid { detail } => {
-                write!(f, "invalid local conversation config: {detail}")
+                write!(f, "invalid current runtime config: {detail}")
             }
             Self::Environment(error) => {
                 write!(f, "invalid base tool environment: {error:?}")
@@ -484,14 +513,13 @@ impl std::fmt::Display for LocalConversationConfigError {
     }
 }
 
-impl std::error::Error for LocalConversationConfigError {}
+impl std::error::Error for CurrentRuntimeConfigError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{LocalConversationConfig, LocalConversationConfigError};
+    use super::{CurrentRuntimeConfig, CurrentRuntimeConfigError};
 
     const MINIMAL: &str = r#"{
-        "conversationId": "conv-1",
         "agentId": "agent-a",
         "model": {"model": "p/m"},
         "context": {"reserveTokens": 1024, "keepRecentTokens": 4096}
@@ -500,8 +528,7 @@ mod tests {
     /// The minimal configuration parses and derives its policy pieces.
     #[test]
     fn minimal_configuration_parses() {
-        let config = LocalConversationConfig::from_json_slice(MINIMAL.as_bytes()).expect("valid");
-        assert_eq!(config.conversation_id.as_str(), "conv-1");
+        let config = CurrentRuntimeConfig::from_json_slice(MINIMAL.as_bytes()).expect("valid");
         assert_eq!(config.context_policy().reserve_tokens, 1024);
         assert!(config.mcp_bindings().expect("bindings").is_empty());
         assert!(
@@ -523,8 +550,8 @@ mod tests {
             "futureKnob": true
         }"#;
         assert!(matches!(
-            LocalConversationConfig::from_json_slice(json.as_bytes()).expect_err("must fail"),
-            LocalConversationConfigError::Syntax { .. }
+            CurrentRuntimeConfig::from_json_slice(json.as_bytes()).expect_err("must fail"),
+            CurrentRuntimeConfigError::Syntax { .. }
         ));
     }
 
@@ -533,13 +560,13 @@ mod tests {
     fn unsupported_schema_version_fails() {
         let json = r#"{
             "schemaVersion": 99,
-            "conversationId": "c", "agentId": "a",
+            "agentId": "a",
             "model": {"model": "p/m"},
             "context": {"reserveTokens": 0, "keepRecentTokens": 0}
         }"#;
         assert!(matches!(
-            LocalConversationConfig::from_json_slice(json.as_bytes()).expect_err("must fail"),
-            LocalConversationConfigError::UnsupportedSchemaVersion { .. }
+            CurrentRuntimeConfig::from_json_slice(json.as_bytes()).expect_err("must fail"),
+            CurrentRuntimeConfigError::UnsupportedSchemaVersion { .. }
         ));
     }
 
@@ -547,7 +574,7 @@ mod tests {
     #[test]
     fn array_based_mcp_servers_are_rejected() {
         let json = r#"{
-            "conversationId": "c", "agentId": "a",
+            "agentId": "a",
             "model": {"model": "p/m"},
             "context": {"reserveTokens": 0, "keepRecentTokens": 0},
             "mcpServers": [
@@ -555,8 +582,8 @@ mod tests {
             ]
         }"#;
         assert!(matches!(
-            LocalConversationConfig::from_json_slice(json.as_bytes()).expect_err("must fail"),
-            LocalConversationConfigError::Syntax { .. }
+            CurrentRuntimeConfig::from_json_slice(json.as_bytes()).expect_err("must fail"),
+            CurrentRuntimeConfigError::Syntax { .. }
         ));
     }
 
@@ -568,12 +595,8 @@ mod tests {
             r#""keepRecentTokens": 4096"#,
             r#""keepRecentTokens": 0, "summaryOutputCap": 0"#,
         );
-        let error =
-            LocalConversationConfig::from_json_slice(json.as_bytes()).expect_err("must fail");
-        assert!(matches!(
-            error,
-            LocalConversationConfigError::Invalid { .. }
-        ));
+        let error = CurrentRuntimeConfig::from_json_slice(json.as_bytes()).expect_err("must fail");
+        assert!(matches!(error, CurrentRuntimeConfigError::Invalid { .. }));
         assert!(
             error
                 .to_string()

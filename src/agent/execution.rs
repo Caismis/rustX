@@ -70,6 +70,8 @@
 //! Cancellation is a generic Agent Loop invariant for every execution:
 //! observable cancellation is checked before every model turn begins.
 
+use std::sync::Arc;
+
 use futures_util::StreamExt;
 
 use crate::capabilities::AttemptCapabilityLease;
@@ -3004,6 +3006,7 @@ impl<'a> AgentExecution<'a> {
             artifacts: self.tool_runtime.artifacts(),
             tool_output: self.tool_runtime.tool_output(),
             environment: self.capability.snapshot().effective_environment(),
+            skill_resources: Some(self.capability.snapshot().skills().resources()),
         };
         let future = executor.execute(invocation.clone(), context);
         tokio::pin!(future);
@@ -3040,11 +3043,13 @@ impl<'a> AgentExecution<'a> {
         // whole lifetime, even after this attempt terminates and later
         // revisions activate.
         let environment = self.capability.snapshot().effective_environment().clone();
-        match self
-            .tool_runtime
-            .background()
-            .prepare_dispatch(invocation, &executor, environment)
-        {
+        let skill_resources = Arc::new(self.capability.snapshot().skills().resources().clone());
+        match self.tool_runtime.background().prepare_dispatch(
+            invocation,
+            &executor,
+            environment,
+            Some(skill_resources),
+        ) {
             Ok(prepared) => {
                 match self
                     .tool_runtime
@@ -4328,6 +4333,8 @@ mod tests {
                 conversation_id: tool_runtime.conversation_id().clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: tools,
+                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("env-store"),

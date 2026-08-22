@@ -111,6 +111,7 @@ async fn run_tool_unchecked(
                 artifacts: fixture.runtime.artifacts(),
                 tool_output: fixture.runtime.tool_output(),
                 environment: fixture.runtime.environment(),
+                skill_resources: None,
             },
         )
         .await

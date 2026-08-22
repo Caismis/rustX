@@ -329,9 +329,10 @@ Exit criteria:
 
 Implemented:
 
-- Skill package discovery from the single project-local root
-  `<workspace>/.agents/skills/` (one level, deterministic ordering,
-  symlink rejection, whole-transaction failure on any malformed candidate)
+- Skill package discovery from bounded user/global and project roots, plus
+  explicit configured and CLI paths (deterministic ordering, duplicate
+  identity rejection, symlink rejection, whole-transaction failure on any
+  malformed candidate)
 - Standard Agent Skills `SKILL.md` frontmatter parsing/validation and the
   compact model-visible catalog projection
 - Content-derived `SkillVersionId` hashing over the complete package state
@@ -1231,7 +1232,7 @@ registry, `CapabilityCoordinator` (prepared and committed before serving),
   semantic conversation coordinator), and one `RuntimeClientHost`
   projection/control adapter over it — and serves its endpoint over the
   Issue #38 stdio/JSONL transport with a protocol-only stdout.
-Model catalog and session configuration are explicit file paths.
+Model catalog and current runtime configuration are explicit file paths.
 
 M10 productizes that established seam. It owns configuration discovery and
 precedence, named profiles, manifest/workspace UX, an interactive config

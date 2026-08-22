@@ -5,8 +5,8 @@
 //!
 //! The skills plane owns:
 //!
-//! - Skill discovery from the single project-local root
-//!   `<workspace>/.agents/skills/` (`package::SkillDiscovery`);
+//! - Skill discovery from current user/global, project, configured, and CLI
+//!   roots (`package::SkillDiscovery`);
 //! - Agent Skills `SKILL.md` frontmatter parsing and validation
 //!   (`package::SkillPackage`);
 //! - deterministic content-derived package/version hashing (`identity`);
@@ -22,11 +22,12 @@
 //! supervised subprocess hierarchy settles and publication returns.
 //!
 //! Skills remain workflow/instruction packages: they are not tools and not
-//! a parallel execution protocol. Skill execution flows through ordinary
-//! native Read/Bash against the Workspace. The capability coordination
-//! layer (`crate::capabilities`) owns the immutable capability snapshot,
-//! attempt leases, and quiescent commit; it consumes this plane but never
-//! vice versa.
+//! a parallel execution protocol. Skill bodies and supporting files are
+//! current resources read through the runtime-owned virtual Skill namespace
+//! and ordinary native Read semantics; they do not create a second execution
+//! protocol. The capability coordination layer (`crate::capabilities`) owns
+//! the immutable capability snapshot, attempt leases, and quiescent commit;
+//! it consumes this plane but never vice versa.
 
 mod catalog;
 mod dependencies;
@@ -44,4 +45,7 @@ pub use environments::{
     PythonEnvironment, RuntimeVersions, SkillEnvironmentBackend, node_environment_digest,
     python_environment_digest,
 };
-pub use package::{SkillDiscovery, SkillPackage, SkillPackageError};
+pub use package::{
+    RUSTX_SKILLS_DIRECTORY, SkillDiscovery, SkillDiscoveryConfig, SkillPackage, SkillPackageError,
+    SkillResourceMap,
+};

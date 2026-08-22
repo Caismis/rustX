@@ -3,7 +3,7 @@
 //! This module owns everything between explicit startup configuration and
 //! the Runtime Client endpoint a transport wraps:
 //!
-//! - [`config`] — the bounded explicit bootstrap conversation configuration;
+//! - [`config`] — the bounded explicit current runtime/project configuration;
 //! - [`composition`] — the one Rust-side composition owner;
 //! - [`cli`] — the bounded startup argument contract;
 //! - [`serve`] — the process lifecycle over the Issue #38 stdio/JSONL
@@ -33,7 +33,7 @@ pub use composition::{
     LocalRuntimeDependencies, LocalRuntimeError, LocalRuntimePaths, LocalSessionProduct,
 };
 pub use config::{
-    LOCAL_CONVERSATION_SCHEMA_VERSION, LocalConversationConfig, LocalConversationConfigError,
+    CURRENT_RUNTIME_SCHEMA_VERSION, CurrentRuntimeConfig, CurrentRuntimeConfigError,
     McpServerDocument, McpTransportType,
 };
 pub use serve::{ProcessOutcome, run_process, serve};

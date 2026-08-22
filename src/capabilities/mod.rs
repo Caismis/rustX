@@ -49,6 +49,7 @@ mod availability;
 mod coordinator;
 mod error;
 mod snapshot;
+mod tools;
 
 pub use availability::{
     CAPABILITY_FAILURE_REASON_MAX_BYTES, CapabilityAvailability, CapabilitySourceId,
@@ -60,6 +61,7 @@ pub use coordinator::{
 };
 pub use error::{CapabilityCommitError, CapabilityPreparationError};
 pub use snapshot::CapabilitySnapshot;
+pub use tools::{AvailableTool, AvailableToolCatalog, ToolActivationPolicy};
 
 /// The commit-boundary synchronization hook, used by the Runtime Client
 /// lock-order tests to park a commit with the coordinator lock held.

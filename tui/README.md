@@ -88,20 +88,26 @@ cargo build --bin rustx
 pnpm --dir tui start \
   --binary "$PWD/target/debug/rustx" \
   --models "$PWD/examples/local-runtime/models.json" \
-  --session "$PWD/examples/local-runtime/session.json" \
+  --config "$PWD/examples/local-runtime/rustx.json" \
   --workspace "$PWD/examples/local-runtime/workspace" \
   --runtime-root "$PWD/examples/local-runtime/.rustx"
 ```
 
-The four startup paths are passed straight through. The `--session` path is
-only the bootstrap conversation configuration; after startup the native
-SessionCatalog/SessionGraph under `--runtime-root` owns user sessions and
-lineages. **The client never opens,
+The four startup paths are passed straight through. The `--config` path is
+the current runtime/project configuration; after startup the native
+SessionCatalog/SessionGraph under `--runtime-root` owns durable user sessions
+and lineages. **The client never opens,
 parses, or interprets any of them** — `models.json` is a runtime-owned model
 authority, and reading it here would create a second one. Provider credentials
 are resolved by the Rust process from the environment it inherits. For the
 complete copyable configuration and Python-tool example, see
 [`examples/local-runtime/README.md`](../examples/local-runtime/README.md).
+
+The TUI may also forward the runtime's bounded startup controls:
+`--skill <path>` (repeatable), `--no-skills`, `--no-builtin-tools`,
+`--no-tools`, `--tools <a,b,c>`, and `--exclude-tools <a,b,c>`. It preserves
+their supplied values and order; Rust owns discovery, validation, activation,
+and all semantic errors.
 
 ## Startup sequence
 
@@ -228,7 +234,8 @@ does not implement a parallel Session system.
 
 - `/model [show|provider/model]` — open the searchable model selector, show the
   current model view, or select a model directly.
-- `/tools` — show the active runtime tool catalog.
+- `/tools` — show the runtime-published Active Tools and the Available but
+  inactive Tools separately.
 - `/skills` — show the active Skill catalog.
 - `/status` — show the runtime-composed Agent Status and diagnostics.
 

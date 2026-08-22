@@ -226,6 +226,14 @@ impl RuntimeClientFixtureBuilder {
                 conversation_id: tool_runtime.conversation_id().clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(self.base_tools),
+                tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+                skill_discovery: rustx::skills::SkillDiscoveryConfig {
+                    automatic_roots: vec![
+                        tool_runtime.workspace().root().join(".rustx/skills"),
+                        tool_runtime.workspace().root().join(".agents/skills"),
+                    ],
+                    explicit_paths: Vec::new(),
+                },
                 mcp_servers: self.mcp_servers,
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: workspace.path().join("skill-env"),

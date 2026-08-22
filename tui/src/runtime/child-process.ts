@@ -7,7 +7,7 @@
  * and never inspects a byte of stdout.
  *
  * The startup paths pass straight through to the binary. This client never
- * reads or interprets `models.json`, the bootstrap conversation config, the
+ * reads or interprets `models.json`, the current runtime config, the
  * workspace, or the runtime root: those are Rust-owned configuration, and
  * reading them here would create a second model/Session authority.
  *
@@ -28,15 +28,33 @@ export const DEFAULT_TERMINATION_GRACE_MS = 5_000;
 /** The explicit startup paths the `rustx` binary requires. */
 export interface RuntimePaths {
   models: string;
-  session: string;
+  config: string;
   workspace: string;
   runtimeRoot: string;
+}
+
+/** Startup capability controls forwarded verbatim to the Rust owner. */
+export interface RuntimeStartupOptions {
+  /** Repeatable explicit Skill package/root paths, in caller order. */
+  skillPaths: string[];
+  /** Disable automatic/default Skill roots. */
+  noSkills: boolean;
+  /** Disable native/built-in Tool activation. */
+  noBuiltinTools: boolean;
+  /** Disable every active Tool. */
+  noTools: boolean;
+  /** Exact comma-separated strict Tool allowlist, when supplied. */
+  tools?: string;
+  /** Exact comma-separated final Tool exclusions, when supplied. */
+  excludeTools?: string;
 }
 
 export interface ChildRuntimeProcessOptions {
   /** Path to the `rustx` binary. */
   binary: string;
   paths: RuntimePaths;
+  /** Capability startup controls owned semantically by the Rust runtime. */
+  startup?: RuntimeStartupOptions;
   /** The environment handed to the child. Defaults to this process's own. */
   env?: NodeJS.ProcessEnv;
   /** Working directory of the child. */
@@ -92,17 +110,38 @@ export class ChildRuntimeProcess {
 
   /** Spawns the binary with the explicit startup argument contract. */
   static spawn(options: ChildRuntimeProcessOptions): ChildRuntimeProcess {
+    const startup = options.startup ?? emptyRuntimeStartupOptions();
+    const startupArguments: string[] = [];
+    for (const skillPath of startup.skillPaths) {
+      startupArguments.push("--skill", skillPath);
+    }
+    if (startup.noSkills) {
+      startupArguments.push("--no-skills");
+    }
+    if (startup.noBuiltinTools) {
+      startupArguments.push("--no-builtin-tools");
+    }
+    if (startup.noTools) {
+      startupArguments.push("--no-tools");
+    }
+    if (startup.tools !== undefined) {
+      startupArguments.push("--tools", startup.tools);
+    }
+    if (startup.excludeTools !== undefined) {
+      startupArguments.push("--exclude-tools", startup.excludeTools);
+    }
     const child = spawn(
       options.binary,
       [
         "--models",
         options.paths.models,
-        "--session",
-        options.paths.session,
+        "--config",
+        options.paths.config,
         "--workspace",
         options.paths.workspace,
         "--runtime-root",
         options.paths.runtimeRoot,
+        ...startupArguments,
       ],
       {
         cwd: options.cwd,
@@ -230,6 +269,15 @@ export class ChildRuntimeProcess {
     this.#stderrTruncatedBytes += dropped;
     this.#stderrTail = combined.subarray(dropped);
   }
+}
+
+function emptyRuntimeStartupOptions(): RuntimeStartupOptions {
+  return {
+    skillPaths: [],
+    noSkills: false,
+    noBuiltinTools: false,
+    noTools: false,
+  };
 }
 
 function delay(ms: number): Promise<void> {

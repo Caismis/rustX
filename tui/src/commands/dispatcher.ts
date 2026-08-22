@@ -28,6 +28,7 @@ import {
   capabilitySummary,
   describeConfiguredReasoning,
   describeReasoning,
+  inactiveToolsByOrigin,
   originLabel,
   outcomeLabel,
   skills,
@@ -385,7 +386,7 @@ export class CommandDispatcher {
    * With no argument it opens the searchable selector over the runtime's
    * `model_catalog_get` result. With `show` it renders the projection's own
    * model view. With a model reference it reads the catalog and replaces the
-   * whole session configuration through `model_set`. It never parses a
+   * whole runtime configuration through `model_set`. It never parses a
    * provider catalog file, never touches a provider SDK, and never resolves
    * an API key.
    */
@@ -749,11 +750,27 @@ export function renderModel(state: PresentationState): string {
 
 /** `/tools` — the capability projection's tool catalog, generically. */
 export function renderTools(state: PresentationState): string {
-  const groups = toolsByOrigin(state);
-  if (groups.length === 0) {
-    return "No tools in the active capability set.";
+  const activeGroups = toolsByOrigin(state);
+  const inactiveGroups = inactiveToolsByOrigin(state);
+  if (activeGroups.length === 0 && inactiveGroups.length === 0) {
+    return "No available tools in the capability set.";
   }
   const lines = [`### Tools (capability revision ${state.capabilities.revision})`];
+  appendToolGroups(lines, "Active tools", activeGroups);
+  appendToolGroups(lines, "Available but inactive", inactiveGroups);
+  return lines.join("\n");
+}
+
+function appendToolGroups(
+  lines: string[],
+  heading: string,
+  groups: Array<{ origin: string; tools: import("../protocol/types.ts").RuntimeClientTool[] }>,
+): void {
+  lines.push("", `### ${heading}`);
+  if (groups.length === 0) {
+    lines.push("- none");
+    return;
+  }
   for (const group of groups) {
     lines.push("", `**${group.origin}**`);
     for (const tool of group.tools) {
@@ -764,7 +781,6 @@ export function renderTools(state: PresentationState): string {
       );
     }
   }
-  return lines.join("\n");
 }
 
 /** `/skills` — the runtime's Skill projection. No SKILL.md is ever read. */

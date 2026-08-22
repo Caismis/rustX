@@ -455,12 +455,12 @@ pub struct RuntimeClientStatusFact {
     pub value: String,
 }
 
-/// The deterministic active capability projection.
+/// The deterministic capability projection.
 ///
 /// Projected from the active [`CapabilitySnapshot`]
 /// ([`crate::capabilities::CapabilitySnapshot`]) plus the
 /// coordinator-owned availability state (Issue #81): the revision, the
-/// deterministic tool catalog, the deterministic Skill catalog, and the
+/// active Tool catalog, the complete available Tool catalog, the deterministic Skill catalog, and the
 /// typed per-source availability. No executors, environment paths,
 /// package-manager state, or private dependency internals appear.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -468,10 +468,18 @@ pub struct RuntimeClientStatusFact {
 pub struct CapabilityView {
     /// The active monotonic capability revision.
     pub revision: CapabilityRevision,
-    /// The deterministic tool catalog in registry order.
+    /// The deterministic active Tool catalog in registry order. Model
+    /// requests and execution use exactly this set.
     #[serde(default)]
     pub tools: Vec<RuntimeClientTool>,
-    /// The deterministic Skill catalog ordered by Skill name.
+    /// The complete available Tool catalog, including inactive Tools. The
+    /// active set above is an explicit subset; availability never implies
+    /// model activation.
+    #[serde(default)]
+    pub available_tools: Vec<RuntimeClientTool>,
+    /// The deterministic model-visible Skill catalog ordered by Skill name.
+    /// Skills hidden by `disable-model-invocation` remain in the runtime
+    /// capability manifest and resource snapshot but are omitted here.
     #[serde(default)]
     pub skills: Vec<RuntimeClientSkill>,
     /// The typed availability of every evaluated optional capability

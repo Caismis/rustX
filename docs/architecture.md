@@ -567,7 +567,7 @@ model/session.rs           SessionModelConfig (the session's authoritative
 model/fixture.rs           fixture construction for tests over the public
                            catalog path (no runtime behaviour of its own)
 local_runtime/             the local conversation runtime process: bounded
-                           session configuration, the one composition owner,
+                           current runtime configuration, the one composition owner,
                            the startup argument contract, and the stdio
                            serving lifecycle
 model/finish.rs            ModelFinishReason
@@ -628,9 +628,11 @@ deliberate pre-1.0 canonical correction, not a compatibility shim.
 
 `ContextManifest` gained `context_window_tokens` in M4, and Issue #42 moved
 its *ownership*: the context window belongs to the selected catalog model,
-not to the process. A session owns a static `SessionContextPolicy` (reserve
-tokens, keep-recent target, summary output cap) and each attempt derives its
-`ContextConfig` from that policy plus **its own** immutable model snapshot.
+not to the process. The current runtime/project configuration supplies the
+current `SessionContextPolicy` (reserve tokens, keep-recent target, summary
+output cap) for each composition; durable Session state does not persist it.
+Each attempt derives its `ContextConfig` from that current policy plus **its
+own** immutable model snapshot.
 The soft input limit is still
 `context_window_tokens - reserve_tokens - max_output_tokens` (checked,
 impossible configurations rejected), but an attempt on a 32k model never
@@ -2132,15 +2134,17 @@ All active skills in one conversation share one Python environment and one Node 
 
 The M6 implementation (`src/skills`) freezes the Skill plane boundary:
 
-- **Skill root.** There is exactly one Skill root,
-  `<workspace>/.agents/skills/`, anchored to the canonical Workspace root
-  and never to Bash's mutable working directory. Discovery is one level
-  only; a missing root is an empty Skill set; hidden root entries and
-  unrelated files are ignored; results are deterministically ordered by
-  validated Skill name; any malformed candidate fails the whole discovery
-  transaction; symlinked package roots and package-internal symlinks are
-  rejected (Skill-package validation only — the general Workspace symlink
-  contract for ordinary tools is unchanged).
+- **Skill roots.** Current resource discovery is bounded to user/global
+  `~/.rustx/skills/` and `~/.agents/skills/`, project
+  `<workspace>/.rustx/skills/` and `<workspace>/.agents/skills/`, plus
+  explicit project-config and CLI paths. Missing automatic roots are empty;
+  missing explicit paths fail. Hidden root entries and unrelated files are
+  ignored; results are deterministically ordered by validated Skill name;
+  any malformed candidate fails the whole discovery transaction; symlinked
+  package roots and package-internal symlinks are rejected (Skill-package
+  validation only — the general Workspace symlink contract for ordinary
+  tools is unchanged). Duplicate logical identities fail explicitly rather
+  than using root or filesystem enumeration order.
 - **Format.** `SKILL.md` is standard Agent Skills YAML frontmatter plus
   Markdown: `name` (validated against the standard naming rules and the
   parent directory), `description` (non-empty, standard length bound),
@@ -2185,23 +2189,26 @@ The M6 implementation (`src/skills`) freezes the Skill plane boundary:
   releases that entry only after materialization, validation, and publication
   return.
 - **Catalog.** The model-visible catalog is rendered compactly from the
-  attempt's immutable Skill snapshot: the common `.agents/skills/` root
-  once, then `- <name>: <description>` per validated Skill in
+  attempt's immutable Skill snapshot: the virtual `.rustx/skills/` root
+  once, then `- <name>: <description>` per visible validated Skill in
   deterministic order. `SKILL.md` bodies, supporting resources, dependency
-  metadata, and host absolute paths never appear.
+  metadata, and host absolute paths never appear. Discovered Skills marked
+  `disable-model-invocation: true` remain in the resource snapshot but are
+  omitted from this catalog.
 - **Execution.** Skills remain workflow/instruction packages: no
   `skill_search`/`activate_skill`/`skill_view`/`run_skill`/
   `run_skill_script` abstractions exist. The model reads
-  `.agents/skills/<name>/SKILL.md` and supporting files through native
-  Read and runs scripts through native Bash against the Workspace.
+  `.rustx/skills/<name>/SKILL.md` and supporting files through the
+  runtime-owned virtual resource map exposed by native Read, and runs
+  scripts through native Bash against the authorized Workspace.
 
-**Workspace-file limitation.** M6 freezes discovered identities, version
+**Skill resource boundary.** M6 freezes discovered identities, version
 identities, catalog metadata, dependency declarations, environment
-identities, and the effective ToolEnvironment. Skill source files
-(`SKILL.md`, scripts, references, assets) remain ordinary Workspace files
-accessed through normal Read/Bash semantics: M6 does not snapshot-mount
-them, and an external rewrite of `.agents/skills/...` after preparation is
-observed only at the next quiescent re-discovery.
+identities, and the effective ToolEnvironment. Accepted Skill source files
+(`SKILL.md`, scripts, references, assets) remain current filesystem resources
+accessed through the runtime-owned virtual namespace and native Read/Bash
+semantics. Host absolute paths are not published, and an external rewrite
+is observed only at the next quiescent re-discovery.
 
 ### Layer 6: Runtime services
 
@@ -2907,13 +2914,14 @@ Runtime Client is a projection/control/attachment adapter over it.
   `background_status`/`background_cancel` use the registry authority, and
   cancel acceptance is distinct from terminal settlement.
 - **Capability/tool/Skill inspection.** One semantic projection derives
-  from the active `CapabilitySnapshot`: the revision, a deterministic
-  tool catalog (id, name, description, input schema, execution/
-  concurrency/replay policies, origin builtin/MCP/Python), and a
-  deterministic Skill catalog (identity, version, name, description).
-  Executors, environment paths, package-manager state, and `SKILL.md`
-  bodies never appear; ordering is deterministic; inspection never
-  mutates the capability set.
+  from the active `CapabilitySnapshot`: the revision, the deterministic
+  active model-visible Tool catalog, the complete available Tool catalog
+  (including inactive definitions), and a deterministic model-visible Skill
+  catalog (identity, version, name, description). Executors, environment
+  paths, package-manager state, and `SKILL.md` bodies never appear; ordering
+  is deterministic; inspection never mutates the capability set. Available
+  and active Tools are distinct fields, and provider requests use only the
+  active field.
 - **Agent Status projection: composed exactly once.** One request
   preparation calls `AgentStatusComposer::compose` exactly once
   (`AgentExecution::compose_status`), sampling the clock once and
@@ -3107,9 +3115,9 @@ domain.
 ### Layer 8: The local conversation runtime process (Issue #42, Issue #61)
 
 ```text
-explicit startup arguments (--models --session --workspace --runtime-root)
+explicit startup arguments (--models --config --workspace --runtime-root)
         |
-ModelCatalog + bootstrap LocalConversationConfig
+ModelCatalog + CurrentRuntimeConfig + selected SessionPersistentState
         |
         +--> SessionCatalog / SessionGraph (native product authority)
         +--> active SessionNode -> one ConversationId
@@ -3135,6 +3143,67 @@ restarts its process attachment and the new process performs ordinary
 per-conversation recovery. The startup capability commit still happens
 *before* the conversation runtime is constructed, so it is not subject to the
 runtime's lifecycle gate.
+
+#### Issue #96 ownership and activation boundary
+
+The durable Session catalog persists Session identity, timestamps, graph
+nodes, ConversationId lineage, durable history, and intentionally
+Session-local choices. Its persisted state currently contains only the
+selected `SessionModelConfig`. It does not contain a copy of the current
+runtime/project configuration. In particular, MCP definitions, Tool or Skill
+activation, Skill roots/resources, environment, context policy, timezone,
+agent settings, and future capability-source settings are launch-scoped
+inputs.
+
+`--config <rustx.json>` is read and validated on every process start before
+the durable catalog is opened. Composition combines that current
+`CurrentRuntimeConfig` with the selected Session state and active node. A
+resume therefore uses current MCP/Skill/Tool/context/timezone/environment
+settings, while the selected Session model remains durable. A new Session
+uses the current runtime model default; clone/fork/tree operations copy only
+the intentionally Session-local state.
+
+On a fresh runtime root, composition resolves and validates the current model
+catalog and default model before it calls the mutating first-Session
+publication path. A failed first launch therefore cannot publish a durable
+root Session containing an invalid model. Existing Session models are then
+validated separately and remain authoritative for resume; current defaults
+are still validated on every launch without overwriting them.
+
+The capability coordinator remains the only candidate/commit owner. Its
+candidate preparation builds one available Tool catalog from native, MCP,
+Python, and future source registrations, applies hard eligibility, then
+applies startup activation. The selection order is:
+
+```text
+available definitions
+  -> eligible definitions
+  -> native defaultTools (unless a strict --tools allowlist is supplied)
+  -> strict --tools allowlist, if supplied
+  -> final --exclude-tools
+  -> immutable active ToolRegistry
+```
+
+`--no-builtin-tools` removes only built-ins from eligibility, `--no-tools`
+empties the active registry, and `defaultTools: []` leaves built-ins
+available but inactive. Unknown or ambiguous strict allowlist names fail
+deterministically. Execution ownership, approval, concurrency, and active
+selection remain separate policy dimensions. #100 will add approval/HITL,
+#98 will add Execution Modes, and #99 will change capability lease
+granularity; this #96 boundary implements none of those later behaviors.
+
+Skills are discovered from the current bounded roots and explicit paths,
+validated as packages, and stored in an immutable Skill snapshot. A Skill
+with `disable-model-invocation: true` remains discovered and validated but is
+omitted from the model-visible catalog. The catalog exposes compact names
+and descriptions; the model reads an accepted Skill's `SKILL.md` on demand
+through ordinary runtime-owned Read semantics. The TUI only projects the
+typed available/active Tool and Skill state. The full Skill binding set is
+retained in the attempt `CapabilitiesManifest`, while only visible bindings
+are projected to model-facing Skill catalogs. The virtual-to-host Skill
+resource map is part of Skill snapshot semantic equality, and background
+ownership captures that map before detachment alongside the effective
+environment; execution ownership cannot retarget capability resources.
 
 #### Native Session lifecycle and branching (M9.4 / Issue #88)
 
@@ -3270,7 +3339,7 @@ previously active.
 
 Startup failure ownership (Issue #81): failures that prove the core runtime
 itself cannot be constructed — startup files, model catalog/credentials/
-bindings, session configuration, workspace/private-store ownership, native
+bindings, current runtime configuration, workspace/private-store ownership, native
 tool plane construction, or the base capability plane (environment-store
 layout, malformed Skills, dependency conflicts, shared environment
 materialization) — remain fatal composition errors. Failures of **optional
@@ -3506,11 +3575,11 @@ the *effective* capability the Runtime Client advertises is text-only until an
 adapter can actually transmit an image reference. The claim is preserved so a
 client can explain why.
 
-Representative local session configuration:
+Representative current runtime/project configuration:
 
 ```json
 {
-  "conversationId": "conv-local-1",
+  "schemaVersion": 2,
   "agentId": "agent-default",
   "model": {
     "model": "gateway/reasoner",
@@ -3548,7 +3617,9 @@ Representative local session configuration:
   "nativeTools": {
     "bash": { "execution": "model_selectable", "concurrency": "sequential" }
   },
-  "environment": { "RUSTX_PROJECT": "demo" }
+  "environment": { "RUSTX_PROJECT": "demo" },
+  "defaultTools": ["read", "write", "edit", "glob", "grep", "bash"],
+  "skills": [".rustx/skills"]
 }
 ```
 
@@ -3572,7 +3643,7 @@ server; a server without an entry gets the deterministic default
 does not declare fails startup. Keeping it outside the connection object is
 what keeps `mcpServers` recognizable as ordinary MCP configuration.
 
-Normalization happens exactly once, at this boundary: `LocalConversationConfig`
+Normalization happens exactly once, at this boundary: `CurrentRuntimeConfig`
 validates each entry and turns it into a typed
 `BTreeMap<McpServerId, McpServerBinding>`. The shorthand spellings never
 reach `McpServerRuntime`, the `CapabilityCoordinator`, the Agent Loop, or the
@@ -3645,7 +3716,7 @@ not depend on Pi.
 
 ```text
 ChildRuntimeProcess     OS process lifecycle only: spawn with the explicit
-                        --models/--session/--workspace/--runtime-root
+                        --models/--config/--workspace/--runtime-root
                         contract, stdio, a bounded stderr tail, stdin close,
                         wait, bounded fallback termination. It never reads a
                         byte of stdout and never interprets a startup path.

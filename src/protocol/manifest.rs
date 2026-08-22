@@ -83,7 +83,8 @@ pub struct ModelManifest {
 pub struct CapabilitiesManifest {
     /// Monotonic capability revision snapshot by the attempt.
     pub revision: CapabilityRevision,
-    /// Bound skills.
+    /// All Skills bound into the immutable attempt capability set, including
+    /// Skills hidden from the model-visible catalog.
     #[serde(default)]
     pub skills: Vec<SkillBinding>,
     /// Bound tools.

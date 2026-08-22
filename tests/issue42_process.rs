@@ -60,7 +60,6 @@ fn models_json(base_url: &str) -> String {
 }
 
 const SESSION_JSON: &str = r#"{
-  "conversationId": "conv-process",
   "agentId": "agent-process",
   "model": {"model": "fixture/process-model"},
   "context": {"reserveTokens": 1024, "keepRecentTokens": 8192}
@@ -80,13 +79,13 @@ impl Process {
         let workspace = root.join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         std::fs::write(root.join("models.json"), models).expect("models.json");
-        std::fs::write(root.join("session.json"), session).expect("session.json");
+        std::fs::write(root.join("rustx.json"), session).expect("rustx.json");
         let mut command = tokio::process::Command::new(binary());
         command
             .arg("--models")
             .arg(root.join("models.json"))
-            .arg("--session")
-            .arg(root.join("session.json"))
+            .arg("--config")
+            .arg(root.join("rustx.json"))
             .arg("--workspace")
             .arg(&workspace)
             .arg("--runtime-root")
@@ -200,7 +199,7 @@ async fn the_process_serves_a_real_conversation_runtime() {
     else {
         panic!("initialize must succeed: {response:?}");
     };
-    assert_eq!(conversation_id.as_str(), "conv-process");
+    assert_eq!(conversation_id.as_str(), "conversation-1");
     assert_eq!(agent_id.as_str(), "agent-process");
 
     // inspect session model / effective capabilities
@@ -388,13 +387,13 @@ async fn invalid_startup_configuration_never_writes_to_stdout() {
         let workspace = root.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         std::fs::write(root.path().join("models.json"), &models).expect("models.json");
-        std::fs::write(root.path().join("session.json"), &session).expect("session.json");
+        std::fs::write(root.path().join("rustx.json"), &session).expect("rustx.json");
         let mut command = std::process::Command::new(binary());
         command
             .arg("--models")
             .arg(root.path().join("models.json"))
-            .arg("--session")
-            .arg(root.path().join("session.json"))
+            .arg("--config")
+            .arg(root.path().join("rustx.json"))
             .arg("--workspace")
             .arg(&workspace)
             .arg("--runtime-root")
@@ -467,13 +466,13 @@ async fn a_started_process_writes_no_banner() {
         models_json(&server.url("/v1")),
     )
     .expect("models.json");
-    std::fs::write(root.path().join("session.json"), SESSION_JSON).expect("session.json");
+    std::fs::write(root.path().join("rustx.json"), SESSION_JSON).expect("rustx.json");
 
     let mut child = std::process::Command::new(binary())
         .arg("--models")
         .arg(root.path().join("models.json"))
-        .arg("--session")
-        .arg(root.path().join("session.json"))
+        .arg("--config")
+        .arg(root.path().join("rustx.json"))
         .arg("--workspace")
         .arg(&workspace)
         .arg("--runtime-root")

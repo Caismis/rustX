@@ -28,6 +28,7 @@ async function startRuntime(parsed: TuiArguments): Promise<RuntimeAttachmentHand
   const child = ChildRuntimeProcess.spawn({
     binary: parsed.binary,
     paths: parsed.paths,
+    startup: parsed.startup,
   });
 
   const connection = new RuntimeClientConnection({

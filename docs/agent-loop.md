@@ -947,8 +947,10 @@ attempt uses exactly the pinned immutable `CapabilitySnapshot`:
 - the immutable Skill snapshot used to produce canonical Skill guidance
   context once per admitted primary step;
 - the effective `ToolEnvironment` for foreground executions;
-- the effective environment captured into every background dispatch at
-  `prepare_dispatch`, before the background ownership commit.
+- the effective environment and immutable Skill resource map captured into
+  every background dispatch at `prepare_dispatch`, before the background
+  ownership commit. The detached runner owns those values and does not query
+  a later capability revision.
 
 No model turn re-discovers Skills or re-queries the conversation capability
 pointer. A capability commit while the attempt lease is active is rejected

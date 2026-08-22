@@ -150,6 +150,7 @@ mod unix_tests {
                 artifacts: bundle.artifacts(),
                 tool_output: bundle.tool_output(),
                 environment: bundle.environment(),
+                skill_resources: None,
             },
         )
         .await
@@ -664,7 +665,6 @@ mod unix_tests {
             "unix_tests::a_named_map_entry_composes_into_exactly_one_runtime_server",
         );
         let session = serde_json::json!({
-            "conversationId": "conv-46",
             "agentId": "agent-46",
             "model": {"model": "local/composed-model"},
             "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
@@ -681,18 +681,24 @@ mod unix_tests {
             },
         });
         let models_path = root.path().join("models.json");
-        let session_path = root.path().join("session.json");
+        let config_path = root.path().join("rustx.json");
         std::fs::write(&models_path, MODELS_JSON).expect("models.json");
         std::fs::write(
-            &session_path,
+            &config_path,
             serde_json::to_vec_pretty(&session).expect("session json"),
         )
-        .expect("session.json");
+        .expect("rustx.json");
 
         let runtime = rustx::local_runtime::composition::LocalConversationRuntime::compose(
             &rustx::local_runtime::composition::LocalRuntimePaths {
                 models: models_path,
-                session: session_path,
+                config: config_path,
+                skill_paths: Vec::new(),
+                no_skills: false,
+                no_builtin_tools: false,
+                no_tools: false,
+                tools: None,
+                exclude_tools: Vec::new(),
                 workspace,
                 runtime_root: root.path().join("private"),
             },

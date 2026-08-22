@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { SlashCommandAutocompleteProvider, commandPrefix } from "../src/commands/autocomplete.ts";
-import { CommandDispatcher } from "../src/commands/dispatcher.ts";
+import { CommandDispatcher, renderTools } from "../src/commands/dispatcher.ts";
 import { COMMANDS, parseCommandLine } from "../src/commands/registry.ts";
 import { emptyPresentationState } from "../src/presentation/projection.ts";
 import { RuntimeClientConnection } from "../src/runtime/connection.ts";
@@ -682,10 +682,52 @@ describe("CommandDispatcher", () => {
       return;
     }
     assert.match(outcome.body, /capability revision 5/);
+    assert.match(outcome.body, /### Active tools/);
+    assert.match(outcome.body, /### Available but inactive/);
     assert.match(outcome.body, /`bash`/);
     assert.match(outcome.body, /mcp:corpus/);
     // Policies come from the runtime; nothing is inferred from the name.
     assert.match(outcome.body, /execution: model_selectable/);
+  });
+
+  it("shows available-but-inactive Tools without duplicating active Tools", async () => {
+    const base = capabilities(6);
+    const inactive = {
+      ...base.available_tools![0]!,
+      id: "tool-lint",
+      name: "lint",
+    };
+    const { dispatcher } = await harness(
+      snapshot({
+        capabilities: {
+          ...base,
+          tools: [base.tools![0]!],
+          available_tools: [...base.available_tools!, inactive],
+        },
+      }),
+    );
+    const outcome = await dispatcher.submit("/tools");
+    assert.equal(outcome.kind, "inspect");
+    if (outcome.kind !== "inspect") {
+      return;
+    }
+    assert.match(outcome.body, /### Active tools/);
+    assert.match(outcome.body, /### Available but inactive/);
+    assert.match(outcome.body, /`lint`/);
+    assert.equal((outcome.body.match(/`bash`/g) ?? []).length, 1);
+    assert.equal((outcome.body.match(/`search`/g) ?? []).length, 1);
+  });
+
+  it("reports available Tools when the active registry is empty", () => {
+    const base = capabilities(7);
+    const rendered = renderTools({
+      ...emptyPresentationState(sessionModel("alpha/model-a")),
+      capabilities: { ...base, tools: [], available_tools: base.available_tools },
+    });
+    assert.match(rendered, /### Active tools\n- none/);
+    assert.match(rendered, /### Available but inactive/);
+    assert.match(rendered, /`bash`/);
+    assert.match(rendered, /`search`/);
   });
 
   it("renders /skills from the runtime's Skill projection", async () => {
@@ -884,8 +926,8 @@ describe("CLI arguments", () => {
     "/usr/bin/rustx",
     "--models",
     "/m.json",
-    "--session",
-    "/s.json",
+    "--config",
+    "/rustx.json",
     "--workspace",
     "/ws",
     "--runtime-root",
@@ -897,9 +939,42 @@ describe("CLI arguments", () => {
     assert.equal(parsed.binary, "/usr/bin/rustx");
     assert.deepEqual(parsed.paths, {
       models: "/m.json",
-      session: "/s.json",
+      config: "/rustx.json",
       workspace: "/ws",
       runtimeRoot: "/private",
+    });
+    assert.deepEqual(parsed.startup, {
+      skillPaths: [],
+      noSkills: false,
+      noBuiltinTools: false,
+      noTools: false,
+      tools: undefined,
+      excludeTools: undefined,
+    });
+  });
+
+  it("parses repeatable Skills and forwards startup controls without interpretation", () => {
+    const parsed = parseArguments([
+      ...complete,
+      "--skill",
+      "/user/skills/one",
+      "--skill",
+      "relative/skills/two",
+      "--no-skills",
+      "--no-builtin-tools",
+      "--no-tools",
+      "--tools",
+      "read,search",
+      "--exclude-tools",
+      "search",
+    ]);
+    assert.deepEqual(parsed.startup, {
+      skillPaths: ["/user/skills/one", "relative/skills/two"],
+      noSkills: true,
+      noBuiltinTools: true,
+      noTools: true,
+      tools: "read,search",
+      excludeTools: "search",
     });
   });
 
@@ -909,6 +984,8 @@ describe("CLI arguments", () => {
       ["--models"],
       ["--future", "x"],
       [...complete, "--models", "/again.json"],
+      [...complete, "--tools", "read", "--tools", "search"],
+      [...complete, "--no-tools", "--no-tools"],
     ];
     for (const argv of cases) {
       assert.throws(

@@ -69,7 +69,7 @@ const KIND_DIAGNOSTIC: u8 = 104;
 /// This is the one typed composition boundary between the parent and the
 /// child runtime: the child composes its headless `ConversationRuntime`
 /// from exactly this typed input plus the model catalog file at
-/// [`SubagentChildSpec::models`]. No temporary session configuration file
+/// [`SubagentChildSpec::models`]. No temporary runtime configuration file
 /// is ever written.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

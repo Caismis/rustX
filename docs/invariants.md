@@ -655,6 +655,70 @@ that a live child produced an Interrupted physical result.
   bounds are bytes, not characters, and truncate only at a valid UTF-8
   boundary; Chinese, emoji, ASCII, and short-content cases are covered.
 
+## Issue #96: Session/configuration and capability activation
+
+- **Durable Session state is intentionally small.** The Session catalog owns
+  Session identity, names and timestamps, graph nodes, active node,
+  ConversationId lineage, durable conversation history, and explicitly
+  Session-local choices. Its current persisted choice is the selected model.
+  It never serializes a complete runtime/project configuration.
+- **Current runtime configuration is recomposed on every launch.**
+  `--config <rustx.json>` is parsed and validated before an existing Session
+  catalog is opened. MCP definitions, native Tool policy and activation,
+  Skill roots/resources, environment, context policy, timezone, agent
+  settings, approval settings reserved for #100, and future capability
+  sources therefore come from the current launch. A valid old Session can
+  never make an invalid current configuration disappear.
+- **First-Session publication follows model validation.** On a fresh
+  `runtime-root`, composition loads the current `models.json` and validates
+  the current runtime default before creating or publishing the root Session.
+  A failed first launch cannot leave a durable Session containing an invalid
+  model that poisons a later corrected launch. Existing Session models are
+  validated independently and are never replaced by the current default.
+- **Model ownership is split deliberately.** The current runtime model is
+  the default for a brand-new Session. An explicitly selected Session model
+  is persisted and wins when that Session resumes. Clone/fork/tree creation
+  copies only Session-local state; it never copies runtime capability or
+  environment settings.
+- **Available and active Tools are different facts.** Native, MCP, Python,
+  and future source registrations form the runtime-owned available catalog
+  after hard eligibility. Startup activation then derives the immutable active
+  `ToolRegistry`. Inactive definitions remain available for truthful
+  inspection but their schemas never enter provider requests.
+- **Startup Tool selection is deterministic.** The base selection applies
+  `defaultTools` to built-ins, `--no-builtin-tools` removes only built-ins,
+  `--no-tools` produces an empty active registry, strict `--tools` resolves
+  names across origins, and `--exclude-tools` is applied last. Unknown,
+  ambiguous, or duplicate allowlist entries fail explicitly; no registry
+  insertion order or last-wins rule resolves identity.
+- **Skill visibility is separate from discovery.** Current user/global,
+  project, configured, and explicit CLI roots are collected in deterministic
+  order. Duplicate logical identities fail explicitly. A validated Skill
+  with `disable-model-invocation: true` remains in the immutable resource
+  snapshot but is omitted from the model-visible catalog. The model reads
+  accepted Skill resources through the runtime-owned virtual `.rustx/skills/`
+  namespace and ordinary Read semantics; host absolute paths are not
+  published to the client or model. The virtual-to-host resource map is part
+  of active Skill snapshot equality, so relocating identical package content
+  creates a new capability revision rather than leaving Read pointed at an
+  old root. The complete Skill bindings remain in `CapabilitiesManifest`
+  provenance; visibility affects only model-facing projections.
+- **Background ownership preserves capability resources.** Before the
+  background ownership commit, the Agent Loop captures the admitted attempt's
+  immutable effective environment and Skill resource map. The detached
+  runner owns those exact values and never looks up a later capability
+  snapshot, so foreground and background Read have the same resource
+  semantics.
+- **Coordinator and lease ownership do not move.** `CapabilityCoordinator`
+  remains the sole candidate/commit authority. An admitted attempt retains
+  one immutable capability snapshot until terminal settlement. #96 does not
+  add approval/HITL (#100), Execution Modes (#98), model-turn leases or
+  deferred discovery (`#99`), file watching, or hot reload.
+- **Clients are projections.** Runtime Client exposes typed active and
+  available Tool lists and the model-visible Skill catalog. The TUI forwards
+  startup paths and renders that projection; it never parses configuration,
+  discovers Skills, or chooses activation.
+
 ## Capability immutability
 
 An attempt sees one immutable capability revision for its entire lifetime.
@@ -712,12 +776,14 @@ expected digest inputs and are never installed into again. The in-flight
 entry is released only after the owner returns, making a retry unable to
 overlap the previous physical writer.
 
-**Workspace-file limitation.** Capability metadata and environment
-identities are snapshotted, but lazy Skill source files
-(`SKILL.md`, scripts, references, assets) remain ordinary Workspace
-content: M6 does not mount them through an immutable filesystem snapshot,
-and an external rewrite of `.agents/skills/...` after preparation is
-observed only at the next quiescent re-discovery.
+**Skill resource boundary.** Capability metadata and environment identities
+are snapshotted. Accepted Skill source files (`SKILL.md`, scripts,
+references, and assets) remain current filesystem resources, but the
+immutable Skill snapshot owns a runtime-controlled virtual
+`.rustx/skills/<name>/...` map used by native Read. Host absolute paths never
+enter model-visible metadata and ordinary Workspace authorization is not
+weakened. A package rewrite is observed only at the next quiescent
+re-discovery.
 
 ### M7 external tool invariants
 
@@ -2905,9 +2971,11 @@ contracts and provider protocols. These invariants are frozen by M2:
   allocates no cursor, and publishes no event.
 
 - **Attempt-scoped context window.** The context window belongs to the
-  selected model; the session owns only the static context policy. An attempt
-  on model B never makes compaction decisions with model A's window, and
-  canonical history is never cleared when the session model changes.
+  selected model; the current runtime/project configuration supplies the
+  composed context policy, while durable Session state owns no context
+  policy. An attempt on model B never makes compaction decisions with model
+  A's window, and canonical history is never cleared when the session model
+  changes.
 
 - **Two production summary modes only.** `session` uses the admitted
   attempt's frozen primary invocation; `explicit` uses a separately resolved

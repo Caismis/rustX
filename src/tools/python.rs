@@ -2469,6 +2469,7 @@ mod tests {
                 artifacts: tool_runtime.artifacts(),
                 tool_output: tool_runtime.tool_output(),
                 environment: tool_runtime.environment(),
+                skill_resources: None,
             },
         )
         .await

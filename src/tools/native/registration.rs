@@ -51,15 +51,15 @@ use crate::tools::types::{ToolDefinition, ToolInvocationPolicy, ToolOrigin, Tool
 ///
 /// [`ToolRegistry`]: crate::tools::executor::ToolRegistry
 /// [`ToolExecutionResult`]: crate::tools::types::ToolExecutionResult
-pub(super) struct NativeToolRegistration {
+pub(crate) struct NativeToolRegistration {
     /// The canonical tool-owned definition (identity, description, input
     /// schema, policies).
-    pub definition: ToolDefinition,
+    pub(crate) definition: ToolDefinition,
     /// The executor serving that definition.
-    pub executor: Arc<dyn ToolExecutor>,
+    pub(crate) executor: Arc<dyn ToolExecutor>,
     /// Tool-owned normalization applied after runtime metadata is stripped
     /// and before the canonical schema is validated.
-    pub normalizer: BusinessArgumentNormalizer,
+    pub(crate) normalizer: BusinessArgumentNormalizer,
 }
 
 impl NativeToolRegistration {

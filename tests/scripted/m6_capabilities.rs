@@ -55,6 +55,18 @@ fn write_skill(root: &std::path::Path, name: &str, description: &str, deps: &[(&
     std::fs::write(dir.join("SKILL.md"), frontmatter).expect("SKILL.md");
 }
 
+fn write_hidden_skill(root: &std::path::Path, name: &str, description: &str) {
+    let dir = root.join(".agents/skills").join(name);
+    std::fs::create_dir_all(&dir).expect("hidden skill dir");
+    std::fs::write(
+        dir.join("SKILL.md"),
+        format!(
+            "---\nname: {name}\ndescription: \"{description}\"\ndisable-model-invocation: true\n---\nbody\n"
+        ),
+    )
+    .expect("hidden SKILL.md");
+}
+
 fn python_deps(json: &str) -> (&'static str, &'static str) {
     (
         "rustx.python-dependencies",
@@ -99,6 +111,14 @@ fn conversation() -> Conversation {
             conversation_id: conversation_id.clone(),
             workspace: workspace.clone(),
             base_tool_registry: Arc::new(ToolRegistry::new()),
+            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+            skill_discovery: rustx::skills::SkillDiscoveryConfig {
+                automatic_roots: vec![
+                    workspace.root().join(".rustx/skills"),
+                    workspace.root().join(".agents/skills"),
+                ],
+                explicit_paths: Vec::new(),
+            },
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: dir.path().join("skill-env"),
@@ -124,6 +144,57 @@ async fn prepare_and_commit(
         .expect("commit")
         .as_ref()
         .clone()
+}
+
+#[tokio::test]
+async fn hidden_skills_keep_attempt_provenance_but_not_model_visibility() {
+    let conversation = conversation();
+    write_skill(
+        conversation.workspace.root(),
+        "visible",
+        "Visible guidance.",
+        &[],
+    );
+    write_hidden_skill(
+        conversation.workspace.root(),
+        "runtime-only",
+        "Runtime-only guidance.",
+    );
+
+    let snapshot = prepare_and_commit(&conversation.coordinator).await;
+    assert_eq!(snapshot.skills().bindings().len(), 2);
+    assert_eq!(snapshot.skills().catalog_entries().len(), 1);
+    assert_eq!(snapshot.skills().catalog_entries()[0].name, "visible");
+    let rendered_catalog = snapshot.skill_catalog().expect("visible Skill catalog");
+    assert!(rendered_catalog.contains("visible"));
+    assert!(!rendered_catalog.contains("runtime-only"));
+    assert!(
+        snapshot
+            .skills()
+            .resources()
+            .resolve(std::path::Path::new(".rustx/skills/runtime-only/SKILL.md"))
+            .is_some()
+    );
+
+    let manifest = snapshot.to_capabilities_manifest();
+    let manifest_names = manifest
+        .skills
+        .iter()
+        .map(|binding| binding.skill_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(manifest_names, vec!["runtime-only", "visible"]);
+
+    let client_view =
+        crate::runtime_client::projection::capability_view(&snapshot, &BTreeMap::new());
+    assert_eq!(
+        client_view
+            .skills
+            .iter()
+            .map(|skill| skill.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["visible"],
+        "Runtime Client Skills are the model-visible projection"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -326,6 +397,10 @@ async fn absolute_store_path_does_not_change_the_digest() {
                 conversation_id: conversation_id.clone(),
                 workspace: workspace.clone(),
                 base_tool_registry: Arc::new(ToolRegistry::new()),
+                tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+                skill_discovery: rustx::skills::SkillDiscoveryConfig::default_for_workspace(
+                    &workspace,
+                ),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: ToolEnvironment::new(),
                 environment_store_root: dir.path().join("skill-env"),
@@ -782,6 +857,8 @@ fn environment_store_inside_workspace_is_rejected_before_creation() {
             conversation_id: ConversationId::new("conv-isolation"),
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
+            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+            skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: store.clone(),
@@ -809,6 +886,8 @@ fn workspace_inside_environment_store_is_rejected() {
             conversation_id: ConversationId::new("conv-isolation"),
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
+            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+            skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: store,
@@ -835,6 +914,8 @@ fn external_environment_store_is_accepted() {
             conversation_id: ConversationId::new("conv-isolation"),
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
+            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+            skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: store.clone(),
@@ -869,6 +950,8 @@ fn symlink_prefix_environment_store_is_rejected_before_creation() {
             conversation_id: ConversationId::new("conv-isolation"),
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
+            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+            skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: configured,
@@ -1285,6 +1368,7 @@ async fn background_execution_retains_its_dispatching_environment() {
             &background_invocation(),
             &(executor.clone() as Arc<dyn ToolExecutor>),
             environment_n.clone(),
+            None,
         )
         .expect("prepare");
     let outcome = conversation
@@ -1352,6 +1436,7 @@ async fn background_execution_retains_its_dispatching_environment() {
             &background_invocation(),
             &(executor2.clone() as Arc<dyn ToolExecutor>),
             lease_n1.snapshot().effective_environment().clone(),
+            None,
         )
         .expect("prepare");
     let outcome2 = conversation
@@ -1437,6 +1522,11 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
             conversation_id: ConversationId::new("conv-m6"),
             workspace: conversation.workspace.clone(),
             base_tool_registry: tools.clone(),
+            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+            skill_discovery: rustx::skills::SkillDiscoveryConfig {
+                automatic_roots: vec![conversation.workspace.root().join(".agents/skills")],
+                explicit_paths: Vec::new(),
+            },
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: conversation.dir.path().join("skill-env-2"),

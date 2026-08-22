@@ -1291,11 +1291,8 @@ pub(crate) fn capability_view(
     snapshot: &crate::capabilities::CapabilitySnapshot,
     availability: &crate::capabilities::CapabilityAvailability,
 ) -> CapabilityView {
-    let tools = snapshot
-        .tool_registry()
-        .definitions()
-        .iter()
-        .map(|definition| super::snapshot::RuntimeClientTool {
+    let project_tool =
+        |definition: &crate::tools::types::ToolDefinition| super::snapshot::RuntimeClientTool {
             id: definition.id.clone(),
             name: definition.name.clone(),
             description: definition.description.clone(),
@@ -1304,12 +1301,23 @@ pub(crate) fn capability_view(
             concurrency_policy: definition.concurrency_policy,
             replay_policy: definition.replay_policy,
             origin: definition.origin.clone(),
-        })
+        };
+    let tools = snapshot
+        .tool_registry()
+        .definitions()
+        .iter()
+        .map(&project_tool)
+        .collect();
+    let available_tools = snapshot
+        .available_tools()
+        .definitions()
+        .iter()
+        .map(project_tool)
         .collect();
     let skills = snapshot
         .catalog_entries()
         .iter()
-        .zip(snapshot.skills().bindings())
+        .zip(snapshot.skills().visible_bindings())
         .map(|(entry, binding)| super::snapshot::RuntimeClientSkill {
             id: binding.skill_id.clone(),
             version_id: binding.version_id.clone(),
@@ -1345,6 +1353,7 @@ pub(crate) fn capability_view(
     CapabilityView {
         revision: snapshot.revision(),
         tools,
+        available_tools,
         skills,
         sources,
     }
@@ -1521,6 +1530,7 @@ mod tests {
             crate::runtime_client::snapshot::CapabilityView {
                 revision: crate::runtime::identity::CapabilityRevision::new(1),
                 tools: Vec::new(),
+                available_tools: Vec::new(),
                 skills: Vec::new(),
                 sources: Vec::new(),
             },
@@ -1580,6 +1590,7 @@ mod tests {
                 crate::runtime_client::snapshot::CapabilityView {
                     revision: crate::runtime::identity::CapabilityRevision::new(1),
                     tools: Vec::new(),
+                    available_tools: Vec::new(),
                     skills: Vec::new(),
                     sources: Vec::new(),
                 },
@@ -2460,6 +2471,7 @@ mod tests {
             crate::runtime_client::snapshot::CapabilityView {
                 revision: crate::runtime::identity::CapabilityRevision::new(1),
                 tools: Vec::new(),
+                available_tools: Vec::new(),
                 skills: Vec::new(),
                 sources: Vec::new(),
             },
@@ -2530,6 +2542,7 @@ mod tests {
             crate::runtime_client::snapshot::CapabilityView {
                 revision: crate::runtime::identity::CapabilityRevision::new(1),
                 tools: Vec::new(),
+                available_tools: Vec::new(),
                 skills: Vec::new(),
                 sources: Vec::new(),
             },

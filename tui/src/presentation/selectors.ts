@@ -105,6 +105,29 @@ export function toolsByOrigin(
     .sort((left, right) => left.origin.localeCompare(right.origin));
 }
 
+/** Available Tools that are not in the runtime-published active registry. */
+export function inactiveToolsByOrigin(
+  state: PresentationState,
+): Array<{ origin: string; tools: RuntimeClientTool[] }> {
+  const activeIds = new Set((state.capabilities.tools ?? []).map((tool) => tool.id));
+  const groups = new Map<string, RuntimeClientTool[]>();
+  for (const tool of state.capabilities.available_tools ?? []) {
+    if (activeIds.has(tool.id)) {
+      continue;
+    }
+    const label = originLabel(tool.origin);
+    const bucket = groups.get(label);
+    if (bucket === undefined) {
+      groups.set(label, [tool]);
+    } else {
+      bucket.push(tool);
+    }
+  }
+  return [...groups.entries()]
+    .map(([origin, tools]) => ({ origin, tools }))
+    .sort((left, right) => left.origin.localeCompare(right.origin));
+}
+
 /** The Skill catalog as the runtime published it. */
 export function skills(state: PresentationState): RuntimeClientSkill[] {
   return state.capabilities.skills ?? [];

@@ -113,6 +113,7 @@ async fn dispatch_big_background_bash(
             &prepared.invocation,
             &executor,
             rustx::tools::environment::ToolEnvironment::new(),
+            None,
         )
         .expect("dispatch prepared");
     let committed = fixture
@@ -772,6 +773,7 @@ async fn genuine_artifacts_still_publish_as_file_blocks_in_the_terminal_inbound(
             &invocation,
             &executor,
             rustx::tools::environment::ToolEnvironment::new(),
+            None,
         )
         .expect("dispatch prepared");
     let committed = fixture

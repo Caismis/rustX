@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::capabilities::tools::AvailableToolCatalog;
 use crate::protocol::manifest::CapabilitiesManifest;
 use crate::runtime::identity::{CapabilityRevision, ConversationId};
 use crate::skills::environments::{NodeEnvironment, PythonEnvironment};
@@ -33,6 +34,7 @@ pub struct CapabilitySnapshot {
     workspace_root: PathBuf,
     revision: CapabilityRevision,
     tool_registry: Arc<ToolRegistry>,
+    available_tools: Arc<AvailableToolCatalog>,
     skills: Arc<SkillSnapshot>,
     python_environment: Option<PythonEnvironment>,
     node_environment: Option<NodeEnvironment>,
@@ -49,6 +51,7 @@ impl PartialEq for CapabilitySnapshot {
             && self.workspace_root == other.workspace_root
             && self.revision == other.revision
             && self.tool_registry.definitions() == other.tool_registry.definitions()
+            && self.available_tools == other.available_tools
             && self.skills == other.skills
             && self.python_environment == other.python_environment
             && self.node_environment == other.node_environment
@@ -62,6 +65,7 @@ impl core::fmt::Debug for CapabilitySnapshot {
             .field("conversation_id", &self.conversation_id)
             .field("workspace_root", &self.workspace_root)
             .field("revision", &self.revision)
+            .field("available_tools", &self.available_tools)
             .field("skills", &self.skills)
             .field("python_environment", &self.python_environment)
             .field("node_environment", &self.node_environment)
@@ -79,6 +83,7 @@ impl CapabilitySnapshot {
         workspace_root: PathBuf,
         revision: CapabilityRevision,
         tool_registry: Arc<ToolRegistry>,
+        available_tools: Arc<AvailableToolCatalog>,
         skills: Arc<SkillSnapshot>,
         python_environment: Option<PythonEnvironment>,
         node_environment: Option<NodeEnvironment>,
@@ -89,6 +94,7 @@ impl CapabilitySnapshot {
             workspace_root,
             revision,
             tool_registry,
+            available_tools,
             skills,
             python_environment,
             node_environment,
@@ -118,6 +124,12 @@ impl CapabilitySnapshot {
     #[must_use]
     pub fn tool_registry(&self) -> &Arc<ToolRegistry> {
         &self.tool_registry
+    }
+
+    /// The immutable available Tool catalog, including inactive Tools.
+    #[must_use]
+    pub fn available_tools(&self) -> &AvailableToolCatalog {
+        &self.available_tools
     }
 
     /// The immutable Skill snapshot/catalog.
@@ -167,6 +179,10 @@ impl CapabilitySnapshot {
     pub fn to_capabilities_manifest(&self) -> CapabilitiesManifest {
         CapabilitiesManifest {
             revision: self.revision,
+            // Manifest provenance is the complete immutable capability set.
+            // Model visibility is projected separately through
+            // `catalog_entries()`/`skill_catalog()` and the Runtime Client;
+            // `disable-model-invocation` must not erase runtime ownership.
             skills: self.skills.bindings().to_vec(),
             tools: self
                 .tool_registry
