@@ -31,6 +31,7 @@
 //! Status composer for `AgentExecution`.
 
 pub mod assembly;
+pub(crate) mod compaction;
 pub mod engine;
 pub mod error;
 pub mod projection;

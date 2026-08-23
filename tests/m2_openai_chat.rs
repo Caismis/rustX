@@ -852,6 +852,13 @@ async fn http_errors_normalize() {
             ModelErrorKind::ContextWindowExceeded,
         ),
         (
+            "openai_400_compatible_context.json",
+            400,
+            "Bad Request",
+            None,
+            ModelErrorKind::ContextWindowExceeded,
+        ),
+        (
             "openai_500.json",
             500,
             "Internal Server Error",

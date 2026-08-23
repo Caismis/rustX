@@ -574,10 +574,11 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
             RuntimeClientEvent::ContextCompacted {
                 attempt_id,
                 context,
-            } => context
-                .latest_compaction
-                .as_ref()
-                .map(|view| (attempt_id.as_str().to_owned(), view.generation)),
+            } => context.latest_compaction.as_ref().and_then(|view| {
+                attempt_id
+                    .as_ref()
+                    .map(|attempt_id| (attempt_id.as_str().to_owned(), view.generation))
+            }),
             _ => None,
         })
         .collect();
@@ -887,10 +888,11 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
             RuntimeClientEvent::ContextCompacted {
                 attempt_id,
                 context,
-            } => context
-                .latest_compaction
-                .as_ref()
-                .map(|view| (attempt_id.as_str().to_owned(), view.generation)),
+            } => context.latest_compaction.as_ref().and_then(|view| {
+                attempt_id
+                    .as_ref()
+                    .map(|attempt_id| (attempt_id.as_str().to_owned(), view.generation))
+            }),
             _ => None,
         })
         .collect();

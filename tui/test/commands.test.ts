@@ -94,6 +94,7 @@ describe("command registry", () => {
         "/tools",
         "/skills",
         "/status",
+        "/compact",
         "/debug",
         "/reasoning",
         "/expand",
@@ -901,6 +902,46 @@ describe("CommandDispatcher", () => {
     assert.ok(outcome.body.includes(rendered));
     assert.match(outcome.body, /inbound pending: 1/);
     assert.match(outcome.body, /last drain: watermark 2, 2 item\(s\)/);
+  });
+
+  it("runs /compact through one canonical Runtime Client operation", async () => {
+    const { peer, dispatcher } = await harness();
+    const compacting = dispatcher.submit("/compact");
+    await peer.awaitRequests(3);
+    assert.equal(peer.requests[2]?.method, "compact_context");
+    peer.respond(3, {
+      type: "context_compacted",
+      context: {
+        compaction_in_progress: false,
+        compaction_count: 1,
+        latest_compaction: {
+          generation: 1,
+          summary_message_id: "conv-test-compaction-summary-1",
+          surface_revision: 4,
+          tokens_before: { input_tokens: 8_400, source: "estimated" },
+          estimated_tokens_after: 1_900,
+        },
+      },
+    });
+
+    const outcome = await compacting;
+    assert.equal(outcome.kind, "transient");
+    if (outcome.kind === "transient") {
+      assert.equal(outcome.level, "info");
+      assert.match(outcome.text, /generation 1/);
+      assert.match(outcome.text, /8400 → 1900 tokens/);
+    }
+  });
+
+  it("rejects /compact arguments without reaching the runtime", async () => {
+    const { peer, dispatcher } = await harness();
+    const outcome = await dispatcher.submit("/compact custom instructions");
+    assert.equal(outcome.kind, "transient");
+    if (outcome.kind === "transient") {
+      assert.equal(outcome.level, "error");
+      assert.match(outcome.text, /usage: \/compact/);
+    }
+    assert.equal(peer.requests.length, 2);
   });
 
   it("renders bounded /debug diagnostics without any credential", async () => {

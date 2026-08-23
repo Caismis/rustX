@@ -544,13 +544,12 @@ async fn fallback_block_is_unsupported() {
     assert_eq!(terminals.len(), 1, "exactly one terminal event");
 }
 
-/// `stop_sequence` and `max_tokens` finish mapping.
+/// Ordinary `stop_sequence` and `max_tokens` finish reasons remain successful.
 #[tokio::test]
 async fn stop_reasons_map_explicitly() {
     for (fixture, expected) in [
         ("stop_sequence.sse", ModelFinishReason::Stop),
         ("max_tokens.sse", ModelFinishReason::Length),
-        ("context_window_exceeded.sse", ModelFinishReason::Length),
     ] {
         let fixture = fixture.to_owned();
         let fixture_for_server = fixture.clone();
@@ -573,6 +572,29 @@ async fn stop_reasons_map_explicitly() {
             describe_events(&events)
         );
     }
+}
+
+/// An explicit provider context-window stop is a recoverable failure, not an
+/// ordinary output-length completion, so the agent loop can compact/retry.
+#[tokio::test]
+async fn context_window_stop_reason_is_a_typed_failure() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("anthropic", "context_window_exceeded.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi"),
+    )
+    .await;
+    let ModelEvent::Failed { error } = events.last().expect("terminal") else {
+        panic!("expected Failed");
+    };
+    assert_eq!(error.kind, ModelErrorKind::ContextWindowExceeded);
+    assert_eq!(
+        error.provider_code.as_deref(),
+        Some("model_context_window_exceeded")
+    );
 }
 
 /// `pause_turn` is preserved with its continuation semantics, never mapped to
@@ -715,6 +737,27 @@ async fn rate_limit_stream_error_maps_semantically() {
     };
     assert_eq!(error.kind, ModelErrorKind::RateLimit);
     assert_eq!(error.provider_code.as_deref(), Some("rate_limit_error"));
+}
+
+/// Compatible providers may retain an OpenAI-style error type while using
+/// the Anthropic SSE envelope. The message still identifies an overflow and
+/// must reach the agent loop as `ContextWindowExceeded`.
+#[tokio::test]
+async fn compatible_bad_request_stream_error_maps_to_context_overflow() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("anthropic", "compatible_context_error.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        simple_request(ModelProtocol::AnthropicMessages, "compat/model", "hi"),
+    )
+    .await;
+    let ModelEvent::Failed { error } = events.last().expect("terminal") else {
+        panic!("expected Failed");
+    };
+    assert_eq!(error.kind, ModelErrorKind::ContextWindowExceeded);
+    assert_eq!(error.provider_code.as_deref(), Some("BadRequestError"));
 }
 
 /// `OpenRouter`'s stable `error_type` wins over the lossy Anthropic-native

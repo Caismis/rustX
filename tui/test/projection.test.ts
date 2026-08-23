@@ -131,6 +131,7 @@ describe("presentation projection", () => {
         type: "context_compacted",
         attempt_id: "a1",
         context: {
+          compaction_in_progress: false,
           compaction_count: 2,
           latest_compaction: {
             generation: 2,

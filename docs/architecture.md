@@ -1113,6 +1113,13 @@ Key contracts:
   `ContextWindowExceeded` is recovered through exactly one bounded
   compact-and-retry
   (`MAX_CONTEXT_OVERFLOW_RETRIES_PER_MODEL_TURN = 1`).
+- Automatic overflow recovery and idle manual compaction call one canonical
+  pipeline for planning, summary generation, exact fit validation, durable
+  commit, and hot-state installation. Manual compaction freezes the current
+  model/context/capability inputs at admission, checks out the sole
+  `ConversationState`, and admits pending inbound only after that state is
+  restored. It owns no attempt identity and is rejected while an attempt or
+  another manual compaction is active.
 - Agent Status is sampled from authoritative runtime facts and admitted as a
   canonical `UserSource::Runtime` context message with
   `InboundKind::Context(ContextKind::AgentStatus)`. It is rendered by the
@@ -2095,6 +2102,14 @@ The no-retry service also captures the provider HTTP status, `Retry-After`
 header, and error payload at the transport boundary, because the SDK's typed
 error drops response headers.
 
+Provider context-window failures are normalized through one shared semantic
+classifier across OpenAI and Anthropic HTTP/SSE paths. It accepts both the
+standard nested error envelope and compatible providers' top-level
+`message`/`type`/`code` object. Explicit overflow stop reasons such as
+`model_context_window_exceeded` terminate as
+`Failed(ContextWindowExceeded)`, not a successful `Length` completion, so
+the agent loop's bounded compact-and-retry path owns recovery consistently.
+
 #### Anthropic Messages (direct HTTP/SSE)
 
 Anthropic has no official Rust SDK, and the evaluated community SDK
@@ -3044,9 +3059,11 @@ Runtime Client is a projection/control/attachment adapter over it.
   PROJECT / FOLD INTO CLIENT STATE ONLY / INTERNAL in the projection
   owner: attempt lifecycle/settlement, streaming output, tool-call
   assembly, and foreground/background tool lifecycle project; turn
-  counting and final usage fold; model request mechanics and compaction
-  mechanics stay internal. Internal `RuntimeEvent` evolution therefore
-  cannot silently break Runtime Client Protocol v1.
+  counting and final usage fold; model request mechanics stay internal;
+  compaction start, failure, and committed completion project with optional
+  attempt attribution and update the shared context read model. Internal
+  `RuntimeEvent` evolution therefore cannot silently break Runtime Client
+  Protocol v1.
 - **Streaming repair.** The snapshot carries an in-flight Assistant output
   view (accumulated blocks) and foreground tool views keyed by the
   logical tool-call identity, so a client repairing after `resync`

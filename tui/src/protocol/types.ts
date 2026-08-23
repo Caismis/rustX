@@ -720,6 +720,7 @@ export interface RuntimeClientCompactionView {
 }
 
 export interface RuntimeClientContextView {
+  compaction_in_progress: boolean;
   compaction_count: number;
   latest_compaction?: RuntimeClientCompactionView;
 }
@@ -787,8 +788,17 @@ export type RuntimeClientEvent =
       revision: number;
     }
   | {
+      type: "context_compaction_started";
+      attempt_id?: AttemptId;
+    }
+  | {
+      type: "context_compaction_failed";
+      attempt_id?: AttemptId;
+      error: string;
+    }
+  | {
       type: "context_compacted";
-      attempt_id: AttemptId;
+      attempt_id?: AttemptId;
       context: RuntimeClientContextView;
     }
   | {
@@ -908,6 +918,7 @@ export type RuntimeClientRequest =
   | { method: "initialize"; id: RequestId; protocol_version: number }
   | { method: "submit_inbound"; id: RequestId; content: UserContentBlock[] }
   | { method: "cancel_current_attempt"; id: RequestId }
+  | { method: "compact_context"; id: RequestId }
   | {
       method: "interaction_respond";
       id: RequestId;
@@ -994,6 +1005,7 @@ export type RuntimeClientRequestBody =
       Extract<RuntimeClientRequest, { method: "cancel_current_attempt" }>,
       "id"
     >
+  | Omit<Extract<RuntimeClientRequest, { method: "compact_context" }>, "id">
   | Omit<
       Extract<RuntimeClientRequest, { method: "interaction_respond" }>,
       "id"
@@ -1036,6 +1048,7 @@ export type RuntimeClientResult =
       inbound_sequence: InboundSequence;
     }
   | { type: "attempt_cancellation_accepted"; attempt_id: AttemptId }
+  | { type: "context_compacted"; context: RuntimeClientContextView }
   | { type: "interaction_response_accepted"; interaction_id: InteractionId }
   | {
       type: "snapshot";
@@ -1158,6 +1171,8 @@ export function isKnownRuntimeClientEvent(
     case "interaction_pending":
     case "interaction_settled":
     case "approval_mode_changed":
+    case "context_compaction_started":
+    case "context_compaction_failed":
     case "context_compacted":
     case "assistant_message_started":
     case "assistant_text_delta":

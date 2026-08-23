@@ -54,7 +54,7 @@ export function emptyPresentationState(
     pendingInteractions: [],
     background: [],
     subagents: [],
-    context: { compaction_count: 0 },
+    context: { compaction_in_progress: false, compaction_count: 0 },
     capabilities: { revision: 0, tools: [], skills: [] },
     sessionModel,
     runtimeShutdown: false,
@@ -190,6 +190,7 @@ export function reduce(
         (entry) =>
           entry.kind !== "streaming" || entry.attemptId !== event.attempt_id,
       );
+      next.context = { ...state.context, compaction_in_progress: false };
       return next;
 
     case "attempt_turn_updated":
@@ -221,6 +222,14 @@ export function reduce(
       next.effectiveApprovalMode = event.effective_approval_mode;
       next.pendingApprovalMode = event.pending_approval_mode;
       next.approvalModeRevision = event.revision;
+      return next;
+
+    case "context_compaction_started":
+      next.context = { ...state.context, compaction_in_progress: true };
+      return next;
+
+    case "context_compaction_failed":
+      next.context = { ...state.context, compaction_in_progress: false };
       return next;
 
     case "context_compacted":

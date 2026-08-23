@@ -8,7 +8,7 @@
 //! is still active, it is simply one canonical
 //! `User(Runtime / CompactionSummary)` message inside the selected span.
 //!
-//! Summary generation is agent-execution activity only: it never recurses
+//! Summary generation is runtime compaction activity only: it never recurses
 //! into `AgentExecution`, never exposes tools, never carries Agent Status or
 //! the Skill catalog, never carries provider continuation, and never commits
 //! anything to the Message Ledger.
@@ -100,15 +100,15 @@ pub trait ContextSummarizer: Send + Sync {
     ) -> BoxFuture<'_, Result<String, ContextError>>;
 }
 
-/// The production summarizer backed by an attempt's resolved summary model
+/// The production summarizer backed by a frozen resolved summary-model
 /// invocation.
 ///
-/// The invocation is the attempt's frozen summary resolution — the primary
-/// invocation itself in `session` mode, or the separately resolved explicit
-/// summary invocation — optionally narrowed by the context plane's summary
-/// output safety cap. There is deliberately no independent "summary provider
-/// config" system and no production path that injects an unrelated
-/// summarizer beside the attempt's model.
+/// For automatic compaction the invocation is the attempt's frozen summary
+/// resolution. Manual compaction freezes the same session resolution at its
+/// idle admission boundary. In `session` mode this is the primary invocation;
+/// in `explicit` mode it is the separately resolved summary invocation,
+/// optionally narrowed by the context plane's summary output safety cap.
+/// There is deliberately no independent "summary provider config" system.
 ///
 /// The summary request is a canonical one-off `ModelRequest`: no tools, no
 /// Agent Status, no Skill catalog, no continuation, and a deterministic

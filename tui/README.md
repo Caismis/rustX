@@ -180,7 +180,7 @@ The command-to-surface classification is:
 | `/fork`, `/tree` | picker; the selected session operation has transient/replacement feedback |
 | `/new`, `/clone` | control with transient/replacement feedback |
 | `/name <text>`, `/model <provider/model>` | control with transient result |
-| `/cancel`, `/approve`, `/answer`, `/approval` | control with transient acceptance/validation result |
+| `/cancel`, `/compact`, `/approve`, `/answer`, `/approval` | control with transient acceptance/validation result |
 | `/reasoning`, `/expand` | preference |
 | `/quit` | quit |
 | invalid, unknown, or empty-result command feedback | transient |
@@ -244,6 +244,8 @@ does not implement a parallel Session system.
 
 - `/cancel [execution-id]` — request cancellation of the current attempt, or
   a background execution by id.
+- `/compact` — ask the runtime to compact the canonical context while idle;
+  progress and completion remain authoritative Runtime Client facts.
 - `/approve <interaction-id> <allow|deny> [reason]` — answer one runtime-owned
   Approval interaction.
 - `/answer <interaction-id> <choice|text> <value>` — answer one runtime-owned
@@ -265,7 +267,9 @@ invokes exactly one canonical Runtime Client operation. `/model` opens the
 searchable selector over `model_catalog_get` and applies a choice through
 `model_set`, while `/model show` renders the projection's own model view;
 `/tools` and `/skills` read the capability projection; `/status` prints the
-runtime's own Agent Status rendering; `/debug` shows bounded diagnostics and
+runtime's own Agent Status rendering; `/compact` invokes one
+`compact_context` operation and waits for its durable terminal result;
+`/debug` shows bounded diagnostics and
 never a credential; `/approve` sends a finite typed response to one
 runtime-owned Approval interaction, `/answer` sends a typed Question response,
 and `/approval` requests a runtime control-plane mode change. The TUI never
@@ -362,6 +366,9 @@ published `input_tokens` divided by the published context window for that
 attempt's model. It is not a client tokenization of transcript history and is
 not a canonical compaction or occupancy calculation. Plumbing such as
 attachment ids, cursors, and capability revisions remains in `/debug`.
+During automatic or manual compaction, the footer displays the runtime-published
+`Compacting context…` lifecycle state; it never infers that state from token
+occupancy.
 
 ## The model invariant
 

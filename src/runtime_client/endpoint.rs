@@ -165,9 +165,7 @@ impl RuntimeClientEndpoint {
         &self,
         request: RuntimeClientRequest,
     ) -> RuntimeClientResponse {
-        if !matches!(&request, RuntimeClientRequest::Shutdown { .. })
-            && !request.is_session_request()
-        {
+        if !request.requires_async() {
             return self.handle_request(request);
         }
         let id = request.id();

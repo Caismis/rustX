@@ -254,6 +254,8 @@ export class CommandDispatcher {
           return inspect("Skills", renderSkills(state));
         case "/status":
           return inspect("Runtime status", renderStatus(state));
+        case "/compact":
+          return await this.#compact(session, argument);
         case "/debug":
           return inspect("Client diagnostics", renderDebug(state, this.#context.diagnostics()));
         case "/reasoning":
@@ -386,6 +388,24 @@ export class CommandDispatcher {
         `conversation ${refreshed.active_conversation_id}`,
         `nodes ${refreshed.node_count}`,
       ].join("\n"),
+    );
+  }
+
+  async #compact(
+    session: RuntimeClientAttachment,
+    argument: string,
+  ): Promise<CommandOutcome> {
+    if (argument.length > 0) {
+      return transient("error", "usage: /compact");
+    }
+    const context = await session.compactContext();
+    const latest = context.latest_compaction;
+    if (latest === undefined) {
+      return transient("info", "context compacted");
+    }
+    return transient(
+      "info",
+      `context compacted to generation ${latest.generation}: ${latest.tokens_before.input_tokens} → ${latest.estimated_tokens_after} tokens`,
     );
   }
 

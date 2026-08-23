@@ -7,7 +7,7 @@ use async_openai::types::chat::CompletionUsage;
 #[cfg(test)]
 use async_openai::types::chat::FinishReason;
 
-use crate::model::error::{ModelError, ModelErrorKind};
+use crate::model::error::{ModelError, ModelErrorKind, is_context_window_error};
 use crate::model::finish::ModelFinishReason;
 use crate::model::types::{ModelUsage, UsageDetails};
 use crate::runtime::identity::ToolId;
@@ -26,6 +26,9 @@ pub(crate) fn normalize_error(error: OpenAIError) -> ModelError {
             404 => invalid_or_unsupported(failure),
             408 | 409 => timeout(failure),
             429 => rate_limit(failure),
+            _ if is_context_window_error(&failure.message, failure.provider_code.as_deref()) => {
+                context_window(failure)
+            }
             _ => provider_error(failure),
         };
     }
@@ -52,10 +55,13 @@ pub(crate) fn normalize_error(error: OpenAIError) -> ModelError {
                 .clone()
                 .or_else(|| api_error.api_error.r#type.clone());
             let kind = match api_error.status_code.as_u16() {
-                400 => context_or_invalid_kind(&message),
+                400 => context_or_invalid_kind(&message, provider_code.as_deref()),
                 401 | 403 => ModelErrorKind::Authentication,
                 429 => ModelErrorKind::RateLimit,
                 408 | 409 => ModelErrorKind::Timeout,
+                _ if is_context_window_error(&message, provider_code.as_deref()) => {
+                    ModelErrorKind::ContextWindowExceeded
+                }
                 _ => ModelErrorKind::ProviderError,
             };
             ModelError {
@@ -109,18 +115,9 @@ pub(crate) fn normalize_error(error: OpenAIError) -> ModelError {
     }
 }
 
-/// Whether an `OpenAI` error message denotes a context-window violation.
-pub(crate) fn is_context_window_message(message: &str) -> bool {
-    let lower = message.to_ascii_lowercase();
-    lower.contains("context_length_exceeded")
-        || lower.contains("maximum context length")
-        || lower.contains("context length exceeded")
-        || lower.contains("context window")
-}
-
 fn context_or_invalid(message: &str, provider_code: Option<&str>) -> ModelError {
     ModelError {
-        kind: if is_context_window_message(message) {
+        kind: if is_context_window_error(message, provider_code) {
             ModelErrorKind::ContextWindowExceeded
         } else {
             ModelErrorKind::InvalidRequest
@@ -131,11 +128,20 @@ fn context_or_invalid(message: &str, provider_code: Option<&str>) -> ModelError 
     }
 }
 
-fn context_or_invalid_kind(message: &str) -> ModelErrorKind {
-    if is_context_window_message(message) {
+fn context_or_invalid_kind(message: &str, provider_code: Option<&str>) -> ModelErrorKind {
+    if is_context_window_error(message, provider_code) {
         ModelErrorKind::ContextWindowExceeded
     } else {
         ModelErrorKind::InvalidRequest
+    }
+}
+
+fn context_window(failure: &super::client::HttpFailure) -> ModelError {
+    ModelError {
+        kind: ModelErrorKind::ContextWindowExceeded,
+        message: failure.message.clone(),
+        retry_after_ms: failure.retry_after_ms,
+        provider_code: failure.provider_code.clone(),
     }
 }
 
@@ -271,11 +277,8 @@ pub(crate) fn resolve_tool(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        is_context_window_message, map_chat_finish_reason, map_sdk_chat_finish_reason,
-        normalize_error,
-    };
-    use crate::model::error::{ModelError, ModelErrorKind};
+    use super::{map_chat_finish_reason, map_sdk_chat_finish_reason, normalize_error};
+    use crate::model::error::{ModelError, ModelErrorKind, is_context_window_error};
     use crate::model::finish::ModelFinishReason;
     use async_openai::types::chat::FinishReason;
 
@@ -334,10 +337,10 @@ mod tests {
             "context_length_exceeded: you can retrieve...",
             "context window is full",
         ] {
-            assert!(is_context_window_message(message), "{message}");
+            assert!(is_context_window_error(message, None), "{message}");
         }
         for message in ["invalid api key", "missing required field"] {
-            assert!(!is_context_window_message(message), "{message}");
+            assert!(!is_context_window_error(message, None), "{message}");
         }
     }
 

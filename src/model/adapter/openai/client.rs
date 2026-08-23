@@ -123,34 +123,49 @@ fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<u64> {
         .map(|seconds| seconds.saturating_mul(1000))
 }
 
-#[derive(serde::Deserialize)]
-struct ErrorBody {
-    #[serde(default)]
-    error: Option<ErrorDetail>,
-}
-
-#[derive(serde::Deserialize)]
-struct ErrorDetail {
-    #[serde(default)]
-    message: Option<String>,
-    #[serde(default)]
-    code: Option<String>,
-    #[serde(default)]
-    r#type: Option<String>,
-}
-
 fn parse_error_body(body: &[u8], status: StatusCode) -> (String, Option<String>) {
-    match serde_json::from_slice::<ErrorBody>(body) {
-        Ok(parsed) => match parsed.error {
-            Some(detail) => (
-                detail
-                    .message
-                    .unwrap_or_else(|| format!("OpenAI HTTP {status}")),
-                detail.code.or(detail.r#type),
-            ),
-            None => (String::from_utf8_lossy(body).into_owned(), None),
-        },
-        Err(_) => (String::from_utf8_lossy(body).into_owned(), None),
+    let Ok(root) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return (String::from_utf8_lossy(body).into_owned(), None);
+    };
+    // OpenAI uses `{ "error": { ... } }`, while several compatible
+    // providers return the same detail object at the top level.
+    let detail = root
+        .get("error")
+        .filter(|error| error.is_object())
+        .unwrap_or(&root);
+    let message = detail
+        .get("message")
+        .and_then(serde_json::Value::as_str)
+        .map_or_else(
+            || {
+                let raw = String::from_utf8_lossy(body).into_owned();
+                if raw.is_empty() {
+                    format!("OpenAI HTTP {status}")
+                } else {
+                    raw
+                }
+            },
+            str::to_owned,
+        );
+    let provider_code = detail
+        .get("code")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| {
+            detail
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .or_else(|| detail.get("code").and_then(provider_code_value));
+    (message, provider_code)
+}
+
+fn provider_code_value(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(value) => Some(value.clone()),
+        serde_json::Value::Number(value) => Some(value.to_string()),
+        _ => None,
     }
 }
 
@@ -177,7 +192,8 @@ pub(crate) fn http_failure_of(error: &OpenAIError) -> Option<&HttpFailure> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_retry_after;
+    use super::{parse_error_body, parse_retry_after};
+    use reqwest::StatusCode;
 
     /// `Retry-After` seconds convert to milliseconds.
     #[test]
@@ -194,5 +210,16 @@ mod tests {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(reqwest::header::RETRY_AFTER, "soon".parse().unwrap());
         assert_eq!(parse_retry_after(&headers), None);
+    }
+
+    #[test]
+    fn top_level_compatible_error_body_is_preserved() {
+        let body = br#"{"message":"This model's maximum context length is 116800 tokens","type":"BadRequestError","param":"input_tokens","code":400}"#;
+        let (message, provider_code) = parse_error_body(body, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            message,
+            "This model's maximum context length is 116800 tokens"
+        );
+        assert_eq!(provider_code.as_deref(), Some("BadRequestError"));
     }
 }

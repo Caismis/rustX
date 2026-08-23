@@ -51,15 +51,14 @@ use crate::model::adapter::block_index::BlockAllocator;
 use crate::model::adapter::openai::client::build_client;
 use crate::model::adapter::openai::config::OpenAiAdapterConfig;
 use crate::model::adapter::openai::mapping::{
-    is_context_window_message, map_chat_finish_reason, normalize_chat_usage, normalize_error,
-    resolve_tool,
+    map_chat_finish_reason, normalize_chat_usage, normalize_error, resolve_tool,
 };
 use crate::model::adapter::traits::{
     ModelAdapter, ModelEventStream, model_event_stream_of_failure,
 };
 use crate::model::adapter::validation::{ValidatedTools, validate_request};
 use crate::model::catalog::{ChatReasoningReplay, ChatStreamUsage};
-use crate::model::error::{ModelError, ModelErrorKind};
+use crate::model::error::{ModelError, ModelErrorKind, is_context_window_error};
 use crate::model::event::ModelEvent;
 use crate::model::invocation::finalize_provider_request;
 use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage};
@@ -616,6 +615,16 @@ impl ChatStreamNormalizer {
                         "deprecated Chat Completions function_call finish semantics lack a canonical invocation id",
                     ));
                 }
+                if is_context_window_error("", Some(reason)) {
+                    return Err(ModelError {
+                        kind: ModelErrorKind::ContextWindowExceeded,
+                        message: format!(
+                            "provider terminated Chat Completions generation with {reason:?}"
+                        ),
+                        retry_after_ms: None,
+                        provider_code: Some(reason.clone()),
+                    });
+                }
                 if matches!(
                     reason.as_str(),
                     "error" | "network_error" | "insufficient_system_resource" | "abort"
@@ -1005,47 +1014,63 @@ fn chat_stream_error(error: &serde_json::Value) -> ModelError {
         .and_then(serde_json::Value::as_str)
         .or_else(|| error.get("type").and_then(serde_json::Value::as_str));
     let numeric_code = error.get("code").and_then(serde_json::Value::as_u64);
-    let kind = match error_type {
-        Some("authentication" | "authentication_error" | "permission_error") => {
-            ModelErrorKind::Authentication
-        }
-        Some("rate_limit_exceeded" | "rate_limit_error") => ModelErrorKind::RateLimit,
-        Some(
-            "context_length_exceeded"
-            | "max_tokens_exceeded"
-            | "token_limit_exceeded"
-            | "string_too_long",
-        ) => ModelErrorKind::ContextWindowExceeded,
-        Some("invalid_request" | "invalid_prompt" | "invalid_request_error") => {
-            ModelErrorKind::InvalidRequest
-        }
-        Some("timeout") => ModelErrorKind::Timeout,
-        _ if is_context_window_message(message) => ModelErrorKind::ContextWindowExceeded,
-        _ => match numeric_code {
-            Some(400) => ModelErrorKind::InvalidRequest,
-            Some(401 | 403) => ModelErrorKind::Authentication,
-            Some(408) => ModelErrorKind::Timeout,
-            Some(429) => ModelErrorKind::RateLimit,
-            _ => ModelErrorKind::ProviderError,
-        },
-    };
     let provider_code = metadata
         .and_then(|value| value.get("provider_code"))
         .and_then(serde_json::Value::as_str)
         .map(str::to_owned)
-        .or_else(|| error_type.map(str::to_owned))
         .or_else(|| {
             error.get("code").and_then(|code| match code {
                 serde_json::Value::String(code) => Some(code.clone()),
                 serde_json::Value::Number(code) => Some(code.to_string()),
                 _ => None,
             })
-        });
+        })
+        .or_else(|| error_type.map(str::to_owned));
+    let provider_code = provider_code.as_deref();
+    let kind = if matches!(
+        error_type,
+        Some("authentication" | "authentication_error" | "permission_error" | "401" | "403")
+    ) || matches!(
+        provider_code,
+        Some("authentication" | "authentication_error" | "permission_error" | "401" | "403")
+    ) || matches!(numeric_code, Some(401 | 403))
+    {
+        ModelErrorKind::Authentication
+    } else if matches!(
+        error_type,
+        Some("rate_limit_exceeded" | "rate_limit_error" | "429")
+    ) || matches!(
+        provider_code,
+        Some("rate_limit_exceeded" | "rate_limit_error" | "429")
+    ) || numeric_code == Some(429)
+    {
+        ModelErrorKind::RateLimit
+    } else if matches!(error_type, Some("timeout" | "408"))
+        || matches!(provider_code, Some("timeout" | "408"))
+        || numeric_code == Some(408)
+    {
+        ModelErrorKind::Timeout
+    } else if is_context_window_error(message, provider_code)
+        || is_context_window_error(message, error_type)
+    {
+        ModelErrorKind::ContextWindowExceeded
+    } else if matches!(
+        error_type,
+        Some("invalid_request" | "invalid_prompt" | "invalid_request_error" | "400")
+    ) || matches!(
+        provider_code,
+        Some("invalid_request" | "invalid_prompt" | "invalid_request_error" | "400")
+    ) || numeric_code == Some(400)
+    {
+        ModelErrorKind::InvalidRequest
+    } else {
+        ModelErrorKind::ProviderError
+    };
     ModelError {
         kind,
         message: format!("OpenAI-compatible stream error: {message}"),
         retry_after_ms: None,
-        provider_code,
+        provider_code: provider_code.map(str::to_owned),
     }
 }
 

@@ -69,6 +69,10 @@ export const COMMANDS: readonly CommandSpec[] = [
     description: "Show the runtime-composed Agent Status and runtime diagnostics.",
   },
   {
+    name: "/compact",
+    description: "Manually compact canonical conversation context while the runtime is idle.",
+  },
+  {
     name: "/debug",
     description: "Show bounded presentation and protocol diagnostics.",
   },

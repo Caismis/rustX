@@ -48,7 +48,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use super::event::RuntimeClientEvent;
-use super::snapshot::{CapabilityView, RuntimeClientSnapshot};
+use super::snapshot::{CapabilityView, RuntimeClientContextView, RuntimeClientSnapshot};
 use crate::conversation::SurfaceRevision;
 use crate::message::types::UserContentBlock;
 use crate::model::catalog::ModelCatalogView;
@@ -343,6 +343,13 @@ pub enum RuntimeClientRequest {
         /// Attachment-scoped request id.
         id: RequestId,
     },
+    /// Manually compact the current canonical context while the runtime is
+    /// idle. The response awaits the runtime-owned maintenance operation's
+    /// terminal result.
+    CompactContext {
+        /// Attachment-scoped request id.
+        id: RequestId,
+    },
     /// Answer one live native interaction through the runtime-owned
     /// coordinator. The response has no tool-argument replacement channel.
     InteractionRespond {
@@ -542,6 +549,7 @@ impl RuntimeClientRequest {
             Self::Initialize { id, .. }
             | Self::SubmitInbound { id, .. }
             | Self::CancelCurrentAttempt { id, .. }
+            | Self::CompactContext { id, .. }
             | Self::InteractionRespond { id, .. }
             | Self::SnapshotGet { id, .. }
             | Self::SubscribeEvents { id, .. }
@@ -575,6 +583,7 @@ impl RuntimeClientRequest {
             Self::Initialize { .. } => "initialize",
             Self::SubmitInbound { .. } => "submit_inbound",
             Self::CancelCurrentAttempt { .. } => "cancel_current_attempt",
+            Self::CompactContext { .. } => "compact_context",
             Self::InteractionRespond { .. } => "interaction_respond",
             Self::SnapshotGet { .. } => "snapshot_get",
             Self::SubscribeEvents { .. } => "subscribe_events",
@@ -617,6 +626,13 @@ impl RuntimeClientRequest {
                 | Self::SessionFork { .. }
                 | Self::SessionTreeBranch { .. }
         )
+    }
+
+    /// Whether this request must run through the async semantic endpoint.
+    #[must_use]
+    pub fn requires_async(&self) -> bool {
+        matches!(self, Self::CompactContext { .. } | Self::Shutdown { .. })
+            || self.is_session_request()
     }
 
     /// Converts the wire request into the typed native Session control
@@ -726,6 +742,11 @@ pub enum RuntimeClientResult {
     AttemptCancellationAccepted {
         /// The attempt cancellation was requested for.
         attempt_id: AttemptId,
+    },
+    /// `compact_context` succeeded after the durable summary/Surface commit.
+    ContextCompacted {
+        /// The authoritative context projection after the commit.
+        context: RuntimeClientContextView,
     },
     /// `interaction_respond` succeeded: the coordinator accepted the one
     /// terminal response transition.
