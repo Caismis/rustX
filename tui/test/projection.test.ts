@@ -71,6 +71,10 @@ describe("presentation projection", () => {
     assert.equal(state.cursor, 9);
     assert.equal(state.transcript.length, 2);
     assert.equal(state.capabilities.revision, 4);
+    assert.equal(
+      state.capabilities.skills?.[0]?.location,
+      ".rustx/skills/review/SKILL.md",
+    );
     assert.equal(state.sessionModel.configured.model, "alpha/model-a");
     assert.equal(state.attempt, undefined);
   });

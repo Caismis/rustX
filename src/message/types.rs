@@ -207,8 +207,6 @@ pub enum ContextKind {
     RuntimeToolObservation,
     /// Generic certified-extension/environment context.
     ExtensionEnvironment,
-    /// Native capability/Skill guidance.
-    SkillGuidance,
     /// Native runtime/Agent Status.
     AgentStatus,
 }

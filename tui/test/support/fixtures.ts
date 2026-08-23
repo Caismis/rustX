@@ -145,6 +145,7 @@ export function capabilities(revision: number): CapabilityView {
         version_id: "skill-review@1",
         name: "review",
         description: "Review a change set.",
+        location: ".rustx/skills/review/SKILL.md",
       },
     ],
   };

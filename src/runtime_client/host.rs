@@ -1943,6 +1943,19 @@ mod tests {
         tools: ToolRegistry,
         composer: AgentStatusComposer,
     ) -> (Arc<GatedAdapter>, HostFixture) {
+        host_fixture_with_native_tools(scripts, tools, composer, false).await
+    }
+
+    /// Builds the conversation runtime + host, optionally activating the
+    /// real native tool plane. Skill projection tests opt into this variant
+    /// so the fixture exercises the normal native composition and its
+    /// mandatory Read capability.
+    async fn host_fixture_with_native_tools(
+        scripts: Vec<Vec<GatedStep>>,
+        mut tools: ToolRegistry,
+        composer: AgentStatusComposer,
+        include_native_tools: bool,
+    ) -> (Arc<GatedAdapter>, HostFixture) {
         let adapter = Arc::new(GatedAdapter::new(scripts));
         let dir = tempfile::tempdir().expect("temp dir");
         let conversation_id = ConversationId::new("conv-host");
@@ -1954,6 +1967,17 @@ mod tests {
             dir.path().join("artifacts"),
         )
         .expect("tool runtime");
+        if include_native_tools {
+            crate::tools::register_native_tools(
+                &mut tools,
+                crate::tools::NativeToolResources {
+                    background: tool_runtime.background().clone(),
+                    subagents: None,
+                },
+                crate::tools::NativeToolPolicies::default(),
+            )
+            .expect("register native tools");
+        }
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
             crate::capabilities::CapabilityCoordinatorConfig {
                 conversation_id: conversation_id.clone(),
@@ -3358,7 +3382,8 @@ mod tests {
     /// and without depending on process exit.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn releasing_the_last_owner_destroys_the_host_and_exits_the_workers() {
-        let (_adapter, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
+        let (_adapter, fixture) =
+            host_fixture_with_native_tools(Vec::new(), ToolRegistry::new(), composer(), true).await;
         let HostFixture {
             _dir: dir,
             host,
@@ -3562,6 +3587,7 @@ mod tests {
             .expect("the coordinator remains authoritative");
         assert!(
             committed
+                .skills()
                 .catalog_entries()
                 .iter()
                 .any(|entry| entry.name == "after-skill")
@@ -3710,7 +3736,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_capability_commit_never_waits_on_the_host_lock() {
         let probe = Arc::new(crate::runtime_client::test_sync::ProjectionProbe::default());
-        let (_, fixture) = host_fixture_probe(probe.clone(), Vec::new()).await;
+        let (_, fixture) =
+            host_fixture_probe_with_native_tools(probe.clone(), Vec::new(), true).await;
         let (before, _) = fixture.host.snapshot().expect("snapshot");
 
         // A non-noop candidate: one discoverable Skill package.
@@ -5027,6 +5054,15 @@ mod tests {
         probe: Arc<crate::runtime_client::test_sync::ProjectionProbe>,
         scripts: Vec<Vec<GatedStep>>,
     ) -> (Arc<GatedAdapter>, HostFixture) {
+        host_fixture_probe_with_native_tools(probe, scripts, false).await
+    }
+
+    /// Probe fixture variant with the real native tool plane activated.
+    async fn host_fixture_probe_with_native_tools(
+        probe: Arc<crate::runtime_client::test_sync::ProjectionProbe>,
+        scripts: Vec<Vec<GatedStep>>,
+        include_native_tools: bool,
+    ) -> (Arc<GatedAdapter>, HostFixture) {
         let adapter = Arc::new(GatedAdapter::new(scripts));
         let dir = tempfile::tempdir().expect("temp dir");
         let conversation_id = ConversationId::new("conv-host");
@@ -5038,11 +5074,23 @@ mod tests {
             dir.path().join("artifacts"),
         )
         .expect("tool runtime");
+        let mut tools = ToolRegistry::new();
+        if include_native_tools {
+            crate::tools::register_native_tools(
+                &mut tools,
+                crate::tools::NativeToolResources {
+                    background: tool_runtime.background().clone(),
+                    subagents: None,
+                },
+                crate::tools::NativeToolPolicies::default(),
+            )
+            .expect("register native tools");
+        }
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
             crate::capabilities::CapabilityCoordinatorConfig {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
-                base_tool_registry: Arc::new(ToolRegistry::new()),
+                base_tool_registry: Arc::new(tools),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig {
                     automatic_roots: vec![workspace.join(".agents/skills")],

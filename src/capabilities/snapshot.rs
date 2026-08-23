@@ -6,8 +6,8 @@ use std::sync::Arc;
 use crate::capabilities::tools::AvailableToolCatalog;
 use crate::protocol::manifest::CapabilitiesManifest;
 use crate::runtime::identity::{CapabilityRevision, ConversationId};
+use crate::skills::SkillSnapshot;
 use crate::skills::environments::{NodeEnvironment, PythonEnvironment};
-use crate::skills::{SkillCatalogEntry, SkillSnapshot};
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::executor::ToolRegistry;
 
@@ -138,12 +138,6 @@ impl CapabilitySnapshot {
         &self.skills
     }
 
-    /// The model-visible Skill catalog entries.
-    #[must_use]
-    pub fn catalog_entries(&self) -> &[SkillCatalogEntry] {
-        self.skills.catalog_entries()
-    }
-
     /// The shared Python environment, when the merged Skill set declares
     /// Python dependencies.
     #[must_use]
@@ -166,12 +160,13 @@ impl CapabilitySnapshot {
         &self.effective_environment
     }
 
-    /// The exact rendered Skill guidance of this immutable capability
-    /// snapshot. Context Assembly admits it as a normal sourced canonical
-    /// User context fact; it is not a request attachment.
+    /// The exact rendered Skill capability guidance of this immutable
+    /// capability snapshot. Context Assembly renders it into the request-time
+    /// Effective System Prompt; it is not canonical conversation history.
     #[must_use]
     pub fn skill_catalog(&self) -> Option<String> {
-        self.skills.render_catalog()
+        let entries = self.skills.catalog_entries();
+        (!entries.is_empty()).then(|| crate::skills::render_skill_catalog(entries))
     }
 
     /// The deterministic `CapabilitiesManifest` data of this snapshot.
@@ -180,9 +175,9 @@ impl CapabilitySnapshot {
         CapabilitiesManifest {
             revision: self.revision,
             // Manifest provenance is the complete immutable capability set.
-            // Model visibility is projected separately through
-            // `catalog_entries()`/`skill_catalog()` and the Runtime Client;
-            // `disable-model-invocation` must not erase runtime ownership.
+            // Model visibility is projected separately through the Skill
+            // snapshot's Skill-level visible catalog; `disable-model-
+            // invocation` must not erase runtime ownership.
             skills: self.skills.bindings().to_vec(),
             tools: self
                 .tool_registry

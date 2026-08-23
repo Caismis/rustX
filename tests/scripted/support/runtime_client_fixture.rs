@@ -62,6 +62,8 @@ impl RuntimeClientFixture {
             initial_messages: Vec::new(),
             workspace_fixtures: Vec::new(),
             mcp_servers: std::collections::BTreeMap::new(),
+            native_tools: false,
+            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
             session_model: None,
             context_policy: SessionContextPolicy {
                 reserve_tokens: 0,
@@ -111,6 +113,10 @@ pub struct RuntimeClientFixtureBuilder {
     workspace_fixtures: Vec<WorkspaceFixture>,
     /// MCP servers the capability coordinator connects.
     mcp_servers: rustx::tools::mcp::McpServerBindings,
+    /// Whether to register the real native tool plane in the base registry.
+    native_tools: bool,
+    /// The startup activation policy applied to the available tool set.
+    tool_activation: rustx::capabilities::ToolActivationPolicy,
     /// An explicit session model authority, when the test needs a specific
     /// catalog (several models, reasoning profiles, or an explicit summary
     /// model). Defaults to the one scripted model.
@@ -187,6 +193,20 @@ impl RuntimeClientFixtureBuilder {
         self
     }
 
+    /// Registers the real native tool plane before capability preparation.
+    #[must_use]
+    pub const fn native_tools(mut self) -> Self {
+        self.native_tools = true;
+        self
+    }
+
+    /// Replaces the startup tool activation policy.
+    #[must_use]
+    pub fn tool_activation(mut self, policy: rustx::capabilities::ToolActivationPolicy) -> Self {
+        self.tool_activation = policy;
+        self
+    }
+
     /// Replaces the session model authority with an explicit one.
     #[must_use]
     pub fn session_model(mut self, model: SessionModelState) -> Self {
@@ -220,13 +240,25 @@ impl RuntimeClientFixtureBuilder {
             workspace.path().join("artifacts"),
         )
         .expect("tool runtime");
+        let mut base_tools = self.base_tools;
+        if self.native_tools {
+            rustx::tools::register_native_tools(
+                &mut base_tools,
+                rustx::tools::NativeToolResources {
+                    background: tool_runtime.background().clone(),
+                    subagents: None,
+                },
+                rustx::tools::NativeToolPolicies::default(),
+            )
+            .expect("register native tools");
+        }
 
         let coordinator = rustx::capabilities::CapabilityCoordinator::with_backend(
             rustx::capabilities::CapabilityCoordinatorConfig {
                 conversation_id: tool_runtime.conversation_id().clone(),
                 workspace: tool_runtime.workspace().clone(),
-                base_tool_registry: Arc::new(self.base_tools),
-                tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+                base_tool_registry: Arc::new(base_tools),
+                tool_activation: self.tool_activation,
                 skill_discovery: rustx::skills::SkillDiscoveryConfig {
                     automatic_roots: vec![
                         tool_runtime.workspace().root().join(".rustx/skills"),

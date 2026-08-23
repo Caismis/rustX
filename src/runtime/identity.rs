@@ -329,13 +329,14 @@ pub enum ContextContributorIdentity {
     CertifiedExtension(CertifiedExtensionIdentity),
 }
 
-/// Native semantic owners that may publish model-visible context.
+/// Native semantic owners that may publish model-visible context or
+/// request-time system guidance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NativeContextContributor {
     /// Workspace/project instructions.
     WorkspaceInstructions,
-    /// The native capability/Skill guidance owner.
+    /// The native capability/Skill guidance system-section owner.
     SkillGuidance,
     /// The native runtime/Agent Status owner.
     AgentStatus,

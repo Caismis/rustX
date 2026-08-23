@@ -21,10 +21,11 @@ use rustx::agent::{
     AgentCancellation, AgentExecution, AgentExecutionRequest, AgentExecutionResult,
 };
 use rustx::context::{
-    ClosureTokenEstimator, CompactionBudgets, ContextAssembly, ContextConfig, ContextEngine,
-    ContextError, ContextErrorKind, ContextProposal, ContextRuntime, ContextSummarizer,
-    DefaultTokenEstimator, ModelBackedSummarizer, ProviderObservedInput, SummaryRequest,
-    TokenEstimator, UserMessageProposal,
+    AcceptedSystemSection, ClosureTokenEstimator, CompactionBudgets, ContextAssembly,
+    ContextConfig, ContextEngine, ContextError, ContextErrorKind, ContextProposal, ContextRuntime,
+    ContextSummarizer, DefaultTokenEstimator, ModelBackedSummarizer, ProviderObservedInput,
+    SummaryRequest, SystemSectionLane, TokenEstimator, UserMessageProposal,
+    render_effective_system_prompt,
 };
 use rustx::conversation::{
     ConversationState, SurfaceOp, SurfaceRevision, SurfaceSpan, summary_message_id,
@@ -42,7 +43,8 @@ use rustx::runtime::continuation::{
     AnthropicContinuation, OpenAiResponsesContinuation, ProviderContinuationState,
 };
 use rustx::runtime::identity::{
-    AgentId, AttemptId, ConversationId, MessageId, RequestId, ToolCallId, ToolId,
+    AgentId, AttemptId, ContextContributorIdentity, ConversationId, MessageId,
+    NativeContextContributor, RequestId, ToolCallId, ToolId,
 };
 use rustx::runtime::inbound::ConversationInboundMailbox;
 use rustx::runtime::types::{CancellationReason, TokenMeasurement, TokenMeasurementSource};
@@ -545,6 +547,58 @@ fn short_history_requires_no_compaction() {
             .expect("threshold decision")
     );
     assert!(engine.fits_under_soft_limit(&projection, 0).expect("fits"));
+}
+
+/// Request-time Skill capability guidance is not a Surface fact: compacting
+/// canonical conversation messages leaves the frozen system section visible.
+#[test]
+fn compaction_cannot_remove_request_time_skill_catalog_guidance() {
+    let skill_catalog = "## Skills\n\n<available_skills>\n  <skill>\n    <name>pdf</name>\n    <description>Create PDF documents.</description>\n    <location>.rustx/skills/pdf/SKILL.md</location>\n  </skill>\n</available_skills>";
+    let sections = [AcceptedSystemSection {
+        lane: SystemSectionLane::NativeCapabilityGuidance,
+        contributor: ContextContributorIdentity::Native(NativeContextContributor::SkillGuidance),
+        content: skill_catalog.to_owned(),
+    }];
+    let mut state = state(vec![user("u1", "first"), user("u2", "second")]);
+    // The exact per-Skill locator is intentionally part of the frozen prompt;
+    // leave enough deterministic room for the compact system section while
+    // still compacting the canonical messages below it.
+    let engine = engine(1_000, 0, 0, weighted(10, 0, 0));
+    let before_messages = state
+        .active_messages()
+        .expect("active messages before compaction");
+    let before_prompt = render_effective_system_prompt(&before_messages, &sections);
+    assert_eq!(before_prompt, skill_catalog);
+    let projection = engine
+        .build_projection(&state, &[], None, &before_prompt)
+        .expect("projection");
+    let plan = engine
+        .plan_compaction(
+            &state,
+            &projection,
+            &[],
+            CompactionBudgets::new(0, 0, 1_000_000),
+            &rustx::context::CompactionConstraints::default(),
+        )
+        .expect("a complete canonical span is compactable");
+    let (commit, _) = engine
+        .prepare_compaction(&state, &conversation(), &plan, "summary", &[])
+        .expect("prepare compaction");
+    state.commit_compaction(commit).expect("commit compaction");
+
+    let after_messages = state
+        .active_messages()
+        .expect("active messages after compaction");
+    let after_prompt = render_effective_system_prompt(&after_messages, &sections);
+    assert_eq!(after_prompt, skill_catalog);
+    assert!(
+        after_messages.iter().all(|message| {
+            !serde_json::to_string(message)
+                .expect("serialize canonical message")
+                .contains("## Skills")
+        }),
+        "the catalog remains outside canonical history after compaction"
+    );
 }
 
 /// The projection is exactly the current Surface, in Surface order, as

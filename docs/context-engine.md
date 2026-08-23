@@ -89,7 +89,8 @@ AcceptedContext
     ↓
 Agent Loop admission
     ↓
-canonical User context facts and request-time system sections
+canonical User context facts + RequestSnapshot
+    (including the frozen Effective System Prompt)
 ~~~
 
 ### Finite contributor input
@@ -123,8 +124,10 @@ cannot mutate committed history. RustX assigns the semantic kind/lane,
 trusted provenance, canonical identity, and commit operation.
 
 Native observations currently include workspace instructions, Skill
-guidance, Agent Status, core runtime identity, and agent profile. Native
-identities use ContextContributorIdentity::Native; extensions use
+capability guidance, Agent Status, core runtime identity, and agent profile.
+Skill capability guidance is a request-time system section, while Agent Status
+is a canonical User context fact. Native identities use
+ContextContributorIdentity::Native; extensions use
 CertifiedExtensionIdentity, which is canonicalized and validated by rustX.
 Native logical keys cannot be claimed by an extension.
 
@@ -145,8 +148,7 @@ The finite user lanes are ordered as:
    native-reserved, never extension-owned;
 3. WorkspaceInstructions — one native semantic owner;
 4. ExtensionEnvironment — multiple certified extensions;
-5. SkillGuidance — one native-reserved owner;
-6. AgentStatus — one native-reserved owner.
+5. AgentStatus — one native-reserved owner.
 
 The native observation lane sits directly after claimed inbound because that
 owner's facts describe what the environment just did for the *preceding* tool
@@ -170,13 +172,18 @@ proposals:
 | --- | --- | --- | --- |
 | `Native(RuntimeToolObservation)` | `RuntimeToolObservation` | `Runtime` | `RuntimeToolObservation` |
 | `Native(WorkspaceInstructions)` | `WorkspaceInstructions` | `Runtime` | `WorkspaceInstructions` |
-| `Native(SkillGuidance)` | `SkillGuidance` | `Runtime` | `SkillGuidance` |
 | `Native(AgentStatus)` | `AgentStatus` | `Runtime` | `AgentStatus` |
 | `CertifiedExtension(key)` | `ExtensionEnvironment` | `Extension { key }` | `ExtensionEnvironment` |
 
 So a certified extension that produces deferred post-tool context keeps its
 extension identity, its extension provenance, and its own lane. There is no
 rule converting post-tool proposals into native runtime context.
+
+`Native(SkillGuidance)` is intentionally absent from this User-context table.
+It publishes only the `SystemSectionLane::NativeCapabilityGuidance` section;
+it has no `UserSource`, `ContextKind`, User message, Ledger entry, or Surface
+identity. The catalog text is rendered from the attempt's immutable
+`SkillSnapshot` and contains routing metadata only.
 
 ### Registration is the only semantic admission authority
 
@@ -245,7 +252,6 @@ MessageBlock::User with InboundKind::Context(ContextKind):
 | --- | --- | --- |
 | workspace/project instructions | Runtime | WorkspaceInstructions |
 | certified extension context | Extension { contributor } | ExtensionEnvironment |
-| Skill/capability guidance | Runtime | SkillGuidance |
 | Agent Status | Runtime | AgentStatus |
 
 The Agent Loop admission function is the only path that allocates context
@@ -262,10 +268,21 @@ Two status snapshots with identical bytes at different admitted steps are
 different facts and receive different MessageIds; content deduplication is
 not a semantic operation.
 
-Skill guidance is assembled through this same path from the immutable
-per-attempt capability snapshot. It is distinct from ModelRequest.tools:
-tool definitions remain capability/request state and are never copied into
-canonical User messages.
+The Skill catalog is sampled from the immutable per-attempt capability
+snapshot and assembled as a request-time native capability section. Normal
+rustX agent composition always contains canonical native Read, so Skill
+visibility is filtered at the Skill level (`disable-model-invocation`) rather
+than by a downstream optional-Read predicate. It is distinct from
+`ModelRequest.tools`: tool definitions remain capability/request state, and the
+Skill catalog is never copied into canonical User messages. Skills are trusted
+instruction packages in the current rustX threat model; structural catalog
+escaping remains, without a semantic trust tier.
+When visible Skills exist, each entry contains deterministic name and
+description metadata plus its exact virtual `.rustx/skills/<skill-name>/SKILL.md`
+location. The guidance tells the model to pass that exact location to Read
+without constructing or rewriting a path. Full Skill bodies are loaded only
+after an explicit native Read call and enter the ordinary tool-result
+conversation path.
 
 The former model-request-only semantic attachment paths are removed. There
 is no hidden Agent Status or Skill insertion during adapter translation and
@@ -281,14 +298,17 @@ RustX renders it with render_effective_system_prompt from:
 2. native CoreRuntimeIdentity sections;
 3. native AgentProfile sections;
 4. certified-extension sections in canonical logical identity order;
-5. any native capability guidance section owned by rustX.
+5. any native capability guidance section owned by rustX, including the
+   request-time Skill catalog when the immutable snapshot has visible Skills.
 
 The section family is the SystemSectionLane contract. Extensions can
 contribute only the certified-extension lane; they cannot claim or shadow a
 native section and cannot replace the entire prompt. RustX owns the final
 section ordering, separators, and rendered string. The exact rendered string
 is frozen by value in every RequestSnapshot; reconstruction never reruns
-section contributors or reads current configuration.
+section contributors, rediscover Skills, or reads current configuration.
+Compaction rewrites only canonical conversation facts, so it cannot remove
+or suppress the Skill catalog section.
 
 The bounded Issue #54 Surface rule still applies: a SurfaceOp::Replace
 cannot contain a canonical System message. This is a history/compaction
@@ -403,8 +423,8 @@ prepare_model_turn → frozen RequestSnapshot + provider ModelRequest
 │ cancellation check                                             │
 │     ↓ not cancelled                                            │
 │ ConversationStore::commit_model_turn_start                     │
-│     → ONE transaction: request-scoped context appends          │
-│       + ledger/Surface + RequestSnapshot                       │
+│     → ONE transaction: canonical request-scoped User context  │
+│       + ledger/Surface + RequestSnapshot (frozen prompt)      │
 │       + ModelRequestStarted + sequence binding                 │
 └────────────────────────────────────────────────────────────────┘
     ↓
@@ -429,8 +449,10 @@ the *same* final batch, an observer cannot commit context around the policy
 either — whatever identity it produces context for.
 
 A start-commit durability failure rolls the whole transaction back: no
-half-committed request-scoped context, no snapshot, no start fact, and no
-provider request. After the start commit succeeds, the accepted context is
+half-committed canonical User context, no snapshot, no start fact, and no
+provider request. Accepted system sections are transient assembly values;
+their rendered value is durable through RequestSnapshot. After the start
+commit succeeds, the accepted context is
 historical: provider failure, disconnect, timeout, or cancellation does not
 roll back the ledger, surface, context generation, or snapshot.
 
@@ -497,7 +519,8 @@ current conversation state, not a historical archive.
 
 During execution, the current request snapshot is prepared from the exact
 provider-neutral request. `ConversationStore::commit_model_turn_start`
-commits the request-scoped context, that immutable snapshot, and its
+commits the canonical request-scoped User context, that immutable snapshot
+(including the frozen Effective System Prompt), and its
 `ModelRequestStarted` Event Journal fact in one transaction before the
 adapter is invoked, under the attempt's start gate (M9b). `RequestHistory` is a durable
 read handle, not an append-only `Vec<RequestSnapshot>` and not a second
@@ -538,10 +561,11 @@ hidden adapter injection.
 
 ## 11. Compatibility manifest
 
-ContextAssembly::compatibility_manifest() returns
+`ContextAssembly::compatibility_manifest()` returns
 ContextCompatibilityManifest with:
 
-- abi_version;
+- `abi_version` (currently `2`; the v2 contract removes Skill guidance from
+  User lanes and keeps it in request-time system sections);
 - canonical user_context_lanes;
 - canonical system_section_lanes;
 - native-reserved slots;

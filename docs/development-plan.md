@@ -364,7 +364,9 @@ Exit criteria:
 
 - A skill can instruct the model to read its instructions and execute Python, Node, or shell scripts against the local workspace.
 - Multiple skills can coexist in one shared environment with deterministic environment identity.
-- An attempt observes one immutable Skill catalog for its complete lifetime.
+- An attempt observes one immutable Skill snapshot for its complete lifetime;
+  each primary request renders its compact catalog into the Effective System
+  Prompt, never into canonical User history.
 - A capability commit is rejected while an attempt lease is active; failed preparation/commit leaves the current revision authoritative.
 - Detached background executions retain the environment of the revision that dispatched them.
 
@@ -460,9 +462,13 @@ Implemented in the current architecture:
 - Stable serializable contributor identities, separate attestation/content
   generations, finite semantic user/system lanes, native-reserved owners,
   and canonical logical-identity ordering for multi-extension lanes.
-- Agent Status and Skill guidance admitted as ordinary canonical Runtime
-  context User messages. The old model-request-only semantic attachment
-  paths do not exist.
+- Agent Status admitted as an ordinary canonical Runtime context User
+  message, while Skill routing guidance is a request-time native system
+  section rendered from the immutable attempt capability snapshot. Each
+  visible Skill exposes only its exact virtual
+  `.rustx/skills/<name>/SKILL.md` locator; full instructions remain a lazy
+  native Read result. The old model-request-only Skill attachment path does
+  not exist.
 - RustX-owned Effective System Prompt sections and deterministic rendering;
   the exact rendered value is frozen per request.
 - Frozen provider-independent `RequestSnapshot` with exact SurfaceRevision,

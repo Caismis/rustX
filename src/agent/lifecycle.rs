@@ -201,8 +201,9 @@ impl std::error::Error for LifecycleError {}
 /// The final immutable description of one primary step's proposal batch.
 ///
 /// This is the *complete* batch that would otherwise be admitted: native
-/// Agent Status and Skill guidance, certified-extension proposals, and any
-/// deferred post-tool observation context staged by the previous tool batch.
+/// Agent Status, the native Skill system section, certified-extension
+/// proposals, and any deferred post-tool observation context staged by the
+/// previous tool batch.
 /// No contributor and no observer has a path around this evaluation.
 ///
 /// Every field is an immutable borrow of an already-validated transient

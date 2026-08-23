@@ -932,7 +932,7 @@ export function renderSkills(state: PresentationState): string {
     `### Skills (capability revision ${state.capabilities.revision})`,
     ...catalog.map(
       (skill) =>
-        `- \`${skill.name}\` (${skill.version_id}) — ${skill.description}`,
+        `- \`${skill.name}\` (${skill.version_id}) — ${skill.description}\n  - location: \`${skill.location}\``,
     ),
   ].join("\n");
 }

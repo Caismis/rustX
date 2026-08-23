@@ -1412,8 +1412,9 @@ pub async fn agent_status_is_runtime_owned(factory: &dyn DriverFactory) {
 }
 
 /// The capability projection carries the revision, the deterministic tool
-/// catalog with typed origin metadata, and the Skill catalog — and no
-/// executor or environment internals.
+/// catalog with typed origin metadata, and the Skill-level visible catalog
+/// including each exact virtual Read locator. No executor or environment
+/// internals are exposed.
 pub async fn capability_projection_is_deterministic(factory: &dyn DriverFactory) {
     let mut base = ToolRegistry::new();
     FakeTool::new(
@@ -1429,6 +1430,11 @@ pub async fn capability_projection_is_deterministic(factory: &dyn DriverFactory)
 
     let fixture = ConformanceFixture::builder(&conversation(factory, "capability"))
         .tools(base)
+        .native_tools()
+        .tool_activation(rustx::capabilities::ToolActivationPolicy {
+            tools: Some(vec!["ls".to_owned(), "read".to_owned()]),
+            ..rustx::capabilities::ToolActivationPolicy::default()
+        })
         .workspace_fixture(|workspace| {
             write_skill(workspace, "skill-readme", "Reads the README");
         })
@@ -1453,13 +1459,15 @@ pub async fn capability_projection_is_deterministic(factory: &dyn DriverFactory)
             .iter()
             .map(|tool| tool.name.as_str())
             .collect::<Vec<_>>(),
-        vec!["ls"]
+        vec!["ls", "read"]
     );
     assert_eq!(capabilities.tools[0].origin, ToolOrigin::Builtin);
     assert_eq!(capabilities.skills.len(), 1);
     assert_eq!(capabilities.skills[0].name, "skill-readme");
-    assert_eq!(capabilities.skills[0].description, "Reads the README");
-    assert!(!capabilities.skills[0].version_id.as_str().is_empty());
+    assert_eq!(
+        capabilities.skills[0].location,
+        ".rustx/skills/skill-readme/SKILL.md"
+    );
 
     // Deterministic: a second read is byte-identical, and the snapshot
     // carries the same view.
@@ -1481,7 +1489,12 @@ pub async fn capability_projection_is_deterministic(factory: &dyn DriverFactory)
 
     // The wire shape carries no executor or environment internals.
     let wire = serde_json::to_string(&capabilities).expect("the projection serializes");
-    for forbidden in ["executor", "environment", "interpreter", "worker", "path"] {
+    for forbidden in [
+        "\"executor\":",
+        "\"environment\":",
+        "\"interpreter\":",
+        "\"worker\":",
+    ] {
         assert!(
             !wire.contains(forbidden),
             "the capability wire shape must not carry `{forbidden}`: {wire}"

@@ -721,9 +721,9 @@ fn malformed_dependency_declaration_fails_the_transaction() {
 // Model-visible catalog
 // ---------------------------------------------------------------------------
 
-/// The exact compact `## Skills` catalog form: common root once,
-/// deterministic ordering, name + description only; no SKILL.md body, no
-/// dependency metadata, and no host absolute path.
+/// The exact compact `## Skills` catalog form: deterministic ordering, name +
+/// description + exact virtual location; no SKILL.md body, dependency
+/// metadata, and no host absolute path.
 #[test]
 fn catalog_rendering_is_exact_and_never_leaks_workspace_paths() {
     let (dir, workspace) = fixture();
@@ -744,16 +744,26 @@ fn catalog_rendering_is_exact_and_never_leaks_workspace_paths() {
     let packages = discover(&workspace);
     let snapshot =
         rustx::skills::SkillSnapshot::new(packages.into_iter().map(std::sync::Arc::new).collect());
-    let rendered = snapshot.render_catalog().expect("catalog");
-    assert_eq!(
-        rendered,
-        "## Skills\n\n\
-         Skills are stored under `.rustx/skills/`.\n\
-         Before using a skill, read `.rustx/skills/<skill-name>/SKILL.md`\n\
-         with the Read tool.\n\n\
-         Available skills:\n\
-         \n- pdf: Create, edit, inspect, and transform PDF documents.\n- slides: Create and modify presentation decks."
+    let rendered = render_skill_catalog(snapshot.catalog_entries());
+    let expected = concat!(
+        "## Skills\n\n",
+        "The following skills provide specialized instructions for specific tasks.\n",
+        "Use the Read tool to load a skill when the task matches its description.\n",
+        "Use the exact location shown below; do not construct or rewrite Skill paths.\n\n",
+        "<available_skills>\n",
+        "  <skill>\n",
+        "    <name>pdf</name>\n",
+        "    <description>Create, edit, inspect, and transform PDF documents.</description>\n",
+        "    <location>.rustx/skills/pdf/SKILL.md</location>\n",
+        "  </skill>\n",
+        "  <skill>\n",
+        "    <name>slides</name>\n",
+        "    <description>Create and modify presentation decks.</description>\n",
+        "    <location>.rustx/skills/slides/SKILL.md</location>\n",
+        "  </skill>\n",
+        "</available_skills>"
     );
+    assert_eq!(rendered, expected);
     let host_root = workspace.root().display().to_string();
     assert!(
         !rendered.contains(&host_root),
@@ -765,13 +775,18 @@ fn catalog_rendering_is_exact_and_never_leaks_workspace_paths() {
         "dependency metadata never appears"
     );
     assert_eq!(
-        snapshot.render_catalog().expect("catalog"),
-        render_skill_catalog(snapshot.catalog_entries())
+        snapshot.catalog_entries()[0].location,
+        ".rustx/skills/pdf/SKILL.md"
+    );
+    assert_eq!(
+        snapshot.catalog_entries()[1].location,
+        ".rustx/skills/slides/SKILL.md"
     );
 
-    // The empty snapshot renders no catalog.
+    // The empty snapshot has no entries; CapabilitySnapshot consequently
+    // omits the entire system section.
     let empty = rustx::skills::SkillSnapshot::new(Vec::new());
-    assert_eq!(empty.render_catalog(), None);
+    assert!(empty.catalog_entries().is_empty());
 }
 
 // ---------------------------------------------------------------------------

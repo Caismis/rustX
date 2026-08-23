@@ -19,8 +19,8 @@ use rustx::tools::types::{
 
 /// A capability view covering native + Python + Skill origins: the
 /// revision, deterministic ordering, origin metadata, and Skill
-/// identity/version/name/description, with no private internals on the
-/// wire.
+/// identity/version/name/description/exact virtual location, with no private
+/// internals on the wire.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)] // one complete capability fixture
@@ -58,6 +58,15 @@ async fn capability_projection_covers_native_python_and_skills() {
             .expect("register base tool");
             base
         })
+        .native_tools()
+        .tool_activation(rustx::capabilities::ToolActivationPolicy {
+            tools: Some(vec![
+                "ls".to_owned(),
+                "py-echo".to_owned(),
+                "read".to_owned(),
+            ]),
+            ..rustx::capabilities::ToolActivationPolicy::default()
+        })
         .workspace_fixture(|workspace| {
             support::runtime_client_fixture::write_python_package(
                 workspace,
@@ -93,7 +102,7 @@ async fn capability_projection_covers_native_python_and_skills() {
         .iter()
         .map(|tool| tool.name.as_str())
         .collect();
-    assert_eq!(names, vec!["ls", "py-echo"]);
+    assert_eq!(names, vec!["ls", "py-echo", "read"]);
     let second = attachment.handle_request(RuntimeClientRequest::CapabilityGet {
         id: rustx::runtime_client::RequestId::new(2),
     });
@@ -112,11 +121,12 @@ async fn capability_projection_covers_native_python_and_skills() {
         ToolOrigin::Python { tool_version_id } if !tool_version_id.as_str().is_empty()
     ));
 
-    // Skill identity/version/name/description.
+    // Skill identity/version/name/description/exact virtual location.
     assert_eq!(capabilities.skills.len(), 1);
     let skill = &capabilities.skills[0];
     assert_eq!(skill.name, "skill-readme");
     assert_eq!(skill.description, "Reads the README");
+    assert_eq!(skill.location, ".rustx/skills/skill-readme/SKILL.md");
     assert_eq!(skill.id.as_str(), "skill-readme");
     assert!(
         skill.version_id.as_str().starts_with("sha256:"),
@@ -126,12 +136,13 @@ async fn capability_projection_covers_native_python_and_skills() {
     // No executor, environment path, package-manager, or dependency
     // internals ever appear on the wire.
     let json = serde_json::to_string(&capabilities).expect("serialize capabilities");
-    for forbidden in ["executor", "/skill-env", "uv.lock", "pyproject", "SKILL.md"] {
+    for forbidden in ["\"executor\":", "/skill-env", "uv.lock", "pyproject"] {
         assert!(
             !json.contains(forbidden),
             "the wire projection must not leak {forbidden:?}: {json}"
         );
     }
+    assert!(json.contains(".rustx/skills/skill-readme/SKILL.md"));
 }
 
 /// The MCP origin is projected with its server identity; the MCP fixture

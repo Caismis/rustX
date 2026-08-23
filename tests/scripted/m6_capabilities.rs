@@ -27,6 +27,7 @@ use rustx::tools::types::{
     ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode,
 };
 use rustx::tools::workspace::Workspace;
+use rustx::tools::{NativeToolPolicies, NativeToolResources, register_native_tools};
 
 use super::{common, support};
 
@@ -82,6 +83,12 @@ fn node_deps(json: &str) -> (&'static str, &'static str) {
 }
 
 fn conversation() -> Conversation {
+    conversation_with_options(rustx::capabilities::ToolActivationPolicy::default())
+}
+
+fn conversation_with_options(
+    tool_activation: rustx::capabilities::ToolActivationPolicy,
+) -> Conversation {
     let dir = tempfile::tempdir().expect("temp dir");
     let workspace_root = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
@@ -106,12 +113,22 @@ fn conversation() -> Conversation {
         },
     );
     let backend = common::FakeSkillEnvironmentBackend::new();
+    let mut base_tool_registry = ToolRegistry::new();
+    register_native_tools(
+        &mut base_tool_registry,
+        NativeToolResources {
+            background: background.clone(),
+            subagents: None,
+        },
+        NativeToolPolicies::default(),
+    )
+    .expect("native tools");
     let coordinator = CapabilityCoordinator::with_backend(
         CapabilityCoordinatorConfig {
             conversation_id: conversation_id.clone(),
             workspace: workspace.clone(),
-            base_tool_registry: Arc::new(ToolRegistry::new()),
-            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+            base_tool_registry: Arc::new(base_tool_registry),
+            tool_activation,
             skill_discovery: rustx::skills::SkillDiscoveryConfig {
                 automatic_roots: vec![
                     workspace.root().join(".rustx/skills"),
@@ -165,8 +182,15 @@ async fn hidden_skills_keep_attempt_provenance_but_not_model_visibility() {
     assert_eq!(snapshot.skills().bindings().len(), 2);
     assert_eq!(snapshot.skills().catalog_entries().len(), 1);
     assert_eq!(snapshot.skills().catalog_entries()[0].name, "visible");
+    assert_eq!(
+        snapshot.skills().catalog_entries()[0].location,
+        ".rustx/skills/visible/SKILL.md"
+    );
     let rendered_catalog = snapshot.skill_catalog().expect("visible Skill catalog");
+    assert_eq!(rendered_catalog.matches("## Skills").count(), 1);
     assert!(rendered_catalog.contains("visible"));
+    assert!(rendered_catalog.contains("<description>Visible guidance.</description>"));
+    assert!(rendered_catalog.contains("<location>.rustx/skills/visible/SKILL.md</location>"));
     assert!(!rendered_catalog.contains("runtime-only"));
     assert!(
         snapshot
@@ -195,6 +219,70 @@ async fn hidden_skills_keep_attempt_provenance_but_not_model_visibility() {
         vec!["visible"],
         "Runtime Client Skills are the model-visible projection"
     );
+    assert_eq!(
+        client_view.skills[0].location,
+        ".rustx/skills/visible/SKILL.md"
+    );
+}
+
+/// Normal rustX agent composition keeps canonical native Read active while
+/// optional Tool activation changes. Skill visibility therefore remains a
+/// Skill-level decision, and the same immutable visible catalog feeds both
+/// the Effective System Prompt and Runtime Client projection.
+#[tokio::test]
+async fn mandatory_native_read_survives_optional_activation_filters() {
+    let policies = [
+        rustx::capabilities::ToolActivationPolicy {
+            no_tools: true,
+            ..rustx::capabilities::ToolActivationPolicy::default()
+        },
+        rustx::capabilities::ToolActivationPolicy {
+            no_builtin_tools: true,
+            ..rustx::capabilities::ToolActivationPolicy::default()
+        },
+        rustx::capabilities::ToolActivationPolicy {
+            tools: Some(vec!["write".to_owned()]),
+            ..rustx::capabilities::ToolActivationPolicy::default()
+        },
+        rustx::capabilities::ToolActivationPolicy {
+            exclude_tools: vec!["read".to_owned()],
+            ..rustx::capabilities::ToolActivationPolicy::default()
+        },
+        rustx::capabilities::ToolActivationPolicy {
+            default_tools: Some(vec!["write".to_owned()]),
+            ..rustx::capabilities::ToolActivationPolicy::default()
+        },
+    ];
+
+    for policy in policies {
+        let conversation = conversation_with_options(policy);
+        write_skill(
+            conversation.workspace.root(),
+            "visible",
+            "Visible guidance.",
+            &[],
+        );
+        let snapshot = prepare_and_commit(&conversation.coordinator).await;
+        assert_eq!(snapshot.skills().bindings().len(), 1);
+        assert!(
+            snapshot
+                .skills()
+                .resources()
+                .resolve(std::path::Path::new(".rustx/skills/visible/SKILL.md"))
+                .is_some()
+        );
+        assert!(snapshot.tool_registry().names().contains(&"read"));
+        assert_eq!(snapshot.skills().catalog_entries().len(), 1);
+        assert_eq!(
+            snapshot.skills().catalog_entries()[0].location,
+            ".rustx/skills/visible/SKILL.md"
+        );
+        let catalog = snapshot.skill_catalog().expect("visible Skill catalog");
+        assert!(catalog.contains("<location>.rustx/skills/visible/SKILL.md</location>"));
+        let view = crate::runtime_client::projection::capability_view(&snapshot, &BTreeMap::new());
+        assert_eq!(view.skills.len(), 1);
+        assert_eq!(view.skills[0].location, ".rustx/skills/visible/SKILL.md");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1069,6 +1157,24 @@ async fn commit_is_busy_while_a_lease_is_active_then_commits_atomically() {
         committed.revision(),
         rustx::runtime::identity::CapabilityRevision::new(revision_n.get() + 1)
     );
+    assert_eq!(snapshot.skill_catalog(), None);
+    assert_eq!(
+        committed.skill_catalog().as_deref(),
+        Some(concat!(
+            "## Skills\n\n",
+            "The following skills provide specialized instructions for specific tasks.\n",
+            "Use the Read tool to load a skill when the task matches its description.\n",
+            "Use the exact location shown below; do not construct or rewrite Skill paths.\n\n",
+            "<available_skills>\n",
+            "  <skill>\n",
+            "    <name>pdf</name>\n",
+            "    <description>PDF skill.</description>\n",
+            "    <location>.rustx/skills/pdf/SKILL.md</location>\n",
+            "  </skill>\n",
+            "</available_skills>"
+        )),
+        "a later capability revision owns its own catalog rather than inheriting history"
+    );
     // The next attempt snapshots the new revision.
     let next_lease = conversation.coordinator.acquire_attempt_lease();
     assert_eq!(next_lease.revision(), committed.revision());
@@ -1494,9 +1600,10 @@ async fn await_background_started(
 // environment on every turn (sections 22/31/33)
 // ---------------------------------------------------------------------------
 
-/// Every model turn of one attempt carries the exact same Skill catalog
-/// attachment and effective environment: the attempt runs multiple turns
-/// while its lease is held, and the catalog never changes mid-attempt.
+/// Every model turn of one attempt carries the exact same Skill catalog in the
+/// Effective System Prompt and the same effective environment: the attempt
+/// runs multiple turns while its lease is held, and the catalog never changes
+/// mid-attempt.
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // one coherent multi-turn scenario
 async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
@@ -1507,10 +1614,18 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
         "PDF skill.",
         &[python_deps(r#"{"pypdf":"5.9.0"}"#)],
     );
-    // The conversation fixture coordinator uses an empty registry; this
-    // test needs the fake tool registered, so it builds its own coordinator
-    // over the same workspace/store.
+    // The test also needs the fake tool registered, so it builds its own
+    // coordinator over the same workspace/store while retaining native Read.
     let mut tools = ToolRegistry::new();
+    register_native_tools(
+        &mut tools,
+        NativeToolResources {
+            background: conversation.background.clone(),
+            subagents: None,
+        },
+        NativeToolPolicies::default(),
+    )
+    .expect("native tools");
     let fake_tool = support::fake::FakeTool::new(
         common::tool("alpha", "tool-alpha"),
         support::fake::success_result("ok"),
@@ -1618,33 +1733,30 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
     let requests = model.requests();
     assert_eq!(requests.len(), 2, "two model turns");
     for request in &requests {
-        assert!(request.messages.iter().any(|message| {
-            matches!(
-                message,
-                rustx::message::types::MessageBlock::User(user)
-                    if user.kind
-                        == rustx::message::types::InboundKind::Context(
-                            rustx::message::types::ContextKind::SkillGuidance,
-                        )
-                    && user.content.iter().any(|content| {
-                        matches!(
-                            content,
-                            rustx::message::types::UserContentBlock::Text(text)
-                                if text.text == catalog
-                        )
-                    })
-            )
-        }));
+        assert_eq!(
+            request.effective_system_prompt, catalog,
+            "the attempt's immutable Skill snapshot renders into the Effective System Prompt"
+        );
+        assert!(
+            !request.messages.iter().any(|message| {
+                serde_json::to_string(message)
+                    .expect("serialize canonical message")
+                    .contains("## Skills")
+            }),
+            "Skill routing metadata never enters canonical conversation messages"
+        );
+        assert!(
+            !request.effective_system_prompt.contains("body"),
+            "the initial system catalog never contains a full SKILL.md body"
+        );
     }
-    // The catalog is canonical history and is therefore present in the
-    // settled result; it is never a separate provider attachment/event.
     assert!(
-        result.messages().iter().any(|message| {
-            serde_json::to_string(message)
+        result.messages().iter().all(|message| {
+            !serde_json::to_string(message)
                 .expect("serialize")
                 .contains("## Skills")
         }),
-        "the committed ledger contains the admitted Skill guidance fact"
+        "the committed ledger contains no Skill catalog fact"
     );
     assert_eq!(
         coordinator.active_attempts(),

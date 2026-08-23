@@ -1339,6 +1339,7 @@ pub(crate) fn capability_view(
         .map(project_tool)
         .collect();
     let skills = snapshot
+        .skills()
         .catalog_entries()
         .iter()
         .zip(snapshot.skills().visible_bindings())
@@ -1347,6 +1348,7 @@ pub(crate) fn capability_view(
             version_id: binding.version_id.clone(),
             name: entry.name.clone(),
             description: entry.description.clone(),
+            location: entry.location.clone(),
         })
         .collect();
     let sources = availability

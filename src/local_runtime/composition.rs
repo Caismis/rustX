@@ -144,9 +144,11 @@ pub struct LocalRuntimePaths {
     pub skill_paths: Vec<PathBuf>,
     /// Disable automatic/default Skill roots while retaining explicit paths.
     pub no_skills: bool,
-    /// Disable native/built-in tools from startup activation.
+    /// Disable optional native/built-in tools from startup activation;
+    /// mandatory native Read remains active.
     pub no_builtin_tools: bool,
-    /// Disable every active Tool while retaining available metadata.
+    /// Disable every optional Tool while retaining available metadata;
+    /// mandatory native Read remains active.
     pub no_tools: bool,
     /// Strict startup Tool allowlist, when supplied.
     pub tools: Option<Vec<String>>,

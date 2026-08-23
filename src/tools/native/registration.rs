@@ -60,6 +60,9 @@ pub(crate) struct NativeToolRegistration {
     /// Tool-owned normalization applied after runtime metadata is stripped
     /// and before the canonical schema is validated.
     pub(crate) normalizer: BusinessArgumentNormalizer,
+    /// Whether this native registration is mandatory in a normal agent
+    /// composition. Only the native Read module opts into this marker.
+    pub(crate) mandatory: bool,
 }
 
 impl NativeToolRegistration {
@@ -70,7 +73,16 @@ impl NativeToolRegistration {
             definition,
             executor,
             normalizer: identity_arguments,
+            mandatory: false,
         }
+    }
+
+    /// Marks this native registration as mandatory for normal agent
+    /// activation. The marker is internal activation metadata and never
+    /// reaches the model-facing `ToolDefinition`.
+    pub(super) fn mandatory(mut self) -> Self {
+        self.mandatory = true;
+        self
     }
 
     /// Attaches one tool-owned business-argument normalizer.
