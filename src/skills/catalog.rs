@@ -14,6 +14,12 @@
 //! file. A virtual namespace would be understood by Read alone and would make
 //! every Bash-executed Skill resource unreachable.
 //!
+//! The catalog never derives that path: [`crate::skills::SkillPackage`]
+//! establishes one canonical absolute UTF-8 location at discovery time (see
+//! its package root invariant), and the catalog is only a projection of it.
+//! Deriving it here instead would let a non-canonical package root reach the
+//! model as a path that resolves differently per tool.
+//!
 //! The catalog is an immutable capability snapshot. Its rendered guidance
 //! enters the request-time Effective System Prompt through Context Assembly;
 //! it is not canonical conversation history and is not carried by a
@@ -22,7 +28,7 @@
 use std::sync::Arc;
 
 use crate::protocol::manifest::SkillBinding;
-use crate::skills::package::{SKILL_MARKDOWN_FILE, SkillPackage};
+use crate::skills::package::SkillPackage;
 
 /// One model-visible Skill catalog entry: standard metadata plus the host
 /// location of the primary instructions file.
@@ -32,9 +38,9 @@ pub struct SkillCatalogEntry {
     pub name: String,
     /// The validated standard Skill description.
     pub description: String,
-    /// The host path of the package's `SKILL.md`. The model passes it to
-    /// Read, and resolves the Skill's own relative references against its
-    /// parent directory.
+    /// The canonical absolute host path of the package's `SKILL.md`. The
+    /// model passes it to Read, and resolves the Skill's own relative
+    /// references against its parent directory.
     pub location: String,
 }
 
@@ -66,7 +72,7 @@ impl SkillSnapshot {
             .map(|package| SkillCatalogEntry {
                 name: package.name().to_owned(),
                 description: package.description().to_owned(),
-                location: skill_markdown_location(package),
+                location: package.location().to_owned(),
             })
             .collect();
         let bindings = packages
@@ -124,10 +130,10 @@ impl SkillSnapshot {
     /// Skill name. Unlike the catalog, this covers packages hidden by
     /// `disable-model-invocation: true`.
     #[must_use]
-    pub fn locations(&self) -> Vec<String> {
+    pub fn locations(&self) -> Vec<&str> {
         self.packages
             .iter()
-            .map(|package| skill_markdown_location(package))
+            .map(|package| package.location())
             .collect()
     }
 
@@ -147,23 +153,10 @@ impl SkillSnapshot {
     }
 }
 
-/// The host path of one package's `SKILL.md`, in the host's own spelling.
-///
-/// The path is published verbatim: the model hands it straight back to Read
-/// and Bash, so rewriting separators would produce a path the host never
-/// named.
-fn skill_markdown_location(package: &SkillPackage) -> String {
-    package
-        .root()
-        .join(SKILL_MARKDOWN_FILE)
-        .to_string_lossy()
-        .into_owned()
-}
-
 /// Renders the compact `## Skills` catalog deterministically.
 ///
-/// The rendered form gives each Skill its host `SKILL.md` location in
-/// deterministic sorted order. No `SKILL.md` body, supporting resource, or
+/// The rendered form gives each Skill its canonical host `SKILL.md` location
+/// in deterministic sorted order. No `SKILL.md` body, supporting resource, or
 /// dependency metadata ever appears.
 #[must_use]
 pub fn render_skill_catalog(entries: &[SkillCatalogEntry]) -> String {

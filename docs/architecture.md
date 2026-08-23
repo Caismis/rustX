@@ -2364,7 +2364,11 @@ The M6 implementation (`src/skills`) freezes the Skill plane boundary:
 - **Skill roots.** Current resource discovery is bounded to user/global
   `~/.rustx/skills/` and `~/.agents/skills/`, project
   `<workspace>/.rustx/skills/` and `<workspace>/.agents/skills/`, plus
-  explicit project-config and CLI paths. Missing automatic roots are empty;
+  explicit project-config and CLI paths. Configured and CLI paths may be
+  relative or otherwise non-canonical; discovery is the one place that
+  normalizes them, so an accepted package always has a canonical absolute
+  UTF-8 root and every consumer of the published location resolves the same
+  file. Missing automatic roots are empty;
   missing explicit paths fail. Hidden root entries and unrelated files are
   ignored; results are deterministically ordered by validated Skill name;
   any malformed candidate fails the whole discovery transaction; symlinked
@@ -2417,7 +2421,8 @@ The M6 implementation (`src/skills`) freezes the Skill plane boundary:
   return.
 - **Catalog.** The model-visible catalog is rendered compactly from the
   attempt's immutable Skill snapshot. Each visible validated Skill carries
-  its name, description, and the host path of its `SKILL.md`; the guidance
+  its name, description, and the canonical absolute host path of its
+  `SKILL.md`, projected from the package rather than re-derived; the guidance
   tells the model to resolve a Skill's own relative references against the
   directory that path names. `SKILL.md` bodies, supporting resources, and
   dependency metadata never appear. Discovered Skills marked

@@ -293,8 +293,12 @@ mod tests {
         let location = snapshot.catalog_entries()[0].location.clone();
         assert_eq!(
             Path::new(&location),
-            skill.join("SKILL.md").as_path(),
-            "the catalog publishes the host path of SKILL.md"
+            // Canonical, so this holds on platforms whose temporary root is
+            // itself reached through a symlink.
+            std::fs::canonicalize(skill.join("SKILL.md"))
+                .expect("canonical SKILL.md")
+                .as_path(),
+            "the catalog publishes the canonical host path of SKILL.md"
         );
 
         let conversation_id = ConversationId::new("read-skill");
@@ -364,7 +368,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn skill_resource_symlink_escape_is_rejected_before_mapping() {
+    fn skill_resource_symlink_escape_is_rejected_at_discovery() {
         let directory = tempfile::tempdir().expect("temporary root");
         let workspace = Workspace::new(directory.path()).expect("workspace");
         let skill_root = directory.path().join("configured-skills");

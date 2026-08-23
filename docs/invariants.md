@@ -769,7 +769,20 @@ that a live child produced an Interrupted physical result.
   exactly the paths Read does. The published locations are part of active
   Skill snapshot equality, so relocating identical package content creates a
   new capability revision rather than leaving the catalog pointed at an old
-  root. The complete Skill
+  root.
+- **One accepted Skill package has one address.** Discovery accepts
+  non-canonical inputs — a relative `--skill` path, an ancestor symlink, an
+  embedded `..` — but an accepted `SkillPackage` always carries a canonical
+  absolute host root, and a location that is that root's `SKILL.md`
+  losslessly representable as UTF-8. Discovery is the single normalization
+  point; the catalog, the Runtime Client projection, and snapshot equality
+  are projections of that one fact and never re-derive it. This is a
+  correctness requirement, not tidiness: a relative published location would
+  be re-resolved against the canonical Workspace root by Read and against the
+  Workspace cwd by Bash, so both would open a path that does not exist. A
+  candidate root that cannot be canonicalized, or whose canonical path is not
+  valid UTF-8, fails the whole discovery transaction rather than reaching the
+  model in a lossy spelling. The complete Skill
   bindings remain in `CapabilitiesManifest` provenance; visibility affects
   only model-facing projections. Skills are trusted instruction packages in
   the current rustX threat model; structural escaping remains, without a
@@ -850,7 +863,7 @@ overlap the previous physical writer.
 are snapshotted. Accepted Skill source files (`SKILL.md`, scripts,
 references, and assets) remain current filesystem resources, read at use time
 through ordinary native tool semantics at their host paths. The Skill catalog
-publishes those host paths, and ordinary Workspace authorization is not
+publishes the canonical absolute host path established at discovery time, and ordinary Workspace authorization is not
 weakened: native Read/Write/Edit/Grep/Glob already accept absolute host paths.
 A package rewrite is observed only at the next quiescent re-discovery.
 

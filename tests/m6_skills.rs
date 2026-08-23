@@ -309,6 +309,107 @@ fn package_symlinks_are_rejected() {
     ));
 }
 
+/// Discovery accepts a non-canonical package root but publishes a canonical
+/// absolute one.
+///
+/// `--workspace w --skill .agents/skills/deck` from a repository root is a
+/// legal invocation, and the resulting candidate root is relative to the
+/// process cwd. Publishing that spelling verbatim would break the whole
+/// point of a host path: Read resolves a relative model path against the
+/// canonical Workspace root and Bash runs with that root as its cwd, so both
+/// would re-prefix it and open the wrong file (or nothing).
+#[test]
+fn a_non_canonical_package_root_is_published_canonically() {
+    // Created under the process cwd so a genuinely relative candidate path
+    // exists without any test mutating the shared process cwd.
+    let dir = tempfile::tempdir_in(".").expect("temporary root under cwd");
+    let relative_root = std::path::PathBuf::from(dir.path().file_name().expect("temporary name"));
+    let workspace_root = dir.path().join("work");
+    std::fs::create_dir_all(&workspace_root).expect("workspace");
+    write_skill(&workspace_root, "deck", "Deck skill.", &[], "body\n");
+    let workspace = Workspace::new(&workspace_root).expect("workspace");
+
+    for explicit in [
+        // Relative, exactly as composition builds it from a relative
+        // `--workspace` plus a relative `--skill`.
+        relative_root.join("work/.agents/skills/deck"),
+        // Absolute but non-canonical: an embedded `..` is a different
+        // spelling of the same package.
+        workspace_root.join("../work/.agents/skills/deck"),
+    ] {
+        let packages = SkillDiscovery::with_config(
+            &workspace,
+            SkillDiscoveryConfig {
+                automatic_roots: Vec::new(),
+                explicit_paths: vec![explicit.clone()],
+            },
+        )
+        .discover()
+        .expect("discovery accepts a non-canonical root");
+        let snapshot = rustx::skills::SkillSnapshot::new(
+            packages.into_iter().map(std::sync::Arc::new).collect(),
+        );
+        let location = snapshot.catalog_entries()[0].location.clone();
+        let published = std::path::Path::new(&location);
+
+        assert!(
+            published.is_absolute(),
+            "published location must be absolute for {explicit:?}, got {location:?}"
+        );
+        assert_eq!(
+            published,
+            workspace
+                .root()
+                .join(".agents/skills/deck/SKILL.md")
+                .as_path(),
+            "every spelling of one package publishes the same canonical location"
+        );
+        // The decisive property: re-resolving the published path against the
+        // execution cwd — what Read and Bash both do — reaches the same file.
+        assert_eq!(
+            workspace.root().join(published),
+            published.to_path_buf(),
+            "an absolute published location is cwd-independent"
+        );
+        assert!(published.is_file(), "the published location exists");
+    }
+}
+
+/// A package root that is not valid UTF-8 cannot be published as a
+/// model-visible location, so discovery rejects it instead of handing the
+/// model a lossy path that names no file.
+#[cfg(unix)]
+#[test]
+fn a_non_utf8_package_root_is_rejected_rather_than_published_lossily() {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let (dir, workspace) = fixture();
+    // A lone 0xFF byte is valid on Unix and never valid UTF-8.
+    let invalid = std::ffi::OsStr::from_bytes(b"skills-\xff");
+    let root = dir.path().join(invalid);
+    let package = root.join("deck");
+    std::fs::create_dir_all(&package).expect("package directory");
+    std::fs::write(
+        package.join("SKILL.md"),
+        "---\nname: deck\ndescription: Deck skill.\n---\nbody\n",
+    )
+    .expect("SKILL.md");
+
+    let error = SkillDiscovery::with_config(
+        &workspace,
+        SkillDiscoveryConfig {
+            automatic_roots: Vec::new(),
+            explicit_paths: vec![package],
+        },
+    )
+    .discover()
+    .expect_err("a non-UTF-8 package root is rejected");
+    assert!(
+        matches!(error, SkillPackageError::UnrepresentableRoot { .. }),
+        "expected UnrepresentableRoot, got {error:?}"
+    );
+}
+
 /// A Skill's supporting files are reachable from Bash, not just Read.
 ///
 /// `SKILL.md` refers to its own assets relatively; the model resolves those
