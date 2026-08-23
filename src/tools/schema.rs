@@ -22,6 +22,31 @@
 //! check lives in [`validate_execution_metadata_contract`] — the bounded
 //! layer that owns both the effective policy and the compiled model-facing
 //! schema — and never in the policy-unaware canonical schema validation.
+//!
+//! # The canonical schema contract of a `ModelSelectable` tool
+//!
+//! `ModelSelectable` is the one policy under which rustX must *write into*
+//! a tool's root schema, so it is the one policy that constrains the root's
+//! shape. A `ModelSelectable` canonical schema must describe its top-level
+//! arguments with root `properties`/`required` (`additionalProperties` is
+//! fine) and nothing else: root composition keywords are rejected by
+//! [`UNDECORATABLE_ROOT_KEYWORDS`].
+//!
+//! The reason is that stripping and validation are asymmetric. The runtime
+//! removes `execution_mode` *before* the canonical schema ever sees the
+//! arguments, so any root-instance constraint that mentions the selector can
+//! never be satisfied: the tool registers, the model emits a perfectly
+//! correct call, and business validation rejects it forever. Both a direct
+//! `required: ["execution_mode"]` and a `execution_mode` buried in a root
+//! `allOf` branch produce that dead state, which is why `required` is
+//! checked alongside `properties` and why root composition is refused
+//! outright rather than partially analysed.
+//!
+//! Nothing here constrains nested subschemas, and nothing here applies to
+//! `ForegroundOnly`/`BackgroundOnly` tools: they receive no injected field,
+//! so an arbitrary composed root schema (the `ask_user` intrinsic's root
+//! `anyOf`, or any MCP server's own schema) stays valid, `execution_mode`
+//! included.
 
 use jsonschema::Validator;
 
@@ -58,6 +83,40 @@ pub const EXECUTION_MODE_DESCRIPTION_REMINDER: &str = "Execution ownership: ever
      continue, or \"background\" when the work should keep running independently while the agent \
      proceeds.";
 
+/// Root-schema keywords a `ModelSelectable` canonical schema may not use.
+///
+/// Each of these constrains the *root* instance — the very instance the
+/// runtime must inject a required `execution_mode` property into — either by
+/// composing sibling schemas (`allOf`, `anyOf`, `oneOf`, `not`,
+/// `if`/`then`/`else`, `$ref`, `$dynamicRef`, `dependentSchemas`,
+/// `dependentRequired`), by constraining property names directly
+/// (`patternProperties`, `propertyNames`), or by rejecting properties the
+/// root object itself did not evaluate (`unevaluatedProperties`). Decorating
+/// a root governed by any of them can contradict a branch that never learned
+/// about the selector, so rustX refuses the combination instead of
+/// partially analysing it.
+///
+/// `additionalProperties` is deliberately absent: decoration inserts
+/// `execution_mode` into the same schema object's own `properties`, so even
+/// `"additionalProperties": false` stays satisfiable. Every ordinary native
+/// tool is that shape.
+pub const UNDECORATABLE_ROOT_KEYWORDS: &[&str] = &[
+    "allOf",
+    "anyOf",
+    "oneOf",
+    "not",
+    "if",
+    "then",
+    "else",
+    "$ref",
+    "$dynamicRef",
+    "dependentSchemas",
+    "dependentRequired",
+    "patternProperties",
+    "propertyNames",
+    "unevaluatedProperties",
+];
+
 /// A tool schema or invocation-metadata validation failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchemaError {
@@ -72,10 +131,14 @@ pub enum SchemaError {
     ReservedProperty(String),
     /// The invocation arguments claim a reserved `__rustx_*` property.
     ReservedInvocationProperty(String),
-    /// A `ModelSelectable` tool's canonical business schema already defines
-    /// a top-level `execution_mode` property, which rustX reserves for
-    /// invocation ownership under that policy.
-    ExecutionModeCollision,
+    /// A `ModelSelectable` tool's canonical business schema already claims
+    /// the top-level `execution_mode` name — as a property, as a `required`
+    /// entry, or both — which rustX reserves for invocation ownership under
+    /// that policy.
+    ExecutionModeCollision(ExecutionModeClaim),
+    /// A `ModelSelectable` tool's canonical schema shapes its root with a
+    /// composition keyword rustX cannot decorate soundly.
+    UndecoratableRootSchema(String),
     /// A `ModelSelectable` invocation omitted the required `execution_mode`
     /// field.
     MissingExecutionMode,
@@ -83,6 +146,34 @@ pub enum SchemaError {
     InvalidExecutionMode(String),
     /// The business arguments violate the canonical schema.
     InvalidArguments(Vec<String>),
+}
+
+/// How a canonical schema claims the reserved `execution_mode` name.
+///
+/// Both forms are fatal under `ModelSelectable`, but they fail differently
+/// and deserve different wording: a declared property would be shadowed by
+/// the injected selector, while a bare `required` entry can never be
+/// satisfied at all, because the runtime strips the selector before the
+/// canonical schema validates anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionModeClaim {
+    /// The root `properties` map declares `execution_mode`.
+    Property,
+    /// The root `required` array demands `execution_mode`.
+    Required,
+    /// Both the root `properties` map and the root `required` array.
+    PropertyAndRequired,
+}
+
+impl ExecutionModeClaim {
+    /// The schema location this claim came from.
+    const fn location(self) -> &'static str {
+        match self {
+            Self::Property => "\"properties\"",
+            Self::Required => "\"required\"",
+            Self::PropertyAndRequired => "\"properties\" and \"required\"",
+        }
+    }
 }
 
 impl core::fmt::Display for SchemaError {
@@ -100,11 +191,21 @@ impl core::fmt::Display for SchemaError {
                 "invocation arguments claim the reserved runtime property {property:?}; \
                  reserved invocation metadata is never forwarded to executors"
             ),
-            Self::ExecutionModeCollision => write!(
+            Self::ExecutionModeCollision(claim) => write!(
                 f,
-                "the canonical tool schema defines a top-level {EXECUTION_MODE_FIELD:?} property, \
-                 which rustX reserves for ModelSelectable invocation ownership; either rename the \
-                 tool's business field or choose a non-ModelSelectable execution policy"
+                "the canonical tool schema claims the top-level {EXECUTION_MODE_FIELD:?} name in \
+                 root {}, which rustX reserves for ModelSelectable invocation ownership; the \
+                 runtime strips {EXECUTION_MODE_FIELD:?} before the canonical schema validates \
+                 anything, so this tool could never accept a call. Either rename the tool's \
+                 business field or choose a non-ModelSelectable execution policy",
+                claim.location()
+            ),
+            Self::UndecoratableRootSchema(keyword) => write!(
+                f,
+                "the canonical tool schema shapes its root with {keyword:?}, so rustX cannot \
+                 soundly inject the required {EXECUTION_MODE_FIELD:?} selector into it; describe \
+                 the tool's top-level arguments with root \"properties\"/\"required\" instead, or \
+                 choose a non-ModelSelectable execution policy, which needs no injected field"
             ),
             Self::MissingExecutionMode => write!(
                 f,
@@ -177,20 +278,36 @@ pub fn validate_canonical_schema(schema: &serde_json::Value) -> Result<(), Schem
     Ok(())
 }
 
-/// Validates the policy-dependent `execution_mode` reservation.
+/// Validates the policy-dependent `execution_mode` reservation and the
+/// decoratable-root requirement.
 ///
 /// `execution_mode` becomes a reserved model-facing invocation field when
-/// and only when the effective execution policy is `ModelSelectable`. A
-/// canonical schema that already defines a top-level `execution_mode`
-/// property is rejected deterministically under that policy rather than
-/// silently renamed, shadowed, merged, or reinterpreted; the same schema
-/// stays legal under `ForegroundOnly`/`BackgroundOnly`, where rustX injects
-/// no synthetic field.
+/// and only when the effective execution policy is `ModelSelectable`. Under
+/// that policy this rejects, deterministically and without any automatic
+/// compatibility mapping:
+///
+/// - a canonical schema that claims the top-level `execution_mode` name,
+///   whether by declaring it in root `properties`, by demanding it in root
+///   `required`, or both; and
+/// - a canonical schema whose root is shaped by any of
+///   [`UNDECORATABLE_ROOT_KEYWORDS`], because rustX cannot inject a required
+///   root property into a composed root without risking a compiled schema no
+///   instance can satisfy.
+///
+/// Both rejections exist for the same reason: the runtime strips
+/// `execution_mode` *before* canonical validation, so any root-instance
+/// constraint that mentions it — directly or through a branch — yields a
+/// tool that registers successfully yet can never accept a call.
+///
+/// Neither rule applies under `ForegroundOnly`/`BackgroundOnly`, which
+/// receive no synthetic field: an arbitrary composed root schema stays
+/// valid there, `execution_mode` included.
 ///
 /// # Errors
 ///
-/// Returns [`SchemaError::ExecutionModeCollision`] for a `ModelSelectable`
-/// tool whose canonical schema claims the reserved field.
+/// Returns [`SchemaError::ExecutionModeCollision`] when the schema claims
+/// the reserved name and [`SchemaError::UndecoratableRootSchema`] when the
+/// root cannot carry the injected selector.
 pub fn validate_execution_metadata_contract(
     policy: ToolExecutionPolicy,
     schema: &serde_json::Value,
@@ -198,12 +315,43 @@ pub fn validate_execution_metadata_contract(
     if policy != ToolExecutionPolicy::ModelSelectable {
         return Ok(());
     }
-    let claims_field = schema
+    let Some(root) = schema.as_object() else {
+        return Ok(());
+    };
+    let declares = root
         .get("properties")
         .and_then(serde_json::Value::as_object)
         .is_some_and(|properties| properties.contains_key(EXECUTION_MODE_FIELD));
-    if claims_field {
-        return Err(SchemaError::ExecutionModeCollision);
+    let requires = root
+        .get("required")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|required| {
+            required
+                .iter()
+                .any(|entry| entry.as_str() == Some(EXECUTION_MODE_FIELD))
+        });
+    match (declares, requires) {
+        (true, true) => {
+            return Err(SchemaError::ExecutionModeCollision(
+                ExecutionModeClaim::PropertyAndRequired,
+            ));
+        }
+        (true, false) => {
+            return Err(SchemaError::ExecutionModeCollision(
+                ExecutionModeClaim::Property,
+            ));
+        }
+        (false, true) => {
+            return Err(SchemaError::ExecutionModeCollision(
+                ExecutionModeClaim::Required,
+            ));
+        }
+        (false, false) => {}
+    }
+    for keyword in UNDECORATABLE_ROOT_KEYWORDS {
+        if root.contains_key(*keyword) {
+            return Err(SchemaError::UndecoratableRootSchema((*keyword).to_owned()));
+        }
     }
     Ok(())
 }
@@ -555,44 +703,165 @@ mod tests {
         }
     }
 
+    /// Every way a canonical root schema can claim the reserved
+    /// `execution_mode` name is rejected under `ModelSelectable` — including
+    /// a bare `required` entry with no declared property, which would
+    /// otherwise register successfully and then reject every correct call,
+    /// because the runtime strips the selector before canonical validation.
     #[test]
-    fn execution_mode_is_reserved_only_under_model_selectable() {
-        let colliding = json!({
+    fn every_execution_mode_claim_is_rejected_under_model_selectable() {
+        let declared = json!({
             "type": "object",
             "properties": {"execution_mode": {"type": "string"}},
         });
-        assert!(
-            validate_canonical_schema(&colliding).is_ok(),
-            "the canonical schema validator stays policy-unaware"
-        );
-        assert!(matches!(
-            validate_execution_metadata_contract(ToolExecutionPolicy::ModelSelectable, &colliding),
-            Err(super::SchemaError::ExecutionModeCollision)
-        ));
-        assert!(matches!(
-            compile_model_definition(&definition(
-                ToolExecutionPolicy::ModelSelectable,
-                colliding.clone()
-            )),
-            Err(super::SchemaError::ExecutionModeCollision)
-        ));
+        let required_only = json!({
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command", "execution_mode"],
+        });
+        let both = json!({
+            "type": "object",
+            "properties": {"execution_mode": {"type": "string"}},
+            "required": ["execution_mode"],
+        });
+        for (schema, expected) in [
+            (&declared, super::ExecutionModeClaim::Property),
+            (&required_only, super::ExecutionModeClaim::Required),
+            (&both, super::ExecutionModeClaim::PropertyAndRequired),
+        ] {
+            assert!(
+                validate_canonical_schema(schema).is_ok(),
+                "the canonical schema validator stays policy-unaware: {schema}"
+            );
+            assert_eq!(
+                validate_execution_metadata_contract(ToolExecutionPolicy::ModelSelectable, schema),
+                Err(super::SchemaError::ExecutionModeCollision(expected)),
+                "unexpected verdict for {schema}"
+            );
+            assert_eq!(
+                compile_model_definition(&definition(
+                    ToolExecutionPolicy::ModelSelectable,
+                    schema.clone()
+                ))
+                .expect_err("compilation is refused"),
+                super::SchemaError::ExecutionModeCollision(expected)
+            );
+        }
+    }
+
+    /// The identical schemas stay ordinary business schemas under a fixed
+    /// execution policy, which needs no injected field.
+    #[test]
+    fn execution_mode_claims_are_legal_under_a_fixed_policy() {
+        let schemas = [
+            json!({"type": "object", "properties": {"execution_mode": {"type": "string"}}}),
+            json!({
+                "type": "object",
+                "properties": {"command": {"type": "string"}},
+                "required": ["command", "execution_mode"],
+            }),
+        ];
         for policy in [
             ToolExecutionPolicy::ForegroundOnly,
             ToolExecutionPolicy::BackgroundOnly,
         ] {
-            validate_execution_metadata_contract(policy, &colliding).expect("fixed policy");
-            let compiled = compile_model_definition(&definition(policy, colliding.clone()))
-                .expect("fixed policy compiles verbatim");
-            assert_eq!(compiled.input_schema, colliding);
+            for schema in &schemas {
+                validate_execution_metadata_contract(policy, schema).expect("fixed policy");
+                let compiled = compile_model_definition(&definition(policy, schema.clone()))
+                    .expect("fixed policy compiles verbatim");
+                assert_eq!(&compiled.input_schema, schema);
+            }
         }
     }
 
+    /// A composed root cannot carry an injected required property soundly, so
+    /// `ModelSelectable` refuses it outright instead of analysing branches
+    /// partially. A root `allOf` branch claiming `execution_mode` is exactly
+    /// the case a direct `properties` check would miss.
     #[test]
-    fn the_collision_error_is_actionable() {
-        let message = super::SchemaError::ExecutionModeCollision.to_string();
-        assert!(message.contains("execution_mode"));
-        assert!(message.contains("rename"));
-        assert!(message.contains("ModelSelectable"));
+    fn composed_roots_are_refused_under_model_selectable_only() {
+        let composed = json!({
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "allOf": [{
+                "properties": {"execution_mode": {"type": "string"}},
+                "required": ["execution_mode"],
+            }],
+        });
+        assert_eq!(
+            validate_execution_metadata_contract(ToolExecutionPolicy::ModelSelectable, &composed),
+            Err(super::SchemaError::UndecoratableRootSchema(
+                "allOf".to_owned()
+            ))
+        );
+
+        for keyword in super::UNDECORATABLE_ROOT_KEYWORDS {
+            let mut root = serde_json::Map::new();
+            root.insert("type".to_owned(), json!("object"));
+            root.insert(
+                "properties".to_owned(),
+                json!({"command": {"type": "string"}}),
+            );
+            root.insert((*keyword).to_owned(), json!([{"type": "object"}]));
+            let schema = serde_json::Value::Object(root);
+            assert_eq!(
+                validate_execution_metadata_contract(ToolExecutionPolicy::ModelSelectable, &schema),
+                Err(super::SchemaError::UndecoratableRootSchema(
+                    (*keyword).to_owned()
+                )),
+                "root {keyword:?} must be refused"
+            );
+            for policy in [
+                ToolExecutionPolicy::ForegroundOnly,
+                ToolExecutionPolicy::BackgroundOnly,
+            ] {
+                validate_execution_metadata_contract(policy, &schema).unwrap_or_else(|error| {
+                    panic!("root {keyword:?} stays legal under a fixed policy: {error}")
+                });
+            }
+        }
+    }
+
+    /// `additionalProperties` is not a composition keyword: decoration adds
+    /// the selector to the same object's own `properties`, so even
+    /// `"additionalProperties": false` — the shape of every ordinary native
+    /// tool — stays decoratable and satisfiable.
+    #[test]
+    fn additional_properties_false_stays_decoratable() {
+        let schema = json!({
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command"],
+            "additionalProperties": false,
+        });
+        validate_execution_metadata_contract(ToolExecutionPolicy::ModelSelectable, &schema)
+            .expect("a closed root object is decoratable");
+        let compiled =
+            compile_model_definition(&definition(ToolExecutionPolicy::ModelSelectable, schema))
+                .expect("compile");
+        let validator =
+            jsonschema::Validator::new(&compiled.input_schema).expect("compiled schema is valid");
+        assert!(
+            validator.is_valid(&json!({"command": "ls", "execution_mode": "foreground"})),
+            "the compiled schema accepts a correct call: {}",
+            compiled.input_schema
+        );
+    }
+
+    #[test]
+    fn the_schema_contract_errors_are_actionable() {
+        let collision =
+            super::SchemaError::ExecutionModeCollision(super::ExecutionModeClaim::Required)
+                .to_string();
+        assert!(collision.contains("execution_mode"));
+        assert!(collision.contains("required"));
+        assert!(collision.contains("rename"));
+        assert!(collision.contains("ModelSelectable"));
+        let undecoratable =
+            super::SchemaError::UndecoratableRootSchema("anyOf".to_owned()).to_string();
+        assert!(undecoratable.contains("anyOf"));
+        assert!(undecoratable.contains("properties"));
+        assert!(undecoratable.contains("ModelSelectable"));
     }
 
     #[test]

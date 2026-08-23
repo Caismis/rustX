@@ -1433,15 +1433,40 @@ defaulted to foreground. `ForegroundOnly`/`BackgroundOnly` definitions are
 compiled verbatim — no synthetic field is injected and ownership resolves
 from the fixed policy alone.
 
-`execution_mode` is reserved **only** while the effective execution policy is
-`ModelSelectable`. A tool whose canonical business schema already declares a
-top-level `execution_mode` property is rejected at registration under that
-policy, with an error telling the human to rename the business field or to
-choose a non-`ModelSelectable` execution policy; rustX never renames,
-shadows, merges, or reinterprets the collision. The same schema stays legal
-under `ForegroundOnly`/`BackgroundOnly`. The check therefore lives in the
-bounded layer that owns both the effective policy and the compiled
-model-facing schema, not in the policy-unaware canonical schema validation.
+`ModelSelectable` is the one policy under which rustX must *write into* a
+tool's root schema, so it is the one policy that constrains the root's shape.
+A `ModelSelectable` canonical schema must describe its top-level arguments
+with root `properties`/`required` — `additionalProperties` included, which is
+every ordinary native tool's shape — and rustX rejects two things at
+registration:
+
+- **A claim on the reserved name.** `execution_mode` declared in root
+  `properties`, demanded in root `required`, or both. The bare `required`
+  entry matters as much as the declared property: the runtime strips the
+  selector *before* the canonical schema validates anything, so such a tool
+  would register successfully, receive a perfectly correct model call, and
+  reject it forever.
+- **An undecoratable root.** A root shaped by a composition keyword
+  (`allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else`, `$ref`,
+  `$dynamicRef`, `dependentSchemas`, `dependentRequired`,
+  `patternProperties`, `propertyNames`, `unevaluatedProperties`). Injecting a
+  required root property into a composition can contradict a branch that
+  never learned about the selector, so rustX refuses the combination outright
+  rather than analysing branches partially — which is also what makes the
+  claim check above complete rather than a syntactic approximation.
+
+Both errors tell the human to rename the business field, flatten the root, or
+choose a non-`ModelSelectable` policy. rustX never renames, shadows, merges,
+or reinterprets a collision.
+
+Neither rule applies under `ForegroundOnly`/`BackgroundOnly`, which receive no
+injected field: an arbitrary composed root stays valid there, `execution_mode`
+included. That scoping is load-bearing — the `ask_user` intrinsic's canonical
+schema is a root `anyOf` with no root `properties` at all, and MCP servers
+ship arbitrary JSON Schema — so the policy-unaware
+`validate_canonical_schema` must stay permissive. The contract therefore lives
+in the bounded layer that owns both the effective policy and the compiled
+model-facing schema.
 
 Separately, the `__rustx_` top-level property namespace remains reserved for
 other runtime concerns under every policy: no canonical schema may claim one

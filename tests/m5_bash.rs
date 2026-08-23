@@ -1226,12 +1226,13 @@ async fn model_selectable_bash_background_selection_dispatches_conversation_owne
     else {
         panic!("the background dispatch is accepted");
     };
-    let terminal = wait_for_lifecycle(
-        &background,
-        &execution_id,
-        rustx::tools::background::BackgroundLifecycle::Succeeded,
-    )
-    .await;
+    // The registry's own state-change notification settles this, not a
+    // polling loop: `wait_until_terminal` subscribes to the exact watch
+    // channel every published transition bumps.
+    let terminal = background
+        .wait_until_terminal(&execution_id)
+        .await
+        .expect("the dispatched execution settles");
     assert_eq!(
         terminal.state,
         rustx::tools::background::BackgroundLifecycle::Succeeded

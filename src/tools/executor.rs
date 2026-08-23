@@ -200,10 +200,16 @@ pub enum ToolRegistryError {
     InvalidSchema(String),
     /// The canonical input schema claims a reserved `__rustx_*` property.
     ReservedProperty(String),
-    /// The tool is `ModelSelectable` and its canonical input schema already
-    /// defines the top-level `execution_mode` property that rustX reserves
-    /// for invocation ownership under that policy.
-    ExecutionModeCollision(String),
+    /// The tool is `ModelSelectable` and its canonical input schema cannot
+    /// carry the runtime-owned `execution_mode` selector: it either claims
+    /// the reserved top-level name itself or shapes its root with a
+    /// composition keyword rustX cannot decorate soundly.
+    ModelSelectableSchema {
+        /// The model-facing name of the rejected tool.
+        name: String,
+        /// The precise schema-level reason.
+        reason: String,
+    },
     /// The declared policies are invalid for this tool.
     InvalidPolicy(String),
 }
@@ -219,12 +225,11 @@ impl core::fmt::Display for ToolRegistryError {
             ),
             Self::InvalidIdentity(message) => write!(f, "{message}"),
             Self::InvalidSchema(message) => write!(f, "invalid tool schema: {message}"),
-            Self::ExecutionModeCollision(name) => write!(
+            Self::ModelSelectableSchema { name, reason } => write!(
                 f,
-                "tool {name:?} is ModelSelectable and its canonical schema defines a top-level \
-                 {EXECUTION_MODE_FIELD:?} property, which rustX reserves for the model's \
-                 per-invocation execution-ownership choice; either rename the tool's business \
-                 field or configure a non-ModelSelectable execution policy"
+                "tool {name:?} cannot be registered as ModelSelectable, because rustX must inject \
+                 the model's per-invocation {EXECUTION_MODE_FIELD:?} selector into its root \
+                 schema: {reason}"
             ),
             Self::ReservedProperty(_) | Self::InvalidPolicy(_) => {
                 write!(f, "the tool registration violates a registry rule")
@@ -446,13 +451,18 @@ impl ToolRegistry {
             }
             other => ToolRegistryError::InvalidSchema(other.to_string()),
         })?;
-        // `execution_mode` is reserved only while the effective execution
-        // policy is ModelSelectable, so the collision check belongs here —
-        // the bounded layer that owns both the effective policy and the
-        // compiled model-facing schema — and not in the policy-unaware
-        // canonical schema validation above.
+        // `execution_mode` is reserved, and the root schema must be
+        // decoratable, only while the effective execution policy is
+        // ModelSelectable. Both checks therefore belong here — the bounded
+        // layer that owns the effective policy and the compiled model-facing
+        // schema together — and not in the policy-unaware canonical schema
+        // validation above, which must keep accepting composed roots such as
+        // the `ask_user` intrinsic's and arbitrary MCP server schemas.
         validate_execution_metadata_contract(definition.execution_policy, &definition.input_schema)
-            .map_err(|_| ToolRegistryError::ExecutionModeCollision(definition.name.clone()))?;
+            .map_err(|error| ToolRegistryError::ModelSelectableSchema {
+                name: definition.name.clone(),
+                reason: error.to_string(),
+            })?;
         if definition.name == BACKGROUND_TASK_TOOL_NAME
             && (definition.execution_policy
                 != crate::tools::types::ToolExecutionPolicy::ForegroundOnly
@@ -952,38 +962,66 @@ mod tests {
         .expect("fixed intrinsic policy is accepted");
     }
 
-    /// A `ModelSelectable` tool whose canonical schema already claims the
-    /// reserved `execution_mode` property is rejected at registration, so it
-    /// can never reach a model request; the same schema stays legal under a
-    /// fixed execution policy.
+    /// A `ModelSelectable` tool whose canonical schema cannot carry the
+    /// injected `execution_mode` selector is rejected at registration, so it
+    /// can never reach a model request. Registration is the boundary that
+    /// keeps a tool from reaching the "registers fine, rejects every correct
+    /// call" state: a bare `required` entry is as fatal as a declared
+    /// property, and a composed root is refused outright. Every one of these
+    /// schemas stays legal under a fixed execution policy.
     #[test]
-    fn model_selectable_execution_mode_collision_is_rejected_at_registration() {
-        let colliding =
-            json!({"type": "object", "properties": {"execution_mode": {"type": "string"}}});
-        let mut registry = ToolRegistry::new();
-        let error = register(
-            &mut registry,
-            definition(
-                "tool-sel",
-                "sel",
-                ToolExecutionPolicy::ModelSelectable,
-                ToolConcurrencyPolicy::Sequential,
-                colliding.clone(),
+    fn undecoratable_model_selectable_schemas_are_rejected_at_registration() {
+        let cases = [
+            (
+                "declared property",
+                json!({"type": "object", "properties": {"execution_mode": {"type": "string"}}}),
             ),
-        )
-        .expect_err("the collision is rejected");
-        let ToolRegistryError::ExecutionModeCollision(name) = &error else {
-            panic!("expected an execution-mode collision, got {error:?}");
-        };
-        assert_eq!(name, "sel");
-        let message = error.to_string();
-        assert!(message.contains("execution_mode"));
-        assert!(message.contains("rename"));
-        assert!(message.contains("ModelSelectable"));
-        assert!(
-            registry.model_definitions().is_empty(),
-            "a colliding tool never reaches a model request"
-        );
+            (
+                "bare required entry",
+                json!({
+                    "type": "object",
+                    "properties": {"command": {"type": "string"}},
+                    "required": ["command", "execution_mode"],
+                }),
+            ),
+            (
+                "composed root",
+                json!({
+                    "type": "object",
+                    "properties": {"command": {"type": "string"}},
+                    "allOf": [{"required": ["execution_mode"]}],
+                }),
+            ),
+        ];
+        for (label, schema) in &cases {
+            let mut registry = ToolRegistry::new();
+            let Err(error) = register(
+                &mut registry,
+                definition(
+                    "tool-sel",
+                    "sel",
+                    ToolExecutionPolicy::ModelSelectable,
+                    ToolConcurrencyPolicy::Sequential,
+                    schema.clone(),
+                ),
+            ) else {
+                panic!("{label} must be rejected");
+            };
+            let ToolRegistryError::ModelSelectableSchema { name, reason } = &error else {
+                panic!("expected a ModelSelectable schema rejection for {label}, got {error:?}");
+            };
+            assert_eq!(name, "sel");
+            assert!(
+                reason.contains("execution_mode"),
+                "{label} names the selector: {reason}"
+            );
+            let message = error.to_string();
+            assert!(message.contains("sel") && message.contains("ModelSelectable"));
+            assert!(
+                registry.model_definitions().is_empty(),
+                "{label} never reaches a model request"
+            );
+        }
 
         for (index, policy) in [
             ToolExecutionPolicy::ForegroundOnly,
@@ -992,19 +1030,27 @@ mod tests {
         .into_iter()
         .enumerate()
         {
-            let mut registry = ToolRegistry::new();
-            register(
-                &mut registry,
-                definition(
-                    &format!("tool-fixed-{index}"),
-                    &format!("fixed-{index}"),
-                    policy,
-                    ToolConcurrencyPolicy::Sequential,
-                    colliding.clone(),
-                ),
-            )
-            .expect("a fixed execution policy needs no synthetic field");
-            assert_eq!(registry.model_definitions()[0].input_schema, colliding);
+            for (offset, (label, schema)) in cases.iter().enumerate() {
+                let mut registry = ToolRegistry::new();
+                register(
+                    &mut registry,
+                    definition(
+                        &format!("tool-fixed-{index}-{offset}"),
+                        &format!("fixed-{index}-{offset}"),
+                        policy,
+                        ToolConcurrencyPolicy::Sequential,
+                        schema.clone(),
+                    ),
+                )
+                .unwrap_or_else(|error| {
+                    panic!("{label} needs no synthetic field under {policy:?}: {error}")
+                });
+                assert_eq!(
+                    &registry.model_definitions()[0].input_schema,
+                    schema,
+                    "{label} is compiled verbatim under {policy:?}"
+                );
+            }
         }
     }
 

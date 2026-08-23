@@ -1141,15 +1141,25 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   stripped before business-argument validation, and is never forwarded to
   any executor. A missing or invalid value is a deterministic rejection with
   actionable diagnostics, never a silent foreground default.
-- `execution_mode` is reserved when and only when the effective execution
-  policy is `ModelSelectable`. Registration rejects a `ModelSelectable` tool
-  whose canonical schema already declares a top-level `execution_mode`
-  property, explicitly and without any automatic compatibility mapping; the
-  same schema is legal under `ForegroundOnly`/`BackgroundOnly`, which
-  receive no synthetic field. The `__rustx_` top-level namespace stays
-  reserved for other runtime concerns under every policy: registration
-  rejects canonical schemas claiming `__rustx_*` properties and preflight
-  rejects invocations carrying them.
+- `execution_mode` is reserved, and the canonical root schema must be
+  decoratable, when and only when the effective execution policy is
+  `ModelSelectable`. Registration rejects such a tool whose canonical schema
+  claims the top-level `execution_mode` name — in root `properties`, in root
+  `required`, or both — and one whose root is shaped by a composition
+  keyword, explicitly and without any automatic compatibility mapping. Both
+  rejections enforce one invariant: a registered tool can never be in a state
+  where a correct model invocation fails business validation forever, which
+  is what stripping the selector before canonical validation would otherwise
+  produce.
+- Those two rules never apply under `ForegroundOnly`/`BackgroundOnly`, which
+  receive no synthetic field: an arbitrary composed root schema is valid
+  there, `execution_mode` included. The policy-unaware canonical schema
+  validation stays permissive so the `ask_user` intrinsic's root `anyOf` and
+  arbitrary MCP server schemas keep registering.
+- The `__rustx_` top-level namespace stays reserved for other runtime
+  concerns under every policy: registration rejects canonical schemas
+  claiming `__rustx_*` properties and preflight rejects invocations carrying
+  them.
 - The registry is a validity boundary: duplicate ids, duplicate model-facing
   names, empty identities, invalid or non-root JSON Schema, reserved
   property collisions, invalid policy combinations, and background-capable

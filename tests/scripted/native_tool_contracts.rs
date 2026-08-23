@@ -644,3 +644,50 @@ async fn native_agent_loop_preflight_rejection_settles_without_starting_an_execu
             .exists()
     );
 }
+
+/// The `ModelSelectable` root-schema contract is scoped to that policy alone.
+///
+/// `ask_user` is the live proof that rustX must keep accepting composed root
+/// schemas: its canonical schema is a root `anyOf` with no root `properties`
+/// at all, and arbitrary MCP servers ship schemas of that shape too. It
+/// registers normally (it is a fixed foreground intrinsic), while the same
+/// schema is refused under `ModelSelectable`, where rustX would have to
+/// inject a required root property into a composition it cannot reason about.
+#[test]
+fn composed_root_schemas_stay_valid_outside_model_selectable() {
+    use rustx::tools::{
+        SchemaError, ToolExecutionPolicy, validate_canonical_schema,
+        validate_execution_metadata_contract,
+    };
+
+    let fixture = common::native_fixture();
+    let ask_user = definition(&fixture, "ask_user").input_schema;
+    assert!(
+        ask_user["anyOf"].is_array() && ask_user.get("properties").is_none(),
+        "ask_user describes its arguments with a root composition: {ask_user}"
+    );
+    validate_canonical_schema(&ask_user)
+        .expect("the policy-unaware canonical validator accepts a composed root");
+    for policy in [
+        ToolExecutionPolicy::ForegroundOnly,
+        ToolExecutionPolicy::BackgroundOnly,
+    ] {
+        validate_execution_metadata_contract(policy, &ask_user)
+            .expect("a fixed policy injects nothing, so the root shape is irrelevant");
+    }
+    assert!(
+        matches!(
+            validate_execution_metadata_contract(ToolExecutionPolicy::ModelSelectable, &ask_user),
+            Err(SchemaError::UndecoratableRootSchema(keyword)) if keyword == "anyOf"
+        ),
+        "a composed root cannot carry the injected execution_mode selector"
+    );
+
+    // Every ordinary native tool is the decoratable shape, which is why the
+    // contract costs nothing in practice.
+    for name in ["read", "write", "edit", "glob", "grep", "bash"] {
+        let schema = definition(&fixture, name).input_schema;
+        validate_execution_metadata_contract(ToolExecutionPolicy::ModelSelectable, &schema)
+            .unwrap_or_else(|error| panic!("{name} must stay ModelSelectable-eligible: {error}"));
+    }
+}

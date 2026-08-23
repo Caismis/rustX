@@ -124,12 +124,17 @@ Choosing `model_selectable` for a tool makes the model pick execution
 ownership per call through a required top-level `execution_mode` field
 (`"foreground"` or `"background"`) that rustX injects into the model-facing
 schema, resolves once at preflight, and strips before the tool ever sees the
-arguments. Because of that, `execution_mode` is reserved under
-`model_selectable` only: a tool whose own input schema already declares a
-top-level `execution_mode` property is rejected at registration under that
-policy — rename the tool's field, or configure `foreground_only` or
-`background_only`, which need no injected field. The same rule applies to
-`mcpToolPolicies` and to Python tool packages. The runtime intrinsics `background_task` and
+arguments. Because rustX writes into the root schema under that policy, and
+only under that policy, a `model_selectable` tool's input schema must describe
+its top-level arguments with root `properties`/`required` and must not claim
+the `execution_mode` name — declaring it as a property, listing it in
+`required`, or shaping the root with `allOf`/`anyOf`/`oneOf`/`$ref` and
+friends all fail registration with an explicit error. Rename the tool's field
+or flatten its root, or configure `foreground_only` or `background_only`,
+which inject nothing and therefore accept any schema, `execution_mode` and
+composed roots included. The same rule applies to `mcpToolPolicies` and to
+Python tool packages — worth knowing before switching an MCP server's tools to
+`model_selectable`, since their schemas come from the server verbatim. The runtime intrinsics `background_task` and
 `ask_user` are not configured in this table: both are fixed foreground,
 sequential, approval-never tools, with `ask_user` publishing one bounded
 Question through the runtime-owned `InteractionCoordinator`.
