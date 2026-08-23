@@ -111,16 +111,33 @@ pub enum RuntimeClientEvent {
         /// The monotonic control-plane revision.
         revision: u64,
     },
-    /// A canonical runtime summary and Surface replacement were committed
-    /// after automatic compaction.
+    /// A context compaction operation began.
+    ContextCompactionStarted {
+        /// The owning attempt for automatic compaction; absent for manual
+        /// idle maintenance.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_id: Option<AttemptId>,
+    },
+    /// A context compaction operation failed before a semantic commit.
+    ContextCompactionFailed {
+        /// The owning attempt for automatic compaction; absent for manual
+        /// idle maintenance.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_id: Option<AttemptId>,
+        /// The runtime-owned failure diagnostic.
+        error: String,
+    },
+    /// A canonical runtime summary and Surface replacement were committed.
     ///
     /// This is the semantic completion fact for clients: the semantic
     /// compaction commit already happened, and the carried snapshot metadata
     /// is sufficient to observe Surface advancement and token-measurement
     /// provenance without exposing summary text or provider credentials.
     ContextCompacted {
-        /// The attempt that committed the compaction.
-        attempt_id: AttemptId,
+        /// The owning attempt for automatic compaction; absent for manual
+        /// idle maintenance.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_id: Option<AttemptId>,
         /// The context diagnostics after this committed compaction.
         context: RuntimeClientContextView,
     },

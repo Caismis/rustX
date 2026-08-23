@@ -78,8 +78,7 @@ impl RuntimeAttachment {
         if self.detached.load(Ordering::SeqCst) {
             return Self::error_response(id, RuntimeClientError::NotAttached);
         }
-        if matches!(request, RuntimeClientRequest::Shutdown { .. }) || request.is_session_request()
-        {
+        if request.requires_async() {
             return Self::error_response(
                 id,
                 RuntimeClientError::InvalidRequest {
@@ -97,6 +96,9 @@ impl RuntimeAttachment {
             }
             RuntimeClientRequest::CancelCurrentAttempt { .. } => {
                 self.inner.cancel_current_attempt()
+            }
+            RuntimeClientRequest::CompactContext { .. } => {
+                unreachable!("manual compaction is handled asynchronously")
             }
             RuntimeClientRequest::InteractionRespond {
                 interaction_id,
@@ -177,6 +179,17 @@ impl RuntimeAttachment {
             return Self::error_response(id, RuntimeClientError::NotAttached);
         }
         if !matches!(request, RuntimeClientRequest::Shutdown { .. }) {
+            if matches!(request, RuntimeClientRequest::CompactContext { .. }) {
+                let result = self.inner.compact_context().await;
+                return match result {
+                    Ok(result) => RuntimeClientResponse {
+                        id,
+                        result: Some(result),
+                        error: None,
+                    },
+                    Err(error) => Self::error_response(id, error),
+                };
+            }
             if let Some(session_request) = request.session_request() {
                 let result = self.inner.session_request(session_request).await;
                 return match result {

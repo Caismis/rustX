@@ -153,6 +153,16 @@ stream and normally commits exactly one terminal `RuntimeEvent`:
   An ordinary inbound drain and an admitted Agent Status fact never clear the
   pending continuation.
 
+- Automatic overflow recovery and manual idle compaction share one execution
+  pipeline: planning, provider-backed summarization, exact post-summary fit,
+  atomic durable commit, and hot-state installation cannot diverge. Manual
+  compaction has no attempt/turn identity and cannot invoke tools. It is
+  admitted only while idle, exclusively checks out `ConversationState`,
+  freezes model/context/capability inputs at admission, and restores ownership
+  before queued inbound can be adopted. Pre-commit failure preserves the old
+  Surface; durable failure enters the absorbing durability gate; drain cancels
+  and awaits the runtime-owned task.
+
 - Cancellation is observed at deterministic check points (before each
   model event, between tool calls) and races every tool execution (biased
   toward cancellation). Once cancellation is observable while a tool is
@@ -3007,6 +3017,15 @@ contracts and provider protocols. These invariants are frozen by M2:
   occurs, and the invocation terminates with `Failed(Cancelled)`.
   Cancellation before any network request creates no provider request and
   emits no `Started`.
+
+- Context-window classification is identical at every provider boundary:
+  typed overflow codes, recognized compatible-provider messages, top-level
+  HTTP error objects, SSE error events, and explicit overflow stop reasons
+  all normalize to `Failed(ContextWindowExceeded)`. Generic byte/string-size
+  codes such as `request_too_large` and `string_too_long` require independent
+  token/context evidence; otherwise they remain request/provider failures and
+  cannot trigger compaction. Rate-limit and throttling diagnostics take
+  precedence and never trigger compaction.
 
 - Provider-hosted tools (OpenAI web/file search, computer use, code
   interpreter, MCP, image generation; Anthropic server tools, tool runner)

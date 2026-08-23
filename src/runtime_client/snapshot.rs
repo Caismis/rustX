@@ -137,6 +137,9 @@ pub struct RuntimeClientSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeClientContextView {
+    /// Whether the runtime currently owns a context-compaction operation.
+    /// This is live operation state, not inferred from token usage.
+    pub compaction_in_progress: bool,
     /// Runtime Client projection statistic: the number of committed
     /// compaction completions folded into this read model. The compaction
     /// generation remains the conversation-owned identity.

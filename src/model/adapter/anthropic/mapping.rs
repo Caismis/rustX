@@ -5,7 +5,7 @@ use reqwest::{StatusCode, header::HeaderMap};
 
 use crate::message::types::{AssistantContentBlock, MessageBlock, UserContentBlock};
 use crate::model::adapter::validation::ValidatedTools;
-use crate::model::error::{ModelError, ModelErrorKind};
+use crate::model::error::{ModelError, ModelErrorKind, is_context_window_error};
 use crate::model::finish::ModelFinishReason;
 use crate::model::invocation::finalize_provider_request;
 use crate::model::types::{ModelProtocol, ModelUsage, UsageDetails};
@@ -19,7 +19,7 @@ pub(crate) fn map_finish_reason(stop_reason: Option<&str>) -> ModelFinishReason 
     match stop_reason {
         Some("end_turn" | "stop_sequence") => ModelFinishReason::Stop,
         Some("tool_use") => ModelFinishReason::ToolCalls,
-        Some("max_tokens" | "model_context_window_exceeded") => ModelFinishReason::Length,
+        Some("max_tokens") => ModelFinishReason::Length,
         Some("refusal") => ModelFinishReason::Refusal,
         // `pause_turn` has continuation semantics and is never mapped to an
         // ordinary stop.
@@ -113,8 +113,8 @@ pub(crate) fn normalize_http_error(
         .and_then(|value| value.parse::<u64>().ok())
         .map(|seconds| seconds.saturating_mul(1000));
     let kind = match status.as_u16() {
-        400 => {
-            if is_context_window_message(&message, provider_code.as_deref()) {
+        400 | 413 => {
+            if is_context_window_error(&message, provider_code.as_deref()) {
                 ModelErrorKind::ContextWindowExceeded
             } else {
                 ModelErrorKind::InvalidRequest
@@ -124,6 +124,9 @@ pub(crate) fn normalize_http_error(
         404 => ModelErrorKind::InvalidRequest,
         408 | 409 => ModelErrorKind::Timeout,
         429 => ModelErrorKind::RateLimit,
+        _ if is_context_window_error(&message, provider_code.as_deref()) => {
+            ModelErrorKind::ContextWindowExceeded
+        }
         _ => ModelErrorKind::ProviderError,
     };
     ModelError {
@@ -134,41 +137,35 @@ pub(crate) fn normalize_http_error(
     }
 }
 
-fn is_context_window_message(message: &str, provider_code: Option<&str>) -> bool {
-    if matches!(
-        provider_code,
-        Some("prompt_too_long" | "input_too_long" | "context_length_exceeded")
-    ) {
-        return true;
-    }
-    let lower = message.to_ascii_lowercase();
-    lower.contains("prompt is too long")
-        || lower.contains("context length")
-        || lower.contains("context window")
-        || lower.contains("input is too long")
-}
-
-#[derive(serde::Deserialize)]
-struct ErrorBody {
-    #[serde(default)]
-    error: Option<ErrorDetail>,
-}
-
-#[derive(serde::Deserialize)]
-struct ErrorDetail {
-    #[serde(rename = "type", default)]
-    error_type: Option<String>,
-    #[serde(default)]
-    message: Option<String>,
-}
-
 fn parse_error_body(body: &[u8]) -> (Option<String>, Option<String>) {
-    match serde_json::from_slice::<ErrorBody>(body) {
-        Ok(ErrorBody {
-            error: Some(detail),
-        }) => (detail.error_type, detail.message),
-        Ok(_) | Err(_) => (None, None),
-    }
+    let Ok(root) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return (None, None);
+    };
+    let detail = root
+        .get("error")
+        .filter(|error| error.is_object())
+        .unwrap_or(&root);
+    let provider_code = detail
+        .get("code")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| {
+            detail
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .or_else(|| {
+            detail
+                .get("code")
+                .and_then(serde_json::Value::as_u64)
+                .map(|code| code.to_string())
+        });
+    let message = detail
+        .get("message")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    (provider_code, message)
 }
 
 /// The runtime-owned structural part of the request body sent to
@@ -548,7 +545,9 @@ mod tests {
             (Some("max_tokens"), ModelFinishReason::Length),
             (
                 Some("model_context_window_exceeded"),
-                ModelFinishReason::Length,
+                ModelFinishReason::Other {
+                    reason: "model_context_window_exceeded".to_owned(),
+                },
             ),
             (Some("refusal"), ModelFinishReason::Refusal),
             (
@@ -583,11 +582,11 @@ mod tests {
     }
 
     #[test]
-    fn model_context_window_exceeded_is_length() {
-        assert_eq!(
+    fn model_context_window_exceeded_is_not_output_length() {
+        assert!(matches!(
             map_finish_reason(Some("model_context_window_exceeded")),
-            ModelFinishReason::Length
-        );
+            ModelFinishReason::Other { .. }
+        ));
     }
 
     /// Cumulative usage snapshots are combined, not summed; effective input

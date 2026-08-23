@@ -323,6 +323,9 @@ impl RuntimeClientProjection {
             ConversationObservation::Event { attempt_id, event } => {
                 self.fold_event(&attempt_id, &event)
             }
+            ConversationObservation::ManualCompactionEvent { event } => {
+                self.fold_compaction_event(None, &event)
+            }
             ConversationObservation::Committed { attempt_id, block } => {
                 if matches!(block, MessageBlock::Assistant(_))
                     && let Some(attempt) = &mut self.snapshot.attempt
@@ -492,10 +495,10 @@ impl RuntimeClientProjection {
     /// - PROJECT: turn counting and final request usage, carrying the exact
     ///   values folded into the attempt view;
     /// - INTERNAL: model request mechanics (`ModelRequestStarted`,
-    ///   `ModelRequestFailed`, `ModelRetryScheduled`) and compaction start /
-    ///   failure (`CompactionStarted/Failed`);
-    /// - PROJECT: committed compaction completion, carrying only context
-    ///   metadata from `CompactionCompleted`.
+    ///   `ModelRequestFailed`, `ModelRetryScheduled`);
+    /// - PROJECT: compaction start/failure and committed completion, carrying
+    ///   attempt attribution when automatic and no attempt identity when
+    ///   manual.
     // The mapping table is one explicit classification policy; identical
     // `Vec::new()` bodies mark intentionally distinct classes (the remaining
     // fold-only/internal observations) that must remain separately
@@ -783,6 +786,44 @@ impl RuntimeClientProjection {
                     result,
                 }]
             }
+            RuntimeEvent::CompactionStarted
+            | RuntimeEvent::CompactionCompleted { .. }
+            | RuntimeEvent::CompactionFailed { .. } => {
+                self.fold_compaction_event(Some(attempt_id), event)
+            }
+            // The background/subagent ownership/terminal publication facts
+            // are durable execution facts; the client projection learns the
+            // resulting snapshot and inbound message through its native
+            // background/subagent/mailbox/message projections.
+            RuntimeEvent::BackgroundExecutionCommitted { .. }
+            | RuntimeEvent::BackgroundTerminalPublished { .. }
+            | RuntimeEvent::SubagentOwnershipCommitted { .. }
+            | RuntimeEvent::SubagentTerminalPublished { .. } => Vec::new(),
+        }
+    }
+
+    /// Folds the shared automatic/manual compaction lifecycle. Manual
+    /// maintenance carries no attempt identity; both paths update the exact
+    /// same context read model and publish the same client vocabulary.
+    fn fold_compaction_event(
+        &mut self,
+        attempt_id: Option<&AttemptId>,
+        event: &RuntimeEvent,
+    ) -> Vec<RuntimeClientEvent> {
+        match event {
+            RuntimeEvent::CompactionStarted => {
+                self.snapshot.context.compaction_in_progress = true;
+                vec![RuntimeClientEvent::ContextCompactionStarted {
+                    attempt_id: attempt_id.cloned(),
+                }]
+            }
+            RuntimeEvent::CompactionFailed { error } => {
+                self.snapshot.context.compaction_in_progress = false;
+                vec![RuntimeClientEvent::ContextCompactionFailed {
+                    attempt_id: attempt_id.cloned(),
+                    error: error.clone(),
+                }]
+            }
             RuntimeEvent::CompactionCompleted {
                 generation,
                 summary_message_id,
@@ -790,6 +831,7 @@ impl RuntimeClientProjection {
                 tokens_before,
                 estimated_tokens_after,
             } => {
+                self.snapshot.context.compaction_in_progress = false;
                 let compaction = RuntimeClientCompactionView {
                     generation: *generation,
                     summary_message_id: summary_message_id.clone(),
@@ -805,21 +847,11 @@ impl RuntimeClientProjection {
                     .expect("Runtime Client compaction count cannot overflow");
                 self.snapshot.context.latest_compaction = Some(compaction);
                 vec![RuntimeClientEvent::ContextCompacted {
-                    attempt_id: attempt_id.clone(),
+                    attempt_id: attempt_id.cloned(),
                     context: self.snapshot.context.clone(),
                 }]
             }
-            // INTERNAL: compaction start/failure and the background/subagent
-            // ownership/terminal publication facts are durable execution
-            // facts; the client projection learns the resulting background /
-            // subagent snapshot and inbound message through its native
-            // background/subagent/mailbox/message projections.
-            RuntimeEvent::CompactionStarted
-            | RuntimeEvent::CompactionFailed { .. }
-            | RuntimeEvent::BackgroundExecutionCommitted { .. }
-            | RuntimeEvent::BackgroundTerminalPublished { .. }
-            | RuntimeEvent::SubagentOwnershipCommitted { .. }
-            | RuntimeEvent::SubagentTerminalPublished { .. } => Vec::new(),
+            _ => unreachable!("only compaction events enter the compaction fold"),
         }
     }
 
@@ -836,6 +868,7 @@ impl RuntimeClientProjection {
             attempt.phase = RuntimeClientAttemptPhase::Settled {
                 outcome: outcome.clone(),
             };
+            self.snapshot.context.compaction_in_progress = false;
         }
         vec![RuntimeClientEvent::AttemptSettled {
             attempt_id: attempt_id.clone(),
@@ -1856,7 +1889,7 @@ mod tests {
         );
     }
 
-    /// A failed compaction emits the existing compaction failure and
+    /// A failed compaction publishes its live start/failure lifecycle and
     /// terminal settlement, but never commits a canonical summary and never
     /// emits canonical or client completion.
     #[tokio::test]
@@ -1900,6 +1933,7 @@ mod tests {
             "a failed compaction never commits a canonical summary"
         );
         let snapshot = observer.snapshot();
+        assert!(!snapshot.context.compaction_in_progress);
         assert_eq!(snapshot.context.compaction_count, 0);
         assert!(snapshot.context.latest_compaction.is_none());
     }
@@ -1956,7 +1990,7 @@ mod tests {
         assert!(matches!(
             &events[0].event,
             RuntimeClientEvent::ContextCompacted { attempt_id, context }
-                if attempt_id == &attempt()
+                if attempt_id.as_ref() == Some(&attempt())
                     && context.compaction_count == 1
                     && context.latest_compaction.as_ref().is_some_and(|view| view.generation == 1)
         ));
@@ -2085,10 +2119,10 @@ mod tests {
         assert_eq!(first_cursor, second_cursor);
     }
 
-    /// Model-request mechanics and compaction start/failure stay internal;
-    /// committed compaction completion is projected from its canonical event.
+    /// Model-request mechanics stay internal; compaction start/failure and
+    /// committed completion are projected as runtime-owned lifecycle facts.
     #[test]
-    fn internal_events_are_not_exposed_but_committed_compaction_is_projected() {
+    fn model_request_events_stay_internal_and_compaction_lifecycle_is_projected() {
         let mut projection = projection();
         for event in [
             RuntimeEvent::ModelRequestStarted {
@@ -2126,16 +2160,58 @@ mod tests {
             apply_event(&mut projection, event);
         }
         let events = collect(&mut projection, RuntimeClientCursor::new(0));
-        assert_eq!(events.len(), 1);
+        assert_eq!(events.len(), 3);
         assert!(matches!(
             &events[0].event,
+            RuntimeClientEvent::ContextCompactionStarted { .. }
+        ));
+        assert!(matches!(
+            &events[1].event,
             RuntimeClientEvent::ContextCompacted { context, .. }
                 if context.compaction_count == 1
         ));
+        assert!(matches!(
+            &events[2].event,
+            RuntimeClientEvent::ContextCompactionFailed { error, .. } if error == "boom"
+        ));
         let (snapshot, cursor) = projection.snapshot().expect("snapshot");
-        assert_eq!(cursor, RuntimeClientCursor::new(1));
+        assert_eq!(cursor, RuntimeClientCursor::new(3));
+        assert!(!snapshot.context.compaction_in_progress);
         assert_eq!(snapshot.context.compaction_count, 1);
         assert!(snapshot.attempt.is_none());
+    }
+
+    #[test]
+    fn manual_compaction_projects_without_fabricating_an_attempt_identity() {
+        let mut projection = projection();
+        projection.apply(ConversationObservation::ManualCompactionEvent {
+            event: RuntimeEvent::CompactionStarted,
+        });
+        projection.apply(ConversationObservation::ManualCompactionEvent {
+            event: RuntimeEvent::CompactionCompleted {
+                generation: 1,
+                summary_message_id: MessageId::new("conv-1-summary-1"),
+                surface_revision: crate::conversation::SurfaceRevision::new(2),
+                tokens_before: TokenMeasurement {
+                    input_tokens: 8_400,
+                    source: TokenMeasurementSource::Estimated,
+                },
+                estimated_tokens_after: 1_900,
+            },
+        });
+
+        let events = collect(&mut projection, RuntimeClientCursor::new(0));
+        assert!(matches!(
+            &events[0].event,
+            RuntimeClientEvent::ContextCompactionStarted { attempt_id: None }
+        ));
+        assert!(matches!(
+            &events[1].event,
+            RuntimeClientEvent::ContextCompacted {
+                attempt_id: None,
+                context,
+            } if !context.compaction_in_progress && context.compaction_count == 1
+        ));
     }
 
     /// Turn and usage observations publish the exact values folded into the

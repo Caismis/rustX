@@ -48,6 +48,17 @@ const footer = (...args: Parameters<typeof renderFooter>) =>
   plainText(renderFooter(...args));
 
 describe("working status", () => {
+  it("shows runtime-published context compaction with or without an attempt", () => {
+    assert.equal(
+      workingStatus(
+        stateOf({
+          context: { compaction_in_progress: true, compaction_count: 0 },
+        }),
+      ),
+      "Compacting context…",
+    );
+  });
+
   it("is absent when there is no attempt and when one has settled", () => {
     assert.equal(workingStatus(stateOf()), undefined);
     assert.equal(

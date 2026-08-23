@@ -7,6 +7,7 @@
  * thinking". Every state below names the projection field that proves it:
  *
  * ```text
+ * Compacting context…    context.compaction_in_progress
  * Waiting for approval…   pendingInteractions for the active attempt
  * Running <tool>…         a foreground execution in state `running`
  * Preparing tool call…    a foreground execution in state `assembled`
@@ -16,9 +17,7 @@
  * Working…                attempt phase `running` with nothing more specific
  * ```
  *
- * A phase rustX does not publish is not shown. Context compaction, for
- * instance, is published as a completed fact (`context_compacted`) and never
- * as an in-progress one, so there is no `Compacting context…` state to prove.
+ * A phase rustX does not publish is not shown.
  */
 
 import type { PresentationState } from "../../presentation/state.ts";
@@ -44,6 +43,9 @@ import { role, style, plainText, plainWidth } from "../theme.ts";
  * rustX did not publish.
  */
 export function workingStatus(state: PresentationState): string | undefined {
+  if (state.context.compaction_in_progress) {
+    return "Compacting context…";
+  }
   const attempt = state.attempt;
   if (attempt === undefined || attempt.phase.type === "settled") {
     return undefined;

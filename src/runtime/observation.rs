@@ -86,6 +86,17 @@ pub(crate) enum ConversationObservation {
         /// The canonical fact.
         event: RuntimeEvent,
     },
+    /// One context-compaction lifecycle fact not owned by an Agent attempt.
+    ///
+    /// Manual compaction is runtime maintenance: completion still names the
+    /// atomic durable `RuntimeEvent::CompactionCompleted` fact, but its live
+    /// publication is delayed until coordinator ownership is restored. Start
+    /// and failure are live operation observations. Only compaction event
+    /// variants are legal in this lane.
+    ManualCompactionEvent {
+        /// The compaction lifecycle fact.
+        event: RuntimeEvent,
+    },
     /// One canonical message commit (the loop's commit observation seam;
     /// the internal committed-message events reference identity only).
     Committed {

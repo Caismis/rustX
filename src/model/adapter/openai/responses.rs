@@ -21,15 +21,13 @@ use crate::message::types::{AssistantContentBlock, MessageBlock};
 use crate::model::adapter::block_index::BlockAllocator;
 use crate::model::adapter::openai::client::build_client;
 use crate::model::adapter::openai::config::OpenAiAdapterConfig;
-use crate::model::adapter::openai::mapping::{
-    is_context_window_message, normalize_error, resolve_tool,
-};
+use crate::model::adapter::openai::mapping::{normalize_error, resolve_tool};
 use crate::model::adapter::traits::{
     ModelAdapter, ModelEventStream, model_event_stream_of_failure,
 };
 use crate::model::adapter::validation::{ValidatedTools, validate_request};
 use crate::model::catalog::ResponsesStorageMode;
-use crate::model::error::{ModelError, ModelErrorKind};
+use crate::model::error::{ModelError, ModelErrorKind, is_context_window_error};
 use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
 use crate::model::invocation::finalize_provider_request;
@@ -983,6 +981,14 @@ impl ResponsesNormalizer {
                 .and_then(|d| d.get("reason"))
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("unknown");
+            if is_context_window_error("", Some(reason)) {
+                return Err(ModelError {
+                    kind: ModelErrorKind::ContextWindowExceeded,
+                    message: format!("provider reported incomplete response reason {reason:?}"),
+                    retry_after_ms: None,
+                    provider_code: Some(reason.to_owned()),
+                });
+            }
             match reason {
                 "max_output_tokens" => ModelFinishReason::Length,
                 "content_filter" => ModelFinishReason::ContentFilter,
@@ -1505,29 +1511,46 @@ fn responses_stream_error(event: &serde_json::Value) -> ModelError {
         .or_else(|| str_field(event, "error_type"))
         .or_else(|| str_field(error, "error_type"));
     let code = str_field(error, "code").or_else(|| str_field(event, "code"));
-    let kind = match error_type.or(code) {
-        Some("authentication" | "authentication_error" | "invalid_api_key") => {
-            ModelErrorKind::Authentication
-        }
-        Some("rate_limit_exceeded" | "rate_limit_error") => ModelErrorKind::RateLimit,
-        Some(
-            "context_length_exceeded"
-            | "max_tokens_exceeded"
-            | "token_limit_exceeded"
-            | "string_too_long",
-        ) => ModelErrorKind::ContextWindowExceeded,
-        Some("invalid_request" | "invalid_prompt" | "invalid_request_error") => {
-            ModelErrorKind::InvalidRequest
-        }
-        Some("timeout") => ModelErrorKind::Timeout,
-        _ if is_context_window_message(message) => ModelErrorKind::ContextWindowExceeded,
-        _ => ModelErrorKind::ProviderError,
+    let provider_code = code.or(error_type);
+    let kind = if matches!(
+        error_type,
+        Some("authentication" | "authentication_error" | "invalid_api_key" | "401" | "403")
+    ) || matches!(
+        code,
+        Some("authentication" | "authentication_error" | "invalid_api_key" | "401" | "403")
+    ) {
+        ModelErrorKind::Authentication
+    } else if matches!(
+        error_type,
+        Some("rate_limit_exceeded" | "rate_limit_error" | "429")
+    ) || matches!(
+        code,
+        Some("rate_limit_exceeded" | "rate_limit_error" | "429")
+    ) {
+        ModelErrorKind::RateLimit
+    } else if is_context_window_error(message, code) || is_context_window_error(message, error_type)
+    {
+        ModelErrorKind::ContextWindowExceeded
+    } else if matches!(
+        error_type,
+        Some("invalid_request" | "invalid_prompt" | "invalid_request_error")
+    ) || matches!(
+        code,
+        Some("invalid_request" | "invalid_prompt" | "invalid_request_error")
+    ) {
+        ModelErrorKind::InvalidRequest
+    } else if matches!(error_type, Some("timeout" | "408"))
+        || matches!(code, Some("timeout" | "408"))
+    {
+        ModelErrorKind::Timeout
+    } else {
+        ModelErrorKind::ProviderError
     };
     ModelError {
         kind,
         message: message.to_owned(),
         retry_after_ms: None,
-        provider_code: error_type.or(code).map(str::to_owned),
+        provider_code: provider_code.map(str::to_owned),
     }
 }
 

@@ -48,6 +48,7 @@ import {
   type ModelCatalogView,
   type RuntimeClientBackgroundExecution,
   type RuntimeClientCursor,
+  type RuntimeClientContextView,
   type RuntimeClientProtocolEvent,
   type RuntimeClientResult,
   type RuntimeClientSnapshot,
@@ -196,6 +197,17 @@ export class RuntimeClientAttachment {
       throw new Error(`cancel_current_attempt returned ${result.type}`);
     }
     return result.attempt_id;
+  }
+
+  /** Runs one manual idle compaction to its durable terminal result. */
+  async compactContext(): Promise<RuntimeClientContextView> {
+    const result = await this.#connection.request({
+      method: "compact_context",
+    });
+    if (result.type !== "context_compacted") {
+      throw new Error(`compact_context returned ${result.type}`);
+    }
+    return result.context;
   }
 
   /** Answers one runtime-owned approval interaction. */

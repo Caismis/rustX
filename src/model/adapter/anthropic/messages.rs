@@ -23,7 +23,7 @@ use crate::model::adapter::traits::{
     ModelAdapter, ModelEventStream, model_event_stream_of_failure,
 };
 use crate::model::adapter::validation::{ValidatedTools, validate_request};
-use crate::model::error::{ModelError, ModelErrorKind};
+use crate::model::error::{ModelError, ModelErrorKind, is_context_window_error};
 use crate::model::event::ModelEvent;
 use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage};
 use crate::runtime::cancellation::CancellationSignal;
@@ -949,6 +949,18 @@ impl AnthropicStreamNormalizer {
         let stop_reason = self.stop_reason.clone().ok_or_else(|| {
             provider_error("provider stream reached message_stop without a stop reason".to_owned())
         })?;
+        if is_context_window_error("", Some(&stop_reason)) {
+            return Ok(vec![ModelEvent::Failed {
+                error: ModelError {
+                    kind: ModelErrorKind::ContextWindowExceeded,
+                    message: format!(
+                        "provider terminated Anthropic generation with {stop_reason:?}"
+                    ),
+                    retry_after_ms: None,
+                    provider_code: Some(stop_reason),
+                },
+            }]);
+        }
         let mut events = Vec::new();
         if is_refusal(Some(&stop_reason))
             && let Some(explanation) = self
@@ -1005,29 +1017,16 @@ fn stream_error_kind(error_type: Option<&str>, message: Option<&str>) -> ModelEr
             "authentication" | "authentication_error" | "permission_denied" | "permission_error",
         ) => ModelErrorKind::Authentication,
         Some("rate_limit_exceeded" | "rate_limit_error") => ModelErrorKind::RateLimit,
-        Some(
-            "context_length_exceeded"
-            | "max_tokens_exceeded"
-            | "token_limit_exceeded"
-            | "string_too_long",
-        ) => ModelErrorKind::ContextWindowExceeded,
+        _ if is_context_window_error(message.unwrap_or_default(), error_type) => {
+            ModelErrorKind::ContextWindowExceeded
+        }
         Some(
             "invalid_request"
             | "invalid_prompt"
             | "invalid_request_error"
             | "request_too_large"
             | "not_found_error",
-        ) => {
-            let message = message.unwrap_or_default().to_ascii_lowercase();
-            if message.contains("context window")
-                || message.contains("prompt is too long")
-                || message.contains("context length")
-            {
-                ModelErrorKind::ContextWindowExceeded
-            } else {
-                ModelErrorKind::InvalidRequest
-            }
-        }
+        ) => ModelErrorKind::InvalidRequest,
         _ => ModelErrorKind::ProviderError,
     }
 }

@@ -73,6 +73,9 @@
 use futures_util::StreamExt;
 
 use crate::capabilities::AttemptCapabilityLease;
+use crate::context::compaction::{
+    CompactionAttribution, CompactionExecutionError, execute_compaction,
+};
 use crate::context::engine::CompactionConstraints;
 use crate::context::error::{ContextError, ContextErrorKind};
 use crate::context::projection::ContextProjection;
@@ -83,7 +86,7 @@ use crate::context::{
     render_effective_system_prompt, validate_user_message_proposal,
 };
 use crate::conversation::{ConversationError, ConversationState, PreparedCanonicalCommit};
-use crate::durable::{CompactionCommitInput, ConversationStore};
+use crate::durable::ConversationStore;
 use crate::events::types::{
     AttemptFailure, AttemptOutcome, EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope,
 };
@@ -2005,7 +2008,6 @@ impl<'a> AgentExecution<'a> {
     /// semantic commit: once cancellation is observable, no summary, no
     /// canonical summary append, and no Surface rewrite happen, so no
     /// half-committed state can exist.
-    #[allow(clippy::too_many_lines)]
     async fn run_compaction(
         &mut self,
         must_cover_through: Option<&MessageId>,
@@ -2013,137 +2015,45 @@ impl<'a> AgentExecution<'a> {
         effective_system_prompt: &str,
         staged_request_context: &[MessageBlock],
     ) -> Result<CompletedCompaction, ContextError> {
-        if self.cancellation.is_cancelled() {
-            return Err(ContextError::new(
-                ContextErrorKind::Cancelled,
-                "compaction cancelled before it began",
-            ));
-        }
         let tools = self.tool_registry().model_definitions();
-        let projection = self.context_runtime.engine.build_projection(
-            &self.conversation,
+        let cancellation = self.cancellation.signal();
+        let result = execute_compaction(
+            &mut self.conversation,
+            &self.context_runtime,
+            &self.request.conversation_id,
+            self.store.as_ref(),
             &tools,
             self.observed.as_ref(),
             effective_system_prompt,
-        )?;
-        let budgets = self.compaction_budgets();
-        let plan = self.context_runtime.engine.plan_compaction(
-            &self.conversation,
-            &projection,
-            &tools,
-            budgets,
             &CompactionConstraints {
                 must_cover_through,
                 fresh_inbound,
                 staged_request_context,
             },
-        )?;
-        let summary_request = plan.summary_request();
-        let summary = tokio::select! {
-            biased;
-            () = self.cancellation.cancelled() => {
-                return Err(ContextError::new(
-                    ContextErrorKind::Cancelled,
-                    "compaction cancelled while summarizing",
-                ));
-            }
-            result = self
-                .context_runtime
-                .summarizer
-                .summarize(summary_request, self.cancellation.model_cancellation()) => result,
-        };
-        let summary_text = summary?;
-        // Cancellation after the summary returned but before the semantic
-        // commit: nothing is appended, nothing is rewritten, no completion
-        // is emitted, and the old state stays authoritative.
-        if self.cancellation.is_cancelled() {
-            return Err(ContextError::new(
-                ContextErrorKind::Cancelled,
-                "compaction cancelled before the semantic commit",
-            ));
-        }
-        // The semantic commit point: prepare (validate), durable append,
-        // then infallible install (Issue #63, Finding 2). The prepared value
-        // binds the exact summary and span, so no substitution is possible.
-        let (prepared, projection) = self.context_runtime.engine.prepare_compaction(
-            &self.conversation,
-            &self.request.conversation_id,
-            &plan,
-            &summary_text,
-            &tools,
-        )?;
-        let summary_block = prepared.summary_block();
-        // The rebuilt projection must fit under the soft input limit
-        // together with any staged request-scoped context the upcoming
-        // request will carry. This is the exact hypothetical request — the
-        // post-compaction Surface plus the staged overlay, measured by the
-        // same estimator — never a stale scalar token delta. If retained
-        // context, the actual summary, and the staged context cannot fit,
-        // fail explicitly before anything is committed.
-        let exact_after = self.context_runtime.engine.estimate_with_staged_context(
-            &projection,
-            staged_request_context,
-            &tools,
-        );
-        let fits = exact_after
-            < self
-                .context_runtime
-                .engine
-                .soft_input_limit(budgets.primary_output_budget)?;
-        if !fits {
-            return Err(ContextError::new(
-                ContextErrorKind::CannotFit,
-                "the compacted surface still exceeds the soft input limit",
-            ));
-        }
-        let (durable_revision, durable_generation, persisted_event) =
-            match self.store.commit_compaction(CompactionCommitInput {
-                summary: prepared.summary().clone(),
-                span: prepared.span().clone(),
-                expected_revision: prepared.expected_revision(),
-                tokens_before: plan.estimated_before,
-                estimated_tokens_after: projection.estimated_input.input_tokens,
+            &cancellation,
+            CompactionAttribution {
                 attempt_id: Some(self.request.attempt_id.clone()),
                 turn_id: Some(TurnId::new(self.turn.to_string())),
-                timestamp: Utc::now(),
-            }) {
-                Ok(result) => result,
-                Err(error) => {
-                    // A durable compaction-summary commit failure is a
-                    // durable-authority failure (Issue #11): the terminal is
-                    // classified as a compaction failure and the owning
-                    // runtime is marked unhealthy.
-                    self.durable_failure_kind = Some(DurableFailureKind::Compaction);
-                    self.durable_failure = Some(format!(
-                        "the compaction transition cannot be committed durably: {error}"
-                    ));
-                    return Err(ContextError::new(
-                        ContextErrorKind::Internal,
-                        error.to_string(),
-                    ));
-                }
-            };
-        if durable_revision != prepared.expected_revision().next() {
-            self.durable_failure =
-                Some("durable compaction returned an unexpected Surface revision".to_owned());
-            return Err(ContextError::new(
-                ContextErrorKind::Internal,
-                "durable compaction revision differs from prepared transition",
-            ));
-        }
-        let record = self.conversation.install_prepared_compaction(prepared);
+            },
+        )
+        .await;
+        let completed = match result {
+            Ok(completed) => completed,
+            Err(CompactionExecutionError::Context(error)) => return Err(error),
+            Err(CompactionExecutionError::Durable(error)) => {
+                self.durable_failure_kind = Some(DurableFailureKind::Compaction);
+                self.durable_failure = Some(format!(
+                    "the compaction transition cannot be committed durably: {error}"
+                ));
+                return Err(ContextError::new(ContextErrorKind::Internal, error));
+            }
+        };
         // The committed runtime summary is a canonical Ledger fact, observed
         // at exactly the commit linearization point like every other commit.
         if let Some(observer) = self.observer {
-            observer.observe_committed(&self.request.attempt_id, &summary_block);
+            observer.observe_committed(&self.request.attempt_id, &completed.summary_block);
         }
-        debug_assert_eq!(record.generation, durable_generation);
-        self.record_persisted_event(persisted_event);
-        let _ = (
-            record,
-            plan.estimated_before,
-            projection.estimated_input.input_tokens,
-        );
+        self.record_persisted_event(completed.persisted_event);
         Ok(CompletedCompaction)
     }
 
@@ -4407,6 +4317,65 @@ mod tests {
                 .events
                 .iter()
                 .any(|envelope| matches!(envelope.event, RuntimeEvent::ModelRequestStarted { .. }))
+        );
+    }
+
+    /// A generic provider request-size failure is terminal request ownership,
+    /// not conversation-history pressure. Once an adapter normalizes it as
+    /// `InvalidRequest`, the Agent Loop emits no compaction lifecycle and
+    /// performs no summary/retry invocation.
+    #[tokio::test]
+    async fn invalid_request_size_failure_never_compacts_or_retries() {
+        let adapter = Arc::new(ScriptedAdapter::new(vec![vec![ModelEvent::Failed {
+            error: crate::model::error::ModelError {
+                kind: ModelErrorKind::InvalidRequest,
+                message: "Request exceeds the maximum size of 32 MB".to_owned(),
+                retry_after_ms: None,
+                provider_code: Some("request_too_large".to_owned()),
+            },
+        }]]));
+        let tool_runtime = tool_runtime("conv-1");
+        let (_dir, _coordinator, lease) =
+            capability_lease(ToolRegistry::new(), &tool_runtime).await;
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let result = AgentExecution::new(
+            request(&adapter),
+            lease,
+            &cancellation,
+            runtime(&adapter),
+            &tool_runtime,
+            crate::agent::AttemptLifecycle::inert(),
+        )
+        .expect("execution construction")
+        .run()
+        .await;
+
+        assert_eq!(
+            adapter.request_count(),
+            1,
+            "no summary request or overflow retry is issued"
+        );
+        assert!(matches!(result.outcome, AttemptOutcome::Failed { .. }));
+        let events = tool_runtime
+            .durable_store()
+            .read_events(None, 128)
+            .expect("event journal")
+            .events;
+        assert!(
+            !events.iter().any(|event| matches!(
+                event.event,
+                RuntimeEvent::CompactionStarted
+                    | RuntimeEvent::CompactionCompleted { .. }
+                    | RuntimeEvent::CompactionFailed { .. }
+            )),
+            "generic request-size failure produces no compaction lifecycle"
+        );
+        assert!(
+            !result.messages().iter().any(|message| matches!(
+                message,
+                MessageBlock::User(user) if user.kind == InboundKind::CompactionSummary
+            )),
+            "no durable compaction summary is created"
         );
     }
 

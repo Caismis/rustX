@@ -544,13 +544,12 @@ async fn fallback_block_is_unsupported() {
     assert_eq!(terminals.len(), 1, "exactly one terminal event");
 }
 
-/// `stop_sequence` and `max_tokens` finish mapping.
+/// Ordinary `stop_sequence` and `max_tokens` finish reasons remain successful.
 #[tokio::test]
 async fn stop_reasons_map_explicitly() {
     for (fixture, expected) in [
         ("stop_sequence.sse", ModelFinishReason::Stop),
         ("max_tokens.sse", ModelFinishReason::Length),
-        ("context_window_exceeded.sse", ModelFinishReason::Length),
     ] {
         let fixture = fixture.to_owned();
         let fixture_for_server = fixture.clone();
@@ -573,6 +572,29 @@ async fn stop_reasons_map_explicitly() {
             describe_events(&events)
         );
     }
+}
+
+/// An explicit provider context-window stop is a recoverable failure, not an
+/// ordinary output-length completion, so the agent loop can compact/retry.
+#[tokio::test]
+async fn context_window_stop_reason_is_a_typed_failure() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("anthropic", "context_window_exceeded.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi"),
+    )
+    .await;
+    let ModelEvent::Failed { error } = events.last().expect("terminal") else {
+        panic!("expected Failed");
+    };
+    assert_eq!(error.kind, ModelErrorKind::ContextWindowExceeded);
+    assert_eq!(
+        error.provider_code.as_deref(),
+        Some("model_context_window_exceeded")
+    );
 }
 
 /// `pause_turn` is preserved with its continuation semantics, never mapped to
@@ -715,6 +737,53 @@ async fn rate_limit_stream_error_maps_semantically() {
     };
     assert_eq!(error.kind, ModelErrorKind::RateLimit);
     assert_eq!(error.provider_code.as_deref(), Some("rate_limit_error"));
+}
+
+/// Anthropic `request_too_large` is a request byte-size failure unless its
+/// message independently proves token/context pressure. It must remain an
+/// invalid request so the Agent Loop cannot compact conversation history.
+#[tokio::test]
+async fn generic_request_too_large_stream_error_is_not_context_overflow() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("anthropic", "request_too_large_error.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi"),
+    )
+    .await;
+    let ModelEvent::Failed { error } = events.last().expect("terminal") else {
+        panic!("expected Failed");
+    };
+    assert_eq!(error.kind, ModelErrorKind::InvalidRequest);
+    assert_eq!(error.provider_code.as_deref(), Some("request_too_large"));
+    assert_eq!(
+        server.attempt_count(),
+        1,
+        "the request-size failure is terminal and never retried as overflow"
+    );
+}
+
+/// Compatible providers may retain an OpenAI-style error type while using
+/// the Anthropic SSE envelope. The message still identifies an overflow and
+/// must reach the agent loop as `ContextWindowExceeded`.
+#[tokio::test]
+async fn compatible_bad_request_stream_error_maps_to_context_overflow() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("anthropic", "compatible_context_error.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        simple_request(ModelProtocol::AnthropicMessages, "compat/model", "hi"),
+    )
+    .await;
+    let ModelEvent::Failed { error } = events.last().expect("terminal") else {
+        panic!("expected Failed");
+    };
+    assert_eq!(error.kind, ModelErrorKind::ContextWindowExceeded);
+    assert_eq!(error.provider_code.as_deref(), Some("BadRequestError"));
 }
 
 /// `OpenRouter`'s stable `error_type` wins over the lossy Anthropic-native
@@ -926,6 +995,13 @@ async fn http_errors_normalize() {
             ModelErrorKind::ContextWindowExceeded,
         ),
         (
+            "anthropic_413_request_too_large.json",
+            413,
+            "Content Too Large",
+            None,
+            ModelErrorKind::InvalidRequest,
+        ),
+        (
             "anthropic_500.json",
             500,
             "Internal Server Error",
@@ -967,6 +1043,11 @@ async fn http_errors_normalize() {
         if fixture == "anthropic_429.json" {
             assert_eq!(error.retry_after_ms, Some(7000));
             assert_eq!(error.provider_code.as_deref(), Some("rate_limit_error"));
+        }
+        if fixture == "anthropic_413_request_too_large.json" {
+            assert_eq!(error.provider_code.as_deref(), Some("request_too_large"));
+            assert!(error.message.contains("32 MB"));
+            assert_eq!(server.attempt_count(), 1);
         }
     }
 }

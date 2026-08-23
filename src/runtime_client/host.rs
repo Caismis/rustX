@@ -125,8 +125,8 @@ use super::types::{
 use crate::model::session::SessionModelConfig;
 use crate::model::{ModelRequest, RequestIdentity};
 use crate::runtime::conversation_runtime::{
-    CancelAttemptError, ConversationRuntime, InboundAdmissionError, ModelUpdateError,
-    RuntimeBootstrapError,
+    CancelAttemptError, ConversationRuntime, InboundAdmissionError, ManualCompactionError,
+    ModelUpdateError, RuntimeBootstrapError,
 };
 use crate::runtime::identity::{ConversationId, InteractionId, ToolExecutionId};
 use crate::runtime::interaction::{InteractionError, InteractionResponse};
@@ -524,6 +524,43 @@ impl ClientInner {
             Ok(attempt_id) => Ok(RuntimeClientResult::AttemptCancellationAccepted { attempt_id }),
             Err(CancelAttemptError::NoCurrentAttempt) => Err(RuntimeClientError::NoCurrentAttempt),
         }
+    }
+
+    /// Runs one manual idle context compaction to its terminal result and
+    /// returns the authoritative context projection after success.
+    pub(crate) async fn compact_context(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.ensure_session_runtime_live()?;
+        self.runtime
+            .compact_context()
+            .await
+            .map_err(|error| match error {
+                ManualCompactionError::Inactive | ManualCompactionError::Busy => {
+                    RuntimeClientError::InvalidState {
+                        message: error.to_string(),
+                    }
+                }
+                ManualCompactionError::Shutdown => RuntimeClientError::RuntimeShutdown,
+                ManualCompactionError::DurabilityFailed { message }
+                | ManualCompactionError::Durable { message } => {
+                    RuntimeClientError::InvalidState { message }
+                }
+                ManualCompactionError::Context(context)
+                    if matches!(
+                        context.kind,
+                        crate::context::ContextErrorKind::NoProgress
+                            | crate::context::ContextErrorKind::CannotFit
+                    ) =>
+                {
+                    RuntimeClientError::InvalidState {
+                        message: context.message,
+                    }
+                }
+                ManualCompactionError::Context(context) => RuntimeClientError::RuntimeFailure {
+                    message: context.message,
+                },
+            })?;
+        let context = self.lock_state().projection.snapshot_ref().context.clone();
+        Ok(RuntimeClientResult::ContextCompacted { context })
     }
 
     /// Accepts one typed native interaction response through the
@@ -1199,6 +1236,16 @@ impl RuntimeClientHost {
     /// is currently cancellable.
     pub fn cancel_current_attempt(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.inner.cancel_current_attempt()
+    }
+
+    /// Manually compacts the current context while the runtime is idle.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed lifecycle, busy, context, or durability error. A
+    /// successful response means the canonical compaction already committed.
+    pub async fn compact_context(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.inner.compact_context().await
     }
 
     /// Responds to one live native interaction through Runtime Client
@@ -3903,6 +3950,7 @@ mod tests {
                 admission_gate: Some(admission_gate.clone()),
                 settlement_gate: None,
                 activation_gate: None,
+                manual_compaction_settlement_gate: None,
                 submit_gate: None,
                 shutdown_arrival: None,
                 start_boundary_pause: None,
@@ -3990,6 +4038,7 @@ mod tests {
                 admission_gate: Some(admission_gate.clone()),
                 settlement_gate: None,
                 activation_gate: None,
+                manual_compaction_settlement_gate: None,
                 submit_gate: None,
                 shutdown_arrival: None,
                 start_boundary_pause: None,
@@ -4511,6 +4560,7 @@ mod tests {
                 admission_gate: Some(admission_gate.clone()),
                 settlement_gate: None,
                 activation_gate: None,
+                manual_compaction_settlement_gate: None,
                 submit_gate: None,
                 shutdown_arrival: None,
                 start_boundary_pause: None,
@@ -4597,6 +4647,7 @@ mod tests {
                 admission_gate: None,
                 settlement_gate: Some(settlement_gate.clone()),
                 activation_gate: None,
+                manual_compaction_settlement_gate: None,
                 submit_gate: None,
                 shutdown_arrival: None,
                 start_boundary_pause: None,
@@ -4827,6 +4878,7 @@ mod tests {
                 admission_gate: Some(admission_gate.clone()),
                 settlement_gate: None,
                 activation_gate: None,
+                manual_compaction_settlement_gate: None,
                 submit_gate: None,
                 shutdown_arrival: None,
                 start_boundary_pause: None,
@@ -6761,6 +6813,7 @@ mod tests {
                 admission_gate: None,
                 settlement_gate: None,
                 activation_gate: Some(gate.clone()),
+                manual_compaction_settlement_gate: None,
                 submit_gate: None,
                 shutdown_arrival: None,
                 start_boundary_pause: None,
@@ -7008,6 +7061,7 @@ mod tests {
                 admission_gate: None,
                 settlement_gate: None,
                 activation_gate: Some(gate.clone()),
+                manual_compaction_settlement_gate: None,
                 submit_gate: None,
                 shutdown_arrival: None,
                 start_boundary_pause: None,

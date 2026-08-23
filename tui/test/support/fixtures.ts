@@ -163,7 +163,7 @@ export function snapshot(
     inbound: { pending: [] },
     pending_interactions: [],
     background: [],
-    context: { compaction_count: 0 },
+    context: { compaction_in_progress: false, compaction_count: 0 },
     capabilities: capabilities(1),
     model: sessionModel("alpha/model-a"),
     ...overrides,
