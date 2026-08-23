@@ -1039,7 +1039,8 @@ Agent Loop staging (scratch validation, prepared canonical commits;
     ↓
 cancellation-vs-start arbitration (attempt start gate held; M9b)
     ↓ commit_model_turn_start: one transaction
-canonical User context + Surface + RequestSnapshot + ModelRequestStarted
+canonical User context + request-time system sections + Surface +
+RequestSnapshot + ModelRequestStarted
     ↓
 ModelAdapter → provider
 ```
@@ -1156,25 +1157,35 @@ Key contracts:
   away; when preserving it makes the projection impossible, planning fails
   with `CannotFit` rather than summarizing the unobserved instruction.
 
-#### Native Skill context (Issue #55)
+#### Native Skill capability guidance (Issue #55)
 
-The Skill catalog is rendered once from the attempt's immutable capability
-snapshot and enters the same Context Assembly path as every other
-model-visible context fact:
+The Skill catalog is rendered deterministically from the attempt's immutable
+`CapabilitySnapshot` / `SkillSnapshot` and enters the existing Context Assembly
+system-section path:
 
-- Skill guidance is admitted as canonical
-  `UserSource::Runtime`/`InboundKind::Context(ContextKind::SkillGuidance)`
-  context. It is not a special request attachment and is never copied into
-  canonical tool definitions. Tool definitions remain immutable capability
-  state and are frozen independently in `RequestSnapshot`.
-- The accepted Skill fact is an ordinary committed User message and is
-  therefore included in Ledger, Surface, compaction, and historical request
-  reconstruction. The capability snapshot itself remains immutable for the
-  attempt.
-- It participates in normal canonical-message token accounting and
-  complete-message compaction.
-- Adapters receive it only through the final canonical User projection and
-  perform protocol translation; they do not discover or inject it.
+- `NativeContextContributor::SkillGuidance` publishes one
+  `SystemSectionLane::NativeCapabilityGuidance` section. It does not publish a
+  User message or User-context semantic kind.
+- The section is request-time capability guidance, not a canonical
+  conversational fact. It creates no MessageId, Ledger entry, Surface entry,
+  or durable Skill commit. Surface compaction therefore cannot remove or
+  suppress it, and an older canonical history entry cannot mask a newer
+  capability revision.
+- The compact catalog contains only visible Skill names/descriptions and the
+  virtual `.rustx/skills/<skill-name>/SKILL.md` Read instruction. It never
+  includes full `SKILL.md` bodies, supporting resources, dependency metadata,
+  or host absolute paths. Skills marked `disable-model-invocation: true`
+  remain in the immutable runtime resource snapshot but are omitted from the
+  model-visible catalog.
+- The model loads a selected Skill lazily with native
+  `read(".rustx/skills/<skill-name>/SKILL.md")`; the runtime-owned virtual
+  resource map resolves the path, and the resulting body enters the ordinary
+  tool-call/result conversation path.
+- Context Assembly composes the section with other request-time system
+  sections. The exact rendered Effective System Prompt is frozen by value in
+  `RequestSnapshot`; historical reconstruction never reruns Skill discovery.
+- Provider adapters receive only the already-rendered provider-neutral
+  Effective System Prompt and canonical history. They own no Skill semantics.
 
 The context path is **mandatory**: every `AgentExecution` is constructed
 with a `ContextRuntime`, a `ConversationToolRuntime`, and an attempt

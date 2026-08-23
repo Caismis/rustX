@@ -536,8 +536,8 @@ async fn a_tool_call_runs_the_real_tool_and_continues() {
 // Scenario C — a real workspace Skill
 // ---------------------------------------------------------------------------
 
-/// rustX discovers a real workspace Skill, admits its catalog through the
-/// normal canonical User-context path, and executes the real Read of the
+/// rustX discovers a real workspace Skill, renders its compact catalog through
+/// the normal Effective System Prompt path, and executes the real Read of the
 /// Skill's own `SKILL.md`. Python implements no part of that.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_real_skill_reaches_the_provider_and_is_read_by_the_real_tool() {
@@ -587,18 +587,28 @@ async fn a_real_skill_reaches_the_provider_and_is_read_by_the_real_tool() {
     let first = body_text(&requests[0]);
     assert!(
         first.contains(SKILL_NAME) && first.contains(SKILL_DESCRIPTION),
-        "the Skill catalog reached the provider through the unified context path"
+        "the Skill catalog reached the provider through the unified system-prompt path"
+    );
+    assert!(
+        !first.contains(SKILL_BODY_MARKER),
+        "the initial request contains routing metadata, not the full SKILL.md body"
     );
     let wire_messages = requests[0]["body"]["messages"]
         .as_array()
         .expect("Chat Completions messages");
     assert!(
         wire_messages.iter().any(|message| {
-            message["role"] == "user"
+            message["role"] == "system"
                 && message["content"].to_string().contains("## Skills")
                 && message["content"].to_string().contains(SKILL_NAME)
         }),
-        "the provider saw Skill guidance as an ordinary canonical User-context message"
+        "the provider saw Skill guidance in the translated system prompt"
+    );
+    assert!(
+        !wire_messages.iter().any(|message| {
+            message["role"] == "user" && message["content"].to_string().contains("## Skills")
+        }),
+        "the provider received a canonical User Skill catalog message"
     );
     assert!(
         body_text(&requests[1]).contains(SKILL_BODY_MARKER),

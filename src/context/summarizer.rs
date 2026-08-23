@@ -172,9 +172,9 @@ impl ContextSummarizer for ModelBackedSummarizer {
                 messages: input.messages,
                 tools: Vec::new(),
                 // Summary generation is not an inbound Assistant turn: it never
-                // carries no primary-step dynamic context: Agent Status and
-                // Skill guidance are admitted canonical facts for primary
-                // requests only.
+                // carries primary-step dynamic context. Agent Status is a
+                // primary-request User fact, and Skill guidance is a
+                // primary-request system section; neither belongs here.
                 effective_system_prompt: String::new(),
                 continuation: None,
             };

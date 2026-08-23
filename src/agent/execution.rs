@@ -1210,7 +1210,7 @@ impl<'a> AgentExecution<'a> {
         }
         // Compact already-committed history before staging this step's
         // dynamic context. This keeps an unobserved fresh inbound batch and
-        // its newly staged Runtime/Skill facts from blocking a
+        // its newly staged Runtime fact from blocking a
         // complete-message compaction candidate that belongs to older
         // history. A second fit check below still rejects a request whose
         // newly staged context cannot fit on its own. This compaction is
@@ -1242,12 +1242,7 @@ impl<'a> AgentExecution<'a> {
             Ok(status) => status,
             Err(error) => return Err(Self::context_failure_terminal(&error)),
         };
-        let skill_guidance =
-            if self.has_active_context_kind(crate::message::types::ContextKind::SkillGuidance)? {
-                None
-            } else {
-                self.capability.snapshot().skill_catalog()
-            };
+        let skill_guidance = self.capability.snapshot().skill_catalog();
         let input = match self.contributor_input_snapshot() {
             Ok(input) => input,
             Err(terminal) => return Err(terminal),
@@ -1818,30 +1813,6 @@ impl<'a> AgentExecution<'a> {
         Ok(staged)
     }
 
-    /// Returns whether one semantic context family is still active on the
-    /// current Surface. A later primary step may re-admit Skill guidance if a
-    /// complete-message compaction retired the earlier canonical fact, while
-    /// an overflow retry never reaches this check because it retains the
-    /// accepted context generation.
-    fn has_active_context_kind(
-        &self,
-        kind: crate::message::types::ContextKind,
-    ) -> Result<bool, Terminal> {
-        let messages = self.conversation.active_messages().map_err(|error| {
-            Self::context_failure_terminal(&ContextError::new(
-                ContextErrorKind::MalformedHistory,
-                error.to_string(),
-            ))
-        })?;
-        Ok(messages.iter().any(|message| {
-            matches!(
-                message,
-                MessageBlock::User(user)
-                    if user.kind == crate::message::types::InboundKind::Context(kind)
-            )
-        }))
-    }
-
     fn compaction_budgets(&self) -> crate::context::CompactionBudgets {
         self.context_runtime.compaction_budgets
     }
@@ -2257,9 +2228,9 @@ impl<'a> AgentExecution<'a> {
     /// `{attempt}-agent-{turn}-retry-{retry_number}`.
     ///
     /// The retry is not a new admitted dynamic-context step. It reuses the
-    /// already accepted context generation, status fact, Skill guidance, and
-    /// contributor output; only the Surface revision and request identity may
-    /// change because compaction happened.
+    /// already accepted context generation, status fact, Skill system section,
+    /// and contributor output; only the Surface revision and request identity
+    /// may change because compaction happened.
     ///
     /// The retry returns the complete retry invocation — provisional
     /// identity, assembler, and terminal together — so a successful retry

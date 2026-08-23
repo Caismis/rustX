@@ -1069,6 +1069,19 @@ async fn commit_is_busy_while_a_lease_is_active_then_commits_atomically() {
         committed.revision(),
         rustx::runtime::identity::CapabilityRevision::new(revision_n.get() + 1)
     );
+    assert_eq!(snapshot.skill_catalog(), None);
+    assert_eq!(
+        committed.skill_catalog().as_deref(),
+        Some(
+            "## Skills\n\n\
+             Skills are stored under `.rustx/skills/`.\n\
+             Before using a skill, read `.rustx/skills/<skill-name>/SKILL.md`\n\
+             with the Read tool.\n\n\
+             Available skills:\n\
+             \n- pdf: PDF skill."
+        ),
+        "a later capability revision owns its own catalog rather than inheriting history"
+    );
     // The next attempt snapshots the new revision.
     let next_lease = conversation.coordinator.acquire_attempt_lease();
     assert_eq!(next_lease.revision(), committed.revision());
@@ -1494,9 +1507,10 @@ async fn await_background_started(
 // environment on every turn (sections 22/31/33)
 // ---------------------------------------------------------------------------
 
-/// Every model turn of one attempt carries the exact same Skill catalog
-/// attachment and effective environment: the attempt runs multiple turns
-/// while its lease is held, and the catalog never changes mid-attempt.
+/// Every model turn of one attempt carries the exact same Skill catalog in the
+/// Effective System Prompt and the same effective environment: the attempt
+/// runs multiple turns while its lease is held, and the catalog never changes
+/// mid-attempt.
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // one coherent multi-turn scenario
 async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
@@ -1618,33 +1632,30 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
     let requests = model.requests();
     assert_eq!(requests.len(), 2, "two model turns");
     for request in &requests {
-        assert!(request.messages.iter().any(|message| {
-            matches!(
-                message,
-                rustx::message::types::MessageBlock::User(user)
-                    if user.kind
-                        == rustx::message::types::InboundKind::Context(
-                            rustx::message::types::ContextKind::SkillGuidance,
-                        )
-                    && user.content.iter().any(|content| {
-                        matches!(
-                            content,
-                            rustx::message::types::UserContentBlock::Text(text)
-                                if text.text == catalog
-                        )
-                    })
-            )
-        }));
+        assert_eq!(
+            request.effective_system_prompt, catalog,
+            "the attempt's immutable Skill snapshot renders into the Effective System Prompt"
+        );
+        assert!(
+            !request.messages.iter().any(|message| {
+                serde_json::to_string(message)
+                    .expect("serialize canonical message")
+                    .contains("## Skills")
+            }),
+            "Skill routing metadata never enters canonical conversation messages"
+        );
+        assert!(
+            !request.effective_system_prompt.contains("body"),
+            "the initial system catalog never contains a full SKILL.md body"
+        );
     }
-    // The catalog is canonical history and is therefore present in the
-    // settled result; it is never a separate provider attachment/event.
     assert!(
-        result.messages().iter().any(|message| {
-            serde_json::to_string(message)
+        result.messages().iter().all(|message| {
+            !serde_json::to_string(message)
                 .expect("serialize")
                 .contains("## Skills")
         }),
-        "the committed ledger contains the admitted Skill guidance fact"
+        "the committed ledger contains no Skill catalog fact"
     );
     assert_eq!(
         coordinator.active_attempts(),

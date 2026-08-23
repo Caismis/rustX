@@ -8,7 +8,8 @@
 //! owns the runtime-controlled resource map used by native Read.
 //!
 //! The catalog is an immutable capability snapshot. Its rendered guidance
-//! enters canonical history through Context Assembly and is not carried by a
+//! enters the request-time Effective System Prompt through Context Assembly;
+//! it is not canonical conversation history and is not carried by a
 //! provider-request special channel.
 
 use std::sync::Arc;

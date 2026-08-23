@@ -1828,9 +1828,18 @@ message role, history shape, or timestamps:
   start-commit failure rolls the whole transaction back, so request-scoped
   context can never become canonical without its request starting.
 - Effective System Prompt is rustX-rendered from canonical System content
-  and ordered native/extension sections. The rendered string is frozen by
-  value in RequestSnapshot; native sections cannot be shadowed and an
-  extension cannot replace the entire prompt.
+  and ordered native/extension sections. The active Skill catalog is one
+  request-time `NativeCapabilityGuidance` section rendered from the attempt's
+  immutable `CapabilitySnapshot`; it is absent when no model-visible Skills
+  exist. The rendered string is frozen by value in RequestSnapshot; native
+  sections cannot be shadowed and an extension cannot replace the entire
+  prompt.
+- The Skill catalog is never a canonical User message, `UserSource::Runtime`,
+  `ContextKind`, Ledger fact, or Surface identity. It contains routing
+  metadata only; full `.rustx/skills/<name>/SKILL.md` content enters the
+  conversation only as the result of an explicit runtime-owned native Read.
+  Compaction operates on canonical facts and cannot remove Skill catalog
+  visibility.
 - RequestSnapshot contains RequestIdentity, SurfaceRevision,
   effective_system_prompt, ModelInvocationConfig, context window,
   reasoning values, tool definitions, capability revision,
@@ -1895,9 +1904,9 @@ Core invariant:
 ### PreStepPolicy
 
 - The policy observes the **final** immutable `AcceptedContext` — the exact
-  batch that would otherwise be admitted, including native Agent Status,
-  native Skill guidance, certified-extension proposals, and deferred context
-  from every producer — plus attempt/conversation identity, the
+  batch that would otherwise be admitted, including native Agent Status, the
+  native Skill system section, certified-extension proposals, and deferred
+  context from every producer — plus attempt/conversation identity, the
   turn, and the pre-start `SurfaceRevision`. It returns `Enter` or
   `Reject { reason }` and nothing else; it cannot rewrite, extend, or replace
   the batch.
@@ -2032,7 +2041,7 @@ The load-bearing split of this seam:
   - `NativeRuntimeObservation` → the native-reserved
     `UserContextLane::RuntimeToolObservation` (immediately after
     `ClaimedInbound` and before `WorkspaceInstructions`,
-    `ExtensionEnvironment`, `SkillGuidance`, and `AgentStatus`),
+    `ExtensionEnvironment`, and `AgentStatus`),
     `UserSource::Runtime`,
     `InboundKind::Context(ContextKind::RuntimeToolObservation)`. rustX owns
     this owner, so it needs no registration and carries no attestation;

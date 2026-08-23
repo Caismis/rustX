@@ -41,27 +41,24 @@ pub enum UserContextLane {
     /// The lane sits immediately after claimed inbound because a native
     /// runtime observation describes what the environment just did for the
     /// tool batch that precedes this step, while the request-time
-    /// workspace/extension/Skill and Agent Status lanes describe the
+    /// workspace/extension and Agent Status lanes describe the
     /// *current* step.
     RuntimeToolObservation,
     /// Workspace/project instructions, with one semantic owner.
     WorkspaceInstructions,
     /// Generic certified-extension/environment context.
     ExtensionEnvironment,
-    /// Native capability/Skill guidance.
-    SkillGuidance,
     /// Native runtime/Agent Status context.
     AgentStatus,
 }
 
 impl UserContextLane {
     /// The contract's deterministic total order.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 5] = [
         Self::ClaimedInbound,
         Self::RuntimeToolObservation,
         Self::WorkspaceInstructions,
         Self::ExtensionEnvironment,
-        Self::SkillGuidance,
         Self::AgentStatus,
     ];
 
@@ -73,7 +70,6 @@ impl UserContextLane {
             Self::RuntimeToolObservation => "runtime_tool_observation",
             Self::WorkspaceInstructions => "workspace_instructions",
             Self::ExtensionEnvironment => "extension_environment",
-            Self::SkillGuidance => "skill_guidance",
             Self::AgentStatus => "agent_status",
         }
     }
@@ -89,8 +85,8 @@ pub enum SystemSectionLane {
     AgentProfile,
     /// Certified-extension sections, ordered by logical contributor identity.
     CertifiedExtension,
-    /// Native capability guidance sections, when a future native owner needs
-    /// a system section rather than a conversational User context fact.
+    /// Native capability guidance sections, including the request-time Skill
+    /// catalog, rather than conversational User context facts.
     NativeCapabilityGuidance,
 }
 
@@ -159,7 +155,7 @@ pub struct NativeContextInput {
     /// one for this request.
     pub workspace_instructions: Option<String>,
     /// Native Skill/capability guidance rendered from the attempt's immutable
-    /// capability snapshot.
+    /// capability snapshot for the request-time Effective System Prompt.
     pub skill_guidance: Option<String>,
     /// The canonical rendered Agent Status snapshot.
     pub agent_status: Option<String>,
@@ -264,11 +260,6 @@ fn user_semantics(
                 UserSource::Runtime,
                 ContextKind::WorkspaceInstructions,
             )),
-            NativeContextContributor::SkillGuidance => Some((
-                UserContextLane::SkillGuidance,
-                UserSource::Runtime,
-                ContextKind::SkillGuidance,
-            )),
             NativeContextContributor::AgentStatus => Some((
                 UserContextLane::AgentStatus,
                 UserSource::Runtime,
@@ -279,7 +270,8 @@ fn user_semantics(
                 UserSource::Runtime,
                 ContextKind::RuntimeToolObservation,
             )),
-            NativeContextContributor::CoreSystemIdentity
+            NativeContextContributor::SkillGuidance
+            | NativeContextContributor::CoreSystemIdentity
             | NativeContextContributor::AgentProfile => None,
         },
         ContextContributorIdentity::CertifiedExtension(extension) => Some((
@@ -700,9 +692,11 @@ impl ContextAssembly {
     }
 
     /// Assembles deferred, native, and certified-extension proposals against
-    /// one finite immutable input snapshot. The returned User messages have
+    /// one finite immutable input snapshot. Returned User messages have
     /// trusted source/kind but no `MessageId`; the Agent Loop allocates and
-    /// commits ids at its one admission boundary.
+    /// commits ids at its one admission boundary. Request-time native system
+    /// sections, including Skill capability guidance, are returned separately
+    /// and never enter that User-message admission path.
     ///
     /// `deferred` carries the proposals whose eligibility the Agent Loop
     /// established earlier, at the observer transaction boundary of a settled
@@ -786,10 +780,12 @@ impl ContextAssembly {
             )?);
         }
         if let Some(text) = &native.skill_guidance {
-            entries.push(ContributionEntry::native_user(
+            validate_text(text, "native Skill capability guidance")?;
+            native_sections.push(native_section(
+                SystemSectionLane::NativeCapabilityGuidance,
                 NativeContextContributor::SkillGuidance,
                 text.clone(),
-            )?);
+            ));
         }
         if let Some(text) = &native.agent_status {
             entries.push(ContributionEntry::native_user(
@@ -1223,6 +1219,7 @@ mod tests {
                 &NativeContextInput {
                     core_runtime_identity: Some("core identity".to_owned()),
                     agent_profile: Some("agent profile".to_owned()),
+                    skill_guidance: Some("skill catalog".to_owned()),
                     ..NativeContextInput::default()
                 },
                 &[],
@@ -1239,16 +1236,36 @@ mod tests {
                 "core identity",
                 "agent profile",
                 "alpha section",
-                "zeta section"
+                "zeta section",
+                "skill catalog"
             ]
         );
         assert_eq!(
             accepted.system_sections[0].contributor,
             ContextContributorIdentity::Native(NativeContextContributor::CoreSystemIdentity)
         );
+        assert!(accepted.user_messages.is_empty());
+        assert_eq!(
+            accepted.system_sections[4].contributor,
+            ContextContributorIdentity::Native(NativeContextContributor::SkillGuidance)
+        );
         assert_eq!(
             render_effective_system_prompt(&[], &accepted.system_sections),
-            "core identity\n\nagent profile\n\nalpha section\n\nzeta section"
+            "core identity\n\nagent profile\n\nalpha section\n\nzeta section\n\nskill catalog"
+        );
+    }
+
+    #[tokio::test]
+    async fn absent_skill_catalog_adds_no_system_section() {
+        let accepted = ContextAssembly::new()
+            .assemble(&input(), &NativeContextInput::default(), &[])
+            .await
+            .expect("empty native context assembles");
+        assert!(accepted.user_messages.is_empty());
+        assert!(accepted.system_sections.is_empty());
+        assert_eq!(
+            render_effective_system_prompt(&[], &accepted.system_sections),
+            ""
         );
     }
 

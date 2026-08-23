@@ -119,8 +119,10 @@ fails explicitly.
 The context path is mandatory: every model request carries the finite
 projection of the current Surface (complete canonical messages in exact
 order), the rustX-rendered Effective System Prompt, and a frozen
-RequestSnapshot. Agent Status and Skill guidance are canonical User context
-facts admitted before the snapshot; they are not hidden request attachments.
+RequestSnapshot. Agent Status is a canonical User context fact admitted before
+the snapshot. Skill guidance is request-time native system capability guidance
+rendered from the attempt's immutable capability snapshot; it is not a
+canonical User fact or a hidden adapter attachment.
 A successful compaction appends one runtime User summary and applies one
 Surface Replace, establishing a new revision and invalidating the pending
 continuation; the continuation-owning turn is retired completely, so an old
@@ -394,11 +396,12 @@ nothing else — it cannot rewrite, extend, or replace the batch, because a
 policy that could synthesize a replacement batch would be a second context
 authority.
 
-There is exactly **one** model-turn start path. Every proposal — native
-Agent Status, native Skill guidance, certified-extension context, and
-deferred context from any producer — converges on the same staging and the
-same arbitration before the same fused start commit. No contributor and no
-observer has a private commit path.
+There is exactly **one** model-turn start path. Every request-time contribution
+— native Agent Status, native Skill system guidance, certified-extension
+context, and deferred context from any producer — converges on the same
+assembly, staging, and arbitration before the same fused start commit. No
+contributor and no observer has a private commit path; Skill guidance does not
+create a separate durable commit.
 
 A `Reject` settles the attempt as
 `AttemptFailed(Runtime(PreStepRejected { reason }))`, and a policy failure as
@@ -976,8 +979,8 @@ attempt uses exactly the pinned immutable `CapabilitySnapshot`:
 
 - the ToolRegistry handle (preflight, executor resolution, model
   definitions);
-- the immutable Skill snapshot used to produce canonical Skill guidance
-  context once per admitted primary step;
+- the immutable Skill snapshot used to produce request-time Skill system
+  guidance once per admitted primary step;
 - the effective `ToolEnvironment` for foreground executions;
 - the effective environment and immutable Skill resource map captured into
   every background dispatch at `prepare_dispatch`, before the background
@@ -985,7 +988,9 @@ attempt uses exactly the pinned immutable `CapabilitySnapshot`:
   a later capability revision.
 
 No model turn re-discovers Skills or re-queries the conversation capability
-pointer. A capability commit while the attempt lease is active is rejected
+pointer. The Skill catalog is re-rendered from the same pinned snapshot for
+each primary request and is never deduplicated against canonical history. A
+capability commit while the attempt lease is active is rejected
 as busy; the lease is moved into `AgentExecution` and releases when the
 consumed execution is dropped after settlement (or when construction fails).
 The lease owner is structurally bound to the `ConversationId` and canonical

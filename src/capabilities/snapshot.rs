@@ -166,9 +166,9 @@ impl CapabilitySnapshot {
         &self.effective_environment
     }
 
-    /// The exact rendered Skill guidance of this immutable capability
-    /// snapshot. Context Assembly admits it as a normal sourced canonical
-    /// User context fact; it is not a request attachment.
+    /// The exact rendered Skill capability guidance of this immutable
+    /// capability snapshot. Context Assembly renders it into the request-time
+    /// Effective System Prompt; it is not canonical conversation history.
     #[must_use]
     pub fn skill_catalog(&self) -> Option<String> {
         self.skills.render_catalog()
