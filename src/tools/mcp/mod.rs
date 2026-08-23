@@ -63,11 +63,12 @@ use crate::runtime::interactive_process::{InteractiveProcessSpec, SupervisedInte
 use crate::tools::artifacts::ArtifactStore;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::{
-    MAX_MODEL_TOOL_RESULT_BYTES, bound_tool_progress, bounded_text_preview,
+    FOREGROUND_TOOL_RESULT_PREVIEW_BYTES, MAX_MODEL_TOOL_RESULT_BYTES, bound_tool_progress,
+    bounded_text_preview,
 };
 use crate::tools::output::{
-    CapturedOutput, ToolOutputCapture, ToolOutputWriter, continuation_for_capture,
-    foreground_continuation_block, truncation_for_capture,
+    CapturedOutput, TextPreviewCapture, ToolOutputCapture, ToolOutputWriter,
+    continuation_for_capture, foreground_continuation_block, truncation_for_capture,
 };
 use crate::tools::types::{
     ManagedOutputContinuation, ToolDefinition, ToolExecutionResult, ToolExecutionStatus,
@@ -1438,7 +1439,6 @@ fn translate_result(
     let continuation = continuation_for_capture(&capture_result, background, output_diagnostic);
     let (model_blocks, aggregate_error) = materialize_mcp_blocks(
         captured.pending_blocks,
-        captured.saw_textual_block,
         &capture_result,
         continuation.as_ref(),
         background,
@@ -1512,7 +1512,6 @@ enum McpPendingBlock {
 /// aggregate has one deterministic budget reservation.
 fn materialize_mcp_blocks(
     pending_blocks: Vec<McpPendingBlock>,
-    saw_textual_block: bool,
     capture_result: &CapturedOutput,
     continuation: Option<&ManagedOutputContinuation>,
     background: bool,
@@ -1536,26 +1535,35 @@ fn materialize_mcp_blocks(
     }
 
     if textual_overflow {
-        if saw_textual_block {
-            consume_mcp_text(
-                capture_result.preview.clone(),
-                &mut budget,
-                &mut model_blocks,
-                &mut aggregate_error,
-            );
-        }
-        // The shared capture's bounded preview represents all textual blocks
-        // in this path. Images remain semantic blocks and are considered in
-        // their original order without moving their bytes into managed text.
+        // The shared capture still owns the complete textual spill and its
+        // aggregate preview state. The model-facing mixed projection needs a
+        // separate bounded text budget, however: replacing all textual
+        // blocks with one aggregate Text would move Images across their
+        // source-relative semantic boundaries.
+        let mut remaining_textual_preview = FOREGROUND_TOOL_RESULT_PREVIEW_BYTES;
         for pending in pending_blocks {
-            if let McpPendingBlock::Image(bytes) = pending {
-                consume_mcp_image(
+            match pending {
+                McpPendingBlock::Text(text) => consume_mcp_text_preview(
+                    &text,
+                    &mut remaining_textual_preview,
+                    &mut budget,
+                    &mut model_blocks,
+                    &mut aggregate_error,
+                ),
+                McpPendingBlock::Json(value) => consume_mcp_json_preview(
+                    &value,
+                    &mut remaining_textual_preview,
+                    &mut budget,
+                    &mut model_blocks,
+                    &mut aggregate_error,
+                ),
+                McpPendingBlock::Image(bytes) => consume_mcp_image(
                     &bytes,
                     &mut budget,
                     &mut model_blocks,
                     &mut aggregate_error,
                     artifacts,
-                );
+                ),
             }
         }
     } else {
@@ -1585,6 +1593,55 @@ fn materialize_mcp_blocks(
     }
 
     (model_blocks, aggregate_error)
+}
+
+fn consume_mcp_text_preview(
+    text: &str,
+    remaining_textual_preview: &mut usize,
+    budget: &mut McpAggregateBudget,
+    model_blocks: &mut Vec<ToolResultContent>,
+    aggregate_error: &mut Option<String>,
+) {
+    if *remaining_textual_preview < 2 {
+        if *remaining_textual_preview == 1
+            && let Some(character) = text.chars().next()
+            && character.len_utf8() == 1
+        {
+            *remaining_textual_preview = 0;
+            consume_mcp_text(character.to_string(), budget, model_blocks, aggregate_error);
+        }
+        return;
+    }
+    let mut preview = TextPreviewCapture::new(*remaining_textual_preview);
+    preview.push(text);
+    let (text, _) = preview.finish();
+    *remaining_textual_preview = (*remaining_textual_preview).saturating_sub(text.len());
+    if !text.is_empty() {
+        consume_mcp_text(text, budget, model_blocks, aggregate_error);
+    }
+}
+
+fn consume_mcp_json_preview(
+    value: &serde_json::Value,
+    remaining_textual_preview: &mut usize,
+    budget: &mut McpAggregateBudget,
+    model_blocks: &mut Vec<ToolResultContent>,
+    aggregate_error: &mut Option<String>,
+) {
+    match serde_json::to_string(value) {
+        Ok(text) => consume_mcp_text_preview(
+            &text,
+            remaining_textual_preview,
+            budget,
+            model_blocks,
+            aggregate_error,
+        ),
+        Err(error) => {
+            if aggregate_error.is_none() {
+                *aggregate_error = Some(format!("invalid MCP structured content: {error}"));
+            }
+        }
+    }
 }
 
 fn consume_mcp_text(
@@ -1674,7 +1731,6 @@ fn open_mcp_output_capture(
 
 struct McpContentCapture {
     pending_blocks: Vec<McpPendingBlock>,
-    saw_textual_block: bool,
     unsupported: Option<String>,
     storage_error: Option<String>,
 }
@@ -1687,14 +1743,12 @@ fn capture_mcp_content(
 ) -> McpContentCapture {
     let mut captured = McpContentCapture {
         pending_blocks: Vec::new(),
-        saw_textual_block: false,
         unsupported: None,
         storage_error: None,
     };
     let mut first_textual_block = true;
     {
         let mut push_textual = |text: &str| -> Result<(), String> {
-            captured.saw_textual_block = true;
             if !first_textual_block {
                 capture.push(
                     "\n",
@@ -1739,7 +1793,6 @@ fn capture_mcp_content(
         }
     }
     if let Some(value) = structured_content {
-        captured.saw_textual_block = true;
         if !first_textual_block
             && let Err(error) = capture.push(
                 "\n",
@@ -1956,6 +2009,18 @@ mod tests {
         )
     }
 
+    fn content_kinds(content: &[ToolResultContent]) -> Vec<&'static str> {
+        content
+            .iter()
+            .map(|content| match content {
+                ToolResultContent::Text(_) => "text",
+                ToolResultContent::Json { .. } => "json",
+                ToolResultContent::File(_) => "file",
+                ToolResultContent::Image(_) => "image",
+            })
+            .collect()
+    }
+
     #[test]
     fn foreground_mcp_aggregate_budget_accepts_exact_text_image_boundary() {
         let (_directory, runtime) = runtime("mcp-aggregate-exact");
@@ -2069,6 +2134,175 @@ mod tests {
                 .any(|content| matches!(content, ToolResultContent::Json { .. }))
         );
         assert!(result.managed_output.is_none());
+    }
+
+    #[test]
+    fn foreground_mcp_image_before_overflow_text_preserves_order_and_spill() {
+        let (_directory, runtime) = runtime("mcp-order-image-text");
+        let text = "B".repeat(crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1);
+        let progress = NoProgress;
+        let result = translate_result(
+            CallToolResult::success(vec![image_block(1024), ContentBlock::text(text.clone())]),
+            &context(&runtime, None, &progress),
+            Instant::now(),
+        );
+
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+        assert_eq!(
+            content_kinds(&result.content),
+            vec!["image", "text", "text"]
+        );
+        assert!(matches!(
+            &result.content[1],
+            ToolResultContent::Text(text) if text.text.contains('B')
+        ));
+        assert!(matches!(
+            &result.content[2],
+            ToolResultContent::Text(text) if text.text.contains("Read or Grep")
+        ));
+        let Some(ManagedOutputContinuation::Complete { locator }) = result.managed_output else {
+            panic!("overflow MCP text must remain Complete: {result:?}");
+        };
+        assert_eq!(
+            std::fs::read(&locator).expect("complete text spill"),
+            text.as_bytes()
+        );
+        assert_eq!(
+            std::fs::read_dir(locator.parent().expect("results directory"))
+                .expect("results directory")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn foreground_mcp_text_image_text_overflow_preserves_order() {
+        let (_directory, runtime) = runtime("mcp-order-text-image-text");
+        let first_bytes = crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES / 2;
+        let second_bytes = crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES - first_bytes;
+        let first = "A".repeat(first_bytes);
+        let second = "B".repeat(second_bytes);
+        let progress = NoProgress;
+        let result = translate_result(
+            CallToolResult::success(vec![
+                ContentBlock::text(first.clone()),
+                image_block(1024),
+                ContentBlock::text(second.clone()),
+            ]),
+            &context(&runtime, None, &progress),
+            Instant::now(),
+        );
+
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+        assert_eq!(
+            content_kinds(&result.content),
+            vec!["text", "image", "text", "text"]
+        );
+        assert!(matches!(
+            &result.content[0],
+            ToolResultContent::Text(text) if text.text == first
+        ));
+        assert!(matches!(
+            &result.content[2],
+            ToolResultContent::Text(text) if text.text == second
+        ));
+        let Some(ManagedOutputContinuation::Complete { locator }) = result.managed_output else {
+            panic!("mixed overflow MCP text must remain Complete: {result:?}");
+        };
+        assert_eq!(
+            std::fs::read(&locator).expect("complete mixed text spill"),
+            format!("{first}\n{second}").as_bytes()
+        );
+    }
+
+    #[test]
+    fn foreground_mcp_text_image_overflow_text_image_preserves_order() {
+        let (_directory, runtime) = runtime("mcp-order-text-image-text-image");
+        let first = "A".repeat(64);
+        let second = "B".repeat(crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1);
+        let progress = NoProgress;
+        let result = translate_result(
+            CallToolResult::success(vec![
+                ContentBlock::text(first.clone()),
+                image_block(1024),
+                ContentBlock::text(second.clone()),
+                image_block(1024),
+            ]),
+            &context(&runtime, None, &progress),
+            Instant::now(),
+        );
+
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+        assert_eq!(
+            content_kinds(&result.content),
+            vec!["text", "image", "text", "image", "text"]
+        );
+        assert!(matches!(
+            &result.content[0],
+            ToolResultContent::Text(text) if text.text == first
+        ));
+        assert!(matches!(
+            &result.content[2],
+            ToolResultContent::Text(text) if text.text.contains('B')
+        ));
+        assert!(matches!(
+            &result.content[1],
+            ToolResultContent::Image(image) if image.artifact_id.as_str() == "artifact_1"
+        ));
+        assert!(matches!(
+            &result.content[3],
+            ToolResultContent::Image(image) if image.artifact_id.as_str() == "artifact_2"
+        ));
+        let Some(ManagedOutputContinuation::Complete { locator }) = result.managed_output else {
+            panic!("mixed overflow MCP text must remain Complete: {result:?}");
+        };
+        assert_eq!(
+            std::fs::read(&locator).expect("complete mixed text spill"),
+            format!("{first}\n{second}").as_bytes()
+        );
+    }
+
+    #[test]
+    fn foreground_mcp_aggregate_pressure_keeps_order_before_rejecting_late_image() {
+        let (_directory, runtime) = runtime("mcp-order-budget-pressure");
+        let first = "A".repeat(crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES / 2);
+        let second = "B".repeat(
+            crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES
+                - crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES / 2,
+        );
+        let progress = NoProgress;
+        let result = translate_result(
+            CallToolResult::success(vec![
+                ContentBlock::text(first.clone()),
+                image_block(30 * 1024),
+                ContentBlock::text(second.clone()),
+                image_block(30 * 1024),
+            ]),
+            &context(&runtime, None, &progress),
+            Instant::now(),
+        );
+
+        let ToolExecutionStatus::Failed { error } = &result.status else {
+            panic!("late aggregate image overflow must fail explicitly: {result:?}");
+        };
+        assert!(error.contains("aggregate model-facing result limit"));
+        assert_eq!(
+            content_kinds(&result.content),
+            vec!["text", "image", "text", "text"]
+        );
+        assert!(matches!(
+            &result.content[0],
+            ToolResultContent::Text(text) if text.text == first
+        ));
+        assert!(matches!(
+            &result.content[2],
+            ToolResultContent::Text(text) if text.text == second
+        ));
+        assert!(matches!(
+            &result.content[1],
+            ToolResultContent::Image(image) if image.artifact_id.as_str() == "artifact_1"
+        ));
+        assert!(result.managed_output.is_some());
     }
 
     #[test]
