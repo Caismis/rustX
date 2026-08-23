@@ -1141,16 +1141,24 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   stripped before business-argument validation, and is never forwarded to
   any executor. A missing or invalid value is a deterministic rejection with
   actionable diagnostics, never a silent foreground default.
-- `execution_mode` is reserved, and the canonical root schema must be
-  decoratable, when and only when the effective execution policy is
-  `ModelSelectable`. Registration rejects such a tool whose canonical schema
-  claims the top-level `execution_mode` name — in root `properties`, in root
-  `required`, or both — and one whose root is shaped by a composition
-  keyword, explicitly and without any automatic compatibility mapping. Both
-  rejections enforce one invariant: a registered tool can never be in a state
-  where a correct model invocation fails business validation forever, which
-  is what stripping the selector before canonical validation would otherwise
-  produce.
+- `execution_mode` is reserved, and the canonical root schema must match the
+  decoratable root profile, when and only when the effective execution policy
+  is `ModelSelectable`. The profile is an allowlist: the root instance
+  semantics must be owned entirely by `type`, `properties`, `required`, and
+  `additionalProperties`, plus purely descriptive keywords; every other root
+  keyword is refused whatever draft introduced it, and nested subschemas stay
+  unrestricted. Registration additionally rejects a canonical schema claiming
+  the top-level `execution_mode` name — in root `properties`, in root
+  `required`, or both — explicitly and without any automatic compatibility
+  mapping.
+- Both rejections enforce one invariant: **a registered tool can never reach
+  a state where no correct model invocation can succeed.** It is reachable
+  two ways, and both are closed. Decoration can contradict a root assertion,
+  leaving a compiled schema with no valid instance (`maxProperties`, a root
+  `const`/`enum`). Stripping can leave business arguments the canonical
+  schema must reject (a claimed `required` entry, a Draft-7 `dependencies`,
+  an unaware composition branch). The allowlist is what makes closing them
+  provable rather than a running list of known hazards.
 - Those two rules never apply under `ForegroundOnly`/`BackgroundOnly`, which
   receive no synthetic field: an arbitrary composed root schema is valid
   there, `execution_mode` included. The policy-unaware canonical schema

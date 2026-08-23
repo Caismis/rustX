@@ -965,13 +965,17 @@ mod tests {
     /// A `ModelSelectable` tool whose canonical schema cannot carry the
     /// injected `execution_mode` selector is rejected at registration, so it
     /// can never reach a model request. Registration is the boundary that
-    /// keeps a tool from reaching the "registers fine, rejects every correct
-    /// call" state: a bare `required` entry is as fatal as a declared
-    /// property, and a composed root is refused outright. Every one of these
-    /// schemas stays legal under a fixed execution policy.
-    #[test]
-    fn undecoratable_model_selectable_schemas_are_rejected_at_registration() {
-        let cases = [
+    /// keeps a tool out of the "registers fine, rejects every correct call"
+    /// state, whichever way it would get there: a bare `required` entry is
+    /// as fatal as a declared property, and any root keyword outside the
+    /// decoratable profile — composition, cardinality, whole-instance, or a
+    /// dependency spelling from an older draft — is refused outright. Every
+    /// one of these schemas stays legal under a fixed execution policy.
+    /// One labelled canonical schema that a `ModelSelectable` tool may not
+    /// carry, spanning both routes into the dead state: a claim on the
+    /// reserved name, and a root keyword outside the decoratable profile.
+    fn undecoratable_registration_cases() -> [(&'static str, serde_json::Value); 6] {
+        [
             (
                 "declared property",
                 json!({"type": "object", "properties": {"execution_mode": {"type": "string"}}}),
@@ -992,7 +996,34 @@ mod tests {
                     "allOf": [{"required": ["execution_mode"]}],
                 }),
             ),
-        ];
+            (
+                "cardinality assertion",
+                json!({
+                    "type": "object",
+                    "properties": {"command": {"type": "string"}},
+                    "required": ["command"],
+                    "maxProperties": 1,
+                }),
+            ),
+            (
+                "whole-instance assertion",
+                json!({"type": "object", "const": {"command": "ls"}}),
+            ),
+            (
+                "draft-7 dependencies",
+                json!({
+                    "$schema": "http://json-schema.org/draft-07/schema#",
+                    "type": "object",
+                    "properties": {"command": {"type": "string"}},
+                    "dependencies": {"command": ["execution_mode"]},
+                }),
+            ),
+        ]
+    }
+
+    #[test]
+    fn undecoratable_model_selectable_schemas_are_rejected_at_registration() {
+        let cases = undecoratable_registration_cases();
         for (label, schema) in &cases {
             let mut registry = ToolRegistry::new();
             let Err(error) = register(
@@ -1014,6 +1045,10 @@ mod tests {
             assert!(
                 reason.contains("execution_mode"),
                 "{label} names the selector: {reason}"
+            );
+            assert!(
+                reason.contains("rename") || reason.contains("decoratable root profile"),
+                "{label} tells the human what to do: {reason}"
             );
             let message = error.to_string();
             assert!(message.contains("sel") && message.contains("ModelSelectable"));

@@ -680,14 +680,20 @@ fn composed_root_schemas_stay_valid_outside_model_selectable() {
             validate_execution_metadata_contract(ToolExecutionPolicy::ModelSelectable, &ask_user),
             Err(SchemaError::UndecoratableRootSchema(keyword)) if keyword == "anyOf"
         ),
-        "a composed root cannot carry the injected execution_mode selector"
+        "a composed root falls outside the decoratable root profile"
     );
 
-    // Every ordinary native tool is the decoratable shape, which is why the
-    // contract costs nothing in practice.
+    // Every ordinary native tool matches the decoratable root profile, which
+    // is why an allowlist costs nothing in practice.
     for name in ["read", "write", "edit", "glob", "grep", "bash"] {
         let schema = definition(&fixture, name).input_schema;
         validate_execution_metadata_contract(ToolExecutionPolicy::ModelSelectable, &schema)
             .unwrap_or_else(|error| panic!("{name} must stay ModelSelectable-eligible: {error}"));
+        for keyword in schema.as_object().expect("root object").keys() {
+            assert!(
+                rustx::tools::is_decoratable_root_keyword(keyword),
+                "{name} uses root keyword {keyword:?}, outside the profile"
+            );
+        }
     }
 }

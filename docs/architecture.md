@@ -1435,29 +1435,41 @@ from the fixed policy alone.
 
 `ModelSelectable` is the one policy under which rustX must *write into* a
 tool's root schema, so it is the one policy that constrains the root's shape.
-A `ModelSelectable` canonical schema must describe its top-level arguments
-with root `properties`/`required` — `additionalProperties` included, which is
-every ordinary native tool's shape — and rustX rejects two things at
-registration:
+Under it a canonical schema must match the **decoratable root profile**: the
+root object's instance semantics are owned entirely by
 
-- **A claim on the reserved name.** `execution_mode` declared in root
-  `properties`, demanded in root `required`, or both. The bare `required`
-  entry matters as much as the declared property: the runtime strips the
-  selector *before* the canonical schema validates anything, so such a tool
-  would register successfully, receive a perfectly correct model call, and
-  reject it forever.
-- **An undecoratable root.** A root shaped by a composition keyword
-  (`allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else`, `$ref`,
-  `$dynamicRef`, `dependentSchemas`, `dependentRequired`,
-  `patternProperties`, `propertyNames`, `unevaluatedProperties`). Injecting a
-  required root property into a composition can contradict a branch that
-  never learned about the selector, so rustX refuses the combination outright
-  rather than analysing branches partially — which is also what makes the
-  claim check above complete rather than a syntactic approximation.
+```text
+type   properties   required   additionalProperties
+```
 
-Both errors tell the human to rename the business field, flatten the root, or
-choose a non-`ModelSelectable` policy. rustX never renames, shadows, merges,
-or reinterprets a collision.
+alongside any purely descriptive root keyword (`$schema`, `$id`, `$comment`,
+`$defs`/`definitions`, `title`, `description`, `default`, `examples`,
+`deprecated`, `readOnly`, `writeOnly`). Every other root keyword is refused,
+whatever draft introduced it. Nested subschemas are unrestricted: a business
+property may hold arbitrary JSON Schema, `execution_mode` included.
+
+This is an allowlist on purpose. Injecting a required `execution_mode`
+property changes what the root instance must look like, so *any* root
+assertion rustX does not understand can silently contradict the injection —
+`maxProperties` capping the object below the new required count, a root
+`const`/`enum` pinning the whole object, a Draft-7 `dependencies` demanding
+the stripped selector, a composition branch that never learned about it.
+Every one of them produces the same fatal outcome: the tool registers, the
+schema compiles, and no correct model call can ever exist. Enumerating
+hazards could never be proven complete, so the profile enumerates what is
+*safe* instead.
+
+On top of the profile, rustX rejects a **claim on the reserved name**:
+`execution_mode` declared in root `properties`, demanded in root `required`,
+or both. This check is separate because `properties` and `required` are
+inside the profile. The bare `required` entry matters as much as the declared
+property — the runtime strips the selector *before* the canonical schema
+validates anything, so such a tool would register successfully, receive a
+perfectly correct model call, and reject it forever.
+
+Both errors tell the human to rename the business field, flatten the root to
+the profile, or choose a non-`ModelSelectable` policy. rustX never renames,
+shadows, merges, or reinterprets a collision.
 
 Neither rule applies under `ForegroundOnly`/`BackgroundOnly`, which receive no
 injected field: an arbitrary composed root stays valid there, `execution_mode`

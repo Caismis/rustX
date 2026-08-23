@@ -27,24 +27,33 @@
 //!
 //! `ModelSelectable` is the one policy under which rustX must *write into*
 //! a tool's root schema, so it is the one policy that constrains the root's
-//! shape. A `ModelSelectable` canonical schema must describe its top-level
-//! arguments with root `properties`/`required` (`additionalProperties` is
-//! fine) and nothing else: root composition keywords are rejected by
-//! [`UNDECORATABLE_ROOT_KEYWORDS`].
+//! shape. Under it a canonical schema must match the **decoratable root
+//! profile**: the root object's instance semantics are owned entirely by
+//! [`DECORATABLE_ROOT_INSTANCE_KEYWORDS`] (`type`, `properties`, `required`,
+//! `additionalProperties`), alongside any purely descriptive keyword from
+//! [`ROOT_ANNOTATION_KEYWORDS`]. Every other root keyword is refused.
 //!
-//! The reason is that stripping and validation are asymmetric. The runtime
-//! removes `execution_mode` *before* the canonical schema ever sees the
-//! arguments, so any root-instance constraint that mentions the selector can
-//! never be satisfied: the tool registers, the model emits a perfectly
-//! correct call, and business validation rejects it forever. Both a direct
-//! `required: ["execution_mode"]` and a `execution_mode` buried in a root
-//! `allOf` branch produce that dead state, which is why `required` is
-//! checked alongside `properties` and why root composition is refused
-//! outright rather than partially analysed.
+//! This is an allowlist on purpose. Injecting a required `execution_mode`
+//! property changes what the root instance must look like, so *any* root
+//! assertion rustX does not understand can silently contradict the
+//! injection — `maxProperties` capping the object below the new required
+//! count, a root `const`/`enum` pinning the whole object, a Draft-7
+//! `dependencies` demanding the stripped selector, a composition branch that
+//! never learned about it. Each produces the same fatal outcome: the tool
+//! registers, the schema compiles, and no correct model call can ever exist.
+//! Enumerating hazards could never be proven complete, so the profile
+//! enumerates what is *safe* instead.
 //!
-//! Nothing here constrains nested subschemas, and nothing here applies to
-//! `ForegroundOnly`/`BackgroundOnly` tools: they receive no injected field,
-//! so an arbitrary composed root schema (the `ask_user` intrinsic's root
+//! The complementary hazard is the strip/validate asymmetry: the runtime
+//! removes `execution_mode` *before* the canonical schema sees the
+//! arguments, so a root that claims the name — in `properties`, in
+//! `required`, or both — can never be satisfied either. That is checked
+//! explicitly, because `properties` and `required` are inside the profile.
+//!
+//! Nothing here constrains nested subschemas: `properties.foo` may hold
+//! arbitrary JSON Schema. Nothing here applies to
+//! `ForegroundOnly`/`BackgroundOnly` tools either — they receive no injected
+//! field, so an arbitrary root schema (the `ask_user` intrinsic's root
 //! `anyOf`, or any MCP server's own schema) stays valid, `execution_mode`
 //! included.
 
@@ -83,39 +92,53 @@ pub const EXECUTION_MODE_DESCRIPTION_REMINDER: &str = "Execution ownership: ever
      continue, or \"background\" when the work should keep running independently while the agent \
      proceeds.";
 
-/// Root-schema keywords a `ModelSelectable` canonical schema may not use.
+/// The root keywords that may shape a `ModelSelectable` root instance.
 ///
-/// Each of these constrains the *root* instance — the very instance the
-/// runtime must inject a required `execution_mode` property into — either by
-/// composing sibling schemas (`allOf`, `anyOf`, `oneOf`, `not`,
-/// `if`/`then`/`else`, `$ref`, `$dynamicRef`, `dependentSchemas`,
-/// `dependentRequired`), by constraining property names directly
-/// (`patternProperties`, `propertyNames`), or by rejecting properties the
-/// root object itself did not evaluate (`unevaluatedProperties`). Decorating
-/// a root governed by any of them can contradict a branch that never learned
-/// about the selector, so rustX refuses the combination instead of
-/// partially analysing it.
+/// These four are the entire instance semantics rustX supports for a
+/// decoratable root, and decoration composes with each of them soundly:
+/// `execution_mode` is inserted into this same schema object's `properties`
+/// and appended to this same `required` array, so a closed root object
+/// (`"additionalProperties": false`) stays satisfiable. `type` is already
+/// pinned to `"object"` by [`validate_canonical_schema`].
 ///
-/// `additionalProperties` is deliberately absent: decoration inserts
-/// `execution_mode` into the same schema object's own `properties`, so even
-/// `"additionalProperties": false` stays satisfiable. Every ordinary native
-/// tool is that shape.
-pub const UNDECORATABLE_ROOT_KEYWORDS: &[&str] = &[
-    "allOf",
-    "anyOf",
-    "oneOf",
-    "not",
-    "if",
-    "then",
-    "else",
-    "$ref",
-    "$dynamicRef",
-    "dependentSchemas",
-    "dependentRequired",
-    "patternProperties",
-    "propertyNames",
-    "unevaluatedProperties",
+/// Every ordinary native tool is exactly this shape.
+pub const DECORATABLE_ROOT_INSTANCE_KEYWORDS: &[&str] =
+    &["type", "properties", "required", "additionalProperties"];
+
+/// The root keywords that carry no root-instance assertion at all.
+///
+/// Identifiers, vocabulary declarations, annotations, and definition
+/// containers describe or name a schema without constraining the instance,
+/// so decoration cannot contradict them. `$defs`/`definitions` hold
+/// subschemas that only apply where something references them, and a root
+/// `$ref`/`$dynamicRef` is not part of the profile.
+pub const ROOT_ANNOTATION_KEYWORDS: &[&str] = &[
+    "$schema",
+    "$id",
+    "$comment",
+    "$defs",
+    "definitions",
+    "title",
+    "description",
+    "default",
+    "examples",
+    "deprecated",
+    "readOnly",
+    "writeOnly",
 ];
+
+/// Whether one root keyword belongs to the decoratable root profile.
+///
+/// The profile is an allowlist: anything absent from both
+/// [`DECORATABLE_ROOT_INSTANCE_KEYWORDS`] and [`ROOT_ANNOTATION_KEYWORDS`]
+/// is refused under `ModelSelectable`, whatever draft introduced it. That is
+/// what makes the contract provable rather than a running list of known
+/// hazards.
+#[must_use]
+pub fn is_decoratable_root_keyword(keyword: &str) -> bool {
+    DECORATABLE_ROOT_INSTANCE_KEYWORDS.contains(&keyword)
+        || ROOT_ANNOTATION_KEYWORDS.contains(&keyword)
+}
 
 /// A tool schema or invocation-metadata validation failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -202,10 +225,12 @@ impl core::fmt::Display for SchemaError {
             ),
             Self::UndecoratableRootSchema(keyword) => write!(
                 f,
-                "the canonical tool schema shapes its root with {keyword:?}, so rustX cannot \
-                 soundly inject the required {EXECUTION_MODE_FIELD:?} selector into it; describe \
-                 the tool's top-level arguments with root \"properties\"/\"required\" instead, or \
-                 choose a non-ModelSelectable execution policy, which needs no injected field"
+                "the canonical tool schema uses the root keyword {keyword:?}, which is outside \
+                 the decoratable root profile, so rustX cannot prove that injecting the required \
+                 {EXECUTION_MODE_FIELD:?} selector leaves the schema satisfiable; describe the \
+                 tool's top-level arguments with root \"type\"/\"properties\"/\"required\"/\
+                 \"additionalProperties\" only — nested subschemas stay unrestricted — or choose \
+                 a non-ModelSelectable execution policy, which needs no injected field"
             ),
             Self::MissingExecutionMode => write!(
                 f,
@@ -289,15 +314,19 @@ pub fn validate_canonical_schema(schema: &serde_json::Value) -> Result<(), Schem
 /// - a canonical schema that claims the top-level `execution_mode` name,
 ///   whether by declaring it in root `properties`, by demanding it in root
 ///   `required`, or both; and
-/// - a canonical schema whose root is shaped by any of
-///   [`UNDECORATABLE_ROOT_KEYWORDS`], because rustX cannot inject a required
-///   root property into a composed root without risking a compiled schema no
-///   instance can satisfy.
+/// - a canonical schema whose root uses any keyword outside the decoratable
+///   root profile (see [`is_decoratable_root_keyword`]), because rustX
+///   cannot prove that injecting a required root property leaves such a
+///   schema satisfiable.
 ///
-/// Both rejections exist for the same reason: the runtime strips
-/// `execution_mode` *before* canonical validation, so any root-instance
-/// constraint that mentions it — directly or through a branch — yields a
-/// tool that registers successfully yet can never accept a call.
+/// Both rejections enforce one invariant: a registered tool can never reach
+/// the state where it compiles into a model-facing definition yet no correct
+/// model call can succeed. A claim on the reserved name reaches it through
+/// the strip/validate asymmetry — the runtime removes `execution_mode`
+/// before canonical validation, so the claim can never be satisfied. A root
+/// keyword outside the profile reaches it by contradicting the injection
+/// itself, as `maxProperties`, a root `const`/`enum`, Draft-7
+/// `dependencies`, or an unaware composition branch all do.
 ///
 /// Neither rule applies under `ForegroundOnly`/`BackgroundOnly`, which
 /// receive no synthetic field: an arbitrary composed root schema stays
@@ -348,9 +377,9 @@ pub fn validate_execution_metadata_contract(
         }
         (false, false) => {}
     }
-    for keyword in UNDECORATABLE_ROOT_KEYWORDS {
-        if root.contains_key(*keyword) {
-            return Err(SchemaError::UndecoratableRootSchema((*keyword).to_owned()));
+    for keyword in root.keys() {
+        if !is_decoratable_root_keyword(keyword) {
+            return Err(SchemaError::UndecoratableRootSchema(keyword.clone()));
         }
     }
     Ok(())
@@ -774,52 +803,329 @@ mod tests {
         }
     }
 
-    /// A composed root cannot carry an injected required property soundly, so
-    /// `ModelSelectable` refuses it outright instead of analysing branches
-    /// partially. A root `allOf` branch claiming `execution_mode` is exactly
-    /// the case a direct `properties` check would miss.
-    #[test]
-    fn composed_roots_are_refused_under_model_selectable_only() {
-        let composed = json!({
-            "type": "object",
-            "properties": {"command": {"type": "string"}},
-            "allOf": [{
-                "properties": {"execution_mode": {"type": "string"}},
-                "required": ["execution_mode"],
-            }],
-        });
-        assert_eq!(
-            validate_execution_metadata_contract(ToolExecutionPolicy::ModelSelectable, &composed),
-            Err(super::SchemaError::UndecoratableRootSchema(
-                "allOf".to_owned()
-            ))
-        );
+    /// Only the decoratable root profile is accepted under `ModelSelectable`.
+    ///
+    /// The cases span cardinality assertions, whole-instance assertions, both
+    /// dependency spellings, and every composition applicator across drafts.
+    /// An allowlist catches all of them — including keywords nobody
+    /// enumerated in advance — which is what makes the contract provable
+    /// rather than a running list of known hazards.
+    ///
+    /// `canonical_ok` records whether the schema is also a valid standalone
+    /// JSON Schema. Dangling references are refused earlier, by the
+    /// policy-unaware validator; the profile still refuses them here.
+    /// Root keywords that assert something about the object *as a whole*.
+    ///
+    /// Each entry pairs the keyword with a schema exercising it and whether
+    /// that schema is also a valid standalone JSON Schema.
+    fn undecoratable_assertion_cases() -> Vec<(&'static str, serde_json::Value, bool)> {
+        let business = json!({"command": {"type": "string"}});
+        vec![
+            // Cardinality assertions: unsatisfiable once a property is added.
+            (
+                "maxProperties",
+                json!({
+                    "type": "object",
+                    "properties": business,
+                    "required": ["command"],
+                    "maxProperties": 1,
+                }),
+                true,
+            ),
+            (
+                "minProperties",
+                json!({"type": "object", "properties": business, "minProperties": 1}),
+                true,
+            ),
+            // Whole-instance assertions: pin the object, contradicting any
+            // injected property.
+            (
+                "const",
+                json!({"type": "object", "const": {"command": "ls"}}),
+                true,
+            ),
+            (
+                "enum",
+                json!({"type": "object", "enum": [{"command": "ls"}]}),
+                true,
+            ),
+            // Both dependency spellings: the Draft-7 keyword is as fatal as
+            // the 2019-09 split that replaced it.
+            (
+                "dependencies",
+                json!({
+                    "$schema": "http://json-schema.org/draft-07/schema#",
+                    "type": "object",
+                    "properties": business,
+                    "dependencies": {"command": ["execution_mode"]},
+                }),
+                true,
+            ),
+            (
+                "dependentRequired",
+                json!({"type": "object", "dependentRequired": {"command": ["other"]}}),
+                true,
+            ),
+            (
+                "dependentSchemas",
+                json!({"type": "object", "dependentSchemas": {"command": {}}}),
+                true,
+            ),
+        ]
+    }
 
-        for keyword in super::UNDECORATABLE_ROOT_KEYWORDS {
-            let mut root = serde_json::Map::new();
-            root.insert("type".to_owned(), json!("object"));
-            root.insert(
-                "properties".to_owned(),
-                json!({"command": {"type": "string"}}),
-            );
-            root.insert((*keyword).to_owned(), json!([{"type": "object"}]));
-            let schema = serde_json::Value::Object(root);
+    /// Root keywords that apply *other schemas* to the same root instance, or
+    /// constrain its property names.
+    ///
+    /// `$dynamicRef` is additionally a dangling reference here, which the
+    /// policy-unaware validator refuses first; the profile still refuses it.
+    fn undecoratable_applicator_cases() -> Vec<(&'static str, serde_json::Value, bool)> {
+        let business = json!({"command": {"type": "string"}});
+        vec![
+            (
+                "allOf",
+                json!({
+                    "type": "object",
+                    "properties": business,
+                    "allOf": [{"required": ["execution_mode"]}],
+                }),
+                true,
+            ),
+            (
+                "anyOf",
+                json!({"type": "object", "anyOf": [{"type": "object"}]}),
+                true,
+            ),
+            (
+                "oneOf",
+                json!({"type": "object", "oneOf": [{"type": "object"}]}),
+                true,
+            ),
+            (
+                "not",
+                json!({"type": "object", "not": {"type": "array"}}),
+                true,
+            ),
+            (
+                "if",
+                json!({"type": "object", "if": {"type": "object"}}),
+                true,
+            ),
+            (
+                "$ref",
+                json!({
+                    "type": "object",
+                    "$ref": "#/$defs/x",
+                    "$defs": {"x": {"type": "object"}},
+                }),
+                true,
+            ),
+            (
+                "$dynamicRef",
+                json!({"type": "object", "$dynamicRef": "#x"}),
+                false,
+            ),
+            (
+                "$recursiveRef",
+                json!({"type": "object", "$recursiveRef": "#"}),
+                true,
+            ),
+            (
+                "patternProperties",
+                json!({"type": "object", "patternProperties": {"^e": {"type": "string"}}}),
+                true,
+            ),
+            (
+                "propertyNames",
+                json!({"type": "object", "propertyNames": {"maxLength": 4}}),
+                true,
+            ),
+            (
+                "unevaluatedProperties",
+                json!({"type": "object", "unevaluatedProperties": false}),
+                true,
+            ),
+        ]
+    }
+
+    #[test]
+    fn only_the_decoratable_root_profile_is_accepted_under_model_selectable() {
+        let mut cases = undecoratable_assertion_cases();
+        cases.extend(undecoratable_applicator_cases());
+
+        for (keyword, schema, canonical_ok) in &cases {
             assert_eq!(
-                validate_execution_metadata_contract(ToolExecutionPolicy::ModelSelectable, &schema),
+                validate_canonical_schema(schema).is_ok(),
+                *canonical_ok,
+                "unexpected policy-unaware verdict for root {keyword:?}: {schema}"
+            );
+            assert_eq!(
+                validate_execution_metadata_contract(ToolExecutionPolicy::ModelSelectable, schema),
                 Err(super::SchemaError::UndecoratableRootSchema(
                     (*keyword).to_owned()
                 )),
-                "root {keyword:?} must be refused"
+                "root {keyword:?} must be refused under ModelSelectable"
+            );
+            assert_eq!(
+                compile_model_definition(&definition(
+                    ToolExecutionPolicy::ModelSelectable,
+                    schema.clone()
+                ))
+                .expect_err("compilation is refused"),
+                super::SchemaError::UndecoratableRootSchema((*keyword).to_owned())
             );
             for policy in [
                 ToolExecutionPolicy::ForegroundOnly,
                 ToolExecutionPolicy::BackgroundOnly,
             ] {
-                validate_execution_metadata_contract(policy, &schema).unwrap_or_else(|error| {
-                    panic!("root {keyword:?} stays legal under a fixed policy: {error}")
-                });
+                let compiled = compile_model_definition(&definition(policy, schema.clone()))
+                    .unwrap_or_else(|error| {
+                        panic!("root {keyword:?} stays legal under {policy:?}: {error}")
+                    });
+                assert_eq!(
+                    &compiled.input_schema, schema,
+                    "root {keyword:?} is compiled verbatim under {policy:?}"
+                );
             }
         }
+    }
+
+    /// The refused root assertions really are fatal, through the two
+    /// mechanisms the contract exists to prevent. This proves the profile
+    /// blocks genuine dead states rather than merely being conservative.
+    #[test]
+    fn the_refused_root_assertions_really_are_fatal() {
+        // Mechanism one: decoration itself contradicts a root assertion, so
+        // the compiled model-facing schema has no valid instance at all.
+        for hazard in [
+            json!({
+                "type": "object",
+                "properties": {"command": {"type": "string"}},
+                "required": ["command"],
+                "maxProperties": 1,
+            }),
+            json!({"type": "object", "const": {"command": "ls"}}),
+            json!({"type": "object", "enum": [{"command": "ls"}]}),
+        ] {
+            // Decorate exactly as compilation would, bypassing the contract.
+            let mut decorated = hazard.clone();
+            super::decorate_execution_mode(&mut decorated);
+            let validator =
+                jsonschema::Validator::new(&decorated).expect("the decorated schema is valid");
+            for candidate in [
+                json!({"command": "ls", "execution_mode": "foreground"}),
+                json!({"command": "ls", "execution_mode": "background"}),
+            ] {
+                assert!(
+                    !validator.is_valid(&candidate),
+                    "a correct call must be impossible under {decorated}"
+                );
+            }
+        }
+
+        // Mechanism two: the canonical schema demands the selector the
+        // runtime has already stripped, so business validation can never
+        // pass however the model calls the tool.
+        for hazard in [
+            json!({
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {"command": {"type": "string"}},
+                "dependencies": {"command": ["execution_mode"]},
+            }),
+            json!({
+                "type": "object",
+                "properties": {"command": {"type": "string"}},
+                "allOf": [{"required": ["execution_mode"]}],
+            }),
+        ] {
+            for mode in super::EXECUTION_MODE_VALUES {
+                let call = json!({"command": "ls", "execution_mode": mode});
+                let (_, stripped) =
+                    resolve_invocation_metadata(ToolExecutionPolicy::ModelSelectable, &call)
+                        .expect("a correct call resolves");
+                assert!(
+                    validate_business_arguments(&hazard, &stripped).is_err(),
+                    "the stripped arguments can never satisfy {hazard}"
+                );
+            }
+        }
+    }
+
+    /// Descriptive root keywords carry no instance assertion, so the profile
+    /// accepts them and decoration proceeds normally.
+    #[test]
+    fn root_annotation_keywords_stay_decoratable() {
+        let schema = json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$id": "https://example.test/tool.json",
+            "$comment": "an annotation",
+            "$defs": {"unused": {"type": "string"}},
+            "definitions": {"unused": {"type": "string"}},
+            "title": "Tool",
+            "description": "A tool.",
+            "default": {"command": "ls"},
+            "examples": [{"command": "ls"}],
+            "deprecated": false,
+            "readOnly": false,
+            "writeOnly": false,
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command"],
+        });
+        for keyword in super::ROOT_ANNOTATION_KEYWORDS {
+            assert!(
+                schema.get(*keyword).is_some(),
+                "the fixture exercises every annotation keyword, missing {keyword:?}"
+            );
+        }
+        validate_canonical_schema(&schema).expect("annotations are valid JSON Schema");
+        validate_execution_metadata_contract(ToolExecutionPolicy::ModelSelectable, &schema)
+            .expect("annotations do not constrain the root instance");
+        let compiled =
+            compile_model_definition(&definition(ToolExecutionPolicy::ModelSelectable, schema))
+                .expect("compile");
+        let validator =
+            jsonschema::Validator::new(&compiled.input_schema).expect("compiled schema is valid");
+        assert!(
+            validator.is_valid(&json!({"command": "ls", "execution_mode": "foreground"})),
+            "the compiled schema accepts a correct call: {}",
+            compiled.input_schema
+        );
+    }
+
+    /// Nested subschemas are unrestricted: the profile governs the root
+    /// instance only, so a business property may hold arbitrary JSON Schema
+    /// — composition, `const`, and an `execution_mode` of its own included.
+    #[test]
+    fn nested_subschemas_stay_unrestricted() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "config": {
+                    "type": "object",
+                    "properties": {"execution_mode": {"const": "whatever"}},
+                    "oneOf": [{"required": ["execution_mode"]}],
+                    "maxProperties": 1,
+                },
+            },
+            "required": ["config"],
+        });
+        validate_execution_metadata_contract(ToolExecutionPolicy::ModelSelectable, &schema)
+            .expect("only the root instance is constrained");
+        let compiled =
+            compile_model_definition(&definition(ToolExecutionPolicy::ModelSelectable, schema))
+                .expect("compile");
+        let validator =
+            jsonschema::Validator::new(&compiled.input_schema).expect("compiled schema is valid");
+        assert!(
+            validator.is_valid(&json!({
+                "config": {"execution_mode": "whatever"},
+                "execution_mode": "background",
+            })),
+            "the nested property keeps its own meaning: {}",
+            compiled.input_schema
+        );
     }
 
     /// `additionalProperties` is not a composition keyword: decoration adds

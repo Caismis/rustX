@@ -124,17 +124,22 @@ Choosing `model_selectable` for a tool makes the model pick execution
 ownership per call through a required top-level `execution_mode` field
 (`"foreground"` or `"background"`) that rustX injects into the model-facing
 schema, resolves once at preflight, and strips before the tool ever sees the
-arguments. Because rustX writes into the root schema under that policy, and
-only under that policy, a `model_selectable` tool's input schema must describe
-its top-level arguments with root `properties`/`required` and must not claim
-the `execution_mode` name — declaring it as a property, listing it in
-`required`, or shaping the root with `allOf`/`anyOf`/`oneOf`/`$ref` and
-friends all fail registration with an explicit error. Rename the tool's field
-or flatten its root, or configure `foreground_only` or `background_only`,
-which inject nothing and therefore accept any schema, `execution_mode` and
-composed roots included. The same rule applies to `mcpToolPolicies` and to
-Python tool packages — worth knowing before switching an MCP server's tools to
-`model_selectable`, since their schemas come from the server verbatim. The runtime intrinsics `background_task` and
+arguments. Because rustX writes into the root schema under that policy — and
+only under that policy — a `model_selectable` tool's input schema must keep
+its root simple: `type`, `properties`, `required`, and `additionalProperties`
+describe the arguments, plus descriptive keywords like `title` and
+`description`. Any other root keyword (`allOf`, `anyOf`, `oneOf`, `$ref`,
+`maxProperties`, `const`, `enum`, `dependencies`, …) fails registration with
+an explicit error, as does claiming the `execution_mode` name in root
+`properties` or `required`. Nested subschemas are unrestricted.
+
+Rename the tool's field or flatten its root, or configure `foreground_only` or
+`background_only`, which inject nothing and therefore accept any schema —
+composed roots and `execution_mode` included. The same rule applies to
+`mcpToolPolicies` and to Python tool packages, which is worth knowing before
+switching an MCP server's tools to `model_selectable`: their schemas come from
+the server verbatim, and a server that ships a composed root will be rejected
+until you pick a fixed policy for it. The runtime intrinsics `background_task` and
 `ask_user` are not configured in this table: both are fixed foreground,
 sequential, approval-never tools, with `ask_user` publishing one bounded
 Question through the runtime-owned `InteractionCoordinator`.
