@@ -121,12 +121,16 @@ async fn capability_projection_covers_native_python_and_skills() {
         ToolOrigin::Python { tool_version_id } if !tool_version_id.as_str().is_empty()
     ));
 
-    // Skill identity/version/name/description/exact virtual location.
+    // Skill identity/version/name/description/host location.
+    let location = support::runtime_client_fixture::skill_location(
+        fixture.runtime.tool_runtime().workspace().root(),
+        "skill-readme",
+    );
     assert_eq!(capabilities.skills.len(), 1);
     let skill = &capabilities.skills[0];
     assert_eq!(skill.name, "skill-readme");
     assert_eq!(skill.description, "Reads the README");
-    assert_eq!(skill.location, ".rustx/skills/skill-readme/SKILL.md");
+    assert_eq!(skill.location, location);
     assert_eq!(skill.id.as_str(), "skill-readme");
     assert!(
         skill.version_id.as_str().starts_with("sha256:"),
@@ -142,7 +146,7 @@ async fn capability_projection_covers_native_python_and_skills() {
             "the wire projection must not leak {forbidden:?}: {json}"
         );
     }
-    assert!(json.contains(".rustx/skills/skill-readme/SKILL.md"));
+    assert!(json.contains(&location));
 }
 
 /// The MCP origin is projected with its server identity; the MCP fixture

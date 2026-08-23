@@ -356,17 +356,24 @@ impl LocalConversationCore {
         if paths.no_skills {
             skill_discovery.automatic_roots.clear();
         }
+        // Relative Skill paths resolve against the *canonical* Workspace
+        // root, not the raw `--workspace` spelling: `--workspace w` would
+        // otherwise produce a candidate root relative to the process cwd
+        // while every consumer of the published location resolves against
+        // the canonical root. Discovery canonicalizes accepted roots too;
+        // this keeps the input meaningful rather than merely recoverable.
+        let workspace_root = tool_runtime.workspace().root().to_path_buf();
         skill_discovery.explicit_paths.extend(
             runtime_config
                 .skills
                 .iter()
-                .map(|path| resolve_workspace_path(&paths.workspace, path)),
+                .map(|path| resolve_workspace_path(&workspace_root, path)),
         );
         skill_discovery.explicit_paths.extend(
             paths
                 .skill_paths
                 .iter()
-                .map(|path| resolve_workspace_path(&paths.workspace, path)),
+                .map(|path| resolve_workspace_path(&workspace_root, path)),
         );
 
         // 9. Composition owns CLI/config precedence resolution. The

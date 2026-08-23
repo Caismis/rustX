@@ -2973,7 +2973,6 @@ mod tests {
                 },
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
-                None,
             )
             .expect("prepare");
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = fixture
@@ -3426,7 +3425,6 @@ mod tests {
                 },
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
-                None,
             )
             .expect("prepare");
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = runtime
@@ -3561,7 +3559,6 @@ mod tests {
                 },
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
-                None,
             )
             .expect("prepare");
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = registry
@@ -3670,7 +3667,6 @@ mod tests {
                 },
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
-                None,
             )
             .expect("prepare");
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = fixture
@@ -4153,7 +4149,6 @@ mod tests {
                 },
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
-                None,
             )
             .expect("prepare");
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = fixture
@@ -4238,7 +4233,6 @@ mod tests {
                 },
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
-                None,
             )
             .expect("prepare");
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = fixture
@@ -6109,7 +6103,6 @@ mod tests {
                 },
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
-                None,
             )
             .expect("preparation is allowed before activation");
         let refused = registry.commit_dispatch(prepared, &CancellationSignal::new());
@@ -6203,7 +6196,6 @@ mod tests {
                         },
                         &executor,
                         crate::tools::environment::ToolEnvironment::new(),
-                        None,
                     )
                     .expect("prepare"),
                 &CancellationSignal::new(),
@@ -6277,7 +6269,6 @@ mod tests {
                 &claim_background_invocation("call-lost-wakeup"),
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
-                None,
             )
             .expect("prepare");
         let outcome = registry
@@ -6411,7 +6402,6 @@ mod tests {
                 &claim_background_invocation("call-committed"),
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
-                None,
             )
             .expect("prepare");
         let outcome = registry
@@ -6484,7 +6474,6 @@ mod tests {
                 &claim_background_invocation("call-prepared"),
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
-                None,
             )
             .expect("prepare");
         assert!(
@@ -6549,7 +6538,6 @@ mod tests {
                 &claim_background_invocation("call-race-a"),
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
-                None,
             )
             .expect("prepare");
         let hook = Arc::new(crate::tools::background::test_sync::CommitBoundaryHook::default());
@@ -6666,7 +6654,6 @@ mod tests {
                 &claim_background_invocation("call-race-b"),
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
-                None,
             )
             .expect("preparation is still allowed");
         let refused = registry
@@ -6692,7 +6679,6 @@ mod tests {
                 &claim_background_invocation("call-race-b-2"),
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
-                None,
             )
             .expect("prepare after activation");
         let outcome = registry
@@ -6810,7 +6796,6 @@ mod tests {
                 &claim_background_invocation("call-activation-pre"),
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
-                None,
             )
             .expect("prepare");
         let refused = registry
@@ -6862,7 +6847,6 @@ mod tests {
                 &claim_background_invocation("call-activation-post"),
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
-                None,
             )
             .expect("prepare");
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = registry
@@ -6944,7 +6928,6 @@ mod tests {
                 &claim_background_invocation("call-epoch-b"),
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
-                None,
             )
             .expect("prepare");
         let commit_registry = registry.clone();

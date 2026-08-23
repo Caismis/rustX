@@ -180,7 +180,7 @@ fn request_snapshot_reconstructs_exactly_after_live_state_changes() {
             retry_number: 0,
         },
         historical_revision,
-        "## Skills\n\n<available_skills>\n  <skill>\n    <name>pdf</name>\n    <description>PDF guidance.</description>\n    <location>.rustx/skills/pdf/SKILL.md</location>\n  </skill>\n</available_skills>"
+        "## Skills\n\n<available_skills>\n  <skill>\n    <name>pdf</name>\n    <description>PDF guidance.</description>\n    <location>/workspace/.agents/skills/pdf/SKILL.md</location>\n  </skill>\n</available_skills>"
             .to_owned(),
         common::invocation(ModelProtocol::OpenAiChatCompletions, "frozen-model"),
         128_000,
@@ -218,7 +218,7 @@ fn request_snapshot_reconstructs_exactly_after_live_state_changes() {
     assert_eq!(rebuilt, expected);
     assert_eq!(
         rebuilt.effective_system_prompt,
-        "## Skills\n\n<available_skills>\n  <skill>\n    <name>pdf</name>\n    <description>PDF guidance.</description>\n    <location>.rustx/skills/pdf/SKILL.md</location>\n  </skill>\n</available_skills>",
+        "## Skills\n\n<available_skills>\n  <skill>\n    <name>pdf</name>\n    <description>PDF guidance.</description>\n    <location>/workspace/.agents/skills/pdf/SKILL.md</location>\n  </skill>\n</available_skills>",
         "historical reconstruction uses the frozen prompt and never rediscovers Skills"
     );
     assert_eq!(rebuilt.messages.len(), 1);

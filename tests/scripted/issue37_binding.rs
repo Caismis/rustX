@@ -205,7 +205,6 @@ fn dispatch_background(
             &invocation,
             &executor,
             rustx::tools::environment::ToolEnvironment::new(),
-            None,
         )
         .expect("prepare background dispatch");
     let outcome = registry

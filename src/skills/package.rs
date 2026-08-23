@@ -3,12 +3,25 @@
 //! # Skill root contract
 //!
 //! Current discovery is bounded to user/global and project roots, plus
-//! explicit configuration and CLI paths. Accepted package files are exposed
-//! to the model through the runtime-owned virtual namespace:
+//! explicit configuration and CLI paths. An accepted package is an ordinary
+//! host directory: the model receives the host path of its `SKILL.md` and
+//! reaches the package's own scripts, references, and assets by resolving the
+//! relative spellings in `SKILL.md` against that directory. No virtual
+//! namespace exists, so every native tool — Read, Bash, Grep, Glob — sees the
+//! same paths.
 //!
-//! ```text
-//! .rustx/skills/<skill-name>/SKILL.md
-//! ```
+//! # Package root invariant
+//!
+//! Discovery accepts non-canonical inputs — a relative `--skill` path, an
+//! ancestor symlink, an embedded `..` — but an *accepted* package always
+//! carries one canonical absolute host root, and a `location` that is that
+//! root's `SKILL.md` losslessly representable as UTF-8. Everything
+//! downstream (the catalog, snapshot equality, and every native tool the
+//! model hands the published path to) consumes that single fact, so no
+//! consumer can re-resolve a published path against a different base and
+//! reach a different file. A candidate whose root cannot be canonicalized,
+//! or whose canonical path is not valid UTF-8, fails discovery explicitly
+//! rather than being published in a lossy spelling.
 //!
 //! Discovery is one level only: direct child directories of the Skill
 //! root, each containing a `SKILL.md`. Nested Skill packages are never
@@ -47,16 +60,15 @@
 //!   [`crate::skills::dependencies`]).
 //!
 //! The model-visible catalog contains only the standard `name` and
-//! `description` plus the derived runtime-owned virtual `SKILL.md` location;
-//! host absolute paths never appear in model-visible Skill metadata.
+//! `description` plus the host location of `SKILL.md`.
 //!
 //! # Resource boundary
 //!
 //! Skill packages remain current filesystem resources. M6 freezes discovered
 //! identities, versions, catalog metadata, and dependency declarations at
-//! preparation time, and the capability snapshot maps accepted package files
-//! into the virtual namespace for runtime-owned Read. An external rewrite is
-//! observed only at the next quiescent re-discovery.
+//! preparation time. Package files themselves are read at use time through
+//! ordinary tool semantics, and an external rewrite is observed only at the
+//! next quiescent re-discovery.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -73,23 +85,6 @@ pub const RUSTX_SKILLS_DIRECTORY: &str = ".rustx";
 pub const SKILLS_ROOT: &str = "skills";
 /// The canonical primary instructions file name of a Skill package.
 pub const SKILL_MARKDOWN_FILE: &str = "SKILL.md";
-
-/// Builds one runtime-owned virtual Skill resource path from the validated
-/// Skill identity and the package-relative resource path.
-pub(crate) fn virtual_skill_resource_path(skill_name: &str, relative_path: &Path) -> PathBuf {
-    PathBuf::from(RUSTX_SKILLS_DIRECTORY)
-        .join(SKILLS_ROOT)
-        .join(skill_name)
-        .join(relative_path)
-}
-
-/// Builds the canonical slash-separated spelling of one virtual Skill
-/// resource for model-facing metadata. Unlike a host [`PathBuf`], this
-/// spelling is independent of the platform path separator.
-pub(crate) fn virtual_skill_resource_location(skill_name: &str, relative_path: &Path) -> String {
-    let relative = relative_path.to_string_lossy().replace('\\', "/");
-    format!("{RUSTX_SKILLS_DIRECTORY}/{SKILLS_ROOT}/{skill_name}/{relative}")
-}
 
 /// The maximum allowed length of a validated standard Skill name.
 pub const MAX_SKILL_NAME_CHARS: usize = 64;
@@ -135,6 +130,9 @@ pub enum SkillPackageError {
     /// found. M6 rejects package-internal symlinks; this is Skill-package
     /// validation, not a change to normal Workspace semantics.
     UnsupportedSymlink { path: String },
+    /// The canonical package root is not losslessly representable as UTF-8,
+    /// so it cannot be published as a model-visible location.
+    UnrepresentableRoot { path: String },
     /// A filesystem failure while reading the package.
     Io { path: String, detail: String },
     /// Two current roots expose the same logical Skill identity.
@@ -190,6 +188,11 @@ impl core::fmt::Display for SkillPackageError {
             Self::InvalidDependencyDeclaration { directory, detail } => {
                 write!(f, "skill {directory:?}: {detail}")
             }
+            Self::UnrepresentableRoot { path } => write!(
+                f,
+                "the skill package root {path} is not valid UTF-8 and cannot be published as a \
+                 model-visible location"
+            ),
             Self::UnsupportedSymlink { path } => {
                 write!(f, "skill package symlinks are rejected for M6: {path:?}")
             }
@@ -214,9 +217,9 @@ impl std::error::Error for SkillPackageError {}
 ///
 /// The package is immutable after discovery: its `SkillVersionId` is
 /// derived from the complete accepted package content, and its dependency
-/// declarations are already parsed and normalized. The model-visible
-/// catalog derives its exact virtual primary-file location from `name`; it
-/// uses no host path or independently mutable locator metadata.
+/// declarations are already parsed and normalized. `root` is canonical and
+/// absolute, and `location` is the model-visible host path of its
+/// `SKILL.md` — see the package root invariant in the module documentation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillPackage {
     id: SkillId,
@@ -230,6 +233,7 @@ pub struct SkillPackage {
     dependencies: DependencyManifest,
     files: Vec<PathBuf>,
     root: PathBuf,
+    location: String,
     disable_model_invocation: bool,
 }
 
@@ -296,11 +300,19 @@ impl SkillPackage {
         &self.files
     }
 
-    /// The runtime-owned host root of this package. It never enters
-    /// model-visible metadata.
+    /// The canonical absolute host root of this package.
     #[must_use]
     pub(crate) fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// The model-visible host path of this package's `SKILL.md`.
+    ///
+    /// This is the one published address: the catalog projects it verbatim,
+    /// and the model hands it straight back to Read and Bash.
+    #[must_use]
+    pub fn location(&self) -> &str {
+        &self.location
     }
 
     /// Whether this validated Skill is omitted from the model catalog.
@@ -325,27 +337,6 @@ impl SkillDiscoveryConfig {
     #[must_use]
     pub fn default_for_workspace(workspace: &Workspace) -> Self {
         default_discovery_config(workspace)
-    }
-}
-
-/// Maps virtual workspace-relative Skill resources to accepted host files.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct SkillResourceMap {
-    pub(crate) entries: BTreeMap<PathBuf, PathBuf>,
-}
-
-impl SkillResourceMap {
-    /// Resolves one virtual Skill resource path.
-    #[must_use]
-    pub fn resolve(&self, path: &Path) -> Option<&Path> {
-        if path.is_absolute()
-            || path
-                .components()
-                .any(|component| matches!(component, std::path::Component::ParentDir))
-        {
-            return None;
-        }
-        self.entries.get(path).map(PathBuf::as_path)
     }
 }
 
@@ -376,8 +367,9 @@ impl SkillDiscovery {
     ///
     /// # Errors
     ///
-    /// Returns [`SkillPackageError`] for a malformed Skill root or any
-    /// malformed candidate package.
+    /// Returns [`SkillPackageError`] for a malformed Skill root, any
+    /// malformed candidate package, or a candidate root that cannot be
+    /// canonicalized or published as UTF-8.
     pub fn discover(&self) -> Result<Vec<SkillPackage>, SkillPackageError> {
         let mut candidates = Vec::<(String, PathBuf)>::new();
         for root in &self.config.automatic_roots {
@@ -389,6 +381,10 @@ impl SkillDiscovery {
         candidates.sort();
         let mut packages = Vec::with_capacity(candidates.len());
         for (name, root) in candidates {
+            // The single normalization point of the package root invariant:
+            // every accepted package is canonical and absolute from here on,
+            // whatever spelling the configured root or CLI path used.
+            let root = canonical_package_root(&root)?;
             if let Some(previous) = packages
                 .iter()
                 .find(|package: &&SkillPackage| package.name() == name)
@@ -404,6 +400,18 @@ impl SkillDiscovery {
         packages.sort_by(|left, right| left.name().cmp(right.name()));
         Ok(packages)
     }
+}
+
+/// Resolves one candidate package root to its canonical absolute host path.
+///
+/// Discovery deliberately accepts relative paths, embedded `..`, and
+/// ancestor symlinks as *input*; this is where all of them collapse to the
+/// one address every downstream consumer sees.
+fn canonical_package_root(root: &Path) -> Result<PathBuf, SkillPackageError> {
+    std::fs::canonicalize(root).map_err(|error| SkillPackageError::Io {
+        path: root.display().to_string(),
+        detail: format!("cannot canonicalize the Skill package root: {error}"),
+    })
 }
 
 fn default_discovery_config(workspace: &Workspace) -> SkillDiscoveryConfig {
@@ -524,6 +532,7 @@ fn discover_package(root: &Path, directory_name: &str) -> Result<SkillPackage, S
         detail,
     })?;
     let skill_markdown = root.join(SKILL_MARKDOWN_FILE);
+    let location = published_location(root, &skill_markdown)?;
     let markdown_meta = std::fs::symlink_metadata(&skill_markdown).map_err(|_| {
         SkillPackageError::MissingSkillMarkdown {
             directory: directory_name.to_owned(),
@@ -617,7 +626,22 @@ fn discover_package(root: &Path, directory_name: &str) -> Result<SkillPackage, S
         dependencies,
         files,
         root: root.to_path_buf(),
+        location,
         disable_model_invocation: frontmatter.disable_model_invocation,
+    })
+}
+
+/// The model-visible location of one canonical package root's `SKILL.md`.
+///
+/// A non-UTF-8 ancestor is rejected rather than published lossily: the model
+/// hands this string straight back to Read and Bash, so a replacement
+/// character would name a path that does not exist, and snapshot equality
+/// would stop comparing real locations.
+fn published_location(root: &Path, skill_markdown: &Path) -> Result<String, SkillPackageError> {
+    skill_markdown.to_str().map(str::to_owned).ok_or_else(|| {
+        SkillPackageError::UnrepresentableRoot {
+            path: root.to_string_lossy().into_owned(),
+        }
     })
 }
 
@@ -935,12 +959,10 @@ mod frontmatter_tests {
         assert!(snapshot.catalog_entries().is_empty());
         assert!(snapshot.visible_bindings().is_empty());
         assert_eq!(snapshot.bindings().len(), 1);
-        assert!(
-            snapshot
-                .resources()
-                .resolve(std::path::Path::new(".rustx/skills/private-guide/SKILL.md"))
-                .is_some()
-        );
+        // The package is hidden from the catalog but still tracked, so its
+        // host location participates in snapshot equality.
+        assert_eq!(snapshot.locations().len(), 1);
+        assert!(snapshot.locations()[0].ends_with("private-guide/SKILL.md"));
     }
 
     #[test]

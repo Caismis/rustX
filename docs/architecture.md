@@ -1177,19 +1177,17 @@ system-section path:
   activation layer keeps it active while optional Tool filters change. The
   catalog therefore filters Skills only by Skill metadata such as
   `disable-model-invocation: true`. Each visible entry contains only its name,
-  description, and exact virtual location
-  `.rustx/skills/<skill-name>/SKILL.md`; the model must pass that location to
-  Read without constructing or rewriting a path. It never includes full
-  `SKILL.md` bodies, supporting resources, dependency metadata, or host
-  absolute paths. Skills marked `disable-model-invocation: true` remain in
+  description, and the host path of its `SKILL.md`. The model passes that
+  path to Read, and resolves the Skill's own relative references against its
+  parent directory. It never includes full `SKILL.md` bodies, supporting
+  resources, or dependency metadata. Skills marked `disable-model-invocation: true` remain in
   the immutable runtime resource snapshot but are omitted from the
   model-visible catalog. Skills are trusted instruction packages in the
   current rustX threat model; structural catalog escaping is retained, but no
   semantic trust tier or hostile-package sanitization is applied.
-- The model loads a selected Skill lazily with native Read; the
-  runtime-owned virtual resource map resolves the exact advertised location,
-  and the resulting body enters the ordinary tool-call/result conversation
-  path.
+- The model loads a selected Skill lazily with native Read at the advertised
+  host path, and the resulting body enters the ordinary tool-call/result
+  conversation path.
 - Context Assembly composes the section with other request-time system
   sections. The exact rendered Effective System Prompt is frozen by value in
   `RequestSnapshot`; historical reconstruction never reruns Skill discovery.
@@ -2366,7 +2364,11 @@ The M6 implementation (`src/skills`) freezes the Skill plane boundary:
 - **Skill roots.** Current resource discovery is bounded to user/global
   `~/.rustx/skills/` and `~/.agents/skills/`, project
   `<workspace>/.rustx/skills/` and `<workspace>/.agents/skills/`, plus
-  explicit project-config and CLI paths. Missing automatic roots are empty;
+  explicit project-config and CLI paths. Configured and CLI paths may be
+  relative or otherwise non-canonical; discovery is the one place that
+  normalizes them, so an accepted package always has a canonical absolute
+  UTF-8 root and every consumer of the published location resolves the same
+  file. Missing automatic roots are empty;
   missing explicit paths fail. Hidden root entries and unrelated files are
   ignored; results are deterministically ordered by validated Skill name;
   any malformed candidate fails the whole discovery transaction; symlinked
@@ -2419,28 +2421,31 @@ The M6 implementation (`src/skills`) freezes the Skill plane boundary:
   return.
 - **Catalog.** The model-visible catalog is rendered compactly from the
   attempt's immutable Skill snapshot. Each visible validated Skill carries
-  its name, description, and exact virtual locator
-  `.rustx/skills/<name>/SKILL.md`; the guidance tells the model to pass that
-  locator to Read without constructing or rewriting a path. `SKILL.md`
-  bodies, supporting resources, dependency metadata, and host absolute paths
-  never appear. Discovered Skills marked `disable-model-invocation: true`
-  remain in the resource snapshot but are omitted from this catalog. Skills
+  its name, description, and the canonical absolute host path of its
+  `SKILL.md`, projected from the package rather than re-derived; the guidance
+  tells the model to resolve a Skill's own relative references against the
+  directory that path names. `SKILL.md` bodies, supporting resources, and
+  dependency metadata never appear. Discovered Skills marked
+  `disable-model-invocation: true` remain in the snapshot but are omitted
+  from this catalog. Skills
   are trusted instruction packages in the current rustX threat model; the
   catalog retains structural escaping without adding a semantic trust tier.
 - **Execution.** Skills remain workflow/instruction packages: no
   `skill_search`/`activate_skill`/`skill_view`/`run_skill`/
-  `run_skill_script` abstractions exist. The model reads the exact advertised
-  `.rustx/skills/<name>/SKILL.md` location and supporting files through the
-  runtime-owned virtual resource map exposed by native Read, and runs scripts
-  through native Bash against the authorized Workspace.
+  `run_skill_script` abstractions exist. A Skill package is an ordinary host
+  directory: the model reads the advertised `SKILL.md` with native Read and
+  reaches the package's scripts, references, and assets by resolving the
+  relative spellings inside `SKILL.md` against that directory — the same
+  paths native Bash, Grep, and Glob see. There is deliberately no virtual
+  Skill namespace: a namespace only native Read understood would leave every
+  Bash-executed Skill resource unreachable.
 
 **Skill resource boundary.** M6 freezes discovered identities, version
 identities, catalog metadata, dependency declarations, environment
 identities, and the effective ToolEnvironment. Accepted Skill source files
 (`SKILL.md`, scripts, references, assets) remain current filesystem resources
-accessed through the runtime-owned virtual namespace and native Read/Bash
-semantics. Host absolute paths are not published, and an external rewrite
-is observed only at the next quiescent re-discovery.
+read at use time through ordinary native tool semantics at their host paths.
+An external rewrite is observed only at the next quiescent re-discovery.
 
 ### Layer 6: Runtime services
 
@@ -3149,7 +3154,7 @@ Runtime Client is a projection/control/attachment adapter over it.
   from the active `CapabilitySnapshot`: the revision, the deterministic
   active model-visible Tool catalog, the complete available Tool catalog
   (including inactive definitions), and a deterministic model-visible Skill
-  catalog (identity, version, name, description, exact virtual location).
+  catalog (identity, version, name, description, host `SKILL.md` location).
   Normal agent composition guarantees canonical native Read, so the catalog is
   non-empty whenever that immutable snapshot has visible Skills. Executors,
   environment paths, package-manager state, and `SKILL.md`
@@ -3437,17 +3442,18 @@ contains canonical native Read, so no downstream optional-Read predicate is
 needed for Skill visibility. Skills are trusted instruction packages in the
 current rustX threat model; structural catalog escaping remains, without a
 semantic trust tier or hostile-package sanitization.
-The catalog exposes compact name/description metadata and the exact virtual
-`.rustx/skills/<name>/SKILL.md` locator; the model passes that locator to Read
-without constructing or rewriting a path. Full instructions enter the
-conversation only as the ordinary runtime-owned Read result. The TUI only
+The catalog exposes compact name/description metadata and the host
+`SKILL.md` path; the model passes that path to Read and resolves the Skill's
+own relative references against its parent directory. Full instructions enter
+the conversation only as the ordinary Read result. The TUI only
 projects the typed available/active Tool and Skill state. The full Skill
 binding set is retained in the attempt `CapabilitiesManifest`, while only
-visible bindings are projected to model-facing Skill catalogs. The
-virtual-to-host Skill resource map is part of Skill snapshot semantic
-equality, and background ownership captures that map before detachment
-alongside the effective environment; execution ownership cannot retarget
-capability resources.
+visible bindings are projected to model-facing Skill catalogs. The published
+host Skill locations are part of Skill snapshot semantic equality, so
+relocating identical package content activates a new revision instead of
+leaving the catalog pointed at the old root. Background ownership captures
+the effective environment before detachment; execution ownership cannot
+retarget capability resources.
 
 #### Native Session lifecycle and branching (M9.4 / Issue #88)
 

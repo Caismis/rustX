@@ -204,7 +204,6 @@ async fn prove_native_tool_executes(runtime: &LocalConversationRuntime) {
             tool_runtime.artifacts(),
             tool_runtime.tool_output(),
             tool_runtime.environment(),
-            None,
         ),
     )
     .await;

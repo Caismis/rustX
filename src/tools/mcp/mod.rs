@@ -1998,7 +1998,6 @@ mod tests {
             runtime.artifacts(),
             runtime.tool_output(),
             runtime.environment(),
-            None,
         )
     }
 

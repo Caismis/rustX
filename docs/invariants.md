@@ -758,28 +758,40 @@ that a live child produced an Interrupted physical result.
 - **Skill visibility is separate from discovery.** Current user/global,
   project, configured, and explicit CLI roots are collected in deterministic
   order. Duplicate logical identities fail explicitly. A validated Skill
-  with `disable-model-invocation: true` remains in the immutable resource
+  with `disable-model-invocation: true` remains in the immutable Skill
   snapshot but is omitted from the model-visible catalog. A discovered Skill
   is model-visible from the Skill-level snapshot projection because normal
   rustX agent composition always contains canonical native Read; no
   downstream optional-Read predicate participates. The catalog and Runtime
-  Client projection expose the same exact virtual location,
-  `.rustx/skills/<name>/SKILL.md`;
-  host absolute paths are not published to the client or model. The model
-  passes that exact location to Read rather than constructing a path. The
-  virtual-to-host resource map is part of active Skill snapshot equality, so
-  relocating identical package content creates a new capability revision
-  rather than leaving Read pointed at an old root. The complete Skill
+  Client projection expose the same host `SKILL.md` path. The model reads
+  that path and resolves a Skill's own relative references against its parent
+  directory; no virtual Skill namespace exists, so Bash, Grep, and Glob see
+  exactly the paths Read does. The published locations are part of active
+  Skill snapshot equality, so relocating identical package content creates a
+  new capability revision rather than leaving the catalog pointed at an old
+  root.
+- **One accepted Skill package has one address.** Discovery accepts
+  non-canonical inputs — a relative `--skill` path, an ancestor symlink, an
+  embedded `..` — but an accepted `SkillPackage` always carries a canonical
+  absolute host root, and a location that is that root's `SKILL.md`
+  losslessly representable as UTF-8. Discovery is the single normalization
+  point; the catalog, the Runtime Client projection, and snapshot equality
+  are projections of that one fact and never re-derive it. This is a
+  correctness requirement, not tidiness: a relative published location would
+  be re-resolved against the canonical Workspace root by Read and against the
+  Workspace cwd by Bash, so both would open a path that does not exist. A
+  candidate root that cannot be canonicalized, or whose canonical path is not
+  valid UTF-8, fails the whole discovery transaction rather than reaching the
+  model in a lossy spelling. The complete Skill
   bindings remain in `CapabilitiesManifest` provenance; visibility affects
   only model-facing projections. Skills are trusted instruction packages in
   the current rustX threat model; structural escaping remains, without a
   semantic trust tier or hostile-package sanitization.
 - **Background ownership preserves capability resources.** Before the
   background ownership commit, the Agent Loop captures the admitted attempt's
-  immutable effective environment and Skill resource map. The detached
-  runner owns those exact values and never looks up a later capability
-  snapshot, so foreground and background Read have the same resource
-  semantics.
+  immutable effective environment. The detached runner owns exactly that
+  value and never looks up a later capability snapshot, so foreground and
+  background executions have the same environment semantics.
 - **Coordinator and lease ownership do not move.** `CapabilityCoordinator`
   remains the sole candidate/commit authority. An admitted attempt retains
   one immutable capability snapshot until terminal settlement. #96 does not
@@ -849,12 +861,11 @@ overlap the previous physical writer.
 
 **Skill resource boundary.** Capability metadata and environment identities
 are snapshotted. Accepted Skill source files (`SKILL.md`, scripts,
-references, and assets) remain current filesystem resources, but the
-immutable Skill snapshot owns a runtime-controlled virtual
-`.rustx/skills/<name>/...` map used by native Read. Host absolute paths never
-enter model-visible metadata and ordinary Workspace authorization is not
-weakened. A package rewrite is observed only at the next quiescent
-re-discovery.
+references, and assets) remain current filesystem resources, read at use time
+through ordinary native tool semantics at their host paths. The Skill catalog
+publishes the canonical absolute host path established at discovery time, and ordinary Workspace authorization is not
+weakened: native Read/Write/Edit/Grep/Glob already accept absolute host paths.
+A package rewrite is observed only at the next quiescent re-discovery.
 
 ### M7 external tool invariants
 
@@ -1882,8 +1893,8 @@ message role, history shape, or timestamps:
   prompt.
 - The Skill catalog is never a canonical User message, `UserSource::Runtime`,
   `ContextKind`, Ledger fact, or Surface identity. It contains routing
-  metadata only; full `.rustx/skills/<name>/SKILL.md` content enters the
-  conversation only as the result of an explicit runtime-owned native Read.
+  metadata only; full `SKILL.md` content enters the conversation only as the
+  result of an explicit native Read.
   Compaction operates on canonical facts and cannot remove Skill catalog
   visibility.
 - RequestSnapshot contains RequestIdentity, SurfaceRevision,

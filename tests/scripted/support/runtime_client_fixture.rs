@@ -333,6 +333,18 @@ pub fn write_skill(workspace: &Path, name: &str, description: &str) {
     .expect("SKILL.md");
 }
 
+/// The host `SKILL.md` location the capability projection publishes for a
+/// Skill written by [`write_skill`] into `workspace`.
+pub fn skill_location(workspace: &Path, name: &str) -> String {
+    workspace
+        .join(".agents")
+        .join("skills")
+        .join(name)
+        .join("SKILL.md")
+        .to_string_lossy()
+        .into_owned()
+}
+
 /// Writes one valid Python tool package into a workspace, generating a real
 /// `uv.lock` when `uv` is available (a missing `uv` skips the environment
 /// step, mirroring the `m7_uv` acceptance pattern).

@@ -841,7 +841,6 @@ pub async fn run_tool_with_cancellation(
         fixture.runtime.artifacts(),
         fixture.runtime.tool_output(),
         fixture.runtime.environment(),
-        None,
     );
     executor.execute(prepared.invocation, context).await
 }
@@ -885,7 +884,6 @@ pub async fn run_tool(
         fixture.runtime.artifacts(),
         fixture.runtime.tool_output(),
         fixture.runtime.environment(),
-        None,
     );
     executor.execute(prepared.invocation, context).await
 }

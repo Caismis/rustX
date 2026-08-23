@@ -248,7 +248,6 @@ async fn dispatch_to_terminal(fixture: &BackgroundFixture) -> ToolExecutionId {
             &background_invocation("bash"),
             &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
             rustx::tools::environment::ToolEnvironment::new(),
-            None,
         )
         .expect("prepare");
     let outcome = registry
@@ -285,7 +284,6 @@ async fn runner_cannot_begin_before_commit_gate() {
             &background_invocation("bash"),
             &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
             rustx::tools::environment::ToolEnvironment::new(),
-            None,
         )
         .expect("prepare");
     // The runner is parked behind the gate: no execution work has begun.
@@ -316,7 +314,6 @@ async fn cancellation_before_ownership_commit_rolls_back() {
             &background_invocation("bash"),
             &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
             rustx::tools::environment::ToolEnvironment::new(),
-            None,
         )
         .expect("prepare");
     let attempt_cancellation = rustx::runtime::CancellationSignal::new();
@@ -358,7 +355,6 @@ async fn ownership_commit_wins_over_later_attempt_cancellation() {
             &background_invocation("bash"),
             &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
             rustx::tools::environment::ToolEnvironment::new(),
-            None,
         )
         .expect("prepare");
     let attempt_cancellation = rustx::runtime::CancellationSignal::new();
@@ -458,7 +454,6 @@ async fn cancel_before_completion_wins_settlement() {
             &background_invocation("bash"),
             &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
             rustx::tools::environment::ToolEnvironment::new(),
-            None,
         )
         .expect("prepare");
     let outcome = registry
@@ -492,7 +487,6 @@ async fn repeated_cancel_is_idempotent() {
             &background_invocation("bash"),
             &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
             rustx::tools::environment::ToolEnvironment::new(),
-            None,
         )
         .expect("prepare");
     let outcome = registry
@@ -524,7 +518,6 @@ async fn starting_can_be_cancelled() {
             &background_invocation("bash"),
             &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
             rustx::tools::environment::ToolEnvironment::new(),
-            None,
         )
         .expect("prepare");
     let outcome = registry
@@ -596,7 +589,6 @@ async fn background_progress_updates_the_latest_snapshot() {
             &background_invocation("bash"),
             &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
             rustx::tools::environment::ToolEnvironment::new(),
-            None,
         )
         .expect("prepare");
     let outcome = registry
@@ -1058,7 +1050,6 @@ async fn background_task_status_and_cancel() {
             &background_invocation("bash"),
             &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
             rustx::tools::environment::ToolEnvironment::new(),
-            None,
         )
         .expect("prepare");
     let outcome = registry
@@ -1259,7 +1250,6 @@ async fn agent_status_active_snapshot_excludes_terminal_entries() {
             &background_invocation("grep"),
             &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
             rustx::tools::environment::ToolEnvironment::new(),
-            None,
         )
         .expect("prepare");
     let outcome = registry

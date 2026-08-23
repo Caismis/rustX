@@ -3047,7 +3047,6 @@ mod tests {
                 artifacts: tool_runtime.artifacts(),
                 tool_output: tool_runtime.tool_output(),
                 environment: tool_runtime.environment(),
-                skill_resources: None,
                 question_requester: None,
             },
         )
@@ -3081,7 +3080,6 @@ mod tests {
                 tool_runtime.artifacts(),
                 tool_runtime.tool_output(),
                 tool_runtime.environment(),
-                None,
             ),
         )
         .await
@@ -3339,7 +3337,6 @@ mod tests {
                 &invocation,
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
-                None,
             )
             .expect("prepare background Python dispatch");
         let crate::tools::background::BackgroundDispatchOutcome::Accepted {
@@ -3428,7 +3425,6 @@ mod tests {
                 &invocation,
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
-                None,
             )
             .expect("prepare background Python dispatch");
         let crate::tools::background::BackgroundDispatchOutcome::Accepted {

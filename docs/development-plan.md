@@ -465,9 +465,8 @@ Implemented in the current architecture:
 - Agent Status admitted as an ordinary canonical Runtime context User
   message, while Skill routing guidance is a request-time native system
   section rendered from the immutable attempt capability snapshot. Each
-  visible Skill exposes only its exact virtual
-  `.rustx/skills/<name>/SKILL.md` locator; full instructions remain a lazy
-  native Read result. The old model-request-only Skill attachment path does
+  visible Skill exposes only the host path of its `SKILL.md`; full
+  instructions remain a lazy native Read result. The old model-request-only Skill attachment path does
   not exist.
 - RustX-owned Effective System Prompt sections and deterministic rendering;
   the exact rendered value is frozen per request.

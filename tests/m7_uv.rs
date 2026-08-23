@@ -107,7 +107,6 @@ async fn production_uv_materializes_a_local_tool_environment() {
             runtime.artifacts(),
             runtime.tool_output(),
             runtime.environment(),
-            None,
         ),
     )
     .await;
@@ -296,7 +295,6 @@ async fn conflicting_local_dependencies_isolate_versions_and_materialize_offline
                 runtime.artifacts(),
                 runtime.tool_output(),
                 runtime.environment(),
-                None,
             ),
         )
         .await;

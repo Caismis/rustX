@@ -488,7 +488,8 @@ pub struct CapabilityView {
     pub available_tools: Vec<RuntimeClientTool>,
     /// The deterministic model-visible Skill catalog ordered by Skill name.
     /// Skills hidden by `disable-model-invocation` remain runtime-owned but
-    /// are omitted here. Every entry includes its exact virtual Read locator.
+    /// are omitted here. Every entry includes the canonical absolute host
+    /// path of its `SKILL.md`.
     #[serde(default)]
     pub skills: Vec<RuntimeClientSkill>,
     /// The typed availability of every evaluated optional capability
@@ -574,7 +575,11 @@ pub struct RuntimeClientSkill {
     pub name: String,
     /// The validated standard Skill description.
     pub description: String,
-    /// The exact runtime-owned virtual location passed to native Read.
+    /// The canonical absolute host path of the package's `SKILL.md`.
+    ///
+    /// This is a real filesystem path, not a runtime-owned virtual locator:
+    /// a Skill package is an ordinary host directory, and the same path
+    /// serves Read, Bash, Grep, and Glob alike.
     pub location: String,
 }
 

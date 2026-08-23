@@ -544,8 +544,7 @@ async fn a_real_skill_reaches_the_provider_and_is_read_by_the_real_tool() {
     // The Skill must exist before composition: the capability candidate is
     // prepared and committed during `compose`. The workspace also exists
     // before the emulator starts so the capability snapshot can publish the
-    // exact virtual locator used by the scripted Read call. Native Read
-    // resolves it through the runtime-owned resource map.
+    // host location the scripted Read call uses.
     let root = tempfile::tempdir().expect("temp root");
     let workspace = root.path().join("workspace");
     let package = workspace.join(".agents/skills").join(SKILL_NAME);
@@ -589,9 +588,14 @@ async fn a_real_skill_reaches_the_provider_and_is_read_by_the_real_tool() {
         first.contains(SKILL_NAME) && first.contains(SKILL_DESCRIPTION),
         "the Skill catalog reached the provider through the unified system-prompt path"
     );
+    let published = snapshot.capabilities.skills[0].location.clone();
     assert!(
-        first.contains(&format!(".rustx/skills/{SKILL_NAME}/SKILL.md")),
-        "the provider receives the exact runtime-owned Skill locator"
+        published.ends_with(&format!(".agents/skills/{SKILL_NAME}/SKILL.md")),
+        "the catalog publishes the package's host SKILL.md path: {published}"
+    );
+    assert!(
+        first.contains(&published),
+        "the provider receives that exact host location"
     );
     assert!(
         !first.contains(SKILL_BODY_MARKER),
