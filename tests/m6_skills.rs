@@ -386,11 +386,24 @@ fn a_non_utf8_package_root_is_rejected_rather_than_published_lossily() {
     use std::os::unix::ffi::OsStrExt as _;
 
     let (dir, workspace) = fixture();
-    // A lone 0xFF byte is valid on Unix and never valid UTF-8.
+    // A lone 0xFF byte is never valid UTF-8. Linux filesystems store it
+    // verbatim, which is what makes the discovery-level rejection reachable
+    // and worth asserting.
     let invalid = std::ffi::OsStr::from_bytes(b"skills-\xff");
     let root = dir.path().join(invalid);
     let package = root.join("deck");
-    std::fs::create_dir_all(&package).expect("package directory");
+    // macOS (APFS/HFS+) enforces UTF-8 filenames and refuses the name with
+    // EILSEQ, so the same invariant already holds one layer lower and no
+    // such package can reach discovery at all. Skip rather than assert a
+    // rejection the platform makes unreachable.
+    if let Err(error) = std::fs::create_dir_all(&package) {
+        eprintln!(
+            "the filesystem refuses non-UTF-8 names ({error}); the \
+             discovery-level rejection is unreachable here and was not \
+             exercised"
+        );
+        return;
+    }
     std::fs::write(
         package.join("SKILL.md"),
         "---\nname: deck\ndescription: Deck skill.\n---\nbody\n",
