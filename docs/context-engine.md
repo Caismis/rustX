@@ -278,9 +278,9 @@ Skill catalog is never copied into canonical User messages. Skills are trusted
 instruction packages in the current rustX threat model; structural catalog
 escaping remains, without a semantic trust tier.
 When visible Skills exist, each entry contains deterministic name and
-description metadata plus its exact virtual `.rustx/skills/<skill-name>/SKILL.md`
-location. The guidance tells the model to pass that exact location to Read
-without constructing or rewriting a path. Full Skill bodies are loaded only
+description metadata plus the host path of the package's `SKILL.md`. The
+guidance tells the model to read that path, and to resolve a Skill's own
+relative references against the directory it names. Full Skill bodies are loaded only
 after an explicit native Read call and enter the ordinary tool-result
 conversation path.
 

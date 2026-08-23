@@ -23,11 +23,12 @@
 //!
 //! Skills remain workflow/instruction packages: they are not tools and not
 //! a parallel execution protocol. Skill bodies and supporting files are
-//! current resources read through the runtime-owned virtual Skill namespace
-//! and ordinary native Read semantics; they do not create a second execution
-//! protocol. The capability coordination layer (`crate::capabilities`) owns
-//! the immutable capability snapshot, attempt leases, and quiescent commit;
-//! it consumes this plane but never vice versa.
+//! current filesystem resources reached through ordinary native tool
+//! semantics at their host paths; they do not create a second execution
+//! protocol or a second path namespace. The capability coordination layer
+//! (`crate::capabilities`) owns the immutable capability snapshot, attempt
+//! leases, and quiescent commit; it consumes this plane but never vice
+//! versa.
 
 mod catalog;
 mod dependencies;
@@ -47,5 +48,4 @@ pub use environments::{
 };
 pub use package::{
     RUSTX_SKILLS_DIRECTORY, SkillDiscovery, SkillDiscoveryConfig, SkillPackage, SkillPackageError,
-    SkillResourceMap,
 };

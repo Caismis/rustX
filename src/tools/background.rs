@@ -186,7 +186,6 @@ use crate::runtime::inbound::ConversationInboundMailbox;
 use crate::runtime::types::{CancellationReason, ConversationLifecycle, DurabilityGate};
 use serde::{Deserialize, Serialize};
 
-use crate::skills::SkillResourceMap;
 use crate::tools::artifacts::ArtifactStore;
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::executor::{ProgressReporter, ToolExecutionContext, ToolExecutor};
@@ -586,16 +585,6 @@ struct PreparedRecord {
     runner: tokio::task::JoinHandle<()>,
 }
 
-/// The attempt-scoped capability resources owned by a detached runner.
-///
-/// These are captured before background ownership commits. The runner keeps
-/// this narrow immutable value for its lifetime instead of retaining or
-/// looking up a broad capability lease after detachment.
-struct CapturedCapabilityResources {
-    environment: ToolEnvironment,
-    skill_resources: Option<Arc<SkillResourceMap>>,
-}
-
 /// The synchronized registry state.
 struct BackgroundRegistryState {
     next_execution_sequence: u64,
@@ -856,7 +845,6 @@ impl ConversationBackgroundRegistry {
         invocation: &ToolInvocation,
         executor: &Arc<dyn ToolExecutor>,
         environment: ToolEnvironment,
-        skill_resources: Option<Arc<SkillResourceMap>>,
     ) -> Result<PreparedBackgroundDispatch, BackgroundDispatchError> {
         if invocation.mode != ToolInvocationMode::Background {
             return Err(BackgroundDispatchError::NotBackgroundInvocation);
@@ -896,21 +884,18 @@ impl ConversationBackgroundRegistry {
         state.next_execution_sequence = next;
         let cancellation = CancellationSignal::new();
         let gate = Arc::new(Notify::new());
-        // The effective attempt environment and Skill resource namespace are
-        // captured here, at prepare time — strictly before the background
-        // ownership commit — and the detached runner retains exactly these
-        // immutable values for its whole lifetime. It never queries the
-        // conversation's current capability state later.
+        // The effective attempt environment is captured here, at prepare
+        // time — strictly before the background ownership commit — and the
+        // detached runner retains exactly this immutable value for its whole
+        // lifetime. It never queries the conversation's current capability
+        // state later.
         let runner = self.spawn_runner(
             execution_id.clone(),
             invocation.clone(),
             executor.clone(),
             cancellation.clone(),
             gate.clone(),
-            CapturedCapabilityResources {
-                environment,
-                skill_resources,
-            },
+            environment,
         );
         let prepared = PreparedRecord {
             record: BackgroundRecord {
@@ -1788,7 +1773,7 @@ impl ConversationBackgroundRegistry {
         executor: Arc<dyn ToolExecutor>,
         cancellation: CancellationSignal,
         gate: Arc<Notify>,
-        captured: CapturedCapabilityResources,
+        environment: ToolEnvironment,
     ) -> tokio::task::JoinHandle<()> {
         let registry = self.clone();
         tokio::spawn(async move {
@@ -1815,8 +1800,7 @@ impl ConversationBackgroundRegistry {
                 progress: &reporter,
                 artifacts: &resources.artifacts,
                 tool_output: &resources.tool_output,
-                environment: &captured.environment,
-                skill_resources: captured.skill_resources.as_deref(),
+                environment: &environment,
                 question_requester: None,
             };
             let result = executor.execute(invocation, context).await;
@@ -2344,7 +2328,7 @@ mod tests {
         mailbox: ConversationInboundMailbox,
         // Declared LAST: fields drop in declaration order, so the registry
         // and its handles drop before the temporary directory is removed.
-        dir: tempfile::TempDir,
+        _dir: tempfile::TempDir,
     }
 
     fn registry(conversation_id: &str) -> TestRegistry {
@@ -2372,7 +2356,7 @@ mod tests {
         TestRegistry {
             registry,
             mailbox,
-            dir,
+            _dir: dir,
         }
     }
 
@@ -2481,7 +2465,6 @@ mod tests {
                 &background_invocation("bash"),
                 executor,
                 ToolEnvironment::new(),
-                None,
             )
             .expect("prepare")
     }
@@ -2895,7 +2878,6 @@ mod tests {
                 &background_invocation("bash"),
                 &executor,
                 ToolEnvironment::new(),
-                None,
             )
             .expect("prepare");
         let outcome = fixture
@@ -3035,7 +3017,6 @@ mod tests {
                 &background_invocation("bash"),
                 &executor,
                 ToolEnvironment::new(),
-                None,
             )
             .expect("prepare");
         let outcome = fixture
@@ -3124,7 +3105,6 @@ mod tests {
                 &background_invocation("bash"),
                 &executor,
                 ToolEnvironment::new(),
-                None,
             )
             .expect("prepare");
         let outcome = fixture
@@ -3213,7 +3193,7 @@ mod tests {
         let fixture = TestRegistry {
             registry,
             mailbox,
-            dir,
+            _dir: dir,
         };
         let executor: Arc<dyn ToolExecutor> = Arc::new(ProgressThenDone);
         let prepared = fixture
@@ -3222,7 +3202,6 @@ mod tests {
                 &background_invocation("bash"),
                 &executor,
                 ToolEnvironment::new(),
-                None,
             )
             .expect("prepare");
         let outcome = fixture
@@ -3306,184 +3285,60 @@ mod tests {
         fn report(&self, _progress: ToolProgress) {}
     }
 
-    struct GatedReadExecutor {
-        started: watch::Sender<bool>,
-        release: watch::Sender<bool>,
-    }
-
-    impl GatedReadExecutor {
-        fn new() -> (Self, watch::Receiver<bool>, watch::Sender<bool>) {
-            let (started, started_rx) = watch::channel(false);
-            let (release, _) = watch::channel(false);
-            (
-                Self {
-                    started,
-                    release: release.clone(),
-                },
-                started_rx,
-                release,
-            )
-        }
-    }
-
-    impl ToolExecutor for GatedReadExecutor {
-        fn execute<'a>(
-            &'a self,
-            invocation: ToolInvocation,
-            context: ToolExecutionContext<'a>,
-        ) -> BoxFuture<'a, ToolExecutionResult> {
-            let started = self.started.clone();
-            let mut release = self.release.subscribe();
-            Box::pin(async move {
-                started.send_replace(true);
-                release
-                    .wait_for(|released| *released)
-                    .await
-                    .expect("read release channel stays open");
-                crate::tools::native::ReadTool
-                    .execute(invocation, context)
-                    .await
-            })
-        }
-    }
-
-    #[allow(clippy::too_many_lines)]
+    /// Background ownership captures the attempt's effective
+    /// `ToolEnvironment` at prepare time. The detached runner keeps exactly
+    /// that value even after the conversation's current capability state
+    /// moves on.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn background_read_keeps_the_attempt_skill_resource_snapshot() {
-        let fixture = registry("conv-bg-skill");
-        let root_a = fixture.dir.path().join("skill-root-a");
-        let skill_a = root_a.join("test-skill");
-        std::fs::create_dir_all(&skill_a).expect("Skill root A");
-        std::fs::write(
-            skill_a.join("SKILL.md"),
-            "---\nname: test-skill\ndescription: Test skill.\n---\nfrom A\n",
-        )
-        .expect("Skill A");
-        let workspace = fixture.registry.resources().workspace.clone();
-        let packages_a = crate::skills::SkillDiscovery::with_config(
-            &workspace,
-            crate::skills::SkillDiscoveryConfig {
-                automatic_roots: Vec::new(),
-                explicit_paths: vec![root_a.clone()],
-            },
-        )
-        .discover()
-        .expect("discover Skill A");
-        let snapshot_a =
-            crate::skills::SkillSnapshot::new(packages_a.into_iter().map(Arc::new).collect());
-        let resources_a = Arc::new(snapshot_a.resources().clone());
-
-        let foreground_environment = ToolEnvironment::new();
-        let foreground_reporter = NoopProgress;
-        let foreground_artifacts = fixture.registry.resources().artifacts.clone();
-        let foreground_output = fixture.registry.resources().tool_output.clone();
-        let foreground = crate::tools::native::ReadTool
-            .execute(
-                ToolInvocation {
-                    call_id: ToolCallId::new("foreground-read"),
-                    tool_id: ToolId::new("tool-read"),
-                    tool_name: "read".to_owned(),
-                    mode: ToolInvocationMode::Foreground,
-                    arguments: serde_json::json!({
-                        "path": ".rustx/skills/test-skill/SKILL.md"
-                    }),
-                },
-                ToolExecutionContext {
-                    conversation_id: fixture.registry.conversation_id(),
-                    execution_id: None,
-                    cancellation: crate::runtime::ExecutionCancellation::detached(
-                        crate::runtime::CancellationSignal::new(),
-                        CancellationReason::UserRequested,
-                    ),
-                    workspace: &workspace,
-                    progress: &foreground_reporter,
-                    artifacts: &foreground_artifacts,
-                    tool_output: &foreground_output,
-                    environment: &foreground_environment,
-                    skill_resources: Some(resources_a.as_ref()),
-                    question_requester: None,
-                },
-            )
-            .await;
-        let foreground_text = match foreground.content.first() {
-            Some(ToolResultContent::Text(text)) => text.text.clone(),
-            other => panic!("foreground Read returned unexpected content: {other:?}"),
-        };
-        assert_eq!(foreground.status, ToolExecutionStatus::Success);
-        assert!(foreground_text.contains("from A"));
-
-        let root_b = fixture.dir.path().join("skill-root-b");
-        let skill_b = root_b.join("test-skill");
-        std::fs::create_dir_all(&skill_b).expect("Skill root B");
-        std::fs::write(
-            skill_b.join("SKILL.md"),
-            "---\nname: test-skill\ndescription: Test skill.\n---\nfrom B\n",
-        )
-        .expect("Skill B");
-        let packages_b = crate::skills::SkillDiscovery::with_config(
-            &workspace,
-            crate::skills::SkillDiscoveryConfig {
-                automatic_roots: Vec::new(),
-                explicit_paths: vec![root_b],
-            },
-        )
-        .discover()
-        .expect("discover Skill B");
-        let resources_b =
-            crate::skills::SkillSnapshot::new(packages_b.into_iter().map(Arc::new).collect())
-                .resources()
-                .clone();
-        assert_ne!(resources_a, Arc::new(resources_b.clone()));
-
-        let (executor, mut started, release) = GatedReadExecutor::new();
-        let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
+    async fn background_execution_keeps_the_attempt_tool_environment() {
+        let fixture = registry("conv-bg-environment");
+        let admitted = ToolEnvironment::from_authorized(vec![(
+            "RUSTX_ADMITTED".to_owned(),
+            "attempt-a".to_owned(),
+        )])
+        .expect("authorized environment");
+        let observed = Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
+        let executor: Arc<dyn ToolExecutor> =
+            Arc::new(EnvironmentRecordingExecutor(observed.clone()));
         let invocation = ToolInvocation {
-            call_id: ToolCallId::new("background-read"),
+            call_id: ToolCallId::new("background-environment"),
             tool_id: ToolId::new("tool-read"),
             tool_name: "read".to_owned(),
             mode: ToolInvocationMode::Background,
-            arguments: serde_json::json!({
-                "path": ".rustx/skills/test-skill/SKILL.md"
-            }),
+            arguments: serde_json::json!({}),
         };
         let prepared = fixture
             .registry
-            .prepare_dispatch(
-                &invocation,
-                &executor,
-                ToolEnvironment::new(),
-                Some(resources_a),
-            )
-            .expect("prepare background Read");
+            .prepare_dispatch(&invocation, &executor, admitted.clone())
+            .expect("prepare background execution");
         let outcome = fixture
             .registry
             .commit_dispatch(prepared, &crate::runtime::CancellationSignal::new())
-            .expect("commit background Read");
+            .expect("commit background execution");
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
-            panic!("background Read must be accepted");
+            panic!("background execution must be accepted");
         };
-        await_test_started(&mut started, "background Read start").await;
-        // A later current capability map points at B, but the detached
-        // execution owns the exact A map admitted by this dispatch.
-        assert!(
-            resources_b
-                .resolve(std::path::Path::new(".rustx/skills/test-skill/SKILL.md"))
-                .expect("Skill B resource")
-                .ends_with("skill-root-b/test-skill/SKILL.md")
-        );
-        release.send_replace(true);
         let terminal = wait_for_terminal(&fixture, &execution_id).await;
         assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
-        let text = match terminal
-            .result
-            .expect("background Read result")
-            .content
-            .first()
-        {
-            Some(ToolResultContent::Text(text)) => text.text.clone(),
-            other => panic!("background Read returned unexpected content: {other:?}"),
-        };
-        assert_eq!(text, foreground_text);
+        assert_eq!(
+            observed.lock().expect("observed environment").as_slice(),
+            admitted.authorized_entries()
+        );
+    }
+
+    /// An executor that records the authorized environment it observed.
+    struct EnvironmentRecordingExecutor(Arc<std::sync::Mutex<Vec<(String, String)>>>);
+
+    impl ToolExecutor for EnvironmentRecordingExecutor {
+        fn execute<'a>(
+            &'a self,
+            _invocation: ToolInvocation,
+            context: ToolExecutionContext<'a>,
+        ) -> BoxFuture<'a, ToolExecutionResult> {
+            *self.0.lock().expect("record environment") =
+                context.environment.authorized_entries().to_vec();
+            Box::pin(async move { success() })
+        }
     }
 
     /// An executor that returns its fixed result immediately.
@@ -3596,7 +3451,6 @@ mod tests {
                 &background_invocation("bash"),
                 &executor,
                 ToolEnvironment::new(),
-                None,
             )
             .expect_err("the allocation failure refuses the dispatch");
         assert!(
@@ -3676,7 +3530,7 @@ mod tests {
         };
         let prepared = fixture
             .registry
-            .prepare_dispatch(&invocation, &executor, ToolEnvironment::new(), None)
+            .prepare_dispatch(&invocation, &executor, ToolEnvironment::new())
             .expect("prepare");
         let outcome = fixture
             .registry
@@ -3741,7 +3595,6 @@ mod tests {
                     artifacts: &fixture.registry.resources().artifacts,
                     tool_output: &tool_output,
                     environment: &ToolEnvironment::new(),
-                    skill_resources: None,
                     question_requester: None,
                 },
             )
@@ -3783,7 +3636,6 @@ mod tests {
                     artifacts: &fixture.registry.resources().artifacts,
                     tool_output: &tool_output,
                     environment: &ToolEnvironment::new(),
-                    skill_resources: None,
                     question_requester: None,
                 },
             )
@@ -3876,7 +3728,7 @@ mod tests {
         };
         let prepared = fixture
             .registry
-            .prepare_dispatch(&invocation, &executor, ToolEnvironment::new(), None)
+            .prepare_dispatch(&invocation, &executor, ToolEnvironment::new())
             .expect("prepare");
         let outcome = fixture
             .registry
@@ -3956,7 +3808,7 @@ mod tests {
         };
         let prepared = fixture
             .registry
-            .prepare_dispatch(&invocation, &executor, ToolEnvironment::new(), None)
+            .prepare_dispatch(&invocation, &executor, ToolEnvironment::new())
             .expect("prepare");
         let outcome = fixture
             .registry
@@ -4056,7 +3908,7 @@ mod tests {
         };
         let prepared = fixture
             .registry
-            .prepare_dispatch(&invocation, &executor, ToolEnvironment::new(), None)
+            .prepare_dispatch(&invocation, &executor, ToolEnvironment::new())
             .expect("prepare");
         // The dispatch owns the live-output file from here on; force the
         // executor's sink open to fail deterministically AFTER the
@@ -4179,7 +4031,7 @@ mod tests {
         };
         let prepared = fixture
             .registry
-            .prepare_dispatch(&invocation, &executor, ToolEnvironment::new(), None)
+            .prepare_dispatch(&invocation, &executor, ToolEnvironment::new())
             .expect("prepare");
         let outcome = fixture
             .registry
@@ -4282,7 +4134,7 @@ mod tests {
         };
         let prepared = fixture
             .registry
-            .prepare_dispatch(&invocation, &executor, ToolEnvironment::new(), None)
+            .prepare_dispatch(&invocation, &executor, ToolEnvironment::new())
             .expect("prepare");
         let outcome = fixture
             .registry

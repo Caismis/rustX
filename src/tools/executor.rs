@@ -104,10 +104,6 @@ pub struct ToolExecutionContext<'a> {
     pub tool_output: &'a ManagedToolOutput,
     /// The explicit authorized tool environment.
     pub environment: &'a ToolEnvironment,
-    /// Runtime-owned virtual Skill resources authorized for this attempt.
-    /// Read resolves these through the ordinary tool contract; clients never
-    /// receive their host paths.
-    pub skill_resources: Option<&'a crate::skills::SkillResourceMap>,
     /// The one bounded native Question capability. This is intentionally not
     /// public: generic `ToolExecutor` implementations can observe only
     /// [`ExecutionCancellation`], while the native `ask_user` path receives a
@@ -130,7 +126,6 @@ impl<'a> ToolExecutionContext<'a> {
         artifacts: &'a ArtifactStore,
         tool_output: &'a ManagedToolOutput,
         environment: &'a ToolEnvironment,
-        skill_resources: Option<&'a crate::skills::SkillResourceMap>,
     ) -> Self {
         Self {
             conversation_id,
@@ -141,7 +136,6 @@ impl<'a> ToolExecutionContext<'a> {
             artifacts,
             tool_output,
             environment,
-            skill_resources,
             question_requester: None,
         }
     }
@@ -1484,7 +1478,6 @@ mod tests {
             artifacts: &artifacts,
             tool_output: &tool_output,
             environment: &ToolEnvironment::new(),
-            skill_resources: None,
             question_requester: None,
         };
         let executor = registry.executor(&prepared.invocation.tool_id);

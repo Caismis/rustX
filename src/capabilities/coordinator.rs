@@ -1576,20 +1576,19 @@ body
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn relocating_identical_skill_resources_is_a_new_capability_revision() {
+    async fn relocating_identical_skill_packages_is_a_new_capability_revision() {
         let (dir, mut coordinator) = coordinator();
         let first = coordinator
             .commit(prepare(&coordinator).await)
             .expect("first commit");
-        let resource_path = std::path::Path::new(".rustx/skills/pdf/SKILL.md");
         let root_a = dir.path().join("workspace/.agents/skills");
         let root_b = dir.path().join("relocated-skills");
         std::fs::create_dir_all(&root_b).expect("root B");
         std::fs::rename(root_a.join("pdf"), root_b.join("pdf")).expect("relocate Skill");
 
         // The package content and version identity are unchanged. Only the
-        // current runtime resource mapping moved, so rediscovery must not be
-        // treated as an activation no-op.
+        // published host location moved, so rediscovery must not be treated
+        // as an activation no-op.
         let inner = Arc::get_mut(&mut coordinator.inner).expect("unshared coordinator");
         inner.skill_discovery = crate::skills::SkillDiscoveryConfig {
             automatic_roots: vec![root_b.clone()],
@@ -1601,17 +1600,13 @@ body
         assert_eq!(second.revision(), CapabilityRevision::new(2));
         assert_eq!(first.skills().bindings(), second.skills().bindings());
         assert_ne!(
-            first.skills().resources(),
-            second.skills().resources(),
-            "the executable virtual-resource mapping changed"
+            first.skills().locations(),
+            second.skills().locations(),
+            "the published host locations changed"
         );
         assert_eq!(
-            second
-                .skills()
-                .resources()
-                .resolve(resource_path)
-                .expect("relocated Read resource"),
-            root_b.join("pdf/SKILL.md").as_path()
+            second.skills().catalog_entries()[0].location,
+            root_b.join("pdf/SKILL.md").to_string_lossy()
         );
     }
 
@@ -2323,7 +2318,6 @@ mod mcp_race_tests {
                 artifacts: runtime_bundle.artifacts(),
                 tool_output: runtime_bundle.tool_output(),
                 environment: runtime_bundle.environment(),
-                skill_resources: None,
                 question_requester: None,
             },
         )

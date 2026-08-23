@@ -9,7 +9,6 @@ mod input;
 
 use futures_util::future::BoxFuture;
 use std::fmt::Write as _;
-use std::path::Path;
 
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::{MAX_READ_LINES, NATIVE_FILE_TOOL_MAX_BYTES};
@@ -32,7 +31,7 @@ pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistrati
         native_definition::<ReadInput>(
             TOOL_ID,
             NAME,
-            "Read a UTF-8 text file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Skill resources use the runtime virtual namespace `.rustx/skills/<skill-name>/...`; when the Skill catalog provides a location, pass that exact location to Read. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+            "Read a UTF-8 text file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
             policy,
         ),
         std::sync::Arc::new(ReadTool),
@@ -61,21 +60,7 @@ fn run_read(
         Ok(input) => input,
         Err(error) => return failed_result(error),
     };
-    let input_path = Path::new(&input.path);
-    let target = if is_virtual_skill_path(input_path) {
-        let Some(resources) = context.skill_resources else {
-            return failed_result("the runtime Skill resource namespace is unavailable");
-        };
-        let Some(target) = resources.resolve(input_path) else {
-            return failed_result(format!(
-                "Skill resource {} is not available in the current capability snapshot",
-                input.path
-            ));
-        };
-        target.to_path_buf()
-    } else {
-        interpret_path(context.workspace.root(), &input.path)
-    };
+    let target = interpret_path(context.workspace.root(), &input.path);
     let bytes = match std::fs::read(&target) {
         Ok(bytes) => bytes,
         Err(error) => return failed_result(format!("cannot read {}: {error}", target.display())),
@@ -158,19 +143,6 @@ fn run_read(
             truncated: true,
             original_bytes: Some(original_bytes),
         }),
-    )
-}
-
-fn is_virtual_skill_path(path: &Path) -> bool {
-    let mut components = path.components();
-    matches!(
-        components.next(),
-        Some(std::path::Component::Normal(component))
-            if component.to_str() == Some(".rustx")
-    ) && matches!(
-        components.next(),
-        Some(std::path::Component::Normal(component))
-            if component.to_str() == Some("skills")
     )
 }
 
@@ -263,7 +235,7 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
-    use super::{NAME, ReadTool, is_virtual_skill_path};
+    use super::{NAME, ReadTool};
     use crate::runtime::identity::{ConversationId, ToolCallId, ToolId};
     use crate::skills::{SkillDiscovery, SkillDiscoveryConfig, SkillPackageError, SkillSnapshot};
     use crate::tools::artifacts::ArtifactStore;
@@ -283,27 +255,31 @@ mod tests {
     }
 
     #[test]
-    fn description_explains_the_exact_virtual_skill_namespace() {
+    fn description_states_the_ordinary_host_path_contract() {
         let description = super::registration(ToolInvocationPolicy::default())
             .definition
             .description;
-        assert!(description.contains(".rustx/skills/<skill-name>/..."));
-        assert!(description.contains("pass that exact location to Read"));
+        assert!(description.contains("absolute paths are used as host filesystem paths"));
+        assert!(!description.contains(".rustx/skills"));
     }
 
+    /// A Skill package is an ordinary host directory. Read reaches its
+    /// `SKILL.md` through the exact published catalog location, and reaches a
+    /// bundled asset through the same relative spelling `SKILL.md` uses —
+    /// exactly what Bash would run. No virtual namespace participates.
     #[tokio::test]
-    #[allow(clippy::too_many_lines)] // one end-to-end virtual-resource contract
-    async fn resolves_virtual_skill_resources_through_runtime_owned_read() {
+    async fn reads_skill_files_at_their_published_host_paths() {
         let directory = tempfile::tempdir().expect("temporary root");
         let workspace = Workspace::new(directory.path()).expect("workspace");
         let skill_root = directory.path().join("configured-skills");
         let skill = skill_root.join("release-guide");
-        std::fs::create_dir_all(&skill).expect("Skill root");
+        std::fs::create_dir_all(skill.join("assets")).expect("Skill root");
         std::fs::write(
             skill.join("SKILL.md"),
-            "---\nname: release-guide\ndescription: Release guidance.\n---\nprocedure\n",
+            "---\nname: release-guide\ndescription: Release guidance.\n---\nUse assets/checklist.md\n",
         )
         .expect("SKILL.md");
+        std::fs::write(skill.join("assets/checklist.md"), "procedure\n").expect("asset");
         let packages = SkillDiscovery::with_config(
             &workspace,
             SkillDiscoveryConfig {
@@ -314,22 +290,12 @@ mod tests {
         .discover()
         .expect("Skill discovery");
         let snapshot = SkillSnapshot::new(packages.into_iter().map(Arc::new).collect());
-        let skill_markdown = skill.join("SKILL.md");
-        let resources = snapshot.resources();
+        let location = snapshot.catalog_entries()[0].location.clone();
         assert_eq!(
-            resources.resolve(Path::new(".rustx/skills/release-guide/SKILL.md")),
-            Some(skill_markdown.as_path())
+            Path::new(&location),
+            skill.join("SKILL.md").as_path(),
+            "the catalog publishes the host path of SKILL.md"
         );
-        for escaped in [
-            Path::new("../../outside"),
-            Path::new(".rustx/skills/release-guide/../../outside"),
-            Path::new("/outside"),
-        ] {
-            assert!(
-                resources.resolve(escaped).is_none(),
-                "Skill resource lookup must reject {escaped:?}"
-            );
-        }
 
         let conversation_id = ConversationId::new("read-skill");
         let artifacts_root = directory.path().join("artifacts");
@@ -340,89 +306,60 @@ mod tests {
                 .expect("managed output");
         let progress = NoProgress;
         let environment = ToolEnvironment::new();
-        let context = ToolExecutionContext {
-            conversation_id: &conversation_id,
-            execution_id: None,
-            cancellation: crate::runtime::ExecutionCancellation::detached(
-                crate::runtime::CancellationSignal::new(),
-                crate::runtime::types::CancellationReason::UserRequested,
-            ),
-            workspace: &workspace,
-            progress: &progress,
-            artifacts: &artifacts,
-            tool_output: &tool_output,
-            environment: &environment,
-            skill_resources: Some(snapshot.resources()),
-            question_requester: None,
-        };
-        let result = ReadTool
-            .execute(
+        let context = |call: &str, path: &str| {
+            (
                 ToolInvocation {
-                    call_id: ToolCallId::new("read-skill-call"),
+                    call_id: ToolCallId::new(call),
                     tool_id: ToolId::new("tool-read"),
                     tool_name: NAME.to_owned(),
                     mode: ToolInvocationMode::Foreground,
-                    arguments: serde_json::json!({
-                        "path": ".rustx/skills/release-guide/SKILL.md"
-                    }),
+                    arguments: serde_json::json!({ "path": path }),
                 },
-                context,
+                ToolExecutionContext {
+                    conversation_id: &conversation_id,
+                    execution_id: None,
+                    cancellation: crate::runtime::ExecutionCancellation::detached(
+                        crate::runtime::CancellationSignal::new(),
+                        crate::runtime::types::CancellationReason::UserRequested,
+                    ),
+                    workspace: &workspace,
+                    progress: &progress,
+                    artifacts: &artifacts,
+                    tool_output: &tool_output,
+                    environment: &environment,
+                    question_requester: None,
+                },
             )
-            .await;
+        };
 
+        let (invocation, execution) = context("read-skill-call", &location);
+        let result = ReadTool.execute(invocation, execution).await;
         assert_eq!(result.status, ToolExecutionStatus::Success);
         let Some(ToolResultContent::Text(text)) = result.content.first() else {
             panic!("Read returned unexpected content: {result:?}");
         };
+        assert!(text.text.contains("assets/checklist.md"));
+
+        // The Skill's own relative reference, resolved against the package
+        // directory the location names.
+        let asset = skill.join("assets/checklist.md");
+        let (invocation, execution) = context("read-skill-asset", &asset.to_string_lossy());
+        let asset_result = ReadTool.execute(invocation, execution).await;
+        assert_eq!(asset_result.status, ToolExecutionStatus::Success);
+        let Some(ToolResultContent::Text(text)) = asset_result.content.first() else {
+            panic!("Read returned unexpected content: {asset_result:?}");
+        };
         assert!(text.text.contains("procedure"));
 
-        // `/skills/...` remains an ordinary absolute host path. It is not a
-        // compatibility alias for rustX's virtual `.rustx/skills/...`
-        // namespace.
-        assert!(!is_virtual_skill_path(Path::new(
-            "/skills/release-guide/SKILL.md"
-        )));
-        assert!(
-            resources
-                .resolve(Path::new("/skills/release-guide/SKILL.md"))
-                .is_none()
-        );
-        let alias_context = ToolExecutionContext {
-            conversation_id: &conversation_id,
-            execution_id: None,
-            cancellation: crate::runtime::ExecutionCancellation::detached(
-                crate::runtime::CancellationSignal::new(),
-                crate::runtime::types::CancellationReason::UserRequested,
-            ),
-            workspace: &workspace,
-            progress: &progress,
-            artifacts: &artifacts,
-            tool_output: &tool_output,
-            environment: &environment,
-            skill_resources: Some(snapshot.resources()),
-            question_requester: None,
-        };
-        let alias_result = ReadTool
-            .execute(
-                ToolInvocation {
-                    call_id: ToolCallId::new("read-skill-alias-call"),
-                    tool_id: ToolId::new("tool-read"),
-                    tool_name: NAME.to_owned(),
-                    mode: ToolInvocationMode::Foreground,
-                    arguments: serde_json::json!({
-                        "path": "/skills/release-guide/SKILL.md"
-                    }),
-                },
-                alias_context,
-            )
-            .await;
+        // The retired virtual spelling is now an ordinary workspace-relative
+        // path, and resolves to nothing.
+        let (invocation, execution) =
+            context("read-skill-virtual", ".rustx/skills/release-guide/SKILL.md");
+        let virtual_result = ReadTool.execute(invocation, execution).await;
         assert!(matches!(
-            alias_result.status,
+            virtual_result.status,
             ToolExecutionStatus::Failed { .. }
         ));
-        assert!(!alias_result.content.iter().any(|content| {
-            matches!(content, ToolResultContent::Text(text) if text.text.contains("procedure"))
-        }));
     }
 
     #[cfg(unix)]

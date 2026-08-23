@@ -368,7 +368,6 @@ async fn bash_background_cancellation_uses_the_same_process_group_path() {
             &invocation,
             &executor,
             rustx::tools::environment::ToolEnvironment::new(),
-            None,
         )
         .expect("prepare");
     let outcome = registry
@@ -427,7 +426,6 @@ async fn bash_natural_exit_beats_late_cancel_in_the_registry() {
             &invocation,
             &executor,
             rustx::tools::environment::ToolEnvironment::new(),
-            None,
         )
         .expect("prepare");
     let outcome = registry
@@ -1174,7 +1172,6 @@ async fn model_selectable_bash_foreground_selection_reaches_the_executor_strippe
         fixture.runtime.artifacts(),
         fixture.runtime.tool_output(),
         fixture.runtime.environment(),
-        None,
     );
     let result = executor.execute(prepared.invocation, context).await;
     assert_eq!(result.status, ToolExecutionStatus::Success);
@@ -1216,7 +1213,6 @@ async fn model_selectable_bash_background_selection_dispatches_conversation_owne
             &prepared.invocation,
             &executor,
             rustx::tools::environment::ToolEnvironment::new(),
-            None,
         )
         .expect("prepare background dispatch");
     let rustx::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =

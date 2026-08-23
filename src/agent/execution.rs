@@ -70,8 +70,6 @@
 //! Cancellation is a generic Agent Loop invariant for every execution:
 //! observable cancellation is checked before every model turn begins.
 
-use std::sync::Arc;
-
 use futures_util::StreamExt;
 
 use crate::capabilities::AttemptCapabilityLease;
@@ -2986,7 +2984,6 @@ impl<'a> AgentExecution<'a> {
             self.tool_runtime.artifacts(),
             self.tool_runtime.tool_output(),
             self.capability.snapshot().effective_environment(),
-            Some(self.capability.snapshot().skills().resources()),
         );
         let context = match self.lifecycle.native_question_requester(
             self.request.attempt_id.clone(),
@@ -3031,13 +3028,11 @@ impl<'a> AgentExecution<'a> {
         // whole lifetime, even after this attempt terminates and later
         // revisions activate.
         let environment = self.capability.snapshot().effective_environment().clone();
-        let skill_resources = Arc::new(self.capability.snapshot().skills().resources().clone());
-        match self.tool_runtime.background().prepare_dispatch(
-            invocation,
-            &executor,
-            environment,
-            Some(skill_resources),
-        ) {
+        match self
+            .tool_runtime
+            .background()
+            .prepare_dispatch(invocation, &executor, environment)
+        {
             Ok(prepared) => {
                 match self
                     .tool_runtime

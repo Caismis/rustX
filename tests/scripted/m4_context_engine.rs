@@ -553,7 +553,7 @@ fn short_history_requires_no_compaction() {
 /// canonical conversation messages leaves the frozen system section visible.
 #[test]
 fn compaction_cannot_remove_request_time_skill_catalog_guidance() {
-    let skill_catalog = "## Skills\n\n<available_skills>\n  <skill>\n    <name>pdf</name>\n    <description>Create PDF documents.</description>\n    <location>.rustx/skills/pdf/SKILL.md</location>\n  </skill>\n</available_skills>";
+    let skill_catalog = "## Skills\n\n<available_skills>\n  <skill>\n    <name>pdf</name>\n    <description>Create PDF documents.</description>\n    <location>/workspace/.agents/skills/pdf/SKILL.md</location>\n  </skill>\n</available_skills>";
     let sections = [AcceptedSystemSection {
         lane: SystemSectionLane::NativeCapabilityGuidance,
         contributor: ContextContributorIdentity::Native(NativeContextContributor::SkillGuidance),

@@ -117,7 +117,6 @@ mod unix_tests {
                 runtime_bundle.artifacts(),
                 runtime_bundle.tool_output(),
                 runtime_bundle.environment(),
-                None,
             ),
         )
         .await;
@@ -163,7 +162,6 @@ mod unix_tests {
                 runtime_bundle.artifacts(),
                 runtime_bundle.tool_output(),
                 runtime_bundle.environment(),
-                None,
             ),
         );
         tokio::pin!(slow_future);
@@ -302,7 +300,6 @@ mod unix_tests {
                     tool_runtime.artifacts(),
                     tool_runtime.tool_output(),
                     tool_runtime.environment(),
-                    None,
                 ),
             )
             .await;
@@ -449,7 +446,6 @@ mod unix_tests {
                 &invocation,
                 &executor,
                 rustx::tools::environment::ToolEnvironment::new(),
-                None,
             )
             .expect("prepare background MCP dispatch");
         let rustx::tools::background::BackgroundDispatchOutcome::Accepted {
@@ -604,7 +600,6 @@ mod unix_tests {
                 runtime_bundle.artifacts(),
                 runtime_bundle.tool_output(),
                 runtime_bundle.environment(),
-                None,
             ),
         )
         .await;
@@ -660,7 +655,6 @@ mod unix_tests {
                 runtime_bundle.artifacts(),
                 runtime_bundle.tool_output(),
                 runtime_bundle.environment(),
-                None,
             ),
         );
         tokio::pin!(slow_future);

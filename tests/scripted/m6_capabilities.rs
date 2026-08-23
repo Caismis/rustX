@@ -68,6 +68,15 @@ fn write_hidden_skill(root: &std::path::Path, name: &str, description: &str) {
     .expect("hidden SKILL.md");
 }
 
+/// The host `SKILL.md` location the catalog publishes for a fixture Skill.
+fn skill_location(root: &std::path::Path, name: &str) -> String {
+    root.join(".agents/skills")
+        .join(name)
+        .join("SKILL.md")
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn python_deps(json: &str) -> (&'static str, &'static str) {
     (
         "rustx.python-dependencies",
@@ -181,23 +190,26 @@ async fn hidden_skills_keep_attempt_provenance_but_not_model_visibility() {
     let snapshot = prepare_and_commit(&conversation.coordinator).await;
     assert_eq!(snapshot.skills().bindings().len(), 2);
     assert_eq!(snapshot.skills().catalog_entries().len(), 1);
+    let visible_location = skill_location(conversation.workspace.root(), "visible");
     assert_eq!(snapshot.skills().catalog_entries()[0].name, "visible");
     assert_eq!(
         snapshot.skills().catalog_entries()[0].location,
-        ".rustx/skills/visible/SKILL.md"
+        visible_location
     );
     let rendered_catalog = snapshot.skill_catalog().expect("visible Skill catalog");
     assert_eq!(rendered_catalog.matches("## Skills").count(), 1);
     assert!(rendered_catalog.contains("visible"));
     assert!(rendered_catalog.contains("<description>Visible guidance.</description>"));
-    assert!(rendered_catalog.contains("<location>.rustx/skills/visible/SKILL.md</location>"));
+    assert!(rendered_catalog.contains(&format!("<location>{visible_location}</location>")));
     assert!(!rendered_catalog.contains("runtime-only"));
-    assert!(
-        snapshot
-            .skills()
-            .resources()
-            .resolve(std::path::Path::new(".rustx/skills/runtime-only/SKILL.md"))
-            .is_some()
+    // The hidden Skill stays in the snapshot with its own host location, but
+    // never reaches the model-visible catalog.
+    assert_eq!(
+        snapshot.skills().locations(),
+        vec![
+            skill_location(conversation.workspace.root(), "runtime-only"),
+            visible_location.clone()
+        ]
     );
 
     let manifest = snapshot.to_capabilities_manifest();
@@ -219,10 +231,7 @@ async fn hidden_skills_keep_attempt_provenance_but_not_model_visibility() {
         vec!["visible"],
         "Runtime Client Skills are the model-visible projection"
     );
-    assert_eq!(
-        client_view.skills[0].location,
-        ".rustx/skills/visible/SKILL.md"
-    );
+    assert_eq!(client_view.skills[0].location, visible_location);
 }
 
 /// Normal rustX agent composition keeps canonical native Read active while
@@ -263,25 +272,17 @@ async fn mandatory_native_read_survives_optional_activation_filters() {
             &[],
         );
         let snapshot = prepare_and_commit(&conversation.coordinator).await;
+        let location = skill_location(conversation.workspace.root(), "visible");
         assert_eq!(snapshot.skills().bindings().len(), 1);
-        assert!(
-            snapshot
-                .skills()
-                .resources()
-                .resolve(std::path::Path::new(".rustx/skills/visible/SKILL.md"))
-                .is_some()
-        );
+        assert_eq!(snapshot.skills().locations(), vec![location.clone()]);
         assert!(snapshot.tool_registry().names().contains(&"read"));
         assert_eq!(snapshot.skills().catalog_entries().len(), 1);
-        assert_eq!(
-            snapshot.skills().catalog_entries()[0].location,
-            ".rustx/skills/visible/SKILL.md"
-        );
+        assert_eq!(snapshot.skills().catalog_entries()[0].location, location);
         let catalog = snapshot.skill_catalog().expect("visible Skill catalog");
-        assert!(catalog.contains("<location>.rustx/skills/visible/SKILL.md</location>"));
+        assert!(catalog.contains(&format!("<location>{location}</location>")));
         let view = crate::runtime_client::projection::capability_view(&snapshot, &BTreeMap::new());
         assert_eq!(view.skills.len(), 1);
-        assert_eq!(view.skills[0].location, ".rustx/skills/visible/SKILL.md");
+        assert_eq!(view.skills[0].location, location);
     }
 }
 
@@ -1160,19 +1161,27 @@ async fn commit_is_busy_while_a_lease_is_active_then_commits_atomically() {
     assert_eq!(snapshot.skill_catalog(), None);
     assert_eq!(
         committed.skill_catalog().as_deref(),
-        Some(concat!(
-            "## Skills\n\n",
-            "The following skills provide specialized instructions for specific tasks.\n",
-            "Use the Read tool to load a skill when the task matches its description.\n",
-            "Use the exact location shown below; do not construct or rewrite Skill paths.\n\n",
-            "<available_skills>\n",
-            "  <skill>\n",
-            "    <name>pdf</name>\n",
-            "    <description>PDF skill.</description>\n",
-            "    <location>.rustx/skills/pdf/SKILL.md</location>\n",
-            "  </skill>\n",
-            "</available_skills>"
-        )),
+        Some(
+            format!(
+                concat!(
+                    "## Skills\n\n",
+                    "The following skills provide specialized instructions for specific tasks.\n",
+                    "Use the Read tool to load a skill when the task matches its description.\n",
+                    "When a skill file references a relative path, resolve it against the skill ",
+                    "directory (the parent of its SKILL.md) and use that absolute path in tool ",
+                    "commands.\n\n",
+                    "<available_skills>\n",
+                    "  <skill>\n",
+                    "    <name>pdf</name>\n",
+                    "    <description>PDF skill.</description>\n",
+                    "    <location>{location}</location>\n",
+                    "  </skill>\n",
+                    "</available_skills>"
+                ),
+                location = skill_location(conversation.workspace.root(), "pdf")
+            )
+            .as_str()
+        ),
         "a later capability revision owns its own catalog rather than inheriting history"
     );
     // The next attempt snapshots the new revision.
@@ -1474,7 +1483,6 @@ async fn background_execution_retains_its_dispatching_environment() {
             &background_invocation(),
             &(executor.clone() as Arc<dyn ToolExecutor>),
             environment_n.clone(),
-            None,
         )
         .expect("prepare");
     let outcome = conversation
@@ -1542,7 +1550,6 @@ async fn background_execution_retains_its_dispatching_environment() {
             &background_invocation(),
             &(executor2.clone() as Arc<dyn ToolExecutor>),
             lease_n1.snapshot().effective_environment().clone(),
-            None,
         )
         .expect("prepare");
     let outcome2 = conversation

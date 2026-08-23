@@ -150,7 +150,6 @@ mod unix_tests {
                 bundle.artifacts(),
                 bundle.tool_output(),
                 bundle.environment(),
-                None,
             ),
         )
         .await

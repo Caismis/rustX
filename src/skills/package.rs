@@ -3,12 +3,12 @@
 //! # Skill root contract
 //!
 //! Current discovery is bounded to user/global and project roots, plus
-//! explicit configuration and CLI paths. Accepted package files are exposed
-//! to the model through the runtime-owned virtual namespace:
-//!
-//! ```text
-//! .rustx/skills/<skill-name>/SKILL.md
-//! ```
+//! explicit configuration and CLI paths. An accepted package is an ordinary
+//! host directory: the model receives the host path of its `SKILL.md` and
+//! reaches the package's own scripts, references, and assets by resolving the
+//! relative spellings in `SKILL.md` against that directory. No virtual
+//! namespace exists, so every native tool — Read, Bash, Grep, Glob — sees the
+//! same paths.
 //!
 //! Discovery is one level only: direct child directories of the Skill
 //! root, each containing a `SKILL.md`. Nested Skill packages are never
@@ -47,16 +47,15 @@
 //!   [`crate::skills::dependencies`]).
 //!
 //! The model-visible catalog contains only the standard `name` and
-//! `description` plus the derived runtime-owned virtual `SKILL.md` location;
-//! host absolute paths never appear in model-visible Skill metadata.
+//! `description` plus the host location of `SKILL.md`.
 //!
 //! # Resource boundary
 //!
 //! Skill packages remain current filesystem resources. M6 freezes discovered
 //! identities, versions, catalog metadata, and dependency declarations at
-//! preparation time, and the capability snapshot maps accepted package files
-//! into the virtual namespace for runtime-owned Read. An external rewrite is
-//! observed only at the next quiescent re-discovery.
+//! preparation time. Package files themselves are read at use time through
+//! ordinary tool semantics, and an external rewrite is observed only at the
+//! next quiescent re-discovery.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -73,23 +72,6 @@ pub const RUSTX_SKILLS_DIRECTORY: &str = ".rustx";
 pub const SKILLS_ROOT: &str = "skills";
 /// The canonical primary instructions file name of a Skill package.
 pub const SKILL_MARKDOWN_FILE: &str = "SKILL.md";
-
-/// Builds one runtime-owned virtual Skill resource path from the validated
-/// Skill identity and the package-relative resource path.
-pub(crate) fn virtual_skill_resource_path(skill_name: &str, relative_path: &Path) -> PathBuf {
-    PathBuf::from(RUSTX_SKILLS_DIRECTORY)
-        .join(SKILLS_ROOT)
-        .join(skill_name)
-        .join(relative_path)
-}
-
-/// Builds the canonical slash-separated spelling of one virtual Skill
-/// resource for model-facing metadata. Unlike a host [`PathBuf`], this
-/// spelling is independent of the platform path separator.
-pub(crate) fn virtual_skill_resource_location(skill_name: &str, relative_path: &Path) -> String {
-    let relative = relative_path.to_string_lossy().replace('\\', "/");
-    format!("{RUSTX_SKILLS_DIRECTORY}/{SKILLS_ROOT}/{skill_name}/{relative}")
-}
 
 /// The maximum allowed length of a validated standard Skill name.
 pub const MAX_SKILL_NAME_CHARS: usize = 64;
@@ -325,27 +307,6 @@ impl SkillDiscoveryConfig {
     #[must_use]
     pub fn default_for_workspace(workspace: &Workspace) -> Self {
         default_discovery_config(workspace)
-    }
-}
-
-/// Maps virtual workspace-relative Skill resources to accepted host files.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct SkillResourceMap {
-    pub(crate) entries: BTreeMap<PathBuf, PathBuf>,
-}
-
-impl SkillResourceMap {
-    /// Resolves one virtual Skill resource path.
-    #[must_use]
-    pub fn resolve(&self, path: &Path) -> Option<&Path> {
-        if path.is_absolute()
-            || path
-                .components()
-                .any(|component| matches!(component, std::path::Component::ParentDir))
-        {
-            return None;
-        }
-        self.entries.get(path).map(PathBuf::as_path)
     }
 }
 
@@ -935,12 +896,10 @@ mod frontmatter_tests {
         assert!(snapshot.catalog_entries().is_empty());
         assert!(snapshot.visible_bindings().is_empty());
         assert_eq!(snapshot.bindings().len(), 1);
-        assert!(
-            snapshot
-                .resources()
-                .resolve(std::path::Path::new(".rustx/skills/private-guide/SKILL.md"))
-                .is_some()
-        );
+        // The package is hidden from the catalog but still tracked, so its
+        // host location participates in snapshot equality.
+        assert_eq!(snapshot.locations().len(), 1);
+        assert!(snapshot.locations()[0].ends_with("private-guide/SKILL.md"));
     }
 
     #[test]

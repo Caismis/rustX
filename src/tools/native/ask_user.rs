@@ -332,7 +332,6 @@ mod tests {
             artifacts,
             tool_output,
             environment,
-            None,
         );
         match requester {
             Some(requester) => context.with_question_requester(requester),

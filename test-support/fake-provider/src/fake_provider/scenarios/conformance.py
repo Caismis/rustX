@@ -48,15 +48,15 @@ SECOND_ATTEMPT = "conformance: second attempt"
 
 # -- workspace fixtures the Rust driver writes -----------------------------
 
-# Ordinary host-file conformance calls use an absolute path so the
-# provider-side script can address the fixture independently of the process
-# cwd. Skill calls deliberately use rustX's exact virtual locator instead;
-# native Read resolves that path through the runtime-owned Skill resource map.
+# Conformance calls use absolute host paths so the provider-side script can
+# address the fixture independently of the process cwd. A Skill package is an
+# ordinary host directory, so its SKILL.md is addressed exactly the same way —
+# the path rustX publishes in its Skill catalog.
 NOTE_PATH = "{workspace}/note.txt"
 NOTE_MARKER = "deterministic-note-payload-6d41"
 SKILL_NAME = "conformance-skill"
 SKILL_DESCRIPTION = "The deterministic workspace Skill of the issue 47 conformance harness."
-SKILL_PATH = f".rustx/skills/{SKILL_NAME}/SKILL.md"
+SKILL_PATH = f"{{workspace}}/.agents/skills/{SKILL_NAME}/SKILL.md"
 SKILL_BODY_MARKER = "skill-body-marker-a17c"
 
 # -- compaction ------------------------------------------------------------

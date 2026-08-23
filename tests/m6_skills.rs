@@ -309,6 +309,112 @@ fn package_symlinks_are_rejected() {
     ));
 }
 
+/// A Skill's supporting files are reachable from Bash, not just Read.
+///
+/// `SKILL.md` refers to its own assets relatively; the model resolves those
+/// against the published package directory and runs an ordinary shell
+/// command. This is the whole reason the catalog publishes a host path: a
+/// namespace only Read understood would fail every Bash-executed Skill step.
+#[cfg(unix)]
+#[tokio::test]
+async fn bash_reaches_skill_assets_through_the_published_location() {
+    let (dir, workspace) = fixture();
+    write_skill(
+        dir.path(),
+        "deck",
+        "Builds decks.",
+        &[],
+        "Copy assets/template.html into the workspace.\n",
+    );
+    let assets = dir.path().join(".agents/skills/deck/assets");
+    std::fs::create_dir_all(&assets).expect("assets dir");
+    std::fs::write(assets.join("template.html"), "<!-- deck template -->\n").expect("template");
+
+    let packages = discover(&workspace);
+    let snapshot =
+        rustx::skills::SkillSnapshot::new(packages.into_iter().map(std::sync::Arc::new).collect());
+    let location = snapshot.catalog_entries()[0].location.clone();
+    let skill_dir = std::path::Path::new(&location)
+        .parent()
+        .expect("skill directory")
+        .to_path_buf();
+
+    let conversation_id = rustx::runtime::identity::ConversationId::new("conv-m6-assets");
+    let artifacts = dir.path().join("artifacts");
+    let artifacts_store =
+        rustx::tools::artifacts::ArtifactStore::new(conversation_id.clone(), &artifacts)
+            .expect("artifacts");
+    let tool_output = rustx::tools::managed_output::ManagedToolOutput::new(
+        conversation_id.clone(),
+        artifacts.join("tool-output"),
+    )
+    .expect("managed tool output");
+    let environment = rustx::tools::environment::ToolEnvironment::new();
+    let mut registry = rustx::tools::executor::ToolRegistry::new();
+    rustx::tools::native::register_native_tools(
+        &mut registry,
+        rustx::tools::native::NativeToolResources {
+            background: rustx::tools::background::ConversationBackgroundRegistry::new(
+                conversation_id.clone(),
+                rustx::tools::background::BackgroundResources {
+                    mailbox: rustx::runtime::inbound::ConversationInboundMailbox::new(
+                        conversation_id.clone(),
+                    ),
+                    workspace: workspace.clone(),
+                    artifacts: artifacts_store.clone(),
+                    tool_output: tool_output.clone(),
+                    clock: std::sync::Arc::new(rustx::runtime::SystemClock),
+                    event_sink: None,
+                },
+            ),
+            subagents: None,
+        },
+        rustx::tools::native::NativeToolPolicies::default(),
+    )
+    .expect("native tools");
+    let executor = registry.executor(&rustx::runtime::identity::ToolId::new("tool-bash"));
+    let context = rustx::tools::executor::ToolExecutionContext::new(
+        &conversation_id,
+        None,
+        rustx::runtime::ExecutionCancellation::detached(
+            rustx::runtime::CancellationSignal::new(),
+            rustx::runtime::types::CancellationReason::UserRequested,
+        ),
+        &workspace,
+        &common::NoopProgress,
+        &artifacts_store,
+        &tool_output,
+        &environment,
+    );
+    let result = executor
+        .execute(
+            rustx::tools::types::ToolInvocation {
+                call_id: rustx::runtime::identity::ToolCallId::new("call-copy"),
+                tool_id: rustx::runtime::identity::ToolId::new("tool-bash"),
+                tool_name: "bash".to_owned(),
+                mode: rustx::tools::types::ToolInvocationMode::Foreground,
+                arguments: serde_json::json!({
+                    "command": format!(
+                        "cp {}/assets/template.html ./index.html && cat ./index.html",
+                        skill_dir.display()
+                    )
+                }),
+            },
+            context,
+        )
+        .await;
+
+    assert_eq!(
+        result.status,
+        rustx::tools::types::ToolExecutionStatus::Success,
+        "Bash must reach the Skill's own assets: {result:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(workspace.root().join("index.html")).expect("copied template"),
+        "<!-- deck template -->\n"
+    );
+}
+
 /// Bash `cd` cannot redefine the canonical Skill root: the root is
 /// anchored to the Workspace, and Bash has no persistent cwd.
 #[cfg(unix)]
@@ -379,7 +485,6 @@ async fn bash_cd_cannot_redefine_the_skill_root() {
             &artifacts_store,
             &tool_output,
             &environment,
-            None,
         );
         executor.execute(invocation, context).await
     };
@@ -722,10 +827,10 @@ fn malformed_dependency_declaration_fails_the_transaction() {
 // ---------------------------------------------------------------------------
 
 /// The exact compact `## Skills` catalog form: deterministic ordering, name +
-/// description + exact virtual location; no SKILL.md body, dependency
-/// metadata, and no host absolute path.
+/// description + the host `SKILL.md` location; no SKILL.md body and no
+/// dependency metadata.
 #[test]
-fn catalog_rendering_is_exact_and_never_leaks_workspace_paths() {
+fn catalog_rendering_is_exact_and_publishes_host_skill_locations() {
     let (dir, workspace) = fixture();
     write_skill(
         dir.path(),
@@ -745,43 +850,41 @@ fn catalog_rendering_is_exact_and_never_leaks_workspace_paths() {
     let snapshot =
         rustx::skills::SkillSnapshot::new(packages.into_iter().map(std::sync::Arc::new).collect());
     let rendered = render_skill_catalog(snapshot.catalog_entries());
-    let expected = concat!(
-        "## Skills\n\n",
-        "The following skills provide specialized instructions for specific tasks.\n",
-        "Use the Read tool to load a skill when the task matches its description.\n",
-        "Use the exact location shown below; do not construct or rewrite Skill paths.\n\n",
-        "<available_skills>\n",
-        "  <skill>\n",
-        "    <name>pdf</name>\n",
-        "    <description>Create, edit, inspect, and transform PDF documents.</description>\n",
-        "    <location>.rustx/skills/pdf/SKILL.md</location>\n",
-        "  </skill>\n",
-        "  <skill>\n",
-        "    <name>slides</name>\n",
-        "    <description>Create and modify presentation decks.</description>\n",
-        "    <location>.rustx/skills/slides/SKILL.md</location>\n",
-        "  </skill>\n",
-        "</available_skills>"
+    let skills_root = workspace.root().join(".agents/skills");
+    let pdf = skills_root.join("pdf/SKILL.md").display().to_string();
+    let slides = skills_root.join("slides/SKILL.md").display().to_string();
+    let expected = format!(
+        concat!(
+            "## Skills\n\n",
+            "The following skills provide specialized instructions for specific tasks.\n",
+            "Use the Read tool to load a skill when the task matches its description.\n",
+            "When a skill file references a relative path, resolve it against the skill ",
+            "directory (the parent of its SKILL.md) and use that absolute path in tool ",
+            "commands.\n\n",
+            "<available_skills>\n",
+            "  <skill>\n",
+            "    <name>pdf</name>\n",
+            "    <description>Create, edit, inspect, and transform PDF documents.</description>\n",
+            "    <location>{pdf}</location>\n",
+            "  </skill>\n",
+            "  <skill>\n",
+            "    <name>slides</name>\n",
+            "    <description>Create and modify presentation decks.</description>\n",
+            "    <location>{slides}</location>\n",
+            "  </skill>\n",
+            "</available_skills>"
+        ),
+        pdf = pdf,
+        slides = slides
     );
     assert_eq!(rendered, expected);
-    let host_root = workspace.root().display().to_string();
-    assert!(
-        !rendered.contains(&host_root),
-        "the host absolute workspace root must never appear in the catalog"
-    );
     assert!(!rendered.contains("body"), "SKILL.md bodies never appear");
     assert!(
         !rendered.contains("rustx.python-dependencies"),
         "dependency metadata never appears"
     );
-    assert_eq!(
-        snapshot.catalog_entries()[0].location,
-        ".rustx/skills/pdf/SKILL.md"
-    );
-    assert_eq!(
-        snapshot.catalog_entries()[1].location,
-        ".rustx/skills/slides/SKILL.md"
-    );
+    assert_eq!(snapshot.catalog_entries()[0].location, pdf);
+    assert_eq!(snapshot.catalog_entries()[1].location, slides);
 
     // The empty snapshot has no entries; CapabilitySnapshot consequently
     // omits the entire system section.

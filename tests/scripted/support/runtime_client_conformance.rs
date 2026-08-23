@@ -344,7 +344,8 @@ pub fn all_driver_factories() -> Vec<Box<dyn DriverFactory>> {
 /// shared with the Issue #37 semantic tests, so a scenario and its #37
 /// counterpart always exercise an identically built runtime.
 pub use crate::scripted_suites::support::runtime_client_fixture::{
-    RuntimeClientFixture as ConformanceFixture, uv_available, write_python_package, write_skill,
+    RuntimeClientFixture as ConformanceFixture, skill_location, uv_available, write_python_package,
+    write_skill,
 };
 
 /// Connects one client session of the given transport to a fixture.
@@ -1466,7 +1467,10 @@ pub async fn capability_projection_is_deterministic(factory: &dyn DriverFactory)
     assert_eq!(capabilities.skills[0].name, "skill-readme");
     assert_eq!(
         capabilities.skills[0].location,
-        ".rustx/skills/skill-readme/SKILL.md"
+        skill_location(
+            fixture.runtime.tool_runtime().workspace().root(),
+            "skill-readme",
+        )
     );
 
     // Deterministic: a second read is byte-identical, and the snapshot

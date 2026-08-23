@@ -111,7 +111,6 @@ async fn run_tool_unchecked(
                 fixture.runtime.artifacts(),
                 fixture.runtime.tool_output(),
                 fixture.runtime.environment(),
-                None,
             ),
         )
         .await
