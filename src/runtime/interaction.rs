@@ -205,15 +205,15 @@ impl ApprovalFacts {
 
 /// The bounded facts used to construct one Question request.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct QuestionFacts {
+pub(crate) struct QuestionFacts {
     /// The model turn or tool turn that owns the question.
-    pub turn: u32,
+    pub(crate) turn: u32,
     /// The bounded prompt.
-    pub prompt: String,
+    pub(crate) prompt: String,
     /// Optional finite choices.
-    pub choices: Option<Vec<String>>,
+    pub(crate) choices: Option<Vec<String>>,
     /// Whether free text is accepted.
-    pub allow_free_text: bool,
+    pub(crate) allow_free_text: bool,
 }
 
 impl QuestionFacts {
@@ -228,7 +228,7 @@ impl QuestionFacts {
     ///
     /// Returns a bounded argument diagnostic when the prompt, choice list, or
     /// answer mode cannot produce an answerable Question.
-    pub fn validate(&self) -> Result<(), String> {
+    pub(crate) fn validate(&self) -> Result<(), String> {
         if self.prompt.is_empty() {
             return Err("prompt must not be empty".to_owned());
         }
@@ -378,8 +378,8 @@ impl Drop for WaiterPayload {
 
 struct PendingInteraction {
     request: InteractionRequest,
-    /// A read-only view of the owning cancellation authority. This is the
-    /// same live view used by the waiter and lets a response that arrives
+    /// An owner-observing cancellation view. This is the same live view used
+    /// by the waiter and lets a response that arrives
     /// after cancellation became observable consume the already-selected
     /// cause instead of publishing an `Answered` terminal outcome. The
     /// coordinator never receives the authority that can request or

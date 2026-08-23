@@ -993,9 +993,11 @@ request, Request Snapshot, or `ModelRequestStarted`; a started request is
 awaited to native settlement. Cancellation causes are first-winner absorbing,
 so runtime drain reports `RuntimeShutdown` rather than a fixed
 `UserRequested` construction default. Executors observe that cause through an
-`ExecutionCancellation` view — the signal plus a live read of the owning
+`ExecutionCancellation` view — observation plus a live read of the owning
 authority — instead of a start-time copy, so an execution that began before
-the cancellation race still reports the winner.
+the cancellation race still reports the winner. They derive subordinate
+signals with `child_signal()`; cancelling that child cannot cancel the owning
+attempt or participate in its model-turn start gate.
 
 The Agent Loop still owns foreground structural result settlement. Started
 foreground siblings receive cancellation and settle physically/logically;
@@ -1088,8 +1090,9 @@ answers, denies, or cancels an already-published interaction.
 
 The native `ask_user` capability is an ordinary foreground, sequential,
 approval-never Tool. Its executor receives only a crate-private,
-attempt-bound `QuestionRequester`, whose cancellation input is the read-only
-`ExecutionCancellation` view. It requests one bounded Question (prompt,
+attempt-bound `QuestionRequester`, whose cancellation input is the
+owner-observing `ExecutionCancellation` view. It requests one bounded
+Question (prompt,
 optional finite choices, optional free text) through this same coordinator and
 returns a normal ToolResult. Its semantic argument normalizer runs in
 `ToolRegistry::preflight`, so a successful `PreparedInvocation` is already an

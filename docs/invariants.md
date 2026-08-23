@@ -204,7 +204,7 @@ The ownership contract is:
 | Response transport | Runtime Client |
 | Rendering/input | TUI projection |
 | Attempt cancellation | `AgentCancellation` |
-| Tool cancellation observation | `ExecutionCancellation` read-only view |
+| Tool cancellation observation | owner-observing `ExecutionCancellation` with one-way child derivation |
 | Native Question capability | crate-private runtime-bound `QuestionRequester` |
 | Drain/quiescence | `ConversationRuntime` / `ConversationLifecycle` |
 | Crash recovery | M9 recovery authority |
@@ -269,7 +269,9 @@ rendezvous; it does not bypass Agent Loop cancellation or tool-start rules.
 attempt-owned interaction. The coordinator retains only an
 `ExecutionCancellation` observation view to consume its already-selected
 first-winner cause at the terminal boundary; it never receives the owning
-handle and does not rank or replace causes. A response that arrives after cancellation
+handle and does not rank or replace causes. `ExecutionCancellation` can derive
+a child signal for subordinate work, but child cancellation cannot cancel the
+owner or change its cause. A response that arrives after cancellation
 has become observable records the same `Cancelled { reason }` outcome and is
 rejected as `interaction_not_pending`, even if the waiter has not yet polled
 its cancellation future. Runtime drain requests `RuntimeShutdown` as a

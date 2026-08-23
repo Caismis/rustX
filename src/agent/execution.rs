@@ -2993,11 +2993,12 @@ impl<'a> AgentExecution<'a> {
 
     /// Runs one foreground invocation against attempt cancellation.
     ///
-    /// The execution receives the attempt's cancellation signal in its
-    /// context, so observable attempt cancellation physically reaches
-    /// cancellable native foreground work. Cancelled results produced while
-    /// attempt cancellation is observable are normalized to the attempt's
-    /// cancellation reason.
+    /// The execution receives an `ExecutionCancellation` view of the
+    /// attempt's signal in its context. Native foreground work derives child
+    /// signals from that view, so observable attempt cancellation physically
+    /// reaches the subordinate operation without handing it cancellation
+    /// authority over the attempt. Cancelled results produced while attempt
+    /// cancellation is observable are normalized to the attempt's reason.
     async fn run_foreground(
         &self,
         invocation: &ToolInvocation,

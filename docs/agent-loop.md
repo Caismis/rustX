@@ -67,17 +67,19 @@ canonical boundary in `src/tools/executor.rs`:
   tool-output store (lazy foreground textual spill files plus the
   dispatch-allocated background live-output channel), and the explicit
   authorized environment.
-- `ExecutionCancellation` is the runtime `CancellationSignal` **plus a live
-  read of the owning authority's absorbing first-winner cause** — not a
-  start-time copy of it. A foreground execution views its attempt's
-  `AgentCancellation`; a background execution views its conversation
-  background registry record. Each owned execution has exactly one cause
-  store, and the first cancellation request that wins owns it: a later
-  request delivers the signal but can never relabel the winner. An executor
-  that started before any cancellation existed therefore reports the cause
-  that actually won the race — `RuntimeShutdown` when runtime drain won,
-  `UserRequested` when the user won first — when it normalizes its own
-  cancelled result.
+- `ExecutionCancellation` observes the runtime `CancellationSignal` and
+  provides a **live read of the owning authority's absorbing first-winner
+  cause** — not a start-time copy of it. A foreground execution views its
+  attempt's `AgentCancellation`; a background execution views its
+  conversation background registry record. `child_signal()` derives a
+  subordinate signal: owner cancellation reaches the child, but a child
+  cancellation cannot reach the owner or enter its start gate. Each owned
+  execution has exactly one cause store, and the first owner cancellation
+  request that wins owns it: a later request delivers the signal but can
+  never relabel the winner. An executor that started before any cancellation
+  existed therefore reports the cause that actually won the race —
+  `RuntimeShutdown` when runtime drain won, `UserRequested` when the user won
+  first — when it normalizes its own cancelled result.
 - The loop preflights every model-issued call **before** the Assistant
   tool-call message is committed: registry identity resolution,
   execution-policy resolution, reserved-metadata extraction, and business
@@ -91,11 +93,11 @@ canonical boundary in `src/tools/executor.rs`:
   reinterprets a result.
 
 A failing tool is a normal outcome: the failed `ToolExecutionResult` is
-passed back to the model, which decides the next action. Cancellable
-native foreground work observes the attempt's `CancellationSignal` in its
-context and physically settles (for example Bash terminates its owned
-process group); the loop never drops a pending tool future and leaves
-external work running.
+passed back to the model, which decides the next action. Cancellable native
+foreground work observes `ExecutionCancellation`, derives a child signal for
+its subordinate operation, and physically settles (for example Bash
+terminates its owned process group); the loop never drops a pending tool
+future and leaves external work running.
 
 The loop does not branch on `ToolOrigin`: MCP transport ownership,
 Python-version publication, and native process details terminate behind the
@@ -717,7 +719,8 @@ second lifecycle or shutdown participant framework.
 The coordinator does not arbitrate cancellation causes. Each runtime-owned
 pending interaction retains an `ExecutionCancellation` observation view, not
 the owning attempt's `AgentCancellation` handle. Generic ToolExecutors receive
-that read-only execution view only; the native `ask_user` path receives a
+that owner-observing `ExecutionCancellation` capability only; the native
+`ask_user` path receives a
 crate-private `QuestionRequester` bound to the same attempt and coordinator.
 If that authority has already selected a cause before a waiter or client
 response reaches the terminal transition, the interaction records the same
@@ -863,8 +866,9 @@ structurally exactly once:
   background dispatch is accepted (`exec_N` + `state: starting`), never
   when the detached work terminates; a sequential background call blocks
   later scheduling only through its dispatch-acceptance point.
-- Foreground executions receive the attempt's `CancellationSignal` in
-  their context. When attempt cancellation wins during a batch:
+- Foreground executions receive an `ExecutionCancellation` view in their
+  context and derive child signals for subordinate work. When attempt
+  cancellation wins during a batch:
   in-flight cancellable foreground work physically settles, unstarted
   calls receive cancelled result slots, committed background executions
   stay conversation-owned, prepared-but-uncommitted dispatches roll back,

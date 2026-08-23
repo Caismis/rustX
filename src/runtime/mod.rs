@@ -130,7 +130,7 @@ pub use inbound::{
 };
 pub use interaction::{
     ApprovalDecision, InteractionKind, InteractionOutcome, InteractionRequest, InteractionResponse,
-    QuestionAnswer, QuestionFacts,
+    QuestionAnswer,
 };
 pub use recovery::{
     AttemptRecoveryClass, BackgroundEvidence, BackgroundRecoveryClass, KnownModelOutcome,

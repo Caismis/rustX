@@ -59,8 +59,8 @@ pub trait ProgressReporter: Send + Sync {
 /// The runtime-owned execution context of one tool invocation.
 ///
 /// The context provides the concrete resources the current contract needs —
-/// conversation identity, execution identity when background, the read-only
-/// runtime cancellation view, the workspace boundary, the progress reporter,
+/// conversation identity, execution identity when background, the
+/// owner-observing runtime cancellation view, the workspace boundary, the progress reporter,
 /// the artifact store, the managed tool-output store, and the explicit
 /// authorized environment. The native `ask_user` executor additionally
 /// receives one crate-private, attempt-bound Question requester. It cannot
@@ -74,10 +74,13 @@ pub struct ToolExecutionContext<'a> {
     /// The detached runtime execution identity, `None` for foreground work.
     /// No fake `ToolExecutionId` is invented for foreground calls.
     pub execution_id: Option<&'a ToolExecutionId>,
-    /// The cancellation view of the execution: the runtime cancellation
-    /// signal plus a **live** read of the owning authority's absorbing
-    /// cause. Foreground executions view their attempt's cancellation owner;
-    /// background executions view their conversation-owned background record.
+    /// The cancellation view of the execution: observation of the runtime
+    /// cancellation signal plus a **live** read of the owning authority's
+    /// absorbing cause. Foreground executions view their attempt's
+    /// cancellation owner; background executions view their
+    /// conversation-owned background record. `child_signal()` derives a
+    /// subordinate signal without exposing a trigger that can cancel this
+    /// owning operation.
     ///
     /// The cause is read through this view at settlement time, never copied
     /// at start time: an execution that started before the cancellation race

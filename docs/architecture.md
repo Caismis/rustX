@@ -311,7 +311,7 @@ The ownership table is:
 | Response transport | Runtime Client |
 | Rendering and input | TUI projection |
 | Attempt cancellation | `AgentCancellation` |
-| Tool cancellation observation | `ExecutionCancellation` read-only view |
+| Tool cancellation observation | owner-observing `ExecutionCancellation` with one-way child derivation |
 | Native Question capability | crate-private `QuestionRequester` bound by the Agent Loop attempt |
 | Runtime drain and quiescence | `ConversationRuntime` / `ConversationLifecycle` |
 | Crash recovery | existing M9 recovery owner |
@@ -322,7 +322,7 @@ binding to its owning `InteractionCoordinator`. The binding is not a
 replaceable production rendezvous strategy, and no public generic interaction
 trait exists. The only Tool Plane consumer is native `ask_user`, which gets a
 crate-private `QuestionRequester` containing the attempt identity, the
-read-only `ExecutionCancellation` view, and that coordinator. A standalone
+owner-observing `ExecutionCancellation` capability, and that coordinator. A standalone
 inert execution has no interaction provider and therefore fails an `Ask`
 closed. The configured
 `ToolApprovalPolicy` is resolved only after exact registry preflight. The
@@ -411,9 +411,12 @@ and no interaction callback can begin after `Quiescent`.
 `AgentCancellation` remains the sole cause authority for an attempt-owned
 interaction. The coordinator retains only an `ExecutionCancellation` view to
 consume the already-selected first-winner reason at this boundary; it never
-receives the owner or performs cause arbitration of its own. A response that arrives after cancellation is
-observable cannot publish `Answered`; it is rejected as `not_pending` after
-the matching `Cancelled { reason }` transition. During drain,
+receives the owner or performs cause arbitration of its own. The view cannot
+expose the owner's signal; its `child_signal()` can only derive a subordinate
+signal whose cancellation does not propagate upward. A response that arrives
+after cancellation is observable cannot publish `Answered`; it is rejected as
+`not_pending` after the matching `Cancelled { reason }` transition. During
+drain,
 `ConversationRuntime` requests `RuntimeShutdown`, reads the active attempt's
 winner, and propagates that reason to every live pending interaction. A prior
 `UserRequested` cause therefore remains `UserRequested`; absent an earlier
@@ -491,7 +494,8 @@ runtime/interaction.rs     provider-independent native Approval and bounded
 runtime/cancellation.rs   CancellationSignal: the one runtime-owned
                            cancellation primitive shared by model adapters,
                            compaction, foreground tool execution, and
-                           background work
+                           background work; ExecutionCancellation observes
+                           its owner and derives one-way child signals
 runtime/types.rs           TokenMeasurement, TokenMeasurementSource,
                            CancellationReason, RuntimeError, RuntimeClock
 runtime/inbound.rs         ConversationInboundMailbox (per-conversation

@@ -1355,7 +1355,7 @@ impl ToolExecutor for PythonToolExecutor {
                         environment: runtime_environment
                             .child_environment(context.workspace.root()),
                         timeout: None,
-                        cancellation: context.cancellation.signal(),
+                        cancellation: context.cancellation.child_signal(),
                     },
                     None,
                 )

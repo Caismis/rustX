@@ -504,7 +504,7 @@ async fn run_bash_unix(
             .environment
             .child_environment(context.workspace.root()),
         timeout,
-        cancellation: context.cancellation.signal(),
+        cancellation: context.cancellation.child_signal(),
     };
     let (mut runner, stdout_pipe, stderr_pipe) =
         match SupervisedCommandRunner::spawn(&spec, runner_control) {

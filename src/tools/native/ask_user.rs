@@ -11,7 +11,8 @@ use futures_util::future::BoxFuture;
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::Deserialize;
 
-use crate::runtime::{InteractionOutcome, InteractionResponse, QuestionAnswer, QuestionFacts};
+use crate::runtime::interaction::QuestionFacts;
+use crate::runtime::{InteractionOutcome, InteractionResponse, QuestionAnswer};
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, input_schema};
 use crate::tools::native::support::{failed_result, success_json};

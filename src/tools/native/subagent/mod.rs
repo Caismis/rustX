@@ -131,11 +131,8 @@ impl ToolExecutor for SubagentExecutor {
                 Ok(prepared) => prepared,
                 Err(error) => return failed_result(error.to_string()),
             };
-            match self
-                .subagents
-                .commit(prepared, &context.cancellation.signal())
-                .await
-            {
+            let child_cancellation = context.cancellation.child_signal();
+            match self.subagents.commit(prepared, &child_cancellation).await {
                 Ok(SubagentStartOutcome::Accepted(accepted)) => {
                     let mut result = accepted.result;
                     result["subagent_id"] =
