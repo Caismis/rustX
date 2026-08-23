@@ -1134,12 +1134,45 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   are two independent axes: ownership/settlement is decided by
   `ToolExecutionPolicy`, concurrency within a batch by
   `ToolConcurrencyPolicy`. The two are never combined into one axis.
-- The canonical tool input schema is tool-owned and never mutated. Reserved
-  runtime invocation metadata (`__rustx_execution` under the `__rustx_`
-  namespace) exists only in the compiled model-facing schema, is required
-  for `ModelSelectable` tools, is extracted and stripped by the runtime, and
-  is never forwarded to any executor. Registration rejects canonical schemas
-  claiming `__rustx_*` properties.
+- The canonical tool input schema is tool-owned and never mutated. The
+  model-facing execution-ownership selector `execution_mode` exists only in
+  the compiled model-facing schema of a `ModelSelectable` tool, is required
+  on every such invocation, is resolved exactly once at preflight, is
+  stripped before business-argument validation, and is never forwarded to
+  any executor. A missing or invalid value is a deterministic rejection with
+  actionable diagnostics, never a silent foreground default.
+- `execution_mode` is reserved, and the canonical root schema must match the
+  decoratable root profile, when and only when the effective execution policy
+  is `ModelSelectable`. The profile is an allowlist: the root instance
+  semantics must be owned entirely by `type`, `properties`, `required`, and
+  `additionalProperties`, plus purely descriptive keywords; every other root
+  keyword is refused whatever draft introduced it. Registration additionally
+  rejects a canonical schema claiming the top-level `execution_mode` name —
+  in root `properties`, in root `required`, or both — and one using a
+  reference applicator (`$ref`, `$dynamicRef`, `$recursiveRef`) at any depth,
+  since decoration edits the root in place and a reference may re-enter it.
+  Apart from references, nested subschemas stay unrestricted. None of this
+  carries an automatic compatibility mapping.
+- The three rejections together enforce the **projection equivalence** that
+  "clone and decorate the root" claims: `canonical(B)` ⇔
+  `compiled(B + top-level execution_mode)` for any business arguments `B` and
+  either mode, and any invocation the compiled schema accepts must satisfy
+  the canonical schema once the top-level selector is stripped. Each class
+  closes one way of breaking it — decoration contradicting a root assertion
+  (`maxProperties`, a root `const`/`enum`), stripping leaving arguments the
+  canonical schema must reject (a claimed `required` entry, a Draft-7
+  `dependencies`, an unaware composition branch), and a reference carrying
+  the injected property into nested objects. A registered tool therefore can
+  never reach a state where no correct model invocation can succeed.
+- None of the three rules applies under `ForegroundOnly`/`BackgroundOnly`,
+  which receive no synthetic field: an arbitrary composed, reference-heavy
+  root schema is valid there, `execution_mode` included. The policy-unaware
+  canonical schema validation stays permissive so the `ask_user` intrinsic's
+  root `anyOf` and arbitrary MCP server schemas keep registering.
+- The `__rustx_` top-level namespace stays reserved for other runtime
+  concerns under every policy: registration rejects canonical schemas
+  claiming `__rustx_*` properties and preflight rejects invocations carrying
+  them.
 - The registry is a validity boundary: duplicate ids, duplicate model-facing
   names, empty identities, invalid or non-root JSON Schema, reserved
   property collisions, invalid policy combinations, and background-capable

@@ -98,7 +98,7 @@ async fn dispatch_big_background_bash(
         tool_id: ToolId::new("tool-bash"),
         name: "bash".to_owned(),
         arguments: serde_json::json!({
-            "__rustx_execution": "background",
+            "execution_mode": "background",
             "command": BIG_OUTPUT_COMMAND,
         }),
     };
@@ -438,7 +438,7 @@ async fn the_background_live_output_path_reaches_the_provider_before_completion(
         fifo.display()
     );
     let arguments = serde_json::json!({
-        "__rustx_execution": "background",
+        "execution_mode": "background",
         "command": command,
     })
     .to_string();

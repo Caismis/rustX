@@ -716,6 +716,37 @@ pub fn native_fixture() -> NativeFixture {
 /// A native tool fixture with an explicit authorized tool environment.
 #[must_use]
 pub fn native_fixture_with_environment(environment: Vec<(String, String)>) -> NativeFixture {
+    native_fixture_with(
+        environment,
+        rustx::tools::native::NativeToolPolicies::default(),
+    )
+}
+
+/// A native tool fixture whose ordinary native tools are `ModelSelectable`,
+/// so a test can drive a real per-invocation `execution_mode` choice through
+/// preflight into the native executor.
+#[must_use]
+pub fn model_selectable_native_fixture() -> NativeFixture {
+    use rustx::tools::types::{
+        ToolApprovalPolicy, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolInvocationPolicy,
+    };
+    native_fixture_with(
+        Vec::new(),
+        rustx::tools::native::NativeToolPolicies::uniform(ToolInvocationPolicy::new(
+            ToolExecutionPolicy::ModelSelectable,
+            ToolConcurrencyPolicy::Sequential,
+            ToolApprovalPolicy::Never,
+        )),
+    )
+}
+
+/// A native tool fixture with an explicit authorized environment and an
+/// explicit native tool policy set.
+#[must_use]
+pub fn native_fixture_with(
+    environment: Vec<(String, String)>,
+    policies: rustx::tools::native::NativeToolPolicies,
+) -> NativeFixture {
     use rustx::tools::runtime::ConversationRuntimeConfig;
     let dir = tempfile::tempdir().expect("temporary workspace");
     let workspace_root = dir.path().join("workspace");
@@ -748,7 +779,7 @@ pub fn native_fixture_with_environment(environment: Vec<(String, String)>) -> Na
             background: runtime.background().clone(),
             subagents: None,
         },
-        rustx::tools::native::NativeToolPolicies::default(),
+        policies,
     )
     .expect("native tool registration");
     let mailbox = runtime.mailbox();
@@ -869,6 +900,78 @@ pub fn model_tool(name: &str, id: &str) -> rustx::tools::types::ModelToolDefinit
         description: format!("Tool {name}"),
         input_schema: serde_json::json!({"type": "object", "properties": {}}),
     }
+}
+
+/// One compiled model-facing definition of a `ModelSelectable` tool.
+///
+/// It is produced by the real model-definition compiler, so adapter tests
+/// observe exactly the schema the runtime sends: the tool's own business
+/// schema plus the injected required `execution_mode` selector.
+pub fn model_selectable_tool(name: &str, id: &str) -> rustx::tools::types::ModelToolDefinition {
+    use rustx::runtime::identity::ToolId;
+    use rustx::tools::compile_model_definition;
+    use rustx::tools::types::{
+        ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin,
+        ToolReplayPolicy,
+    };
+    compile_model_definition(&ToolDefinition {
+        id: ToolId::new(id),
+        name: name.to_owned(),
+        description: format!("Tool {name}"),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command"],
+        }),
+        execution_policy: ToolExecutionPolicy::ModelSelectable,
+        concurrency_policy: ToolConcurrencyPolicy::Sequential,
+        approval_policy: ToolApprovalPolicy::Never,
+        replay_policy: ToolReplayPolicy::Never,
+        origin: ToolOrigin::Builtin,
+    })
+    .expect("the model-selectable definition compiles")
+}
+
+/// Asserts one provider tool-parameter payload carries the compiled
+/// `execution_mode` selector verbatim next to the untouched business schema.
+///
+/// Provider adapters are policy-unaware: they translate the already-compiled
+/// [`rustx::tools::types::ModelToolDefinition`] and never inject, rename, or
+/// interpret execution metadata themselves.
+pub fn assert_compiled_execution_mode_schema(
+    parameters: &serde_json::Value,
+    business_property: &str,
+) {
+    let field = &parameters["properties"]["execution_mode"];
+    assert_eq!(field["type"], serde_json::json!("string"));
+    assert_eq!(
+        field["enum"],
+        serde_json::json!(["foreground", "background"])
+    );
+    assert!(
+        field["description"]
+            .as_str()
+            .is_some_and(|text| text.contains("foreground") && text.contains("background")),
+        "the model-facing description explains the choice: {field}"
+    );
+    let required = parameters["required"].as_array().expect("required");
+    assert!(
+        required.contains(&serde_json::json!("execution_mode")),
+        "the selector is required: {parameters}"
+    );
+    assert!(
+        required.contains(&serde_json::json!(business_property)),
+        "the tool's own required arguments survive decoration: {parameters}"
+    );
+    assert_eq!(
+        parameters["properties"][business_property]["type"],
+        serde_json::json!("string"),
+        "the business schema reaches the provider untouched: {parameters}"
+    );
+    assert!(
+        !parameters.to_string().contains("__rustx_execution"),
+        "the retired reserved selector is never sent: {parameters}"
+    );
 }
 
 /// Reconstructs the observable execution-phase sequence from a runtime

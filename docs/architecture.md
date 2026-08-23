@@ -1412,17 +1412,114 @@ The three policy axes are independent:
 
 The canonical input schema is tool-owned and never mutated. For
 `ModelSelectable` tools the model-facing compiler decorates a clone with the
-required reserved `__rustx_execution` field
-(`{"type": "string", "enum": ["foreground", "background"]}`) inside the
-reserved `__rustx_` top-level property namespace. The runtime extracts the
-field, resolves the canonical mode, strips it, and validates the remaining
-business arguments against the original schema before dispatch; reserved
-fields are never forwarded to executors. Tool-owned argument normalization,
-where present, runs between stripping and that canonical validation. Native
-Edit's known malformed argument spellings are handled there; provider
-adapters and the Agent Loop remain unaware of them. `ModelRequest.tools`
-carries the compiled [`ModelToolDefinition`] values only — provider adapters
-translate them verbatim and never decide execution semantics.
+required top-level `execution_mode` field
+(`{"type": "string", "enum": ["foreground", "background"]}`, carrying a
+model-facing description of the ownership decision) and appends a
+runtime-owned reminder to the compiled description. The contract is:
+
+```text
+ModelSelectable
+    ⇒ the model must explicitly choose execution_mode per invocation
+    ⇒ preflight resolves ownership once
+    ⇒ the runtime strips execution_mode
+    ⇒ the executor never sees model-facing runtime metadata
+```
+
+The runtime extracts the field, resolves the canonical mode, strips it, and
+validates the remaining business arguments against the original schema
+before dispatch. A missing or invalid `execution_mode` is a deterministic
+preflight rejection carrying the exact retry the model needs; it is never
+defaulted to foreground. `ForegroundOnly`/`BackgroundOnly` definitions are
+compiled verbatim — no synthetic field is injected and ownership resolves
+from the fixed policy alone.
+
+`ModelSelectable` is the one policy under which rustX must *write into* a
+tool's root schema, so it is the one policy that constrains the root's shape.
+Under it a canonical schema must match the **decoratable root profile**: the
+root object's instance semantics are owned entirely by
+
+```text
+type   properties   required   additionalProperties
+```
+
+alongside any purely descriptive root keyword (`$schema`, `$id`, `$comment`,
+`$defs`/`definitions`, `title`, `description`, `default`, `examples`,
+`deprecated`, `readOnly`, `writeOnly`). Every other root keyword is refused,
+whatever draft introduced it.
+
+One further rule reaches past the root. Decoration is an *in-place* edit, so
+it is only sound while the root schema is the sole description of the root
+instance — and a reference can re-enter the decorated root from any depth. A
+schema whose `child` property is `{"$ref": "#"}` would make the injected
+selector propagate into nested business objects, so `$ref`, `$dynamicRef`,
+and `$recursiveRef` are refused throughout a `ModelSelectable` canonical
+schema. rustX refuses them outright instead of resolving URIs to decide which ones
+reach the root: that decision is a JSON Schema reference resolver, and this
+contract is meant to be checkable by inspection. The scan descends only
+through positions JSON Schema defines as carrying subschemas, so a `$ref` key
+that is really a property name (under `dependentRequired`, or the Draft-7
+`dependencies` list shape) or annotation data under an unrecognized keyword
+is left alone rather than misread as an applicator. Apart from references,
+nested subschemas stay unrestricted — a business property may hold
+composition, cardinality assertions, and an `execution_mode` of its own.
+
+This is an allowlist on purpose. Injecting a required `execution_mode`
+property changes what the root instance must look like, so *any* root
+assertion rustX does not understand can silently contradict the injection —
+`maxProperties` capping the object below the new required count, a root
+`const`/`enum` pinning the whole object, a Draft-7 `dependencies` demanding
+the stripped selector, a composition branch that never learned about it.
+Every one of them produces the same fatal outcome: the tool registers, the
+schema compiles, and no correct model call can ever exist. Enumerating
+hazards could never be proven complete, so the profile enumerates what is
+*safe* instead.
+
+On top of the profile, rustX rejects a **claim on the reserved name**:
+`execution_mode` declared in root `properties`, demanded in root `required`,
+or both. This check is separate because `properties` and `required` are
+inside the profile. The bare `required` entry matters as much as the declared
+property — the runtime strips the selector *before* the canonical schema
+validates anything, so such a tool would register successfully, receive a
+perfectly correct model call, and reject it forever.
+
+Every error tells the human to rename the business field, flatten the root to
+the profile, inline the reference, or choose a non-`ModelSelectable` policy.
+rustX never renames, shadows, merges, or reinterprets a collision.
+
+Together the three rules give compilation a provable contract rather than a
+safe-looking root syntax — the **projection equivalence** that "clone and
+decorate the root" actually claims:
+
+```text
+canonical(B) ⇔ compiled(B + top-level execution_mode)
+```
+
+For any business arguments `B` and either mode the canonical and compiled
+schemas must agree, and any invocation the compiled schema accepts must
+satisfy the canonical schema once the top-level selector is stripped. Each
+rejection class closes one way of breaking it: a root assertion decoration
+contradicts, a claim stripping can never satisfy, and a reference that
+carries the injected property into nested objects — which breaks the
+equivalence in both directions at once.
+
+None of the three rules applies under `ForegroundOnly`/`BackgroundOnly`,
+which receive no injected field: an arbitrary composed, reference-heavy root
+stays valid there, `execution_mode` included. That scoping is load-bearing — the `ask_user` intrinsic's canonical
+schema is a root `anyOf` with no root `properties` at all, and MCP servers
+ship arbitrary JSON Schema — so the policy-unaware
+`validate_canonical_schema` must stay permissive. The contract therefore lives
+in the bounded layer that owns both the effective policy and the compiled
+model-facing schema.
+
+Separately, the `__rustx_` top-level property namespace remains reserved for
+other runtime concerns under every policy: no canonical schema may claim one
+and no invocation may carry one. Tool-owned argument normalization, where
+present, runs between stripping and canonical validation. Native Edit's known
+malformed argument spellings are handled there; provider adapters and the
+Agent Loop remain unaware of them. `ModelRequest.tools` carries the compiled
+[`ModelToolDefinition`] values only — provider adapters translate them
+verbatim and never decide execution semantics, and no tool (Bash included)
+implements `execution_mode` handling of its own.
 
 The registry is a correctness boundary: duplicate `ToolId`s, duplicate
 model-facing names, empty identities, invalid or non-root JSON Schema,

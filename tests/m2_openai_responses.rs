@@ -1263,3 +1263,35 @@ async fn continuation_no_tool_tail_preserves_both_users() {
     assert_eq!(input[1]["type"], "message");
     assert_eq!(input[1]["content"][0]["text"], "B");
 }
+
+/// Provider adapters translate the compiled `ModelSelectable` definition
+/// verbatim: the required `execution_mode` selector reaches the provider
+/// inside the tool's parameter schema, and no adapter implements
+/// policy-specific logic to put it there.
+#[tokio::test]
+async fn model_selectable_execution_mode_schema_reaches_the_provider_verbatim() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_responses", "plain_text.sse")
+    })
+    .await;
+    let mut request = request_with_tools("List");
+    request.tools = vec![common::model_selectable_tool("bash", "tool-bash")];
+    let events = collect_events(
+        &adapter(&server),
+        with_storage(request, ResponsesStorageMode::Stored),
+    )
+    .await;
+    assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+    let body: serde_json::Value =
+        serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
+    let tool = &body["tools"][0];
+    assert_eq!(tool["name"], "bash");
+    assert!(
+        tool["description"]
+            .as_str()
+            .expect("description")
+            .contains("execution_mode"),
+        "the compiled reminder is translated verbatim: {tool}"
+    );
+    common::assert_compiled_execution_mode_schema(&tool["parameters"], "command");
+}

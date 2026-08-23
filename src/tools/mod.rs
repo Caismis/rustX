@@ -44,9 +44,12 @@ pub use locator::LocatorError;
 pub use managed_output::{BackgroundOutput, ManagedOutputError, ManagedToolOutput, ResultSpill};
 pub use runtime::ConversationToolRuntime;
 pub use schema::{
-    EXECUTION_FIELD, EXECUTION_FIELD_VALUES, RUNTIME_PROPERTY_PREFIX, SchemaError,
-    compile_model_definition, is_reserved_property, resolve_invocation_metadata,
-    validate_business_arguments, validate_canonical_schema,
+    DECORATABLE_ROOT_INSTANCE_KEYWORDS, EXECUTION_MODE_DESCRIPTION,
+    EXECUTION_MODE_DESCRIPTION_REMINDER, EXECUTION_MODE_FIELD, EXECUTION_MODE_VALUES,
+    ExecutionModeClaim, REFERENCE_APPLICATOR_KEYWORDS, ROOT_ANNOTATION_KEYWORDS,
+    RUNTIME_PROPERTY_PREFIX, SchemaError, compile_model_definition, is_decoratable_root_keyword,
+    is_reserved_property, resolve_invocation_metadata, validate_business_arguments,
+    validate_canonical_schema, validate_execution_metadata_contract,
 };
 pub use types::{
     ManagedOutputContinuation, ModelToolDefinition, ToolApprovalPolicy, ToolCall, ToolCallStart,

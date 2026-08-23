@@ -1083,3 +1083,204 @@ fn wait_for_process_absence_macos(pid: i32) -> bool {
     }
     false
 }
+
+/// The `ModelSelectable` Bash definition the model receives: the canonical
+/// schema stays free of runtime metadata and the compiled model-facing schema
+/// carries the required `execution_mode` selector next to Bash's own
+/// arguments. Bash implements no `execution_mode` handling of its own.
+#[test]
+fn model_selectable_bash_compiles_the_execution_mode_selector() {
+    let fixture = common::model_selectable_native_fixture();
+    let bash = selectable_bash(&fixture);
+    assert_eq!(
+        bash.execution_policy,
+        rustx::tools::types::ToolExecutionPolicy::ModelSelectable
+    );
+    assert!(
+        !bash.input_schema.to_string().contains("execution_mode"),
+        "the canonical Bash schema stays free of runtime metadata: {}",
+        bash.input_schema
+    );
+    let compiled = fixture
+        .registry
+        .model_definitions()
+        .into_iter()
+        .find(|definition| definition.name == "bash")
+        .expect("compiled bash definition");
+    common::assert_compiled_execution_mode_schema(&compiled.input_schema, "command");
+}
+
+/// The canonical `ModelSelectable` Bash definition of a fixture.
+fn selectable_bash(fixture: &common::NativeFixture) -> rustx::tools::types::ToolDefinition {
+    fixture
+        .registry
+        .definitions()
+        .into_iter()
+        .find(|definition| definition.name == "bash")
+        .expect("bash is registered")
+}
+
+/// One `ModelSelectable` Bash call carrying the model's explicit choice.
+fn selectable_bash_call(
+    bash: &rustx::tools::types::ToolDefinition,
+    mode: &str,
+) -> rustx::tools::types::ToolCall {
+    rustx::tools::types::ToolCall {
+        id: rustx::runtime::identity::ToolCallId::new("call-bash-selectable"),
+        tool_id: bash.id.clone(),
+        name: "bash".to_owned(),
+        arguments: serde_json::json!({"execution_mode": mode, "command": "echo selectable"}),
+    }
+}
+
+/// The business arguments every `ModelSelectable` Bash call in this suite
+/// leaves behind once the runtime strips its `execution_mode` selector.
+fn selectable_bash_business_arguments() -> serde_json::Value {
+    serde_json::json!({"command": "echo selectable"})
+}
+
+/// An explicit `"foreground"` choice resolves to attempt-owned execution and
+/// reaches the native executor with the selector already stripped.
+#[tokio::test]
+async fn model_selectable_bash_foreground_selection_reaches_the_executor_stripped() {
+    use rustx::tools::executor::{PreflightOutcome, ToolExecutionContext};
+
+    let fixture = common::model_selectable_native_fixture();
+    let bash = selectable_bash(&fixture);
+    let business = selectable_bash_business_arguments();
+    let PreflightOutcome::Ready(prepared) = fixture
+        .registry
+        .preflight(&selectable_bash_call(&bash, "foreground"))
+        .expect("preflight")
+    else {
+        panic!("an explicit foreground selection preflights as ready");
+    };
+    assert_eq!(prepared.invocation.mode, ToolInvocationMode::Foreground);
+    assert_eq!(
+        prepared.invocation.arguments, business,
+        "the executor receives only business arguments"
+    );
+    let executor = fixture.registry.executor(&prepared.invocation.tool_id);
+    let reporter = common::NoopProgress;
+    let context = ToolExecutionContext::new(
+        fixture.runtime.conversation_id(),
+        None,
+        rustx::runtime::ExecutionCancellation::detached(
+            CancellationSignal::new(),
+            rustx::runtime::types::CancellationReason::UserRequested,
+        ),
+        fixture.runtime.workspace(),
+        &reporter,
+        fixture.runtime.artifacts(),
+        fixture.runtime.tool_output(),
+        fixture.runtime.environment(),
+        None,
+    );
+    let result = executor.execute(prepared.invocation, context).await;
+    assert_eq!(result.status, ToolExecutionStatus::Success);
+    assert_eq!(json_content(&result)["exit_code"], 0);
+    assert!(
+        json_content(&result)["stdout"]
+            .as_str()
+            .expect("stdout")
+            .contains("selectable")
+    );
+}
+
+/// An explicit `"background"` choice resolves to conversation-owned execution
+/// and dispatches through the background registry with the same stripped
+/// business arguments.
+#[tokio::test]
+async fn model_selectable_bash_background_selection_dispatches_conversation_owned() {
+    use rustx::tools::executor::PreflightOutcome;
+
+    let fixture = common::model_selectable_native_fixture();
+    let bash = selectable_bash(&fixture);
+    let business = selectable_bash_business_arguments();
+    let PreflightOutcome::Ready(prepared) = fixture
+        .registry
+        .preflight(&selectable_bash_call(&bash, "background"))
+        .expect("preflight")
+    else {
+        panic!("an explicit background selection preflights as ready");
+    };
+    assert_eq!(prepared.invocation.mode, ToolInvocationMode::Background);
+    assert_eq!(
+        prepared.invocation.arguments, business,
+        "the executor receives only business arguments"
+    );
+    let background = fixture.runtime.background().clone();
+    let executor = fixture.registry.executor(&prepared.invocation.tool_id);
+    let dispatch = background
+        .prepare_dispatch(
+            &prepared.invocation,
+            &executor,
+            rustx::tools::environment::ToolEnvironment::new(),
+            None,
+        )
+        .expect("prepare background dispatch");
+    let rustx::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
+        background
+            .commit_dispatch(dispatch, &CancellationSignal::new())
+            .expect("background dispatch commits")
+    else {
+        panic!("the background dispatch is accepted");
+    };
+    // The registry's own state-change notification settles this, not a
+    // polling loop: `wait_until_terminal` subscribes to the exact watch
+    // channel every published transition bumps.
+    let terminal = background
+        .wait_until_terminal(&execution_id)
+        .await
+        .expect("the dispatched execution settles");
+    assert_eq!(
+        terminal.state,
+        rustx::tools::background::BackgroundLifecycle::Succeeded
+    );
+}
+
+/// A `ModelSelectable` Bash call that omits or misspells `execution_mode` is
+/// rejected at preflight with diagnostics the model can act on directly, and
+/// the retired `__rustx_execution` selector no longer works.
+#[tokio::test]
+async fn model_selectable_bash_rejects_unusable_execution_mode() {
+    use rustx::runtime::identity::ToolCallId;
+    use rustx::tools::executor::PreflightOutcome;
+    use rustx::tools::types::ToolCall;
+
+    let fixture = common::model_selectable_native_fixture();
+    let bash = selectable_bash(&fixture);
+    let reject = |arguments: serde_json::Value| {
+        let outcome = fixture
+            .registry
+            .preflight(&ToolCall {
+                id: ToolCallId::new("call-bash-selectable"),
+                tool_id: bash.id.clone(),
+                name: "bash".to_owned(),
+                arguments,
+            })
+            .expect("preflight outcome");
+        let PreflightOutcome::Rejected { error, .. } = outcome else {
+            panic!("expected a deterministic rejection");
+        };
+        error
+    };
+
+    let missing = reject(serde_json::json!({"command": "echo hi"}));
+    assert!(
+        missing.contains("\"execution_mode\": \"foreground\"")
+            && missing.contains("\"execution_mode\": \"background\""),
+        "the model is told exactly how to retry: {missing}"
+    );
+    let invalid = reject(serde_json::json!({"execution_mode": "detached", "command": "echo hi"}));
+    assert!(
+        invalid.contains("execution_mode") && invalid.contains("detached"),
+        "the invalid value is named: {invalid}"
+    );
+    let retired =
+        reject(serde_json::json!({"__rustx_execution": "background", "command": "echo hi"}));
+    assert!(
+        retired.contains("__rustx_"),
+        "the retired selector is a forged reserved argument, not a mode: {retired}"
+    );
+}

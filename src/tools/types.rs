@@ -72,8 +72,10 @@ pub struct ToolDefinition {
 ///   attempt after successful background dispatch; the conversation owns the
 ///   execution.
 /// - `ModelSelectable` — the model must explicitly choose foreground or
-///   background execution for each invocation through the reserved
-///   `__rustx_execution` invocation field.
+///   background execution for each invocation through the required
+///   `execution_mode` invocation field. That field is reserved by the
+///   runtime only under this policy; registration rejects a `ModelSelectable`
+///   tool whose canonical schema already defines it.
 ///
 /// Foreground/background is orthogonal to sequential/parallel scheduling
 /// ([`ToolConcurrencyPolicy`]).
@@ -163,9 +165,11 @@ pub enum ToolApprovalPolicy {
 /// The resolved execution ownership of one canonical invocation.
 ///
 /// The runtime resolves the effective mode from the tool's declared
-/// [`ToolExecutionPolicy`] and (for `ModelSelectable`) the reserved
-/// `__rustx_execution` invocation field, and delivers it to the executor as
-/// canonical invocation data. No policy resolution happens inside executors.
+/// [`ToolExecutionPolicy`] and (for `ModelSelectable`) the required
+/// `execution_mode` invocation field, and delivers it to the executor as
+/// canonical invocation data. The field is consumed before business-argument
+/// validation and never reaches an executor. No policy resolution happens
+/// inside executors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolInvocationMode {
@@ -494,8 +498,9 @@ pub enum ToolResultContent {
 /// canonical [`ToolDefinition`]: runtime execution, replay, and origin
 /// policy never reach provider adapters. For a `ModelSelectable` tool the
 /// compiled `input_schema` is the canonical schema decorated with the
-/// reserved runtime-owned `__rustx_execution` invocation field; the stored
-/// canonical schema remains untouched.
+/// required runtime-owned `execution_mode` invocation field and the compiled
+/// `description` carries the runtime-owned reminder that the field is
+/// mandatory; the stored canonical definition remains untouched.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelToolDefinition {
     /// Identity of the tool within the capability set.

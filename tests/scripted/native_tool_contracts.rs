@@ -229,7 +229,8 @@ fn optional_native_properties_are_absent_not_nullable_and_registry_metadata_stay
         {
             assert_ne!(property["type"], serde_json::json!(["null"]));
         }
-        assert!(schema["properties"]["__rustx_execution"].is_null());
+        assert!(schema["properties"]["execution_mode"].is_null());
+        assert!(!schema.to_string().contains("execution_mode"));
         assert!(!schema.to_string().contains("__rustx_execution"));
     }
     for definition in fixture.registry.model_definitions() {
@@ -237,8 +238,16 @@ fn optional_native_properties_are_absent_not_nullable_and_registry_metadata_stay
             !definition
                 .input_schema
                 .to_string()
-                .contains("__rustx_execution"),
+                .contains("execution_mode"),
             "default native definitions stay provider-neutral: {}",
+            definition.name
+        );
+        assert!(
+            !definition
+                .input_schema
+                .to_string()
+                .contains("__rustx_execution"),
+            "the retired reserved selector is gone: {}",
             definition.name
         );
     }
@@ -286,7 +295,7 @@ fn native_tools_preserve_legal_execution_policies_and_fixed_background_task_poli
             .expect("read definition");
         assert_eq!(read.execution_policy, execution);
         let arguments = if execution == ToolExecutionPolicy::ModelSelectable {
-            serde_json::json!({"path": "a.txt", "__rustx_execution": "foreground"})
+            serde_json::json!({"path": "a.txt", "execution_mode": "foreground"})
         } else {
             serde_json::json!({"path": "a.txt"})
         };
@@ -634,4 +643,65 @@ async fn native_agent_loop_preflight_rejection_settles_without_starting_an_execu
             .join("must-not-be-created.txt")
             .exists()
     );
+}
+
+/// The `ModelSelectable` root-schema contract is scoped to that policy alone.
+///
+/// `ask_user` is the live proof that rustX must keep accepting composed root
+/// schemas: its canonical schema is a root `anyOf` with no root `properties`
+/// at all, and arbitrary MCP servers ship schemas of that shape too. It
+/// registers normally (it is a fixed foreground intrinsic), while the same
+/// schema is refused under `ModelSelectable`, where rustX would have to
+/// inject a required root property into a composition it cannot reason about.
+#[test]
+fn composed_root_schemas_stay_valid_outside_model_selectable() {
+    use rustx::tools::{
+        SchemaError, ToolExecutionPolicy, validate_canonical_schema,
+        validate_execution_metadata_contract,
+    };
+
+    let fixture = common::native_fixture();
+    let ask_user = definition(&fixture, "ask_user").input_schema;
+    assert!(
+        ask_user["anyOf"].is_array() && ask_user.get("properties").is_none(),
+        "ask_user describes its arguments with a root composition: {ask_user}"
+    );
+    validate_canonical_schema(&ask_user)
+        .expect("the policy-unaware canonical validator accepts a composed root");
+    for policy in [
+        ToolExecutionPolicy::ForegroundOnly,
+        ToolExecutionPolicy::BackgroundOnly,
+    ] {
+        validate_execution_metadata_contract(policy, &ask_user)
+            .expect("a fixed policy injects nothing, so the root shape is irrelevant");
+    }
+    assert!(
+        matches!(
+            validate_execution_metadata_contract(ToolExecutionPolicy::ModelSelectable, &ask_user),
+            Err(SchemaError::UndecoratableRootSchema(keyword)) if keyword == "anyOf"
+        ),
+        "a composed root falls outside the decoratable root profile"
+    );
+
+    // Every ordinary native tool matches the decoratable root profile, which
+    // is why an allowlist costs nothing in practice.
+    for name in ["read", "write", "edit", "glob", "grep", "bash"] {
+        let schema = definition(&fixture, name).input_schema;
+        validate_execution_metadata_contract(ToolExecutionPolicy::ModelSelectable, &schema)
+            .unwrap_or_else(|error| panic!("{name} must stay ModelSelectable-eligible: {error}"));
+        for keyword in schema.as_object().expect("root object").keys() {
+            assert!(
+                rustx::tools::is_decoratable_root_keyword(keyword),
+                "{name} uses root keyword {keyword:?}, outside the profile"
+            );
+        }
+        // Native contracts are generated with inlined subschemas, so the
+        // reference ban costs them nothing either.
+        for keyword in rustx::tools::REFERENCE_APPLICATOR_KEYWORDS {
+            assert!(
+                !schema.to_string().contains(keyword),
+                "{name} must stay reference-free for ModelSelectable: {keyword}"
+            );
+        }
+    }
 }
