@@ -1604,9 +1604,14 @@ body
             second.skills().locations(),
             "the published host locations changed"
         );
+        // Canonical, because discovery publishes the canonical root: the
+        // fixture's own spelling is not the published one on a platform
+        // whose temporary directory is reached through a symlink.
         assert_eq!(
             second.skills().catalog_entries()[0].location,
-            root_b.join("pdf/SKILL.md").to_string_lossy()
+            std::fs::canonicalize(root_b.join("pdf/SKILL.md"))
+                .expect("canonical relocated SKILL.md")
+                .to_string_lossy()
         );
     }
 
