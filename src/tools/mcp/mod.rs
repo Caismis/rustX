@@ -66,8 +66,8 @@ use crate::tools::limits::{
     MAX_MODEL_TOOL_RESULT_BYTES, bound_tool_progress, bounded_text_preview,
 };
 use crate::tools::output::{
-    ToolOutputCapture, ToolOutputWriter, continuation_for_capture, foreground_continuation_block,
-    truncation_for_capture,
+    CapturedOutput, ToolOutputCapture, ToolOutputWriter, continuation_for_capture,
+    foreground_continuation_block, truncation_for_capture,
 };
 use crate::tools::types::{
     ManagedOutputContinuation, ToolDefinition, ToolExecutionResult, ToolExecutionStatus,
@@ -1436,11 +1436,20 @@ fn translate_result(
         .as_deref()
         .or(captured.unsupported.as_deref());
     let continuation = continuation_for_capture(&capture_result, background, output_diagnostic);
+    let (model_blocks, aggregate_error) = materialize_mcp_blocks(
+        captured.pending_blocks,
+        captured.saw_textual_block,
+        &capture_result,
+        continuation.as_ref(),
+        background,
+        context.artifacts,
+    );
+    let unsupported = captured.unsupported.or(aggregate_error);
     let status = if let Some(error) = captured.storage_error {
         ToolExecutionStatus::Failed {
             error: format!("MCP result output storage failed: {error}"),
         }
-    } else if let Some(error) = captured.unsupported {
+    } else if let Some(error) = unsupported {
         ToolExecutionStatus::Failed { error }
     } else if reported_error {
         ToolExecutionStatus::Failed {
@@ -1450,28 +1459,6 @@ fn translate_result(
         ToolExecutionStatus::Success
     };
     let truncation = truncation_for_capture(&capture_result);
-    let mut model_blocks = if capture_result.truncated || !capture_result.complete {
-        let mut preview_blocks = Vec::new();
-        if captured.saw_textual_block {
-            preview_blocks.push(ToolResultContent::Text(
-                crate::message::content::TextBlock {
-                    text: capture_result.preview,
-                },
-            ));
-        }
-        preview_blocks.extend(
-            captured
-                .small_blocks
-                .into_iter()
-                .filter(|block| matches!(block, ToolResultContent::Image(_))),
-        );
-        preview_blocks
-    } else {
-        captured.small_blocks
-    };
-    if !background && let Some(block) = foreground_continuation_block(continuation.as_ref()) {
-        model_blocks.push(block);
-    }
     ToolExecutionResult {
         status,
         content: model_blocks,
@@ -1480,6 +1467,189 @@ fn translate_result(
         artifacts: Vec::new(),
         truncation,
         managed_output: continuation,
+    }
+}
+
+/// The one MCP-owned accounting state for the aggregate canonical result.
+///
+/// Textual overflow is normalized by the shared Tool Plane capture first; the
+/// complete spill is auxiliary and therefore does not consume this budget.
+/// Every component that remains in the model-facing MCP projection consumes
+/// this same counter, including semantic image content.
+#[derive(Debug)]
+struct McpAggregateBudget {
+    remaining: usize,
+}
+
+const MCP_AGGREGATE_BUDGET_ERROR: &str =
+    "MCP result content exceeds the aggregate model-facing result limit";
+const MCP_IMAGE_AGGREGATE_BUDGET_ERROR: &str =
+    "MCP image content exceeds the aggregate model-facing result limit";
+
+impl McpAggregateBudget {
+    fn new() -> Self {
+        Self {
+            remaining: MAX_MODEL_TOOL_RESULT_BYTES,
+        }
+    }
+
+    fn consume(&mut self, bytes: usize) -> bool {
+        if bytes > self.remaining {
+            return false;
+        }
+        self.remaining -= bytes;
+        true
+    }
+}
+
+enum McpPendingBlock {
+    Text(String),
+    Json(serde_json::Value),
+    Image(Vec<u8>),
+}
+
+/// Materializes semantic MCP blocks only after the complete model-facing
+/// aggregate has one deterministic budget reservation.
+fn materialize_mcp_blocks(
+    pending_blocks: Vec<McpPendingBlock>,
+    saw_textual_block: bool,
+    capture_result: &CapturedOutput,
+    continuation: Option<&ManagedOutputContinuation>,
+    background: bool,
+    artifacts: &ArtifactStore,
+) -> (Vec<ToolResultContent>, Option<String>) {
+    let textual_overflow = capture_result.truncated || !capture_result.complete;
+    let mut budget = McpAggregateBudget::new();
+    let mut model_blocks = Vec::new();
+    let mut aggregate_error = None;
+    let continuation_block = (!background)
+        .then(|| foreground_continuation_block(continuation))
+        .flatten();
+    let continuation_fits = continuation_block.as_ref().is_none_or(|block| {
+        let ToolResultContent::Text(text) = block else {
+            return false;
+        };
+        budget.consume(text.text.len())
+    });
+    if !continuation_fits {
+        aggregate_error = Some(MCP_AGGREGATE_BUDGET_ERROR.to_owned());
+    }
+
+    if textual_overflow {
+        if saw_textual_block {
+            consume_mcp_text(
+                capture_result.preview.clone(),
+                &mut budget,
+                &mut model_blocks,
+                &mut aggregate_error,
+            );
+        }
+        // The shared capture's bounded preview represents all textual blocks
+        // in this path. Images remain semantic blocks and are considered in
+        // their original order without moving their bytes into managed text.
+        for pending in pending_blocks {
+            if let McpPendingBlock::Image(bytes) = pending {
+                consume_mcp_image(
+                    &bytes,
+                    &mut budget,
+                    &mut model_blocks,
+                    &mut aggregate_error,
+                    artifacts,
+                );
+            }
+        }
+    } else {
+        for pending in pending_blocks {
+            match pending {
+                McpPendingBlock::Text(text) => {
+                    consume_mcp_text(text, &mut budget, &mut model_blocks, &mut aggregate_error);
+                }
+                McpPendingBlock::Json(value) => {
+                    consume_mcp_json(value, &mut budget, &mut model_blocks, &mut aggregate_error);
+                }
+                McpPendingBlock::Image(bytes) => {
+                    consume_mcp_image(
+                        &bytes,
+                        &mut budget,
+                        &mut model_blocks,
+                        &mut aggregate_error,
+                        artifacts,
+                    );
+                }
+            }
+        }
+    }
+
+    if continuation_fits && let Some(block) = continuation_block {
+        model_blocks.push(block);
+    }
+
+    (model_blocks, aggregate_error)
+}
+
+fn consume_mcp_text(
+    text: String,
+    budget: &mut McpAggregateBudget,
+    model_blocks: &mut Vec<ToolResultContent>,
+    aggregate_error: &mut Option<String>,
+) {
+    if budget.consume(text.len()) {
+        model_blocks.push(ToolResultContent::Text(
+            crate::message::content::TextBlock { text },
+        ));
+    } else if aggregate_error.is_none() {
+        *aggregate_error = Some(MCP_AGGREGATE_BUDGET_ERROR.to_owned());
+    }
+}
+
+fn consume_mcp_json(
+    value: serde_json::Value,
+    budget: &mut McpAggregateBudget,
+    model_blocks: &mut Vec<ToolResultContent>,
+    aggregate_error: &mut Option<String>,
+) {
+    match serde_json::to_vec(&value) {
+        Ok(bytes) if budget.consume(bytes.len()) => {
+            model_blocks.push(ToolResultContent::Json { value });
+        }
+        Ok(_) => {
+            if aggregate_error.is_none() {
+                *aggregate_error = Some(MCP_AGGREGATE_BUDGET_ERROR.to_owned());
+            }
+        }
+        Err(error) => {
+            if aggregate_error.is_none() {
+                *aggregate_error = Some(format!("invalid MCP structured content: {error}"));
+            }
+        }
+    }
+}
+
+fn consume_mcp_image(
+    bytes: &[u8],
+    budget: &mut McpAggregateBudget,
+    model_blocks: &mut Vec<ToolResultContent>,
+    aggregate_error: &mut Option<String>,
+    artifacts: &ArtifactStore,
+) {
+    if !budget.consume(bytes.len()) {
+        if aggregate_error.is_none() {
+            *aggregate_error = Some(MCP_IMAGE_AGGREGATE_BUDGET_ERROR.to_owned());
+        }
+        return;
+    }
+    match write_artifact(artifacts, bytes) {
+        Ok(id) => model_blocks.push(ToolResultContent::Image(
+            crate::message::content::ImageReference {
+                artifact_id: id,
+                alt: None,
+            },
+        )),
+        Err(error) => {
+            if aggregate_error.is_none() {
+                *aggregate_error = Some(error);
+            }
+        }
     }
 }
 
@@ -1503,7 +1673,7 @@ fn open_mcp_output_capture(
 }
 
 struct McpContentCapture {
-    small_blocks: Vec<ToolResultContent>,
+    pending_blocks: Vec<McpPendingBlock>,
     saw_textual_block: bool,
     unsupported: Option<String>,
     storage_error: Option<String>,
@@ -1516,7 +1686,7 @@ fn capture_mcp_content(
     capture: &mut ToolOutputCapture,
 ) -> McpContentCapture {
     let mut captured = McpContentCapture {
-        small_blocks: Vec::new(),
+        pending_blocks: Vec::new(),
         saw_textual_block: false,
         unsupported: None,
         storage_error: None,
@@ -1543,31 +1713,13 @@ fn capture_mcp_content(
                     if let Err(error) = push_textual(&text.text) {
                         captured.storage_error = Some(error);
                     }
-                    captured.small_blocks.push(ToolResultContent::Text(
-                        crate::message::content::TextBlock { text: text.text },
-                    ));
+                    captured
+                        .pending_blocks
+                        .push(McpPendingBlock::Text(text.text));
                 }
                 ContentBlock::Image(image) => {
                     match base64::engine::general_purpose::STANDARD.decode(image.data.as_bytes()) {
-                        Ok(bytes) if bytes.len() <= MAX_MODEL_TOOL_RESULT_BYTES => {
-                            match write_artifact(context.artifacts, &bytes) {
-                                Ok(id) => {
-                                    captured.small_blocks.push(ToolResultContent::Image(
-                                        crate::message::content::ImageReference {
-                                            artifact_id: id,
-                                            alt: None,
-                                        },
-                                    ));
-                                }
-                                Err(error) => captured.unsupported = Some(error),
-                            }
-                        }
-                        Ok(_) => {
-                            captured.unsupported = Some(
-                                "MCP image content exceeds the bounded tool-result limit"
-                                    .to_owned(),
-                            );
-                        }
+                        Ok(bytes) => captured.pending_blocks.push(McpPendingBlock::Image(bytes)),
                         Err(error) => {
                             captured.unsupported = Some(format!("invalid MCP image data: {error}"));
                         }
@@ -1606,9 +1758,7 @@ fn capture_mcp_content(
                 captured.storage_error = Some(error);
             }
         }
-        captured
-            .small_blocks
-            .push(ToolResultContent::Json { value });
+        captured.pending_blocks.push(McpPendingBlock::Json(value));
     }
     captured
 }
@@ -1744,6 +1894,7 @@ pub struct McpCapabilityBinding {
 mod tests {
     use std::time::Instant;
 
+    use base64::Engine as _;
     use rmcp::model::{CallToolResult, ContentBlock};
 
     use super::{McpServerId, mcp_empty_terminal, mcp_tool_id, translate_result};
@@ -1796,6 +1947,128 @@ mod tests {
             runtime.environment(),
             None,
         )
+    }
+
+    fn image_block(bytes: usize) -> ContentBlock {
+        ContentBlock::image(
+            base64::engine::general_purpose::STANDARD.encode(vec![b'i'; bytes]),
+            "image/png",
+        )
+    }
+
+    #[test]
+    fn foreground_mcp_aggregate_budget_accepts_exact_text_image_boundary() {
+        let (_directory, runtime) = runtime("mcp-aggregate-exact");
+        let text_bytes = crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES;
+        let image_bytes = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES - text_bytes;
+        let progress = NoProgress;
+        let result = translate_result(
+            CallToolResult::success(vec![
+                ContentBlock::text("t".repeat(text_bytes)),
+                image_block(image_bytes),
+            ]),
+            &context(&runtime, None, &progress),
+            Instant::now(),
+        );
+
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+        assert!(result.managed_output.is_none());
+        assert!(matches!(
+            result.content.first(),
+            Some(ToolResultContent::Text(text)) if text.text.len() == text_bytes
+        ));
+        assert!(matches!(
+            result.content.get(1),
+            Some(ToolResultContent::Image(_))
+        ));
+    }
+
+    #[test]
+    fn foreground_mcp_multiple_images_share_the_aggregate_budget() {
+        let (_directory, runtime) = runtime("mcp-aggregate-images");
+        let image_bytes = 40 * 1024;
+        let progress = NoProgress;
+        let result = translate_result(
+            CallToolResult::success(vec![image_block(image_bytes), image_block(image_bytes)]),
+            &context(&runtime, None, &progress),
+            Instant::now(),
+        );
+
+        let ToolExecutionStatus::Failed { error } = &result.status else {
+            panic!("aggregate image overflow must fail explicitly: {result:?}");
+        };
+        assert!(error.contains("aggregate model-facing result limit"));
+        assert_eq!(
+            result
+                .content
+                .iter()
+                .filter(|content| matches!(content, ToolResultContent::Image(_)))
+                .count(),
+            1
+        );
+        assert!(result.managed_output.is_none());
+    }
+
+    #[test]
+    fn foreground_mcp_text_and_image_share_the_aggregate_budget() {
+        let (_directory, runtime) = runtime("mcp-aggregate-text-image");
+        let text_bytes = crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES;
+        let image_bytes = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES - text_bytes + 1;
+        let progress = NoProgress;
+        let result = translate_result(
+            CallToolResult::success(vec![
+                ContentBlock::text("t".repeat(text_bytes)),
+                image_block(image_bytes),
+            ]),
+            &context(&runtime, None, &progress),
+            Instant::now(),
+        );
+
+        let ToolExecutionStatus::Failed { error } = &result.status else {
+            panic!("text plus image overflow must fail explicitly: {result:?}");
+        };
+        assert!(error.contains("aggregate model-facing result limit"));
+        assert!(matches!(
+            result.content.first(),
+            Some(ToolResultContent::Text(text)) if text.text.len() == text_bytes
+        ));
+        assert!(
+            !result
+                .content
+                .iter()
+                .any(|content| matches!(content, ToolResultContent::Image(_)))
+        );
+        assert!(result.managed_output.is_none());
+    }
+
+    #[test]
+    fn foreground_mcp_structured_json_and_image_share_the_aggregate_budget() {
+        let (_directory, runtime) = runtime("mcp-aggregate-json-image");
+        let value = serde_json::json!({"payload": "x".repeat(1024)});
+        let structured_bytes = serde_json::to_vec(&value).expect("structured JSON").len();
+        let image_bytes = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES - structured_bytes + 1;
+        let mut call = CallToolResult::success(vec![image_block(image_bytes)]);
+        call.structured_content = Some(value);
+        let progress = NoProgress;
+        let result = translate_result(call, &context(&runtime, None, &progress), Instant::now());
+
+        let ToolExecutionStatus::Failed { error } = &result.status else {
+            panic!("structured JSON plus image overflow must fail explicitly: {result:?}");
+        };
+        assert!(error.contains("aggregate model-facing result limit"));
+        assert!(
+            result
+                .content
+                .iter()
+                .any(|content| matches!(content, ToolResultContent::Image(_)))
+        );
+        assert!(
+            !result
+                .content
+                .iter()
+                .any(|content| matches!(content, ToolResultContent::Json { .. }))
+        );
+        assert!(result.managed_output.is_none());
     }
 
     #[test]
