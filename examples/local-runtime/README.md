@@ -107,11 +107,21 @@ attempt's primary model.
 `keepRecentTokens`, and `summaryOutputCap`). The selected model's
 `contextWindow` remains in `models.json`.
 
-`nativeTools` shows the two policy axes for `read`, `write`, `edit`, `glob`,
-`grep`, and `bash`: `execution` is one of `foreground_only`,
-`background_only`, or `model_selectable`, and `concurrency` is one of
-`sequential` or `parallel`. The runtime-intrinsic `background_task` tool is
-not configured in this table; its fixed policy comes from the runtime.
+`approvalMode` is the current runtime-wide HITL mode. It defaults to `policy`;
+`full_access` suppresses only approval prompts for the current runtime and is
+never restored from Session history. The runtime applies it at attempt
+boundaries, so a busy attempt keeps its admitted mode while the latest request
+waits as `pending`.
+
+`nativeTools` shows the three independent policy axes for `read`, `write`,
+`edit`, `glob`, `grep`, and `bash`: `execution` is one of
+`foreground_only`, `background_only`, or `model_selectable`; `concurrency` is
+one of `sequential` or `parallel`; and `approval` is `never` or `always`.
+Availability, activation, approval, approval mode, execution ownership, and
+concurrency are separate facts. The runtime intrinsics `background_task` and
+`ask_user` are not configured in this table: both are fixed foreground,
+sequential, approval-never tools, with `ask_user` publishing one bounded
+Question through the runtime-owned `InteractionCoordinator`.
 
 The harmless `RUSTX_EXAMPLE_MODE` entry demonstrates the authorized runtime
 environment. Keep provider credentials in `models.json`'s `apiKey` reference,
@@ -203,7 +213,11 @@ the separate `mcpToolPolicies` map, keyed by the same identity, so an
 ```json
 {
   "mcpToolPolicies": {
-    "exa": { "execution": "foreground_only", "concurrency": "parallel" }
+    "exa": {
+      "execution": "foreground_only",
+      "concurrency": "parallel",
+      "approval": "never"
+    }
   }
 }
 ```
@@ -228,8 +242,8 @@ The `echo` tool is discovered automatically from:
 ```
 
 Its `TOOL.toml` uses the current manifest fields and
-`foreground_only`/`sequential` policies. `input.schema.json` requires one
-string `message`, and `tool.py` exposes the executor entrypoint
+`foreground_only`/`sequential`/`never` execution, concurrency, and approval
+policies. `input.schema.json` requires one string `message`, and `tool.py` exposes the executor entrypoint
 `def main(arguments)` and returns a JSON-serializable object. `pyproject.toml`
 has no third-party dependencies, and the committed `uv.lock` is generated
 from that project.

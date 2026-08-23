@@ -2,13 +2,16 @@
 //! normal [`ToolDefinition`] + [`ToolExecutor`] registrations.
 //!
 //! Read, Write, Edit, Glob, Grep, and Bash are all ordinary registrations;
-//! their executor implementations and their execution-ownership policies are
-//! independent, so each tool is configured with its own
+//! their executor implementations and their execution-ownership and approval
+//! policies are independent, so each tool is configured with its own
 //! [`ToolInvocationPolicy`] (`ForegroundOnly`, `BackgroundOnly`, or
-//! `ModelSelectable`) through the concrete bounded
+//! `ModelSelectable` execution, `Sequential`/`Parallel` concurrency, and
+//! `Never`/`Always` approval through the concrete bounded
 //! [`NativeToolPolicies`] configuration. The only intentionally fixed
 //! policy is the runtime intrinsic `background_task` (foreground-only,
-//! sequential), enforced by the registry itself.
+//! sequential, approval-never), and `ask_user` is likewise fixed to
+//! foreground-only, sequential, approval-never because it is the native
+//! Question capability itself.
 //!
 //! The default is foreground-only sequential for every ordinary native
 //! tool: the model-facing surface of the native tool plane is conservative
@@ -36,6 +39,7 @@
 //! [`ToolDefinition`]: crate::tools::types::ToolDefinition
 //! [`ToolExecutor`]: crate::tools::executor::ToolExecutor
 
+mod ask_user;
 mod background_task;
 mod bash;
 mod edit;
@@ -89,8 +93,9 @@ pub struct NativeToolResources {
     pub subagents: Option<crate::runtime::subagent::SubagentRegistry>,
 }
 
-/// The concrete, bounded per-tool execution-policy configuration of the six
-/// ordinary native tools.
+/// The concrete, bounded per-tool policy configuration of the six ordinary
+/// configurable native tools. `ask_user` and `background_task` are runtime
+/// intrinsics with fixed policies and are not configurable through this table.
 ///
 /// Execution policy belongs to the registered tool definition, not to the
 /// native tool plane as a whole: each ordinary native tool independently
@@ -184,6 +189,7 @@ pub(crate) fn native_tool_registrations(
     } = resources;
     let mut registrations = vec![
         background_task::registration(background),
+        ask_user::registration(),
         read::registration(policies.read),
         write::registration(policies.write),
         edit::registration(policies.edit),

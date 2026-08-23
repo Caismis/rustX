@@ -1900,6 +1900,8 @@ mod tests {
             "context",
             "mcp_servers",
             "native_tools",
+            "approval_mode",
+            "approvalMode",
             "environment",
             "skills",
             "default_tools",

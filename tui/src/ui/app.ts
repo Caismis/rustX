@@ -58,6 +58,7 @@ import {
 import {
   withPendingSubmission,
 } from "../presentation/projection.ts";
+import { focusedInteraction } from "../presentation/selectors.ts";
 import { correlateTools } from "../presentation/tools.ts";
 import type { PresentationState } from "../presentation/state.ts";
 import type { ChildRuntimeProcess } from "../runtime/child-process.ts";
@@ -314,11 +315,12 @@ export class RustxTuiApp {
           return { consume: true };
         }
         if (matchesKey(data, "escape")) {
-          const attempt = this.#session.state?.attempt;
+          const state = this.#session.state;
+          const attempt = state?.attempt;
           const acted = this.#overlay !== undefined || (
             !this.#restarting &&
-            attempt !== undefined &&
-            attempt.phase.type !== "settled"
+            (focusedInteraction(state) !== undefined ||
+              (attempt !== undefined && attempt.phase.type !== "settled"))
           );
           void this.#onEscape();
           return acted ? { consume: true } : undefined;
@@ -351,7 +353,11 @@ export class RustxTuiApp {
     // Optimistic echo, explicitly transient: it is reconciled away by the
     // runtime's authoritative inbound fact and is never canonical history.
     const key = `local-${++this.#submissionOrdinal}`;
-    const optimistic = !line.startsWith("/");
+    // Focused interaction answers are not inbound messages. The dispatcher
+    // repeats this projection check at the semantic routing boundary; this
+    // copy only prevents a misleading optimistic inbound echo.
+    const optimistic = !line.startsWith("/") &&
+      focusedInteraction(lease.session.state) === undefined;
     if (optimistic) {
       lease.session.updateState((state) =>
         withPendingSubmission(state, key, line),
@@ -430,8 +436,10 @@ export class RustxTuiApp {
       return;
     }
     if (this.#restarting) return;
-    const attempt = this.#session.state?.attempt;
-    if (attempt !== undefined && attempt.phase.type !== "settled") {
+    const state = this.#session.state;
+    const attempt = state?.attempt;
+    if (focusedInteraction(state) !== undefined ||
+      (attempt !== undefined && attempt.phase.type !== "settled")) {
       const lease = this.#presentationLease();
       try {
         const outcome = await this.#dispatcher.submit("/cancel");
@@ -450,7 +458,8 @@ export class RustxTuiApp {
     this.#acknowledgeTransient();
     if (this.#restarting) return;
     const state = this.#session.state;
-    if (state?.attempt !== undefined && state.attempt.phase.type !== "settled") {
+    if (focusedInteraction(state) !== undefined ||
+      (state?.attempt !== undefined && state.attempt.phase.type !== "settled")) {
       const lease = this.#presentationLease();
       try {
         const outcome = await this.#dispatcher.submit("/cancel");

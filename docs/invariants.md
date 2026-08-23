@@ -176,7 +176,7 @@ stream and normally commits exactly one terminal `RuntimeEvent`:
   identical cancellation conditions, the loop produces an identical
   ordered `RuntimeEvent` stream and an identical terminal outcome.
 
-## Native interaction and approval coordination (M9.2 / Issue #64)
+## Native interaction and HITL coordination (M9.2 / Issue #100)
 
 The native interaction plane is one conversation-owned rendezvous. It is not
 a provider adapter, a client callback, a permission framework, or an Agent
@@ -185,7 +185,7 @@ Loop replacement.
 ```text
 ToolRegistry::preflight
   -> canonical Assistant ToolCall
-  -> one AttemptLifecycle::pre_tool policy
+  -> effective ToolApprovalPolicy / ApprovalMode
        Allow -> existing start frontier
        Deny  -> one ToolExecutionStatus::Denied result slot
        Ask   -> InteractionCoordinator -> typed Runtime Client response
@@ -204,6 +204,8 @@ The ownership contract is:
 | Response transport | Runtime Client |
 | Rendering/input | TUI projection |
 | Attempt cancellation | `AgentCancellation` |
+| Tool cancellation observation | owner-observing `ExecutionCancellation` with one-way child derivation |
+| Native Question capability | crate-private runtime-bound `QuestionRequester` |
 | Drain/quiescence | `ConversationRuntime` / `ConversationLifecycle` |
 | Crash recovery | M9 recovery authority |
 
@@ -212,16 +214,25 @@ The ownership contract is:
 - `AttemptLifecycle` always contains exactly one typed `PreToolPolicy`. A
   runtime-created attempt receives one concrete native binding to its
   conversation-owned `InteractionCoordinator`; production callers cannot
-  replace that owner with an arbitrary rendezvous. A standalone inert
-  execution has no interaction provider and fails `Ask` closed. `AlwaysAllow`
-  is the identity policy because the current product has no native rule
-  requiring approval. There are no optional approval hooks, policy chains,
-  priorities, wrappers, or callbacks hidden in `ToolExecutor`.
+  replace that owner with an arbitrary rendezvous. No public
+  generic interaction trait is exposed. A standalone inert
+  execution has no interaction provider and fails `Ask` closed. The
+  runtime-created policy is derived from the effective `ApprovalMode`:
+  `Policy` consults the resolved Tool's `Never`/`Always`
+  `ToolApprovalPolicy`, while `FullAccess` makes effective approval `Never`
+  only. There are no optional approval hooks, policy chains, priorities,
+  wrappers, or callbacks hidden in `ToolExecutor`.
 - `PreToolPolicy` runs only after `ToolRegistry::preflight` has resolved the
   tool identity, invocation metadata, execution mode, and validated business
   arguments, and after the Assistant `ToolCall` has committed canonically.
   Its `PreToolView` is read-only and contains no mutation handle, executor,
   cancellation owner, or dispatch capability.
+- `ToolRegistry::preflight` is the final `ask_user` argument contract. Its
+  tool-owned normalizer validates bounded Question facts and emits a
+  canonical explicit `allow_free_text` mode before schema validation. A
+  successful `PreparedInvocation` therefore cannot contain an empty,
+  duplicate, or oversized choice list, an invalid answer mode, or text outside
+  the Unicode-character bounds used by the Question response validator.
 - `Allow`, `Deny { reason }`, and `Ask { reason }` are the complete decision
   vocabulary. An approval request exposes only immutable decision facts. A
   response has no replacement argument field. Therefore `ToolCallId`,
@@ -255,9 +266,12 @@ mutate runtime state. A response/cancellation winner only decides the
 rendezvous; it does not bypass Agent Loop cancellation or tool-start rules.
 
 `AgentCancellation` is the only cancellation-cause authority for an
-attempt-owned interaction. The coordinator retains that owning handle only to
-consume its already-selected first-winner cause at the terminal boundary; it
-does not rank or replace causes. A response that arrives after cancellation
+attempt-owned interaction. The coordinator retains only an
+`ExecutionCancellation` observation view to consume its already-selected
+first-winner cause at the terminal boundary; it never receives the owning
+handle and does not rank or replace causes. `ExecutionCancellation` can derive
+a child signal for subordinate work, but child cancellation cannot cancel the
+owner or change its cause. A response that arrives after cancellation
 has become observable records the same `Cancelled { reason }` outcome and is
 rejected as `interaction_not_pending`, even if the waiter has not yet polled
 its cancellation future. Runtime drain requests `RuntimeShutdown` as a
@@ -303,10 +317,30 @@ tool configuration.
 
 The one active Runtime Client attachment is the 0.1 interaction provider. If
 none is present when an `Ask` is published, the coordinator returns
-`Unavailable` and approval fails closed as `Denied`. Detach/EOF/TUI exit never
-fabricates Allow, Deny, or cancellation for an already-published request. A
-later attachment may answer still-live state, which it reconstructs from the
+`Unavailable` and approval fails closed as `Denied`; if `ask_user` cannot find
+the same provider, it returns an explicit failed ToolResult. No interaction
+path hangs or fabricates an answer. Detach/EOF/TUI exit never fabricates
+Allow, Deny, or cancellation for an already-published request. A later
+attachment may answer still-live state, which it reconstructs from the
 authoritative snapshot and cursor projection.
+
+### Question and `ask_user`
+
+Question is a separate bounded interaction kind. It contains a prompt,
+optional finite choices, and an optional free-text flag; its response is a
+typed choice or bounded free-text value. For the native `ask_user` contract, a
+bare prompt is open-ended, a supplied non-empty choice list is choice-only
+unless `allow_free_text: true` is explicit, and invalid combinations are
+rejected during schema/preflight validation before provider lookup. The
+existing coordinator owns its identity, pending map, cancellation race, and
+exactly-once settlement just as it does for Approval.
+
+`ask_user` is an ordinary native Tool, not an Agent Loop Question branch. Its
+fixed policy is foreground-only, sequential, and approval-never. Its executor
+receives only the crate-private bounded Question requester, requests a
+Question through the same coordinator, and returns a normal ToolResult, so the
+model continues through the existing Tool Plane. It has no
+filesystem/network/process authority and cannot recursively request Approval.
 
 ### Runtime Client and TUI projection
 
@@ -314,10 +348,37 @@ The Runtime Client carries native interaction facts through typed
 `interaction_respond`, `interaction_pending`, and `interaction_settled`
 messages plus `snapshot.pending_interactions`. Snapshot-at-cursor followed by
 subscribe-after-cursor remains the repair invariant. The TUI renders the
-runtime-owned pending approval and sends the typed response; it owns no
-pending truth, tool execution, arguments, cancellation, or local outcome
-state. Approval is the only 0.1 interaction kind; questions/forms and
-provider-specific payloads are out of scope.
+runtime-owned pending approval and Question and sends typed responses; it owns
+no pending truth, tool execution, arguments, cancellation, or local outcome
+state. Approval responses contain only `Allow`/`Deny`; Question responses
+contain no Tool identity or argument replacement channel. When multiple
+interactions are pending, ordinary editor input targets the
+lexicographically-smallest `InteractionId`; explicit commands can address any
+id. The TUI renders both from authoritative projection state, sends typed
+responses through the Runtime Client, and never suppresses or auto-answers
+them locally.
+
+### ApprovalMode control plane
+
+`ApprovalMode` is runtime control state, defaulting to `Policy` and optionally
+configured as `approvalMode` in current project/runtime settings. It is not
+Session history, so resume uses current configuration and never restores stale
+`FullAccess`.
+
+The runtime maintains `effective_approval_mode` and
+`desired_approval_mode`. While busy, a request changes only desired state; the
+current attempt keeps its original admission mode. Repeated requests coalesce
+to the latest desired value and idempotent requests do not advance the
+revision. After terminal settlement, reconciliation commits before the next
+attempt admission. Requesting `FullAccess` does not auto-approve a pending
+Approval, activate disabled/excluded Tools, change execution ownership or
+concurrency, or change authority.
+
+These facts are independent:
+
+```text
+availability != activation != approval != approval mode != execution != concurrency
+```
 
 ### Denied Tool Plane settlement and parallel calls
 
@@ -2014,9 +2075,9 @@ Tool-execution wrappers/middleware chains, post-tool result replacement or
 retroactive blocking, pre-tool argument or identity rewriting, question/form
 frameworks, generalized permission/risk policy, subagent lifecycle
 observation (Issue #60), and `TurnStoppingPolicy`/forced continuation are
-**absent by decision**, not TODO compatibility hooks. Native pre-tool approval
-is now the concrete bounded Issue #64 seam described above; it does not imply
-any of those broader frameworks.
+**absent by decision**, not TODO compatibility hooks. Native Approval plus the
+bounded Question/`ask_user` seam is now the concrete Issue #100 capability; it
+does not imply any of those broader frameworks.
 
 ## Conversation runtime coordinator (Issue #61)
 

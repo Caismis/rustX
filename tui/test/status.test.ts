@@ -25,6 +25,7 @@ import {
   workingStatus,
 } from "../src/ui/components/status.ts";
 import { plainText } from "../src/ui/theme.ts";
+import type { InteractionRequest } from "../src/protocol/types.ts";
 import {
   DEFAULT_PREVIEW_CHARS,
   withExpandedBackgroundExecutions,
@@ -39,6 +40,7 @@ import {
   sessionModel,
   toolResult,
   userMessage,
+  questionInteraction,
 } from "./support/fixtures.ts";
 import { prefs, stateOf } from "./support/render.ts";
 
@@ -143,6 +145,18 @@ describe("working status", () => {
         }),
       ),
       "Waiting for approval of bash…",
+    );
+  });
+
+  it("reports a pending Question as an answer request", () => {
+    assert.equal(
+      workingStatus(
+        stateOf({
+          attempt: attemptView({ attempt_id: "attempt-1" }),
+          pending_interactions: [questionInteraction()],
+        }),
+      ),
+      "Waiting for an answer…",
     );
   });
 
@@ -362,7 +376,7 @@ describe("footer", () => {
     );
     assert.match(rendered, /queued 1/);
     assert.match(rendered, /background 1/);
-    assert.match(rendered, /approvals 1/);
+    assert.match(rendered, /human input 1/);
   });
 
   it("reports drain and a closed transport without implying cancellation", () => {
@@ -501,6 +515,19 @@ describe("activity area", () => {
     assert.match(rendered, /\/approve <interaction-id> <allow\|deny> \[reason\]/);
   });
 
+  it("marks the deterministic focused interaction for ordinary editor input", () => {
+    const later = questionInteraction("attempt-1-interaction-z");
+    const focused = questionInteraction("attempt-1-interaction-a");
+    const rendered = plainText(
+      renderInteractionSection(
+        stateOf({ pending_interactions: [later, focused] }),
+        prefs(),
+      ),
+    );
+    assert.match(rendered, /Focused interaction: attempt-1-interaction-a/);
+    assert.match(rendered, /ordinary input answers this request/);
+  });
+
   it("surfaces an execution whose stream was dropped", () => {
     const state = stateOf({
       attempt: attemptView({
@@ -591,10 +618,13 @@ describe("client collapse is finite and reversible", () => {
   }
 
   function interaction(
-    kind: Partial<ReturnType<typeof approvalInteraction>["kind"]>,
+    kind: Partial<Extract<InteractionRequest["kind"], { type: "approval" }>>,
     expanded: boolean,
   ): string {
     const request = approvalInteraction();
+    if (request.kind.type !== "approval") {
+      throw new Error("fixture must be an approval interaction");
+    }
     const preferences = expanded
       ? withExpandedInteractions(prefs(), [request.id])
       : prefs();
@@ -602,7 +632,7 @@ describe("client collapse is finite and reversible", () => {
       renderInteractionSection(
         stateOf({
           pending_interactions: [
-            { ...request, kind: { ...request.kind, ...kind } },
+            { ...request, kind: { ...request.kind, ...kind, type: "approval" } },
           ],
         }),
         preferences,

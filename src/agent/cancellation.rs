@@ -217,11 +217,11 @@ impl AgentCancellation {
         self.signal.cancelled().await;
     }
 
-    /// The underlying runtime-owned cancellation signal of the attempt.
+    /// The owning runtime cancellation signal of the attempt.
     ///
-    /// Foreground tool executions receive this signal in their execution
-    /// context, so attempt cancellation physically reaches cancellable
-    /// native foreground work.
+    /// This owner-only handle is used by Agent Loop/runtime boundaries. Tool
+    /// executors receive [`ExecutionCancellation`] instead and derive child
+    /// signals, so they cannot acquire this trigger through their context.
     #[must_use]
     pub fn signal(&self) -> CancellationSignal {
         self.signal.clone()
@@ -282,14 +282,36 @@ mod tests {
             .expect("invocation must be cancelled with the attempt");
     }
 
-    /// Foreground tool executions receive the attempt's underlying signal.
+    /// The owner signal follows the attempt's cancellation transition.
     #[tokio::test]
-    async fn tool_executions_share_the_attempt_signal() {
+    async fn owner_signal_follows_attempt_cancellation() {
         let signal = AgentCancellation::new(CancellationReason::UserRequested);
         let tool_signal = signal.signal();
         assert!(!tool_signal.is_cancelled());
         signal.cancel();
         assert!(tool_signal.is_cancelled());
+    }
+
+    /// An execution-derived child can be cancelled independently, but owner
+    /// cancellation still propagates to it and the owner retains its live
+    /// first-winner cause.
+    #[test]
+    fn execution_child_cannot_cancel_or_relabel_attempt() {
+        let attempt = AgentCancellation::new(CancellationReason::UserRequested);
+        let view = attempt.execution_cancellation();
+        let child = view.child_signal();
+
+        child.cancel();
+        assert!(child.is_cancelled());
+        assert!(!attempt.is_cancelled());
+        assert!(!view.is_cancelled());
+        assert_eq!(attempt.reason(), CancellationReason::UserRequested);
+
+        assert!(attempt.request_cancel(CancellationReason::RuntimeShutdown));
+        assert!(view.is_cancelled());
+        assert!(child.is_cancelled());
+        assert_eq!(view.reason(), CancellationReason::RuntimeShutdown);
+        assert_eq!(attempt.reason(), CancellationReason::RuntimeShutdown);
     }
 
     /// Issue #12 (M9c): a foreground execution context taken **before** the

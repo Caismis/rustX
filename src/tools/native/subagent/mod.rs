@@ -68,6 +68,7 @@ fn definition() -> ToolDefinition {
         input_schema: input_schema::<SubagentInput>(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         concurrency_policy: ToolConcurrencyPolicy::Sequential,
+        approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     }
@@ -130,11 +131,8 @@ impl ToolExecutor for SubagentExecutor {
                 Ok(prepared) => prepared,
                 Err(error) => return failed_result(error.to_string()),
             };
-            match self
-                .subagents
-                .commit(prepared, &context.cancellation.signal())
-                .await
-            {
+            let child_cancellation = context.cancellation.child_signal();
+            match self.subagents.commit(prepared, &child_cancellation).await {
                 Ok(SubagentStartOutcome::Accepted(accepted)) => {
                     let mut result = accepted.result;
                     result["subagent_id"] =

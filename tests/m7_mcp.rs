@@ -105,20 +105,20 @@ mod unix_tests {
                 mode: rustx::tools::types::ToolInvocationMode::Foreground,
                 arguments: serde_json::json!({}),
             },
-            rustx::tools::executor::ToolExecutionContext {
-                conversation_id: runtime_bundle.conversation_id(),
-                execution_id: None,
-                cancellation: rustx::runtime::ExecutionCancellation::detached(
+            rustx::tools::executor::ToolExecutionContext::new(
+                runtime_bundle.conversation_id(),
+                None,
+                rustx::runtime::ExecutionCancellation::detached(
                     rustx::runtime::CancellationSignal::new(),
                     rustx::runtime::types::CancellationReason::UserRequested,
                 ),
-                workspace: runtime_bundle.workspace(),
-                progress: &progress,
-                artifacts: runtime_bundle.artifacts(),
-                tool_output: runtime_bundle.tool_output(),
-                environment: runtime_bundle.environment(),
-                skill_resources: None,
-            },
+                runtime_bundle.workspace(),
+                &progress,
+                runtime_bundle.artifacts(),
+                runtime_bundle.tool_output(),
+                runtime_bundle.environment(),
+                None,
+            ),
         )
         .await;
         assert!(matches!(
@@ -151,20 +151,20 @@ mod unix_tests {
                 mode: rustx::tools::types::ToolInvocationMode::Foreground,
                 arguments: serde_json::json!({}),
             },
-            rustx::tools::executor::ToolExecutionContext {
-                conversation_id: runtime_bundle.conversation_id(),
-                execution_id: None,
-                cancellation: rustx::runtime::ExecutionCancellation::detached(
+            rustx::tools::executor::ToolExecutionContext::new(
+                runtime_bundle.conversation_id(),
+                None,
+                rustx::runtime::ExecutionCancellation::detached(
                     slow_cancellation.clone(),
                     rustx::runtime::types::CancellationReason::UserRequested,
                 ),
-                workspace: runtime_bundle.workspace(),
-                progress: &slow_progress,
-                artifacts: runtime_bundle.artifacts(),
-                tool_output: runtime_bundle.tool_output(),
-                environment: runtime_bundle.environment(),
-                skill_resources: None,
-            },
+                runtime_bundle.workspace(),
+                &slow_progress,
+                runtime_bundle.artifacts(),
+                runtime_bundle.tool_output(),
+                runtime_bundle.environment(),
+                None,
+            ),
         );
         tokio::pin!(slow_future);
         tokio::select! {
@@ -280,20 +280,20 @@ mod unix_tests {
                 mode: rustx::tools::types::ToolInvocationMode::Foreground,
                 arguments: serde_json::json!({}),
             },
-            rustx::tools::executor::ToolExecutionContext {
-                conversation_id: runtime_bundle.conversation_id(),
-                execution_id: None,
-                cancellation: rustx::runtime::ExecutionCancellation::detached(
+            rustx::tools::executor::ToolExecutionContext::new(
+                runtime_bundle.conversation_id(),
+                None,
+                rustx::runtime::ExecutionCancellation::detached(
                     rustx::runtime::CancellationSignal::new(),
                     rustx::runtime::types::CancellationReason::UserRequested,
                 ),
-                workspace: runtime_bundle.workspace(),
-                progress: &progress,
-                artifacts: runtime_bundle.artifacts(),
-                tool_output: runtime_bundle.tool_output(),
-                environment: runtime_bundle.environment(),
-                skill_resources: None,
-            },
+                runtime_bundle.workspace(),
+                &progress,
+                runtime_bundle.artifacts(),
+                runtime_bundle.tool_output(),
+                runtime_bundle.environment(),
+                None,
+            ),
         )
         .await;
         assert!(matches!(
@@ -336,20 +336,20 @@ mod unix_tests {
                 mode: rustx::tools::types::ToolInvocationMode::Foreground,
                 arguments: serde_json::json!({}),
             },
-            rustx::tools::executor::ToolExecutionContext {
-                conversation_id: runtime_bundle.conversation_id(),
-                execution_id: None,
-                cancellation: rustx::runtime::ExecutionCancellation::detached(
+            rustx::tools::executor::ToolExecutionContext::new(
+                runtime_bundle.conversation_id(),
+                None,
+                rustx::runtime::ExecutionCancellation::detached(
                     slow_cancellation.clone(),
                     rustx::runtime::types::CancellationReason::UserRequested,
                 ),
-                workspace: runtime_bundle.workspace(),
-                progress: &progress,
-                artifacts: runtime_bundle.artifacts(),
-                tool_output: runtime_bundle.tool_output(),
-                environment: runtime_bundle.environment(),
-                skill_resources: None,
-            },
+                runtime_bundle.workspace(),
+                &progress,
+                runtime_bundle.artifacts(),
+                runtime_bundle.tool_output(),
+                runtime_bundle.environment(),
+                None,
+            ),
         );
         tokio::pin!(slow_future);
         tokio::select! {

@@ -49,6 +49,7 @@ use rustx::message::types::{
 };
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
+use rustx::runtime::ExecutionCancellation;
 use rustx::runtime::identity::{
     AgentId, AttemptId, CertifiedExtensionIdentity, ContextContributorIdentity, ConversationId,
     MessageId, NativeContextContributor, ToolCallId, ToolId,
@@ -56,8 +57,9 @@ use rustx::runtime::identity::{
 use rustx::runtime::types::{CancellationReason, ConversationLifecycle, RuntimeError};
 use rustx::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
 use rustx::tools::types::{
-    ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
-    ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolOrigin, ToolReplayPolicy,
+    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
+    ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolOrigin,
+    ToolReplayPolicy,
 };
 use support::fake::{FakeModel, FakeStep, ScriptedCall, fake_model, tool_call_events};
 
@@ -249,11 +251,11 @@ impl ScriptedInteractionRendezvous {
 }
 
 impl TestInteractionRendezvous for ScriptedInteractionRendezvous {
-    fn request_approval<'a>(
-        &'a self,
+    fn request_approval(
+        &self,
         facts: ApprovalFacts,
-        cancellation: &'a AgentCancellation,
-    ) -> BoxFuture<'a, InteractionOutcome> {
+        cancellation: ExecutionCancellation,
+    ) -> BoxFuture<'_, InteractionOutcome> {
         let count = {
             let mut requests = self.requests.lock().expect("interaction requests lock");
             requests.push(facts);
@@ -2002,6 +2004,7 @@ async fn invalid_preflight_never_reaches_pre_tool_policy() {
         }),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         concurrency_policy: ToolConcurrencyPolicy::Sequential,
+        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     };

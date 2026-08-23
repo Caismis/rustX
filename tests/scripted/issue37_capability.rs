@@ -44,6 +44,7 @@ async fn capability_projection_covers_native_python_and_skills() {
                 input_schema: serde_json::json!({"type": "object"}),
                 execution_policy: ToolExecutionPolicy::ForegroundOnly,
                 concurrency_policy: ToolConcurrencyPolicy::Sequential,
+                approval_policy: rustx::tools::types::ToolApprovalPolicy::Never,
                 replay_policy: ToolReplayPolicy::Never,
                 origin: ToolOrigin::Builtin,
             };

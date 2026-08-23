@@ -159,11 +159,16 @@ impl ExecutionCancellation {
         self.cause.cause()
     }
 
-    /// The underlying runtime cancellation signal, for executors that hand
-    /// it to a child operation (a supervised process, a nested runner).
+    /// Derives a cancellation signal for subordinate work.
+    ///
+    /// Cancellation propagates from the owning operation into this child, but
+    /// cancelling the returned signal cannot cancel the owner. This is the
+    /// only signal capability exposed by the execution observation view: a
+    /// `ToolExecutor` can supervise a process or nested runner without
+    /// acquiring the Agent Loop attempt's cancellation authority.
     #[must_use]
-    pub fn signal(&self) -> CancellationSignal {
-        self.signal.clone()
+    pub fn child_signal(&self) -> CancellationSignal {
+        self.signal.child()
     }
 }
 
@@ -235,6 +240,50 @@ mod tests {
         *authority.winner.lock().expect("winner lock") = Some(CancellationReason::RuntimeShutdown);
         signal.cancel();
         view.cancelled().await;
+        assert_eq!(view.reason(), CancellationReason::RuntimeShutdown);
+    }
+
+    /// An execution view derives one-way cancellation for subordinate work:
+    /// the owner reaches the child, while the child cannot reach the owner or
+    /// alter the owner's live cause.
+    #[test]
+    fn execution_child_cancellation_is_downward_only() {
+        use super::{CancellationCause, ExecutionCancellation};
+        use crate::runtime::types::CancellationReason;
+        use std::sync::{Arc, Mutex};
+
+        struct Authority {
+            default: CancellationReason,
+            winner: Mutex<Option<CancellationReason>>,
+        }
+        impl CancellationCause for Authority {
+            fn cause(&self) -> CancellationReason {
+                self.winner
+                    .lock()
+                    .expect("winner lock")
+                    .unwrap_or(self.default)
+            }
+        }
+
+        let parent = CancellationSignal::new();
+        let authority = Arc::new(Authority {
+            default: CancellationReason::UserRequested,
+            winner: Mutex::new(None),
+        });
+        let view = ExecutionCancellation::new(parent.clone(), authority.clone());
+        let child = view.child_signal();
+
+        child.cancel();
+        assert!(child.is_cancelled());
+        assert!(!parent.is_cancelled());
+        assert!(!view.is_cancelled());
+        assert_eq!(view.reason(), CancellationReason::UserRequested);
+
+        *authority.winner.lock().expect("winner lock") = Some(CancellationReason::RuntimeShutdown);
+        let propagated_child = view.child_signal();
+        parent.cancel();
+        assert!(view.is_cancelled());
+        assert!(propagated_child.is_cancelled());
         assert_eq!(view.reason(), CancellationReason::RuntimeShutdown);
     }
 

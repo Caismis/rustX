@@ -28,6 +28,7 @@
 import type {
   BackgroundLifecycle,
   CapabilitySourceView,
+  InteractionRequest,
   ModelInvocationView,
   SessionModelConfig,
   RuntimeClientBackgroundExecution,
@@ -79,6 +80,26 @@ export function activeBackground(
   return state.background.filter(
     (execution) => !BACKGROUND_TERMINAL_STATES.has(execution.state),
   );
+}
+
+/**
+ * The one interaction that receives ordinary editor input.
+ *
+ * Runtime publication order is not a user-facing focus contract, so the TUI
+ * deliberately selects the lexicographically smallest live InteractionId.
+ * Explicit `/answer`, `/approve`, and `/cancel` commands remain able to target
+ * any runtime-owned interaction or attempt.
+ */
+export function focusedInteraction(
+  state: PresentationState | undefined,
+): InteractionRequest | undefined {
+  return state?.pendingInteractions
+    .slice()
+    .sort((left, right) => {
+      if (left.id < right.id) return -1;
+      if (left.id > right.id) return 1;
+      return 0;
+    })[0];
 }
 
 /** Whether a background lifecycle state is terminal, per the runtime. */

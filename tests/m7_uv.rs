@@ -95,20 +95,20 @@ async fn production_uv_materializes_a_local_tool_environment() {
             mode: rustx::tools::types::ToolInvocationMode::Foreground,
             arguments: serde_json::json!({"answer": 42}),
         },
-        rustx::tools::executor::ToolExecutionContext {
-            conversation_id: runtime.conversation_id(),
-            execution_id: None,
-            cancellation: rustx::runtime::ExecutionCancellation::detached(
+        rustx::tools::executor::ToolExecutionContext::new(
+            runtime.conversation_id(),
+            None,
+            rustx::runtime::ExecutionCancellation::detached(
                 rustx::runtime::CancellationSignal::new(),
                 rustx::runtime::types::CancellationReason::UserRequested,
             ),
-            workspace: runtime.workspace(),
-            progress: &progress,
-            artifacts: runtime.artifacts(),
-            tool_output: runtime.tool_output(),
-            environment: runtime.environment(),
-            skill_resources: None,
-        },
+            runtime.workspace(),
+            &progress,
+            runtime.artifacts(),
+            runtime.tool_output(),
+            runtime.environment(),
+            None,
+        ),
     )
     .await;
     assert!(matches!(
@@ -284,20 +284,20 @@ async fn conflicting_local_dependencies_isolate_versions_and_materialize_offline
                 mode: rustx::tools::types::ToolInvocationMode::Foreground,
                 arguments: serde_json::json!({}),
             },
-            rustx::tools::executor::ToolExecutionContext {
-                conversation_id: runtime.conversation_id(),
-                execution_id: None,
-                cancellation: rustx::runtime::ExecutionCancellation::detached(
+            rustx::tools::executor::ToolExecutionContext::new(
+                runtime.conversation_id(),
+                None,
+                rustx::runtime::ExecutionCancellation::detached(
                     rustx::runtime::CancellationSignal::new(),
                     rustx::runtime::types::CancellationReason::UserRequested,
                 ),
-                workspace: runtime.workspace(),
-                progress: &NoProgress,
-                artifacts: runtime.artifacts(),
-                tool_output: runtime.tool_output(),
-                environment: runtime.environment(),
-                skill_resources: None,
-            },
+                runtime.workspace(),
+                &NoProgress,
+                runtime.artifacts(),
+                runtime.tool_output(),
+                runtime.environment(),
+                None,
+            ),
         )
         .await;
         assert!(

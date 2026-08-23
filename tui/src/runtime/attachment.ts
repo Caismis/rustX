@@ -41,6 +41,7 @@ import {
 import type { PresentationState } from "../presentation/state.ts";
 import {
   RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+  type ApprovalMode,
   type AgentId,
   type CapabilityView,
   type ConversationId,
@@ -279,6 +280,28 @@ export class RuntimeClientAttachment {
       throw new Error(`model_set returned ${result.type}`);
     }
     return result.model;
+  }
+
+  /** Requests the authoritative runtime ApprovalMode transition. */
+  async approvalModeSet(
+    mode: ApprovalMode,
+  ): Promise<{
+    effectiveApprovalMode: ApprovalMode;
+    pendingApprovalMode?: ApprovalMode;
+    revision: number;
+  }> {
+    const result = await this.#connection.request({
+      method: "approval_mode_set",
+      mode,
+    });
+    if (result.type !== "approval_mode_set") {
+      throw new Error(`approval_mode_set returned ${result.type}`);
+    }
+    return {
+      effectiveApprovalMode: result.effective_approval_mode,
+      pendingApprovalMode: result.pending_approval_mode,
+      revision: result.revision,
+    };
   }
 
   async capabilityGet(): Promise<CapabilityView> {

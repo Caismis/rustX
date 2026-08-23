@@ -26,6 +26,7 @@ import {
   capabilities,
   runtimeInbound,
   sessionModel,
+  questionInteraction,
   snapshot,
   toolResult,
   userMessage,
@@ -100,6 +101,24 @@ describe("presentation projection", () => {
     );
     assert.deepEqual(repaired.pendingInteractions, [interaction]);
     assert.equal(repaired.cursor, 8);
+  });
+
+  it("folds Questions and authoritative ApprovalMode changes", () => {
+    const question = questionInteraction();
+    const state = fold(initial(), [
+      { type: "interaction_pending", interaction: question },
+      {
+        type: "approval_mode_changed",
+        effective_approval_mode: "policy",
+        pending_approval_mode: "full_access",
+        revision: 1,
+      },
+    ]);
+
+    assert.deepEqual(state.pendingInteractions, [question]);
+    assert.equal(state.effectiveApprovalMode, "policy");
+    assert.equal(state.pendingApprovalMode, "full_access");
+    assert.equal(state.approvalModeRevision, 1);
   });
 
   it("folds committed compaction diagnostics and rebuilds them from a snapshot", () => {

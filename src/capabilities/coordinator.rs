@@ -672,6 +672,7 @@ impl CapabilityCoordinator {
                     input_schema: package.input_schema,
                     execution_policy: package.policy.execution,
                     concurrency_policy: package.policy.concurrency,
+                    approval_policy: package.policy.approval,
                     replay_policy: crate::tools::types::ToolReplayPolicy::Never,
                     origin: crate::tools::types::ToolOrigin::Python {
                         tool_version_id: package.tool_version_id,
@@ -2323,6 +2324,7 @@ mod mcp_race_tests {
                 tool_output: runtime_bundle.tool_output(),
                 environment: runtime_bundle.environment(),
                 skill_resources: None,
+                question_requester: None,
             },
         )
         .await;

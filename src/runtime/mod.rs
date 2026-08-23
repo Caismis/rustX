@@ -31,7 +31,7 @@ pub mod conversation_runtime;
 pub mod identity;
 pub mod inbound;
 /// The native provider-independent human interaction rendezvous and pending
-/// interaction projection facts (Issue #64). Internal ownership primitives
+/// interaction projection facts (Issue #100). Internal ownership primitives
 /// stay behind the runtime facade; the public domain values are re-exported
 /// below.
 pub(crate) mod interaction;
@@ -116,8 +116,9 @@ pub use continuation::{
     AnthropicContinuation, OpenAiResponsesContinuation, ProviderContinuationState,
 };
 pub use conversation_runtime::{
-    CancelAttemptError, ConversationContextConfig, ConversationRuntime, ConversationRuntimeError,
-    InboundAdmission, InboundAdmissionError, ModelUpdateError, RuntimeConversationConfig,
+    ApprovalModeUpdateError, CancelAttemptError, ConversationContextConfig, ConversationRuntime,
+    ConversationRuntimeError, InboundAdmission, InboundAdmissionError, ModelUpdateError,
+    RuntimeConversationConfig,
 };
 pub use identity::{
     AgentId, AgentVersionId, ArtifactId, AttemptId, CapabilityRevision, ConversationId, EventId,
@@ -129,6 +130,7 @@ pub use inbound::{
 };
 pub use interaction::{
     ApprovalDecision, InteractionKind, InteractionOutcome, InteractionRequest, InteractionResponse,
+    QuestionAnswer,
 };
 pub use recovery::{
     AttemptRecoveryClass, BackgroundEvidence, BackgroundRecoveryClass, KnownModelOutcome,
@@ -137,6 +139,7 @@ pub use recovery::{
 };
 pub use request_history::{RequestHistory, RequestHistoryError};
 pub use types::{
-    CancellationReason, ConversationLifecycle, ConversationLifecycleState, RuntimeClock,
-    RuntimeError, SystemClock, TokenMeasurement, TokenMeasurementSource,
+    ApprovalMode, ApprovalModeState, CancellationReason, ConversationLifecycle,
+    ConversationLifecycleState, RuntimeClock, RuntimeError, SystemClock, TokenMeasurement,
+    TokenMeasurementSource,
 };

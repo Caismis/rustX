@@ -215,6 +215,11 @@ export type ToolExecutionPolicy =
 
 export type ToolConcurrencyPolicy = "sequential" | "parallel";
 
+export type ToolApprovalPolicy = "never" | "always";
+
+/** Runtime-wide approval control. `full_access` only bypasses approval. */
+export type ApprovalMode = "policy" | "full_access";
+
 export type ToolInvocationMode = "foreground" | "background";
 
 export type ToolReplayPolicy = "never" | "idempotent";
@@ -270,26 +275,42 @@ export type ApprovalDecision =
   | { type: "allow" }
   | { type: "deny"; reason: string };
 
-export type InteractionResponse = {
-  type: "approval";
-  decision: ApprovalDecision;
-};
+export type QuestionAnswer =
+  | { type: "choice"; value: string }
+  | { type: "free_text"; value: string };
+
+export type InteractionResponse =
+  | {
+      type: "approval";
+      decision: ApprovalDecision;
+    }
+  | {
+      type: "question";
+      answer: QuestionAnswer;
+    };
 
 export type InteractionRequest = {
   id: InteractionId;
   conversation_id: ConversationId;
   attempt_id: AttemptId;
   turn: number;
-  kind: {
-    type: "approval";
-    call_id: ToolCallId;
-    tool_id: ToolId;
-    tool_name: string;
-    origin: ToolOrigin;
-    mode: ToolInvocationMode;
-    arguments: unknown;
-    reason: string;
-  };
+  kind:
+    | {
+        type: "approval";
+        call_id: ToolCallId;
+        tool_id: ToolId;
+        tool_name: string;
+        origin: ToolOrigin;
+        mode: ToolInvocationMode;
+        arguments: unknown;
+        reason: string;
+      }
+    | {
+        type: "question";
+        prompt: string;
+        choices?: string[];
+        allow_free_text: boolean;
+      };
 };
 
 export type InteractionOutcome =
@@ -637,6 +658,7 @@ export interface RuntimeClientTool {
   input_schema: unknown;
   execution_policy: ToolExecutionPolicy;
   concurrency_policy: ToolConcurrencyPolicy;
+  approval_policy: ToolApprovalPolicy;
   replay_policy: ToolReplayPolicy;
   origin: ToolOrigin;
 }
@@ -704,6 +726,9 @@ export interface RuntimeClientContextView {
 export interface RuntimeClientSnapshot {
   conversation_id: ConversationId;
   shutting_down: boolean;
+  effective_approval_mode: ApprovalMode;
+  pending_approval_mode?: ApprovalMode;
+  approval_mode_revision: number;
   messages: MessageBlock[];
   attempt?: RuntimeClientAttempt;
   inbound: InboundDiagnostics;
@@ -753,6 +778,12 @@ export type RuntimeClientEvent =
       type: "interaction_settled";
       interaction_id: InteractionId;
       outcome: InteractionOutcome;
+    }
+  | {
+      type: "approval_mode_changed";
+      effective_approval_mode: ApprovalMode;
+      pending_approval_mode?: ApprovalMode;
+      revision: number;
     }
   | {
       type: "context_compacted";
@@ -892,6 +923,7 @@ export type RuntimeClientRequest =
   | { method: "model_catalog_get"; id: RequestId }
   | { method: "model_get"; id: RequestId }
   | { method: "model_set"; id: RequestId; config: SessionModelConfig }
+  | { method: "approval_mode_set"; id: RequestId; mode: ApprovalMode }
   | {
       method: "session_list";
       id: RequestId;
@@ -971,6 +1003,7 @@ export type RuntimeClientRequestBody =
   | Omit<Extract<RuntimeClientRequest, { method: "model_catalog_get" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "model_get" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "model_set" }>, "id">
+  | Omit<Extract<RuntimeClientRequest, { method: "approval_mode_set" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "session_list" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "session_get" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "session_tree_get" }>, "id">
@@ -1013,6 +1046,12 @@ export type RuntimeClientResult =
   | { type: "model_catalog"; catalog: ModelCatalogView }
   | { type: "model"; model: SessionModelView }
   | { type: "model_set"; model: SessionModelView }
+  | {
+      type: "approval_mode_set";
+      effective_approval_mode: ApprovalMode;
+      pending_approval_mode?: ApprovalMode;
+      revision: number;
+    }
   | {
       type: "session_list";
       sessions: SessionSummaryView[];
@@ -1068,6 +1107,8 @@ export type RuntimeClientError =
   | { type: "no_current_attempt" }
   | { type: "interaction_not_pending"; interaction_id: InteractionId }
   | { type: "interaction_invalid_response"; message: string }
+  | { type: "approval_mode_inactive" }
+  | { type: "approval_mode_durability_failed"; message: string }
   | { type: "unknown_background_execution"; execution_id: ToolExecutionId }
   | { type: "unknown_subagent"; subagent_id: SubagentId }
   | {
@@ -1115,6 +1156,7 @@ export function isKnownRuntimeClientEvent(
     case "attempt_usage_updated":
     case "interaction_pending":
     case "interaction_settled":
+    case "approval_mode_changed":
     case "context_compacted":
     case "assistant_message_started":
     case "assistant_text_delta":
@@ -1191,6 +1233,10 @@ export function describeProtocolError(error: RuntimeClientError): string {
       return `interaction ${error.interaction_id} is no longer pending`;
     case "interaction_invalid_response":
       return `invalid interaction response: ${error.message}`;
+    case "approval_mode_inactive":
+      return "the runtime is not activated for ApprovalMode changes";
+    case "approval_mode_durability_failed":
+      return `ApprovalMode change failed durability: ${error.message}`;
     case "unknown_background_execution":
       return `unknown background execution ${error.execution_id}`;
     case "resync_required":

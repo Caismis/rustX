@@ -192,20 +192,20 @@ async fn prove_native_tool_executes(runtime: &LocalConversationRuntime) {
             mode: rustx::tools::types::ToolInvocationMode::Foreground,
             arguments: serde_json::json!({"command": "echo rustx-issue-81-alive"}),
         },
-        rustx::tools::executor::ToolExecutionContext {
-            conversation_id: tool_runtime.conversation_id(),
-            execution_id: None,
-            cancellation: rustx::runtime::ExecutionCancellation::detached(
+        rustx::tools::executor::ToolExecutionContext::new(
+            tool_runtime.conversation_id(),
+            None,
+            rustx::runtime::ExecutionCancellation::detached(
                 rustx::runtime::CancellationSignal::new(),
                 rustx::runtime::types::CancellationReason::UserRequested,
             ),
-            workspace: tool_runtime.workspace(),
-            progress: &NoProgress,
-            artifacts: tool_runtime.artifacts(),
-            tool_output: tool_runtime.tool_output(),
-            environment: tool_runtime.environment(),
-            skill_resources: None,
-        },
+            tool_runtime.workspace(),
+            &NoProgress,
+            tool_runtime.artifacts(),
+            tool_runtime.tool_output(),
+            tool_runtime.environment(),
+            None,
+        ),
     )
     .await;
     let rustx::tools::types::ToolExecutionStatus::Success = result.status else {

@@ -99,6 +99,7 @@ fn try_config(
         agent_id: AgentId::new("agent-a"),
         model: support::model::scripted_session_model(model),
         timezone: None,
+        approval_mode: rustx::runtime::ApprovalMode::Policy,
         context: ConversationContextConfig {
             policy: rustx::context::SessionContextPolicy {
                 reserve_tokens: 0,
