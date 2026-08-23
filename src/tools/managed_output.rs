@@ -7,11 +7,11 @@
 //! ```text
 //! managed tool-output root
 //!     |
-//!     +-- results/result_N.txt   ResultSpill: foreground/settled result
-//!     |                          overflow storage. Allocated lazily, only
-//!     |                          when a textual result crosses its
-//!     |                          model-facing bound. Small output never
-//!     |                          touches the filesystem.
+//!     +-- results/result_N.txt   ResultSpill: foreground result overflow
+//!     |                          storage. Allocated lazily, only when a
+//!     |                          textual result crosses the shared preview
+//!     |                          threshold. Small output never touches the
+//!     |                          filesystem.
 //!     |
 //!     +-- tasks/exec_N.output    BackgroundOutput: the live output channel
 //!                                of one accepted background execution.
@@ -23,10 +23,11 @@
 //!
 //! Both are auxiliary runtime-owned storage: a bounded model-visible
 //! preview/message is the canonical replayable record, and the file holds
-//! the complete textual output addressed by its absolute path inside
-//! ordinary textual tool output. Neither is a semantic artifact, a second
-//! canonical history, or a model `File` modality. The model may explicitly
-//! Read or Grep an advertised path while the file exists.
+//! the complete textual output (or an honestly partial prefix after a
+//! storage failure) addressed by its absolute path inside ordinary textual
+//! tool output. Neither is a semantic artifact, a second canonical history,
+//! or a model `File` modality. The model may explicitly Read or Grep an
+//! advertised path while the file exists.
 //!
 //! Every advertised path contains valid UTF-8 text: producers decode each
 //! byte stream with an incremental UTF-8 decoder before writing (invalid
@@ -536,10 +537,13 @@ fn spill_high_water(results: &Path) -> Result<u64, ManagedOutputError> {
 /// tool result streams through it, and its absolute path is the
 /// model-facing continuation locator.
 ///
-/// A result spill has exactly one terminal storage state: either it is
-/// published complete (the producer finished every write successfully and
-/// advertised the locator), or it is incomplete and is cleaned up without
-/// ever being advertised.
+/// A result spill is published as
+/// [`crate::tools::types::ManagedOutputContinuation::Complete`] only
+/// after every write succeeds. If storage fails after allocation, the file is
+/// retained as auxiliary partial output and the producer publishes a typed
+/// [`crate::tools::types::ManagedOutputContinuation::Partial`] locator instead
+/// of claiming that it
+/// contains the complete result.
 #[derive(Debug)]
 pub struct ResultSpill {
     file: File,

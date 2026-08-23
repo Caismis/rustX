@@ -320,9 +320,10 @@ pub struct ToolExecutionResult {
 ///
 /// The two managed-output lifecycles both use this type: a foreground
 /// result references its lazy result spill (`results/result_N.txt`) only
-/// when the output crossed the preview bound, while a background result
-/// references its dispatch-allocated live-output file
-/// (`tasks/exec_N.output`).
+/// when the complete representation crossed the shared preview threshold,
+/// while a background result references its dispatch-allocated live-output
+/// file (`tasks/exec_N.output`). A size-only cutoff is never a semantic tool
+/// failure; `Partial`/`Unavailable` make output-storage failure explicit.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ManagedOutputContinuation {

@@ -29,7 +29,8 @@ use crate::runtime::process_runner::{
 };
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::{
-    BASH_STREAM_PREVIEW_BYTES, BASH_TERMINATION_CONFIRMATION, DEFAULT_FOREGROUND_BASH_TIMEOUT,
+    BASH_TERMINATION_CONFIRMATION, DEFAULT_FOREGROUND_BASH_TIMEOUT,
+    FOREGROUND_TOOL_RESULT_PREVIEW_BYTES,
 };
 use crate::tools::native::support::failed_result;
 use crate::tools::types::{
@@ -525,8 +526,12 @@ async fn run_bash_unix(
             }
         };
 
-    let stdout_capture = Arc::new(Mutex::new(PreviewCapture::new(BASH_STREAM_PREVIEW_BYTES)));
-    let stderr_capture = Arc::new(Mutex::new(PreviewCapture::new(BASH_STREAM_PREVIEW_BYTES)));
+    let stdout_capture = Arc::new(Mutex::new(PreviewCapture::new(
+        FOREGROUND_TOOL_RESULT_PREVIEW_BYTES,
+    )));
+    let stderr_capture = Arc::new(Mutex::new(PreviewCapture::new(
+        FOREGROUND_TOOL_RESULT_PREVIEW_BYTES,
+    )));
     let (combined_tx, combined_rx) = tokio::sync::mpsc::channel::<(u8, String)>(32);
 
     // The combined multiplex storage policy is mode-dependent: foreground
@@ -542,14 +547,14 @@ async fn run_bash_unix(
         #[cfg(not(test))]
         let append_watch: AppendWatch = None;
         let capture = Arc::new(Mutex::new(BackgroundOutputCapture::new(
-            BASH_STREAM_PREVIEW_BYTES,
+            FOREGROUND_TOOL_RESULT_PREVIEW_BYTES,
             sink,
             append_watch,
         )));
         background_capture = Some(capture.clone());
         tokio::spawn(consume_background(combined_rx, capture))
     } else {
-        let spill_capture = SpillCapture::new(BASH_STREAM_PREVIEW_BYTES);
+        let spill_capture = SpillCapture::new();
         #[cfg(test)]
         let spill_capture = match control {
             Some(control) => spill_capture.with_spill_started_watch(control.spill_started.clone()),
@@ -638,9 +643,6 @@ async fn run_bash_unix(
     // an output locator as the complete output; a background output file
     // whose storage failed is honestly labelled partial, never complete.
     let mut capture_error: Option<String> = None;
-    // The deferred foreground capture failure (see below): the failed
-    // result is returned only after the capture settled and cleaned up.
-    let mut foreground_unowned_failure: Option<String> = None;
     if let Err(error) = *capture {
         // The outcome is already owned (failure or cancellation/
         // timeout): the capture of a terminated process tree is
@@ -667,10 +669,11 @@ async fn run_bash_unix(
                 // result below names the partial file honestly.
                 capture_failure = Some(format!("bash output capture failed: {error}"));
             } else {
-                // Defer the failed result until the capture has settled
-                // below: `finish(false)` owns the partial spill cleanup, so
-                // a failed foreground capture never leaks a partial file.
-                foreground_unowned_failure = Some(format!("bash output capture failed: {error}"));
+                // Foreground storage failure is explicit too. The shared
+                // capture retains any allocated partial spill so the result
+                // can publish Partial (or Unavailable when allocation never
+                // succeeded) without claiming Complete.
+                capture_failure = Some(format!("bash output capture failed: {error}"));
             }
         }
         capture_error = Some(error);
@@ -703,13 +706,6 @@ async fn run_bash_unix(
             .finish(capture_error.is_none()),
         _ => unreachable!("exactly one combined capture exists per invocation"),
     };
-    if let Some(message) = foreground_unowned_failure {
-        // The capture has settled and `finish(false)` discarded the partial
-        // spill best-effort: the failure is explicit and no partial file or
-        // locator survives.
-        return failed_result(message);
-    }
-
     // Outcome precedence: an explicit process-control/runtime failure wins
     // over cancellation/timeout intent, which wins over the natural shell
     // result — but in every case the owned process tree is already
@@ -771,12 +767,15 @@ async fn run_bash_unix(
                 .clone()
                 .unwrap_or_else(|| "unknown capture failure".to_owned()),
         }),
+        (false, false, Some(path)) => Some(ManagedOutputContinuation::Partial {
+            locator: path,
+            diagnostic: capture_error
+                .clone()
+                .unwrap_or_else(|| "the foreground output capture is partial".to_owned()),
+        }),
         (false, _, None) => capture_error
             .clone()
             .map(|diagnostic| ManagedOutputContinuation::Unavailable { diagnostic }),
-        (false, false, Some(_)) => {
-            unreachable!("a foreground capture never advertises a partial spill")
-        }
         (true, _, None) => unreachable!("a background capture always owns its live-output file"),
     };
     // The model must be able to locate the managed output of a FOREGROUND

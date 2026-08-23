@@ -65,9 +65,13 @@ use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::{
     MAX_MODEL_TOOL_RESULT_BYTES, bound_tool_progress, bounded_text_preview,
 };
+use crate::tools::output::{
+    ToolOutputCapture, ToolOutputWriter, continuation_for_capture, foreground_continuation_block,
+    truncation_for_capture,
+};
 use crate::tools::types::{
-    ToolDefinition, ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationPolicy,
-    ToolOrigin, ToolReplayPolicy, ToolResultContent,
+    ManagedOutputContinuation, ToolDefinition, ToolExecutionResult, ToolExecutionStatus,
+    ToolInvocation, ToolInvocationPolicy, ToolOrigin, ToolReplayPolicy, ToolResultContent,
 };
 use crate::tools::workspace::Workspace;
 
@@ -1005,10 +1009,10 @@ impl McpServerRuntime {
         let _call_gate = self.call_gate.read().await;
         let started = Instant::now();
         if self.closed.load(Ordering::Acquire) {
-            return failed_mcp("MCP server runtime is closed", started);
+            return failed_mcp("MCP server runtime is closed", context, started);
         }
         let serde_json::Value::Object(arguments) = arguments else {
-            return failed_mcp("MCP tool arguments must be a JSON object", started);
+            return failed_mcp("MCP tool arguments must be a JSON object", context, started);
         };
         let params = CallToolRequestParams::new(remote_name.to_owned()).with_arguments(arguments);
         let request = ClientRequest::CallToolRequest(CallToolRequest::new(params));
@@ -1018,7 +1022,9 @@ impl McpServerRuntime {
             .await
         {
             Ok(handle) => handle,
-            Err(error) => return failed_mcp(&bound_error(&error.to_string()), started),
+            Err(error) => {
+                return failed_mcp(&bound_error(&error.to_string()), context, started);
+            }
         };
         let mut progress = self
             .handler
@@ -1033,15 +1039,21 @@ impl McpServerRuntime {
                     let cancelled = handle.cancel(Some("rustX execution cancellation".to_owned())).await;
                     drop(progress);
                     return match cancelled {
-                        Ok(()) => ToolExecutionResult {
-                            status: ToolExecutionStatus::Cancelled {
+                        Ok(()) => mcp_empty_terminal(
+                            ToolExecutionStatus::Cancelled {
                                 reason: context.cancellation.reason(),
                             },
-                            content: Vec::new(), duration_ms: duration_ms(started),
-                            exit_code: None, artifacts: Vec::new(), truncation: None,
-                            managed_output: None,
-                        },
-                        Err(error) => failed_mcp(&format!("MCP cancellation failed: {}", bound_error(&error.to_string())), started),
+                            context,
+                            started,
+                        ),
+                        Err(error) => failed_mcp(
+                            &format!(
+                                "MCP cancellation failed: {}",
+                                bound_error(&error.to_string())
+                            ),
+                            context,
+                            started,
+                        ),
                     };
                 }
                 progress_item = progress.next() => {
@@ -1062,15 +1074,23 @@ impl McpServerRuntime {
         let response = match response {
             Some(Ok(Ok(ServerResult::CallToolResult(result)))) => result,
             Some(Ok(Ok(ServerResult::InputRequiredResult(_)))) => {
-                return failed_mcp("MCP input_required results are unsupported in M7", started);
+                return failed_mcp(
+                    "MCP input_required results are unsupported in M7",
+                    context,
+                    started,
+                );
             }
-            Some(Ok(Ok(_))) => return failed_mcp("unexpected MCP tools/call response", started),
-            Some(Ok(Err(error))) => return failed_mcp(&bound_error(&error.to_string()), started),
+            Some(Ok(Ok(_))) => {
+                return failed_mcp("unexpected MCP tools/call response", context, started);
+            }
+            Some(Ok(Err(error))) => {
+                return failed_mcp(&bound_error(&error.to_string()), context, started);
+            }
             Some(Err(_)) | None => {
-                return failed_mcp("MCP transport closed during tools/call", started);
+                return failed_mcp("MCP transport closed during tools/call", context, started);
             }
         };
-        translate_result(response, context.artifacts, started)
+        translate_result(response, context, started)
     }
 }
 
@@ -1393,92 +1413,204 @@ fn resolve_workspace_cwd(workspace: &Workspace, cwd: Option<&Path>) -> Result<Pa
 
 fn translate_result(
     result: CallToolResult,
-    artifacts: &ArtifactStore,
+    context: &ToolExecutionContext<'_>,
     started: Instant,
 ) -> ToolExecutionResult {
-    let mut content = Vec::new();
-    let mut unsupported = None;
-    let mut remaining = MAX_MODEL_TOOL_RESULT_BYTES;
-    let mut original_bytes = 0usize;
-    let mut truncated = false;
-    for block in result.content {
-        match block {
-            ContentBlock::Text(text) => {
-                original_bytes = original_bytes.saturating_add(text.text.len());
-                let (preview, was_truncated) =
-                    bounded_text_preview(text.text.as_bytes(), remaining);
-                remaining = remaining.saturating_sub(preview.len());
-                truncated |= was_truncated;
-                content.push(ToolResultContent::Text(
-                    crate::message::content::TextBlock { text: preview },
-                ));
-            }
-            ContentBlock::Image(image) => {
-                match base64::engine::general_purpose::STANDARD.decode(image.data.as_bytes()) {
-                    Ok(bytes) if bytes.len() <= remaining => {
-                        match write_artifact(artifacts, &bytes) {
-                            Ok(id) => {
-                                remaining = remaining.saturating_sub(bytes.len());
-                                original_bytes = original_bytes.saturating_add(bytes.len());
-                                content.push(ToolResultContent::Image(
-                                    crate::message::content::ImageReference {
-                                        artifact_id: id,
-                                        alt: None,
-                                    },
-                                ));
-                            }
-                            Err(error) => unsupported = Some(error),
-                        }
-                    }
-                    Ok(_) => {
-                        unsupported = Some(
-                            "MCP image content exceeds the bounded tool-result limit".to_owned(),
-                        );
-                    }
-                    Err(error) => unsupported = Some(format!("invalid MCP image data: {error}")),
-                }
-            }
-            ContentBlock::Audio(_) | ContentBlock::Resource(_) | ContentBlock::ResourceLink(_) => {
-                unsupported =
-                    Some("MCP content variant has no canonical M7 representation".to_owned());
-            }
-            _ => unsupported = Some("unknown MCP content variant is unsupported in M7".to_owned()),
+    let background = context.execution_id.is_some();
+    let mut capture = match open_mcp_output_capture(context) {
+        Ok(capture) => capture,
+        Err((locator, diagnostic)) => {
+            return failed_mcp_storage(&diagnostic, locator, started);
         }
-    }
-    if let Some(value) = result.structured_content {
-        match serde_json::to_vec(&value) {
-            Ok(bytes) if bytes.len() <= remaining => {
-                original_bytes = original_bytes.saturating_add(bytes.len());
-                content.push(ToolResultContent::Json { value });
-            }
-            Ok(_) => {
-                unsupported =
-                    Some("MCP structured content exceeds the bounded tool-result limit".to_owned());
-            }
-            Err(error) => unsupported = Some(format!("invalid MCP structured content: {error}")),
+    };
+    let reported_error = result.is_error == Some(true);
+    let captured = capture_mcp_content(
+        result.content,
+        result.structured_content,
+        context,
+        &mut capture,
+    );
+    let capture_result = capture.finish(captured.storage_error.is_none());
+    let output_diagnostic = captured
+        .storage_error
+        .as_deref()
+        .or(captured.unsupported.as_deref());
+    let continuation = continuation_for_capture(&capture_result, background, output_diagnostic);
+    let status = if let Some(error) = captured.storage_error {
+        ToolExecutionStatus::Failed {
+            error: format!("MCP result output storage failed: {error}"),
         }
-    }
-    let status = if let Some(error) = unsupported {
+    } else if let Some(error) = captured.unsupported {
         ToolExecutionStatus::Failed { error }
-    } else if result.is_error == Some(true) {
+    } else if reported_error {
         ToolExecutionStatus::Failed {
             error: "MCP tool reported an execution error".to_owned(),
         }
     } else {
         ToolExecutionStatus::Success
     };
+    let truncation = truncation_for_capture(&capture_result);
+    let mut model_blocks = if capture_result.truncated || !capture_result.complete {
+        let mut preview_blocks = Vec::new();
+        if captured.saw_textual_block {
+            preview_blocks.push(ToolResultContent::Text(
+                crate::message::content::TextBlock {
+                    text: capture_result.preview,
+                },
+            ));
+        }
+        preview_blocks.extend(
+            captured
+                .small_blocks
+                .into_iter()
+                .filter(|block| matches!(block, ToolResultContent::Image(_))),
+        );
+        preview_blocks
+    } else {
+        captured.small_blocks
+    };
+    if !background && let Some(block) = foreground_continuation_block(continuation.as_ref()) {
+        model_blocks.push(block);
+    }
     ToolExecutionResult {
         status,
-        content,
+        content: model_blocks,
         duration_ms: duration_ms(started),
         exit_code: None,
         artifacts: Vec::new(),
-        truncation: truncated.then_some(crate::tools::types::TruncationState {
-            truncated: true,
-            original_bytes: u64::try_from(original_bytes).ok(),
-        }),
-        managed_output: None,
+        truncation,
+        managed_output: continuation,
     }
+}
+
+fn open_mcp_output_capture(
+    context: &ToolExecutionContext<'_>,
+) -> Result<ToolOutputCapture, (PathBuf, String)> {
+    let Some(execution_id) = context.execution_id else {
+        return Ok(ToolOutputCapture::foreground());
+    };
+    let locator = context.tool_output.background_output_path(execution_id);
+    let sink = context
+        .tool_output
+        .open_background_output_sink(execution_id)
+        .map_err(|error| {
+            (
+                locator,
+                format!("cannot open the background MCP result output: {error}"),
+            )
+        })?;
+    Ok(ToolOutputCapture::background(sink, None))
+}
+
+struct McpContentCapture {
+    small_blocks: Vec<ToolResultContent>,
+    saw_textual_block: bool,
+    unsupported: Option<String>,
+    storage_error: Option<String>,
+}
+
+fn capture_mcp_content(
+    blocks: Vec<ContentBlock>,
+    structured_content: Option<serde_json::Value>,
+    context: &ToolExecutionContext<'_>,
+    capture: &mut ToolOutputCapture,
+) -> McpContentCapture {
+    let mut captured = McpContentCapture {
+        small_blocks: Vec::new(),
+        saw_textual_block: false,
+        unsupported: None,
+        storage_error: None,
+    };
+    let mut first_textual_block = true;
+    {
+        let mut push_textual = |text: &str| -> Result<(), String> {
+            captured.saw_textual_block = true;
+            if !first_textual_block {
+                capture.push(
+                    "\n",
+                    (!capture.is_background()).then_some(context.tool_output),
+                )?;
+            }
+            first_textual_block = false;
+            capture.push(
+                text,
+                (!capture.is_background()).then_some(context.tool_output),
+            )
+        };
+        for block in blocks {
+            match block {
+                ContentBlock::Text(text) => {
+                    if let Err(error) = push_textual(&text.text) {
+                        captured.storage_error = Some(error);
+                    }
+                    captured.small_blocks.push(ToolResultContent::Text(
+                        crate::message::content::TextBlock { text: text.text },
+                    ));
+                }
+                ContentBlock::Image(image) => {
+                    match base64::engine::general_purpose::STANDARD.decode(image.data.as_bytes()) {
+                        Ok(bytes) if bytes.len() <= MAX_MODEL_TOOL_RESULT_BYTES => {
+                            match write_artifact(context.artifacts, &bytes) {
+                                Ok(id) => {
+                                    captured.small_blocks.push(ToolResultContent::Image(
+                                        crate::message::content::ImageReference {
+                                            artifact_id: id,
+                                            alt: None,
+                                        },
+                                    ));
+                                }
+                                Err(error) => captured.unsupported = Some(error),
+                            }
+                        }
+                        Ok(_) => {
+                            captured.unsupported = Some(
+                                "MCP image content exceeds the bounded tool-result limit"
+                                    .to_owned(),
+                            );
+                        }
+                        Err(error) => {
+                            captured.unsupported = Some(format!("invalid MCP image data: {error}"));
+                        }
+                    }
+                }
+                ContentBlock::Audio(_)
+                | ContentBlock::Resource(_)
+                | ContentBlock::ResourceLink(_) => {
+                    captured.unsupported =
+                        Some("MCP content variant has no canonical M7 representation".to_owned());
+                }
+                _ => {
+                    captured.unsupported =
+                        Some("unknown MCP content variant is unsupported in M7".to_owned());
+                }
+            }
+        }
+    }
+    if let Some(value) = structured_content {
+        captured.saw_textual_block = true;
+        if !first_textual_block
+            && let Err(error) = capture.push(
+                "\n",
+                (!capture.is_background()).then_some(context.tool_output),
+            )
+        {
+            captured.storage_error = Some(error);
+        }
+        if captured.storage_error.is_none() {
+            let foreground_store = (!capture.is_background()).then_some(context.tool_output);
+            let mut writer = ToolOutputWriter::new(capture, foreground_store);
+            let write_result = serde_json::to_writer(&mut writer, &value)
+                .map_err(|error| format!("invalid MCP structured content: {error}"))
+                .and_then(|()| writer.finish());
+            if let Err(error) = write_result {
+                captured.storage_error = Some(error);
+            }
+        }
+        captured
+            .small_blocks
+            .push(ToolResultContent::Json { value });
+    }
+    captured
 }
 
 fn write_artifact(
@@ -1496,17 +1628,99 @@ fn write_artifact(
     Ok(id)
 }
 
-fn failed_mcp(message: &str, started: Instant) -> ToolExecutionResult {
+fn failed_mcp_storage(diagnostic: &str, locator: PathBuf, started: Instant) -> ToolExecutionResult {
+    let diagnostic = bound_error(diagnostic);
     ToolExecutionResult {
         status: ToolExecutionStatus::Failed {
-            error: bound_error(message),
+            error: format!("MCP result output storage failed: {diagnostic}"),
         },
         content: Vec::new(),
         duration_ms: duration_ms(started),
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
-        managed_output: None,
+        managed_output: Some(crate::tools::types::ManagedOutputContinuation::Partial {
+            locator,
+            diagnostic,
+        }),
+    }
+}
+
+fn failed_mcp(
+    message: &str,
+    context: &ToolExecutionContext<'_>,
+    started: Instant,
+) -> ToolExecutionResult {
+    mcp_empty_terminal(
+        ToolExecutionStatus::Failed {
+            error: bound_error(message),
+        },
+        context,
+        started,
+    )
+}
+
+/// Retains the dispatch-owned background locator for MCP outcomes that do
+/// not carry a remote `CallToolResult` (cancellation, transport failure, or
+/// a local protocol error). A healthy preallocated empty file is a complete
+/// record of a call that produced no logical result; a sink-open failure is
+/// explicitly Partial.
+fn mcp_empty_terminal(
+    status: ToolExecutionStatus,
+    context: &ToolExecutionContext<'_>,
+    started: Instant,
+) -> ToolExecutionResult {
+    let Some(execution_id) = context.execution_id else {
+        return ToolExecutionResult {
+            status,
+            content: Vec::new(),
+            duration_ms: duration_ms(started),
+            exit_code: None,
+            artifacts: Vec::new(),
+            truncation: None,
+            managed_output: None,
+        };
+    };
+    let locator = context.tool_output.background_output_path(execution_id);
+    match context
+        .tool_output
+        .open_background_output_sink(execution_id)
+    {
+        Ok(sink) => {
+            drop(sink);
+            ToolExecutionResult {
+                status,
+                content: Vec::new(),
+                duration_ms: duration_ms(started),
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+                managed_output: Some(ManagedOutputContinuation::Complete { locator }),
+            }
+        }
+        Err(error) => {
+            let diagnostic = format!("cannot open the background MCP result output: {error}");
+            let error = match status {
+                ToolExecutionStatus::Failed { error } => {
+                    format!("{error}; MCP result output storage failed: {diagnostic}")
+                }
+                _ => format!("MCP result output storage failed: {diagnostic}"),
+            };
+            ToolExecutionResult {
+                status: ToolExecutionStatus::Failed {
+                    error: bound_error(&error),
+                },
+                content: Vec::new(),
+                duration_ms: duration_ms(started),
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+                managed_output: Some(ManagedOutputContinuation::Partial {
+                    locator,
+                    diagnostic: bound_error(&diagnostic),
+                }),
+            }
+        }
     }
 }
 
@@ -1528,7 +1742,61 @@ pub struct McpCapabilityBinding {
 
 #[cfg(test)]
 mod tests {
-    use super::{McpServerId, mcp_tool_id};
+    use std::time::Instant;
+
+    use rmcp::model::{CallToolResult, ContentBlock};
+
+    use super::{McpServerId, mcp_empty_terminal, mcp_tool_id, translate_result};
+    use crate::runtime::identity::{ConversationId, ToolExecutionId};
+    use crate::runtime::types::CancellationReason;
+    use crate::runtime::{CancellationSignal, ExecutionCancellation};
+    use crate::tools::executor::{ProgressReporter, ToolExecutionContext};
+    use crate::tools::types::{ManagedOutputContinuation, ToolExecutionStatus, ToolResultContent};
+
+    struct NoProgress;
+
+    impl ProgressReporter for NoProgress {
+        fn report(&self, _progress: crate::tools::types::ToolProgress) {}
+    }
+
+    fn runtime(
+        name: &str,
+    ) -> (
+        tempfile::TempDir,
+        crate::tools::runtime::ConversationToolRuntime,
+    ) {
+        let directory = tempfile::tempdir().expect("runtime directory");
+        let root = directory.path().to_path_buf();
+        std::fs::create_dir_all(root.join("workspace")).expect("workspace");
+        let runtime = crate::tools::runtime::ConversationToolRuntime::new(
+            ConversationId::new(name),
+            root.join("workspace"),
+            root.join("artifacts"),
+        )
+        .expect("tool runtime");
+        (directory, runtime)
+    }
+
+    fn context<'a>(
+        runtime: &'a crate::tools::runtime::ConversationToolRuntime,
+        execution_id: Option<&'a ToolExecutionId>,
+        progress: &'a NoProgress,
+    ) -> ToolExecutionContext<'a> {
+        ToolExecutionContext::new(
+            runtime.conversation_id(),
+            execution_id,
+            ExecutionCancellation::detached(
+                CancellationSignal::new(),
+                CancellationReason::UserRequested,
+            ),
+            runtime.workspace(),
+            progress,
+            runtime.artifacts(),
+            runtime.tool_output(),
+            runtime.environment(),
+            None,
+        )
+    }
 
     #[test]
     fn mcp_tool_ids_are_length_prefixed_and_stable() {
@@ -1536,5 +1804,150 @@ mod tests {
         assert_eq!(first, mcp_tool_id(&McpServerId::new("a"), "b"));
         assert_ne!(first, mcp_tool_id(&McpServerId::new("ab"), ""));
         assert!(first.starts_with("mcp:sha256:"));
+    }
+
+    #[test]
+    fn foreground_mcp_storage_allocation_failure_is_unavailable() {
+        let (_directory, runtime) = runtime("mcp-storage-allocation");
+        runtime.tool_output().set_force_open_failures(true);
+        let progress = NoProgress;
+        let result = translate_result(
+            CallToolResult::success(vec![ContentBlock::text(
+                "x".repeat(crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1),
+            )]),
+            &context(&runtime, None, &progress),
+            Instant::now(),
+        );
+        assert!(matches!(result.status, ToolExecutionStatus::Failed { .. }));
+        assert!(matches!(
+            result.managed_output,
+            Some(ManagedOutputContinuation::Unavailable { .. })
+        ));
+        assert!(result.content.iter().any(|content| matches!(
+            content,
+            ToolResultContent::Text(text) if text.text.len() <= crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES
+        )));
+    }
+
+    #[test]
+    fn foreground_mcp_storage_write_failure_is_partial() {
+        let (_directory, runtime) = runtime("mcp-storage-write");
+        runtime.tool_output().fail_writes_after(0);
+        let progress = NoProgress;
+        let result = translate_result(
+            CallToolResult::success(vec![ContentBlock::text(
+                "x".repeat(crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1),
+            )]),
+            &context(&runtime, None, &progress),
+            Instant::now(),
+        );
+        let Some(ManagedOutputContinuation::Partial { locator, .. }) = result.managed_output else {
+            panic!("MCP write failure must remain Partial: {result:?}");
+        };
+        assert!(locator.exists());
+        assert!(matches!(result.status, ToolExecutionStatus::Failed { .. }));
+    }
+
+    #[test]
+    fn foreground_mcp_utf8_boundary_keeps_preview_valid_and_spill_complete() {
+        let (_directory, runtime) = runtime("mcp-utf8-boundary");
+        let text = format!(
+            "{}😀",
+            "a".repeat(crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES - 1)
+        );
+        let expected = text.clone();
+        let progress = NoProgress;
+        let result = translate_result(
+            CallToolResult::success(vec![ContentBlock::text(text)]),
+            &context(&runtime, None, &progress),
+            Instant::now(),
+        );
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+        let Some(ManagedOutputContinuation::Complete { locator }) = result.managed_output else {
+            panic!("MCP UTF-8 result must be complete in managed output: {result:?}");
+        };
+        assert_eq!(
+            std::fs::read_to_string(&locator).expect("UTF-8 MCP spill"),
+            expected
+        );
+        assert!(result.content.iter().all(|content| match content {
+            ToolResultContent::Text(text) => std::str::from_utf8(text.text.as_bytes()).is_ok(),
+            _ => true,
+        }));
+        assert!(
+            result
+                .truncation
+                .as_ref()
+                .is_some_and(|truncation| truncation.truncated)
+        );
+    }
+
+    #[test]
+    fn background_mcp_empty_terminal_reuses_the_dispatch_locator() {
+        let (_directory, runtime) = runtime("mcp-background-empty");
+        let execution_id = ToolExecutionId::background(11);
+        let advertised = runtime
+            .tool_output()
+            .allocate_background_output(&execution_id)
+            .expect("dispatch output");
+        let progress = NoProgress;
+        let result = mcp_empty_terminal(
+            ToolExecutionStatus::Cancelled {
+                reason: CancellationReason::UserRequested,
+            },
+            &context(&runtime, Some(&execution_id), &progress),
+            Instant::now(),
+        );
+        assert!(matches!(
+            result.status,
+            ToolExecutionStatus::Cancelled { .. }
+        ));
+        assert_eq!(
+            result.managed_output,
+            Some(ManagedOutputContinuation::Complete {
+                locator: advertised
+            })
+        );
+        assert_eq!(
+            std::fs::read(runtime.tool_output().background_output_path(&execution_id))
+                .expect("empty background output"),
+            b""
+        );
+        assert_eq!(
+            std::fs::read_dir(runtime.tool_output().root().join("results"))
+                .expect("results directory")
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn background_mcp_storage_write_failure_keeps_the_dispatch_locator_partial() {
+        let (_directory, runtime) = runtime("mcp-background-storage-write");
+        let execution_id = ToolExecutionId::background(4);
+        let advertised = runtime
+            .tool_output()
+            .allocate_background_output(&execution_id)
+            .expect("dispatch output");
+        runtime.tool_output().fail_writes_after(0);
+        let progress = NoProgress;
+        let result = translate_result(
+            CallToolResult::success(vec![ContentBlock::text(
+                "x".repeat(crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1),
+            )]),
+            &context(&runtime, Some(&execution_id), &progress),
+            Instant::now(),
+        );
+        let Some(ManagedOutputContinuation::Partial { locator, .. }) = result.managed_output else {
+            panic!("background MCP write failure must remain Partial: {result:?}");
+        };
+        assert_eq!(locator, advertised);
+        assert!(matches!(result.status, ToolExecutionStatus::Failed { .. }));
+        assert_eq!(
+            std::fs::read_dir(runtime.tool_output().root().join("results"))
+                .expect("results directory")
+                .count(),
+            0
+        );
     }
 }

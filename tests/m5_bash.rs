@@ -544,7 +544,7 @@ async fn bash_large_output_spills_to_managed_output() {
     let content = json_content(&result);
     assert!(
         content["stdout"].as_str().expect("stdout").len()
-            <= rustx::tools::limits::BASH_STREAM_PREVIEW_BYTES,
+            <= rustx::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES,
         "the model-facing preview stays bounded"
     );
     assert!(

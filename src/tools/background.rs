@@ -50,15 +50,23 @@
 //! ([`BackgroundDispatchError::Output`]); a rolled-back dispatch discards
 //! the file. Streaming executors (Bash) append decoded UTF-8 text from the
 //! first byte on, so the model can Read/Grep the output while the
-//! execution runs, and the terminal settlement message reuses the exact
-//! same path when the file already represents the complete textual output
-//! — no second file is created for the same payload. A distinct settled
-//! result spill (`results/result_N.txt`) is legitimate only when a tool's
-//! final logical result is a different oversized payload than its live
-//! execution output. The locator is ordinary textual metadata in both
-//! messages, never a `File` modality, and the terminal canonical message
-//! stays bounded while structurally retaining the locator and its
-//! continuation guidance.
+//! execution runs. MCP and Python do not need to fabricate streaming bytes:
+//! after their logical result is known, their Tool Plane normalization writes
+//! the complete deterministic representation to this same sink before the
+//! executor future returns. Terminal settlement then reuses the exact path;
+//! no `results/result_N.txt` is allocated for an accepted background result,
+//! regardless of origin or result size. The locator is ordinary textual
+//! metadata in both messages, never a `File` modality, and the terminal
+//! canonical message stays bounded while structurally retaining the locator
+//! and its continuation guidance.
+//!
+//! The write/settlement order is part of this ownership contract:
+//! dispatch allocation precedes accepted publication; origin normalization
+//! owns the sink until its executor future resolves; the runner calls
+//! `settle_terminal` only after that resolution; and the registry's terminal
+//! candidate/publication transition is the final structural winner. Thus no
+//! origin-owned writer remains that could mutate the settled output path after
+//! terminal settlement.
 //!
 //! # Conversation runtime ownership transfer
 //!
@@ -4001,7 +4009,7 @@ mod tests {
             "the partial file is the same advertised path"
         );
         assert!(
-            diagnostic.contains("background output file"),
+            diagnostic.contains("background result output"),
             "the diagnostic names the output-storage failure: {diagnostic}"
         );
 
