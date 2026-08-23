@@ -127,13 +127,15 @@ The harmless `RUSTX_EXAMPLE_MODE` entry demonstrates the authorized runtime
 environment. Keep provider credentials in `models.json`'s `apiKey` reference,
 not in this table.
 
-`defaultTools` controls native/built-in Tool activation. An empty list keeps
-built-ins available for truthful capability inspection while activating none.
-The command-line controls `--no-builtin-tools`, `--no-tools`, `--tools`, and
-`--exclude-tools` apply after discovery; availability and activation are
-separate runtime facts. The reference TUI accepts and forwards these controls,
-as well as repeatable `--skill <path>` and `--no-skills`; it does not interpret
-their values.
+`defaultTools` controls optional native/built-in Tool activation.
+`defaultTools: []` leaves optional built-ins available but inactive; canonical
+native Read remains active. `--no-builtin-tools` disables optional built-ins,
+and `--no-tools` disables every optional Tool, while both retain Read. Strict
+`--tools` cannot remove Read by omitting it, and `--exclude-tools read` cannot
+remove mandatory Read. These controls apply after discovery; availability and
+activation remain separate runtime facts. The reference TUI accepts and
+forwards these controls, as well as repeatable `--skill <path>` and
+`--no-skills`; it does not interpret their values.
 
 Skills are discovered from the current user/global and project roots, plus any
 explicit `skills` paths in this file or repeatable `--skill` arguments.
