@@ -506,7 +506,8 @@ durable/inbox.rs           ConversationStore trait + domain types (InboundDraft,
                            AcceptedInbound, PendingInboundItem, PendingBatch):
                            the backend-independent acceptance/selection/adoption
                            operations, plus the fused `commit_model_turn_start`
-                           contract (request-scoped context + RequestSnapshot +
+                           contract (canonical User context + RequestSnapshot
+                           with frozen Effective System Prompt +
                            ModelRequestStarted in one transaction)
 durable/sqlite.rs          SqliteConversationStore: the M8 SQLite backend
                            (one semantic authority over Pending Inbound,
@@ -1039,8 +1040,9 @@ Agent Loop staging (scratch validation, prepared canonical commits;
     ↓
 cancellation-vs-start arbitration (attempt start gate held; M9b)
     ↓ commit_model_turn_start: one transaction
-canonical User context + request-time system sections + Surface +
-RequestSnapshot + ModelRequestStarted
+canonical request-scoped User context + Surface state/reference +
+RequestSnapshot (including the frozen Effective System Prompt) +
+ModelRequestStarted
     ↓
 ModelAdapter → provider
 ```
@@ -1171,16 +1173,19 @@ system-section path:
   or durable Skill commit. Surface compaction therefore cannot remove or
   suppress it, and an older canonical history entry cannot mask a newer
   capability revision.
-- The compact catalog contains only visible Skill names/descriptions and the
-  virtual `.rustx/skills/<skill-name>/SKILL.md` Read instruction. It never
-  includes full `SKILL.md` bodies, supporting resources, dependency metadata,
-  or host absolute paths. Skills marked `disable-model-invocation: true`
-  remain in the immutable runtime resource snapshot but are omitted from the
+- The compact catalog is present only when the immutable capability snapshot
+  activates rustX's canonical native Read capability. Each visible entry
+  contains only its name, description, and exact virtual location
+  `.rustx/skills/<skill-name>/SKILL.md`; the model must pass that location to
+  Read without constructing or rewriting a path. It never includes full
+  `SKILL.md` bodies, supporting resources, dependency metadata, or host
+  absolute paths. Skills marked `disable-model-invocation: true` remain in
+  the immutable runtime resource snapshot but are omitted from the
   model-visible catalog.
-- The model loads a selected Skill lazily with native
-  `read(".rustx/skills/<skill-name>/SKILL.md")`; the runtime-owned virtual
-  resource map resolves the path, and the resulting body enters the ordinary
-  tool-call/result conversation path.
+- The model loads a selected Skill lazily with native Read; the
+  runtime-owned virtual resource map resolves the exact advertised location,
+  and the resulting body enters the ordinary tool-call/result conversation
+  path.
 - Context Assembly composes the section with other request-time system
   sections. The exact rendered Effective System Prompt is frozen by value in
   `RequestSnapshot`; historical reconstruction never reruns Skill discovery.
@@ -1268,7 +1273,8 @@ staging (scratch validation, no durable effect)
         |
 cancellation-vs-start arbitration   <- the one linearization point
         |                             (start gate held across check + commit)
-commit_model_turn_start -> context + Ledger/Surface + RequestSnapshot
+commit_model_turn_start -> canonical User context + Ledger/Surface +
+                           RequestSnapshot (frozen Effective System Prompt)
                            + ModelRequestStarted, in one transaction
 
 Assistant(ToolCall A, ToolCall B) committed
@@ -2311,18 +2317,20 @@ The M6 implementation (`src/skills`) freezes the Skill plane boundary:
   releases that entry only after materialization, validation, and publication
   return.
 - **Catalog.** The model-visible catalog is rendered compactly from the
-  attempt's immutable Skill snapshot: the virtual `.rustx/skills/` root
-  once, then `- <name>: <description>` per visible validated Skill in
-  deterministic order. `SKILL.md` bodies, supporting resources, dependency
-  metadata, and host absolute paths never appear. Discovered Skills marked
-  `disable-model-invocation: true` remain in the resource snapshot but are
-  omitted from this catalog.
+  attempt's immutable Skill snapshot. Each visible validated Skill carries
+  its name, description, and exact virtual locator
+  `.rustx/skills/<name>/SKILL.md`; the guidance tells the model to pass that
+  locator to Read without constructing or rewriting a path. `SKILL.md`
+  bodies, supporting resources, dependency metadata, and host absolute paths
+  never appear. Discovered Skills marked `disable-model-invocation: true`
+  remain in the resource snapshot but are omitted from this catalog, as are
+  all Skills when native Read is inactive.
 - **Execution.** Skills remain workflow/instruction packages: no
   `skill_search`/`activate_skill`/`skill_view`/`run_skill`/
-  `run_skill_script` abstractions exist. The model reads
-  `.rustx/skills/<name>/SKILL.md` and supporting files through the
-  runtime-owned virtual resource map exposed by native Read, and runs
-  scripts through native Bash against the authorized Workspace.
+  `run_skill_script` abstractions exist. The model reads the exact advertised
+  `.rustx/skills/<name>/SKILL.md` location and supporting files through the
+  runtime-owned virtual resource map exposed by native Read, and runs scripts
+  through native Bash against the authorized Workspace.
 
 **Skill resource boundary.** M6 freezes discovered identities, version
 identities, catalog metadata, dependency declarations, environment
@@ -3039,9 +3047,11 @@ Runtime Client is a projection/control/attachment adapter over it.
   from the active `CapabilitySnapshot`: the revision, the deterministic
   active model-visible Tool catalog, the complete available Tool catalog
   (including inactive definitions), and a deterministic model-visible Skill
-  catalog (identity, version, name, description). Executors, environment
-  paths, package-manager state, and `SKILL.md` bodies never appear; ordering
-  is deterministic; inspection never mutates the capability set. Available
+  catalog (identity, version, name, description, exact virtual location).
+  The catalog is non-empty only when that snapshot activates canonical native
+  Read. Executors, environment paths, package-manager state, and `SKILL.md`
+  bodies never appear; ordering is deterministic; inspection never mutates
+  the capability set. Available
   and active Tools are distinct fields, and provider requests use only the
   active field.
 - **Agent Status projection: composed exactly once.** One request
@@ -3317,15 +3327,19 @@ granularity; this #96 boundary implements none of those later behaviors.
 Skills are discovered from the current bounded roots and explicit paths,
 validated as packages, and stored in an immutable Skill snapshot. A Skill
 with `disable-model-invocation: true` remains discovered and validated but is
-omitted from the model-visible catalog. The catalog exposes compact names
-and descriptions; the model reads an accepted Skill's `SKILL.md` on demand
-through ordinary runtime-owned Read semantics. The TUI only projects the
-typed available/active Tool and Skill state. The full Skill binding set is
-retained in the attempt `CapabilitiesManifest`, while only visible bindings
-are projected to model-facing Skill catalogs. The virtual-to-host Skill
-resource map is part of Skill snapshot semantic equality, and background
-ownership captures that map before detachment alongside the effective
-environment; execution ownership cannot retarget capability resources.
+omitted from the model-visible catalog. A Skill is also omitted unless the
+same immutable capability snapshot activates rustX's native Read capability.
+The catalog exposes compact name/description metadata and the exact virtual
+`.rustx/skills/<name>/SKILL.md` locator; the model passes that locator to Read
+without constructing or rewriting a path. Full instructions enter the
+conversation only as the ordinary runtime-owned Read result. The TUI only
+projects the typed available/active Tool and Skill state. The full Skill
+binding set is retained in the attempt `CapabilitiesManifest`, while only
+visible bindings are projected to model-facing Skill catalogs. The
+virtual-to-host Skill resource map is part of Skill snapshot semantic
+equality, and background ownership captures that map before detachment
+alongside the effective environment; execution ownership cannot retarget
+capability resources.
 
 #### Native Session lifecycle and branching (M9.4 / Issue #88)
 

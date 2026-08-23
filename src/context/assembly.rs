@@ -20,7 +20,7 @@ use crate::runtime::identity::{
 };
 
 /// The ABI version of the native context contribution contract.
-pub const CONTEXT_COMPATIBILITY_ABI_VERSION: u32 = 1;
+pub const CONTEXT_COMPATIBILITY_ABI_VERSION: u32 = 2;
 
 /// The finite user-context semantic lanes owned by rustX.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -1818,6 +1818,10 @@ mod tests {
     #[test]
     fn manifest_is_derived_from_contract_constants() {
         let manifest = ContextAssembly::compatibility_manifest();
+        assert_eq!(
+            CONTEXT_COMPATIBILITY_ABI_VERSION, 2,
+            "moving Skill guidance out of canonical User context is a v2 ABI"
+        );
         assert_eq!(manifest.user_context_lanes, UserContextLane::ALL);
         assert_eq!(manifest.system_section_lanes, SystemSectionLane::ALL);
         assert_eq!(manifest.abi_version, CONTEXT_COMPATIBILITY_ABI_VERSION);

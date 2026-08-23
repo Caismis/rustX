@@ -1339,14 +1339,15 @@ pub(crate) fn capability_view(
         .map(project_tool)
         .collect();
     let skills = snapshot
-        .catalog_entries()
+        .model_visible_skill_entries()
         .iter()
-        .zip(snapshot.skills().visible_bindings())
+        .zip(snapshot.model_visible_skill_bindings())
         .map(|(entry, binding)| super::snapshot::RuntimeClientSkill {
             id: binding.skill_id.clone(),
             version_id: binding.version_id.clone(),
             name: entry.name.clone(),
             description: entry.description.clone(),
+            location: entry.location.clone(),
         })
         .collect();
     let sources = availability

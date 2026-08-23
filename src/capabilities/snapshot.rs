@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::capabilities::tools::AvailableToolCatalog;
-use crate::protocol::manifest::CapabilitiesManifest;
+use crate::protocol::manifest::{CapabilitiesManifest, SkillBinding};
 use crate::runtime::identity::{CapabilityRevision, ConversationId};
 use crate::skills::environments::{NodeEnvironment, PythonEnvironment};
 use crate::skills::{SkillCatalogEntry, SkillSnapshot};
@@ -138,10 +138,38 @@ impl CapabilitySnapshot {
         &self.skills
     }
 
-    /// The model-visible Skill catalog entries.
+    /// Whether the active registry contains the canonical rustX native Read
+    /// capability. Tool name alone is deliberately insufficient: only the
+    /// builtin `tool-read` identity owns the virtual Skill namespace.
     #[must_use]
-    pub fn catalog_entries(&self) -> &[SkillCatalogEntry] {
-        self.skills.catalog_entries()
+    pub fn has_active_native_read(&self) -> bool {
+        self.tool_registry
+            .definitions()
+            .iter()
+            .any(crate::tools::native::is_native_read_definition)
+    }
+
+    /// The model-visible Skill catalog entries. A discovered Skill is
+    /// model-visible only when this immutable snapshot also activates native
+    /// Read, which is required to load the advertised virtual location.
+    #[must_use]
+    pub fn model_visible_skill_entries(&self) -> &[SkillCatalogEntry] {
+        if self.has_active_native_read() {
+            self.skills.catalog_entries()
+        } else {
+            &[]
+        }
+    }
+
+    /// The Skill bindings corresponding exactly to
+    /// [`Self::model_visible_skill_entries`].
+    #[must_use]
+    pub fn model_visible_skill_bindings(&self) -> &[SkillBinding] {
+        if self.has_active_native_read() {
+            self.skills.visible_bindings()
+        } else {
+            &[]
+        }
     }
 
     /// The shared Python environment, when the merged Skill set declares
@@ -171,7 +199,8 @@ impl CapabilitySnapshot {
     /// Effective System Prompt; it is not canonical conversation history.
     #[must_use]
     pub fn skill_catalog(&self) -> Option<String> {
-        self.skills.render_catalog()
+        let entries = self.model_visible_skill_entries();
+        (!entries.is_empty()).then(|| crate::skills::render_skill_catalog(entries))
     }
 
     /// The deterministic `CapabilitiesManifest` data of this snapshot.
@@ -181,8 +210,9 @@ impl CapabilitySnapshot {
             revision: self.revision,
             // Manifest provenance is the complete immutable capability set.
             // Model visibility is projected separately through
-            // `catalog_entries()`/`skill_catalog()` and the Runtime Client;
-            // `disable-model-invocation` must not erase runtime ownership.
+            // `model_visible_skill_entries()`/`skill_catalog()` and the Runtime
+            // Client; `disable-model-invocation` must not erase runtime
+            // ownership.
             skills: self.skills.bindings().to_vec(),
             tools: self
                 .tool_registry

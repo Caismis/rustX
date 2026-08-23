@@ -211,7 +211,8 @@ prepare_model_turn: freeze RequestSnapshot + ModelRequest
 │ cancellation check                                            │
 │     ↓ not cancelled                                           │
 │ ConversationStore::commit_model_turn_start — ONE transaction: │
-│   request-scoped context appends + RequestSnapshot +          │
+│   canonical request-scoped User context + RequestSnapshot    │
+│   (including the frozen Effective System Prompt) +           │
 │   ModelRequestStarted + sequence binding                      │
 └───────────────────────────────────────────────────────────────┘
     ↓
@@ -257,9 +258,11 @@ an adapter. It never reads current configuration, Skill discovery, live
 contributors, package contents, filesystem state, or current runtime status.
 
 Every actual primary request is durably started before provider dispatch:
-`ConversationStore::commit_model_turn_start` commits the request-scoped
-context, the immutable snapshot, and the exact `ModelRequestStarted` fact
-in one transaction. `RequestHistory` (`src/runtime/request_history.rs`) is
+`ConversationStore::commit_model_turn_start` commits the canonical
+request-scoped User context, the immutable snapshot containing the exact
+frozen Effective System Prompt, and the exact `ModelRequestStarted` fact in
+one transaction. Transient accepted system sections are not independently
+persisted. `RequestHistory` (`src/runtime/request_history.rs`) is
 a durable read handle, never a retained snapshot vector or client
 projection state. Historical reconstruction loads one snapshot, its exact
 Surface revision, and keyed Ledger bodies on demand.
@@ -383,7 +386,8 @@ staging (scratch validation — no durable effect)
     ↓
 cancellation-vs-start arbitration     ← the one linearization point
     ↓ (start gate held across check + commit)
-commit_model_turn_start → context + Surface + RequestSnapshot
+commit_model_turn_start → canonical User context + Surface + RequestSnapshot
+                          (frozen Effective System Prompt)
                           + ModelRequestStarted, in one transaction
     ↓
 invoke adapter

@@ -16,21 +16,31 @@ use crate::tools::limits::{MAX_READ_LINES, NATIVE_FILE_TOOL_MAX_BYTES};
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
 use crate::tools::native::support::{failed_result, interpret_path, success_text};
 use crate::tools::types::ToolInvocationPolicy;
-use crate::tools::types::{ToolExecutionResult, ToolInvocation, TruncationState};
+use crate::tools::types::{
+    ToolDefinition, ToolExecutionResult, ToolInvocation, ToolOrigin, TruncationState,
+};
 
 use input::ReadInput;
 
 /// The canonical model-facing name of the tool.
 pub const NAME: &str = "read";
+/// The canonical identity of the rustX native Read capability.
+pub(crate) const TOOL_ID: &str = "tool-read";
+
+/// Whether a definition is the rustX native Read capability that owns the
+/// runtime virtual Skill namespace.
+pub(crate) fn is_native_definition(definition: &ToolDefinition) -> bool {
+    definition.id.as_str() == TOOL_ID && matches!(&definition.origin, ToolOrigin::Builtin)
+}
 
 /// The tool-owned registration of the native Read tool.
 #[must_use]
 pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
     NativeToolRegistration::new(
         native_definition::<ReadInput>(
-            "tool-read",
+            TOOL_ID,
             NAME,
-            "Read a UTF-8 text file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+            "Read a UTF-8 text file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Skill resources use the runtime virtual namespace `.rustx/skills/<skill-name>/...`; when the Skill catalog provides a location, pass that exact location to Read. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
             policy,
         ),
         std::sync::Arc::new(ReadTool),
@@ -260,7 +270,7 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
-    use super::{NAME, ReadTool};
+    use super::{NAME, ReadTool, is_virtual_skill_path};
     use crate::runtime::identity::{ConversationId, ToolCallId, ToolId};
     use crate::skills::{SkillDiscovery, SkillDiscoveryConfig, SkillPackageError, SkillSnapshot};
     use crate::tools::artifacts::ArtifactStore;
@@ -268,7 +278,8 @@ mod tests {
     use crate::tools::executor::{ProgressReporter, ToolExecutionContext, ToolExecutor};
     use crate::tools::managed_output::ManagedToolOutput;
     use crate::tools::types::{
-        ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolProgress, ToolResultContent,
+        ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolInvocationPolicy,
+        ToolProgress, ToolResultContent,
     };
     use crate::tools::workspace::Workspace;
 
@@ -278,7 +289,17 @@ mod tests {
         fn report(&self, _progress: ToolProgress) {}
     }
 
+    #[test]
+    fn description_explains_the_exact_virtual_skill_namespace() {
+        let description = super::registration(ToolInvocationPolicy::default())
+            .definition
+            .description;
+        assert!(description.contains(".rustx/skills/<skill-name>/..."));
+        assert!(description.contains("pass that exact location to Read"));
+    }
+
     #[tokio::test]
+    #[allow(clippy::too_many_lines)] // one end-to-end virtual-resource contract
     async fn resolves_virtual_skill_resources_through_runtime_owned_read() {
         let directory = tempfile::tempdir().expect("temporary root");
         let workspace = Workspace::new(directory.path()).expect("workspace");
@@ -361,6 +382,54 @@ mod tests {
             panic!("Read returned unexpected content: {result:?}");
         };
         assert!(text.text.contains("procedure"));
+
+        // `/skills/...` remains an ordinary absolute host path. It is not a
+        // compatibility alias for rustX's virtual `.rustx/skills/...`
+        // namespace.
+        assert!(!is_virtual_skill_path(Path::new(
+            "/skills/release-guide/SKILL.md"
+        )));
+        assert!(
+            resources
+                .resolve(Path::new("/skills/release-guide/SKILL.md"))
+                .is_none()
+        );
+        let alias_context = ToolExecutionContext {
+            conversation_id: &conversation_id,
+            execution_id: None,
+            cancellation: crate::runtime::ExecutionCancellation::detached(
+                crate::runtime::CancellationSignal::new(),
+                crate::runtime::types::CancellationReason::UserRequested,
+            ),
+            workspace: &workspace,
+            progress: &progress,
+            artifacts: &artifacts,
+            tool_output: &tool_output,
+            environment: &environment,
+            skill_resources: Some(snapshot.resources()),
+            question_requester: None,
+        };
+        let alias_result = ReadTool
+            .execute(
+                ToolInvocation {
+                    call_id: ToolCallId::new("read-skill-alias-call"),
+                    tool_id: ToolId::new("tool-read"),
+                    tool_name: NAME.to_owned(),
+                    mode: ToolInvocationMode::Foreground,
+                    arguments: serde_json::json!({
+                        "path": "/skills/release-guide/SKILL.md"
+                    }),
+                },
+                alias_context,
+            )
+            .await;
+        assert!(matches!(
+            alias_result.status,
+            ToolExecutionStatus::Failed { .. }
+        ));
+        assert!(!alias_result.content.iter().any(|content| {
+            matches!(content, ToolResultContent::Text(text) if text.text.contains("procedure"))
+        }));
     }
 
     #[cfg(unix)]

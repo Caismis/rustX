@@ -1412,8 +1412,9 @@ pub async fn agent_status_is_runtime_owned(factory: &dyn DriverFactory) {
 }
 
 /// The capability projection carries the revision, the deterministic tool
-/// catalog with typed origin metadata, and the Skill catalog — and no
-/// executor or environment internals.
+/// catalog with typed origin metadata. A discovered Skill is deliberately not
+/// projected here because this fixture does not activate native Read; no
+/// executor or environment internals are exposed.
 pub async fn capability_projection_is_deterministic(factory: &dyn DriverFactory) {
     let mut base = ToolRegistry::new();
     FakeTool::new(
@@ -1456,10 +1457,10 @@ pub async fn capability_projection_is_deterministic(factory: &dyn DriverFactory)
         vec!["ls"]
     );
     assert_eq!(capabilities.tools[0].origin, ToolOrigin::Builtin);
-    assert_eq!(capabilities.skills.len(), 1);
-    assert_eq!(capabilities.skills[0].name, "skill-readme");
-    assert_eq!(capabilities.skills[0].description, "Reads the README");
-    assert!(!capabilities.skills[0].version_id.as_str().is_empty());
+    assert!(
+        capabilities.skills.is_empty(),
+        "Runtime Client Skills are model-visible and native Read is inactive"
+    );
 
     // Deterministic: a second read is byte-identical, and the snapshot
     // carries the same view.

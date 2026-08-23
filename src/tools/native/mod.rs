@@ -56,6 +56,8 @@ mod subagent;
 mod support;
 mod write;
 
+pub(crate) use read::is_native_definition as is_native_read_definition;
+
 #[cfg(test)]
 pub(crate) use bash::{BashTestControl, BashTool};
 #[cfg(test)]

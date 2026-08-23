@@ -756,14 +756,17 @@ that a live child produced an Interrupted physical result.
   project, configured, and explicit CLI roots are collected in deterministic
   order. Duplicate logical identities fail explicitly. A validated Skill
   with `disable-model-invocation: true` remains in the immutable resource
-  snapshot but is omitted from the model-visible catalog. The model reads
-  accepted Skill resources through the runtime-owned virtual `.rustx/skills/`
-  namespace and ordinary Read semantics; host absolute paths are not
-  published to the client or model. The virtual-to-host resource map is part
-  of active Skill snapshot equality, so relocating identical package content
-  creates a new capability revision rather than leaving Read pointed at an
-  old root. The complete Skill bindings remain in `CapabilitiesManifest`
-  provenance; visibility affects only model-facing projections.
+  snapshot but is omitted from the model-visible catalog. A discovered Skill
+  is model-visible only when the same immutable capability snapshot activates
+  rustX's canonical native Read. The catalog and Runtime Client projection
+  expose the same exact virtual location, `.rustx/skills/<name>/SKILL.md`;
+  host absolute paths are not published to the client or model. The model
+  passes that exact location to Read rather than constructing a path. The
+  virtual-to-host resource map is part of active Skill snapshot equality, so
+  relocating identical package content creates a new capability revision
+  rather than leaving Read pointed at an old root. The complete Skill
+  bindings remain in `CapabilitiesManifest` provenance; visibility affects
+  only model-facing projections.
 - **Background ownership preserves capability resources.** Before the
   background ownership commit, the Agent Loop captures the admitted attempt's
   immutable effective environment and Skill resource map. The detached
@@ -1818,15 +1821,18 @@ message role, history shape, or timestamps:
 - The one cancellation-vs-start linearization point of every model turn is
   `AgentCancellation::arbitrate_model_turn_start`: the attempt's start gate
   is held across the cancellation check and the fused
-  `ConversationStore::commit_model_turn_start` transaction (request-scoped
-  context appends + `RequestSnapshot` + `ModelRequestStarted` + sequence
-  binding). Cancellation that linearizes first commits nothing: no dynamic
+  `ConversationStore::commit_model_turn_start` transaction (canonical
+  request-scoped User context appends + `RequestSnapshot` containing the
+  frozen Effective System Prompt + `ModelRequestStarted` + sequence binding).
+  Accepted system sections are transient assembly values; they are not
+  independently persisted. Cancellation that linearizes first commits nothing: no dynamic
   context, no Surface advancement, no RequestSnapshot, no start fact, and
   no provider request. Once the start commit linearizes first, the request
   is durably started; a later cancellation is post-start, settles the
   started request, and can never be reclassified as never-started. A
-  start-commit failure rolls the whole transaction back, so request-scoped
-  context can never become canonical without its request starting.
+  start-commit failure rolls the whole transaction back, so canonical
+  request-scoped User context can never become canonical without its request
+  starting.
 - Effective System Prompt is rustX-rendered from canonical System content
   and ordered native/extension sections. The active Skill catalog is one
   request-time `NativeCapabilityGuidance` section rendered from the attempt's

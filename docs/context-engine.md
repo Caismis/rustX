@@ -89,7 +89,8 @@ AcceptedContext
     ↓
 Agent Loop admission
     ↓
-canonical User context facts and request-time system sections
+canonical User context facts + RequestSnapshot
+    (including the frozen Effective System Prompt)
 ~~~
 
 ### Finite contributor input
@@ -268,13 +269,16 @@ different facts and receive different MessageIds; content deduplication is
 not a semantic operation.
 
 The Skill catalog is sampled from the immutable per-attempt capability
-snapshot and assembled as a request-time native capability section. It is
+snapshot and assembled as a request-time native capability section only when
+that snapshot activates rustX's canonical native Read capability. It is
 distinct from `ModelRequest.tools`: tool definitions remain capability/request
 state, and the Skill catalog is never copied into canonical User messages.
-When visible Skills exist, the section contains only deterministic name and
-description entries plus the virtual `.rustx/skills/<skill-name>/SKILL.md`
-Read instruction. Full Skill bodies are loaded only after an explicit native
-Read call and enter the ordinary tool-result conversation path.
+When visible Skills exist, each entry contains deterministic name and
+description metadata plus its exact virtual `.rustx/skills/<skill-name>/SKILL.md`
+location. The guidance tells the model to pass that exact location to Read
+without constructing or rewriting a path. Full Skill bodies are loaded only
+after an explicit native Read call and enter the ordinary tool-result
+conversation path.
 
 The former model-request-only semantic attachment paths are removed. There
 is no hidden Agent Status or Skill insertion during adapter translation and
@@ -415,8 +419,8 @@ prepare_model_turn → frozen RequestSnapshot + provider ModelRequest
 │ cancellation check                                             │
 │     ↓ not cancelled                                            │
 │ ConversationStore::commit_model_turn_start                     │
-│     → ONE transaction: request-scoped context appends          │
-│       + ledger/Surface + RequestSnapshot                       │
+│     → ONE transaction: canonical request-scoped User context  │
+│       + ledger/Surface + RequestSnapshot (frozen prompt)      │
 │       + ModelRequestStarted + sequence binding                 │
 └────────────────────────────────────────────────────────────────┘
     ↓
@@ -441,8 +445,10 @@ the *same* final batch, an observer cannot commit context around the policy
 either — whatever identity it produces context for.
 
 A start-commit durability failure rolls the whole transaction back: no
-half-committed request-scoped context, no snapshot, no start fact, and no
-provider request. After the start commit succeeds, the accepted context is
+half-committed canonical User context, no snapshot, no start fact, and no
+provider request. Accepted system sections are transient assembly values;
+their rendered value is durable through RequestSnapshot. After the start
+commit succeeds, the accepted context is
 historical: provider failure, disconnect, timeout, or cancellation does not
 roll back the ledger, surface, context generation, or snapshot.
 
@@ -509,7 +515,8 @@ current conversation state, not a historical archive.
 
 During execution, the current request snapshot is prepared from the exact
 provider-neutral request. `ConversationStore::commit_model_turn_start`
-commits the request-scoped context, that immutable snapshot, and its
+commits the canonical request-scoped User context, that immutable snapshot
+(including the frozen Effective System Prompt), and its
 `ModelRequestStarted` Event Journal fact in one transaction before the
 adapter is invoked, under the attempt's start gate (M9b). `RequestHistory` is a durable
 read handle, not an append-only `Vec<RequestSnapshot>` and not a second
@@ -550,10 +557,11 @@ hidden adapter injection.
 
 ## 11. Compatibility manifest
 
-ContextAssembly::compatibility_manifest() returns
+`ContextAssembly::compatibility_manifest()` returns
 ContextCompatibilityManifest with:
 
-- abi_version;
+- `abi_version` (currently `2`; the v2 contract removes Skill guidance from
+  User lanes and keeps it in request-time system sections);
 - canonical user_context_lanes;
 - canonical system_section_lanes;
 - native-reserved slots;

@@ -553,14 +553,17 @@ fn short_history_requires_no_compaction() {
 /// canonical conversation messages leaves the frozen system section visible.
 #[test]
 fn compaction_cannot_remove_request_time_skill_catalog_guidance() {
-    let skill_catalog = "## Skills\n\n- pdf: Create PDF documents.";
+    let skill_catalog = "## Skills\n\n<available_skills>\n  <skill>\n    <name>pdf</name>\n    <description>Create PDF documents.</description>\n    <location>.rustx/skills/pdf/SKILL.md</location>\n  </skill>\n</available_skills>";
     let sections = [AcceptedSystemSection {
         lane: SystemSectionLane::NativeCapabilityGuidance,
         contributor: ContextContributorIdentity::Native(NativeContextContributor::SkillGuidance),
         content: skill_catalog.to_owned(),
     }];
     let mut state = state(vec![user("u1", "first"), user("u2", "second")]);
-    let engine = engine(30, 0, 0, weighted(10, 0, 0));
+    // The exact per-Skill locator is intentionally part of the frozen prompt;
+    // leave enough deterministic room for the compact system section while
+    // still compacting the canonical messages below it.
+    let engine = engine(1_000, 0, 0, weighted(10, 0, 0));
     let before_messages = state
         .active_messages()
         .expect("active messages before compaction");
