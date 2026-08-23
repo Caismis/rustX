@@ -717,7 +717,7 @@ impl ContextAssembly {
         deferred: &[DeferredContextProposal],
     ) -> Result<AcceptedContext, ContextAssemblyError> {
         let mut entries = Vec::new();
-        let mut native_sections = Vec::new();
+        let mut native_sections = native_system_sections(native)?;
         let mut generations = vec![
             native
                 .workspace_instructions
@@ -779,36 +779,11 @@ impl ContextAssembly {
                 text.clone(),
             )?);
         }
-        if let Some(text) = &native.skill_guidance {
-            validate_text(text, "native Skill capability guidance")?;
-            native_sections.push(native_section(
-                SystemSectionLane::NativeCapabilityGuidance,
-                NativeContextContributor::SkillGuidance,
-                text.clone(),
-            ));
-        }
         if let Some(text) = &native.agent_status {
             entries.push(ContributionEntry::native_user(
                 NativeContextContributor::AgentStatus,
                 text.clone(),
             )?);
-        }
-
-        if let Some(text) = &native.core_runtime_identity {
-            validate_text(text, "core runtime identity")?;
-            native_sections.push(native_section(
-                SystemSectionLane::CoreRuntimeIdentity,
-                NativeContextContributor::CoreSystemIdentity,
-                text.clone(),
-            ));
-        }
-        if let Some(text) = &native.agent_profile {
-            validate_text(text, "agent profile")?;
-            native_sections.push(native_section(
-                SystemSectionLane::AgentProfile,
-                NativeContextContributor::AgentProfile,
-                text.clone(),
-            ));
         }
 
         let mut extensions = self.extensions.clone();
@@ -945,6 +920,49 @@ fn native_section(
         contributor: ContextContributorIdentity::Native(contributor),
         content,
     }
+}
+
+/// Validates and accepts the statically sampled native Effective System
+/// Prompt sections.
+///
+/// Agent execution and idle manual maintenance both use this constructor so
+/// capability-derived guidance has one lane/owner/validation contract. The
+/// returned sections are request input only: callers may account for them,
+/// but must never commit them as conversational history.
+pub(crate) fn native_system_sections(
+    native: &NativeContextInput,
+) -> Result<Vec<AcceptedSystemSection>, ContextAssemblyError> {
+    let mut sections = Vec::new();
+    if let Some(text) = &native.skill_guidance {
+        validate_text(text, "native Skill capability guidance")?;
+        sections.push(native_section(
+            SystemSectionLane::NativeCapabilityGuidance,
+            NativeContextContributor::SkillGuidance,
+            text.clone(),
+        ));
+    }
+    if let Some(text) = &native.core_runtime_identity {
+        validate_text(text, "core runtime identity")?;
+        sections.push(native_section(
+            SystemSectionLane::CoreRuntimeIdentity,
+            NativeContextContributor::CoreSystemIdentity,
+            text.clone(),
+        ));
+    }
+    if let Some(text) = &native.agent_profile {
+        validate_text(text, "agent profile")?;
+        sections.push(native_section(
+            SystemSectionLane::AgentProfile,
+            NativeContextContributor::AgentProfile,
+            text.clone(),
+        ));
+    }
+    sections.sort_by(|left, right| {
+        left.lane
+            .cmp(&right.lane)
+            .then_with(|| left.contributor.cmp(&right.contributor))
+    });
+    Ok(sections)
 }
 
 fn native_generation(contributor: NativeContextContributor) -> ContributorGeneration {

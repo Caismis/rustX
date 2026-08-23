@@ -1116,10 +1116,13 @@ Key contracts:
 - Automatic overflow recovery and idle manual compaction call one canonical
   pipeline for planning, summary generation, exact fit validation, durable
   commit, and hot-state installation. Manual compaction freezes the current
-  model/context/capability inputs at admission, checks out the sole
-  `ConversationState`, and admits pending inbound only after that state is
-  restored. It owns no attempt identity and is rejected while an attempt or
-  another manual compaction is active.
+  model/context/capability inputs at admission, including tool definitions and
+  capability-derived Skill guidance in the non-retirable Effective System
+  Prompt used for fit accounting. It checks out the sole `ConversationState`;
+  manual completion is client-visible only after that state is restored and
+  the maintenance slot is clear. Pending inbound admits after restoration. It
+  owns no attempt identity and is rejected while an attempt or another manual
+  compaction is active.
 - Agent Status is sampled from authoritative runtime facts and admitted as a
   canonical `UserSource::Runtime` context message with
   `InboundKind::Context(ContextKind::AgentStatus)`. It is rendered by the
@@ -2109,6 +2112,10 @@ standard nested error envelope and compatible providers' top-level
 `model_context_window_exceeded` terminate as
 `Failed(ContextWindowExceeded)`, not a successful `Length` completion, so
 the agent loop's bounded compact-and-retry path owns recovery consistently.
+Ambiguous request-size codes (`request_too_large`, `string_too_long`) do not
+establish context pressure by themselves: only a message with independent
+token/context evidence upgrades them. A generic HTTP byte-size failure remains
+`InvalidRequest`/`ProviderError` and never authorizes Surface compaction.
 
 #### Anthropic Messages (direct HTTP/SSE)
 

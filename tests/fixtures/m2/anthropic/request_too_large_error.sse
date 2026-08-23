@@ -1,0 +1,4 @@
+event: error
+data: {"type":"error","error":{"type":"request_too_large","message":"Request exceeds the maximum size of 32 MB"}}
+
+: fixture terminator

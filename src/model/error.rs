@@ -72,6 +72,10 @@ pub(crate) fn is_context_window_error(message: &str, provider_code: Option<&str>
         return false;
     }
 
+    // These codes carry context/token semantics strongly enough to stand on
+    // their own. Generic request/string size codes deliberately do not: for
+    // example Anthropic `request_too_large` is an HTTP byte-size limit and
+    // says nothing about conversation-history pressure.
     if provider_code
         .map(str::to_ascii_lowercase)
         .is_some_and(|code| {
@@ -83,8 +87,6 @@ pub(crate) fn is_context_window_error(message: &str, provider_code: Option<&str>
                     | "input_too_long"
                     | "max_tokens_exceeded"
                     | "token_limit_exceeded"
-                    | "string_too_long"
-                    | "request_too_large"
             )
         })
     {
@@ -94,8 +96,6 @@ pub(crate) fn is_context_window_error(message: &str, provider_code: Option<&str>
     [
         "prompt is too long",
         "prompt too long",
-        "request_too_large",
-        "request exceeds the maximum size",
         "input is too long for requested model",
         "exceeds the context window",
         "maximum context length",
@@ -195,6 +195,32 @@ mod tests {
             "Service unavailable: context window workers are saturated",
         ] {
             assert!(!is_context_window_error(message, None), "{message}");
+        }
+    }
+
+    #[test]
+    fn generic_request_size_errors_are_not_context_overflow() {
+        for (message, code) in [
+            (
+                "Request exceeds the maximum size of 32 MB",
+                Some("request_too_large"),
+            ),
+            (
+                "String should have at most 1048576 characters",
+                Some("string_too_long"),
+            ),
+        ] {
+            assert!(!is_context_window_error(message, code), "{message}");
+        }
+    }
+
+    #[test]
+    fn ambiguous_size_code_requires_context_specific_message_evidence() {
+        for code in ["request_too_large", "string_too_long"] {
+            assert!(is_context_window_error(
+                "input tokens exceed the model's maximum context length",
+                Some(code),
+            ));
         }
     }
 }

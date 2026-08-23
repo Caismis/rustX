@@ -3021,8 +3021,11 @@ contracts and provider protocols. These invariants are frozen by M2:
 - Context-window classification is identical at every provider boundary:
   typed overflow codes, recognized compatible-provider messages, top-level
   HTTP error objects, SSE error events, and explicit overflow stop reasons
-  all normalize to `Failed(ContextWindowExceeded)`. Rate-limit and
-  throttling diagnostics take precedence and never trigger compaction.
+  all normalize to `Failed(ContextWindowExceeded)`. Generic byte/string-size
+  codes such as `request_too_large` and `string_too_long` require independent
+  token/context evidence; otherwise they remain request/provider failures and
+  cannot trigger compaction. Rate-limit and throttling diagnostics take
+  precedence and never trigger compaction.
 
 - Provider-hosted tools (OpenAI web/file search, computer use, code
   interpreter, MCP, image generation; Anthropic server tools, tool runner)

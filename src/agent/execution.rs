@@ -4320,6 +4320,65 @@ mod tests {
         );
     }
 
+    /// A generic provider request-size failure is terminal request ownership,
+    /// not conversation-history pressure. Once an adapter normalizes it as
+    /// `InvalidRequest`, the Agent Loop emits no compaction lifecycle and
+    /// performs no summary/retry invocation.
+    #[tokio::test]
+    async fn invalid_request_size_failure_never_compacts_or_retries() {
+        let adapter = Arc::new(ScriptedAdapter::new(vec![vec![ModelEvent::Failed {
+            error: crate::model::error::ModelError {
+                kind: ModelErrorKind::InvalidRequest,
+                message: "Request exceeds the maximum size of 32 MB".to_owned(),
+                retry_after_ms: None,
+                provider_code: Some("request_too_large".to_owned()),
+            },
+        }]]));
+        let tool_runtime = tool_runtime("conv-1");
+        let (_dir, _coordinator, lease) =
+            capability_lease(ToolRegistry::new(), &tool_runtime).await;
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let result = AgentExecution::new(
+            request(&adapter),
+            lease,
+            &cancellation,
+            runtime(&adapter),
+            &tool_runtime,
+            crate::agent::AttemptLifecycle::inert(),
+        )
+        .expect("execution construction")
+        .run()
+        .await;
+
+        assert_eq!(
+            adapter.request_count(),
+            1,
+            "no summary request or overflow retry is issued"
+        );
+        assert!(matches!(result.outcome, AttemptOutcome::Failed { .. }));
+        let events = tool_runtime
+            .durable_store()
+            .read_events(None, 128)
+            .expect("event journal")
+            .events;
+        assert!(
+            !events.iter().any(|event| matches!(
+                event.event,
+                RuntimeEvent::CompactionStarted
+                    | RuntimeEvent::CompactionCompleted { .. }
+                    | RuntimeEvent::CompactionFailed { .. }
+            )),
+            "generic request-size failure produces no compaction lifecycle"
+        );
+        assert!(
+            !result.messages().iter().any(|message| matches!(
+                message,
+                MessageBlock::User(user) if user.kind == InboundKind::CompactionSummary
+            )),
+            "no durable compaction summary is created"
+        );
+    }
+
     /// A long scripted tool loop grows the durable authorities while the
     /// active execution retains only its current working state. Event and
     /// Request Snapshot inspection deliberately walks the store in bounded

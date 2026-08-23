@@ -113,7 +113,7 @@ pub(crate) fn normalize_http_error(
         .and_then(|value| value.parse::<u64>().ok())
         .map(|seconds| seconds.saturating_mul(1000));
     let kind = match status.as_u16() {
-        400 => {
+        400 | 413 => {
             if is_context_window_error(&message, provider_code.as_deref()) {
                 ModelErrorKind::ContextWindowExceeded
             } else {

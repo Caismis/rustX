@@ -513,10 +513,14 @@ reconstructions.
 
 `ConversationRuntime::compact_context` exposes the same compaction pipeline
 as an explicit idle maintenance operation. It freezes the session model,
-summary invocation, context policy, and active tool definitions at admission,
-then checks out the sole `ConversationState` while the provider-backed summary
-runs. It allocates no attempt or turn identity, invokes no tools, and commits
-through the same atomic summary + Surface replacement transaction as automatic
+summary invocation, context policy, and one immutable capability snapshot at
+admission. Active tool definitions and the snapshot's rendered Skill catalog
+are sampled together. The catalog remains non-conversational and cannot be
+summarized or retired, but it is part of the Effective System Prompt used by
+planning and exact post-compaction fit validation. The operation then checks
+out the sole `ConversationState` while the provider-backed summary runs. It
+allocates no attempt or turn identity, invokes no tools, and commits through
+the same atomic summary + Surface replacement transaction as automatic
 compaction.
 
 The operation is rejected as `Busy` when an attempt or another manual
@@ -530,8 +534,12 @@ task instead of abandoning checked-out state.
 Runtime Client projects `ContextCompactionStarted`,
 `ContextCompactionFailed`, and `ContextCompacted` for both entry points. The
 automatic path carries its `AttemptId`; manual maintenance carries no attempt
-identity. The TUI `/compact` command invokes exactly one `compact_context`
-request and renders the published in-progress state as `Compacting context…`.
+identity. A manual completion is published only after `ConversationState` has
+returned to the coordinator and the maintenance slot is clear, so
+`compaction_in_progress = false` is live ownership state rather than an early
+durable-commit signal. The TUI `/compact` command invokes exactly one
+`compact_context` request and renders the published in-progress state as
+`Compacting context…`.
 
 ## 9. Durable RequestSnapshot ownership (M8 / Issue #11)
 

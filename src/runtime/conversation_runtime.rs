@@ -276,12 +276,13 @@ use crate::agent::observer::{AgentExecutionObserver, AgentStatusObservation};
 use crate::agent::{AgentExecution, AgentExecutionRequest};
 use crate::capabilities::{CapabilityCoordinator, CapabilityObserver, CapabilitySnapshot};
 use crate::context::compaction::{
-    CompactionAttribution, CompactionExecutionError, execute_compaction,
+    CompactionAttribution, CompactionExecutionError, ExecutedCompaction, execute_compaction,
 };
 use crate::context::tokens::TokenEstimator;
 use crate::context::{
     AgentStatusComposer, CompactionConstraints, ContextError, ContextErrorKind, ContextRuntime,
-    SessionContextPolicy, render_effective_system_prompt,
+    NativeContextInput, SessionContextPolicy, native_system_sections,
+    render_effective_system_prompt,
 };
 use crate::conversation::ConversationState;
 use crate::conversation::SurfaceRevision;
@@ -554,7 +555,16 @@ struct CurrentManualCompaction {
 
 struct ManualCompactionTaskResult {
     conversation: ConversationState,
-    result: Result<ManualCompactionOutcome, ManualCompactionError>,
+    result: Result<ManualCompactionSuccess, ManualCompactionError>,
+}
+
+/// A successful task-local compaction whose durable facts have not yet been
+/// published to Runtime Client observers. Publication belongs to coordinator
+/// settlement, after the checked-out conversation and maintenance slot have
+/// returned.
+struct ManualCompactionSuccess {
+    outcome: ManualCompactionOutcome,
+    completed: ExecutedCompaction,
 }
 
 /// The semantic durable operations of the coordinator's durability-health
@@ -901,6 +911,10 @@ impl DrainCompletion {
 ///   still `Inactive` and every competing runtime-owned commit or host
 ///   bind can still proceed. Releasing the gate commits the one
 ///   `Inactive -> Running` transition.
+/// - `manual_compaction_settlement_gate`: parked after the durable compaction
+///   commit and task-local hot-state installation, but before the coordinator
+///   restores `ConversationState`, clears the maintenance slot, or publishes
+///   manual completion to Runtime Client observers.
 ///
 /// All synchronization is `std` (mutex + condvar) because the coordinator
 /// boundary is a `std` mutex critical section; the parking blocks the OS
@@ -918,6 +932,9 @@ pub(crate) struct CoordinatorProbe {
     /// Parks the next activation before the lifecycle transition when
     /// armed.
     pub(crate) activation_gate: Option<Arc<Gate>>,
+    /// Parks the next manual compaction immediately before coordinator
+    /// settlement restores ownership and publishes completion.
+    pub(crate) manual_compaction_settlement_gate: Option<Arc<Gate>>,
     /// Parks the next `submit_inbound` **after** the coordinator lock is
     /// acquired and the shutdown/activation decision is read, but **before**
     /// the durable acceptance. This is the exact critical-section window the
@@ -1846,10 +1863,11 @@ impl RuntimeInner {
         mut conversation: ConversationState,
         context_runtime: ContextRuntime,
         tools: Vec<ModelToolDefinition>,
+        system_sections: Vec<crate::context::AcceptedSystemSection>,
         cancellation: &AgentCancellation,
     ) -> ManualCompactionTaskResult {
         let effective_system_prompt = match conversation.active_messages() {
-            Ok(messages) => render_effective_system_prompt(&messages, &[]),
+            Ok(messages) => render_effective_system_prompt(&messages, &system_sections),
             Err(error) => {
                 return ManualCompactionTaskResult {
                     conversation,
@@ -1899,16 +1917,7 @@ impl RuntimeInner {
                     tokens_before: *tokens_before,
                     estimated_tokens_after: *estimated_tokens_after,
                 };
-                // The summary body and completion metadata are published in
-                // durable commit order. Neither is attributed to an attempt.
-                self.observe(ConversationObservation::Committed {
-                    attempt_id: None,
-                    block: completed.summary_block,
-                });
-                self.observe(ConversationObservation::ManualCompactionEvent {
-                    event: completed.persisted_event.event,
-                });
-                Ok(outcome)
+                Ok(ManualCompactionSuccess { outcome, completed })
             }
             Err(CompactionExecutionError::Context(error)) => {
                 Err(ManualCompactionError::Context(error))
@@ -1931,10 +1940,14 @@ impl RuntimeInner {
         task: ManualCompactionTaskResult,
         completion: &ManualCompactionCompletion,
     ) {
-        let result = task.result;
+        let ManualCompactionTaskResult {
+            conversation,
+            result,
+        } = task;
+        let completion_result;
         {
             let mut state = self.lock_state();
-            state.conversation = Some(task.conversation);
+            state.conversation = Some(conversation);
             state
                 .manual_compaction
                 .take()
@@ -1948,16 +1961,33 @@ impl RuntimeInner {
                     ),
                 );
             }
-            if let Err(error) = &result {
-                self.observe(ConversationObservation::ManualCompactionEvent {
-                    event: RuntimeEvent::CompactionFailed {
-                        error: error.to_string(),
-                    },
-                });
-            }
+            completion_result = match result {
+                Ok(success) => {
+                    // Durable commit already happened in the task, but the
+                    // live completion is published only after coordinator
+                    // ownership is restored and the maintenance slot is
+                    // clear. Neither observation has an attempt identity.
+                    self.observe(ConversationObservation::Committed {
+                        attempt_id: None,
+                        block: success.completed.summary_block,
+                    });
+                    self.observe(ConversationObservation::ManualCompactionEvent {
+                        event: success.completed.persisted_event.event,
+                    });
+                    Ok(success.outcome)
+                }
+                Err(error) => {
+                    self.observe(ConversationObservation::ManualCompactionEvent {
+                        event: RuntimeEvent::CompactionFailed {
+                            error: error.to_string(),
+                        },
+                    });
+                    Err(error)
+                }
+            };
         }
         self.settlement.notify_waiters();
-        completion.complete(result);
+        completion.complete(completion_result);
         self.admit_next_attempt();
     }
 
@@ -3155,12 +3185,18 @@ impl ConversationRuntime {
             // Manual maintenance has no attempt lease, but it still freezes
             // the exact capability definitions used for planning at the
             // same admission boundary as the model/context snapshot.
-            let tools = self
-                .inner
-                .capability
-                .current_snapshot()
-                .tool_registry()
-                .model_definitions();
+            let capability = self.inner.capability.current_snapshot();
+            let tools = capability.tool_registry().model_definitions();
+            let system_sections = native_system_sections(&NativeContextInput {
+                skill_guidance: capability.skill_catalog(),
+                ..NativeContextInput::default()
+            })
+            .map_err(|error| {
+                ManualCompactionError::Context(ContextError::new(
+                    ContextErrorKind::Internal,
+                    format!("the frozen capability system guidance is invalid: {error}"),
+                ))
+            })?;
             let conversation = state
                 .conversation
                 .take()
@@ -3184,8 +3220,26 @@ impl ConversationRuntime {
             drop(state);
             self.inner.executor.spawn(async move {
                 let task = inner
-                    .run_manual_compaction(conversation, context_runtime, tools, &cancellation)
+                    .run_manual_compaction(
+                        conversation,
+                        context_runtime,
+                        tools,
+                        system_sections,
+                        &cancellation,
+                    )
                     .await;
+                #[cfg(test)]
+                {
+                    let gate = inner
+                        .probe
+                        .lock()
+                        .expect("coordinator probe lock poisoned")
+                        .as_mut()
+                        .and_then(|probe| probe.manual_compaction_settlement_gate.take());
+                    if let Some(gate) = gate {
+                        gate.enter();
+                    }
+                }
                 inner.finish_manual_compaction(task, &completion_for_task);
                 drop(admission);
             });
@@ -4295,6 +4349,17 @@ impl ConversationRuntime {
             .is_some()
     }
 
+    /// Whether idle maintenance currently owns the conversation state.
+    #[cfg(test)]
+    pub(crate) fn has_manual_compaction(&self) -> bool {
+        self.inner
+            .state
+            .lock()
+            .expect("runtime lock")
+            .manual_compaction
+            .is_some()
+    }
+
     /// A non-owning handle to the shared runtime state, for lifetime tests.
     pub(crate) fn weak_inner(&self) -> Weak<RuntimeInner> {
         Arc::downgrade(&self.inner)
@@ -4337,7 +4402,8 @@ mod tests {
         AgentCancellation, LifecycleError, PreToolDecision, PreToolPolicy, PreToolView,
     };
     use crate::context::{
-        AgentStatusComposer, ContextError, ContextErrorKind, DefaultTokenEstimator, TokenEstimator,
+        AgentStatusComposer, ClosureTokenEstimator, ContextError, ContextErrorKind,
+        DefaultTokenEstimator, TokenEstimator,
     };
     use crate::conversation::SurfaceSpan;
     use crate::durable::inbox::{CompactionCommitInput, ConversationStore};
@@ -4462,6 +4528,47 @@ mod tests {
         base_tool_registry: Option<crate::tools::executor::ToolRegistry>,
         probe: Option<CoordinatorProbe>,
     ) -> (ConversationRuntime, Arc<FakeModel>) {
+        headless_runtime_with_options(
+            dir,
+            scripts,
+            base_tool_registry,
+            probe,
+            HeadlessRuntimeOptions::default(),
+        )
+        .await
+    }
+
+    struct HeadlessRuntimeOptions {
+        skill_discovery: crate::skills::SkillDiscoveryConfig,
+        estimator: Arc<dyn TokenEstimator>,
+        policy: crate::context::SessionContextPolicy,
+        initial_messages: Vec<MessageBlock>,
+    }
+
+    impl Default for HeadlessRuntimeOptions {
+        fn default() -> Self {
+            Self {
+                skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
+                estimator: Arc::new(DefaultTokenEstimator),
+                policy: crate::context::SessionContextPolicy {
+                    reserve_tokens: 0,
+                    keep_recent_tokens: 0,
+                    summary_output_cap: None,
+                },
+                initial_messages: Vec::new(),
+            }
+        }
+    }
+
+    /// The configurable headless fixture variant used by exact context-input
+    /// regressions without changing the defaults of the broad runtime suite.
+    async fn headless_runtime_with_options(
+        dir: &tempfile::TempDir,
+        scripts: Vec<Vec<FakeStep>>,
+        base_tool_registry: Option<crate::tools::executor::ToolRegistry>,
+        probe: Option<CoordinatorProbe>,
+        options: HeadlessRuntimeOptions,
+    ) -> (ConversationRuntime, Arc<FakeModel>) {
         let conversation_id = ConversationId::new("conv-headless");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
@@ -4477,7 +4584,7 @@ mod tests {
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(base_tool_registry.unwrap_or_default()),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
-                skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
+                skill_discovery: options.skill_discovery,
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
@@ -4488,25 +4595,20 @@ mod tests {
         coordinator.commit(candidate).expect("commit");
         let model = Arc::new(FakeModel::new(scripts));
         let adapter: Arc<dyn ModelAdapter> = model.clone();
-        let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
         let config = RuntimeConversationConfig {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter),
             timezone: None,
             approval_mode: ApprovalMode::Policy,
             context: ConversationContextConfig {
-                policy: crate::context::SessionContextPolicy {
-                    reserve_tokens: 0,
-                    keep_recent_tokens: 0,
-                    summary_output_cap: None,
-                },
-                estimator,
+                policy: options.policy,
+                estimator: options.estimator,
                 status_composer: AgentStatusComposer::default(),
             },
             tool_runtime,
             capability: coordinator,
             clock: None,
-            initial_messages: Vec::new(),
+            initial_messages: options.initial_messages,
             subagents: None,
         };
         let runtime = match probe {
@@ -5388,6 +5490,226 @@ mod tests {
         ));
     }
 
+    /// Manual admission freezes capability-derived Skill guidance as
+    /// non-retirable request input. The same history can retire one message
+    /// without that guidance, but must retire two when the frozen catalog
+    /// makes the one-message candidate exceed the exact soft limit.
+    #[allow(clippy::too_many_lines)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn manual_compaction_exact_fit_includes_frozen_skill_guidance() {
+        fn estimator() -> Arc<dyn TokenEstimator> {
+            Arc::new(ClosureTokenEstimator::new(
+                |messages, effective_system_prompt, _tools| {
+                    let conversation = messages
+                        .iter()
+                        .map(|message| {
+                            if matches!(
+                                message,
+                                MessageBlock::User(user)
+                                    if user.kind == InboundKind::CompactionSummary
+                            ) {
+                                10_000
+                            } else {
+                                350_000
+                            }
+                        })
+                        .sum::<u64>();
+                    conversation
+                        + if effective_system_prompt.is_empty() {
+                            0
+                        } else {
+                            400_000
+                        }
+                },
+            ))
+        }
+
+        fn history() -> Vec<MessageBlock> {
+            vec![
+                seed_user("oldest", "oldest fact"),
+                seed_user("middle", "middle fact"),
+                seed_user("recent", "recent fact"),
+            ]
+        }
+
+        let without_skill = tempfile::tempdir().expect("temp dir");
+        let (runtime_without_skill, _) = headless_runtime_with_options(
+            &without_skill,
+            vec![text_turn_script("S")],
+            None,
+            None,
+            HeadlessRuntimeOptions {
+                estimator: estimator(),
+                policy: crate::context::SessionContextPolicy {
+                    reserve_tokens: 0,
+                    keep_recent_tokens: 700_000,
+                    summary_output_cap: None,
+                },
+                initial_messages: history(),
+                ..HeadlessRuntimeOptions::default()
+            },
+        )
+        .await;
+        runtime_without_skill.activate();
+        let without_outcome = runtime_without_skill
+            .compact_context()
+            .await
+            .expect("one-message retirement fits without Skill guidance");
+        assert_eq!(without_outcome.tokens_before.input_tokens, 1_050_000);
+        assert_eq!(without_outcome.estimated_tokens_after, 710_000);
+        assert_eq!(
+            runtime_without_skill
+                .coordinator_active_ids()
+                .expect("restored without Skill guidance"),
+            vec![
+                without_outcome.summary_message_id,
+                crate::runtime::identity::MessageId::new("middle"),
+                crate::runtime::identity::MessageId::new("recent"),
+            ],
+            "the retention target keeps the one-message candidate when it truly fits"
+        );
+
+        let with_skill = tempfile::tempdir().expect("temp dir");
+        let skill = with_skill
+            .path()
+            .join("workspace/.agents/skills/exact-fit-skill");
+        std::fs::create_dir_all(&skill).expect("skill package");
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: exact-fit-skill\ndescription: Frozen fit guidance.\n---\n\nInstructions.\n",
+        )
+        .expect("SKILL.md");
+        let (runtime_with_skill, _) = headless_runtime_with_options(
+            &with_skill,
+            vec![text_turn_script("S")],
+            None,
+            None,
+            HeadlessRuntimeOptions {
+                skill_discovery: crate::skills::SkillDiscoveryConfig {
+                    automatic_roots: Vec::new(),
+                    explicit_paths: vec![skill],
+                },
+                estimator: estimator(),
+                policy: crate::context::SessionContextPolicy {
+                    reserve_tokens: 0,
+                    keep_recent_tokens: 700_000,
+                    summary_output_cap: None,
+                },
+                initial_messages: history(),
+            },
+        )
+        .await;
+        runtime_with_skill.activate();
+        let with_outcome = runtime_with_skill
+            .compact_context()
+            .await
+            .expect("a larger retirement span fits with frozen Skill guidance");
+        assert_eq!(with_outcome.tokens_before.input_tokens, 1_450_000);
+        assert_eq!(with_outcome.estimated_tokens_after, 760_000);
+        assert_eq!(
+            runtime_with_skill
+                .coordinator_active_ids()
+                .expect("restored with Skill guidance"),
+            vec![
+                with_outcome.summary_message_id,
+                crate::runtime::identity::MessageId::new("recent"),
+            ],
+            "the frozen catalog makes the one-message candidate fail, so planning retires two"
+        );
+    }
+
+    /// The durable commit is not the live maintenance-settlement point. While
+    /// the task-local committed state is parked before coordinator restore,
+    /// Runtime Client must still report compaction in progress and a second
+    /// manual request must remain busy. Completion becomes observable only
+    /// after the state and maintenance slot return together.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn manual_compaction_completion_publishes_after_coordinator_restore() {
+        let gate = Arc::new(super::Gate::default());
+        gate.arm();
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (runtime, _) = headless_runtime_with_options(
+            &dir,
+            vec![text_turn_script("settled summary")],
+            None,
+            Some(CoordinatorProbe {
+                manual_compaction_settlement_gate: Some(gate.clone()),
+                ..CoordinatorProbe::default()
+            }),
+            HeadlessRuntimeOptions {
+                initial_messages: vec![seed_user("old", &"old history ".repeat(512))],
+                ..HeadlessRuntimeOptions::default()
+            },
+        )
+        .await;
+        let host = RuntimeClientHost::new(RuntimeClientHostConfig {
+            runtime: runtime.clone(),
+            replay_limit: None,
+        })
+        .expect("host");
+        runtime.activate();
+
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        let runtime_for_compaction = runtime.clone();
+        tokio::spawn(async move {
+            let _ = done_tx.send(runtime_for_compaction.compact_context().await);
+        });
+        let wait_gate = gate.clone();
+        within_liveness_guard("manual compaction pre-settlement gate", async move {
+            tokio::task::spawn_blocking(move || wait_gate.wait_entered())
+                .await
+                .expect("gate wait task");
+        })
+        .await;
+
+        assert!(
+            runtime.has_manual_compaction(),
+            "the coordinator still owns the live maintenance slot"
+        );
+        assert!(
+            runtime.coordinator_ledger().is_none(),
+            "the checked-out conversation has not returned to the coordinator"
+        );
+        assert_eq!(
+            runtime.compact_context().await,
+            Err(ManualCompactionError::Busy)
+        );
+        let (during, _) = host.snapshot().expect("snapshot during settlement park");
+        assert!(during.context.compaction_in_progress);
+        assert_eq!(during.context.compaction_count, 0);
+        assert!(
+            runtime
+                .tool_runtime()
+                .durable_store()
+                .read_events(None, 128)
+                .expect("event journal")
+                .events
+                .iter()
+                .any(|event| matches!(event.event, RuntimeEvent::CompactionCompleted { .. })),
+            "the durable compaction fact already committed before live settlement"
+        );
+
+        gate.release();
+        let outcome = within_liveness_guard("manual compaction settlement", done_rx)
+            .await
+            .expect("completion channel")
+            .expect("manual compaction succeeds");
+        assert!(!runtime.has_manual_compaction());
+        assert!(runtime.coordinator_ledger().is_some());
+        let (after, _) = host.snapshot().expect("snapshot after settlement");
+        assert!(!after.context.compaction_in_progress);
+        assert_eq!(after.context.compaction_count, 1);
+        assert_eq!(
+            after
+                .context
+                .latest_compaction
+                .as_ref()
+                .expect("latest compaction")
+                .summary_message_id,
+            outcome.summary_message_id
+        );
+    }
+
     /// A rejected manual compaction never strands the checked-out state. An
     /// empty conversation has no retirable span, and ordinary inbound still
     /// admits immediately after that typed failure.
@@ -5882,6 +6204,7 @@ mod tests {
             admission_gate: Some(gate.clone()),
             settlement_gate: None,
             activation_gate: None,
+            manual_compaction_settlement_gate: None,
             submit_gate: None,
             shutdown_arrival: Some(Arc::new(tokio::sync::Notify::new())),
             drain_linearization: None,
@@ -6830,6 +7153,7 @@ mod tests {
             admission_gate: None,
             settlement_gate: None,
             activation_gate: None,
+            manual_compaction_settlement_gate: None,
             submit_gate: Some(gate.clone()),
             shutdown_arrival: Some(shutdown_arrival.clone()),
             drain_linearization: None,
@@ -6911,6 +7235,7 @@ mod tests {
             admission_gate: Some(admission_gate.clone()),
             settlement_gate: None,
             activation_gate: None,
+            manual_compaction_settlement_gate: None,
             submit_gate: None,
             shutdown_arrival: Some(shutdown_arrival.clone()),
             drain_linearization: None,
