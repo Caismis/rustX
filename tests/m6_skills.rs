@@ -312,12 +312,11 @@ fn package_symlinks_are_rejected() {
 /// Discovery accepts a non-canonical package root but publishes a canonical
 /// absolute one.
 ///
-/// `--workspace w --skill .agents/skills/deck` from a repository root is a
-/// legal invocation, and the resulting candidate root is relative to the
-/// process cwd. Publishing that spelling verbatim would break the whole
-/// point of a host path: Read resolves a relative model path against the
-/// canonical Workspace root and Bash runs with that root as its cwd, so both
-/// would re-prefix it and open the wrong file (or nothing).
+/// This boundary owns the invariant on its own, for any caller. Publishing a
+/// non-canonical spelling verbatim would break the whole point of a host
+/// path: Read resolves a relative model path against the canonical Workspace
+/// root and Bash runs with that root as its cwd, so both would re-prefix it
+/// and open the wrong file (or nothing).
 #[test]
 fn a_non_canonical_package_root_is_published_canonically() {
     // Created under the process cwd so a genuinely relative candidate path
@@ -330,8 +329,11 @@ fn a_non_canonical_package_root_is_published_canonically() {
     let workspace = Workspace::new(&workspace_root).expect("workspace");
 
     for explicit in [
-        // Relative, exactly as composition builds it from a relative
-        // `--workspace` plus a relative `--skill`.
+        // Relative input from a low-level discovery caller. Production
+        // composition resolves CLI/config Skill paths against the canonical
+        // Workspace root before this boundary, so discovery is not the only
+        // thing standing between a relative `--skill` and the model — but it
+        // is what makes the invariant hold for every caller.
         relative_root.join("work/.agents/skills/deck"),
         // Absolute but non-canonical: an embedded `..` is a different
         // spelling of the same package.
