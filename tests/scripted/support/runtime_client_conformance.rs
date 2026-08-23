@@ -1238,7 +1238,7 @@ pub async fn background_execution_lifecycle(factory: &dyn DriverFactory) {
         "call-bg",
         "tool-bg",
         "bg",
-        serde_json::json!({"__rustx_execution": "background"}),
+        serde_json::json!({"execution_mode": "background"}),
     );
     let mut first = vec![FakeStep::Emit(ModelEvent::Started)];
     for event in super::fake::tool_call_events(0, &call) {

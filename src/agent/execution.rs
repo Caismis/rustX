@@ -5851,7 +5851,7 @@ mod tests {
             id: ToolCallId::new("call-bg"),
             tool_id: ToolId::new("tool-bg"),
             name: "bg".to_owned(),
-            arguments: serde_json::json!({"__rustx_execution": "background"}),
+            arguments: serde_json::json!({"execution_mode": "background"}),
         };
         let adapter = Arc::new(ScriptedAdapter::new(vec![
             tool_call_script(&call),

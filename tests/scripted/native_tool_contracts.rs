@@ -229,7 +229,8 @@ fn optional_native_properties_are_absent_not_nullable_and_registry_metadata_stay
         {
             assert_ne!(property["type"], serde_json::json!(["null"]));
         }
-        assert!(schema["properties"]["__rustx_execution"].is_null());
+        assert!(schema["properties"]["execution_mode"].is_null());
+        assert!(!schema.to_string().contains("execution_mode"));
         assert!(!schema.to_string().contains("__rustx_execution"));
     }
     for definition in fixture.registry.model_definitions() {
@@ -237,8 +238,16 @@ fn optional_native_properties_are_absent_not_nullable_and_registry_metadata_stay
             !definition
                 .input_schema
                 .to_string()
-                .contains("__rustx_execution"),
+                .contains("execution_mode"),
             "default native definitions stay provider-neutral: {}",
+            definition.name
+        );
+        assert!(
+            !definition
+                .input_schema
+                .to_string()
+                .contains("__rustx_execution"),
+            "the retired reserved selector is gone: {}",
             definition.name
         );
     }
@@ -286,7 +295,7 @@ fn native_tools_preserve_legal_execution_policies_and_fixed_background_task_poli
             .expect("read definition");
         assert_eq!(read.execution_policy, execution);
         let arguments = if execution == ToolExecutionPolicy::ModelSelectable {
-            serde_json::json!({"path": "a.txt", "__rustx_execution": "foreground"})
+            serde_json::json!({"path": "a.txt", "execution_mode": "foreground"})
         } else {
             serde_json::json!({"path": "a.txt"})
         };

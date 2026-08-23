@@ -329,6 +329,11 @@ fn discover_package(directory: &str, root: &Path) -> Result<PythonToolPackage, P
         .map_err(|error| PythonToolError::InvalidPackage(format!("input.schema.json: {error}")))?;
     crate::tools::schema::validate_canonical_schema(&schema)
         .map_err(|error| PythonToolError::InvalidPackage(format!("input.schema.json: {error}")))?;
+    // The manifest declares the effective execution policy next to the
+    // schema, so a `model_selectable` package that also claims the reserved
+    // `execution_mode` property is rejected here rather than at registration.
+    crate::tools::schema::validate_execution_metadata_contract(policy.execution, &schema)
+        .map_err(|error| PythonToolError::InvalidPackage(format!("input.schema.json: {error}")))?;
     let files = collect_files(root)?;
     let tool_version_id = tool_version_id(&files);
     Ok(PythonToolPackage {

@@ -118,7 +118,18 @@ waits as `pending`.
 `foreground_only`, `background_only`, or `model_selectable`; `concurrency` is
 one of `sequential` or `parallel`; and `approval` is `never` or `always`.
 Availability, activation, approval, approval mode, execution ownership, and
-concurrency are separate facts. The runtime intrinsics `background_task` and
+concurrency are separate facts.
+
+Choosing `model_selectable` for a tool makes the model pick execution
+ownership per call through a required top-level `execution_mode` field
+(`"foreground"` or `"background"`) that rustX injects into the model-facing
+schema, resolves once at preflight, and strips before the tool ever sees the
+arguments. Because of that, `execution_mode` is reserved under
+`model_selectable` only: a tool whose own input schema already declares a
+top-level `execution_mode` property is rejected at registration under that
+policy — rename the tool's field, or configure `foreground_only` or
+`background_only`, which need no injected field. The same rule applies to
+`mcpToolPolicies` and to Python tool packages. The runtime intrinsics `background_task` and
 `ask_user` are not configured in this table: both are fixed foreground,
 sequential, approval-never tools, with `ask_user` publishing one bounded
 Question through the runtime-owned `InteractionCoordinator`.

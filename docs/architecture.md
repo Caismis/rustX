@@ -1412,17 +1412,46 @@ The three policy axes are independent:
 
 The canonical input schema is tool-owned and never mutated. For
 `ModelSelectable` tools the model-facing compiler decorates a clone with the
-required reserved `__rustx_execution` field
-(`{"type": "string", "enum": ["foreground", "background"]}`) inside the
-reserved `__rustx_` top-level property namespace. The runtime extracts the
-field, resolves the canonical mode, strips it, and validates the remaining
-business arguments against the original schema before dispatch; reserved
-fields are never forwarded to executors. Tool-owned argument normalization,
-where present, runs between stripping and that canonical validation. Native
-Edit's known malformed argument spellings are handled there; provider
-adapters and the Agent Loop remain unaware of them. `ModelRequest.tools`
-carries the compiled [`ModelToolDefinition`] values only — provider adapters
-translate them verbatim and never decide execution semantics.
+required top-level `execution_mode` field
+(`{"type": "string", "enum": ["foreground", "background"]}`, carrying a
+model-facing description of the ownership decision) and appends a
+runtime-owned reminder to the compiled description. The contract is:
+
+```text
+ModelSelectable
+    ⇒ the model must explicitly choose execution_mode per invocation
+    ⇒ preflight resolves ownership once
+    ⇒ the runtime strips execution_mode
+    ⇒ the executor never sees model-facing runtime metadata
+```
+
+The runtime extracts the field, resolves the canonical mode, strips it, and
+validates the remaining business arguments against the original schema
+before dispatch. A missing or invalid `execution_mode` is a deterministic
+preflight rejection carrying the exact retry the model needs; it is never
+defaulted to foreground. `ForegroundOnly`/`BackgroundOnly` definitions are
+compiled verbatim — no synthetic field is injected and ownership resolves
+from the fixed policy alone.
+
+`execution_mode` is reserved **only** while the effective execution policy is
+`ModelSelectable`. A tool whose canonical business schema already declares a
+top-level `execution_mode` property is rejected at registration under that
+policy, with an error telling the human to rename the business field or to
+choose a non-`ModelSelectable` execution policy; rustX never renames,
+shadows, merges, or reinterprets the collision. The same schema stays legal
+under `ForegroundOnly`/`BackgroundOnly`. The check therefore lives in the
+bounded layer that owns both the effective policy and the compiled
+model-facing schema, not in the policy-unaware canonical schema validation.
+
+Separately, the `__rustx_` top-level property namespace remains reserved for
+other runtime concerns under every policy: no canonical schema may claim one
+and no invocation may carry one. Tool-owned argument normalization, where
+present, runs between stripping and canonical validation. Native Edit's known
+malformed argument spellings are handled there; provider adapters and the
+Agent Loop remain unaware of them. `ModelRequest.tools` carries the compiled
+[`ModelToolDefinition`] values only — provider adapters translate them
+verbatim and never decide execution semantics, and no tool (Bash included)
+implements `execution_mode` handling of its own.
 
 The registry is a correctness boundary: duplicate `ToolId`s, duplicate
 model-facing names, empty identities, invalid or non-root JSON Schema,

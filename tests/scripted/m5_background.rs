@@ -829,7 +829,7 @@ async fn background_completion_after_attempt_terminal_does_not_alter_the_attempt
         "call-1",
         "tool-bg",
         "bg",
-        serde_json::json!({"__rustx_execution": "background"}),
+        serde_json::json!({"execution_mode": "background"}),
     );
     let model = fake_model(vec![
         vec![
@@ -947,7 +947,7 @@ async fn terminal_inbound_before_snapshot_joins_the_batch() {
         "call-bg",
         "tool-bg",
         "bg",
-        serde_json::json!({"__rustx_execution": "background"}),
+        serde_json::json!({"execution_mode": "background"}),
     );
     let model = fake_model(vec![
         vec![
@@ -1152,7 +1152,7 @@ fn background_task_is_never_background_dispatchable() {
         id: ToolCallId::new("call-x"),
         tool_id: ToolId::new("tool-background-task"),
         name: "background_task".to_owned(),
-        arguments: serde_json::json!({"__rustx_execution": "background", "execution_id": "exec_1", "action": "status"}),
+        arguments: serde_json::json!({"execution_mode": "background", "execution_id": "exec_1", "action": "status"}),
     };
     let outcome = fixture.registry.preflight(&call).expect("preflight");
     assert!(
@@ -1294,13 +1294,13 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
         "call-b1",
         "tool-b1",
         "b1",
-        serde_json::json!({"__rustx_execution": "background"}),
+        serde_json::json!({"execution_mode": "background"}),
     );
     let call_b2 = scripted(
         "call-b2",
         "tool-b2",
         "b2",
-        serde_json::json!({"__rustx_execution": "background"}),
+        serde_json::json!({"execution_mode": "background"}),
     );
     let (model_release_tx, model_release_rx) = support::fake::model_release();
     let model = fake_model(vec![

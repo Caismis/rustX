@@ -187,8 +187,9 @@ Implemented in the M5 tool plane PR (Issue #8):
 - Two independent policy axes: `ToolExecutionPolicy`
   (foreground/background ownership) and `ToolConcurrencyPolicy`
   (sequential/parallel batch scheduling)
-- The compiled `ModelToolDefinition` with the reserved `__rustx_`
-  invocation namespace (`__rustx_execution` for model-selectable tools)
+- The compiled `ModelToolDefinition` with the required `execution_mode`
+  invocation selector for model-selectable tools and the reserved
+  `__rustx_` namespace for other runtime concerns
 - `ToolExecutionId` and the conversation-owned
   `ConversationBackgroundRegistry` with the dispatch ownership commit,
   lifecycle state machine, cancel-vs-complete linearization, and

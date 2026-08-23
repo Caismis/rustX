@@ -33,8 +33,8 @@ use crate::tools::artifacts::ArtifactStore;
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::managed_output::ManagedToolOutput;
 use crate::tools::schema::{
-    SchemaError, compile_model_definition, resolve_invocation_metadata,
-    validate_business_arguments, validate_canonical_schema,
+    EXECUTION_MODE_FIELD, SchemaError, compile_model_definition, resolve_invocation_metadata,
+    validate_business_arguments, validate_canonical_schema, validate_execution_metadata_contract,
 };
 use crate::tools::types::{
     ModelToolDefinition, ToolApprovalPolicy, ToolCall, ToolConcurrencyPolicy, ToolDefinition,
@@ -200,6 +200,10 @@ pub enum ToolRegistryError {
     InvalidSchema(String),
     /// The canonical input schema claims a reserved `__rustx_*` property.
     ReservedProperty(String),
+    /// The tool is `ModelSelectable` and its canonical input schema already
+    /// defines the top-level `execution_mode` property that rustX reserves
+    /// for invocation ownership under that policy.
+    ExecutionModeCollision(String),
     /// The declared policies are invalid for this tool.
     InvalidPolicy(String),
 }
@@ -215,6 +219,13 @@ impl core::fmt::Display for ToolRegistryError {
             ),
             Self::InvalidIdentity(message) => write!(f, "{message}"),
             Self::InvalidSchema(message) => write!(f, "invalid tool schema: {message}"),
+            Self::ExecutionModeCollision(name) => write!(
+                f,
+                "tool {name:?} is ModelSelectable and its canonical schema defines a top-level \
+                 {EXECUTION_MODE_FIELD:?} property, which rustX reserves for the model's \
+                 per-invocation execution-ownership choice; either rename the tool's business \
+                 field or configure a non-ModelSelectable execution policy"
+            ),
             Self::ReservedProperty(_) | Self::InvalidPolicy(_) => {
                 write!(f, "the tool registration violates a registry rule")
             }
@@ -380,9 +391,10 @@ impl ToolRegistry {
     /// Registration validates the definition before insertion: duplicate
     /// `ToolId`s and duplicate model-facing names are rejected, empty
     /// identities are rejected, the canonical input schema must be a valid
-    /// root object schema with no reserved `__rustx_*` property, and the
-    /// runtime intrinsics are fixed to foreground-only, sequential execution;
-    /// `ask_user` is also fixed to approval-never.
+    /// root object schema with no reserved `__rustx_*` property, a
+    /// `ModelSelectable` tool may not claim the reserved `execution_mode`
+    /// property, and the runtime intrinsics are fixed to foreground-only,
+    /// sequential execution; `ask_user` is also fixed to approval-never.
     ///
     /// # Errors
     ///
@@ -434,6 +446,13 @@ impl ToolRegistry {
             }
             other => ToolRegistryError::InvalidSchema(other.to_string()),
         })?;
+        // `execution_mode` is reserved only while the effective execution
+        // policy is ModelSelectable, so the collision check belongs here —
+        // the bounded layer that owns both the effective policy and the
+        // compiled model-facing schema — and not in the policy-unaware
+        // canonical schema validation above.
+        validate_execution_metadata_contract(definition.execution_policy, &definition.input_schema)
+            .map_err(|_| ToolRegistryError::ExecutionModeCollision(definition.name.clone()))?;
         if definition.name == BACKGROUND_TASK_TOOL_NAME
             && (definition.execution_policy
                 != crate::tools::types::ToolExecutionPolicy::ForegroundOnly
@@ -525,7 +544,8 @@ impl ToolRegistry {
     /// # Panics
     ///
     /// Panics only when a registered canonical schema would fail its own
-    /// registration validation, which is impossible by construction.
+    /// registration validation — including the `ModelSelectable`
+    /// `execution_mode` reservation — which is impossible by construction.
     #[must_use]
     pub fn model_definitions(&self) -> Vec<ModelToolDefinition> {
         self.entries
@@ -582,9 +602,10 @@ impl ToolRegistry {
     /// Identity resolution is unambiguous: the call's `ToolId` and
     /// model-facing name must resolve to the same registered tool. An
     /// unresolvable or inconsistent call is a structural
-    /// [`ToolPreflightError`]; a missing/invalid reserved invocation field or
-    /// a business schema violation is a normal [`PreflightOutcome::Rejected`]
-    /// that never reaches an executor.
+    /// [`ToolPreflightError`]; a missing/invalid `execution_mode` selection,
+    /// a forged reserved `__rustx_*` argument, or a business schema violation
+    /// is a normal [`PreflightOutcome::Rejected`] that never reaches an
+    /// executor.
     pub fn preflight(&self, call: &ToolCall) -> Result<PreflightOutcome, ToolPreflightError> {
         let entry = self.resolve_entry(call)?;
         let (mode, stripped) =
@@ -931,6 +952,62 @@ mod tests {
         .expect("fixed intrinsic policy is accepted");
     }
 
+    /// A `ModelSelectable` tool whose canonical schema already claims the
+    /// reserved `execution_mode` property is rejected at registration, so it
+    /// can never reach a model request; the same schema stays legal under a
+    /// fixed execution policy.
+    #[test]
+    fn model_selectable_execution_mode_collision_is_rejected_at_registration() {
+        let colliding =
+            json!({"type": "object", "properties": {"execution_mode": {"type": "string"}}});
+        let mut registry = ToolRegistry::new();
+        let error = register(
+            &mut registry,
+            definition(
+                "tool-sel",
+                "sel",
+                ToolExecutionPolicy::ModelSelectable,
+                ToolConcurrencyPolicy::Sequential,
+                colliding.clone(),
+            ),
+        )
+        .expect_err("the collision is rejected");
+        let ToolRegistryError::ExecutionModeCollision(name) = &error else {
+            panic!("expected an execution-mode collision, got {error:?}");
+        };
+        assert_eq!(name, "sel");
+        let message = error.to_string();
+        assert!(message.contains("execution_mode"));
+        assert!(message.contains("rename"));
+        assert!(message.contains("ModelSelectable"));
+        assert!(
+            registry.model_definitions().is_empty(),
+            "a colliding tool never reaches a model request"
+        );
+
+        for (index, policy) in [
+            ToolExecutionPolicy::ForegroundOnly,
+            ToolExecutionPolicy::BackgroundOnly,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut registry = ToolRegistry::new();
+            register(
+                &mut registry,
+                definition(
+                    &format!("tool-fixed-{index}"),
+                    &format!("fixed-{index}"),
+                    policy,
+                    ToolConcurrencyPolicy::Sequential,
+                    colliding.clone(),
+                ),
+            )
+            .expect("a fixed execution policy needs no synthetic field");
+            assert_eq!(registry.model_definitions()[0].input_schema, colliding);
+        }
+    }
+
     /// A valid foreground model-selectable selection is extracted and
     /// stripped before dispatch.
     #[test]
@@ -951,7 +1028,7 @@ mod tests {
             .preflight(&call(
                 "tool-sel",
                 "sel",
-                json!({"__rustx_execution": "foreground", "path": "a.txt"}),
+                json!({"execution_mode": "foreground", "path": "a.txt"}),
             ))
             .expect("preflight");
         let PreflightOutcome::Ready(prepared) = outcome else {
@@ -964,7 +1041,7 @@ mod tests {
                 .invocation
                 .arguments
                 .as_object()
-                .is_some_and(|object| object.contains_key("__rustx_execution")),
+                .is_some_and(|object| object.contains_key("execution_mode")),
             "the synthetic field never reaches the executor"
         );
     }
@@ -988,7 +1065,7 @@ mod tests {
             .preflight(&call(
                 "tool-sel",
                 "sel",
-                json!({"__rustx_execution": "background", "command": "ls"}),
+                json!({"execution_mode": "background", "command": "ls"}),
             ))
             .expect("preflight");
         let PreflightOutcome::Ready(prepared) = outcome else {
@@ -1020,15 +1097,34 @@ mod tests {
         let PreflightOutcome::Rejected { error, .. } = missing else {
             panic!("expected rejection");
         };
-        assert!(error.contains("__rustx_execution"));
+        assert!(
+            error.contains("execution_mode"),
+            "the rejection names the field the model must add: {error}"
+        );
+        assert!(
+            error.contains("\"execution_mode\": \"foreground\"")
+                && error.contains("\"execution_mode\": \"background\""),
+            "the rejection shows both recoveries: {error}"
+        );
         let invalid = registry
             .preflight(&call(
                 "tool-sel",
                 "sel",
-                json!({"__rustx_execution": "sideways", "path": "a.txt"}),
+                json!({"execution_mode": "sideways", "path": "a.txt"}),
             ))
             .expect("preflight outcome");
         assert!(matches!(invalid, PreflightOutcome::Rejected { .. }));
+        let retired = registry
+            .preflight(&call(
+                "tool-sel",
+                "sel",
+                json!({"__rustx_execution": "background", "path": "a.txt"}),
+            ))
+            .expect("preflight outcome");
+        assert!(
+            matches!(retired, PreflightOutcome::Rejected { .. }),
+            "the retired reserved selector no longer selects a mode"
+        );
     }
 
     /// Business schema violations are rejected without an executor call.
@@ -1142,8 +1238,12 @@ mod tests {
         assert_eq!(registry.definitions()[0].input_schema, schema);
         let compiled = registry.model_definitions()[0].input_schema.clone();
         assert!(
-            compiled["properties"]["__rustx_execution"].is_object(),
+            compiled["properties"]["execution_mode"].is_object(),
             "the compiled schema carries the synthetic field"
+        );
+        assert!(
+            !compiled.to_string().contains("__rustx_execution"),
+            "the retired reserved selector is gone from the compiled schema"
         );
         assert_eq!(
             registry.definitions()[0].input_schema,
@@ -1236,7 +1336,7 @@ mod tests {
             .preflight(&call(
                 "tool-sel",
                 "sel",
-                json!({"__rustx_execution": "background", "path": "a.txt"}),
+                json!({"execution_mode": "background", "path": "a.txt"}),
             ))
             .expect("preflight");
         let PreflightOutcome::Ready(prepared) = outcome else {

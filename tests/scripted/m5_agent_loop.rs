@@ -417,7 +417,7 @@ async fn mixed_foreground_background_group_does_not_wait_for_detached_terminal()
         "call-b",
         "tool-beta",
         "beta",
-        serde_json::json!({"__rustx_execution": "background"}),
+        serde_json::json!({"execution_mode": "background"}),
     );
     let call_c = scripted("call-c", "tool-gamma", "gamma", serde_json::json!({}));
     let model = fake_model(tool_turn_then_stop(&[&call_a, &call_b, &call_c]));
@@ -517,7 +517,7 @@ async fn cancellation_during_mixed_batch_settles_structurally() {
         "call-b",
         "tool-beta",
         "beta",
-        serde_json::json!({"__rustx_execution": "background"}),
+        serde_json::json!({"execution_mode": "background"}),
     );
     let call_c = scripted("call-c", "tool-gamma", "gamma", serde_json::json!({}));
     let call_d = scripted("call-d", "tool-delta", "delta", serde_json::json!({}));

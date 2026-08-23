@@ -1134,12 +1134,22 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   are two independent axes: ownership/settlement is decided by
   `ToolExecutionPolicy`, concurrency within a batch by
   `ToolConcurrencyPolicy`. The two are never combined into one axis.
-- The canonical tool input schema is tool-owned and never mutated. Reserved
-  runtime invocation metadata (`__rustx_execution` under the `__rustx_`
-  namespace) exists only in the compiled model-facing schema, is required
-  for `ModelSelectable` tools, is extracted and stripped by the runtime, and
-  is never forwarded to any executor. Registration rejects canonical schemas
-  claiming `__rustx_*` properties.
+- The canonical tool input schema is tool-owned and never mutated. The
+  model-facing execution-ownership selector `execution_mode` exists only in
+  the compiled model-facing schema of a `ModelSelectable` tool, is required
+  on every such invocation, is resolved exactly once at preflight, is
+  stripped before business-argument validation, and is never forwarded to
+  any executor. A missing or invalid value is a deterministic rejection with
+  actionable diagnostics, never a silent foreground default.
+- `execution_mode` is reserved when and only when the effective execution
+  policy is `ModelSelectable`. Registration rejects a `ModelSelectable` tool
+  whose canonical schema already declares a top-level `execution_mode`
+  property, explicitly and without any automatic compatibility mapping; the
+  same schema is legal under `ForegroundOnly`/`BackgroundOnly`, which
+  receive no synthetic field. The `__rustx_` top-level namespace stays
+  reserved for other runtime concerns under every policy: registration
+  rejects canonical schemas claiming `__rustx_*` properties and preflight
+  rejects invocations carrying them.
 - The registry is a validity boundary: duplicate ids, duplicate model-facing
   names, empty identities, invalid or non-root JSON Schema, reserved
   property collisions, invalid policy combinations, and background-capable
