@@ -1453,9 +1453,13 @@ instance — and a reference can re-enter the decorated root from any depth. A
 schema whose `child` property is `{"$ref": "#"}` would make the injected
 selector propagate into nested business objects, so `$ref`, `$dynamicRef`,
 and `$recursiveRef` are refused throughout a `ModelSelectable` canonical
-schema. rustX refuses them outright instead of resolving URIs to decide which
-ones reach the root: that decision is a JSON Schema reference resolver, and
-this contract is meant to be checkable by inspection. Apart from references,
+schema. rustX refuses them outright instead of resolving URIs to decide which ones
+reach the root: that decision is a JSON Schema reference resolver, and this
+contract is meant to be checkable by inspection. The scan descends only
+through positions JSON Schema defines as carrying subschemas, so a `$ref` key
+that is really a property name (under `dependentRequired`, or the Draft-7
+`dependencies` list shape) or annotation data under an unrecognized keyword
+is left alone rather than misread as an applicator. Apart from references,
 nested subschemas stay unrestricted — a business property may hold
 composition, cardinality assertions, and an `execution_mode` of its own.
 

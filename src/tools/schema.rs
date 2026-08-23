@@ -161,13 +161,33 @@ pub const ROOT_ANNOTATION_KEYWORDS: &[&str] = &[
 /// reference-heavy schema stays fully usable under a fixed policy.
 pub const REFERENCE_APPLICATOR_KEYWORDS: &[&str] = &["$ref", "$dynamicRef", "$recursiveRef"];
 
-/// Keywords whose values are instance data rather than subschemas, so a
-/// `$ref` appearing inside them is a literal value, not an applicator.
-const INSTANCE_DATA_KEYWORDS: &[&str] = &["const", "default", "enum", "examples"];
+/// Keywords whose value is exactly one subschema.
+///
+/// `additionalProperties`, `unevaluatedItems`, and `unevaluatedProperties`
+/// may also hold a boolean, which is a valid schema carrying nothing to
+/// inspect.
+const SUBSCHEMA_KEYWORDS: &[&str] = &[
+    "additionalItems",
+    "additionalProperties",
+    "contains",
+    "contentSchema",
+    "else",
+    "if",
+    "not",
+    "propertyNames",
+    "then",
+    "unevaluatedItems",
+    "unevaluatedProperties",
+];
 
-/// Keywords whose values map *names* to subschemas. A key inside one of
-/// these is a property or definition name — a business property may legally
-/// be called `$ref` — so only the mapped values are walked as schemas.
+/// Keywords whose value is an array of subschemas.
+const SUBSCHEMA_LIST_KEYWORDS: &[&str] = &["allOf", "anyOf", "oneOf", "prefixItems"];
+
+/// Keywords whose value maps *names* to subschemas.
+///
+/// A key here is a property or definition name, never a schema keyword, so
+/// only the mapped values are schema nodes. That distinction is what lets a
+/// business property legally be called `$ref`.
 const SCHEMA_MAP_KEYWORDS: &[&str] = &[
     "properties",
     "patternProperties",
@@ -176,7 +196,7 @@ const SCHEMA_MAP_KEYWORDS: &[&str] = &[
     "definitions",
 ];
 
-/// Whether one root keyword belongs to the decoratable root profile.
+/// Whether one root keyword belongs to the decoratable root profile./// Whether one root keyword belongs to the decoratable root profile.
 ///
 /// The profile is an allowlist: anything absent from both
 /// [`DECORATABLE_ROOT_INSTANCE_KEYWORDS`] and [`ROOT_ANNOTATION_KEYWORDS`]
@@ -208,8 +228,9 @@ pub enum SchemaError {
     /// entry, or both — which rustX reserves for invocation ownership under
     /// that policy.
     ExecutionModeCollision(ExecutionModeClaim),
-    /// A `ModelSelectable` tool's canonical schema shapes its root with a
-    /// composition keyword rustX cannot decorate soundly.
+    /// A `ModelSelectable` tool's canonical schema uses a root keyword
+    /// outside the decoratable root profile, so rustX cannot prove that
+    /// decorating it leaves the schema satisfiable.
     UndecoratableRootSchema(String),
     /// A `ModelSelectable` tool's canonical schema uses a reference
     /// applicator, which may re-enter the decorated root from any depth.
@@ -390,14 +411,21 @@ pub fn validate_canonical_schema(schema: &serde_json::Value) -> Result<(), Schem
 ///   cannot prove that injecting a required root property leaves such a
 ///   schema satisfiable.
 ///
-/// Both rejections enforce one invariant: a registered tool can never reach
-/// the state where it compiles into a model-facing definition yet no correct
-/// model call can succeed. A claim on the reserved name reaches it through
-/// the strip/validate asymmetry — the runtime removes `execution_mode`
-/// before canonical validation, so the claim can never be satisfied. A root
-/// keyword outside the profile reaches it by contradicting the injection
-/// itself, as `maxProperties`, a root `const`/`enum`, Draft-7
-/// `dependencies`, or an unaware composition branch all do.
+/// - a canonical schema using a reference applicator at any depth (see
+///   [`REFERENCE_APPLICATOR_KEYWORDS`]), because decoration edits the root in
+///   place and a reference may re-enter it.
+///
+/// The three rejections together enforce the projection equivalence
+/// `canonical(B)` ⇔ `compiled(B + top-level execution_mode)`, so a
+/// registered tool can never reach the state where it compiles into a
+/// model-facing definition yet no correct model call can succeed. A claim on
+/// the reserved name reaches that state through the strip/validate asymmetry
+/// — the runtime removes `execution_mode` before canonical validation, so
+/// the claim can never be satisfied. A root keyword outside the profile
+/// reaches it by contradicting the injection itself, as `maxProperties`, a
+/// root `const`/`enum`, Draft-7 `dependencies`, or an unaware composition
+/// branch all do. A reference reaches it by carrying the injected property
+/// into nested business objects, breaking the equivalence both ways at once.
 ///
 /// Neither rule applies under `ForegroundOnly`/`BackgroundOnly`, which
 /// receive no synthetic field: an arbitrary composed root schema stays
@@ -406,8 +434,10 @@ pub fn validate_canonical_schema(schema: &serde_json::Value) -> Result<(), Schem
 /// # Errors
 ///
 /// Returns [`SchemaError::ExecutionModeCollision`] when the schema claims
-/// the reserved name and [`SchemaError::UndecoratableRootSchema`] when the
-/// root cannot carry the injected selector.
+/// the reserved name, [`SchemaError::UndecoratableRootSchema`] when the root
+/// cannot carry the injected selector, and
+/// [`SchemaError::ReferenceApplicator`] when the schema references another
+/// schema at any depth.
 pub fn validate_execution_metadata_contract(
     policy: ToolExecutionPolicy,
     schema: &serde_json::Value,
@@ -538,15 +568,20 @@ fn decorate_execution_mode(schema: &mut serde_json::Value) {
 
 /// Rejects every reference applicator in a canonical schema, at any depth.
 ///
-/// The walk distinguishes the three positions a `$ref` key can occupy, so it
-/// refuses applicators without refusing legitimate data:
+/// The walk descends **only** through positions JSON Schema defines as
+/// carrying subschemas — [`SUBSCHEMA_KEYWORDS`], [`SUBSCHEMA_LIST_KEYWORDS`],
+/// [`SCHEMA_MAP_KEYWORDS`], plus `items` and the Draft-7 `dependencies`,
+/// which each have two legal shapes. Anything else a schema object holds is
+/// left alone.
 ///
-/// - inside [`SCHEMA_MAP_KEYWORDS`], keys are *names* — a business property
-///   may legally be called `$ref` — so only the mapped values are walked;
-/// - inside [`INSTANCE_DATA_KEYWORDS`], the value is instance data, not a
-///   schema, so it is not walked at all;
-/// - everywhere else, an object is a schema node and an array is a list of
-///   schema nodes.
+/// That direction matters. Descending into every object-shaped value and
+/// excluding known data positions would repeat, one level down, the mistake
+/// the root profile already corrected: it mistakes JSON shape for schema
+/// position and misreads names and annotations as keywords. `{"$ref":
+/// ["other"]}` under `dependentRequired` is a *property name* whose presence
+/// implies another; the value of an unrecognized keyword is annotation data
+/// that JSON Schema explicitly does not treat as a subschema. Neither is an
+/// applicator, and neither is walked.
 ///
 /// # Errors
 ///
@@ -556,44 +591,91 @@ fn reject_reference_applicators(
     schema: &serde_json::Value,
     location: &str,
 ) -> Result<(), SchemaError> {
-    match schema {
-        serde_json::Value::Array(items) => {
-            for (index, item) in items.iter().enumerate() {
-                reject_reference_applicators(item, &format!("{location}/{index}"))?;
-            }
-            Ok(())
+    // A boolean is a valid schema with nothing to inspect; so is anything
+    // malformed enough not to be an object, which registration rejects
+    // elsewhere.
+    let Some(node) = schema.as_object() else {
+        return Ok(());
+    };
+    for keyword in REFERENCE_APPLICATOR_KEYWORDS {
+        if node.contains_key(*keyword) {
+            return Err(SchemaError::ReferenceApplicator {
+                keyword: (*keyword).to_owned(),
+                location: location.to_owned(),
+            });
         }
-        serde_json::Value::Object(node) => {
-            for keyword in REFERENCE_APPLICATOR_KEYWORDS {
-                if node.contains_key(*keyword) {
-                    return Err(SchemaError::ReferenceApplicator {
-                        keyword: (*keyword).to_owned(),
-                        location: location.to_owned(),
-                    });
-                }
-            }
-            for (keyword, value) in node {
-                if INSTANCE_DATA_KEYWORDS.contains(&keyword.as_str()) {
-                    continue;
-                }
-                let next = format!("{location}/{}", escape_pointer_token(keyword));
-                if SCHEMA_MAP_KEYWORDS.contains(&keyword.as_str())
-                    && let Some(members) = value.as_object()
-                {
-                    for (name, subschema) in members {
-                        reject_reference_applicators(
-                            subschema,
-                            &format!("{next}/{}", escape_pointer_token(name)),
-                        )?;
-                    }
-                    continue;
-                }
+    }
+    for (keyword, value) in node {
+        let next = format!("{location}/{}", escape_pointer_token(keyword));
+        if SUBSCHEMA_KEYWORDS.contains(&keyword.as_str()) {
+            reject_reference_applicators(value, &next)?;
+        } else if SUBSCHEMA_LIST_KEYWORDS.contains(&keyword.as_str()) {
+            reject_reference_applicators_in_list(value, &next)?;
+        } else if SCHEMA_MAP_KEYWORDS.contains(&keyword.as_str()) {
+            reject_reference_applicators_in_map(value, &next)?;
+        } else if keyword == "items" {
+            // One subschema in 2020-12; an array of them in older drafts.
+            if value.is_array() {
+                reject_reference_applicators_in_list(value, &next)?;
+            } else {
                 reject_reference_applicators(value, &next)?;
             }
-            Ok(())
+        } else if keyword == "dependencies" {
+            // Draft-7 mapped a property name to either a subschema or a list
+            // of required property names. 2020-12 split those into
+            // `dependentSchemas` and `dependentRequired` precisely because
+            // the two shapes are not interchangeable.
+            reject_reference_applicators_in_map(value, &next)?;
         }
-        _ => Ok(()),
     }
+    Ok(())
+}
+
+/// Walks each element of a subschema array.
+///
+/// # Errors
+///
+/// Returns [`SchemaError::ReferenceApplicator`] for the first reference
+/// found.
+fn reject_reference_applicators_in_list(
+    value: &serde_json::Value,
+    location: &str,
+) -> Result<(), SchemaError> {
+    let Some(items) = value.as_array() else {
+        return Ok(());
+    };
+    for (index, item) in items.iter().enumerate() {
+        reject_reference_applicators(item, &format!("{location}/{index}"))?;
+    }
+    Ok(())
+}
+
+/// Walks the mapped values of a name-to-subschema map, never its keys.
+///
+/// A non-object value is skipped: that is the Draft-7 `dependencies` shape
+/// listing required property names, which carries no subschema.
+///
+/// # Errors
+///
+/// Returns [`SchemaError::ReferenceApplicator`] for the first reference
+/// found.
+fn reject_reference_applicators_in_map(
+    value: &serde_json::Value,
+    location: &str,
+) -> Result<(), SchemaError> {
+    let Some(members) = value.as_object() else {
+        return Ok(());
+    };
+    for (name, subschema) in members {
+        if !subschema.is_object() {
+            continue;
+        }
+        reject_reference_applicators(
+            subschema,
+            &format!("{location}/{}", escape_pointer_token(name)),
+        )?;
+    }
+    Ok(())
 }
 
 /// Escapes one JSON Pointer reference token (RFC 6901).
@@ -1289,29 +1371,155 @@ mod tests {
         assert!(message.contains("Inline"));
     }
 
-    /// The reference scan reads schema positions, not raw text: a business
-    /// property *named* `$ref`, and a `$ref` appearing inside instance data,
-    /// are values rather than applicators.
+    /// The scan descends only through positions JSON Schema defines as
+    /// carrying subschemas, so a `$ref` key that is a *property name* or
+    /// *annotation data* is not an applicator.
+    ///
+    /// Each case would be a false positive under a walk that treated every
+    /// object-shaped value as a schema node — the same shape-versus-position
+    /// mistake the root profile already corrected.
     #[test]
-    fn the_reference_scan_does_not_fire_on_names_or_instance_data() {
-        for schema in [
-            json!({"type": "object", "properties": {"$ref": {"type": "string"}}}),
+    fn the_reference_scan_reads_schema_positions_not_json_shape() {
+        let cases = [
+            // A business property may legally be called `$ref`.
+            (
+                "property name",
+                json!({"type": "object", "properties": {"$ref": {"type": "string"}}}),
+            ),
+            // `dependentRequired` maps a property name to further required
+            // property names. No subschema is involved.
+            (
+                "dependentRequired name",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "config": {
+                            "type": "object",
+                            "dependentRequired": {"$ref": ["other"]},
+                        },
+                    },
+                }),
+            ),
+            // The Draft-7 `dependencies` spelling of the same thing.
+            (
+                "draft-7 dependencies name",
+                json!({
+                    "$schema": "http://json-schema.org/draft-07/schema#",
+                    "type": "object",
+                    "properties": {
+                        "config": {
+                            "type": "object",
+                            "dependencies": {"$ref": ["other"]},
+                        },
+                    },
+                }),
+            ),
+            // An unrecognized keyword's value is annotation data, which JSON
+            // Schema explicitly does not treat as a subschema.
+            (
+                "unknown annotation data",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "config": {
+                            "type": "object",
+                            "x-vendor-metadata": {"$ref": "literal metadata"},
+                        },
+                    },
+                }),
+            ),
+            // Instance data, not schemas.
+            (
+                "enum value",
+                json!({
+                    "type": "object",
+                    "properties": {"mode": {"enum": [{"$ref": "not-a-schema"}]}},
+                }),
+            ),
+            (
+                "const value",
+                json!({
+                    "type": "object",
+                    "properties": {"mode": {"const": {"$ref": "not-a-schema"}}},
+                }),
+            ),
+            (
+                "examples value",
+                json!({
+                    "type": "object",
+                    "properties": {"mode": {"type": "string"}},
+                    "examples": [{"$ref": "not-a-schema"}],
+                }),
+            ),
+        ];
+        for (label, schema) in &cases {
+            validate_execution_metadata_contract(ToolExecutionPolicy::ModelSelectable, schema)
+                .unwrap_or_else(|error| panic!("{label} is not an applicator: {error}"));
+        }
+    }
+
+    /// The same positions, used as real subschema carriers, are walked: a
+    /// reference hiding in any of them is still found.
+    #[test]
+    fn the_reference_scan_walks_every_subschema_position() {
+        let reference = json!({"$ref": "#"});
+        let mut cases: Vec<(String, serde_json::Value)> = Vec::new();
+        for keyword in super::SUBSCHEMA_KEYWORDS {
+            cases.push((
+                format!("/properties/config/{keyword}"),
+                json!({
+                    "type": "object",
+                    "properties": {"config": {*keyword: reference.clone()}},
+                }),
+            ));
+        }
+        for keyword in super::SUBSCHEMA_LIST_KEYWORDS {
+            cases.push((
+                format!("/properties/config/{keyword}/0"),
+                json!({
+                    "type": "object",
+                    "properties": {"config": {*keyword: [reference.clone()]}},
+                }),
+            ));
+        }
+        for keyword in super::SCHEMA_MAP_KEYWORDS {
+            cases.push((
+                format!("/properties/config/{keyword}/inner"),
+                json!({
+                    "type": "object",
+                    "properties": {"config": {*keyword: {"inner": reference.clone()}}},
+                }),
+            ));
+        }
+        // `items` in both of its legal shapes.
+        cases.push((
+            "/properties/config/items".to_owned(),
+            json!({"type": "object", "properties": {"config": {"items": reference.clone()}}}),
+        ));
+        cases.push((
+            "/properties/config/items/0".to_owned(),
+            json!({"type": "object", "properties": {"config": {"items": [reference.clone()]}}}),
+        ));
+        // Draft-7 `dependencies` in its subschema shape.
+        cases.push((
+            "/properties/config/dependencies/inner".to_owned(),
             json!({
                 "type": "object",
-                "properties": {"mode": {"enum": [{"$ref": "not-a-schema"}]}},
+                "properties": {
+                    "config": {"dependencies": {"inner": reference.clone()}},
+                },
             }),
-            json!({
-                "type": "object",
-                "properties": {"mode": {"const": {"$ref": "not-a-schema"}}},
-            }),
-            json!({
-                "type": "object",
-                "properties": {"mode": {"type": "string"}},
-                "examples": [{"$ref": "not-a-schema"}],
-            }),
-        ] {
-            validate_execution_metadata_contract(ToolExecutionPolicy::ModelSelectable, &schema)
-                .unwrap_or_else(|error| panic!("not an applicator: {error} in {schema}"));
+        ));
+
+        for (location, schema) in &cases {
+            assert_eq!(
+                validate_execution_metadata_contract(ToolExecutionPolicy::ModelSelectable, schema),
+                Err(super::SchemaError::ReferenceApplicator {
+                    keyword: "$ref".to_owned(),
+                    location: location.clone(),
+                }),
+                "a reference at {location} must be found: {schema}"
+            );
         }
     }
 
