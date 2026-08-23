@@ -860,6 +860,7 @@ describe("CommandDispatcher", () => {
     assert.equal(outcome.kind, "inspect");
     if (outcome.kind === "inspect") {
       assert.match(outcome.body, /`review` \(skill-review@1\)/);
+      assert.match(outcome.body, /\.rustx\/skills\/review\/SKILL\.md/);
     }
   });
 

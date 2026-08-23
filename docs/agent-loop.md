@@ -1001,6 +1001,12 @@ The lease owner is structurally bound to the `ConversationId` and canonical
 Workspace root of the corresponding `ConversationToolRuntime`; a mismatch is
 rejected before any model request or tool execution begins.
 
+Normal rustX agent composition always contains canonical native Read; optional
+tool activation cannot remove it. Skills are trusted instruction packages in
+the current rustX threat model, so the pinned Skill snapshot's model-visible
+projection is filtered by Skill metadata such as
+`disable-model-invocation`, not by a downstream optional-Read predicate.
+
 For M7 the pinned snapshot also owns the exact composed registry. Its MCP
 executors retain their `McpServerRuntime`; its Python executors retain their
 published ToolVersion source and PythonToolEnvironment. `tools/list_changed`

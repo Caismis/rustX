@@ -217,7 +217,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
             .collect::<Vec<_>>(),
         vec!["new-skill"]
     );
-    assert!(snapshot.tool_registry().names().is_empty());
+    assert_eq!(snapshot.tool_registry().names(), vec!["read"]);
     assert!(!snapshot.available_tools().tools().is_empty());
 
     let resumed_endpoint = resumed.endpoint();
@@ -236,7 +236,14 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         Some(RuntimeClientResult::Capability { capabilities }) => capabilities,
         other => panic!("capability_get returned an unexpected result: {other:?}"),
     };
-    assert!(capabilities.tools.is_empty());
+    assert_eq!(
+        capabilities
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["read"]
+    );
     assert!(!capabilities.available_tools.is_empty());
     let new_session = resumed_endpoint
         .handle_request_async(RuntimeClientRequest::SessionNew {

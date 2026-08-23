@@ -747,26 +747,33 @@ that a live child produced an Interrupted physical result.
   `ToolRegistry`. Inactive definitions remain available for truthful
   inspection but their schemas never enter provider requests.
 - **Startup Tool selection is deterministic.** The base selection applies
-  `defaultTools` to built-ins, `--no-builtin-tools` removes only built-ins,
-  `--no-tools` produces an empty active registry, strict `--tools` resolves
-  names across origins, and `--exclude-tools` is applied last. Unknown,
+  `defaultTools` to optional built-ins, `--no-builtin-tools` removes optional
+  built-ins while retaining mandatory native Read, `--no-tools` disables
+  optional tools while retaining Read, strict `--tools` cannot remove Read,
+  and `--exclude-tools` is applied last without removing Read. Unknown,
   ambiguous, or duplicate allowlist entries fail explicitly; no registry
-  insertion order or last-wins rule resolves identity.
+  insertion order or last-wins rule resolves identity. Normal rustX agent
+  composition always supplies canonical native Read; bare lower-level
+  registries are not normal agent compositions.
 - **Skill visibility is separate from discovery.** Current user/global,
   project, configured, and explicit CLI roots are collected in deterministic
   order. Duplicate logical identities fail explicitly. A validated Skill
   with `disable-model-invocation: true` remains in the immutable resource
   snapshot but is omitted from the model-visible catalog. A discovered Skill
-  is model-visible only when the same immutable capability snapshot activates
-  rustX's canonical native Read. The catalog and Runtime Client projection
-  expose the same exact virtual location, `.rustx/skills/<name>/SKILL.md`;
+  is model-visible from the Skill-level snapshot projection because normal
+  rustX agent composition always contains canonical native Read; no
+  downstream optional-Read predicate participates. The catalog and Runtime
+  Client projection expose the same exact virtual location,
+  `.rustx/skills/<name>/SKILL.md`;
   host absolute paths are not published to the client or model. The model
   passes that exact location to Read rather than constructing a path. The
   virtual-to-host resource map is part of active Skill snapshot equality, so
   relocating identical package content creates a new capability revision
   rather than leaving Read pointed at an old root. The complete Skill
   bindings remain in `CapabilitiesManifest` provenance; visibility affects
-  only model-facing projections.
+  only model-facing projections. Skills are trusted instruction packages in
+  the current rustX threat model; structural escaping remains, without a
+  semantic trust tier or hostile-package sanitization.
 - **Background ownership preserves capability resources.** Before the
   background ownership commit, the Agent Loop captures the admitted attempt's
   immutable effective environment and Skill resource map. The detached

@@ -56,8 +56,6 @@ mod subagent;
 mod support;
 mod write;
 
-pub(crate) use read::is_native_definition as is_native_read_definition;
-
 #[cfg(test)]
 pub(crate) use bash::{BashTestControl, BashTool};
 #[cfg(test)]
@@ -171,8 +169,9 @@ pub fn register_native_tools(
             definition,
             executor,
             normalizer,
+            mandatory,
         } = registration;
-        registry.register_with_argument_normalizer(definition, executor, normalizer)?;
+        registry.register_with_activation_metadata(definition, executor, normalizer, mandatory)?;
     }
     Ok(())
 }
@@ -233,9 +232,10 @@ pub fn register_subagent_child_tools(
         definition,
         executor,
         normalizer,
+        mandatory,
     } in registrations
     {
-        registry.register_with_argument_normalizer(definition, executor, normalizer)?;
+        registry.register_with_activation_metadata(definition, executor, normalizer, mandatory)?;
     }
     Ok(())
 }
@@ -252,6 +252,14 @@ mod tests {
             .expect("explore tools register");
         assert_eq!(registry.names(), vec!["read", "glob", "grep"]);
         assert_eq!(registry.len(), 3);
+        assert!(
+            registry
+                .registrations()
+                .iter()
+                .find(|registration| registration.definition.name == "read")
+                .is_some_and(|registration| registration.mandatory),
+            "native Read is marked mandatory by the native composition"
+        );
         assert!(
             registry
                 .definitions()

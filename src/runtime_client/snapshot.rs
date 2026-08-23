@@ -469,8 +469,9 @@ pub struct RuntimeClientStatusFact {
 /// ([`crate::capabilities::CapabilitySnapshot`]) plus the
 /// coordinator-owned availability state (Issue #81): the revision, the
 /// active Tool catalog, the complete available Tool catalog, the deterministic
-/// model-visible Skill catalog, and the typed per-source availability. No executors, environment paths,
-/// package-manager state, or private dependency internals appear.
+/// model-visible Skill catalog, and the typed per-source availability. No
+/// executors, environment paths, package-manager state, or private dependency
+/// internals appear.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CapabilityView {
@@ -486,8 +487,8 @@ pub struct CapabilityView {
     #[serde(default)]
     pub available_tools: Vec<RuntimeClientTool>,
     /// The deterministic model-visible Skill catalog ordered by Skill name.
-    /// Skills hidden by `disable-model-invocation`, or whose required native
-    /// Read capability is inactive, remain runtime-owned but are omitted here.
+    /// Skills hidden by `disable-model-invocation` remain runtime-owned but
+    /// are omitted here. Every entry includes its exact virtual Read locator.
     #[serde(default)]
     pub skills: Vec<RuntimeClientSkill>,
     /// The typed availability of every evaluated optional capability

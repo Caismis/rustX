@@ -37,10 +37,9 @@ pub struct SkillCatalogEntry {
 ///
 /// The snapshot holds the accepted Skill packages, the deterministically
 /// ordered catalog metadata entries after Skill-level invocation filtering,
-/// and the deterministic `SkillId` + `SkillVersionId` bindings. The
-/// capability layer adds active native Read eligibility before exposing these
-/// entries as model-visible. It is constructed once per candidate preparation
-/// and never mutated.
+/// and the deterministic `SkillId` + `SkillVersionId` bindings. The entries
+/// are the one Skill-level model-visible set used by capability projections.
+/// It is constructed once per candidate preparation and never mutated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillSnapshot {
     packages: Vec<Arc<SkillPackage>>,
@@ -111,8 +110,7 @@ impl SkillSnapshot {
 
     /// The catalog metadata entries that pass Skill-level
     /// `disable-model-invocation` filtering, deterministically ordered by
-    /// Skill name. [`crate::capabilities::CapabilitySnapshot`] applies the
-    /// active native Read predicate before treating them as model-visible.
+    /// Skill name.
     #[must_use]
     pub fn catalog_entries(&self) -> &[SkillCatalogEntry] {
         &self.catalog
@@ -126,8 +124,7 @@ impl SkillSnapshot {
     }
 
     /// The bindings corresponding exactly to the Skill-level visible catalog
-    /// metadata. The capability layer applies active native Read eligibility
-    /// together with these bindings for model-facing projections.
+    /// metadata.
     #[must_use]
     pub fn visible_bindings(&self) -> &[SkillBinding] {
         &self.visible_bindings

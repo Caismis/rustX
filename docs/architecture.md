@@ -1173,15 +1173,19 @@ system-section path:
   or durable Skill commit. Surface compaction therefore cannot remove or
   suppress it, and an older canonical history entry cannot mask a newer
   capability revision.
-- The compact catalog is present only when the immutable capability snapshot
-  activates rustX's canonical native Read capability. Each visible entry
-  contains only its name, description, and exact virtual location
+- Normal rustX agent composition always supplies canonical native Read; the
+  activation layer keeps it active while optional Tool filters change. The
+  catalog therefore filters Skills only by Skill metadata such as
+  `disable-model-invocation: true`. Each visible entry contains only its name,
+  description, and exact virtual location
   `.rustx/skills/<skill-name>/SKILL.md`; the model must pass that location to
   Read without constructing or rewriting a path. It never includes full
   `SKILL.md` bodies, supporting resources, dependency metadata, or host
   absolute paths. Skills marked `disable-model-invocation: true` remain in
   the immutable runtime resource snapshot but are omitted from the
-  model-visible catalog.
+  model-visible catalog. Skills are trusted instruction packages in the
+  current rustX threat model; structural catalog escaping is retained, but no
+  semantic trust tier or hostile-package sanitization is applied.
 - The model loads a selected Skill lazily with native Read; the
   runtime-owned virtual resource map resolves the exact advertised location,
   and the resulting body enters the ordinary tool-call/result conversation
@@ -2323,8 +2327,9 @@ The M6 implementation (`src/skills`) freezes the Skill plane boundary:
   locator to Read without constructing or rewriting a path. `SKILL.md`
   bodies, supporting resources, dependency metadata, and host absolute paths
   never appear. Discovered Skills marked `disable-model-invocation: true`
-  remain in the resource snapshot but are omitted from this catalog, as are
-  all Skills when native Read is inactive.
+  remain in the resource snapshot but are omitted from this catalog. Skills
+  are trusted instruction packages in the current rustX threat model; the
+  catalog retains structural escaping without adding a semantic trust tier.
 - **Execution.** Skills remain workflow/instruction packages: no
   `skill_search`/`activate_skill`/`skill_view`/`run_skill`/
   `run_skill_script` abstractions exist. The model reads the exact advertised
@@ -3048,8 +3053,9 @@ Runtime Client is a projection/control/attachment adapter over it.
   active model-visible Tool catalog, the complete available Tool catalog
   (including inactive definitions), and a deterministic model-visible Skill
   catalog (identity, version, name, description, exact virtual location).
-  The catalog is non-empty only when that snapshot activates canonical native
-  Read. Executors, environment paths, package-manager state, and `SKILL.md`
+  Normal agent composition guarantees canonical native Read, so the catalog is
+  non-empty whenever that immutable snapshot has visible Skills. Executors,
+  environment paths, package-manager state, and `SKILL.md`
   bodies never appear; ordering is deterministic; inspection never mutates
   the capability set. Available
   and active Tools are distinct fields, and provider requests use only the
@@ -3316,9 +3322,11 @@ available definitions
   -> immutable active ToolRegistry
 ```
 
-`--no-builtin-tools` removes only built-ins from eligibility, `--no-tools`
-empties the active registry, and `defaultTools: []` leaves built-ins
-available but inactive. Unknown or ambiguous strict allowlist names fail
+`--no-builtin-tools` removes optional built-ins from eligibility while
+retaining mandatory native Read, `--no-tools` disables optional tools while
+retaining Read, and `defaultTools: []` leaves optional built-ins available but
+inactive. Strict `--tools` and `--exclude-tools` likewise cannot remove
+mandatory Read. Unknown or ambiguous strict allowlist names fail
 deterministically. Execution ownership, approval, concurrency, and active
 selection remain separate policy dimensions. #100 will add approval/HITL,
 #98 will add Execution Modes, and #99 will change capability lease
@@ -3327,8 +3335,11 @@ granularity; this #96 boundary implements none of those later behaviors.
 Skills are discovered from the current bounded roots and explicit paths,
 validated as packages, and stored in an immutable Skill snapshot. A Skill
 with `disable-model-invocation: true` remains discovered and validated but is
-omitted from the model-visible catalog. A Skill is also omitted unless the
-same immutable capability snapshot activates rustX's native Read capability.
+omitted from the model-visible catalog. Normal rustX agent composition always
+contains canonical native Read, so no downstream optional-Read predicate is
+needed for Skill visibility. Skills are trusted instruction packages in the
+current rustX threat model; structural catalog escaping remains, without a
+semantic trust tier or hostile-package sanitization.
 The catalog exposes compact name/description metadata and the exact virtual
 `.rustx/skills/<name>/SKILL.md` locator; the model passes that locator to Read
 without constructing or rewriting a path. Full instructions enter the

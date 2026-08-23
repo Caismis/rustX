@@ -19,8 +19,8 @@ use rustx::tools::types::{
 
 /// A capability view covering native + Python + Skill origins: the
 /// revision, deterministic ordering, origin metadata, and Skill
-/// identity/version/name/description, with no private internals on the
-/// wire.
+/// identity/version/name/description/exact virtual location, with no private
+/// internals on the wire.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)] // one complete capability fixture
@@ -121,7 +121,7 @@ async fn capability_projection_covers_native_python_and_skills() {
         ToolOrigin::Python { tool_version_id } if !tool_version_id.as_str().is_empty()
     ));
 
-    // Skill identity/version/name/description.
+    // Skill identity/version/name/description/exact virtual location.
     assert_eq!(capabilities.skills.len(), 1);
     let skill = &capabilities.skills[0];
     assert_eq!(skill.name, "skill-readme");

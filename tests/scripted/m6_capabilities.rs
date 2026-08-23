@@ -83,34 +83,10 @@ fn node_deps(json: &str) -> (&'static str, &'static str) {
 }
 
 fn conversation() -> Conversation {
-    conversation_with_options(false, rustx::capabilities::ToolActivationPolicy::default())
-}
-
-fn conversation_with_native_tools() -> Conversation {
-    conversation_with_options(true, rustx::capabilities::ToolActivationPolicy::default())
-}
-
-fn conversation_with_non_native_read() -> Conversation {
-    conversation_with_registry_options(
-        false,
-        true,
-        rustx::capabilities::ToolActivationPolicy {
-            no_builtin_tools: true,
-            ..rustx::capabilities::ToolActivationPolicy::default()
-        },
-    )
+    conversation_with_options(rustx::capabilities::ToolActivationPolicy::default())
 }
 
 fn conversation_with_options(
-    include_native_tools: bool,
-    tool_activation: rustx::capabilities::ToolActivationPolicy,
-) -> Conversation {
-    conversation_with_registry_options(include_native_tools, false, tool_activation)
-}
-
-fn conversation_with_registry_options(
-    include_native_tools: bool,
-    include_non_native_read: bool,
     tool_activation: rustx::capabilities::ToolActivationPolicy,
 ) -> Conversation {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -138,24 +114,15 @@ fn conversation_with_registry_options(
     );
     let backend = common::FakeSkillEnvironmentBackend::new();
     let mut base_tool_registry = ToolRegistry::new();
-    if include_native_tools {
-        register_native_tools(
-            &mut base_tool_registry,
-            NativeToolResources {
-                background: background.clone(),
-                subagents: None,
-            },
-            NativeToolPolicies::default(),
-        )
-        .expect("native tools");
-    }
-    if include_non_native_read {
-        let fake_read = support::fake::FakeTool::new(
-            common::tool("read", "mcp-read"),
-            support::fake::success_result("not native Read"),
-        );
-        fake_read.register(&mut base_tool_registry);
-    }
+    register_native_tools(
+        &mut base_tool_registry,
+        NativeToolResources {
+            background: background.clone(),
+            subagents: None,
+        },
+        NativeToolPolicies::default(),
+    )
+    .expect("native tools");
     let coordinator = CapabilityCoordinator::with_backend(
         CapabilityCoordinatorConfig {
             conversation_id: conversation_id.clone(),
@@ -198,7 +165,7 @@ async fn prepare_and_commit(
 
 #[tokio::test]
 async fn hidden_skills_keep_attempt_provenance_but_not_model_visibility() {
-    let conversation = conversation_with_native_tools();
+    let conversation = conversation();
     write_skill(
         conversation.workspace.root(),
         "visible",
@@ -258,13 +225,12 @@ async fn hidden_skills_keep_attempt_provenance_but_not_model_visibility() {
     );
 }
 
-/// The immutable capability layer advertises a discovered Skill only when
-/// the active registry contains rustX's native Read. Runtime-owned packages
-/// and resources remain present for every activation policy, while the
-/// Effective System Prompt and Runtime Client projection use the same
-/// capability-owned visibility predicate.
+/// Normal rustX agent composition keeps canonical native Read active while
+/// optional Tool activation changes. Skill visibility therefore remains a
+/// Skill-level decision, and the same immutable visible catalog feeds both
+/// the Effective System Prompt and Runtime Client projection.
 #[tokio::test]
-async fn skill_visibility_requires_active_native_read() {
+async fn mandatory_native_read_survives_optional_activation_filters() {
     let policies = [
         rustx::capabilities::ToolActivationPolicy {
             no_tools: true,
@@ -282,10 +248,14 @@ async fn skill_visibility_requires_active_native_read() {
             exclude_tools: vec!["read".to_owned()],
             ..rustx::capabilities::ToolActivationPolicy::default()
         },
+        rustx::capabilities::ToolActivationPolicy {
+            default_tools: Some(vec!["write".to_owned()]),
+            ..rustx::capabilities::ToolActivationPolicy::default()
+        },
     ];
 
     for policy in policies {
-        let conversation = conversation_with_options(true, policy);
+        let conversation = conversation_with_options(policy);
         write_skill(
             conversation.workspace.root(),
             "visible",
@@ -301,49 +271,18 @@ async fn skill_visibility_requires_active_native_read() {
                 .resolve(std::path::Path::new(".rustx/skills/visible/SKILL.md"))
                 .is_some()
         );
-        assert!(!snapshot.has_active_native_read());
-        assert!(snapshot.model_visible_skill_entries().is_empty());
-        assert_eq!(snapshot.skill_catalog(), None);
+        assert!(snapshot.tool_registry().names().contains(&"read"));
+        assert_eq!(snapshot.skills().catalog_entries().len(), 1);
+        assert_eq!(
+            snapshot.skills().catalog_entries()[0].location,
+            ".rustx/skills/visible/SKILL.md"
+        );
+        let catalog = snapshot.skill_catalog().expect("visible Skill catalog");
+        assert!(catalog.contains("<location>.rustx/skills/visible/SKILL.md</location>"));
         let view = crate::runtime_client::projection::capability_view(&snapshot, &BTreeMap::new());
-        assert!(view.skills.is_empty());
+        assert_eq!(view.skills.len(), 1);
+        assert_eq!(view.skills[0].location, ".rustx/skills/visible/SKILL.md");
     }
-
-    let conversation = conversation_with_native_tools();
-    write_skill(
-        conversation.workspace.root(),
-        "visible",
-        "Visible guidance.",
-        &[],
-    );
-    let snapshot = prepare_and_commit(&conversation.coordinator).await;
-    assert!(snapshot.has_active_native_read());
-    assert_eq!(
-        snapshot.model_visible_skill_entries()[0].location,
-        ".rustx/skills/visible/SKILL.md"
-    );
-    let view = crate::runtime_client::projection::capability_view(&snapshot, &BTreeMap::new());
-    assert_eq!(view.skills.len(), 1);
-    assert_eq!(view.skills[0].location, ".rustx/skills/visible/SKILL.md");
-
-    // A non-native Tool named `read` does not own rustX's virtual namespace.
-    let conversation = conversation_with_non_native_read();
-    write_skill(
-        conversation.workspace.root(),
-        "visible",
-        "Visible guidance.",
-        &[],
-    );
-    let snapshot = prepare_and_commit(&conversation.coordinator).await;
-    assert!(
-        snapshot
-            .tool_registry()
-            .definitions()
-            .iter()
-            .any(|definition| definition.name == "read")
-    );
-    assert!(!snapshot.has_active_native_read());
-    assert!(snapshot.model_visible_skill_entries().is_empty());
-    assert!(snapshot.skill_catalog().is_none());
 }
 
 // ---------------------------------------------------------------------------
@@ -1174,7 +1113,7 @@ async fn attempt_lease_pins_one_immutable_revision() {
 /// the next attempt observes the new revision.
 #[tokio::test]
 async fn commit_is_busy_while_a_lease_is_active_then_commits_atomically() {
-    let conversation = conversation_with_native_tools();
+    let conversation = conversation();
     let snapshot = prepare_and_commit(&conversation.coordinator).await;
     let revision_n = snapshot.revision();
     let lease = conversation.coordinator.acquire_attempt_lease();

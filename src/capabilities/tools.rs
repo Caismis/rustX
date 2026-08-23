@@ -15,16 +15,22 @@ use crate::tools::types::{ToolDefinition, ToolOrigin};
 /// and CLI options. They are never Session-persisted.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ToolActivationPolicy {
-    /// Native names active by default. `None` means every available native
-    /// tool, which is the default for internal child compositions.
+    /// Optional built-in names active by default. `None` means every
+    /// available optional built-in tool; external capabilities remain
+    /// eligible. Canonical native Read is always active when it is present in
+    /// the native base registry.
     pub default_tools: Option<Vec<String>>,
-    /// Remove only built-in tools from the default/allowlist eligibility set.
+    /// Remove optional built-in tools from the default/allowlist eligibility
+    /// set. Canonical native Read remains active.
     pub no_builtin_tools: bool,
-    /// Produce an empty active registry while retaining availability.
+    /// Disable every optional Tool while retaining availability. Canonical
+    /// native Read remains active.
     pub no_tools: bool,
-    /// A strict model-facing allowlist across all eligible origins.
+    /// A strict model-facing allowlist across all eligible origins. Canonical
+    /// native Read is added even when it is not named.
     pub tools: Option<Vec<String>>,
-    /// Final model-facing name exclusions.
+    /// Final model-facing name exclusions. Canonical native Read cannot be
+    /// excluded.
     pub exclude_tools: Vec<String>,
 }
 
@@ -85,19 +91,18 @@ pub(crate) fn select_tools(
             .map(|registration| registration.definition.clone())
             .collect(),
     );
-    if policy.no_tools {
-        return Ok((available_catalog, ToolRegistry::new()));
-    }
-
     let eligible = available
         .iter()
         .filter(|registration| {
             !policy.no_builtin_tools
+                || registration.mandatory
                 || !matches!(registration.definition.origin, ToolOrigin::Builtin)
         })
         .collect::<Vec<_>>();
 
-    let mut selected = if let Some(names) = &policy.tools {
+    let mut selected = if policy.no_tools {
+        Vec::new()
+    } else if let Some(names) = &policy.tools {
         let mut selected = Vec::with_capacity(names.len());
         for name in names {
             let matches = eligible
@@ -140,7 +145,23 @@ pub(crate) fn select_tools(
     };
 
     let excluded = policy.exclude_tools.iter().collect::<BTreeSet<_>>();
-    selected.retain(|registration| !excluded.contains(&registration.definition.name));
+    selected.retain(|registration| {
+        registration.mandatory || !excluded.contains(&registration.definition.name)
+    });
+
+    // The normal native runtime composition always supplies Read in the base
+    // registry. Keep that capability active regardless of optional-tool
+    // selection. Bare lower-level registries without native Read remain valid
+    // for tests and specialized composition paths; they simply have no
+    // mandatory registration to activate here.
+    if let Some(mandatory) = available.iter().find(|registration| {
+        registration.mandatory
+            && !selected
+                .iter()
+                .any(|item: &&ToolRegistration| item.definition.id == registration.definition.id)
+    }) {
+        selected.insert(0, mandatory);
+    }
 
     let active = ToolRegistry::from_registrations(selected.into_iter().cloned())
         .map_err(|error| format!("active Tool selection is invalid: {error}"))?;
@@ -155,7 +176,9 @@ mod tests {
 
     use super::{ToolActivationPolicy, select_tools};
     use crate::runtime::identity::ToolId;
-    use crate::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
+    use crate::tools::executor::{
+        ToolExecutionContext, ToolExecutor, ToolRegistration, ToolRegistry,
+    };
     use crate::tools::types::{
         ToolConcurrencyPolicy, ToolDefinition, ToolExecutionResult, ToolExecutionStatus,
         ToolInvocation, ToolOrigin, ToolReplayPolicy,
@@ -223,6 +246,15 @@ mod tests {
         registry.names().into_iter().map(str::to_owned).collect()
     }
 
+    fn registrations() -> Vec<ToolRegistration> {
+        let mut registrations = registry().registrations();
+        // The production native Read registration carries this activation
+        // marker from `read::registration`; the fixture supplies the same
+        // internal metadata without needing native runtime resources.
+        registrations[0].mandatory = true;
+        registrations
+    }
+
     #[test]
     fn available_and_active_sets_are_distinct_and_selection_is_deterministic() {
         let policy = ToolActivationPolicy {
@@ -230,7 +262,7 @@ mod tests {
             ..ToolActivationPolicy::default()
         };
         let (available, active) =
-            select_tools(&registry().registrations(), &policy).expect("activation selection");
+            select_tools(&registrations(), &policy).expect("activation selection");
 
         assert_eq!(
             available
@@ -247,43 +279,43 @@ mod tests {
     #[test]
     fn builtin_disable_and_no_tools_retain_truthful_availability() {
         let (available, active) = select_tools(
-            &registry().registrations(),
+            &registrations(),
             &ToolActivationPolicy {
                 default_tools: Some(Vec::new()),
                 ..ToolActivationPolicy::default()
             },
         )
         .expect("empty native defaults");
-        assert_eq!(names(&active), vec!["search"]);
+        assert_eq!(names(&active), vec!["read", "search"]);
         assert_eq!(available.tools().len(), 3);
 
         let (available, active) = select_tools(
-            &registry().registrations(),
+            &registrations(),
             &ToolActivationPolicy {
                 no_builtin_tools: true,
                 ..ToolActivationPolicy::default()
             },
         )
         .expect("native disable");
-        assert_eq!(names(&active), vec!["search"]);
+        assert_eq!(names(&active), vec!["read", "search"]);
         assert_eq!(available.tools().len(), 3);
 
         let (available, active) = select_tools(
-            &registry().registrations(),
+            &registrations(),
             &ToolActivationPolicy {
                 no_tools: true,
                 ..ToolActivationPolicy::default()
             },
         )
         .expect("all tools disable");
-        assert!(active.names().is_empty());
+        assert_eq!(names(&active), vec!["read"]);
         assert_eq!(available.tools().len(), 3);
     }
 
     #[test]
     fn strict_allowlist_and_final_exclusions_cross_origins() {
         let (available, active) = select_tools(
-            &registry().registrations(),
+            &registrations(),
             &ToolActivationPolicy {
                 tools: Some(vec!["bash".to_owned(), "search".to_owned()]),
                 exclude_tools: vec!["bash".to_owned()],
@@ -291,11 +323,11 @@ mod tests {
             },
         )
         .expect("cross-origin allowlist");
-        assert_eq!(names(&active), vec!["search"]);
+        assert_eq!(names(&active), vec!["read", "search"]);
         assert_eq!(available.tools().len(), 3);
 
         let error = select_tools(
-            &registry().registrations(),
+            &registrations(),
             &ToolActivationPolicy {
                 tools: Some(vec!["missing".to_owned()]),
                 ..ToolActivationPolicy::default()

@@ -16,22 +16,14 @@ use crate::tools::limits::{MAX_READ_LINES, NATIVE_FILE_TOOL_MAX_BYTES};
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
 use crate::tools::native::support::{failed_result, interpret_path, success_text};
 use crate::tools::types::ToolInvocationPolicy;
-use crate::tools::types::{
-    ToolDefinition, ToolExecutionResult, ToolInvocation, ToolOrigin, TruncationState,
-};
+use crate::tools::types::{ToolExecutionResult, ToolInvocation, TruncationState};
 
 use input::ReadInput;
 
 /// The canonical model-facing name of the tool.
 pub const NAME: &str = "read";
 /// The canonical identity of the rustX native Read capability.
-pub(crate) const TOOL_ID: &str = "tool-read";
-
-/// Whether a definition is the rustX native Read capability that owns the
-/// runtime virtual Skill namespace.
-pub(crate) fn is_native_definition(definition: &ToolDefinition) -> bool {
-    definition.id.as_str() == TOOL_ID && matches!(&definition.origin, ToolOrigin::Builtin)
-}
+const TOOL_ID: &str = "tool-read";
 
 /// The tool-owned registration of the native Read tool.
 #[must_use]
@@ -45,6 +37,7 @@ pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistrati
         ),
         std::sync::Arc::new(ReadTool),
     )
+    .mandatory()
 }
 
 /// The native Read executor.

@@ -668,6 +668,7 @@ export interface RuntimeClientSkill {
   version_id: SkillVersionId;
   name: string;
   description: string;
+  location: string;
 }
 
 export interface CapabilityView {

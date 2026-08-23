@@ -107,7 +107,8 @@ The TUI may also forward the runtime's bounded startup controls:
 `--skill <path>` (repeatable), `--no-skills`, `--no-builtin-tools`,
 `--no-tools`, `--tools <a,b,c>`, and `--exclude-tools <a,b,c>`. It preserves
 their supplied values and order; Rust owns discovery, validation, activation,
-and all semantic errors.
+and all semantic errors. Normal rustX composition keeps mandatory native Read
+active even when these controls disable optional tools.
 
 ## Startup sequence
 

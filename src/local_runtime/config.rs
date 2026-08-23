@@ -69,8 +69,9 @@ pub struct CurrentRuntimeConfig {
     /// The current base authorized tool environment.
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
-    /// Native/built-in tool names active by default. An empty list disables
-    /// default built-in activation while leaving those tools available.
+    /// Optional native/built-in tool names active by default. An empty list
+    /// disables optional built-in activation while mandatory native Read
+    /// remains active and available.
     #[serde(default = "default_tools")]
     pub default_tools: Vec<String>,
     /// Explicit Skill roots or package paths supplied by the project config.

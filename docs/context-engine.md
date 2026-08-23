@@ -269,10 +269,14 @@ different facts and receive different MessageIds; content deduplication is
 not a semantic operation.
 
 The Skill catalog is sampled from the immutable per-attempt capability
-snapshot and assembled as a request-time native capability section only when
-that snapshot activates rustX's canonical native Read capability. It is
-distinct from `ModelRequest.tools`: tool definitions remain capability/request
-state, and the Skill catalog is never copied into canonical User messages.
+snapshot and assembled as a request-time native capability section. Normal
+rustX agent composition always contains canonical native Read, so Skill
+visibility is filtered at the Skill level (`disable-model-invocation`) rather
+than by a downstream optional-Read predicate. It is distinct from
+`ModelRequest.tools`: tool definitions remain capability/request state, and the
+Skill catalog is never copied into canonical User messages. Skills are trusted
+instruction packages in the current rustX threat model; structural catalog
+escaping remains, without a semantic trust tier.
 When visible Skills exist, each entry contains deterministic name and
 description metadata plus its exact virtual `.rustx/skills/<skill-name>/SKILL.md`
 location. The guidance tells the model to pass that exact location to Read
