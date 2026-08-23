@@ -695,5 +695,13 @@ fn composed_root_schemas_stay_valid_outside_model_selectable() {
                 "{name} uses root keyword {keyword:?}, outside the profile"
             );
         }
+        // Native contracts are generated with inlined subschemas, so the
+        // reference ban costs them nothing either.
+        for keyword in rustx::tools::REFERENCE_APPLICATOR_KEYWORDS {
+            assert!(
+                !schema.to_string().contains(keyword),
+                "{name} must stay reference-free for ModelSelectable: {keyword}"
+            );
+        }
     }
 }

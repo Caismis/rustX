@@ -974,7 +974,7 @@ mod tests {
     /// One labelled canonical schema that a `ModelSelectable` tool may not
     /// carry, spanning both routes into the dead state: a claim on the
     /// reserved name, and a root keyword outside the decoratable profile.
-    fn undecoratable_registration_cases() -> [(&'static str, serde_json::Value); 6] {
+    fn undecoratable_registration_cases() -> [(&'static str, serde_json::Value); 7] {
         [
             (
                 "declared property",
@@ -1018,6 +1018,18 @@ mod tests {
                     "dependencies": {"command": ["execution_mode"]},
                 }),
             ),
+            (
+                "nested root reference",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "string"},
+                        "child": {"$ref": "#"},
+                    },
+                    "required": ["command"],
+                    "additionalProperties": false,
+                }),
+            ),
         ]
     }
 
@@ -1043,11 +1055,13 @@ mod tests {
             };
             assert_eq!(name, "sel");
             assert!(
-                reason.contains("execution_mode"),
-                "{label} names the selector: {reason}"
+                reason.contains("execution_mode") || reason.contains("$ref"),
+                "{label} names the selector or the offending keyword: {reason}"
             );
             assert!(
-                reason.contains("rename") || reason.contains("decoratable root profile"),
+                reason.contains("rename")
+                    || reason.contains("decoratable root profile")
+                    || reason.contains("Inline"),
                 "{label} tells the human what to do: {reason}"
             );
             let message = error.to_string();

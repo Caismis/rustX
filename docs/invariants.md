@@ -1146,24 +1146,29 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   is `ModelSelectable`. The profile is an allowlist: the root instance
   semantics must be owned entirely by `type`, `properties`, `required`, and
   `additionalProperties`, plus purely descriptive keywords; every other root
-  keyword is refused whatever draft introduced it, and nested subschemas stay
-  unrestricted. Registration additionally rejects a canonical schema claiming
-  the top-level `execution_mode` name — in root `properties`, in root
-  `required`, or both — explicitly and without any automatic compatibility
-  mapping.
-- Both rejections enforce one invariant: **a registered tool can never reach
-  a state where no correct model invocation can succeed.** It is reachable
-  two ways, and both are closed. Decoration can contradict a root assertion,
-  leaving a compiled schema with no valid instance (`maxProperties`, a root
-  `const`/`enum`). Stripping can leave business arguments the canonical
-  schema must reject (a claimed `required` entry, a Draft-7 `dependencies`,
-  an unaware composition branch). The allowlist is what makes closing them
-  provable rather than a running list of known hazards.
-- Those two rules never apply under `ForegroundOnly`/`BackgroundOnly`, which
-  receive no synthetic field: an arbitrary composed root schema is valid
-  there, `execution_mode` included. The policy-unaware canonical schema
-  validation stays permissive so the `ask_user` intrinsic's root `anyOf` and
-  arbitrary MCP server schemas keep registering.
+  keyword is refused whatever draft introduced it. Registration additionally
+  rejects a canonical schema claiming the top-level `execution_mode` name —
+  in root `properties`, in root `required`, or both — and one using a
+  reference applicator (`$ref`, `$dynamicRef`, `$recursiveRef`) at any depth,
+  since decoration edits the root in place and a reference may re-enter it.
+  Apart from references, nested subschemas stay unrestricted. None of this
+  carries an automatic compatibility mapping.
+- The three rejections together enforce the **projection equivalence** that
+  "clone and decorate the root" claims: `canonical(B)` ⇔
+  `compiled(B + top-level execution_mode)` for any business arguments `B` and
+  either mode, and any invocation the compiled schema accepts must satisfy
+  the canonical schema once the top-level selector is stripped. Each class
+  closes one way of breaking it — decoration contradicting a root assertion
+  (`maxProperties`, a root `const`/`enum`), stripping leaving arguments the
+  canonical schema must reject (a claimed `required` entry, a Draft-7
+  `dependencies`, an unaware composition branch), and a reference carrying
+  the injected property into nested objects. A registered tool therefore can
+  never reach a state where no correct model invocation can succeed.
+- None of the three rules applies under `ForegroundOnly`/`BackgroundOnly`,
+  which receive no synthetic field: an arbitrary composed, reference-heavy
+  root schema is valid there, `execution_mode` included. The policy-unaware
+  canonical schema validation stays permissive so the `ask_user` intrinsic's
+  root `anyOf` and arbitrary MCP server schemas keep registering.
 - The `__rustx_` top-level namespace stays reserved for other runtime
   concerns under every policy: registration rejects canonical schemas
   claiming `__rustx_*` properties and preflight rejects invocations carrying

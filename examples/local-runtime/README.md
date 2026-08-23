@@ -131,7 +131,10 @@ describe the arguments, plus descriptive keywords like `title` and
 `description`. Any other root keyword (`allOf`, `anyOf`, `oneOf`, `$ref`,
 `maxProperties`, `const`, `enum`, `dependencies`, …) fails registration with
 an explicit error, as does claiming the `execution_mode` name in root
-`properties` or `required`. Nested subschemas are unrestricted.
+`properties` or `required`. Reference applicators (`$ref`, `$dynamicRef`,
+`$recursiveRef`) are also refused at any depth, because rustX decorates the
+root in place and a reference can re-enter it — inline the referenced
+subschema instead. Apart from references, nested subschemas are unrestricted.
 
 Rename the tool's field or flatten its root, or configure `foreground_only` or
 `background_only`, which inject nothing and therefore accept any schema —

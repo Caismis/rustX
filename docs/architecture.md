@@ -1445,8 +1445,19 @@ type   properties   required   additionalProperties
 alongside any purely descriptive root keyword (`$schema`, `$id`, `$comment`,
 `$defs`/`definitions`, `title`, `description`, `default`, `examples`,
 `deprecated`, `readOnly`, `writeOnly`). Every other root keyword is refused,
-whatever draft introduced it. Nested subschemas are unrestricted: a business
-property may hold arbitrary JSON Schema, `execution_mode` included.
+whatever draft introduced it.
+
+One further rule reaches past the root. Decoration is an *in-place* edit, so
+it is only sound while the root schema is the sole description of the root
+instance — and a reference can re-enter the decorated root from any depth. A
+schema whose `child` property is `{"$ref": "#"}` would make the injected
+selector propagate into nested business objects, so `$ref`, `$dynamicRef`,
+and `$recursiveRef` are refused throughout a `ModelSelectable` canonical
+schema. rustX refuses them outright instead of resolving URIs to decide which
+ones reach the root: that decision is a JSON Schema reference resolver, and
+this contract is meant to be checkable by inspection. Apart from references,
+nested subschemas stay unrestricted — a business property may hold
+composition, cardinality assertions, and an `execution_mode` of its own.
 
 This is an allowlist on purpose. Injecting a required `execution_mode`
 property changes what the root instance must look like, so *any* root
@@ -1467,13 +1478,29 @@ property — the runtime strips the selector *before* the canonical schema
 validates anything, so such a tool would register successfully, receive a
 perfectly correct model call, and reject it forever.
 
-Both errors tell the human to rename the business field, flatten the root to
-the profile, or choose a non-`ModelSelectable` policy. rustX never renames,
-shadows, merges, or reinterprets a collision.
+Every error tells the human to rename the business field, flatten the root to
+the profile, inline the reference, or choose a non-`ModelSelectable` policy.
+rustX never renames, shadows, merges, or reinterprets a collision.
 
-Neither rule applies under `ForegroundOnly`/`BackgroundOnly`, which receive no
-injected field: an arbitrary composed root stays valid there, `execution_mode`
-included. That scoping is load-bearing — the `ask_user` intrinsic's canonical
+Together the three rules give compilation a provable contract rather than a
+safe-looking root syntax — the **projection equivalence** that "clone and
+decorate the root" actually claims:
+
+```text
+canonical(B) ⇔ compiled(B + top-level execution_mode)
+```
+
+For any business arguments `B` and either mode the canonical and compiled
+schemas must agree, and any invocation the compiled schema accepts must
+satisfy the canonical schema once the top-level selector is stripped. Each
+rejection class closes one way of breaking it: a root assertion decoration
+contradicts, a claim stripping can never satisfy, and a reference that
+carries the injected property into nested objects — which breaks the
+equivalence in both directions at once.
+
+None of the three rules applies under `ForegroundOnly`/`BackgroundOnly`,
+which receive no injected field: an arbitrary composed, reference-heavy root
+stays valid there, `execution_mode` included. That scoping is load-bearing — the `ask_user` intrinsic's canonical
 schema is a root `anyOf` with no root `properties` at all, and MCP servers
 ship arbitrary JSON Schema — so the policy-unaware
 `validate_canonical_schema` must stay permissive. The contract therefore lives

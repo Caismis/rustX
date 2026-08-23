@@ -50,12 +50,26 @@
 //! `required`, or both — can never be satisfied either. That is checked
 //! explicitly, because `properties` and `required` are inside the profile.
 //!
-//! Nothing here constrains nested subschemas: `properties.foo` may hold
-//! arbitrary JSON Schema. Nothing here applies to
-//! `ForegroundOnly`/`BackgroundOnly` tools either — they receive no injected
-//! field, so an arbitrary root schema (the `ask_user` intrinsic's root
-//! `anyOf`, or any MCP server's own schema) stays valid, `execution_mode`
-//! included.
+//! One further rule reaches past the root, because decoration is an
+//! *in-place* edit of the root schema and is only sound while the root
+//! schema is the sole description of the root instance. A reference can
+//! re-enter the decorated root from any depth — `{"child": {"$ref": "#"}}` —
+//! so [`REFERENCE_APPLICATOR_KEYWORDS`] are refused throughout a
+//! `ModelSelectable` canonical schema. Apart from references, nested
+//! subschemas stay unrestricted: `properties.foo` may hold composition,
+//! cardinality assertions, and an `execution_mode` of its own.
+//!
+//! Together the three rules give compilation a provable contract, not merely
+//! a safe-looking root syntax:
+//!
+//! ```text
+//! canonical(B) ⇔ compiled(B + top-level execution_mode)
+//! ```
+//!
+//! Nothing here applies to `ForegroundOnly`/`BackgroundOnly` tools — they
+//! receive no injected field, so an arbitrary root schema (the `ask_user`
+//! intrinsic's root `anyOf`, or any MCP server's own reference-heavy schema)
+//! stays valid, `execution_mode` included.
 
 use jsonschema::Validator;
 
@@ -127,6 +141,41 @@ pub const ROOT_ANNOTATION_KEYWORDS: &[&str] = &[
     "writeOnly",
 ];
 
+/// The reference applicators refused anywhere in a `ModelSelectable`
+/// canonical schema, at any depth.
+///
+/// Compilation decorates the root *in place*, so it is only sound while the
+/// root schema is the sole description of the root instance. A reference can
+/// re-enter the decorated root from inside a nested subschema — `{"child":
+/// {"$ref": "#"}}` is the canonical example — which makes the injected
+/// selector propagate into nested business objects and breaks the projection
+/// equivalence in both directions: business arguments that satisfy the
+/// canonical schema stop satisfying the compiled one, and invocations the
+/// compiled schema accepts stop satisfying the canonical schema once the
+/// top-level selector is stripped.
+///
+/// rustX refuses reference applicators outright rather than resolving URIs
+/// to decide which ones reach the root: deciding that is a JSON Schema
+/// reference resolver, and this contract is meant to be checkable by
+/// inspection. The refusal is scoped to `ModelSelectable`, so a
+/// reference-heavy schema stays fully usable under a fixed policy.
+pub const REFERENCE_APPLICATOR_KEYWORDS: &[&str] = &["$ref", "$dynamicRef", "$recursiveRef"];
+
+/// Keywords whose values are instance data rather than subschemas, so a
+/// `$ref` appearing inside them is a literal value, not an applicator.
+const INSTANCE_DATA_KEYWORDS: &[&str] = &["const", "default", "enum", "examples"];
+
+/// Keywords whose values map *names* to subschemas. A key inside one of
+/// these is a property or definition name — a business property may legally
+/// be called `$ref` — so only the mapped values are walked as schemas.
+const SCHEMA_MAP_KEYWORDS: &[&str] = &[
+    "properties",
+    "patternProperties",
+    "dependentSchemas",
+    "$defs",
+    "definitions",
+];
+
 /// Whether one root keyword belongs to the decoratable root profile.
 ///
 /// The profile is an allowlist: anything absent from both
@@ -162,6 +211,14 @@ pub enum SchemaError {
     /// A `ModelSelectable` tool's canonical schema shapes its root with a
     /// composition keyword rustX cannot decorate soundly.
     UndecoratableRootSchema(String),
+    /// A `ModelSelectable` tool's canonical schema uses a reference
+    /// applicator, which may re-enter the decorated root from any depth.
+    ReferenceApplicator {
+        /// The reference keyword found.
+        keyword: String,
+        /// A JSON-pointer-style location of the schema object holding it.
+        location: String,
+    },
     /// A `ModelSelectable` invocation omitted the required `execution_mode`
     /// field.
     MissingExecutionMode,
@@ -245,6 +302,20 @@ impl core::fmt::Display for SchemaError {
                  \"background\", got {value}; retry the call with \
                  \"{EXECUTION_MODE_FIELD}\": \"foreground\" or \
                  \"{EXECUTION_MODE_FIELD}\": \"background\""
+            ),
+            Self::ReferenceApplicator { keyword, location } => write!(
+                f,
+                "the canonical tool schema uses the reference applicator {keyword:?} at {}, and \
+                 rustX compiles a ModelSelectable tool by decorating its root schema in place; a \
+                 reference can re-enter that decorated root, which would make the injected \
+                 {EXECUTION_MODE_FIELD:?} selector propagate into nested business objects. Inline \
+                 the referenced subschema, or choose a non-ModelSelectable execution policy, \
+                 which decorates nothing and accepts references freely",
+                if location.is_empty() {
+                    "the schema root".to_owned()
+                } else {
+                    format!("{location:?}")
+                }
             ),
             Self::InvalidArguments(errors) => write!(
                 f,
@@ -377,6 +448,9 @@ pub fn validate_execution_metadata_contract(
         }
         (false, false) => {}
     }
+    // The reference scan runs before the root profile so a root `$ref` is
+    // reported as what it is, rather than as a generic profile violation.
+    reject_reference_applicators(schema, "")?;
     for keyword in root.keys() {
         if !is_decoratable_root_keyword(keyword) {
             return Err(SchemaError::UndecoratableRootSchema(keyword.clone()));
@@ -460,6 +534,71 @@ fn decorate_execution_mode(schema: &mut serde_json::Value) {
     if !required.iter().any(|value| value == EXECUTION_MODE_FIELD) {
         required.push(serde_json::Value::String(EXECUTION_MODE_FIELD.to_owned()));
     }
+}
+
+/// Rejects every reference applicator in a canonical schema, at any depth.
+///
+/// The walk distinguishes the three positions a `$ref` key can occupy, so it
+/// refuses applicators without refusing legitimate data:
+///
+/// - inside [`SCHEMA_MAP_KEYWORDS`], keys are *names* — a business property
+///   may legally be called `$ref` — so only the mapped values are walked;
+/// - inside [`INSTANCE_DATA_KEYWORDS`], the value is instance data, not a
+///   schema, so it is not walked at all;
+/// - everywhere else, an object is a schema node and an array is a list of
+///   schema nodes.
+///
+/// # Errors
+///
+/// Returns [`SchemaError::ReferenceApplicator`] for the first reference
+/// found, with a JSON-pointer-style location.
+fn reject_reference_applicators(
+    schema: &serde_json::Value,
+    location: &str,
+) -> Result<(), SchemaError> {
+    match schema {
+        serde_json::Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                reject_reference_applicators(item, &format!("{location}/{index}"))?;
+            }
+            Ok(())
+        }
+        serde_json::Value::Object(node) => {
+            for keyword in REFERENCE_APPLICATOR_KEYWORDS {
+                if node.contains_key(*keyword) {
+                    return Err(SchemaError::ReferenceApplicator {
+                        keyword: (*keyword).to_owned(),
+                        location: location.to_owned(),
+                    });
+                }
+            }
+            for (keyword, value) in node {
+                if INSTANCE_DATA_KEYWORDS.contains(&keyword.as_str()) {
+                    continue;
+                }
+                let next = format!("{location}/{}", escape_pointer_token(keyword));
+                if SCHEMA_MAP_KEYWORDS.contains(&keyword.as_str())
+                    && let Some(members) = value.as_object()
+                {
+                    for (name, subschema) in members {
+                        reject_reference_applicators(
+                            subschema,
+                            &format!("{next}/{}", escape_pointer_token(name)),
+                        )?;
+                    }
+                    continue;
+                }
+                reject_reference_applicators(value, &next)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Escapes one JSON Pointer reference token (RFC 6901).
+fn escape_pointer_token(token: &str) -> String {
+    token.replace('~', "~0").replace('/', "~1")
 }
 
 /// Resolves the effective invocation mode and strips the runtime-owned
@@ -875,10 +1014,8 @@ mod tests {
     }
 
     /// Root keywords that apply *other schemas* to the same root instance, or
-    /// constrain its property names.
-    ///
-    /// `$dynamicRef` is additionally a dangling reference here, which the
-    /// policy-unaware validator refuses first; the profile still refuses it.
+    /// constrain its property names. Reference applicators are covered
+    /// separately, by `reference_applicators_are_refused_at_any_depth`.
     fn undecoratable_applicator_cases() -> Vec<(&'static str, serde_json::Value, bool)> {
         let business = json!({"command": {"type": "string"}});
         vec![
@@ -909,25 +1046,6 @@ mod tests {
             (
                 "if",
                 json!({"type": "object", "if": {"type": "object"}}),
-                true,
-            ),
-            (
-                "$ref",
-                json!({
-                    "type": "object",
-                    "$ref": "#/$defs/x",
-                    "$defs": {"x": {"type": "object"}},
-                }),
-                true,
-            ),
-            (
-                "$dynamicRef",
-                json!({"type": "object", "$dynamicRef": "#x"}),
-                false,
-            ),
-            (
-                "$recursiveRef",
-                json!({"type": "object", "$recursiveRef": "#"}),
                 true,
             ),
             (
@@ -1094,9 +1212,193 @@ mod tests {
         );
     }
 
-    /// Nested subschemas are unrestricted: the profile governs the root
-    /// instance only, so a business property may hold arbitrary JSON Schema
-    /// — composition, `const`, and an `execution_mode` of its own included.
+    /// Reference applicators are refused at any depth under
+    /// `ModelSelectable`, and only there.
+    ///
+    /// Compilation decorates the root in place, so a reference that re-enters
+    /// the decorated root would make the injected selector propagate into
+    /// nested business objects. rustX refuses references outright rather than
+    /// resolving URIs to decide which ones reach the root.
+    #[test]
+    fn reference_applicators_are_refused_at_any_depth() {
+        let cases = [
+            ("$ref", "", json!({"type": "object", "$ref": "#"})),
+            (
+                "$ref",
+                "/properties/child",
+                json!({
+                    "type": "object",
+                    "properties": {"command": {"type": "string"}, "child": {"$ref": "#"}},
+                    "required": ["command"],
+                    "additionalProperties": false,
+                }),
+            ),
+            (
+                "$ref",
+                "/properties/items/items",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "items": {"type": "array", "items": {"$ref": "#/$defs/x"}},
+                    },
+                    "$defs": {"x": {"type": "string"}},
+                }),
+            ),
+            (
+                "$dynamicRef",
+                "/properties/child",
+                json!({"type": "object", "properties": {"child": {"$dynamicRef": "#x"}}}),
+            ),
+            (
+                "$recursiveRef",
+                "/properties/child",
+                json!({"type": "object", "properties": {"child": {"$recursiveRef": "#"}}}),
+            ),
+        ];
+        for (keyword, location, schema) in &cases {
+            assert_eq!(
+                validate_execution_metadata_contract(ToolExecutionPolicy::ModelSelectable, schema),
+                Err(super::SchemaError::ReferenceApplicator {
+                    keyword: (*keyword).to_owned(),
+                    location: (*location).to_owned(),
+                }),
+                "unexpected verdict for {schema}"
+            );
+            for policy in [
+                ToolExecutionPolicy::ForegroundOnly,
+                ToolExecutionPolicy::BackgroundOnly,
+            ] {
+                let compiled = compile_model_definition(&definition(policy, (*schema).clone()))
+                    .unwrap_or_else(|error| {
+                        panic!("references stay legal under {policy:?}: {error}")
+                    });
+                assert_eq!(
+                    &compiled.input_schema, schema,
+                    "a referencing schema is compiled verbatim under {policy:?}"
+                );
+            }
+        }
+
+        let message = super::SchemaError::ReferenceApplicator {
+            keyword: "$ref".to_owned(),
+            location: "/properties/child".to_owned(),
+        }
+        .to_string();
+        assert!(message.contains("$ref"));
+        assert!(message.contains("/properties/child"));
+        assert!(message.contains("Inline"));
+    }
+
+    /// The reference scan reads schema positions, not raw text: a business
+    /// property *named* `$ref`, and a `$ref` appearing inside instance data,
+    /// are values rather than applicators.
+    #[test]
+    fn the_reference_scan_does_not_fire_on_names_or_instance_data() {
+        for schema in [
+            json!({"type": "object", "properties": {"$ref": {"type": "string"}}}),
+            json!({
+                "type": "object",
+                "properties": {"mode": {"enum": [{"$ref": "not-a-schema"}]}},
+            }),
+            json!({
+                "type": "object",
+                "properties": {"mode": {"const": {"$ref": "not-a-schema"}}},
+            }),
+            json!({
+                "type": "object",
+                "properties": {"mode": {"type": "string"}},
+                "examples": [{"$ref": "not-a-schema"}],
+            }),
+        ] {
+            validate_execution_metadata_contract(ToolExecutionPolicy::ModelSelectable, &schema)
+                .unwrap_or_else(|error| panic!("not an applicator: {error} in {schema}"));
+        }
+    }
+
+    /// The compilation contract, stated as the projection equivalence it
+    /// actually needs:
+    ///
+    /// ```text
+    /// canonical(B) ⇔ compiled(B + top-level execution_mode)
+    /// ```
+    ///
+    /// Decoration is a clone-and-decorate of the root only, so for any
+    /// business arguments and either mode the two schemas must agree. This is
+    /// what the root profile, the reserved-name check, and the reference ban
+    /// exist to guarantee.
+    #[test]
+    fn compilation_preserves_the_projection_equivalence() {
+        let schemas = [
+            json!({
+                "type": "object",
+                "properties": {"command": {"type": "string"}, "timeout": {"type": "integer"}},
+                "required": ["command"],
+                "additionalProperties": false,
+            }),
+            json!({
+                "type": "object",
+                "properties": {
+                    "child": {
+                        "type": "object",
+                        "properties": {"execution_mode": {"type": "string"}},
+                        "oneOf": [{"required": ["execution_mode"]}],
+                        "additionalProperties": false,
+                    },
+                },
+                "required": ["child"],
+                "additionalProperties": false,
+            }),
+        ];
+        let candidates = [
+            json!({"command": "ls"}),
+            json!({"command": "ls", "timeout": 5}),
+            json!({"command": 42}),
+            json!({"timeout": 5}),
+            json!({"child": {"execution_mode": "anything"}}),
+            json!({"child": {}}),
+            json!({"child": {"execution_mode": "anything", "extra": 1}}),
+            json!({}),
+        ];
+        for schema in &schemas {
+            validate_execution_metadata_contract(ToolExecutionPolicy::ModelSelectable, schema)
+                .expect("the fixture matches the contract");
+            let compiled = compile_model_definition(&definition(
+                ToolExecutionPolicy::ModelSelectable,
+                schema.clone(),
+            ))
+            .expect("compile");
+            let compiled_validator = jsonschema::Validator::new(&compiled.input_schema)
+                .expect("the compiled schema is valid");
+            for business in &candidates {
+                let canonical_verdict = validate_business_arguments(schema, business).is_ok();
+                for mode in super::EXECUTION_MODE_VALUES {
+                    let mut invocation = business.clone();
+                    invocation
+                        .as_object_mut()
+                        .expect("object candidate")
+                        .insert(EXECUTION_MODE_FIELD.to_owned(), json!(mode));
+                    assert_eq!(
+                        compiled_validator.is_valid(&invocation),
+                        canonical_verdict,
+                        "projection equivalence broken for {business} with {mode:?} under {schema}"
+                    );
+                    // And the round trip: stripping recovers exactly the
+                    // business arguments the canonical schema judged.
+                    let (_, stripped) = resolve_invocation_metadata(
+                        ToolExecutionPolicy::ModelSelectable,
+                        &invocation,
+                    )
+                    .expect("a well-formed invocation resolves");
+                    assert_eq!(&stripped, business);
+                }
+            }
+        }
+    }
+
+    /// Apart from references, nested subschemas are unrestricted: the
+    /// profile governs the root instance only, so a business property may
+    /// hold composition, `const`, cardinality assertions, and an
+    /// `execution_mode` of its own.
     #[test]
     fn nested_subschemas_stay_unrestricted() {
         let schema = json!({
