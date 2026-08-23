@@ -262,7 +262,8 @@ async fn wait_for_group_death(pgid: i32) {
 /// A spill write failure is represented explicitly: the invocation fails
 /// instead of reporting ordinary success while losing the promised retained
 /// output. The command provably crosses the preview bound, so the lazy
-/// spill allocation is actually reached.
+/// spill allocation is actually reached. If the spill opens but its first
+/// write fails, the typed result reports the retained file as Partial.
 #[tokio::test]
 async fn spill_write_failure_fails_the_invocation_explicitly() {
     let (_dir, artifacts, tool_output, workspace) = fixture();
@@ -341,19 +342,23 @@ async fn spill_write_failure_after_allocation_fails_the_invocation_explicitly() 
             "no complete-output locator is advertised: {text}"
         );
     }
+    let Some(crate::tools::types::ManagedOutputContinuation::Partial {
+        locator,
+        diagnostic,
+    }) = &result.managed_output
+    else {
+        panic!(
+            "a post-allocation spill write failure must be typed Partial, got {:?}",
+            result.managed_output
+        );
+    };
     assert!(
-        result.managed_output.is_none(),
-        "the failed invocation carries no continuation metadata"
+        diagnostic.contains("output"),
+        "storage diagnostic: {diagnostic}"
     );
-    // The incomplete spill reached exactly one terminal storage state: the
-    // failed invocation settled AFTER the capture cleanup, so no partial
-    // file survives in the managed store.
     assert!(
-        std::fs::read_dir(tool_output.root().join("results"))
-            .expect("results dir")
-            .next()
-            .is_none(),
-        "a failed foreground spill leaves no partial file behind"
+        locator.exists(),
+        "a partial foreground spill remains retrievable at its stable locator"
     );
 }
 
@@ -403,8 +408,9 @@ async fn cancellation_owns_the_outcome_and_a_failed_spill_is_never_advertised() 
         result.status
     );
     // The tool-owned JSON carries no magic output keys; the
-    // complete-vs-partial truth is typed runtime-owned metadata, and the
-    // removed partial spill means no locator exists at all.
+    // complete-vs-partial truth is typed runtime-owned metadata. The
+    // incomplete spill remains available, but it is never advertised as
+    // complete.
     let content = result
         .content
         .iter()
@@ -417,14 +423,17 @@ async fn cancellation_owns_the_outcome_and_a_failed_spill_is_never_advertised() 
         content.get("full_output").is_none() && content.get("note").is_none(),
         "no magic continuation keys exist in tool-owned JSON: {content}"
     );
-    let Some(crate::tools::types::ManagedOutputContinuation::Unavailable { diagnostic }) =
-        &result.managed_output
+    let Some(crate::tools::types::ManagedOutputContinuation::Partial {
+        locator,
+        diagnostic,
+    }) = &result.managed_output
     else {
         panic!(
-            "a partial spill removed best-effort is typed Unavailable, got {:?}",
+            "a partial spill is typed Partial, got {:?}",
             result.managed_output
         );
     };
+    assert_eq!(locator, &partial);
     assert!(
         diagnostic.contains("capture"),
         "the bounded capture diagnostic is retained: {diagnostic}"
@@ -447,10 +456,7 @@ async fn cancellation_owns_the_outcome_and_a_failed_spill_is_never_advertised() 
         !note.contains("Complete output:"),
         "no complete-retention claim survives a failed spill: {note}"
     );
-    assert!(
-        !partial.exists(),
-        "the partial spill file was removed best-effort"
-    );
+    assert!(partial.exists(), "the partial spill remains available");
     let truncation = result
         .truncation
         .expect("an incomplete capture is truncated");
@@ -516,7 +522,7 @@ async fn large_output_spills_lazily_with_an_absolute_locator() {
         .expect("json content");
     assert!(
         content["combined"].as_str().expect("combined").len()
-            <= crate::tools::limits::BASH_STREAM_PREVIEW_BYTES,
+            <= crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES,
         "the model-facing preview stays bounded"
     );
     assert!(

@@ -63,11 +63,16 @@ use crate::runtime::interactive_process::{InteractiveProcessSpec, SupervisedInte
 use crate::tools::artifacts::ArtifactStore;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::{
-    MAX_MODEL_TOOL_RESULT_BYTES, bound_tool_progress, bounded_text_preview,
+    FOREGROUND_TOOL_RESULT_PREVIEW_BYTES, MAX_MODEL_TOOL_RESULT_BYTES, bound_tool_progress,
+    bounded_text_preview,
+};
+use crate::tools::output::{
+    CapturedOutput, TextPreviewCapture, ToolOutputCapture, ToolOutputWriter,
+    continuation_for_capture, foreground_continuation_block, truncation_for_capture,
 };
 use crate::tools::types::{
-    ToolDefinition, ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationPolicy,
-    ToolOrigin, ToolReplayPolicy, ToolResultContent,
+    ManagedOutputContinuation, ToolDefinition, ToolExecutionResult, ToolExecutionStatus,
+    ToolInvocation, ToolInvocationPolicy, ToolOrigin, ToolReplayPolicy, ToolResultContent,
 };
 use crate::tools::workspace::Workspace;
 
@@ -1005,10 +1010,10 @@ impl McpServerRuntime {
         let _call_gate = self.call_gate.read().await;
         let started = Instant::now();
         if self.closed.load(Ordering::Acquire) {
-            return failed_mcp("MCP server runtime is closed", started);
+            return failed_mcp("MCP server runtime is closed", context, started);
         }
         let serde_json::Value::Object(arguments) = arguments else {
-            return failed_mcp("MCP tool arguments must be a JSON object", started);
+            return failed_mcp("MCP tool arguments must be a JSON object", context, started);
         };
         let params = CallToolRequestParams::new(remote_name.to_owned()).with_arguments(arguments);
         let request = ClientRequest::CallToolRequest(CallToolRequest::new(params));
@@ -1018,7 +1023,9 @@ impl McpServerRuntime {
             .await
         {
             Ok(handle) => handle,
-            Err(error) => return failed_mcp(&bound_error(&error.to_string()), started),
+            Err(error) => {
+                return failed_mcp(&bound_error(&error.to_string()), context, started);
+            }
         };
         let mut progress = self
             .handler
@@ -1033,15 +1040,21 @@ impl McpServerRuntime {
                     let cancelled = handle.cancel(Some("rustX execution cancellation".to_owned())).await;
                     drop(progress);
                     return match cancelled {
-                        Ok(()) => ToolExecutionResult {
-                            status: ToolExecutionStatus::Cancelled {
+                        Ok(()) => mcp_empty_terminal(
+                            ToolExecutionStatus::Cancelled {
                                 reason: context.cancellation.reason(),
                             },
-                            content: Vec::new(), duration_ms: duration_ms(started),
-                            exit_code: None, artifacts: Vec::new(), truncation: None,
-                            managed_output: None,
-                        },
-                        Err(error) => failed_mcp(&format!("MCP cancellation failed: {}", bound_error(&error.to_string())), started),
+                            context,
+                            started,
+                        ),
+                        Err(error) => failed_mcp(
+                            &format!(
+                                "MCP cancellation failed: {}",
+                                bound_error(&error.to_string())
+                            ),
+                            context,
+                            started,
+                        ),
                     };
                 }
                 progress_item = progress.next() => {
@@ -1062,15 +1075,23 @@ impl McpServerRuntime {
         let response = match response {
             Some(Ok(Ok(ServerResult::CallToolResult(result)))) => result,
             Some(Ok(Ok(ServerResult::InputRequiredResult(_)))) => {
-                return failed_mcp("MCP input_required results are unsupported in M7", started);
+                return failed_mcp(
+                    "MCP input_required results are unsupported in M7",
+                    context,
+                    started,
+                );
             }
-            Some(Ok(Ok(_))) => return failed_mcp("unexpected MCP tools/call response", started),
-            Some(Ok(Err(error))) => return failed_mcp(&bound_error(&error.to_string()), started),
+            Some(Ok(Ok(_))) => {
+                return failed_mcp("unexpected MCP tools/call response", context, started);
+            }
+            Some(Ok(Err(error))) => {
+                return failed_mcp(&bound_error(&error.to_string()), context, started);
+            }
             Some(Err(_)) | None => {
-                return failed_mcp("MCP transport closed during tools/call", started);
+                return failed_mcp("MCP transport closed during tools/call", context, started);
             }
         };
-        translate_result(response, context.artifacts, started)
+        translate_result(response, context, started)
     }
 }
 
@@ -1393,92 +1414,406 @@ fn resolve_workspace_cwd(workspace: &Workspace, cwd: Option<&Path>) -> Result<Pa
 
 fn translate_result(
     result: CallToolResult,
-    artifacts: &ArtifactStore,
+    context: &ToolExecutionContext<'_>,
     started: Instant,
 ) -> ToolExecutionResult {
-    let mut content = Vec::new();
-    let mut unsupported = None;
-    let mut remaining = MAX_MODEL_TOOL_RESULT_BYTES;
-    let mut original_bytes = 0usize;
-    let mut truncated = false;
-    for block in result.content {
-        match block {
-            ContentBlock::Text(text) => {
-                original_bytes = original_bytes.saturating_add(text.text.len());
-                let (preview, was_truncated) =
-                    bounded_text_preview(text.text.as_bytes(), remaining);
-                remaining = remaining.saturating_sub(preview.len());
-                truncated |= was_truncated;
-                content.push(ToolResultContent::Text(
-                    crate::message::content::TextBlock { text: preview },
-                ));
-            }
-            ContentBlock::Image(image) => {
-                match base64::engine::general_purpose::STANDARD.decode(image.data.as_bytes()) {
-                    Ok(bytes) if bytes.len() <= remaining => {
-                        match write_artifact(artifacts, &bytes) {
-                            Ok(id) => {
-                                remaining = remaining.saturating_sub(bytes.len());
-                                original_bytes = original_bytes.saturating_add(bytes.len());
-                                content.push(ToolResultContent::Image(
-                                    crate::message::content::ImageReference {
-                                        artifact_id: id,
-                                        alt: None,
-                                    },
-                                ));
-                            }
-                            Err(error) => unsupported = Some(error),
-                        }
-                    }
-                    Ok(_) => {
-                        unsupported = Some(
-                            "MCP image content exceeds the bounded tool-result limit".to_owned(),
-                        );
-                    }
-                    Err(error) => unsupported = Some(format!("invalid MCP image data: {error}")),
-                }
-            }
-            ContentBlock::Audio(_) | ContentBlock::Resource(_) | ContentBlock::ResourceLink(_) => {
-                unsupported =
-                    Some("MCP content variant has no canonical M7 representation".to_owned());
-            }
-            _ => unsupported = Some("unknown MCP content variant is unsupported in M7".to_owned()),
+    let background = context.execution_id.is_some();
+    let mut capture = match open_mcp_output_capture(context) {
+        Ok(capture) => capture,
+        Err((locator, diagnostic)) => {
+            return failed_mcp_storage(&diagnostic, locator, started);
         }
-    }
-    if let Some(value) = result.structured_content {
-        match serde_json::to_vec(&value) {
-            Ok(bytes) if bytes.len() <= remaining => {
-                original_bytes = original_bytes.saturating_add(bytes.len());
-                content.push(ToolResultContent::Json { value });
-            }
-            Ok(_) => {
-                unsupported =
-                    Some("MCP structured content exceeds the bounded tool-result limit".to_owned());
-            }
-            Err(error) => unsupported = Some(format!("invalid MCP structured content: {error}")),
+    };
+    let reported_error = result.is_error == Some(true);
+    let captured = capture_mcp_content(
+        result.content,
+        result.structured_content,
+        context,
+        &mut capture,
+    );
+    let capture_result = capture.finish(captured.storage_error.is_none());
+    let output_diagnostic = captured
+        .storage_error
+        .as_deref()
+        .or(captured.unsupported.as_deref());
+    let continuation = continuation_for_capture(&capture_result, background, output_diagnostic);
+    let (model_blocks, aggregate_error) = materialize_mcp_blocks(
+        captured.pending_blocks,
+        &capture_result,
+        continuation.as_ref(),
+        background,
+        context.artifacts,
+    );
+    let unsupported = captured.unsupported.or(aggregate_error);
+    let status = if let Some(error) = captured.storage_error {
+        ToolExecutionStatus::Failed {
+            error: format!("MCP result output storage failed: {error}"),
         }
-    }
-    let status = if let Some(error) = unsupported {
+    } else if let Some(error) = unsupported {
         ToolExecutionStatus::Failed { error }
-    } else if result.is_error == Some(true) {
+    } else if reported_error {
         ToolExecutionStatus::Failed {
             error: "MCP tool reported an execution error".to_owned(),
         }
     } else {
         ToolExecutionStatus::Success
     };
+    let truncation = truncation_for_capture(&capture_result);
     ToolExecutionResult {
         status,
-        content,
+        content: model_blocks,
         duration_ms: duration_ms(started),
         exit_code: None,
         artifacts: Vec::new(),
-        truncation: truncated.then_some(crate::tools::types::TruncationState {
-            truncated: true,
-            original_bytes: u64::try_from(original_bytes).ok(),
-        }),
-        managed_output: None,
+        truncation,
+        managed_output: continuation,
     }
+}
+
+/// The one MCP-owned accounting state for the aggregate canonical result.
+///
+/// Textual overflow is normalized by the shared Tool Plane capture first; the
+/// complete spill is auxiliary and therefore does not consume this budget.
+/// Every component that remains in the model-facing MCP projection consumes
+/// this same counter, including semantic image content.
+#[derive(Debug)]
+struct McpAggregateBudget {
+    remaining: usize,
+}
+
+const MCP_AGGREGATE_BUDGET_ERROR: &str =
+    "MCP result content exceeds the aggregate model-facing result limit";
+const MCP_IMAGE_AGGREGATE_BUDGET_ERROR: &str =
+    "MCP image content exceeds the aggregate model-facing result limit";
+
+impl McpAggregateBudget {
+    fn new() -> Self {
+        Self {
+            remaining: MAX_MODEL_TOOL_RESULT_BYTES,
+        }
+    }
+
+    fn consume(&mut self, bytes: usize) -> bool {
+        if bytes > self.remaining {
+            return false;
+        }
+        self.remaining -= bytes;
+        true
+    }
+}
+
+enum McpPendingBlock {
+    Text(String),
+    Json(serde_json::Value),
+    Image(Vec<u8>),
+}
+
+/// Materializes semantic MCP blocks only after the complete model-facing
+/// aggregate has one deterministic budget reservation.
+fn materialize_mcp_blocks(
+    pending_blocks: Vec<McpPendingBlock>,
+    capture_result: &CapturedOutput,
+    continuation: Option<&ManagedOutputContinuation>,
+    background: bool,
+    artifacts: &ArtifactStore,
+) -> (Vec<ToolResultContent>, Option<String>) {
+    let textual_overflow = capture_result.truncated || !capture_result.complete;
+    let mut budget = McpAggregateBudget::new();
+    let mut model_blocks = Vec::new();
+    let mut aggregate_error = None;
+    let continuation_block = (!background)
+        .then(|| foreground_continuation_block(continuation))
+        .flatten();
+    let continuation_fits = continuation_block.as_ref().is_none_or(|block| {
+        let ToolResultContent::Text(text) = block else {
+            return false;
+        };
+        budget.consume(text.text.len())
+    });
+    if !continuation_fits {
+        aggregate_error = Some(MCP_AGGREGATE_BUDGET_ERROR.to_owned());
+    }
+
+    if textual_overflow {
+        // The shared capture still owns the complete textual spill and its
+        // aggregate preview state. The model-facing mixed projection needs a
+        // separate bounded text budget, however: replacing all textual
+        // blocks with one aggregate Text would move Images across their
+        // source-relative semantic boundaries.
+        let mut remaining_textual_preview = FOREGROUND_TOOL_RESULT_PREVIEW_BYTES;
+        for pending in pending_blocks {
+            match pending {
+                McpPendingBlock::Text(text) => consume_mcp_text_preview(
+                    &text,
+                    &mut remaining_textual_preview,
+                    &mut budget,
+                    &mut model_blocks,
+                    &mut aggregate_error,
+                ),
+                McpPendingBlock::Json(value) => consume_mcp_json_preview(
+                    &value,
+                    &mut remaining_textual_preview,
+                    &mut budget,
+                    &mut model_blocks,
+                    &mut aggregate_error,
+                ),
+                McpPendingBlock::Image(bytes) => consume_mcp_image(
+                    &bytes,
+                    &mut budget,
+                    &mut model_blocks,
+                    &mut aggregate_error,
+                    artifacts,
+                ),
+            }
+        }
+    } else {
+        for pending in pending_blocks {
+            match pending {
+                McpPendingBlock::Text(text) => {
+                    consume_mcp_text(text, &mut budget, &mut model_blocks, &mut aggregate_error);
+                }
+                McpPendingBlock::Json(value) => {
+                    consume_mcp_json(value, &mut budget, &mut model_blocks, &mut aggregate_error);
+                }
+                McpPendingBlock::Image(bytes) => {
+                    consume_mcp_image(
+                        &bytes,
+                        &mut budget,
+                        &mut model_blocks,
+                        &mut aggregate_error,
+                        artifacts,
+                    );
+                }
+            }
+        }
+    }
+
+    if continuation_fits && let Some(block) = continuation_block {
+        model_blocks.push(block);
+    }
+
+    (model_blocks, aggregate_error)
+}
+
+fn consume_mcp_text_preview(
+    text: &str,
+    remaining_textual_preview: &mut usize,
+    budget: &mut McpAggregateBudget,
+    model_blocks: &mut Vec<ToolResultContent>,
+    aggregate_error: &mut Option<String>,
+) {
+    if *remaining_textual_preview < 2 {
+        if *remaining_textual_preview == 1
+            && let Some(character) = text.chars().next()
+            && character.len_utf8() == 1
+        {
+            *remaining_textual_preview = 0;
+            consume_mcp_text(character.to_string(), budget, model_blocks, aggregate_error);
+        }
+        return;
+    }
+    let mut preview = TextPreviewCapture::new(*remaining_textual_preview);
+    preview.push(text);
+    let (text, _) = preview.finish();
+    *remaining_textual_preview = (*remaining_textual_preview).saturating_sub(text.len());
+    if !text.is_empty() {
+        consume_mcp_text(text, budget, model_blocks, aggregate_error);
+    }
+}
+
+fn consume_mcp_json_preview(
+    value: &serde_json::Value,
+    remaining_textual_preview: &mut usize,
+    budget: &mut McpAggregateBudget,
+    model_blocks: &mut Vec<ToolResultContent>,
+    aggregate_error: &mut Option<String>,
+) {
+    match serde_json::to_string(value) {
+        Ok(text) => consume_mcp_text_preview(
+            &text,
+            remaining_textual_preview,
+            budget,
+            model_blocks,
+            aggregate_error,
+        ),
+        Err(error) => {
+            if aggregate_error.is_none() {
+                *aggregate_error = Some(format!("invalid MCP structured content: {error}"));
+            }
+        }
+    }
+}
+
+fn consume_mcp_text(
+    text: String,
+    budget: &mut McpAggregateBudget,
+    model_blocks: &mut Vec<ToolResultContent>,
+    aggregate_error: &mut Option<String>,
+) {
+    if budget.consume(text.len()) {
+        model_blocks.push(ToolResultContent::Text(
+            crate::message::content::TextBlock { text },
+        ));
+    } else if aggregate_error.is_none() {
+        *aggregate_error = Some(MCP_AGGREGATE_BUDGET_ERROR.to_owned());
+    }
+}
+
+fn consume_mcp_json(
+    value: serde_json::Value,
+    budget: &mut McpAggregateBudget,
+    model_blocks: &mut Vec<ToolResultContent>,
+    aggregate_error: &mut Option<String>,
+) {
+    match serde_json::to_vec(&value) {
+        Ok(bytes) if budget.consume(bytes.len()) => {
+            model_blocks.push(ToolResultContent::Json { value });
+        }
+        Ok(_) => {
+            if aggregate_error.is_none() {
+                *aggregate_error = Some(MCP_AGGREGATE_BUDGET_ERROR.to_owned());
+            }
+        }
+        Err(error) => {
+            if aggregate_error.is_none() {
+                *aggregate_error = Some(format!("invalid MCP structured content: {error}"));
+            }
+        }
+    }
+}
+
+fn consume_mcp_image(
+    bytes: &[u8],
+    budget: &mut McpAggregateBudget,
+    model_blocks: &mut Vec<ToolResultContent>,
+    aggregate_error: &mut Option<String>,
+    artifacts: &ArtifactStore,
+) {
+    if !budget.consume(bytes.len()) {
+        if aggregate_error.is_none() {
+            *aggregate_error = Some(MCP_IMAGE_AGGREGATE_BUDGET_ERROR.to_owned());
+        }
+        return;
+    }
+    match write_artifact(artifacts, bytes) {
+        Ok(id) => model_blocks.push(ToolResultContent::Image(
+            crate::message::content::ImageReference {
+                artifact_id: id,
+                alt: None,
+            },
+        )),
+        Err(error) => {
+            if aggregate_error.is_none() {
+                *aggregate_error = Some(error);
+            }
+        }
+    }
+}
+
+fn open_mcp_output_capture(
+    context: &ToolExecutionContext<'_>,
+) -> Result<ToolOutputCapture, (PathBuf, String)> {
+    let Some(execution_id) = context.execution_id else {
+        return Ok(ToolOutputCapture::foreground());
+    };
+    let locator = context.tool_output.background_output_path(execution_id);
+    let sink = context
+        .tool_output
+        .open_background_output_sink(execution_id)
+        .map_err(|error| {
+            (
+                locator,
+                format!("cannot open the background MCP result output: {error}"),
+            )
+        })?;
+    Ok(ToolOutputCapture::background(sink, None))
+}
+
+struct McpContentCapture {
+    pending_blocks: Vec<McpPendingBlock>,
+    unsupported: Option<String>,
+    storage_error: Option<String>,
+}
+
+fn capture_mcp_content(
+    blocks: Vec<ContentBlock>,
+    structured_content: Option<serde_json::Value>,
+    context: &ToolExecutionContext<'_>,
+    capture: &mut ToolOutputCapture,
+) -> McpContentCapture {
+    let mut captured = McpContentCapture {
+        pending_blocks: Vec::new(),
+        unsupported: None,
+        storage_error: None,
+    };
+    let mut first_textual_block = true;
+    {
+        let mut push_textual = |text: &str| -> Result<(), String> {
+            if !first_textual_block {
+                capture.push(
+                    "\n",
+                    (!capture.is_background()).then_some(context.tool_output),
+                )?;
+            }
+            first_textual_block = false;
+            capture.push(
+                text,
+                (!capture.is_background()).then_some(context.tool_output),
+            )
+        };
+        for block in blocks {
+            match block {
+                ContentBlock::Text(text) => {
+                    if let Err(error) = push_textual(&text.text) {
+                        captured.storage_error = Some(error);
+                    }
+                    captured
+                        .pending_blocks
+                        .push(McpPendingBlock::Text(text.text));
+                }
+                ContentBlock::Image(image) => {
+                    match base64::engine::general_purpose::STANDARD.decode(image.data.as_bytes()) {
+                        Ok(bytes) => captured.pending_blocks.push(McpPendingBlock::Image(bytes)),
+                        Err(error) => {
+                            captured.unsupported = Some(format!("invalid MCP image data: {error}"));
+                        }
+                    }
+                }
+                ContentBlock::Audio(_)
+                | ContentBlock::Resource(_)
+                | ContentBlock::ResourceLink(_) => {
+                    captured.unsupported =
+                        Some("MCP content variant has no canonical M7 representation".to_owned());
+                }
+                _ => {
+                    captured.unsupported =
+                        Some("unknown MCP content variant is unsupported in M7".to_owned());
+                }
+            }
+        }
+    }
+    if let Some(value) = structured_content {
+        if !first_textual_block
+            && let Err(error) = capture.push(
+                "\n",
+                (!capture.is_background()).then_some(context.tool_output),
+            )
+        {
+            captured.storage_error = Some(error);
+        }
+        if captured.storage_error.is_none() {
+            let foreground_store = (!capture.is_background()).then_some(context.tool_output);
+            let mut writer = ToolOutputWriter::new(capture, foreground_store);
+            let write_result = serde_json::to_writer(&mut writer, &value)
+                .map_err(|error| format!("invalid MCP structured content: {error}"))
+                .and_then(|()| writer.finish());
+            if let Err(error) = write_result {
+                captured.storage_error = Some(error);
+            }
+        }
+        captured.pending_blocks.push(McpPendingBlock::Json(value));
+    }
+    captured
 }
 
 fn write_artifact(
@@ -1496,17 +1831,99 @@ fn write_artifact(
     Ok(id)
 }
 
-fn failed_mcp(message: &str, started: Instant) -> ToolExecutionResult {
+fn failed_mcp_storage(diagnostic: &str, locator: PathBuf, started: Instant) -> ToolExecutionResult {
+    let diagnostic = bound_error(diagnostic);
     ToolExecutionResult {
         status: ToolExecutionStatus::Failed {
-            error: bound_error(message),
+            error: format!("MCP result output storage failed: {diagnostic}"),
         },
         content: Vec::new(),
         duration_ms: duration_ms(started),
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
-        managed_output: None,
+        managed_output: Some(crate::tools::types::ManagedOutputContinuation::Partial {
+            locator,
+            diagnostic,
+        }),
+    }
+}
+
+fn failed_mcp(
+    message: &str,
+    context: &ToolExecutionContext<'_>,
+    started: Instant,
+) -> ToolExecutionResult {
+    mcp_empty_terminal(
+        ToolExecutionStatus::Failed {
+            error: bound_error(message),
+        },
+        context,
+        started,
+    )
+}
+
+/// Retains the dispatch-owned background locator for MCP outcomes that do
+/// not carry a remote `CallToolResult` (cancellation, transport failure, or
+/// a local protocol error). A healthy preallocated empty file is a complete
+/// record of a call that produced no logical result; a sink-open failure is
+/// explicitly Partial.
+fn mcp_empty_terminal(
+    status: ToolExecutionStatus,
+    context: &ToolExecutionContext<'_>,
+    started: Instant,
+) -> ToolExecutionResult {
+    let Some(execution_id) = context.execution_id else {
+        return ToolExecutionResult {
+            status,
+            content: Vec::new(),
+            duration_ms: duration_ms(started),
+            exit_code: None,
+            artifacts: Vec::new(),
+            truncation: None,
+            managed_output: None,
+        };
+    };
+    let locator = context.tool_output.background_output_path(execution_id);
+    match context
+        .tool_output
+        .open_background_output_sink(execution_id)
+    {
+        Ok(sink) => {
+            drop(sink);
+            ToolExecutionResult {
+                status,
+                content: Vec::new(),
+                duration_ms: duration_ms(started),
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+                managed_output: Some(ManagedOutputContinuation::Complete { locator }),
+            }
+        }
+        Err(error) => {
+            let diagnostic = format!("cannot open the background MCP result output: {error}");
+            let error = match status {
+                ToolExecutionStatus::Failed { error } => {
+                    format!("{error}; MCP result output storage failed: {diagnostic}")
+                }
+                _ => format!("MCP result output storage failed: {diagnostic}"),
+            };
+            ToolExecutionResult {
+                status: ToolExecutionStatus::Failed {
+                    error: bound_error(&error),
+                },
+                content: Vec::new(),
+                duration_ms: duration_ms(started),
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+                managed_output: Some(ManagedOutputContinuation::Partial {
+                    locator,
+                    diagnostic: bound_error(&diagnostic),
+                }),
+            }
+        }
     }
 }
 
@@ -1528,7 +1945,365 @@ pub struct McpCapabilityBinding {
 
 #[cfg(test)]
 mod tests {
-    use super::{McpServerId, mcp_tool_id};
+    use std::time::Instant;
+
+    use base64::Engine as _;
+    use rmcp::model::{CallToolResult, ContentBlock};
+
+    use super::{McpServerId, mcp_empty_terminal, mcp_tool_id, translate_result};
+    use crate::runtime::identity::{ConversationId, ToolExecutionId};
+    use crate::runtime::types::CancellationReason;
+    use crate::runtime::{CancellationSignal, ExecutionCancellation};
+    use crate::tools::executor::{ProgressReporter, ToolExecutionContext};
+    use crate::tools::types::{ManagedOutputContinuation, ToolExecutionStatus, ToolResultContent};
+
+    struct NoProgress;
+
+    impl ProgressReporter for NoProgress {
+        fn report(&self, _progress: crate::tools::types::ToolProgress) {}
+    }
+
+    fn runtime(
+        name: &str,
+    ) -> (
+        tempfile::TempDir,
+        crate::tools::runtime::ConversationToolRuntime,
+    ) {
+        let directory = tempfile::tempdir().expect("runtime directory");
+        let root = directory.path().to_path_buf();
+        std::fs::create_dir_all(root.join("workspace")).expect("workspace");
+        let runtime = crate::tools::runtime::ConversationToolRuntime::new(
+            ConversationId::new(name),
+            root.join("workspace"),
+            root.join("artifacts"),
+        )
+        .expect("tool runtime");
+        (directory, runtime)
+    }
+
+    fn context<'a>(
+        runtime: &'a crate::tools::runtime::ConversationToolRuntime,
+        execution_id: Option<&'a ToolExecutionId>,
+        progress: &'a NoProgress,
+    ) -> ToolExecutionContext<'a> {
+        ToolExecutionContext::new(
+            runtime.conversation_id(),
+            execution_id,
+            ExecutionCancellation::detached(
+                CancellationSignal::new(),
+                CancellationReason::UserRequested,
+            ),
+            runtime.workspace(),
+            progress,
+            runtime.artifacts(),
+            runtime.tool_output(),
+            runtime.environment(),
+            None,
+        )
+    }
+
+    fn image_block(bytes: usize) -> ContentBlock {
+        ContentBlock::image(
+            base64::engine::general_purpose::STANDARD.encode(vec![b'i'; bytes]),
+            "image/png",
+        )
+    }
+
+    fn content_kinds(content: &[ToolResultContent]) -> Vec<&'static str> {
+        content
+            .iter()
+            .map(|content| match content {
+                ToolResultContent::Text(_) => "text",
+                ToolResultContent::Json { .. } => "json",
+                ToolResultContent::File(_) => "file",
+                ToolResultContent::Image(_) => "image",
+            })
+            .collect()
+    }
+
+    #[test]
+    fn foreground_mcp_aggregate_budget_accepts_exact_text_image_boundary() {
+        let (_directory, runtime) = runtime("mcp-aggregate-exact");
+        let text_bytes = crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES;
+        let image_bytes = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES - text_bytes;
+        let progress = NoProgress;
+        let result = translate_result(
+            CallToolResult::success(vec![
+                ContentBlock::text("t".repeat(text_bytes)),
+                image_block(image_bytes),
+            ]),
+            &context(&runtime, None, &progress),
+            Instant::now(),
+        );
+
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+        assert!(result.managed_output.is_none());
+        assert!(matches!(
+            result.content.first(),
+            Some(ToolResultContent::Text(text)) if text.text.len() == text_bytes
+        ));
+        assert!(matches!(
+            result.content.get(1),
+            Some(ToolResultContent::Image(_))
+        ));
+    }
+
+    #[test]
+    fn foreground_mcp_multiple_images_share_the_aggregate_budget() {
+        let (_directory, runtime) = runtime("mcp-aggregate-images");
+        let image_bytes = 40 * 1024;
+        let progress = NoProgress;
+        let result = translate_result(
+            CallToolResult::success(vec![image_block(image_bytes), image_block(image_bytes)]),
+            &context(&runtime, None, &progress),
+            Instant::now(),
+        );
+
+        let ToolExecutionStatus::Failed { error } = &result.status else {
+            panic!("aggregate image overflow must fail explicitly: {result:?}");
+        };
+        assert!(error.contains("aggregate model-facing result limit"));
+        assert_eq!(
+            result
+                .content
+                .iter()
+                .filter(|content| matches!(content, ToolResultContent::Image(_)))
+                .count(),
+            1
+        );
+        assert!(result.managed_output.is_none());
+    }
+
+    #[test]
+    fn foreground_mcp_text_and_image_share_the_aggregate_budget() {
+        let (_directory, runtime) = runtime("mcp-aggregate-text-image");
+        let text_bytes = crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES;
+        let image_bytes = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES - text_bytes + 1;
+        let progress = NoProgress;
+        let result = translate_result(
+            CallToolResult::success(vec![
+                ContentBlock::text("t".repeat(text_bytes)),
+                image_block(image_bytes),
+            ]),
+            &context(&runtime, None, &progress),
+            Instant::now(),
+        );
+
+        let ToolExecutionStatus::Failed { error } = &result.status else {
+            panic!("text plus image overflow must fail explicitly: {result:?}");
+        };
+        assert!(error.contains("aggregate model-facing result limit"));
+        assert!(matches!(
+            result.content.first(),
+            Some(ToolResultContent::Text(text)) if text.text.len() == text_bytes
+        ));
+        assert!(
+            !result
+                .content
+                .iter()
+                .any(|content| matches!(content, ToolResultContent::Image(_)))
+        );
+        assert!(result.managed_output.is_none());
+    }
+
+    #[test]
+    fn foreground_mcp_structured_json_and_image_share_the_aggregate_budget() {
+        let (_directory, runtime) = runtime("mcp-aggregate-json-image");
+        let value = serde_json::json!({"payload": "x".repeat(1024)});
+        let structured_bytes = serde_json::to_vec(&value).expect("structured JSON").len();
+        let image_bytes = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES - structured_bytes + 1;
+        let mut call = CallToolResult::success(vec![image_block(image_bytes)]);
+        call.structured_content = Some(value);
+        let progress = NoProgress;
+        let result = translate_result(call, &context(&runtime, None, &progress), Instant::now());
+
+        let ToolExecutionStatus::Failed { error } = &result.status else {
+            panic!("structured JSON plus image overflow must fail explicitly: {result:?}");
+        };
+        assert!(error.contains("aggregate model-facing result limit"));
+        assert!(
+            result
+                .content
+                .iter()
+                .any(|content| matches!(content, ToolResultContent::Image(_)))
+        );
+        assert!(
+            !result
+                .content
+                .iter()
+                .any(|content| matches!(content, ToolResultContent::Json { .. }))
+        );
+        assert!(result.managed_output.is_none());
+    }
+
+    #[test]
+    fn foreground_mcp_image_before_overflow_text_preserves_order_and_spill() {
+        let (_directory, runtime) = runtime("mcp-order-image-text");
+        let text = "B".repeat(crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1);
+        let progress = NoProgress;
+        let result = translate_result(
+            CallToolResult::success(vec![image_block(1024), ContentBlock::text(text.clone())]),
+            &context(&runtime, None, &progress),
+            Instant::now(),
+        );
+
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+        assert_eq!(
+            content_kinds(&result.content),
+            vec!["image", "text", "text"]
+        );
+        assert!(matches!(
+            &result.content[1],
+            ToolResultContent::Text(text) if text.text.contains('B')
+        ));
+        assert!(matches!(
+            &result.content[2],
+            ToolResultContent::Text(text) if text.text.contains("Read or Grep")
+        ));
+        let Some(ManagedOutputContinuation::Complete { locator }) = result.managed_output else {
+            panic!("overflow MCP text must remain Complete: {result:?}");
+        };
+        assert_eq!(
+            std::fs::read(&locator).expect("complete text spill"),
+            text.as_bytes()
+        );
+        assert_eq!(
+            std::fs::read_dir(locator.parent().expect("results directory"))
+                .expect("results directory")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn foreground_mcp_text_image_text_overflow_preserves_order() {
+        let (_directory, runtime) = runtime("mcp-order-text-image-text");
+        let first_bytes = crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES / 2;
+        let second_bytes = crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES - first_bytes;
+        let first = "A".repeat(first_bytes);
+        let second = "B".repeat(second_bytes);
+        let progress = NoProgress;
+        let result = translate_result(
+            CallToolResult::success(vec![
+                ContentBlock::text(first.clone()),
+                image_block(1024),
+                ContentBlock::text(second.clone()),
+            ]),
+            &context(&runtime, None, &progress),
+            Instant::now(),
+        );
+
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+        assert_eq!(
+            content_kinds(&result.content),
+            vec!["text", "image", "text", "text"]
+        );
+        assert!(matches!(
+            &result.content[0],
+            ToolResultContent::Text(text) if text.text == first
+        ));
+        assert!(matches!(
+            &result.content[2],
+            ToolResultContent::Text(text) if text.text == second
+        ));
+        let Some(ManagedOutputContinuation::Complete { locator }) = result.managed_output else {
+            panic!("mixed overflow MCP text must remain Complete: {result:?}");
+        };
+        assert_eq!(
+            std::fs::read(&locator).expect("complete mixed text spill"),
+            format!("{first}\n{second}").as_bytes()
+        );
+    }
+
+    #[test]
+    fn foreground_mcp_text_image_overflow_text_image_preserves_order() {
+        let (_directory, runtime) = runtime("mcp-order-text-image-text-image");
+        let first = "A".repeat(64);
+        let second = "B".repeat(crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1);
+        let progress = NoProgress;
+        let result = translate_result(
+            CallToolResult::success(vec![
+                ContentBlock::text(first.clone()),
+                image_block(1024),
+                ContentBlock::text(second.clone()),
+                image_block(1024),
+            ]),
+            &context(&runtime, None, &progress),
+            Instant::now(),
+        );
+
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+        assert_eq!(
+            content_kinds(&result.content),
+            vec!["text", "image", "text", "image", "text"]
+        );
+        assert!(matches!(
+            &result.content[0],
+            ToolResultContent::Text(text) if text.text == first
+        ));
+        assert!(matches!(
+            &result.content[2],
+            ToolResultContent::Text(text) if text.text.contains('B')
+        ));
+        assert!(matches!(
+            &result.content[1],
+            ToolResultContent::Image(image) if image.artifact_id.as_str() == "artifact_1"
+        ));
+        assert!(matches!(
+            &result.content[3],
+            ToolResultContent::Image(image) if image.artifact_id.as_str() == "artifact_2"
+        ));
+        let Some(ManagedOutputContinuation::Complete { locator }) = result.managed_output else {
+            panic!("mixed overflow MCP text must remain Complete: {result:?}");
+        };
+        assert_eq!(
+            std::fs::read(&locator).expect("complete mixed text spill"),
+            format!("{first}\n{second}").as_bytes()
+        );
+    }
+
+    #[test]
+    fn foreground_mcp_aggregate_pressure_keeps_order_before_rejecting_late_image() {
+        let (_directory, runtime) = runtime("mcp-order-budget-pressure");
+        let first = "A".repeat(crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES / 2);
+        let second = "B".repeat(
+            crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES
+                - crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES / 2,
+        );
+        let progress = NoProgress;
+        let result = translate_result(
+            CallToolResult::success(vec![
+                ContentBlock::text(first.clone()),
+                image_block(30 * 1024),
+                ContentBlock::text(second.clone()),
+                image_block(30 * 1024),
+            ]),
+            &context(&runtime, None, &progress),
+            Instant::now(),
+        );
+
+        let ToolExecutionStatus::Failed { error } = &result.status else {
+            panic!("late aggregate image overflow must fail explicitly: {result:?}");
+        };
+        assert!(error.contains("aggregate model-facing result limit"));
+        assert_eq!(
+            content_kinds(&result.content),
+            vec!["text", "image", "text", "text"]
+        );
+        assert!(matches!(
+            &result.content[0],
+            ToolResultContent::Text(text) if text.text == first
+        ));
+        assert!(matches!(
+            &result.content[2],
+            ToolResultContent::Text(text) if text.text == second
+        ));
+        assert!(matches!(
+            &result.content[1],
+            ToolResultContent::Image(image) if image.artifact_id.as_str() == "artifact_1"
+        ));
+        assert!(result.managed_output.is_some());
+    }
 
     #[test]
     fn mcp_tool_ids_are_length_prefixed_and_stable() {
@@ -1536,5 +2311,150 @@ mod tests {
         assert_eq!(first, mcp_tool_id(&McpServerId::new("a"), "b"));
         assert_ne!(first, mcp_tool_id(&McpServerId::new("ab"), ""));
         assert!(first.starts_with("mcp:sha256:"));
+    }
+
+    #[test]
+    fn foreground_mcp_storage_allocation_failure_is_unavailable() {
+        let (_directory, runtime) = runtime("mcp-storage-allocation");
+        runtime.tool_output().set_force_open_failures(true);
+        let progress = NoProgress;
+        let result = translate_result(
+            CallToolResult::success(vec![ContentBlock::text(
+                "x".repeat(crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1),
+            )]),
+            &context(&runtime, None, &progress),
+            Instant::now(),
+        );
+        assert!(matches!(result.status, ToolExecutionStatus::Failed { .. }));
+        assert!(matches!(
+            result.managed_output,
+            Some(ManagedOutputContinuation::Unavailable { .. })
+        ));
+        assert!(result.content.iter().any(|content| matches!(
+            content,
+            ToolResultContent::Text(text) if text.text.len() <= crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES
+        )));
+    }
+
+    #[test]
+    fn foreground_mcp_storage_write_failure_is_partial() {
+        let (_directory, runtime) = runtime("mcp-storage-write");
+        runtime.tool_output().fail_writes_after(0);
+        let progress = NoProgress;
+        let result = translate_result(
+            CallToolResult::success(vec![ContentBlock::text(
+                "x".repeat(crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1),
+            )]),
+            &context(&runtime, None, &progress),
+            Instant::now(),
+        );
+        let Some(ManagedOutputContinuation::Partial { locator, .. }) = result.managed_output else {
+            panic!("MCP write failure must remain Partial: {result:?}");
+        };
+        assert!(locator.exists());
+        assert!(matches!(result.status, ToolExecutionStatus::Failed { .. }));
+    }
+
+    #[test]
+    fn foreground_mcp_utf8_boundary_keeps_preview_valid_and_spill_complete() {
+        let (_directory, runtime) = runtime("mcp-utf8-boundary");
+        let text = format!(
+            "{}😀",
+            "a".repeat(crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES - 1)
+        );
+        let expected = text.clone();
+        let progress = NoProgress;
+        let result = translate_result(
+            CallToolResult::success(vec![ContentBlock::text(text)]),
+            &context(&runtime, None, &progress),
+            Instant::now(),
+        );
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+        let Some(ManagedOutputContinuation::Complete { locator }) = result.managed_output else {
+            panic!("MCP UTF-8 result must be complete in managed output: {result:?}");
+        };
+        assert_eq!(
+            std::fs::read_to_string(&locator).expect("UTF-8 MCP spill"),
+            expected
+        );
+        assert!(result.content.iter().all(|content| match content {
+            ToolResultContent::Text(text) => std::str::from_utf8(text.text.as_bytes()).is_ok(),
+            _ => true,
+        }));
+        assert!(
+            result
+                .truncation
+                .as_ref()
+                .is_some_and(|truncation| truncation.truncated)
+        );
+    }
+
+    #[test]
+    fn background_mcp_empty_terminal_reuses_the_dispatch_locator() {
+        let (_directory, runtime) = runtime("mcp-background-empty");
+        let execution_id = ToolExecutionId::background(11);
+        let advertised = runtime
+            .tool_output()
+            .allocate_background_output(&execution_id)
+            .expect("dispatch output");
+        let progress = NoProgress;
+        let result = mcp_empty_terminal(
+            ToolExecutionStatus::Cancelled {
+                reason: CancellationReason::UserRequested,
+            },
+            &context(&runtime, Some(&execution_id), &progress),
+            Instant::now(),
+        );
+        assert!(matches!(
+            result.status,
+            ToolExecutionStatus::Cancelled { .. }
+        ));
+        assert_eq!(
+            result.managed_output,
+            Some(ManagedOutputContinuation::Complete {
+                locator: advertised
+            })
+        );
+        assert_eq!(
+            std::fs::read(runtime.tool_output().background_output_path(&execution_id))
+                .expect("empty background output"),
+            b""
+        );
+        assert_eq!(
+            std::fs::read_dir(runtime.tool_output().root().join("results"))
+                .expect("results directory")
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn background_mcp_storage_write_failure_keeps_the_dispatch_locator_partial() {
+        let (_directory, runtime) = runtime("mcp-background-storage-write");
+        let execution_id = ToolExecutionId::background(4);
+        let advertised = runtime
+            .tool_output()
+            .allocate_background_output(&execution_id)
+            .expect("dispatch output");
+        runtime.tool_output().fail_writes_after(0);
+        let progress = NoProgress;
+        let result = translate_result(
+            CallToolResult::success(vec![ContentBlock::text(
+                "x".repeat(crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1),
+            )]),
+            &context(&runtime, Some(&execution_id), &progress),
+            Instant::now(),
+        );
+        let Some(ManagedOutputContinuation::Partial { locator, .. }) = result.managed_output else {
+            panic!("background MCP write failure must remain Partial: {result:?}");
+        };
+        assert_eq!(locator, advertised);
+        assert!(matches!(result.status, ToolExecutionStatus::Failed { .. }));
+        assert_eq!(
+            std::fs::read_dir(runtime.tool_output().root().join("results"))
+                .expect("results directory")
+                .count(),
+            0
+        );
     }
 }

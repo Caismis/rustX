@@ -61,6 +61,14 @@ pub const PROTOCOL_VERSIONS_ENV: &str = "RUSTX_M7_FIXTURE_PROTOCOL_VERSIONS";
 /// the capability availability contract must bound it before the
 /// diagnostic enters authoritative state.
 pub const LIST_TOOLS_ERROR_BYTES_ENV: &str = "RUSTX_M7_FIXTURE_LIST_TOOLS_ERROR_BYTES";
+/// The environment variable selecting the byte length of the successful
+/// `echo` text result (Issue #103).
+pub const RESULT_BYTES_ENV: &str = "RUSTX_M7_FIXTURE_RESULT_BYTES";
+/// The environment variable selecting comma-separated successful `echo`
+/// content-block byte lengths. Blocks are joined by the Tool Plane's
+/// deterministic newline representation, so their aggregate can cross the
+/// bound even when each block is individually below it.
+pub const RESULT_BLOCK_BYTES_ENV: &str = "RUSTX_M7_FIXTURE_RESULT_BLOCK_BYTES";
 /// Parses a comma-separated protocol revision list.
 ///
 /// Every MCP revision string is accepted, including ones no SDK knows: that
@@ -95,6 +103,15 @@ impl FixtureServer {
             list_tools_error_bytes: std::env::var(LIST_TOOLS_ERROR_BYTES_ENV)
                 .ok()
                 .and_then(|value| value.parse::<usize>().ok()),
+            result_bytes: std::env::var(RESULT_BYTES_ENV)
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok()),
+            result_block_bytes: std::env::var(RESULT_BLOCK_BYTES_ENV).ok().map(|value| {
+                value
+                    .split(',')
+                    .filter_map(|entry| entry.parse::<usize>().ok())
+                    .collect()
+            }),
             ..Self::default()
         }
     }
@@ -164,6 +181,12 @@ pub struct FixtureServer {
     /// When set, `tools/list` fails with a correlated error message of
     /// exactly this many bytes (the oversized-diagnostic seam).
     pub list_tools_error_bytes: Option<usize>,
+    /// When set, the successful `echo` tool returns one text block of exactly
+    /// this many bytes.
+    pub result_bytes: Option<usize>,
+    /// When set, the successful `echo` tool returns one text block for each
+    /// listed byte length.
+    pub result_block_bytes: Option<Vec<usize>>,
 }
 
 impl FixtureServer {
@@ -280,9 +303,25 @@ impl ServerHandler for FixtureServer {
         let slow_started = self.slow_started.clone();
         let cancel_observed = self.cancel_observed.clone();
         let cancel_observed_file = self.cancel_observed_file.clone();
+        let result_bytes = self.result_bytes;
+        let result_block_bytes = self.result_block_bytes.clone();
         async move {
             if request.name == "echo" {
-                Ok(CallToolResult::success(vec![ContentBlock::text("fixture echo")]).into())
+                let blocks = result_block_bytes.map_or_else(
+                    || {
+                        vec![ContentBlock::text(result_bytes.map_or_else(
+                            || "fixture echo".to_owned(),
+                            |bytes| "x".repeat(bytes),
+                        ))]
+                    },
+                    |blocks| {
+                        blocks
+                            .into_iter()
+                            .map(|bytes| ContentBlock::text("x".repeat(bytes)))
+                            .collect()
+                    },
+                );
+                Ok(CallToolResult::success(blocks).into())
             } else if request.name == "mutate" {
                 changed.store(true, Ordering::Release);
                 if let Some(token) = context.meta.get_progress_token() {

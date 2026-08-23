@@ -1682,6 +1682,56 @@ spawning, waiting/reaping, signaling, and IPC failures settle as `Failed`,
 never as a silent `Success`, `Cancelled`, or `TimedOut`) — never a silent
 success that lost the retained output.
 
+##### Tool Plane result normalization and output ownership
+
+Native, MCP, and Python executors produce a logical result; they do not
+choose independent oversized-result policies. The shared Tool Plane seam in
+`src/tools/output.rs` owns deterministic textual representation, byte
+accounting, bounded preview, UTF-8 handling, managed-output retention, and
+typed `TruncationState`/`ManagedOutputContinuation` publication. The origin
+adapters remain protocol translators: MCP translates `CallToolResult`, and
+Python translates its private runtime status/result transport.
+
+The limits have deliberately different meanings:
+
+- `FOREGROUND_TOOL_RESULT_PREVIEW_BYTES` (currently 16 KiB) is the shared
+  foreground projection threshold;
+- `MAX_MODEL_TOOL_RESULT_BYTES` (currently 64 KiB) is the absolute
+  canonical/model-facing safety bound, including a bounded background
+  continuation;
+- managed output is auxiliary storage for the complete logical text (or an
+  explicitly partial prefix after a storage failure), not canonical history
+  and not a semantic artifact/File result.
+
+In foreground mode, a complete deterministic representation at or below the
+shared preview threshold remains a direct result and creates no result spill.
+Crossing the threshold lazily allocates exactly one
+`results/result_N.txt`, streams the complete representation there, and
+publishes a bounded deterministic preview plus typed `Complete` continuation.
+An allocation failure publishes `Unavailable`; a write/read failure retains
+the locator as `Partial`. Result size alone never changes semantic success to
+failure; an output-storage failure is a separate explicit failure fact.
+MCP content blocks are budgeted collectively, and oversized Python JSON is
+streamed from its private transport so the canonical preview is always valid
+UTF-8 rather than malformed truncated JSON.
+
+In background mode, `prepare_dispatch` allocates exactly one
+`tasks/exec_N.output` before the accepted result advertises it. Bash streams
+into it while running; MCP and Python write their complete final logical
+representation to it at result normalization/settlement. The accepted and
+terminal locators are therefore identical, no secondary `results/` spill is
+created, and terminal publication keeps the locator and fixed Read/Grep
+guidance structurally while bounding the canonical body by
+`MAX_MODEL_TOOL_RESULT_BYTES`. Failed retention is `Partial`, never false
+`Complete`.
+
+The background write/settlement linearization is also explicit: the origin
+owns its sink until its executor future returns, the runner invokes registry
+terminal settlement only after that return, and terminal candidate/publication
+then claims the registry's structural winner. No origin-owned writer remains
+after settlement can win, so cancellation cannot be followed by a late
+MCP/Python result write that mutates settled result state.
+
 **The Bash invocation ownership boundary is its dedicated process group.**
 On both supported platforms the inner supervisor creates a fresh session and
 process group, and `TERM`/`KILL` are issued with `killpg` while the retained
@@ -2169,9 +2219,12 @@ by a crash is skipped by the allocator and never destroyed (no scratch GC
 exists). The interpreter whose
 identity enters the digest is pinned to uv via `UV_PYTHON`, managed Python
 downloads stay disabled, and every preparation command has a finite
-deadline (a timeout is an explicit preparation failure). A harness uses a private input file and
-one bounded JSON result envelope; the Python subprocess uses the shared
-supervised short-lived runner. Same-digest in-flight builds coalesce behind
+deadline (a timeout is an explicit preparation failure). The private harness
+uses `input.json` plus a small `status.json` completion protocol and a
+separate `result.json` logical-return transport; stdout/stderr remain bounded
+process diagnostics and never frame the logical result. The shared Tool
+Plane normalization streams `result.json` into the foreground spill or the
+dispatch-owned background output path. Same-digest in-flight builds coalesce behind
 one store-owned owner task (callers only wait; owner failure publishes a
 terminal error and removes the in-flight entry).
 

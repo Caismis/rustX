@@ -56,8 +56,13 @@ pub const MAX_PROGRESS_MESSAGE_BYTES: usize = 512;
 /// executor reports without pause.
 pub const MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL: usize = 128;
 
-/// The per-stream bounded preview retained for Bash stdout/stderr/combined.
-pub const BASH_STREAM_PREVIEW_BYTES: usize = 16 * 1024;
+/// The shared foreground Tool Plane preview threshold.
+///
+/// Results at or below this bound remain direct model-facing results. Once a
+/// logical textual representation crosses it, the Tool Plane allocates one
+/// lazy complete-result spill. This is a projection threshold, not the
+/// complete managed-output storage limit.
+pub const FOREGROUND_TOOL_RESULT_PREVIEW_BYTES: usize = 16 * 1024;
 
 /// The grace period between TERM and KILL when terminating a Bash process
 /// group.

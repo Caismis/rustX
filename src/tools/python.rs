@@ -25,7 +25,9 @@
 //! └── python-invocations/execution-N/ # one invocation-private execution bundle
 //!     ├── source/                     # writable copy of the canonical source
 //!     ├── harness.py                  # runtime-owned harness bytes
-//!     └── input.json                  # runtime-owned invocation arguments
+//!     ├── input.json                  # runtime-owned invocation arguments
+//!     ├── status.json                 # runtime-owned small completion protocol
+//!     └── result.json                 # runtime-owned logical return transport
 //! ```
 //!
 //! On reuse a published `ToolVersion` is validated by recomputing the
@@ -63,7 +65,7 @@
 //! M7.
 
 use std::collections::BTreeMap;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -81,9 +83,15 @@ use crate::runtime::process_runner::{
 use crate::skills::environments::{ENVIRONMENT_COMMAND_TIMEOUT, RUNTIME_PROBE_TIMEOUT};
 use crate::tools::environment::{ToolEnvironment, ToolEnvironmentOverlay};
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
+use crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES;
+use crate::tools::output::{
+    ToolOutputCapture, continuation_for_capture, foreground_continuation_block,
+    truncation_for_capture,
+};
 use crate::tools::types::{
-    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionResult,
-    ToolExecutionStatus, ToolInvocation, ToolInvocationPolicy, ToolResultContent,
+    ManagedOutputContinuation, ToolApprovalPolicy, ToolConcurrencyPolicy, ToolExecutionPolicy,
+    ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationPolicy,
+    ToolResultContent,
 };
 use crate::tools::workspace::Workspace;
 
@@ -106,6 +114,9 @@ const PYTHON_TOOL_PROBE_TIMEOUT: Duration = RUNTIME_PROBE_TIMEOUT;
 /// The finite deadline of one uv lock/materialization command (mirrors the
 /// M6 `ENVIRONMENT_COMMAND_TIMEOUT`).
 const PYTHON_TOOL_UV_TIMEOUT: Duration = ENVIRONMENT_COMMAND_TIMEOUT;
+/// The status transport is a fixed-size runtime protocol. Logical return
+/// values never use this bound; they are streamed from their separate file.
+const PYTHON_STATUS_MAX_BYTES: usize = 8 * 1024;
 
 const PYTHON_HARNESS: &str = r#"import contextlib
 import importlib
@@ -116,6 +127,8 @@ import sys
 source_root = pathlib.Path(sys.argv[1]).resolve()
 entrypoint = sys.argv[2]
 input_path = pathlib.Path(sys.argv[3]).resolve()
+status_path = pathlib.Path(sys.argv[4]).resolve()
+result_path = pathlib.Path(sys.argv[5]).resolve()
 sys.path.insert(0, str(source_root))
 
 # The source root the harness receives is the invocation-private
@@ -128,9 +141,11 @@ sys.path.insert(0, str(source_root))
 # environment.
 sys.dont_write_bytecode = True
 
-def emit(value):
-    sys.__stdout__.write(json.dumps(value, separators=(",", ":"), ensure_ascii=False) + "\n")
-    sys.__stdout__.flush()
+def write_status(value):
+    status_path.write_text(
+        json.dumps(value, separators=(",", ":"), ensure_ascii=False),
+        encoding="utf-8",
+    )
 
 try:
     module_name, function_name = entrypoint.split(":", 1)
@@ -139,9 +154,14 @@ try:
         module = importlib.import_module(module_name)
         function = getattr(module, function_name)
         value = function(arguments)
-    emit({"ok": True, "value": value})
+    # The logical return value never crosses stdout. json.dump streams the
+    # value to the invocation-private transport, so the generic supervised
+    # process diagnostic capture remains bounded and cannot corrupt framing.
+    with result_path.open("w", encoding="utf-8", newline="") as result_file:
+        json.dump(value, result_file, separators=(",", ":"), ensure_ascii=False)
+    write_status({"ok": True})
 except BaseException as error:
-    emit({"ok": False, "error": f"{type(error).__name__}: {error}"})
+    write_status({"ok": False, "error": f"{type(error).__name__}: {error}"})
 "#;
 
 /// A package discovery/publication failure.
@@ -1316,11 +1336,22 @@ impl ToolExecutor for PythonToolExecutor {
             // delete it while it is live.
             let bundle = match self.store.allocate_execution_bundle() {
                 Ok(bundle) => bundle,
-                Err(error) => return failed_python(&error.to_string(), started),
+                Err(error) => {
+                    return python_empty_terminal(
+                        ToolExecutionStatus::Failed {
+                            error: error.to_string(),
+                        },
+                        None,
+                        &context,
+                        started,
+                    );
+                }
             };
             let source_dir = bundle.join("source");
             let harness_path = bundle.join("harness.py");
             let input_path = bundle.join("input.json");
+            let status_path = bundle.join("status.json");
+            let result_path = bundle.join("result.json");
             let materialization = (|| -> Result<(), PythonToolError> {
                 materialize_invocation_source(&self.tool.root, &source_dir)?;
                 std::fs::write(&harness_path, PYTHON_HARNESS).map_err(io_error)?;
@@ -1331,16 +1362,26 @@ impl ToolExecutor for PythonToolExecutor {
                 // The bundle is this invocation's own freshly claimed
                 // directory, so settling it is always safe.
                 let _ = std::fs::remove_dir_all(&bundle);
-                return failed_python(&error.to_string(), started);
+                return python_empty_terminal(
+                    ToolExecutionStatus::Failed {
+                        error: error.to_string(),
+                    },
+                    None,
+                    &context,
+                    started,
+                );
             }
             let python = self.environment.root.join("bin/python");
             let command = format!(
-                "{} {} {} {}",
+                "{} {} {} {} {} {} {}",
                 shell_quote(&python),
                 shell_quote(&harness_path),
                 shell_quote(&source_dir),
                 shell_quote_str(&self.tool.package.entrypoint),
-            ) + &format!(" {}", shell_quote(&input_path));
+                shell_quote(&input_path),
+                shell_quote(&status_path),
+                shell_quote(&result_path),
+            );
             let runtime_environment = context
                 .environment
                 .with_replacement_overlay(&ToolEnvironmentOverlay::python(&self.environment.root));
@@ -1360,12 +1401,27 @@ impl ToolExecutor for PythonToolExecutor {
                     None,
                 )
                 .await;
-            let _ = std::fs::remove_dir_all(&bundle);
             match result {
                 Ok(result) => {
-                    translate_python_result(result, started, context.cancellation.reason())
+                    let translated = translate_python_result(
+                        result,
+                        &status_path,
+                        &result_path,
+                        &context,
+                        started,
+                    );
+                    let _ = std::fs::remove_dir_all(&bundle);
+                    translated
                 }
-                Err(error) => failed_python(&error, started),
+                Err(error) => {
+                    let _ = std::fs::remove_dir_all(&bundle);
+                    python_empty_terminal(
+                        ToolExecutionStatus::Failed { error },
+                        None,
+                        &context,
+                        started,
+                    )
+                }
             }
         })
     }
@@ -1439,76 +1495,423 @@ fn write_private_input(path: &Path, arguments: &serde_json::Value) -> Result<(),
     Ok(())
 }
 
+#[derive(Debug, Deserialize)]
+struct PythonStatusEnvelope {
+    ok: bool,
+    #[serde(default)]
+    error: Option<String>,
+}
+
 fn translate_python_result(
     result: CapturedProcessResult,
+    status_path: &Path,
+    result_path: &Path,
+    context: &ToolExecutionContext<'_>,
     started: Instant,
-    cancellation_reason: crate::runtime::types::CancellationReason,
 ) -> ToolExecutionResult {
-    let status = match result.intent {
-        ProcessOutcomeIntent::Cancelled => ToolExecutionStatus::Cancelled {
-            reason: cancellation_reason,
-        },
-        ProcessOutcomeIntent::TimedOut => ToolExecutionStatus::TimedOut,
-        ProcessOutcomeIntent::ProcessControlFailed(error) => ToolExecutionStatus::Failed { error },
-        ProcessOutcomeIntent::Completed if result.exit_code != Some(0) => {
-            ToolExecutionStatus::Failed {
-                error: bounded_output(&result.stderr),
-            }
+    let background = context.execution_id.is_some();
+    let cancellation_reason = context.cancellation.reason();
+    match result.intent {
+        ProcessOutcomeIntent::Cancelled => {
+            return python_empty_terminal(
+                ToolExecutionStatus::Cancelled {
+                    reason: cancellation_reason,
+                },
+                result.exit_code,
+                context,
+                started,
+            );
         }
-        ProcessOutcomeIntent::Completed => {
-            let envelope: Result<serde_json::Value, _> = serde_json::from_slice(&result.stdout);
-            match envelope {
-                Ok(value) if value.get("ok") == Some(&serde_json::Value::Bool(true)) => {
-                    return ToolExecutionResult {
-                        status: ToolExecutionStatus::Success,
-                        content: vec![ToolResultContent::Json {
-                            value: value
-                                .get("value")
-                                .cloned()
-                                .unwrap_or(serde_json::Value::Null),
-                        }],
-                        duration_ms: duration_ms(started),
-                        exit_code: result.exit_code,
-                        artifacts: Vec::new(),
-                        truncation: None,
-                        managed_output: None,
-                    };
-                }
-                Ok(value) => ToolExecutionStatus::Failed {
-                    error: value
-                        .get("error")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("Python tool failed")
-                        .to_owned(),
+        ProcessOutcomeIntent::TimedOut => {
+            return python_empty_terminal(
+                ToolExecutionStatus::TimedOut,
+                result.exit_code,
+                context,
+                started,
+            );
+        }
+        ProcessOutcomeIntent::ProcessControlFailed(error) => {
+            return python_empty_terminal(
+                ToolExecutionStatus::Failed { error },
+                result.exit_code,
+                context,
+                started,
+            );
+        }
+        ProcessOutcomeIntent::Completed if result.exit_code != Some(0) => {
+            return python_empty_terminal(
+                ToolExecutionStatus::Failed {
+                    error: bounded_output(&result.stderr),
                 },
-                Err(error) => ToolExecutionStatus::Failed {
-                    error: format!("invalid Python result envelope: {error}"),
-                },
-            }
+                result.exit_code,
+                context,
+                started,
+            );
+        }
+        ProcessOutcomeIntent::Completed => {}
+    }
+
+    let envelope = match read_python_status(status_path) {
+        Ok(envelope) => envelope,
+        Err(error) => {
+            return python_empty_terminal(
+                ToolExecutionStatus::Failed { error },
+                result.exit_code,
+                context,
+                started,
+            );
         }
     };
+    if !envelope.ok {
+        return python_empty_terminal(
+            ToolExecutionStatus::Failed {
+                error: bound_error(envelope.error.as_deref().unwrap_or("Python tool failed")),
+            },
+            result.exit_code,
+            context,
+            started,
+        );
+    }
+
+    normalize_python_success(result_path, result.exit_code, context, started, background)
+}
+
+fn read_python_status(path: &Path) -> Result<PythonStatusEnvelope, String> {
+    let file = std::fs::File::open(path)
+        .map_err(|error| format!("cannot read the Python runtime status transport: {error}"))?;
+    let mut limited = file.take((PYTHON_STATUS_MAX_BYTES + 1) as u64);
+    let mut bytes = Vec::new();
+    limited
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("cannot read the Python runtime status transport: {error}"))?;
+    if bytes.len() > PYTHON_STATUS_MAX_BYTES {
+        return Err(format!(
+            "the Python runtime status transport exceeds {PYTHON_STATUS_MAX_BYTES} bytes"
+        ));
+    }
+    serde_json::from_slice(&bytes)
+        .map_err(|error| format!("invalid Python runtime status transport: {error}"))
+}
+
+fn normalize_python_success(
+    result_path: &Path,
+    exit_code: Option<i32>,
+    context: &ToolExecutionContext<'_>,
+    started: Instant,
+    background: bool,
+) -> ToolExecutionResult {
+    let small = match read_small_json_transport(result_path) {
+        Ok(Some(value)) => Some(value),
+        Ok(None) => None,
+        Err(error) => {
+            if background {
+                return python_storage_failure(
+                    &format!("Python logical result storage failed: {error}"),
+                    exit_code,
+                    context,
+                    started,
+                );
+            }
+            return python_empty_terminal(
+                ToolExecutionStatus::Failed { error },
+                exit_code,
+                context,
+                started,
+            );
+        }
+    };
+
+    if let Some((value, bytes)) = small {
+        return normalize_small_python_value(
+            value, &bytes, exit_code, context, started, background,
+        );
+    }
+
+    let mut capture = if background {
+        let Some(execution_id) = context.execution_id else {
+            return python_empty_terminal(
+                ToolExecutionStatus::Failed {
+                    error: "a background Python result requires an execution identity".to_owned(),
+                },
+                None,
+                context,
+                started,
+            );
+        };
+        let sink = match context
+            .tool_output
+            .open_background_output_sink(execution_id)
+        {
+            Ok(sink) => sink,
+            Err(error) => {
+                return python_storage_failure(
+                    &format!("cannot open the background Python result output: {error}"),
+                    exit_code,
+                    context,
+                    started,
+                );
+            }
+        };
+        ToolOutputCapture::background(sink, None)
+    } else {
+        ToolOutputCapture::foreground()
+    };
+
+    let read_result = std::fs::File::open(result_path)
+        .map_err(|error| format!("cannot open the Python logical result transport: {error}"))
+        .and_then(|file| {
+            let foreground_store = (!capture.is_background()).then_some(context.tool_output);
+            capture.push_reader(file, foreground_store)
+        });
+    let capture_result = capture.finish(read_result.is_ok());
+    if let Err(error) = read_result {
+        return python_capture_result(
+            ToolExecutionStatus::Failed {
+                error: format!("Python logical result storage failed: {error}"),
+            },
+            capture_result,
+            exit_code,
+            context,
+            started,
+            background,
+            Some(error.as_str()),
+        );
+    }
+    if let Err(error) = validate_json_transport(result_path) {
+        return python_capture_result(
+            ToolExecutionStatus::Failed {
+                error: format!("invalid Python logical result transport: {error}"),
+            },
+            capture_result,
+            exit_code,
+            context,
+            started,
+            background,
+            Some(error.as_str()),
+        );
+    }
+
+    python_capture_result(
+        ToolExecutionStatus::Success,
+        capture_result,
+        exit_code,
+        context,
+        started,
+        background,
+        None,
+    )
+}
+
+fn read_small_json_transport(path: &Path) -> Result<Option<(serde_json::Value, String)>, String> {
+    let file = std::fs::File::open(path)
+        .map_err(|error| format!("cannot open the Python logical result transport: {error}"))?;
+    let mut limited = file.take((FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1) as u64);
+    let mut bytes = Vec::new();
+    limited
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("cannot read the Python logical result transport: {error}"))?;
+    if bytes.len() > FOREGROUND_TOOL_RESULT_PREVIEW_BYTES {
+        return Ok(None);
+    }
+    let text = String::from_utf8(bytes.clone())
+        .map_err(|error| format!("Python logical result is not valid UTF-8: {error}"))?;
+    let value = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("invalid Python logical result JSON: {error}"))?;
+    Ok(Some((value, text)))
+}
+
+fn validate_json_transport(path: &Path) -> Result<(), String> {
+    let file = std::fs::File::open(path)
+        .map_err(|error| format!("cannot reopen the Python logical result transport: {error}"))?;
+    let mut deserializer = serde_json::Deserializer::from_reader(file);
+    serde::de::IgnoredAny::deserialize(&mut deserializer).map_err(|error| error.to_string())?;
+    deserializer.end().map_err(|error| error.to_string())
+}
+
+fn normalize_small_python_value(
+    value: serde_json::Value,
+    bytes: &str,
+    exit_code: Option<i32>,
+    context: &ToolExecutionContext<'_>,
+    started: Instant,
+    background: bool,
+) -> ToolExecutionResult {
+    if !background {
+        return ToolExecutionResult {
+            status: ToolExecutionStatus::Success,
+            content: vec![ToolResultContent::Json { value }],
+            duration_ms: duration_ms(started),
+            exit_code,
+            artifacts: Vec::new(),
+            truncation: None,
+            managed_output: None,
+        };
+    }
+    let Some(execution_id) = context.execution_id else {
+        return python_empty_terminal(
+            ToolExecutionStatus::Failed {
+                error: "a background Python result requires an execution identity".to_owned(),
+            },
+            exit_code,
+            context,
+            started,
+        );
+    };
+    let sink = match context
+        .tool_output
+        .open_background_output_sink(execution_id)
+    {
+        Ok(sink) => sink,
+        Err(error) => {
+            return python_storage_failure(
+                &format!("cannot open the background Python result output: {error}"),
+                exit_code,
+                context,
+                started,
+            );
+        }
+    };
+    let mut capture = ToolOutputCapture::background(sink, None);
+    if let Err(error) = capture.push(bytes, None) {
+        let captured = capture.finish(false);
+        return python_capture_result(
+            ToolExecutionStatus::Failed {
+                error: format!("Python logical result storage failed: {error}"),
+            },
+            captured,
+            exit_code,
+            context,
+            started,
+            true,
+            Some(error.as_str()),
+        );
+    }
+    let captured = capture.finish(true);
+    python_capture_result(
+        ToolExecutionStatus::Success,
+        captured,
+        exit_code,
+        context,
+        started,
+        true,
+        None,
+    )
+    .with_json_content(value)
+}
+
+fn python_capture_result(
+    status: ToolExecutionStatus,
+    captured: crate::tools::output::CapturedOutput,
+    exit_code: Option<i32>,
+    _context: &ToolExecutionContext<'_>,
+    started: Instant,
+    background: bool,
+    diagnostic: Option<&str>,
+) -> ToolExecutionResult {
+    let status = bound_status(status);
+    let continuation = continuation_for_capture(&captured, background, diagnostic);
+    let truncation = truncation_for_capture(&captured);
+    let mut content = vec![ToolResultContent::Text(
+        crate::message::content::TextBlock {
+            text: captured.preview,
+        },
+    )];
+    if !background && let Some(block) = foreground_continuation_block(continuation.as_ref()) {
+        content.push(block);
+    }
     ToolExecutionResult {
         status,
-        content: Vec::new(),
+        content,
         duration_ms: duration_ms(started),
-        exit_code: result.exit_code,
+        exit_code,
         artifacts: Vec::new(),
-        truncation: None,
-        managed_output: None,
+        truncation,
+        managed_output: continuation,
     }
 }
 
-fn failed_python(message: &str, started: Instant) -> ToolExecutionResult {
+trait PythonResultContentExt {
+    fn with_json_content(self, value: serde_json::Value) -> Self;
+}
+
+impl PythonResultContentExt for ToolExecutionResult {
+    fn with_json_content(mut self, value: serde_json::Value) -> Self {
+        self.content = vec![ToolResultContent::Json { value }];
+        self
+    }
+}
+
+fn python_empty_terminal(
+    status: ToolExecutionStatus,
+    exit_code: Option<i32>,
+    context: &ToolExecutionContext<'_>,
+    started: Instant,
+) -> ToolExecutionResult {
+    let status = bound_status(status);
+    if context.execution_id.is_none() {
+        return ToolExecutionResult {
+            status,
+            content: Vec::new(),
+            duration_ms: duration_ms(started),
+            exit_code,
+            artifacts: Vec::new(),
+            truncation: None,
+            managed_output: None,
+        };
+    }
+    let Some(execution_id) = context.execution_id else {
+        unreachable!();
+    };
+    let locator = context.tool_output.background_output_path(execution_id);
+    match context
+        .tool_output
+        .open_background_output_sink(execution_id)
+    {
+        Ok(sink) => {
+            drop(sink);
+            ToolExecutionResult {
+                status,
+                content: Vec::new(),
+                duration_ms: duration_ms(started),
+                exit_code,
+                artifacts: Vec::new(),
+                truncation: None,
+                managed_output: Some(ManagedOutputContinuation::Complete { locator }),
+            }
+        }
+        Err(error) => python_storage_failure(
+            &format!("cannot open the background Python result output: {error}"),
+            exit_code,
+            context,
+            started,
+        ),
+    }
+}
+
+fn python_storage_failure(
+    error: &str,
+    exit_code: Option<i32>,
+    context: &ToolExecutionContext<'_>,
+    started: Instant,
+) -> ToolExecutionResult {
+    let error = bound_error(error);
+    let continuation =
+        context
+            .execution_id
+            .map(|execution_id| ManagedOutputContinuation::Partial {
+                locator: context.tool_output.background_output_path(execution_id),
+                diagnostic: error.clone(),
+            });
     ToolExecutionResult {
         status: ToolExecutionStatus::Failed {
-            error: bounded_output(message.as_bytes()),
+            error: error.clone(),
         },
         content: Vec::new(),
         duration_ms: duration_ms(started),
-        exit_code: None,
+        exit_code,
         artifacts: Vec::new(),
         truncation: None,
-        managed_output: None,
+        managed_output: continuation,
     }
 }
 
@@ -1518,6 +1921,19 @@ fn duration_ms(started: Instant) -> u64 {
 
 fn bounded_output(bytes: &[u8]) -> String {
     String::from_utf8_lossy(&bytes[..bytes.len().min(4096)]).into_owned()
+}
+
+fn bound_status(status: ToolExecutionStatus) -> ToolExecutionStatus {
+    match status {
+        ToolExecutionStatus::Failed { error } => ToolExecutionStatus::Failed {
+            error: bound_error(&error),
+        },
+        status => status,
+    }
+}
+
+fn bound_error(message: &str) -> String {
+    crate::tools::limits::bound_utf8_text(message.to_owned(), 1024)
 }
 
 fn shell_quote(path: &Path) -> String {
@@ -1562,7 +1978,8 @@ mod tests {
     use crate::runtime::process_runner::{
         CapturedProcessResult, ProcessOutcomeIntent, SupervisedCommandSpec, SupervisedProcessRunner,
     };
-    use crate::tools::types::ToolInvocationPolicy;
+    use crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES;
+    use crate::tools::types::{ToolExecutionStatus, ToolInvocationPolicy, ToolResultContent};
     use futures_util::future::BoxFuture;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
@@ -2383,10 +2800,47 @@ mod tests {
         };
     }
 
+    /// Returns the shell arguments of the private Python invocation command.
+    /// Test runners use this only to emulate the runtime-owned result
+    /// transport at the same boundary as the production harness.
+    fn private_python_arguments(command: &str) -> Vec<String> {
+        let mut arguments = Vec::new();
+        let mut current = String::new();
+        let mut quoted = false;
+        let mut escaped = false;
+        for character in command.chars() {
+            if escaped {
+                current.push(character);
+                escaped = false;
+            } else if character == '\\' && quoted {
+                escaped = true;
+            } else if character == '\'' {
+                quoted = !quoted;
+            } else if character.is_whitespace() && !quoted {
+                if !current.is_empty() {
+                    arguments.push(std::mem::take(&mut current));
+                }
+            } else {
+                current.push(character);
+            }
+        }
+        if !current.is_empty() {
+            arguments.push(current);
+        }
+        arguments
+    }
+
+    fn write_private_python_success(spec: &SupervisedCommandSpec, value: &str) {
+        let arguments = private_python_arguments(&spec.command);
+        assert_eq!(arguments.len(), 7, "private Python command arguments");
+        std::fs::write(&arguments[5], br#"{"ok":true}"#).expect("status transport");
+        std::fs::write(&arguments[6], value).expect("logical result transport");
+    }
+
     /// A scripted execution runner that reproduces the tool's own
     /// filesystem behavior at whatever writable working directory the
     /// executor gave it — one relative write and one self-modification of
-    /// the module file — then answers with a valid success envelope. It
+    /// the module file — then answers with the private status/result transport. It
     /// records every command with its cwd.
     #[derive(Clone, Default)]
     struct ToolWriteSimulatingRunner {
@@ -2412,11 +2866,113 @@ mod tests {
                 b"def main(arguments):\n    return 'tampered'\n",
             )
             .expect("the simulated self-modification");
+            write_private_python_success(&spec, r#""ok""#);
             Box::pin(async move {
                 Ok(CapturedProcessResult {
                     exit_code: Some(0),
                     intent: ProcessOutcomeIntent::Completed,
-                    stdout: br#"{"ok":true,"value":"ok"}"#.to_vec(),
+                    stdout: b"diagnostic output\n".to_vec(),
+                    stderr: Vec::new(),
+                })
+            })
+        }
+    }
+
+    /// A process-boundary fixture that writes the private status/result
+    /// transports exactly where the production harness writes them. Stdout
+    /// is deliberately only diagnostic bytes, proving that the logical
+    /// result no longer depends on generic process capture.
+    #[derive(Clone)]
+    struct LogicalResultRunner {
+        result: Arc<Vec<u8>>,
+        status: &'static [u8],
+    }
+
+    impl LogicalResultRunner {
+        fn success(result: impl Into<Vec<u8>>) -> Self {
+            Self {
+                result: Arc::new(result.into()),
+                status: br#"{"ok":true}"#,
+            }
+        }
+    }
+
+    impl SupervisedProcessRunner for LogicalResultRunner {
+        fn run(
+            &self,
+            spec: SupervisedCommandSpec,
+            _control: Option<crate::runtime::process_runner::RunnerTestControl>,
+        ) -> BoxFuture<'_, Result<CapturedProcessResult, String>> {
+            let arguments = private_python_arguments(&spec.command);
+            assert_eq!(arguments.len(), 7, "private Python command arguments");
+            std::fs::write(&arguments[5], self.status).expect("status transport");
+            std::fs::write(&arguments[6], self.result.as_ref()).expect("result transport");
+            Box::pin(async {
+                Ok(CapturedProcessResult {
+                    exit_code: Some(0),
+                    intent: ProcessOutcomeIntent::Completed,
+                    stdout: b"diagnostic bytes that are independent of the result\n".to_vec(),
+                    stderr: Vec::new(),
+                })
+            })
+        }
+    }
+
+    /// A deterministic process-boundary gate. The private transports are
+    /// ready, but the supervised command does not return until the test
+    /// releases it; this lets cancellation win before Python normalization
+    /// writes the final result to the dispatch-owned background sink.
+    #[derive(Clone)]
+    struct GatedLogicalResultRunner {
+        result: Arc<Vec<u8>>,
+        started: tokio::sync::watch::Sender<bool>,
+        release: tokio::sync::watch::Sender<bool>,
+    }
+
+    impl GatedLogicalResultRunner {
+        fn new(
+            result: Vec<u8>,
+        ) -> (
+            Self,
+            tokio::sync::watch::Receiver<bool>,
+            tokio::sync::watch::Sender<bool>,
+        ) {
+            let (started, started_receiver) = tokio::sync::watch::channel(false);
+            let (release, _) = tokio::sync::watch::channel(false);
+            (
+                Self {
+                    result: Arc::new(result),
+                    started,
+                    release: release.clone(),
+                },
+                started_receiver,
+                release,
+            )
+        }
+    }
+
+    impl SupervisedProcessRunner for GatedLogicalResultRunner {
+        fn run(
+            &self,
+            spec: SupervisedCommandSpec,
+            _control: Option<crate::runtime::process_runner::RunnerTestControl>,
+        ) -> BoxFuture<'_, Result<CapturedProcessResult, String>> {
+            let arguments = private_python_arguments(&spec.command);
+            assert_eq!(arguments.len(), 7, "private Python command arguments");
+            std::fs::write(&arguments[5], br#"{"ok":true}"#).expect("status transport");
+            std::fs::write(&arguments[6], self.result.as_ref()).expect("result transport");
+            let started = self.started.clone();
+            let mut release = self.release.subscribe();
+            Box::pin(async move {
+                started.send_replace(true);
+                release
+                    .wait_for(|released| *released)
+                    .await
+                    .expect("release channel stays open");
+                Ok(CapturedProcessResult {
+                    exit_code: Some(0),
+                    intent: ProcessOutcomeIntent::Completed,
+                    stdout: b"diagnostic bytes independent of logical result\n".to_vec(),
                     stderr: Vec::new(),
                 })
             })
@@ -2491,6 +3047,488 @@ mod tests {
             },
         )
         .await
+    }
+
+    async fn execute_mode(
+        executor: &crate::tools::python::PythonToolExecutor,
+        tool_runtime: &crate::tools::runtime::ConversationToolRuntime,
+        mode: crate::tools::types::ToolInvocationMode,
+        execution_id: Option<&crate::runtime::identity::ToolExecutionId>,
+    ) -> crate::tools::types::ToolExecutionResult {
+        crate::tools::executor::ToolExecutor::execute(
+            executor,
+            crate::tools::types::ToolInvocation {
+                call_id: crate::runtime::identity::ToolCallId::new("call-mode"),
+                tool_id: crate::runtime::identity::ToolId::new("tool-alpha"),
+                tool_name: "alpha".to_owned(),
+                mode,
+                arguments: serde_json::json!({}),
+            },
+            crate::tools::executor::ToolExecutionContext::new(
+                tool_runtime.conversation_id(),
+                execution_id,
+                crate::runtime::ExecutionCancellation::detached(
+                    crate::runtime::CancellationSignal::new(),
+                    crate::runtime::types::CancellationReason::UserRequested,
+                ),
+                tool_runtime.workspace(),
+                &NoProgress,
+                tool_runtime.artifacts(),
+                tool_runtime.tool_output(),
+                tool_runtime.environment(),
+                None,
+            ),
+        )
+        .await
+    }
+
+    fn json_string_with_exact_bytes(bytes: usize) -> Vec<u8> {
+        assert!(bytes >= 2);
+        format!("\"{}\"", "x".repeat(bytes - 2)).into_bytes()
+    }
+
+    fn assert_no_foreground_spill(runtime: &crate::tools::runtime::ConversationToolRuntime) {
+        assert_eq!(
+            std::fs::read_dir(runtime.tool_output().root().join("results"))
+                .expect("results directory")
+                .count(),
+            0,
+            "small foreground Python results allocate no spill"
+        );
+    }
+
+    /// The exact foreground preview boundary keeps Python's normal JSON
+    /// result semantics and does not allocate a spill.
+    #[tokio::test]
+    async fn foreground_python_result_at_preview_boundary_is_direct_json() {
+        let directory = tempfile::tempdir().expect("directory");
+        let raw = json_string_with_exact_bytes(FOREGROUND_TOOL_RESULT_PREVIEW_BYTES);
+        let runner = Arc::new(LogicalResultRunner::success(raw));
+        let package = test_package();
+        let (_store, _published, executor, runtime) =
+            executor_fixture(&directory, runner, &package);
+        let result = execute_once(&executor, &runtime).await;
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+        assert!(matches!(
+            result.content.first(),
+            Some(ToolResultContent::Json { .. })
+        ));
+        assert!(result.managed_output.is_none());
+        assert!(result.truncation.is_none());
+        assert_no_foreground_spill(&runtime);
+    }
+
+    /// One byte over the same boundary remains semantic success but becomes
+    /// a single complete managed-output spill with a bounded typed preview.
+    #[tokio::test]
+    async fn foreground_python_result_one_byte_over_boundary_spills_once() {
+        let directory = tempfile::tempdir().expect("directory");
+        let raw = json_string_with_exact_bytes(FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1);
+        let expected = raw.clone();
+        let runner = Arc::new(LogicalResultRunner::success(raw));
+        let package = test_package();
+        let (_store, _published, executor, runtime) =
+            executor_fixture(&directory, runner, &package);
+        let result = execute_once(&executor, &runtime).await;
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+        let Some(crate::tools::types::ManagedOutputContinuation::Complete { locator }) =
+            &result.managed_output
+        else {
+            panic!("oversized Python result must retain Complete output: {result:?}");
+        };
+        assert_eq!(std::fs::read(locator).expect("complete spill"), expected);
+        assert_eq!(
+            std::fs::read_dir(runtime.tool_output().root().join("results"))
+                .expect("results directory")
+                .count(),
+            1,
+            "exactly one foreground Python spill is allocated"
+        );
+        assert!(matches!(
+            result.content.first(),
+            Some(ToolResultContent::Text(text)) if text.text.len() <= FOREGROUND_TOOL_RESULT_PREVIEW_BYTES
+        ));
+        assert!(result
+            .content
+            .iter()
+            .any(|content| matches!(content, ToolResultContent::Text(text) if text.text.contains("Read or Grep"))));
+        assert_eq!(
+            result
+                .truncation
+                .as_ref()
+                .and_then(|state| state.original_bytes),
+            Some((FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1) as u64)
+        );
+    }
+
+    /// Escaped JSON and multibyte Unicode stay valid at the real executor
+    /// boundary; the oversized preview never splits a code point while the
+    /// spill preserves the exact transport bytes.
+    #[tokio::test]
+    async fn foreground_python_json_escaping_and_unicode_are_valid() {
+        let directory = tempfile::tempdir().expect("directory");
+        // Include JSON escape sequences as well as a multibyte scalar close
+        // to the byte boundary. The transport itself is valid JSON; only its
+        // bounded model-facing projection is allowed to be textual preview.
+        let mut value = String::from("\"line\\n\\\"");
+        while value.len() <= FOREGROUND_TOOL_RESULT_PREVIEW_BYTES {
+            value.push('😀');
+        }
+        value.push('"');
+        let raw = value.into_bytes();
+        assert!(raw.len() > FOREGROUND_TOOL_RESULT_PREVIEW_BYTES);
+        let runner = Arc::new(LogicalResultRunner::success(raw.clone()));
+        let package = test_package();
+        let (_store, _published, executor, runtime) =
+            executor_fixture(&directory, runner, &package);
+        let result = execute_once(&executor, &runtime).await;
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+        assert!(result.content.iter().all(|content| match content {
+            ToolResultContent::Text(text) => std::str::from_utf8(text.text.as_bytes()).is_ok(),
+            _ => true,
+        }));
+        let Some(crate::tools::types::ManagedOutputContinuation::Complete { locator }) =
+            &result.managed_output
+        else {
+            panic!("Unicode JSON result must be complete in managed output");
+        };
+        assert_eq!(std::fs::read(locator).expect("Unicode spill"), raw);
+        assert!(
+            serde_json::from_slice::<serde_json::Value>(
+                &std::fs::read(locator).expect("Unicode spill")
+            )
+            .is_ok()
+        );
+    }
+
+    /// A successful result much larger than the old 64 KiB process-capture
+    /// ceiling is still Success because the logical transport is a file,
+    /// while Rust streams it into the one managed spill.
+    #[tokio::test]
+    async fn foreground_python_result_over_old_process_capture_limit_stays_successful() {
+        let directory = tempfile::tempdir().expect("directory");
+        let raw = json_string_with_exact_bytes(100_000);
+        let runner = Arc::new(LogicalResultRunner::success(raw.clone()));
+        let package = test_package();
+        let (_store, _published, executor, runtime) =
+            executor_fixture(&directory, runner, &package);
+        let result = execute_once(&executor, &runtime).await;
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+        let Some(crate::tools::types::ManagedOutputContinuation::Complete { locator }) =
+            &result.managed_output
+        else {
+            panic!("large Python result must remain retrievable");
+        };
+        assert_eq!(std::fs::read(locator).expect("large spill"), raw);
+    }
+
+    /// Foreground storage failures are explicit: allocation has no locator,
+    /// while a write failure retains only a typed Partial locator.
+    #[tokio::test]
+    async fn foreground_python_storage_failures_never_claim_complete() {
+        let package = test_package();
+        let raw = json_string_with_exact_bytes(FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1);
+
+        let allocation_directory = tempfile::tempdir().expect("allocation directory");
+        let allocation_runner = Arc::new(LogicalResultRunner::success(raw.clone()));
+        let (_store, _published, allocation_executor, allocation_runtime) =
+            executor_fixture(&allocation_directory, allocation_runner, &package);
+        allocation_runtime
+            .tool_output()
+            .set_force_open_failures(true);
+        let allocation_result = execute_once(&allocation_executor, &allocation_runtime).await;
+        assert!(matches!(
+            allocation_result.status,
+            ToolExecutionStatus::Failed { .. }
+        ));
+        assert!(matches!(
+            allocation_result.managed_output,
+            Some(crate::tools::types::ManagedOutputContinuation::Unavailable { .. })
+        ));
+
+        let write_directory = tempfile::tempdir().expect("write directory");
+        let write_runner = Arc::new(LogicalResultRunner::success(raw));
+        let (_store, _published, write_executor, write_runtime) =
+            executor_fixture(&write_directory, write_runner, &package);
+        write_runtime.tool_output().fail_writes_after(0);
+        let write_result = execute_once(&write_executor, &write_runtime).await;
+        assert!(matches!(
+            write_result.status,
+            ToolExecutionStatus::Failed { .. }
+        ));
+        assert!(matches!(
+            write_result.managed_output,
+            Some(crate::tools::types::ManagedOutputContinuation::Partial { .. })
+        ));
+    }
+
+    /// Background Python uses the path allocated before dispatch as its only
+    /// result identity; even an oversized final value never creates a
+    /// secondary `results/result_N.txt` spill.
+    #[tokio::test]
+    async fn background_python_reuses_the_dispatch_owned_locator() {
+        let directory = tempfile::tempdir().expect("directory");
+        let raw = json_string_with_exact_bytes(100_000);
+        let runner = Arc::new(LogicalResultRunner::success(raw.clone()));
+        let package = test_package();
+        let (_store, _published, executor, runtime) =
+            executor_fixture(&directory, runner, &package);
+        let execution_id = crate::runtime::identity::ToolExecutionId::background(1);
+        let advertised = runtime
+            .tool_output()
+            .allocate_background_output(&execution_id)
+            .expect("dispatch-owned output");
+        let result = execute_mode(
+            &executor,
+            &runtime,
+            crate::tools::types::ToolInvocationMode::Background,
+            Some(&execution_id),
+        )
+        .await;
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+        assert_eq!(
+            result.managed_output,
+            Some(crate::tools::types::ManagedOutputContinuation::Complete {
+                locator: advertised.clone(),
+            })
+        );
+        assert_eq!(std::fs::read(&advertised).expect("background output"), raw);
+        assert_eq!(
+            std::fs::read_dir(runtime.tool_output().root().join("results"))
+                .expect("results directory")
+                .count(),
+            0,
+            "background result normalization never allocates a secondary spill"
+        );
+        assert_eq!(
+            std::fs::read_dir(runtime.tool_output().root().join("tasks"))
+                .expect("tasks directory")
+                .count(),
+            1,
+            "the dispatch-owned task output is the only managed file"
+        );
+    }
+
+    /// The real background registry path proves the accepted locator exists
+    /// before the runner starts and that terminal publication carries the
+    /// same typed locator without allocating a result spill.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn background_python_registry_reuses_one_locator_through_settlement() {
+        let directory = tempfile::tempdir().expect("directory");
+        let raw = json_string_with_exact_bytes(100_000);
+        let runner = Arc::new(LogicalResultRunner::success(raw.clone()));
+        let package = test_package();
+        let (_store, _published, executor, runtime) =
+            executor_fixture(&directory, runner, &package);
+        let executor: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(executor);
+        let invocation = crate::tools::types::ToolInvocation {
+            call_id: crate::runtime::identity::ToolCallId::new("background-python-call"),
+            tool_id: crate::runtime::identity::ToolId::new("tool-alpha"),
+            tool_name: "alpha".to_owned(),
+            mode: crate::tools::types::ToolInvocationMode::Background,
+            arguments: serde_json::json!({}),
+        };
+        let prepared = runtime
+            .background()
+            .prepare_dispatch(
+                &invocation,
+                &executor,
+                crate::tools::environment::ToolEnvironment::new(),
+                None,
+            )
+            .expect("prepare background Python dispatch");
+        let crate::tools::background::BackgroundDispatchOutcome::Accepted {
+            execution_id,
+            result: accepted,
+        } = runtime
+            .background()
+            .commit_dispatch(prepared, &crate::runtime::CancellationSignal::new())
+            .expect("commit background Python dispatch")
+        else {
+            panic!("background Python dispatch was not accepted");
+        };
+        let advertised = match &accepted.content[0] {
+            ToolResultContent::Json { value } => value["output_path"]
+                .as_str()
+                .expect("accepted output path")
+                .to_owned(),
+            content => panic!("accepted result is JSON: {content:?}"),
+        };
+        assert!(std::path::Path::new(&advertised).exists());
+        let terminal = runtime
+            .background()
+            .wait_until_terminal(&execution_id)
+            .await
+            .expect("terminal Python result");
+        let terminal_result = terminal.result.expect("terminal result");
+        assert_eq!(
+            terminal.state,
+            crate::tools::background::BackgroundLifecycle::Succeeded
+        );
+        assert_eq!(
+            terminal_result.managed_output,
+            Some(crate::tools::types::ManagedOutputContinuation::Complete {
+                locator: std::path::PathBuf::from(&advertised),
+            })
+        );
+        assert_eq!(
+            std::fs::read(&advertised).expect("complete background result"),
+            raw
+        );
+        assert_eq!(
+            std::fs::read_dir(runtime.tool_output().root().join("results"))
+                .expect("results directory")
+                .count(),
+            0,
+            "terminal Python publication creates no secondary result spill"
+        );
+        let batch = runtime
+            .mailbox()
+            .select_pending_batch()
+            .expect("terminal mailbox")
+            .expect("terminal inbound");
+        let crate::message::types::UserContentBlock::Text(text) =
+            &batch.items()[0].message().content[0]
+        else {
+            panic!("terminal Python publication is text-only");
+        };
+        assert!(text.text.len() <= crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES + 256);
+        assert!(text.text.contains(&advertised));
+        assert!(text.text.contains("Read or Grep"));
+    }
+
+    /// Cancellation can win while a Python process is still running, but the
+    /// registry settles only after the executor returns and the final logical
+    /// result has been written. The result therefore remains on the one
+    /// dispatch-owned path, and no post-settlement writer exists.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn background_python_cancellation_waits_for_final_result_write() {
+        let directory = tempfile::tempdir().expect("directory");
+        let raw = json_string_with_exact_bytes(100_000);
+        let (runner, mut started, release) = GatedLogicalResultRunner::new(raw.clone());
+        let package = test_package();
+        let (_store, _published, executor, runtime) =
+            executor_fixture(&directory, Arc::new(runner), &package);
+        let executor: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(executor);
+        let invocation = crate::tools::types::ToolInvocation {
+            call_id: crate::runtime::identity::ToolCallId::new("background-python-cancel-call"),
+            tool_id: crate::runtime::identity::ToolId::new("tool-alpha"),
+            tool_name: "alpha".to_owned(),
+            mode: crate::tools::types::ToolInvocationMode::Background,
+            arguments: serde_json::json!({}),
+        };
+        let prepared = runtime
+            .background()
+            .prepare_dispatch(
+                &invocation,
+                &executor,
+                crate::tools::environment::ToolEnvironment::new(),
+                None,
+            )
+            .expect("prepare background Python dispatch");
+        let crate::tools::background::BackgroundDispatchOutcome::Accepted {
+            execution_id,
+            result: accepted,
+        } = runtime
+            .background()
+            .commit_dispatch(prepared, &crate::runtime::CancellationSignal::new())
+            .expect("commit background Python dispatch")
+        else {
+            panic!("background Python dispatch was not accepted");
+        };
+        let advertised = match &accepted.content[0] {
+            ToolResultContent::Json { value } => value["output_path"]
+                .as_str()
+                .expect("accepted output path")
+                .to_owned(),
+            content => panic!("accepted result is JSON: {content:?}"),
+        };
+        assert!(std::path::Path::new(&advertised).exists());
+        started
+            .wait_for(|is_started| *is_started)
+            .await
+            .expect("gated Python process started");
+
+        let cancelling = runtime
+            .background()
+            .cancel(&execution_id)
+            .expect("cancel running Python execution");
+        assert_eq!(
+            cancelling.state,
+            crate::tools::background::BackgroundLifecycle::Cancelling
+        );
+        release.send_replace(true);
+
+        let terminal = runtime
+            .background()
+            .wait_until_terminal(&execution_id)
+            .await
+            .expect("terminal Python result");
+        assert_eq!(
+            terminal.state,
+            crate::tools::background::BackgroundLifecycle::Cancelled
+        );
+        let terminal_result = terminal.result.expect("terminal result");
+        assert_eq!(
+            terminal_result.managed_output,
+            Some(crate::tools::types::ManagedOutputContinuation::Complete {
+                locator: std::path::PathBuf::from(&advertised),
+            })
+        );
+        assert_eq!(
+            std::fs::read(&advertised).expect("complete Python output"),
+            raw
+        );
+        assert_eq!(
+            std::fs::read_dir(runtime.tool_output().root().join("results"))
+                .expect("results directory")
+                .count(),
+            0,
+            "cancellation does not create a foreground result spill"
+        );
+    }
+
+    /// A write failure after background dispatch has advertised its path is
+    /// retained as Partial at that same path; settlement never upgrades it
+    /// to Complete and never creates a second spill.
+    #[tokio::test]
+    async fn background_python_write_failure_is_partial_at_the_same_locator() {
+        let directory = tempfile::tempdir().expect("directory");
+        let raw = json_string_with_exact_bytes(100_000);
+        let runner = Arc::new(LogicalResultRunner::success(raw));
+        let package = test_package();
+        let (_store, _published, executor, runtime) =
+            executor_fixture(&directory, runner, &package);
+        let execution_id = crate::runtime::identity::ToolExecutionId::background(7);
+        let advertised = runtime
+            .tool_output()
+            .allocate_background_output(&execution_id)
+            .expect("dispatch-owned output");
+        runtime.tool_output().fail_writes_after(0);
+        let result = execute_mode(
+            &executor,
+            &runtime,
+            crate::tools::types::ToolInvocationMode::Background,
+            Some(&execution_id),
+        )
+        .await;
+        assert!(matches!(result.status, ToolExecutionStatus::Failed { .. }));
+        let Some(crate::tools::types::ManagedOutputContinuation::Partial {
+            locator,
+            diagnostic,
+        }) = result.managed_output
+        else {
+            panic!("background write failure must be Partial: {result:?}");
+        };
+        assert_eq!(locator, advertised);
+        assert!(diagnostic.contains("background result output"));
+        assert!(advertised.exists());
+        assert_eq!(
+            std::fs::read_dir(runtime.tool_output().root().join("results"))
+                .expect("results directory")
+                .count(),
+            0
+        );
     }
 
     /// `ToolVersion` immutability at execution (Issue #81): a tool that
@@ -2590,7 +3628,7 @@ mod tests {
     /// A gated execution runner: the first invocation records its command
     /// and cwd, signals that its execution bundle is live, then parks until
     /// the test releases it; every later invocation passes through. Both
-    /// answer a valid success envelope. All synchronization is explicit —
+    /// publish the private status/result transport. All synchronization is explicit —
     /// no sleeps.
     #[derive(Default)]
     struct FirstParkingRunner {
@@ -2616,10 +3654,11 @@ mod tests {
                     self.entered.notify_one();
                     self.release.notified().await;
                 }
+                write_private_python_success(&spec, r#""ok""#);
                 Ok(CapturedProcessResult {
                     exit_code: Some(0),
                     intent: ProcessOutcomeIntent::Completed,
-                    stdout: br#"{"ok":true,"value":"ok"}"#.to_vec(),
+                    stdout: b"diagnostic output\n".to_vec(),
                     stderr: Vec::new(),
                 })
             })
@@ -2770,11 +3809,12 @@ mod tests {
                         .contains(&bundle.join("harness.py").display().to_string()),
                     "the executed harness is the bundle's runtime-owned one"
                 );
+                write_private_python_success(&spec, r#""ok""#);
                 Box::pin(async move {
                     Ok(CapturedProcessResult {
                         exit_code: Some(0),
                         intent: ProcessOutcomeIntent::Completed,
-                        stdout: br#"{"ok":true,"value":"ok"}"#.to_vec(),
+                        stdout: b"diagnostic output\n".to_vec(),
                         stderr: Vec::new(),
                     })
                 })
@@ -3307,11 +4347,15 @@ mod tests {
         std::fs::write(&harness, super::PYTHON_HARNESS).expect("harness");
         let input = dir.path().join("input.json");
         std::fs::write(&input, br#"{"question": 42}"#).expect("input");
+        let status = dir.path().join("status.json");
+        let result = dir.path().join("result.json");
         let output = std::process::Command::new(&python)
             .arg(&harness)
             .arg(&source)
             .arg("tool:main")
             .arg(&input)
+            .arg(&status)
+            .arg(&result)
             .current_dir(&source)
             .output()
             .expect("run the harness");
@@ -3320,11 +4364,17 @@ mod tests {
             "harness failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        let stdout = String::from_utf8(output.stdout).expect("harness stdout");
-        assert!(
-            stdout.contains("\"ok\":true"),
-            "the tool executed through the harness: {stdout}"
+        assert_eq!(
+            std::fs::read(&status).expect("harness status"),
+            br#"{"ok":true}"#,
+            "the harness published the small completion protocol"
         );
+        assert_eq!(
+            std::fs::read(&result).expect("harness result"),
+            br#"{"echo":{"question":42}}"#,
+            "the harness published the logical result separately from stdout"
+        );
+        assert!(output.stdout.is_empty(), "stdout remains diagnostics only");
         let entries = super::collect_files(&source).expect("source files");
         assert_eq!(
             entries

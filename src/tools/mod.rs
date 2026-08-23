@@ -20,6 +20,7 @@ pub mod locator;
 pub mod managed_output;
 pub mod mcp;
 pub mod native;
+pub(crate) mod output;
 pub mod python;
 pub mod runtime;
 pub mod schema;

@@ -1388,34 +1388,49 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   alignment, and it is never moved, renamed, or re-schema'd to make the
   native tool directory look uniform.
 - Model-facing output is bounded by named limits. Text overflow is not an
-  artifact (Issue #86): Bash output is *text*, and the bounded head/tail
-  preview is the canonical replayable record. The managed tool-output
-  store owns two deliberately distinct lifecycles over one authorized
-  read-only root. Foreground output is context-overflow storage: only
-  when the combined text crosses its preview bound does the capture
-  lazily allocate one result spill (`tool-output/results/result_N.txt`,
-  monotonic per-conversation sequence, `create_new`), write the retained
-  complete prefix, and stream every subsequent fragment into it; the
-  absolute spill path is runtime-owned typed continuation metadata
+  artifact (Issue #86): native Bash, MCP, and Python logical results all
+  cross the shared Tool Plane normalization seam in `tools/output.rs`. The
+  managed tool-output store owns two deliberately distinct lifecycles over
+  one authorized read-only root. `FOREGROUND_TOOL_RESULT_PREVIEW_BYTES`
+  (currently 16 KiB) is the shared foreground projection threshold;
+  `MAX_MODEL_TOOL_RESULT_BYTES` (currently 64 KiB) is the absolute
+  canonical/model-facing safety bound; and managed output is complete
+  auxiliary execution text, not canonical history or a semantic artifact.
+  Foreground output at or below the threshold remains a direct result and
+  creates no file. Once the complete deterministic representation crosses
+  it, normalization lazily allocates exactly one result spill
+  (`tool-output/results/result_N.txt`, monotonic per-conversation sequence,
+  `create_new`), writes the complete representation once, and publishes a
+  bounded deterministic preview plus typed continuation metadata
   (`ToolExecutionResult::managed_output`, never a magic tool-JSON key,
   never a `FileReference`, never a semantic artifact, and never a model
-  `File` modality), which the producer presents inside its ordinary
-  textual result content so the model can Read/Grep it explicitly. **Foreground** output
-  at or below the bound creates no file at all; a spill allocation or
-  write failure is an explicit invocation failure, never silently lost
-  output. A **background** execution instead owns a live-output channel
-  from the dispatch commit point on (`tool-output/tasks/exec_N.output`):
-  the file is allocated before the accepted result advertises its
-  absolute path (`output_path`) with Read/Grep continuation guidance,
-  decoded output is appended from the first byte on so the model can
-  Read/Grep it while the execution runs, and the settlement notification
-  reuses the exact same path when it already represents the complete
-  textual output — no second file is created for the same payload. A
-  distinct settled-result spill is legitimate only when the final logical
-  result is a different oversized payload than the live execution output.
-  An output-storage failure of an already-advertised background path
-  settles the execution as an explicit failure that names the file as
-  partial output — never as a false "complete output" claim.
+  `File` modality). Allocation failure is `Unavailable`; a write failure
+  retains the locator as `Partial`; result size alone never turns semantic
+  success into failure. The bounded preview is the canonical replayable
+  record and the model can Read/Grep the complete auxiliary path explicitly.
+  MCP content blocks are budgeted collectively, and Python's logical return
+  transport is streamed so UTF-8/JSON framing is never delegated to bounded
+  subprocess stdout capture.
+  A **background** execution instead owns one live-output channel from the
+  dispatch commit point on (`tool-output/tasks/exec_N.output`): the file is
+  allocated before the accepted result advertises its absolute path
+  (`output_path`) with Read/Grep continuation guidance. Bash appends from the
+  first byte; MCP and Python write their final complete deterministic result
+  there when it becomes available. Accepted and terminal messages reuse the
+  exact same path, no secondary `results/result_N.txt` is created, and the
+  terminal canonical projection remains bounded while structurally retaining
+  the typed locator/guidance. An output-storage failure of an
+  already-advertised background path settles as explicit `Partial`, never a
+  false `Complete` claim.
+- Background output ownership has a concrete linearization order: dispatch
+  allocation precedes accepted publication; the origin owns its sink until
+  its executor future returns; the runner invokes terminal settlement only
+  after that return; and registry terminal publication is the structural
+  settlement winner. No MCP/Python writer remains after settlement can win,
+  so cancellation cannot be followed by a late result write that mutates
+  settled output/result state. The complete managed payload remains auxiliary
+  output only; canonical history contains the bounded projection and typed
+  continuation, never the full oversized payload.
 - The advertised background live-output locator participates in EVERY
   terminal settlement after the dispatch commits — execution status and
   output completeness are independent axes, and no post-accept Bash
@@ -1428,10 +1443,10 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   healthy (the sink could not be opened after the dispatch committed)
   settles Failed with the locator as explicitly PARTIAL and a diagnostic
   naming the storage failure — never falsely Complete, never dropped.
-  Foreground Bash keeps its own spill lifecycle (lazy allocation, no
-  file below the preview bound, allocation failure is an invocation
-  failure); the post-accept axis invariant is a background-execution
-  property rooted at the dispatch commit. Every
+  Foreground Tool Plane normalization keeps its own spill lifecycle (lazy
+  allocation, no file below the preview bound, allocation failure is an
+  invocation failure); the post-accept axis invariant is a
+  background-execution property rooted at the dispatch commit. Every
   advertised path holds valid UTF-8 text: each byte stream is decoded
   with its own incremental UTF-8 decoder (invalid sequences become
   U+FFFD) before fragments are multiplexed, so a sequence split across
