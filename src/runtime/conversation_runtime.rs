@@ -313,6 +313,7 @@ use crate::model::session::{
     AttemptModelSnapshot, SessionModelConfig, SessionModelState, SessionModelView,
 };
 use crate::model::{ModelRequest, RequestIdentity, invocation::ModelInvocationError};
+use crate::publication::{PublicationAudit, PublicationFrame, PublicationStreamStart};
 use crate::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolExecutionId};
 use crate::runtime::inbound::{
     ConversationInboundMailbox, FreshInboundTurn, InboundBatch, InboundItem, InboundObserver,
@@ -4646,6 +4647,27 @@ impl AgentExecutionObserver for RuntimeObserver {
 
     fn observe_status(&self, observation: &AgentStatusObservation) {
         self.push(ConversationObservation::Status(observation.clone()));
+    }
+
+    fn observe_publication_opened(&self, attempt_id: &AttemptId, start: &PublicationStreamStart) {
+        self.push(ConversationObservation::PublicationOpened {
+            attempt_id: attempt_id.clone(),
+            start: start.clone(),
+        });
+    }
+
+    fn observe_publication(&self, attempt_id: &AttemptId, frame: &PublicationFrame) {
+        self.push(ConversationObservation::Publication {
+            attempt_id: attempt_id.clone(),
+            frame: frame.clone(),
+        });
+    }
+
+    fn observe_publication_settled(&self, attempt_id: &AttemptId, audit: &PublicationAudit) {
+        self.push(ConversationObservation::PublicationSettled {
+            attempt_id: attempt_id.clone(),
+            audit: Box::new(audit.clone()),
+        });
     }
 }
 
@@ -14814,6 +14836,7 @@ mod tests {
                     "request-completed",
                     &dead,
                     crate::events::types::RuntimeEvent::ModelRequestCompleted {
+                        request_id: snapshot.request_id.clone(),
                         finish_reason: crate::model::finish::ModelFinishReason::Stop,
                         usage: None,
                     },

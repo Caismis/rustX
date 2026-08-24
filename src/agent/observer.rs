@@ -29,6 +29,7 @@
 use crate::context::status::AgentStatus;
 use crate::events::types::RuntimeEvent;
 use crate::message::types::MessageBlock;
+use crate::publication::{PublicationAudit, PublicationFrame, PublicationStreamStart};
 use crate::runtime::identity::{AttemptId, MessageId};
 
 /// The structured Agent Status observation of one request preparation.
@@ -77,4 +78,28 @@ pub trait AgentExecutionObserver: Sync {
 
     /// Observes the one composed Agent Status of a request preparation.
     fn observe_status(&self, observation: &AgentStatusObservation);
+
+    /// Observes one publication stream opening (Issue #108).
+    ///
+    /// The observation carries the frozen stream identity: the attempt,
+    /// turn, request, and provisional message the stream is pinned to. A
+    /// projection uses it to open its in-flight read model.
+    fn observe_publication_opened(&self, attempt_id: &AttemptId, start: &PublicationStreamStart);
+
+    /// Observes one publication frame **after** its durable commit.
+    ///
+    /// This is the user-facing release point. The loop calls it only once the
+    /// frame's staging transaction — or, for the final frames, the atomic
+    /// terminal transaction — has committed, so no semantic output can reach
+    /// a Runtime Client that rustX has not durably committed for release.
+    fn observe_publication(&self, attempt_id: &AttemptId, frame: &PublicationFrame);
+
+    /// Observes one publication stream settling as an audit.
+    ///
+    /// The audit is an upper bound on what may have been displayed, never
+    /// proof of perception, and its tool-call entries are model proposals
+    /// that were never authorized or executed. A projection must be able to
+    /// present them as such and must never treat them as canonical
+    /// conversation history.
+    fn observe_publication_settled(&self, attempt_id: &AttemptId, audit: &PublicationAudit);
 }

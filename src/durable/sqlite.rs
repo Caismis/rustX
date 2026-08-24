@@ -28,7 +28,14 @@ use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvel
 use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock, UserSource};
 use crate::model::snapshot::RequestSnapshot;
 use crate::model::types::ModelRequest;
-use crate::runtime::identity::{AgentId, ConversationId, EventId, MessageId, RequestId};
+use crate::publication::{
+    PublicationAudit, PublicationFrame, PublicationPayload, PublicationSettlement,
+    PublicationStreamRecord, PublicationStreamStart, consolidate_audit_content,
+};
+use crate::runtime::identity::{
+    AgentId, AttemptId, ConversationId, EventId, MessageId, PublicationStreamId, RequestId,
+    ToolCallId, TurnId,
+};
 use crate::runtime::inbound::InboundSequence;
 
 use super::inbox::{
@@ -41,13 +48,21 @@ use super::inbox::{
 /// The only schema accepted by this pre-production store. Incompatible
 /// databases fail explicitly; there is no migration or legacy reader.
 ///
-/// Version 3 freezes the Issue #106 durable format change: canonical System
+/// Version 3 froze the Issue #106 durable format change: canonical System
 /// messages were removed and `RequestSnapshot` gained exact ordered System
-/// Sections plus the process-local resource revision. An older development
-/// database must fail at store open with an explicit
-/// [`ConversationStoreError::SchemaVersionMismatch`] rather than a later
-/// accidental JSON decode failure.
-pub const SQLITE_SCHEMA_VERSION: i64 = 3;
+/// Sections plus the process-local resource revision.
+///
+/// Version 4 freezes the Issue #108 durable publication plane: the
+/// `publication_streams`, `publication_frames`, `publication_proposals`, and
+/// `publication_audits` tables, the `request_snapshots.completed_sequence`
+/// P-marker column, and the `ModelRequestCompleted` / `ModelRequestFailed`
+/// payload change that names the exact request. A v3 database has no
+/// publication plane and its request-outcome facts cannot be attributed to a
+/// request, so an older development database must fail at store open with an
+/// explicit [`ConversationStoreError::SchemaVersionMismatch`] rather than a
+/// later accidental JSON decode failure. There is no migration and no
+/// compatibility path.
+pub const SQLITE_SCHEMA_VERSION: i64 = 4;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -120,6 +135,12 @@ pub struct SqliteConversationStore {
     pub(crate) compaction_fault_script: Arc<Mutex<VecDeque<CompactionFaultOperation>>>,
     #[cfg(test)]
     pub(crate) request_start_fault_script: Arc<Mutex<VecDeque<RequestStartFaultOperation>>>,
+    #[cfg(test)]
+    pub(crate) fail_publication_frames_remaining: Arc<AtomicUsize>,
+    #[cfg(test)]
+    pub(crate) fail_publication_terminal_remaining: Arc<AtomicUsize>,
+    #[cfg(test)]
+    pub(crate) fail_publication_audit_remaining: Arc<AtomicUsize>,
 }
 
 impl std::fmt::Debug for SqliteConversationStore {
@@ -200,6 +221,12 @@ impl SqliteConversationStore {
             compaction_fault_script: Arc::new(Mutex::new(VecDeque::new())),
             #[cfg(test)]
             request_start_fault_script: Arc::new(Mutex::new(VecDeque::new())),
+            #[cfg(test)]
+            fail_publication_frames_remaining: Arc::new(AtomicUsize::new(0)),
+            #[cfg(test)]
+            fail_publication_terminal_remaining: Arc::new(AtomicUsize::new(0)),
+            #[cfg(test)]
+            fail_publication_audit_remaining: Arc::new(AtomicUsize::new(0)),
         })
     }
 
@@ -207,6 +234,27 @@ impl SqliteConversationStore {
         self.conn
             .lock()
             .map_err(|_| storage("the conversation store connection is poisoned"))
+    }
+
+    /// Fails the next `count` publication staging commits.
+    #[cfg(test)]
+    pub(crate) fn arm_fail_publication_frames_times(&self, count: usize) {
+        self.fail_publication_frames_remaining
+            .store(count, Ordering::SeqCst);
+    }
+
+    /// Fails the next `count` publication terminal (U) commits.
+    #[cfg(test)]
+    pub(crate) fn arm_fail_publication_terminal_times(&self, count: usize) {
+        self.fail_publication_terminal_remaining
+            .store(count, Ordering::SeqCst);
+    }
+
+    /// Fails the next `count` publication audit terminalizations.
+    #[cfg(test)]
+    pub(crate) fn arm_fail_publication_audit_times(&self, count: usize) {
+        self.fail_publication_audit_remaining
+            .store(count, Ordering::SeqCst);
     }
 
     #[cfg(test)]
@@ -1237,6 +1285,553 @@ impl ConversationStore for SqliteConversationStore {
             next_sequence: next,
         })
     }
+
+    fn open_publication_stream(
+        &self,
+        start: &PublicationStreamStart,
+    ) -> Result<(), ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("publication open transaction: {error}")))?;
+        if let Some(existing) = read_publication_stream(&transaction, &start.stream_id)? {
+            // Re-opening is idempotent only for the identical frozen identity:
+            // a stream may never be re-associated with another request,
+            // attempt, turn, or provisional message.
+            if existing.start != *start {
+                return Err(ConversationStoreError::PublicationViolation(format!(
+                    "publication stream {} is already open under a different request generation",
+                    start.stream_id
+                )));
+            }
+            if existing.settlement.is_some() {
+                return Err(ConversationStoreError::PublicationViolation(format!(
+                    "publication stream {} already settled and cannot reopen",
+                    start.stream_id
+                )));
+            }
+            return Ok(());
+        }
+        transaction
+            .execute(
+                "INSERT INTO publication_streams(stream_id,attempt_id,turn_id,request_id,message_id,next_frame_sequence,terminal_sequence,settlement)
+                 VALUES(?1,?2,?3,?4,?5,0,NULL,NULL)",
+                params![
+                    start.stream_id.as_str(),
+                    start.attempt_id.as_str(),
+                    start.turn_id.as_str(),
+                    start.request_id.as_str(),
+                    start.message_id.as_str()
+                ],
+            )
+            .map_err(|error| storage(format!("open publication stream: {error}")))?;
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("publication open commit: {error}")))?;
+        Ok(())
+    }
+
+    fn stage_publication_frames(
+        &self,
+        frames: &[PublicationFrame],
+    ) -> Result<(), ConversationStoreError> {
+        if frames.is_empty() {
+            return Err(ConversationStoreError::PublicationViolation(
+                "a publication staging transaction must carry at least one frame".to_owned(),
+            ));
+        }
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("publication staging transaction: {error}")))?;
+        #[cfg(test)]
+        if Self::consume(&self.fail_publication_frames_remaining) {
+            return Err(storage("fault injected: publication staging commit"));
+        }
+        let stream = stage_frames_tx(&transaction, frames)?;
+        if stream.terminal_sequence.is_some() {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "publication stream {} already reached its terminal boundary",
+                stream.start.stream_id
+            )));
+        }
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("publication staging commit: {error}")))?;
+        Ok(())
+    }
+
+    fn commit_publication_terminal(
+        &self,
+        stream_id: &PublicationStreamId,
+        frames: &[PublicationFrame],
+    ) -> Result<(), ConversationStoreError> {
+        if frames.is_empty() {
+            return Err(ConversationStoreError::PublicationViolation(
+                "the publication terminal transaction must carry a final frame".to_owned(),
+            ));
+        }
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("publication terminal transaction: {error}")))?;
+        #[cfg(test)]
+        if Self::consume(&self.fail_publication_terminal_remaining) {
+            return Err(storage("fault injected: publication terminal commit"));
+        }
+        let stream = stage_frames_tx(&transaction, frames)?;
+        if stream.start.stream_id != *stream_id {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "terminal frames belong to publication stream {}, not {stream_id}",
+                stream.start.stream_id
+            )));
+        }
+        if stream.terminal_sequence.is_some() {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "publication stream {stream_id} already committed its terminal boundary"
+            )));
+        }
+        // U may never precede P: the exact provider request's durable outcome
+        // must already exist.
+        if !request_outcome_is_durable(&transaction, &stream.start.request_id)? {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "publication terminal for {stream_id} has no durable provider outcome for request {}",
+                stream.start.request_id
+            )));
+        }
+        let terminal_sequence = frames
+            .last()
+            .map(|frame| frame.sequence)
+            .ok_or_else(|| storage("terminal frames are empty"))?;
+        // The final frame and the terminal marker share this one transaction.
+        transaction
+            .execute(
+                "UPDATE publication_streams SET terminal_sequence=?1 WHERE stream_id=?2",
+                params![seq_to_i64(terminal_sequence)?, stream_id.as_str()],
+            )
+            .map_err(|error| storage(format!("commit publication terminal: {error}")))?;
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("publication terminal commit: {error}")))?;
+        Ok(())
+    }
+
+    fn commit_canonical_publication(
+        &self,
+        stream_id: &PublicationStreamId,
+        message: &MessageBlock,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        validate_canonical_event_for_message(message, &event.event)?;
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("canonical publication transaction: {error}")))?;
+        let stream = require_publication_stream(&transaction, stream_id)?;
+        if let Some(settlement) = stream.settlement {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "publication stream {stream_id} already settled as {}; canonical acceptance is permanently forbidden",
+                settlement.as_str()
+            )));
+        }
+        // C may never precede U for a published stream.
+        if stream.terminal_sequence.is_none() {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "publication stream {stream_id} has no durable publication terminal; canonical acceptance requires U"
+            )));
+        }
+        if crate::conversation::message_id_of(message) != stream.start.message_id {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "canonical acceptance of publication stream {stream_id} names a foreign message identity"
+            )));
+        }
+        ensure_surface_head(&transaction)?;
+        append_message_and_surface(&transaction, message)?;
+        #[cfg(test)]
+        if Self::consume(&self.fail_event_remaining) {
+            return Err(storage("fault injected: canonical publication commit"));
+        }
+        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        // The canonical transition clears the lifecycle staging of the stream:
+        // the Ledger is now the long-term authority and no transient frame
+        // survives it.
+        clear_publication_staging(&transaction, stream_id)?;
+        transaction
+            .execute(
+                "DELETE FROM publication_proposals WHERE stream_id=?1",
+                [stream_id.as_str()],
+            )
+            .map_err(|error| storage(format!("clear publication proposals: {error}")))?;
+        transaction
+            .execute(
+                "UPDATE publication_streams SET settlement=?1 WHERE stream_id=?2",
+                params![
+                    PublicationSettlement::Canonical.as_str(),
+                    stream_id.as_str()
+                ],
+            )
+            .map_err(|error| storage(format!("settle canonical publication: {error}")))?;
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("canonical publication commit: {error}")))?;
+        Ok(persisted)
+    }
+
+    fn terminalize_publication_audit(
+        &self,
+        stream_id: &PublicationStreamId,
+        timestamp: DateTime<Utc>,
+    ) -> Result<PublicationAudit, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("publication audit transaction: {error}")))?;
+        #[cfg(test)]
+        if Self::consume(&self.fail_publication_audit_remaining) {
+            return Err(storage("fault injected: publication audit commit"));
+        }
+        let stream = require_publication_stream(&transaction, stream_id)?;
+        if let Some(settlement) = stream.settlement {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "publication stream {stream_id} already settled as {}",
+                settlement.as_str()
+            )));
+        }
+        // The kind is derived from durable evidence, never supplied: U
+        // present means the released output was complete but never accepted;
+        // U absent means publication never reached its own terminal boundary.
+        let kind = stream.audit_kind();
+        let executed: Option<String> = transaction
+            .query_row(
+                "SELECT call_id FROM publication_proposals WHERE stream_id=?1 AND executed=1 LIMIT 1",
+                [stream_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| storage(format!("publication proposal execution probe: {error}")))?;
+        if let Some(call_id) = executed {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "publication stream {stream_id} cannot terminalize as an audit: proposal {call_id} already has a Tool Plane execution fact"
+            )));
+        }
+        let frames = read_publication_frames(&transaction, stream_id)?;
+        let audit = PublicationAudit {
+            stream_id: stream_id.clone(),
+            attempt_id: stream.start.attempt_id.clone(),
+            turn_id: stream.start.turn_id.clone(),
+            request_id: stream.start.request_id.clone(),
+            message_id: stream.start.message_id.clone(),
+            kind,
+            content: consolidate_audit_content(&frames),
+            settled_at: timestamp,
+        };
+        let settlement = PublicationSettlement::from(kind);
+        transaction
+            .execute(
+                "INSERT INTO publication_audits(stream_id,audit_json) VALUES(?1,?2)",
+                params![stream_id.as_str(), encode(&audit, "publication audit")?],
+            )
+            .map_err(|error| storage(format!("insert publication audit: {error}")))?;
+        // Consolidation replaces the transient frames: the durable footprint
+        // of a settled audit is one bounded object, never O(frames) rows.
+        clear_publication_staging(&transaction, stream_id)?;
+        transaction
+            .execute(
+                "UPDATE publication_proposals SET settlement=?1 WHERE stream_id=?2",
+                params![settlement.as_str(), stream_id.as_str()],
+            )
+            .map_err(|error| storage(format!("ban audited tool proposals: {error}")))?;
+        transaction
+            .execute(
+                "UPDATE publication_streams SET settlement=?1 WHERE stream_id=?2",
+                params![settlement.as_str(), stream_id.as_str()],
+            )
+            .map_err(|error| storage(format!("settle publication audit: {error}")))?;
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("publication audit commit: {error}")))?;
+        Ok(audit)
+    }
+
+    fn load_unsettled_publication_streams(
+        &self,
+    ) -> Result<Vec<PublicationStreamRecord>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT stream_id,attempt_id,turn_id,request_id,message_id,terminal_sequence,settlement
+                 FROM publication_streams WHERE settlement IS NULL ORDER BY stream_id",
+            )
+            .map_err(|error| storage(format!("unsettled publication query: {error}")))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                ))
+            })
+            .map_err(|error| storage(format!("unsettled publication rows: {error}")))?;
+        let mut records = Vec::new();
+        for row in rows {
+            let row =
+                row.map_err(|error| storage(format!("unsettled publication row: {error}")))?;
+            records.push(publication_record(row)?);
+        }
+        Ok(records)
+    }
+
+    fn load_publication_audit(
+        &self,
+        stream_id: &PublicationStreamId,
+    ) -> Result<Option<PublicationAudit>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let json: Option<String> = connection
+            .query_row(
+                "SELECT audit_json FROM publication_audits WHERE stream_id=?1",
+                [stream_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| storage(format!("publication audit read: {error}")))?;
+        json.map(|json| decode(&json, "publication audit"))
+            .transpose()
+    }
+}
+
+/// Reads one publication stream record, when it exists.
+fn read_publication_stream(
+    transaction: &Transaction<'_>,
+    stream_id: &PublicationStreamId,
+) -> Result<Option<PublicationStreamRecord>, ConversationStoreError> {
+    let row = transaction
+        .query_row(
+            "SELECT stream_id,attempt_id,turn_id,request_id,message_id,terminal_sequence,settlement
+             FROM publication_streams WHERE stream_id=?1",
+            [stream_id.as_str()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| storage(format!("publication stream read: {error}")))?;
+    row.map(publication_record).transpose()
+}
+
+fn require_publication_stream(
+    transaction: &Transaction<'_>,
+    stream_id: &PublicationStreamId,
+) -> Result<PublicationStreamRecord, ConversationStoreError> {
+    read_publication_stream(transaction, stream_id)?.ok_or_else(|| {
+        ConversationStoreError::PublicationViolation(format!(
+            "publication stream {stream_id} was never opened"
+        ))
+    })
+}
+
+type PublicationStreamRow = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    Option<i64>,
+    Option<String>,
+);
+
+fn publication_record(
+    row: PublicationStreamRow,
+) -> Result<PublicationStreamRecord, ConversationStoreError> {
+    let (stream_id, attempt_id, turn_id, request_id, message_id, terminal_sequence, settlement) =
+        row;
+    let settlement = settlement
+        .map(|value| {
+            PublicationSettlement::parse(&value).ok_or_else(|| {
+                ConversationStoreError::InvalidReference(format!(
+                    "publication stream {stream_id} has an unknown settlement {value}"
+                ))
+            })
+        })
+        .transpose()?;
+    let terminal_sequence = terminal_sequence
+        .map(|value| nonnegative(value, "publication terminal sequence"))
+        .transpose()?;
+    Ok(PublicationStreamRecord {
+        start: PublicationStreamStart {
+            stream_id: PublicationStreamId::new(stream_id),
+            attempt_id: AttemptId::new(attempt_id),
+            turn_id: TurnId::new(turn_id),
+            request_id: RequestId::new(request_id),
+            message_id: MessageId::new(message_id),
+        },
+        terminal_sequence,
+        settlement,
+    })
+}
+
+/// Stages one contiguous run of frames onto an open unsettled stream and
+/// returns the stream as it was before the staging.
+fn stage_frames_tx(
+    transaction: &Transaction<'_>,
+    frames: &[PublicationFrame],
+) -> Result<PublicationStreamRecord, ConversationStoreError> {
+    let stream_id = &frames[0].stream_id;
+    if frames.iter().any(|frame| frame.stream_id != *stream_id) {
+        return Err(ConversationStoreError::PublicationViolation(
+            "one publication transaction may only stage frames of one stream".to_owned(),
+        ));
+    }
+    let stream = require_publication_stream(transaction, stream_id)?;
+    if let Some(settlement) = stream.settlement {
+        return Err(ConversationStoreError::PublicationViolation(format!(
+            "publication stream {stream_id} already settled as {}",
+            settlement.as_str()
+        )));
+    }
+    let mut next: i64 = transaction
+        .query_row(
+            "SELECT next_frame_sequence FROM publication_streams WHERE stream_id=?1",
+            [stream_id.as_str()],
+            |row| row.get(0),
+        )
+        .map_err(|error| storage(format!("publication sequence read: {error}")))?;
+    for frame in frames {
+        if frame.message_id != stream.start.message_id {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "publication frame of {stream_id} names a foreign message identity"
+            )));
+        }
+        let expected = nonnegative(next, "publication frame sequence")?;
+        if frame.sequence != expected {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "publication frame of {stream_id} is sequence {} where {expected} was required",
+                frame.sequence
+            )));
+        }
+        transaction
+            .execute(
+                "INSERT INTO publication_frames(stream_id,sequence,frame_json) VALUES(?1,?2,?3)",
+                params![
+                    stream_id.as_str(),
+                    seq_to_i64(frame.sequence)?,
+                    encode(frame, "publication frame")?
+                ],
+            )
+            .map_err(|error| storage(format!("stage publication frame: {error}")))?;
+        if let PublicationPayload::ProposedToolCallStarted { call, .. } = &frame.payload {
+            // A released proposal is registered so the Tool Plane can never
+            // execute one that belongs to a settled audit, and so an audit can
+            // never terminalize over a proposal that already executed.
+            transaction
+                .execute(
+                    "INSERT OR IGNORE INTO publication_proposals(call_id,stream_id,executed,settlement) VALUES(?1,?2,0,NULL)",
+                    params![call.id.as_str(), stream_id.as_str()],
+                )
+                .map_err(|error| storage(format!("register tool proposal: {error}")))?;
+        }
+        next += 1;
+    }
+    transaction
+        .execute(
+            "UPDATE publication_streams SET next_frame_sequence=?1 WHERE stream_id=?2",
+            params![next, stream_id.as_str()],
+        )
+        .map_err(|error| storage(format!("advance publication sequence: {error}")))?;
+    Ok(stream)
+}
+
+fn read_publication_frames(
+    transaction: &Transaction<'_>,
+    stream_id: &PublicationStreamId,
+) -> Result<Vec<PublicationFrame>, ConversationStoreError> {
+    let mut statement = transaction
+        .prepare("SELECT frame_json FROM publication_frames WHERE stream_id=?1 ORDER BY sequence")
+        .map_err(|error| storage(format!("publication frame query: {error}")))?;
+    let rows = statement
+        .query_map([stream_id.as_str()], |row| row.get::<_, String>(0))
+        .map_err(|error| storage(format!("publication frame rows: {error}")))?;
+    let mut frames = Vec::new();
+    for row in rows {
+        let json = row.map_err(|error| storage(format!("publication frame row: {error}")))?;
+        frames.push(decode(&json, "publication frame")?);
+    }
+    Ok(frames)
+}
+
+fn clear_publication_staging(
+    transaction: &Transaction<'_>,
+    stream_id: &PublicationStreamId,
+) -> Result<(), ConversationStoreError> {
+    transaction
+        .execute(
+            "DELETE FROM publication_frames WHERE stream_id=?1",
+            [stream_id.as_str()],
+        )
+        .map_err(|error| storage(format!("clear publication staging: {error}")))?;
+    Ok(())
+}
+
+/// Whether **P** is durable for one exact provider request.
+fn request_outcome_is_durable(
+    transaction: &Transaction<'_>,
+    request_id: &RequestId,
+) -> Result<bool, ConversationStoreError> {
+    let completed: Option<Option<i64>> = transaction
+        .query_row(
+            "SELECT completed_sequence FROM request_snapshots WHERE request_id=?1",
+            [request_id.as_str()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| storage(format!("request outcome probe: {error}")))?;
+    Ok(completed.flatten().is_some())
+}
+
+/// Rejects a Tool Plane execution fact for a proposal that belongs to a
+/// settled publication audit, and records the execution otherwise.
+///
+/// This is the durable half of the hard Issue #108 invariant: no tool
+/// proposal from an Incomplete or Unaccepted publication may have a dependent
+/// `ToolExecutionStarted`, `ToolResult`, or side-effect authorization.
+fn record_tool_proposal_execution(
+    transaction: &Transaction<'_>,
+    call_id: &ToolCallId,
+) -> Result<(), ConversationStoreError> {
+    let settlement: Option<Option<String>> = transaction
+        .query_row(
+            "SELECT settlement FROM publication_proposals WHERE call_id=?1",
+            [call_id.as_str()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| storage(format!("tool proposal probe: {error}")))?;
+    let Some(settlement) = settlement else {
+        return Ok(());
+    };
+    if let Some(settlement) = settlement {
+        return Err(ConversationStoreError::PublicationViolation(format!(
+            "tool call {call_id} is a model proposal of an {settlement} publication and may never execute"
+        )));
+    }
+    transaction
+        .execute(
+            "UPDATE publication_proposals SET executed=1 WHERE call_id=?1",
+            [call_id.as_str()],
+        )
+        .map_err(|error| storage(format!("record tool proposal execution: {error}")))?;
+    Ok(())
 }
 
 fn accept_inbound_tx(
@@ -1502,6 +2097,7 @@ fn validate_existing_schema(connection: &Connection) -> Result<(), ConversationS
     verify_schema_shape(connection)
 }
 
+#[allow(clippy::too_many_lines)] // One schema, one place.
 fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
     connection
         .execute_batch(
@@ -1554,7 +2150,34 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 request_id TEXT PRIMARY KEY,
                 surface_revision INTEGER NOT NULL,
                 snapshot_json TEXT NOT NULL,
-                started_sequence INTEGER
+                started_sequence INTEGER,
+                completed_sequence INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS publication_streams (
+                stream_id TEXT PRIMARY KEY,
+                attempt_id TEXT NOT NULL,
+                turn_id TEXT NOT NULL,
+                request_id TEXT NOT NULL,
+                message_id TEXT NOT NULL,
+                next_frame_sequence INTEGER NOT NULL CHECK(next_frame_sequence >= 0),
+                terminal_sequence INTEGER,
+                settlement TEXT
+            );
+            CREATE TABLE IF NOT EXISTS publication_frames (
+                stream_id TEXT NOT NULL,
+                sequence INTEGER NOT NULL,
+                frame_json TEXT NOT NULL,
+                PRIMARY KEY(stream_id, sequence)
+            );
+            CREATE TABLE IF NOT EXISTS publication_proposals (
+                call_id TEXT PRIMARY KEY,
+                stream_id TEXT NOT NULL,
+                executed INTEGER NOT NULL CHECK(executed IN (0,1)),
+                settlement TEXT
+            );
+            CREATE TABLE IF NOT EXISTS publication_audits (
+                stream_id TEXT PRIMARY KEY,
+                audit_json TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS events (
                 sequence INTEGER PRIMARY KEY,
@@ -1574,7 +2197,9 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
             CREATE INDEX IF NOT EXISTS surface_ops_revision_idx ON surface_ops(revision);
             CREATE INDEX IF NOT EXISTS events_sequence_idx ON events(sequence);
             CREATE INDEX IF NOT EXISTS events_attempt_idx ON events(attempt_id, sequence);
-            CREATE INDEX IF NOT EXISTS request_snapshots_surface_idx ON request_snapshots(surface_revision);",
+            CREATE INDEX IF NOT EXISTS request_snapshots_surface_idx ON request_snapshots(surface_revision);
+            CREATE INDEX IF NOT EXISTS publication_frames_stream_idx ON publication_frames(stream_id, sequence);
+            CREATE INDEX IF NOT EXISTS publication_streams_settlement_idx ON publication_streams(settlement);",
         )
         .map_err(|error| storage(format!("create schema: {error}")))?;
     connection
@@ -1600,6 +2225,7 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)] // One required-shape table, one place.
 fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreError> {
     let required = [
         (
@@ -1643,8 +2269,31 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "surface_revision",
                 "snapshot_json",
                 "started_sequence",
+                "completed_sequence",
             ],
         ),
+        (
+            "publication_streams",
+            &[
+                "stream_id",
+                "attempt_id",
+                "turn_id",
+                "request_id",
+                "message_id",
+                "next_frame_sequence",
+                "terminal_sequence",
+                "settlement",
+            ],
+        ),
+        (
+            "publication_frames",
+            &["stream_id", "sequence", "frame_json"],
+        ),
+        (
+            "publication_proposals",
+            &["call_id", "stream_id", "executed", "settlement"],
+        ),
+        ("publication_audits", &["stream_id", "audit_json"]),
         (
             "events",
             &[
@@ -1682,6 +2331,9 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         ("message_ledger", "message_id"),
         ("events", "event_id"),
         ("request_snapshots", "request_id"),
+        ("publication_streams", "stream_id"),
+        ("publication_proposals", "call_id"),
+        ("publication_audits", "stream_id"),
     ] {
         verify_unique_column(connection, table, column)?;
     }
@@ -2629,6 +3281,7 @@ fn replacement_active(
     next
 }
 
+#[allow(clippy::too_many_lines)] // One event persistence contract, one place.
 fn persist_event_tx(
     transaction: &Transaction<'_>,
     conversation_id: &ConversationId,
@@ -2726,6 +3379,22 @@ fn persist_event_tx(
             [sequence],
         )
         .map_err(|error| storage(format!("update event sequence: {error}")))?;
+    // The **P** marker: a durable provider outcome is recorded against its
+    // exact request, so the publication plane can reject U-without-P with one
+    // keyed lookup instead of a Journal scan.
+    if let RuntimeEvent::ModelRequestCompleted { request_id, .. } = &event.event {
+        let updated = transaction
+            .execute(
+                "UPDATE request_snapshots SET completed_sequence=?1 WHERE request_id=?2 AND completed_sequence IS NULL",
+                params![sequence, request_id.as_str()],
+            )
+            .map_err(|error| storage(format!("record provider outcome: {error}")))?;
+        if updated != 1 {
+            return Err(ConversationStoreError::TerminalViolation(format!(
+                "request {request_id} already has a durable provider outcome"
+            )));
+        }
+    }
     Ok(event)
 }
 
@@ -2888,6 +3557,29 @@ fn validate_event_reference(
     envelope: &RuntimeEventEnvelope,
 ) -> Result<(), ConversationStoreError> {
     match &envelope.event {
+        // A provider outcome names an actual started request. Without this
+        // the P marker could be recorded against a request that never had a
+        // durable start fact.
+        RuntimeEvent::ModelRequestCompleted { request_id, .. }
+        | RuntimeEvent::ModelRequestFailed { request_id, .. } => {
+            let exists: bool = transaction
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM request_snapshots WHERE request_id=?1)",
+                    [request_id.as_str()],
+                    |row| row.get(0),
+                )
+                .map_err(|error| storage(format!("request outcome reference probe: {error}")))?;
+            if !exists {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "model request outcome references request {request_id}, which never started"
+                )));
+            }
+        }
+        // The Tool Plane may never act on a proposal that belongs to a settled
+        // publication audit.
+        RuntimeEvent::ToolExecutionStarted { tool_call_id, .. } => {
+            record_tool_proposal_execution(transaction, tool_call_id)?;
+        }
         RuntimeEvent::SubagentOwnershipCommitted { subagent_id, .. } => {
             // The durable identity of an ownership fact is canonical: the
             // EventId must be the deterministic `subagent-committed-event:{id}`
@@ -4982,9 +5674,9 @@ mod tests {
                     &conversation_id,
                     "after-turn-terminal",
                     Some(attempt_id.clone()),
-                    RuntimeEvent::ModelRequestCompleted {
-                        finish_reason: ModelFinishReason::Stop,
-                        usage: None,
+                    RuntimeEvent::ModelRetryScheduled {
+                        attempt_number: 1,
+                        retry_delay_ms: None,
                     },
                 );
                 late.turn_id = Some(TurnId::new("turn-events"));

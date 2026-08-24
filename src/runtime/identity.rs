@@ -255,6 +255,36 @@ impl ToolExecutionId {
 }
 
 id_type! {
+    /// Identifies one user-facing publication stream (Issue #108, FND-03).
+    ///
+    /// A publication stream is the durable release plane of exactly one
+    /// provider request: it is the identity under which committed-for-release
+    /// frames are staged, under which the publication terminal marker
+    /// commits, and under which the stream settles exactly once as canonical,
+    /// unaccepted, or incomplete. It is deliberately distinct from
+    /// [`RequestId`] (the provider execution fact) and from [`MessageId`]
+    /// (the canonical conversation fact), because publication durability is
+    /// a separate plane from both.
+    PublicationStreamId
+}
+
+impl PublicationStreamId {
+    /// The separator between the attempt identity and the request ordinal.
+    const PUBLICATION_INFIX: &'static str = "-publication-";
+
+    /// Allocates the publication identity of one model request of `attempt`.
+    ///
+    /// The identity is derived from the attempt domain and the request's
+    /// provisional message identity, so it is stable across a crash and can
+    /// never be reused by a later attempt or a later request of the same
+    /// attempt.
+    #[must_use]
+    pub fn for_request(attempt: &AttemptId, message_id: &MessageId) -> Self {
+        Self::new(format!("{attempt}{}{message_id}", Self::PUBLICATION_INFIX))
+    }
+}
+
+id_type! {
     /// Identifies a skill bound to the runtime.
     ///
     /// M6 makes the standard Agent Skills `name` the logical skill identity:

@@ -31,7 +31,7 @@ use rustx::runtime::identity::{
 use rustx::runtime::inbound::MailboxError;
 use rustx::runtime::types::{CancellationReason, RuntimeError};
 use rustx::tools::executor::ToolRegistry;
-use rustx::tools::types::{ToolCall, ToolExecutionStatus};
+use rustx::tools::types::ToolExecutionStatus;
 use support::fake::{
     FakeModel, FakeStep, FakeTool, ScriptedCall, await_started, failed_result, model_release,
     success_result, tool_call_events,
@@ -97,7 +97,8 @@ async fn run(
     let tool_runtime = common::tool_runtime("conv-1");
     let store = tool_runtime.durable_store();
     let capability = common::capability_lease(tools, &tool_runtime).await;
-    let result = AgentExecution::new(
+    let publication = common::RecordingPublicationObserver::default();
+    let mut execution = AgentExecution::new(
         request("attempt-1", model),
         capability.into_lease(),
         cancellation,
@@ -105,10 +106,10 @@ async fn run(
         &tool_runtime,
         rustx::agent::AttemptLifecycle::inert(),
     )
-    .expect("conversation identity matches the tool runtime")
-    .run()
-    .await;
-    common::durable_agent_result(result, store.as_ref())
+    .expect("conversation identity matches the tool runtime");
+    execution.observe(&publication);
+    let result = execution.run().await;
+    common::durable_agent_result_with_publication(result, store.as_ref(), &publication)
 }
 
 /// The terminal events of an attempt.
@@ -243,20 +244,11 @@ async fn text_execution_completes_with_exact_trace() {
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "fake-model".to_owned(),
         },
-        RuntimeEvent::AssistantMessageStarted {
-            message_id: assistant_message_id(1),
-        },
-        RuntimeEvent::AssistantTextDelta {
-            message_id: assistant_message_id(1),
-            block_index: rustx::message::types::ContentBlockIndex::new(0),
-            delta: "hello".to_owned(),
-        },
-        RuntimeEvent::AssistantTextDelta {
-            message_id: assistant_message_id(1),
-            block_index: rustx::message::types::ContentBlockIndex::new(0),
-            delta: " world".to_owned(),
-        },
+        // Assistant streaming assembly is not an Event Journal fact
+        // (Issue #108); it lives in the durable publication plane, which the
+        // release-trace assertion below covers.
         RuntimeEvent::ModelRequestCompleted {
+            request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             finish_reason: ModelFinishReason::Stop,
             usage: None,
         },
@@ -271,6 +263,15 @@ async fn text_execution_completes_with_exact_trace() {
     ];
     assert_trace(&result.event_history, &expected);
     assert_single_terminal(&result.event_history);
+    assert_eq!(
+        result.publication_frames.len(),
+        1,
+        "the two provider deltas coalesced into one durable publication frame"
+    );
+    assert!(
+        result.publication_audits.is_empty(),
+        "a canonically accepted stream never produces an audit"
+    );
     assert_outcome(
         &result,
         AttemptOutcome::Completed {
@@ -301,15 +302,24 @@ async fn several_deltas_assemble_in_stream_order() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = run(&model, tools, &cancellation).await;
 
-    let deltas: Vec<&str> = result
-        .event_history
+    // Different target blocks are never coalesced together, so the released
+    // publication preserves the provider's block ordering exactly.
+    let deltas: Vec<String> = result
+        .publication_frames
         .iter()
-        .filter_map(|event| match event {
-            RuntimeEvent::AssistantTextDelta { delta, .. } => Some(delta.as_str()),
+        .filter_map(|frame| match &frame.payload {
+            rustx::publication::PublicationPayload::TextSuffix {
+                block_index,
+                suffix,
+            } => Some(format!("{}:{suffix}", block_index.get())),
             _ => None,
         })
         .collect();
-    assert_eq!(deltas, vec!["a", "b", "c"], "delta order preserved");
+    assert_eq!(
+        deltas,
+        vec!["0:a", "1:b", "0:c"],
+        "publication order preserved"
+    );
     let MessageBlock::Assistant(assistant) = result.messages().last().expect("Assistant message")
     else {
         panic!("final message must be an Assistant message");
@@ -353,6 +363,7 @@ async fn model_failure_before_content_fails_attempt() {
             model: "fake-model".to_owned(),
         },
         RuntimeEvent::ModelRequestFailed {
+            request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             error: error.clone(),
         },
         RuntimeEvent::AttemptFailed {
@@ -399,11 +410,28 @@ async fn model_failure_after_partial_content_commits_nothing() {
     let result = run(&model, tools, &cancellation).await;
 
     assert!(
-        result
+        result.publication_frames.is_empty(),
+        "payload still buffered when the stream failed was never committed, so it was never released"
+    );
+    let audit = result
+        .publication_audits
+        .first()
+        .expect("the stream settled as an audit");
+    assert_eq!(
+        audit.kind,
+        rustx::publication::PublicationAuditKind::Incomplete,
+        "publication never reached its own durable terminal"
+    );
+    assert!(
+        audit.content.is_empty(),
+        "the audit is an upper bound on what was committed for release, and nothing was"
+    );
+    assert!(
+        !result
             .event_history
             .iter()
-            .any(|event| matches!(event, RuntimeEvent::AssistantTextDelta { .. })),
-        "streamed deltas remain in the trace"
+            .any(|event| matches!(event, RuntimeEvent::ModelRequestCompleted { .. })),
+        "a mid-stream failure has no provider outcome (P)"
     );
     assert_single_terminal(&result.event_history);
     assert!(matches!(
@@ -461,8 +489,8 @@ async fn no_events_after_completed_terminal() {
     assert_single_terminal(&result.event_history);
     assert_eq!(
         result.event_history.len(),
-        9,
-        "exact event count of a text turn"
+        7,
+        "exact event count of a text turn: streaming assembly is no longer journalled"
     );
 }
 
@@ -613,35 +641,11 @@ fn expected_single_tool_trace() -> Vec<RuntimeEvent> {
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "fake-model".to_owned(),
         },
-        RuntimeEvent::AssistantMessageStarted {
-            message_id: assistant_message_id(1),
-        },
-        RuntimeEvent::ToolCallStarted {
-            message_id: assistant_message_id(1),
-            block_index: rustx::message::types::ContentBlockIndex::new(0),
-            call: rustx::tools::types::ToolCallStart {
-                id: ToolCallId::new("call-1"),
-                tool_id: ToolId::new("tool-alpha"),
-                name: "alpha".to_owned(),
-            },
-        },
-        RuntimeEvent::ToolCallArgumentsDelta {
-            message_id: assistant_message_id(1),
-            block_index: rustx::message::types::ContentBlockIndex::new(0),
-            call_id: ToolCallId::new("call-1"),
-            arguments_delta: r#"{"path":"."}"#.to_owned(),
-        },
-        RuntimeEvent::ToolCallCompleted {
-            message_id: assistant_message_id(1),
-            block_index: rustx::message::types::ContentBlockIndex::new(0),
-            call: ToolCall {
-                id: ToolCallId::new("call-1"),
-                tool_id: ToolId::new("tool-alpha"),
-                name: "alpha".to_owned(),
-                arguments: serde_json::json!({"path": "."}),
-            },
-        },
+        // The model's tool-call *proposal* streams through the publication
+        // plane; the Event Journal records only the Tool Plane execution
+        // facts below.
         RuntimeEvent::ModelRequestCompleted {
+            request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             finish_reason: ModelFinishReason::ToolCalls,
             usage: None,
         },
@@ -667,15 +671,8 @@ fn expected_single_tool_trace() -> Vec<RuntimeEvent> {
             request_id: RequestId::new("request:9:attempt-1:1:2:0"),
             model: "fake-model".to_owned(),
         },
-        RuntimeEvent::AssistantMessageStarted {
-            message_id: assistant_message_id(2),
-        },
-        RuntimeEvent::AssistantTextDelta {
-            message_id: assistant_message_id(2),
-            block_index: rustx::message::types::ContentBlockIndex::new(0),
-            delta: "done".to_owned(),
-        },
         RuntimeEvent::ModelRequestCompleted {
+            request_id: RequestId::new("request:9:attempt-1:1:2:0"),
             finish_reason: ModelFinishReason::Stop,
             usage: None,
         },
@@ -835,35 +832,8 @@ fn expected_unknown_tool_trace() -> Vec<RuntimeEvent> {
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "fake-model".to_owned(),
         },
-        RuntimeEvent::AssistantMessageStarted {
-            message_id: assistant_message_id(1),
-        },
-        RuntimeEvent::ToolCallStarted {
-            message_id: assistant_message_id(1),
-            block_index: rustx::message::types::ContentBlockIndex::new(0),
-            call: rustx::tools::types::ToolCallStart {
-                id: ToolCallId::new("call-1"),
-                tool_id: ToolId::new("tool-missing"),
-                name: "missing".to_owned(),
-            },
-        },
-        RuntimeEvent::ToolCallArgumentsDelta {
-            message_id: assistant_message_id(1),
-            block_index: rustx::message::types::ContentBlockIndex::new(0),
-            call_id: ToolCallId::new("call-1"),
-            arguments_delta: "{}".to_owned(),
-        },
-        RuntimeEvent::ToolCallCompleted {
-            message_id: assistant_message_id(1),
-            block_index: rustx::message::types::ContentBlockIndex::new(0),
-            call: ToolCall {
-                id: ToolCallId::new("call-1"),
-                tool_id: ToolId::new("tool-missing"),
-                name: "missing".to_owned(),
-                arguments: serde_json::json!({}),
-            },
-        },
         RuntimeEvent::ModelRequestCompleted {
+            request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             finish_reason: ModelFinishReason::ToolCalls,
             usage: None,
         },
@@ -1131,14 +1101,6 @@ async fn cancellation_during_generation_after_partial_text() {
         RuntimeEvent::ModelRequestStarted {
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "fake-model".to_owned(),
-        },
-        RuntimeEvent::AssistantMessageStarted {
-            message_id: assistant_message_id(1),
-        },
-        RuntimeEvent::AssistantTextDelta {
-            message_id: assistant_message_id(1),
-            block_index: rustx::message::types::ContentBlockIndex::new(0),
-            delta: "partial".to_owned(),
         },
         RuntimeEvent::AttemptCancelled {
             attempt_id: AttemptId::new("attempt-1"),
@@ -1443,11 +1405,8 @@ async fn cancellation_during_continuation_generation() {
         Some(RuntimeEvent::AttemptCancelled { .. })
     ));
     assert!(
-        result
-            .event_history
-            .iter()
-            .any(|event| matches!(event, RuntimeEvent::AssistantTextDelta { .. })),
-        "continuation deltas before cancellation remain in the trace"
+        !result.publication_frames.is_empty(),
+        "continuation output released before cancellation stays in the publication trace"
     );
     assert_outcome(
         &result,

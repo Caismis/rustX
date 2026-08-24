@@ -36,9 +36,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use rustx::agent::{AgentExecutionResult, state::ExecutionState};
+use rustx::agent::{
+    AgentExecutionObserver, AgentExecutionResult, AgentStatusObservation, state::ExecutionState,
+};
 use rustx::durable::ConversationStore;
 use rustx::events::types::RuntimeEvent;
+use rustx::message::types::MessageBlock;
+use rustx::publication::{PublicationAudit, PublicationFrame, PublicationStreamStart};
 use rustx::runtime::identity::AttemptId;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -484,6 +488,16 @@ pub struct DurableExecutionAudit {
     /// The durable Request Snapshots read through fixed-size pages for a
     /// test that is explicitly auditing request history.
     snapshot_history: Vec<rustx::model::RequestSnapshot>,
+    /// The publication frames released during the attempt, in release order.
+    ///
+    /// These are collected at the observation seam because a canonically
+    /// accepted stream clears its staging as part of the C transaction: the
+    /// durable plane deliberately keeps no permanent per-frame history
+    /// (Issue #108).
+    pub publication_frames: Vec<PublicationFrame>,
+    /// The bounded immutable audits of every stream that settled without
+    /// canonical acceptance.
+    pub publication_audits: Vec<PublicationAudit>,
 }
 
 impl std::ops::Deref for DurableExecutionAudit {
@@ -549,6 +563,21 @@ pub fn read_request_snapshot_history(
 }
 
 impl DurableExecutionAudit {
+    /// The released text of the attempt's publication streams, folded in
+    /// release order.
+    #[must_use]
+    pub fn released_publication_text(&self) -> String {
+        self.publication_frames
+            .iter()
+            .filter_map(|frame| match &frame.payload {
+                rustx::publication::PublicationPayload::TextSuffix { suffix, .. } => {
+                    Some(suffix.as_str())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Returns the test's explicitly paged durable Request Snapshot audit.
     #[must_use]
     pub fn snapshot_history(&self) -> &[rustx::model::RequestSnapshot] {
@@ -562,12 +591,100 @@ pub fn durable_agent_result(
     result: AgentExecutionResult,
     store: &dyn ConversationStore,
 ) -> DurableExecutionAudit {
+    durable_agent_result_with_publication(result, store, &RecordingPublicationObserver::default())
+}
+
+/// Builds the history view together with the publication release trace an
+/// observer collected during the attempt.
+#[must_use]
+pub fn durable_agent_result_with_publication(
+    result: AgentExecutionResult,
+    store: &dyn ConversationStore,
+    publication: &RecordingPublicationObserver,
+) -> DurableExecutionAudit {
     let event_history = read_event_history(store, &result.attempt_id);
     let snapshot_history = read_request_snapshot_history(store, &result.attempt_id);
     DurableExecutionAudit {
         result,
         event_history,
         snapshot_history,
+        publication_frames: publication.frames(),
+        publication_audits: publication.audits(),
+    }
+}
+
+/// The shared publication observation recorder of the deterministic suites.
+///
+/// It records the release trace of the publication plane: which frames the
+/// Agent Loop released (all of them already durably committed) and how each
+/// stream settled when it did not reach canonical acceptance.
+#[derive(Debug, Default)]
+pub struct RecordingPublicationObserver {
+    opened: Mutex<Vec<PublicationStreamStart>>,
+    frames: Mutex<Vec<PublicationFrame>>,
+    audits: Mutex<Vec<PublicationAudit>>,
+}
+
+impl RecordingPublicationObserver {
+    /// The frozen identities of every stream that opened.
+    #[must_use]
+    pub fn opened(&self) -> Vec<PublicationStreamStart> {
+        self.opened.lock().expect("publication opened lock").clone()
+    }
+
+    /// The released frames, in release order.
+    #[must_use]
+    pub fn frames(&self) -> Vec<PublicationFrame> {
+        self.frames.lock().expect("publication frame lock").clone()
+    }
+
+    /// The audits of every non-canonical settlement.
+    #[must_use]
+    pub fn audits(&self) -> Vec<PublicationAudit> {
+        self.audits.lock().expect("publication audit lock").clone()
+    }
+
+    /// The released text of one block, folded from the frames.
+    #[must_use]
+    pub fn released_text(&self) -> String {
+        self.frames()
+            .iter()
+            .filter_map(|frame| match &frame.payload {
+                rustx::publication::PublicationPayload::TextSuffix { suffix, .. } => {
+                    Some(suffix.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+impl AgentExecutionObserver for RecordingPublicationObserver {
+    fn observe_event(&self, _attempt_id: &AttemptId, _event: &RuntimeEvent) {}
+
+    fn observe_committed(&self, _attempt_id: &AttemptId, _block: &MessageBlock) {}
+
+    fn observe_status(&self, _observation: &AgentStatusObservation) {}
+
+    fn observe_publication_opened(&self, _attempt_id: &AttemptId, start: &PublicationStreamStart) {
+        self.opened
+            .lock()
+            .expect("publication opened lock")
+            .push(start.clone());
+    }
+
+    fn observe_publication(&self, _attempt_id: &AttemptId, frame: &PublicationFrame) {
+        self.frames
+            .lock()
+            .expect("publication frame lock")
+            .push(frame.clone());
+    }
+
+    fn observe_publication_settled(&self, _attempt_id: &AttemptId, audit: &PublicationAudit) {
+        self.audits
+            .lock()
+            .expect("publication audit lock")
+            .push(audit.clone());
     }
 }
 

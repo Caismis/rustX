@@ -14,6 +14,7 @@ pub mod local_runtime;
 pub mod message;
 pub mod model;
 pub mod protocol;
+pub mod publication;
 pub mod runtime;
 pub mod runtime_client;
 pub mod skills;

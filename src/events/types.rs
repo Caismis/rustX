@@ -8,7 +8,7 @@
 //! MessageBlock = model-context fact
 //! ```
 //!
-//! Streaming model deltas and tool progress are events, never message blocks.
+//! Tool progress is an event, never a message block.
 //! Events are append-only and a successful durable append commits before
 //! external publication through the durable `ConversationStore`. If a
 //! required append fails, the event is not published or fabricated in a
@@ -49,12 +49,26 @@
 //! Ledger body they reference. Compaction and request-start facts use the
 //! same reference-ordering rule. Persist-before-publish appends the committed
 //! envelope before observers or external projections see it.
+//!
+//! ## What the Event Journal deliberately does not carry
+//!
+//! High-frequency Assistant streaming content is **not** an Event Journal
+//! fact (Issue #108). Assistant text, reasoning, refusal, and tool-call
+//! argument increments belong to the durable publication plane
+//! ([`crate::publication`]), which owns its own bounded coalescing policy,
+//! its own staging rows, and its own terminal marker. The Journal keeps the
+//! low-frequency recovery-significant semantic facts only, so its size is
+//! O(execution facts) rather than O(provider deltas).
+//!
+//! The Journal therefore owns exactly two of the three Issue #108
+//! linearization points — P ([`RuntimeEvent::ModelRequestCompleted`]) and C
+//! ([`RuntimeEvent::AssistantMessageCommitted`]) — while U lives in the
+//! publication plane. The required ordering is `P < U < C`.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::conversation::SurfaceRevision;
-use crate::message::types::ContentBlockIndex;
 use crate::model::error::ModelError;
 use crate::model::finish::ModelFinishReason;
 use crate::model::types::ModelUsage;
@@ -63,7 +77,7 @@ use crate::runtime::identity::{
     ToolExecutionId, ToolId, TurnId,
 };
 use crate::runtime::types::{CancellationReason, RuntimeError, TokenMeasurement};
-use crate::tools::types::{ToolCall, ToolCallStart, ToolExecutionResult, ToolProgress};
+use crate::tools::types::{ToolExecutionResult, ToolProgress};
 
 /// The current schema version of [`RuntimeEventEnvelope`].
 pub const EVENT_SCHEMA_VERSION: u16 = 1;
@@ -157,7 +171,15 @@ pub enum RuntimeEvent {
         model: String,
     },
     /// A model request completed successfully.
+    ///
+    /// This is the **P** linearization point of Issue #108: the durable fact
+    /// that one exact provider request produced an outcome. It is deliberately
+    /// never combined with the publication outcome (U) or with canonical
+    /// Assistant acceptance (C); each is a different fact and a crash between
+    /// them must stay distinguishable.
     ModelRequestCompleted {
+        /// The exact provider request whose outcome this fact records.
+        request_id: RequestId,
         /// Why the generation finished.
         finish_reason: ModelFinishReason,
         /// Final usage, when reported.
@@ -165,6 +187,8 @@ pub enum RuntimeEvent {
     },
     /// A model request failed with a normalized error.
     ModelRequestFailed {
+        /// The exact provider request that failed.
+        request_id: RequestId,
         /// The normalized model error.
         error: ModelError,
     },
@@ -176,73 +200,12 @@ pub enum RuntimeEvent {
         retry_delay_ms: Option<u64>,
     },
 
-    /// Assembly of a canonical Assistant message started.
-    AssistantMessageStarted {
-        /// The message identity being assembled.
-        message_id: MessageId,
-    },
-    /// A text delta of one output block of the in-flight Assistant message.
-    AssistantTextDelta {
-        /// The message identity being assembled.
-        message_id: MessageId,
-        /// The output block the delta belongs to.
-        block_index: ContentBlockIndex,
-        /// The incremental text.
-        delta: String,
-    },
-    /// A reasoning delta of one output block of the in-flight Assistant message.
-    AssistantReasoningDelta {
-        /// The message identity being assembled.
-        message_id: MessageId,
-        /// The reasoning block the delta belongs to.
-        block_index: ContentBlockIndex,
-        /// The incremental reasoning text.
-        delta: String,
-    },
-    /// A refusal delta of one output block of the in-flight Assistant message.
-    ///
-    /// Refusal is preserved as refusal, never flattened into text, so the
-    /// completed message assembles a `RefusalBlock`.
-    AssistantRefusalDelta {
-        /// The message identity being assembled.
-        message_id: MessageId,
-        /// The refusal block the delta belongs to.
-        block_index: ContentBlockIndex,
-        /// The incremental refusal text.
-        delta: String,
-    },
-    /// A tool call within the in-flight Assistant message started.
-    ToolCallStarted {
-        /// The message identity being assembled.
-        message_id: MessageId,
-        /// The tool-call content block being assembled.
-        block_index: ContentBlockIndex,
-        /// The tool call identity, without streamed arguments yet.
-        call: ToolCallStart,
-    },
-    /// An argument delta of an in-flight tool call.
-    ToolCallArgumentsDelta {
-        /// The message identity being assembled.
-        message_id: MessageId,
-        /// The tool-call content block being assembled.
-        block_index: ContentBlockIndex,
-        /// Identity of the tool call being assembled.
-        call_id: ToolCallId,
-        /// The incremental JSON argument fragment.
-        arguments_delta: String,
-    },
-    /// A tool call within the in-flight Assistant message completed.
-    ToolCallCompleted {
-        /// The message identity being assembled.
-        message_id: MessageId,
-        /// The tool-call content block that completed.
-        block_index: ContentBlockIndex,
-        /// The fully assembled tool call.
-        call: ToolCall,
-    },
     /// A complete canonical Assistant message was committed to the Message
     /// Ledger. The event references the message by identity only; message
     /// content is never duplicated into the Event Journal.
+    ///
+    /// This is the **C** linearization point of Issue #108. For a published
+    /// stream the durable store rejects C without U.
     AssistantMessageCommitted {
         /// Identity of the committed message block.
         message_id: MessageId,

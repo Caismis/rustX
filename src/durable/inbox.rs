@@ -19,7 +19,10 @@ use crate::message::types::{
 };
 use crate::model::snapshot::RequestSnapshot;
 use crate::model::types::ModelRequest;
-use crate::runtime::identity::{ConversationId, MessageId, RequestId};
+use crate::publication::{
+    PublicationAudit, PublicationFrame, PublicationStreamRecord, PublicationStreamStart,
+};
+use crate::runtime::identity::{ConversationId, MessageId, PublicationStreamId, RequestId};
 use crate::runtime::inbound::InboundSequence;
 use crate::runtime::types::TokenMeasurement;
 
@@ -271,6 +274,11 @@ pub enum ConversationStoreError {
     RequestNotFound(RequestId),
     /// A lifecycle event violates terminal uniqueness or terminal ordering.
     TerminalViolation(String),
+    /// A publication-plane transition violates the `C => U => P` ordering,
+    /// the single-settlement rule, or the tool-proposal execution ban
+    /// (Issue #108). The durable store — not only Agent Loop control flow —
+    /// rejects impossible publication state combinations.
+    PublicationViolation(String),
     /// The underlying storage rejected the operation.
     Storage(String),
 }
@@ -311,6 +319,9 @@ impl core::fmt::Display for ConversationStoreError {
             }
             Self::TerminalViolation(message) => {
                 write!(f, "invalid terminal lifecycle event: {message}")
+            }
+            Self::PublicationViolation(message) => {
+                write!(f, "invalid publication transition: {message}")
             }
             Self::Storage(message) => write!(f, "durable ConversationStore failed: {message}"),
         }
@@ -736,6 +747,101 @@ pub trait ConversationStore: Send + Sync + 'static {
         after_sequence: Option<u64>,
         limit: usize,
     ) -> Result<EventPage, ConversationStoreError>;
+
+    // ---------------------------------------------------------------------
+    // The durable publication plane (Issue #108, FND-03).
+    //
+    // Publication durability is a plane of its own, separate from provider
+    // outcome (P) and canonical conversation acceptance (C). The store is the
+    // authority for the ordering `C => U => P` and for the rule that a stream
+    // settles exactly once; the Agent Loop may not be the only thing keeping
+    // an impossible combination out of durable state.
+    // ---------------------------------------------------------------------
+
+    /// Opens one publication stream, pinning it to the exact attempt, turn,
+    /// request, and provisional message identity that started it.
+    ///
+    /// Opening is idempotent for the identical start: re-opening the same
+    /// stream with the same frozen identities succeeds and changes nothing,
+    /// so a retried open cannot fork a stream. Re-opening with different
+    /// identities is a [`ConversationStoreError::PublicationViolation`].
+    fn open_publication_stream(
+        &self,
+        start: &PublicationStreamStart,
+    ) -> Result<(), ConversationStoreError>;
+
+    /// Stages publication frames durably, before any of them is released.
+    ///
+    /// This is the non-terminal staging commit. Frames must belong to one
+    /// open, unsettled stream and must continue its sequence without a gap or
+    /// a repeat. A stream that already committed U accepts no further frames.
+    fn stage_publication_frames(
+        &self,
+        frames: &[PublicationFrame],
+    ) -> Result<(), ConversationStoreError>;
+
+    /// Commits **U**: the final publication frame(s) and the publication
+    /// terminal marker in one transaction.
+    ///
+    /// There is deliberately no "write final frame, publish, then mark
+    /// complete" sequence to crash inside. When no visible payload remains,
+    /// the caller supplies a single
+    /// [`TerminalOnly`](crate::publication::PublicationPayload::TerminalOnly)
+    /// frame, so the terminal transition always has a frame to commit
+    /// atomically with its marker.
+    ///
+    /// The store rejects U without P: the exact request's
+    /// [`RuntimeEvent::ModelRequestCompleted`](crate::events::types::RuntimeEvent::ModelRequestCompleted)
+    /// must already be durable.
+    fn commit_publication_terminal(
+        &self,
+        stream_id: &PublicationStreamId,
+        frames: &[PublicationFrame],
+    ) -> Result<(), ConversationStoreError>;
+
+    /// Commits **C** for a published stream as one compound transition.
+    ///
+    /// The transition validates that the exact stream is publication-complete
+    /// (U committed, still unsettled), appends the canonical Assistant Ledger
+    /// fact, advances the Surface, records `AssistantMessageCommitted`, and
+    /// clears the stream's publication staging — all in one transaction. The
+    /// store rejects C without U, and rejects C for a stream that already
+    /// settled as an audit.
+    fn commit_canonical_publication(
+        &self,
+        stream_id: &PublicationStreamId,
+        message: &MessageBlock,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+
+    /// Terminalizes one unsettled publication stream as an audit.
+    ///
+    /// The audit kind is derived from durable evidence alone — U present
+    /// means [`Unaccepted`](crate::publication::PublicationAuditKind::Unaccepted),
+    /// U absent means [`Incomplete`](crate::publication::PublicationAuditKind::Incomplete)
+    /// — so a caller can never mislabel a settlement. The transition
+    /// consolidates the transient frames into one bounded immutable audit,
+    /// removes the staging rows, and permanently forbids canonical
+    /// acceptance of that stream.
+    fn terminalize_publication_audit(
+        &self,
+        stream_id: &PublicationStreamId,
+        timestamp: DateTime<Utc>,
+    ) -> Result<PublicationAudit, ConversationStoreError>;
+
+    /// Loads every publication stream that has not settled, for recovery
+    /// classification. The records carry frozen identities and the durable
+    /// P/U evidence only; nothing here consults a provider or a workspace.
+    fn load_unsettled_publication_streams(
+        &self,
+    ) -> Result<Vec<PublicationStreamRecord>, ConversationStoreError>;
+
+    /// Loads one bounded immutable publication audit, when the stream settled
+    /// as an audit.
+    fn load_publication_audit(
+        &self,
+        stream_id: &PublicationStreamId,
+    ) -> Result<Option<PublicationAudit>, ConversationStoreError>;
 }
 
 impl<T: ConversationStore + ?Sized> ConversationInboundCapability for T {

@@ -49,7 +49,7 @@ use rustx::runtime::identity::{
 use rustx::runtime::inbound::ConversationInboundMailbox;
 use rustx::runtime::types::{CancellationReason, TokenMeasurement, TokenMeasurementSource};
 use rustx::tools::executor::ToolRegistry;
-use rustx::tools::types::{ToolCall, ToolCallStart, ToolExecutionResult, ToolExecutionStatus};
+use rustx::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus};
 use support::context::{FakeContextSummarizer, FakeSummaryStep, ScriptedEstimator};
 use support::fake::{
     FakeModel, FakeStep, FakeTool, ScriptedCall, fake_model, model_release, success_result,
@@ -352,23 +352,6 @@ fn describe_trace(events: &[RuntimeEvent]) -> String {
         .map(|event| serde_json::to_string(event).expect("serialize event"))
         .collect::<Vec<_>>()
         .join("\n          ")
-}
-
-fn call_start() -> ToolCallStart {
-    ToolCallStart {
-        id: ToolCallId::new("call-1"),
-        tool_id: ToolId::new("tool-alpha"),
-        name: "alpha".to_owned(),
-    }
-}
-
-fn call_done() -> ToolCall {
-    ToolCall {
-        id: ToolCallId::new("call-1"),
-        tool_id: ToolId::new("tool-alpha"),
-        name: "alpha".to_owned(),
-        arguments: serde_json::json!({}),
-    }
 }
 
 fn scripted_call() -> ScriptedCall {
@@ -2600,26 +2583,8 @@ async fn proactive_compaction_before_the_next_turn() {
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "fake-model".to_owned(),
         },
-        RuntimeEvent::AssistantMessageStarted {
-            message_id: assistant_message_id(1),
-        },
-        RuntimeEvent::ToolCallStarted {
-            message_id: assistant_message_id(1),
-            block_index: ContentBlockIndex::new(0),
-            call: call_start(),
-        },
-        RuntimeEvent::ToolCallArgumentsDelta {
-            message_id: assistant_message_id(1),
-            block_index: ContentBlockIndex::new(0),
-            call_id: ToolCallId::new("call-1"),
-            arguments_delta: "{}".to_owned(),
-        },
-        RuntimeEvent::ToolCallCompleted {
-            message_id: assistant_message_id(1),
-            block_index: ContentBlockIndex::new(0),
-            call: call_done(),
-        },
         RuntimeEvent::ModelRequestCompleted {
+            request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             finish_reason: ModelFinishReason::ToolCalls,
             usage: Some(ModelUsage {
                 input_tokens: 15,
@@ -2658,15 +2623,8 @@ async fn proactive_compaction_before_the_next_turn() {
             request_id: RequestId::new("request:9:attempt-1:1:2:0"),
             model: "fake-model".to_owned(),
         },
-        RuntimeEvent::AssistantMessageStarted {
-            message_id: assistant_message_id(2),
-        },
-        RuntimeEvent::AssistantTextDelta {
-            message_id: assistant_message_id(2),
-            block_index: ContentBlockIndex::new(0),
-            delta: "answer".to_owned(),
-        },
         RuntimeEvent::ModelRequestCompleted {
+            request_id: RequestId::new("request:9:attempt-1:1:2:0"),
             finish_reason: ModelFinishReason::Stop,
             usage: None,
         },
@@ -2872,15 +2830,8 @@ async fn overflow_compact_and_retry_succeeds() {
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "fake-model".to_owned(),
         },
-        RuntimeEvent::AssistantMessageStarted {
-            message_id: assistant_message_id(1),
-        },
-        RuntimeEvent::AssistantTextDelta {
-            message_id: assistant_message_id(1),
-            block_index: ContentBlockIndex::new(0),
-            delta: "provisional".to_owned(),
-        },
         RuntimeEvent::ModelRequestFailed {
+            request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             error: overflow_error(),
         },
         RuntimeEvent::CompactionStarted,
@@ -2899,15 +2850,8 @@ async fn overflow_compact_and_retry_succeeds() {
             request_id: RequestId::new("request:9:attempt-1:1:1:1"),
             model: "fake-model".to_owned(),
         },
-        RuntimeEvent::AssistantMessageStarted {
-            message_id: retry_message_id(1),
-        },
-        RuntimeEvent::AssistantTextDelta {
-            message_id: retry_message_id(1),
-            block_index: ContentBlockIndex::new(0),
-            delta: "retry ok".to_owned(),
-        },
         RuntimeEvent::ModelRequestCompleted {
+            request_id: RequestId::new("request:9:attempt-1:1:1:1"),
             finish_reason: ModelFinishReason::Stop,
             usage: Some(ModelUsage {
                 input_tokens: 4,
@@ -3945,6 +3889,7 @@ async fn compaction_failure_after_overflow_preserves_the_overflow() {
 
     let expected_tail = vec![
         RuntimeEvent::ModelRequestFailed {
+            request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             error: overflow_error(),
         },
         RuntimeEvent::CompactionStarted,

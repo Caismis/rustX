@@ -1,0 +1,10 @@
+{
+  "stream_id": "attempt-1-publication-msg-agent-a-gen-3",
+  "message_id": "msg-agent-a-gen-3",
+  "sequence": 2,
+  "payload": {
+    "kind": "text_suffix",
+    "block_index": 0,
+    "suffix": "The repository contains a Cargo manifest, a docs directory, "
+  }
+}

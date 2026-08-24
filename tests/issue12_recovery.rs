@@ -662,6 +662,7 @@ fn completed_model_request_before_assistant_commit_is_not_class_b() {
                 Some(attempt.clone()),
                 Some(TurnId::new("0")),
                 RuntimeEvent::ModelRequestCompleted {
+                    request_id: snapshot.request_id.clone(),
                     finish_reason: rustx::model::ModelFinishReason::Stop,
                     usage: None,
                 },
@@ -785,6 +786,7 @@ fn failed_model_request_before_terminal_is_not_retried() {
                 Some(attempt.clone()),
                 Some(TurnId::new("0")),
                 RuntimeEvent::ModelRequestFailed {
+                    request_id: snapshot.request_id.clone(),
                     error: rustx::model::error::ModelError {
                         kind: rustx::model::error::ModelErrorKind::ProviderError,
                         message: "durable provider failure".to_owned(),
@@ -1096,6 +1098,7 @@ fn known_request_with_unknown_tool_outcome_stays_indeterminate() {
                 Some(attempt.clone()),
                 Some(TurnId::new("0")),
                 RuntimeEvent::ModelRequestCompleted {
+                    request_id: snapshot.request_id.clone(),
                     finish_reason: rustx::model::ModelFinishReason::ToolCalls,
                     usage: None,
                 },
@@ -2282,6 +2285,7 @@ fn the_recovery_fold_retains_only_unresolved_work() {
                     Some(attempt.clone()),
                     Some(TurnId::new("0")),
                     RuntimeEvent::ModelRequestCompleted {
+                        request_id: snapshot.request_id.clone(),
                         finish_reason: rustx::model::ModelFinishReason::Stop,
                         usage: None,
                     },

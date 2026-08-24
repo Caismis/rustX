@@ -108,6 +108,7 @@ use crate::context::status::{AgentStatusSectionData, render_agent_status};
 use crate::events::types::{AttemptFailure, RuntimeEvent};
 use crate::message::types::{ContentBlockIndex, MessageBlock};
 use crate::model::session::{AttemptModelView, SessionModelView};
+use crate::publication::{PublicationFrame, PublicationPayload};
 use crate::runtime::identity::{AttemptId, ConversationId, ToolCallId};
 use crate::runtime::inbound::InboundItem;
 use crate::runtime::observation::ConversationObservation;
@@ -338,6 +339,41 @@ impl RuntimeClientProjection {
                     message: block,
                 }]
             }
+            // The three publication observations replace what used to be
+            // per-delta Event Journal facts (Issue #108). The client-facing
+            // vocabulary is unchanged: a frame folds into exactly the
+            // streaming event a delta used to publish, and every one of them
+            // is already durably committed for release before it arrives.
+            ConversationObservation::PublicationOpened { attempt_id, start } => {
+                self.ensure_attempt(&attempt_id);
+                self.snapshot
+                    .attempt
+                    .as_mut()
+                    .expect("attempt view exists")
+                    .in_flight = Some(InFlightAssistantMessage {
+                    message_id: start.message_id.clone(),
+                    blocks: Vec::new(),
+                });
+                vec![RuntimeClientEvent::AssistantMessageStarted {
+                    attempt_id,
+                    message_id: start.message_id,
+                }]
+            }
+            ConversationObservation::Publication { attempt_id, frame } => {
+                self.fold_publication_frame(&attempt_id, &frame)
+            }
+            // An audit is not conversation history: it never enters the
+            // committed message list and never becomes an in-flight message.
+            // It only closes the in-flight read model of a stream that will
+            // never be canonically accepted.
+            ConversationObservation::PublicationSettled { attempt_id, audit } => {
+                if let Some(attempt) = &mut self.snapshot.attempt
+                    && attempt.attempt_id == attempt_id
+                {
+                    attempt.in_flight = None;
+                }
+                vec![RuntimeClientEvent::AssistantPublicationSettled { attempt_id, audit }]
+            }
             ConversationObservation::Status(observation) => {
                 let view = status_view(&observation);
                 self.snapshot.status = Some(view.clone());
@@ -484,14 +520,126 @@ impl RuntimeClientProjection {
         }
     }
 
+    /// Folds one durably committed publication frame into the in-flight read
+    /// model and publishes its client event.
+    ///
+    /// The tool-call frames are model **proposals**: they update the
+    /// in-flight assembly view, and the `Assembled` foreground state records
+    /// exactly that — a call the model proposed, not one the Tool Plane
+    /// started. Only `ToolExecutionStarted` moves a slot to `Running`.
+    fn fold_publication_frame(
+        &mut self,
+        attempt_id: &AttemptId,
+        frame: &PublicationFrame,
+    ) -> Vec<RuntimeClientEvent> {
+        let message_id = frame.message_id.clone();
+        match &frame.payload {
+            PublicationPayload::TextSuffix {
+                block_index,
+                suffix,
+            } => {
+                self.ensure_attempt(attempt_id);
+                self.append_text(*block_index, suffix, TextKind::Text);
+                vec![RuntimeClientEvent::AssistantTextDelta {
+                    attempt_id: attempt_id.clone(),
+                    message_id,
+                    block_index: *block_index,
+                    delta: suffix.clone(),
+                }]
+            }
+            PublicationPayload::ReasoningSuffix {
+                block_index,
+                suffix,
+            } => {
+                self.ensure_attempt(attempt_id);
+                self.append_text(*block_index, suffix, TextKind::Reasoning);
+                vec![RuntimeClientEvent::AssistantReasoningDelta {
+                    attempt_id: attempt_id.clone(),
+                    message_id,
+                    block_index: *block_index,
+                    delta: suffix.clone(),
+                }]
+            }
+            PublicationPayload::RefusalSuffix {
+                block_index,
+                suffix,
+            } => {
+                self.ensure_attempt(attempt_id);
+                self.append_text(*block_index, suffix, TextKind::Refusal);
+                vec![RuntimeClientEvent::AssistantRefusalDelta {
+                    attempt_id: attempt_id.clone(),
+                    message_id,
+                    block_index: *block_index,
+                    delta: suffix.clone(),
+                }]
+            }
+            PublicationPayload::ProposedToolCallStarted { block_index, call } => {
+                self.ensure_attempt(attempt_id);
+                let attempt = self.snapshot.attempt.as_mut().expect("attempt view exists");
+                attempt.foreground.push(ForegroundToolExecution {
+                    call_id: call.id.clone(),
+                    tool_id: call.tool_id.clone(),
+                    name: call.name.clone(),
+                    state: ForegroundToolState::Assembled {
+                        arguments: String::new(),
+                    },
+                });
+                push_in_flight_block(
+                    &mut attempt.in_flight,
+                    InFlightBlock::ToolCall {
+                        block_index: *block_index,
+                        call_id: call.id.clone(),
+                        tool_id: call.tool_id.clone(),
+                        name: call.name.clone(),
+                        arguments: String::new(),
+                    },
+                );
+                vec![RuntimeClientEvent::ToolCallStarted {
+                    attempt_id: attempt_id.clone(),
+                    message_id,
+                    block_index: *block_index,
+                    call: call.clone(),
+                }]
+            }
+            PublicationPayload::ProposedToolCallArgumentsSuffix {
+                block_index,
+                call_id,
+                suffix,
+            } => {
+                self.append_arguments(call_id, suffix);
+                vec![RuntimeClientEvent::ToolCallArgumentsDelta {
+                    attempt_id: attempt_id.clone(),
+                    message_id,
+                    block_index: *block_index,
+                    call_id: call_id.clone(),
+                    arguments_delta: suffix.clone(),
+                }]
+            }
+            PublicationPayload::ProposedToolCallCompleted { block_index, call } => {
+                self.set_assembled(call);
+                vec![RuntimeClientEvent::ToolCallAssembled {
+                    attempt_id: attempt_id.clone(),
+                    message_id,
+                    block_index: *block_index,
+                    call: call.clone(),
+                }]
+            }
+            // The terminal-only frame carries the publication terminal
+            // transition and no visible payload, so it publishes nothing.
+            PublicationPayload::TerminalOnly => Vec::new(),
+        }
+    }
+
     /// The explicit `RuntimeEvent` mapping policy of Runtime Client Protocol
     /// v1.
     ///
     /// Classification (see the module documentation):
     ///
-    /// - PROJECT: attempt lifecycle/settlement, streaming assistant
-    ///   output, tool-call assembly, foreground tool lifecycle, and
-    ///   progress;
+    /// - PROJECT: attempt lifecycle/settlement, foreground tool lifecycle,
+    ///   and progress. Streaming assistant output and tool-call assembly are
+    ///   no longer `RuntimeEvent` facts at all: they arrive as durably
+    ///   committed publication frames (Issue #108) and fold through
+    ///   [`RuntimeClientProjection::fold_publication_frame`];
     /// - PROJECT: turn counting and final request usage, carrying the exact
     ///   values folded into the attempt view;
     /// - INTERNAL: model request mechanics (`ModelRequestStarted`,
@@ -583,123 +731,6 @@ impl RuntimeClientProjection {
                     }];
                 }
                 Vec::new()
-            }
-            RuntimeEvent::AssistantMessageStarted { message_id } => {
-                self.ensure_attempt(attempt_id);
-                self.snapshot
-                    .attempt
-                    .as_mut()
-                    .expect("attempt view exists")
-                    .in_flight = Some(InFlightAssistantMessage {
-                    message_id: message_id.clone(),
-                    blocks: Vec::new(),
-                });
-                vec![RuntimeClientEvent::AssistantMessageStarted {
-                    attempt_id: attempt_id.clone(),
-                    message_id: message_id.clone(),
-                }]
-            }
-            RuntimeEvent::AssistantTextDelta {
-                message_id,
-                block_index,
-                delta,
-            } => {
-                self.ensure_attempt(attempt_id);
-                self.append_text(*block_index, delta, TextKind::Text);
-                vec![RuntimeClientEvent::AssistantTextDelta {
-                    attempt_id: attempt_id.clone(),
-                    message_id: message_id.clone(),
-                    block_index: *block_index,
-                    delta: delta.clone(),
-                }]
-            }
-            RuntimeEvent::AssistantReasoningDelta {
-                message_id,
-                block_index,
-                delta,
-            } => {
-                self.ensure_attempt(attempt_id);
-                self.append_text(*block_index, delta, TextKind::Reasoning);
-                vec![RuntimeClientEvent::AssistantReasoningDelta {
-                    attempt_id: attempt_id.clone(),
-                    message_id: message_id.clone(),
-                    block_index: *block_index,
-                    delta: delta.clone(),
-                }]
-            }
-            RuntimeEvent::AssistantRefusalDelta {
-                message_id,
-                block_index,
-                delta,
-            } => {
-                self.ensure_attempt(attempt_id);
-                self.append_text(*block_index, delta, TextKind::Refusal);
-                vec![RuntimeClientEvent::AssistantRefusalDelta {
-                    attempt_id: attempt_id.clone(),
-                    message_id: message_id.clone(),
-                    block_index: *block_index,
-                    delta: delta.clone(),
-                }]
-            }
-            RuntimeEvent::ToolCallStarted {
-                message_id,
-                block_index,
-                call,
-            } => {
-                self.ensure_attempt(attempt_id);
-                let attempt = self.snapshot.attempt.as_mut().expect("attempt view exists");
-                attempt.foreground.push(ForegroundToolExecution {
-                    call_id: call.id.clone(),
-                    tool_id: call.tool_id.clone(),
-                    name: call.name.clone(),
-                    state: ForegroundToolState::Assembled {
-                        arguments: String::new(),
-                    },
-                });
-                push_in_flight_block(
-                    &mut attempt.in_flight,
-                    InFlightBlock::ToolCall {
-                        block_index: *block_index,
-                        call_id: call.id.clone(),
-                        tool_id: call.tool_id.clone(),
-                        name: call.name.clone(),
-                        arguments: String::new(),
-                    },
-                );
-                vec![RuntimeClientEvent::ToolCallStarted {
-                    attempt_id: attempt_id.clone(),
-                    message_id: message_id.clone(),
-                    block_index: *block_index,
-                    call: call.clone(),
-                }]
-            }
-            RuntimeEvent::ToolCallArgumentsDelta {
-                message_id,
-                block_index,
-                call_id,
-                arguments_delta,
-            } => {
-                self.append_arguments(call_id, arguments_delta);
-                vec![RuntimeClientEvent::ToolCallArgumentsDelta {
-                    attempt_id: attempt_id.clone(),
-                    message_id: message_id.clone(),
-                    block_index: *block_index,
-                    call_id: call_id.clone(),
-                    arguments_delta: arguments_delta.clone(),
-                }]
-            }
-            RuntimeEvent::ToolCallCompleted {
-                message_id,
-                block_index,
-                call,
-            } => {
-                self.set_assembled(call);
-                vec![RuntimeClientEvent::ToolCallAssembled {
-                    attempt_id: attempt_id.clone(),
-                    message_id: message_id.clone(),
-                    block_index: *block_index,
-                    call: call.clone(),
-                }]
             }
             // The durable Journal event carries identity only; the projection
             // already receives the canonical body from the commit
@@ -1545,6 +1576,7 @@ mod tests {
     use crate::model::event::ModelEvent;
     use crate::model::finish::ModelFinishReason;
     use crate::model::types::ModelUsage;
+    use crate::publication::{PublicationFrame, PublicationPayload};
     use crate::runtime::identity::{
         AgentId, AttemptId, ConversationId, InteractionId, MessageId, RequestId, ToolCallId, ToolId,
     };
@@ -1599,10 +1631,41 @@ mod tests {
     }
 
     fn apply_event(projection: &mut RuntimeClientProjection, event: RuntimeEvent) {
-        projection.apply(ConversationObservation::Event {
+        projection.apply(event_observation(event));
+    }
+
+    /// Opens the representative publication stream on a projection.
+    fn apply_publication_open(projection: &mut RuntimeClientProjection) {
+        projection.apply(ConversationObservation::PublicationOpened {
+            attempt_id: attempt(),
+            start: stream_start(),
+        });
+    }
+
+    /// Releases one already-committed publication frame into a projection.
+    fn apply_frame(
+        projection: &mut RuntimeClientProjection,
+        sequence: u64,
+        payload: PublicationPayload,
+    ) {
+        projection.apply(ConversationObservation::Publication {
+            attempt_id: attempt(),
+            frame: frame(sequence, payload),
+        });
+    }
+
+    fn text_frame(text: &str) -> PublicationPayload {
+        PublicationPayload::TextSuffix {
+            block_index: ContentBlockIndex::new(0),
+            suffix: text.to_owned(),
+        }
+    }
+
+    fn event_observation(event: RuntimeEvent) -> ConversationObservation {
+        ConversationObservation::Event {
             attempt_id: attempt(),
             event,
-        });
+        }
     }
 
     fn collect(
@@ -1735,6 +1798,45 @@ mod tests {
         fn observe_status(&self, observation: &AgentStatusObservation) {
             let mut projection = self.projection.lock().expect("projection lock");
             projection.apply(ConversationObservation::Status(observation.clone()));
+            self.drain_client_events(&mut projection);
+        }
+
+        fn observe_publication_opened(
+            &self,
+            attempt_id: &AttemptId,
+            start: &crate::publication::PublicationStreamStart,
+        ) {
+            let mut projection = self.projection.lock().expect("projection lock");
+            projection.apply(ConversationObservation::PublicationOpened {
+                attempt_id: attempt_id.clone(),
+                start: start.clone(),
+            });
+            self.drain_client_events(&mut projection);
+        }
+
+        fn observe_publication(
+            &self,
+            attempt_id: &AttemptId,
+            frame: &crate::publication::PublicationFrame,
+        ) {
+            let mut projection = self.projection.lock().expect("projection lock");
+            projection.apply(ConversationObservation::Publication {
+                attempt_id: attempt_id.clone(),
+                frame: frame.clone(),
+            });
+            self.drain_client_events(&mut projection);
+        }
+
+        fn observe_publication_settled(
+            &self,
+            attempt_id: &AttemptId,
+            audit: &crate::publication::PublicationAudit,
+        ) {
+            let mut projection = self.projection.lock().expect("projection lock");
+            projection.apply(ConversationObservation::PublicationSettled {
+                attempt_id: attempt_id.clone(),
+                audit: Box::new(audit.clone()),
+            });
             self.drain_client_events(&mut projection);
         }
     }
@@ -2015,33 +2117,56 @@ mod tests {
         }
     }
 
-    /// The representative attempt sequence: streaming assembly, a tool
+    fn stream_start() -> crate::publication::PublicationStreamStart {
+        crate::publication::PublicationStreamStart {
+            stream_id: crate::runtime::identity::PublicationStreamId::new("attempt-1-pub-1"),
+            attempt_id: attempt(),
+            turn_id: crate::runtime::identity::TurnId::new("1"),
+            request_id: RequestId::new("request:9:attempt-1:1:1:0"),
+            message_id: MessageId::new("msg-1"),
+        }
+    }
+
+    fn frame(sequence: u64, payload: PublicationPayload) -> PublicationFrame {
+        PublicationFrame {
+            stream_id: stream_start().stream_id,
+            message_id: MessageId::new("msg-1"),
+            sequence,
+            payload,
+        }
+    }
+
+    /// The representative attempt sequence: streaming publication, a tool
     /// call, execution, and terminal settlement.
-    fn representative_sequence() -> Vec<RuntimeEvent> {
-        vec![
-            RuntimeEvent::AttemptStarted {
+    ///
+    /// Streaming assembly arrives as durably committed publication frames
+    /// (Issue #108); only the surrounding execution facts are Event Journal
+    /// observations.
+    fn representative_sequence() -> Vec<ConversationObservation> {
+        let mut observations = vec![
+            event_observation(RuntimeEvent::AttemptStarted {
                 attempt_id: attempt(),
-            },
-            RuntimeEvent::TurnStarted,
-            RuntimeEvent::ModelRequestStarted {
+            }),
+            event_observation(RuntimeEvent::TurnStarted),
+            event_observation(RuntimeEvent::ModelRequestStarted {
                 request_id: RequestId::new("request:9:attempt-1:1:1:0"),
                 model: "scripted".to_owned(),
+            }),
+            ConversationObservation::PublicationOpened {
+                attempt_id: attempt(),
+                start: stream_start(),
             },
-            RuntimeEvent::AssistantMessageStarted {
-                message_id: MessageId::new("msg-1"),
-            },
-            RuntimeEvent::AssistantTextDelta {
-                message_id: MessageId::new("msg-1"),
+        ];
+        for (sequence, payload) in [
+            PublicationPayload::TextSuffix {
                 block_index: ContentBlockIndex::new(0),
-                delta: "hello ".to_owned(),
+                suffix: "hello ".to_owned(),
             },
-            RuntimeEvent::AssistantTextDelta {
-                message_id: MessageId::new("msg-1"),
+            PublicationPayload::TextSuffix {
                 block_index: ContentBlockIndex::new(0),
-                delta: "world".to_owned(),
+                suffix: "world".to_owned(),
             },
-            RuntimeEvent::ToolCallStarted {
-                message_id: MessageId::new("msg-1"),
+            PublicationPayload::ProposedToolCallStarted {
                 block_index: ContentBlockIndex::new(1),
                 call: ToolCallStart {
                     id: ToolCallId::new("call_1"),
@@ -2049,14 +2174,12 @@ mod tests {
                     name: "alpha".to_owned(),
                 },
             },
-            RuntimeEvent::ToolCallArgumentsDelta {
-                message_id: MessageId::new("msg-1"),
+            PublicationPayload::ProposedToolCallArgumentsSuffix {
                 block_index: ContentBlockIndex::new(1),
                 call_id: ToolCallId::new("call_1"),
-                arguments_delta: "{}".to_owned(),
+                suffix: "{}".to_owned(),
             },
-            RuntimeEvent::ToolCallCompleted {
-                message_id: MessageId::new("msg-1"),
+            PublicationPayload::ProposedToolCallCompleted {
                 block_index: ContentBlockIndex::new(1),
                 call: ToolCall {
                     id: ToolCallId::new("call_1"),
@@ -2065,15 +2188,26 @@ mod tests {
                     arguments: serde_json::json!({}),
                 },
             },
-            RuntimeEvent::ModelRequestCompleted {
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            observations.push(ConversationObservation::Publication {
+                attempt_id: attempt(),
+                frame: frame(sequence as u64, payload),
+            });
+        }
+        observations.extend([
+            event_observation(RuntimeEvent::ModelRequestCompleted {
+                request_id: RequestId::new("request:9:attempt-1:1:1:0"),
                 finish_reason: ModelFinishReason::ToolCalls,
                 usage: None,
-            },
-            RuntimeEvent::ToolExecutionStarted {
+            }),
+            event_observation(RuntimeEvent::ToolExecutionStarted {
                 tool_call_id: ToolCallId::new("call_1"),
                 tool_id: ToolId::new("tool-alpha"),
-            },
-            RuntimeEvent::ToolExecutionProgress {
+            }),
+            event_observation(RuntimeEvent::ToolExecutionProgress {
                 tool_call_id: ToolCallId::new("call_1"),
                 tool_id: ToolId::new("tool-alpha"),
                 execution_id: None,
@@ -2082,18 +2216,19 @@ mod tests {
                     completed: Some(1.0),
                     total: Some(2.0),
                 },
-            },
-            RuntimeEvent::ToolExecutionCompleted {
+            }),
+            event_observation(RuntimeEvent::ToolExecutionCompleted {
                 tool_call_id: ToolCallId::new("call_1"),
                 tool_id: ToolId::new("tool-alpha"),
                 result: success_result(),
-            },
-            RuntimeEvent::TurnCompleted,
-            RuntimeEvent::AttemptCompleted {
+            }),
+            event_observation(RuntimeEvent::TurnCompleted),
+            event_observation(RuntimeEvent::AttemptCompleted {
                 attempt_id: attempt(),
                 finish_reason: ModelFinishReason::Stop,
-            },
-        ]
+            }),
+        ]);
+        observations
     }
 
     /// The projection is deterministic: applying the same representative
@@ -2102,12 +2237,12 @@ mod tests {
     #[test]
     fn representative_sequence_projects_deterministically() {
         let mut first = projection();
-        for event in representative_sequence() {
-            apply_event(&mut first, event);
+        for observation in representative_sequence() {
+            first.apply(observation);
         }
         let mut second = projection();
-        for event in representative_sequence() {
-            apply_event(&mut second, event);
+        for observation in representative_sequence() {
+            second.apply(observation);
         }
         let first_events = collect(&mut first, RuntimeClientCursor::new(0));
         let second_events = collect(&mut second, RuntimeClientCursor::new(0));
@@ -2130,6 +2265,7 @@ mod tests {
                 model: "m".to_owned(),
             },
             RuntimeEvent::ModelRequestFailed {
+                request_id: RequestId::new("request:9:attempt-1:1:1:0"),
                 error: ModelError {
                     kind: ModelErrorKind::RateLimit,
                     message: "retry".to_owned(),
@@ -2231,6 +2367,7 @@ mod tests {
         apply_event(
             &mut projection,
             RuntimeEvent::ModelRequestCompleted {
+                request_id: RequestId::new("request:9:attempt-1:1:1:0"),
                 finish_reason: ModelFinishReason::Stop,
                 usage: Some(ModelUsage {
                     input_tokens: 10,
@@ -2386,20 +2523,8 @@ mod tests {
                 attempt_id: attempt(),
             },
         );
-        apply_event(
-            &mut projection,
-            RuntimeEvent::AssistantMessageStarted {
-                message_id: MessageId::new("msg-1"),
-            },
-        );
-        apply_event(
-            &mut projection,
-            RuntimeEvent::AssistantTextDelta {
-                message_id: MessageId::new("msg-1"),
-                block_index: ContentBlockIndex::new(0),
-                delta: "hello ".to_owned(),
-            },
-        );
+        apply_publication_open(&mut projection);
+        apply_frame(&mut projection, 0, text_frame("hello "));
         let (snapshot, cursor) = projection.snapshot().expect("snapshot");
         let in_flight = snapshot
             .attempt
@@ -2415,14 +2540,7 @@ mod tests {
         );
         // Resume after C delivers exactly the remaining delta, never a
         // duplicate of the accumulated text.
-        apply_event(
-            &mut projection,
-            RuntimeEvent::AssistantTextDelta {
-                message_id: MessageId::new("msg-1"),
-                block_index: ContentBlockIndex::new(0),
-                delta: "world".to_owned(),
-            },
-        );
+        apply_frame(&mut projection, 1, text_frame("world"));
         let resumed = collect(&mut projection, cursor);
         assert_eq!(resumed.len(), 1, "exactly one delta is published after C");
         assert!(matches!(
@@ -2462,7 +2580,7 @@ mod tests {
                 attempt_id: attempt(),
             },
         );
-        for call in [
+        for (sequence, call) in [
             ToolCallStart {
                 id: ToolCallId::new("call_a"),
                 tool_id: ToolId::new("tool-alpha"),
@@ -2473,11 +2591,14 @@ mod tests {
                 tool_id: ToolId::new("tool-beta"),
                 name: "beta".to_owned(),
             },
-        ] {
-            apply_event(
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            apply_frame(
                 &mut projection,
-                RuntimeEvent::ToolCallStarted {
-                    message_id: MessageId::new("msg-1"),
+                sequence as u64,
+                PublicationPayload::ProposedToolCallStarted {
                     block_index: ContentBlockIndex::new(0),
                     call,
                 },
@@ -2540,15 +2661,8 @@ mod tests {
                 attempt_id: attempt(),
             },
         );
-        for index in 0..10 {
-            apply_event(
-                &mut projection,
-                RuntimeEvent::AssistantTextDelta {
-                    message_id: MessageId::new("msg-1"),
-                    block_index: ContentBlockIndex::new(0),
-                    delta: format!("{index}"),
-                },
-            );
+        for index in 0..10u64 {
+            apply_frame(&mut projection, index, text_frame(&index.to_string()));
         }
         let (_, cursor) = projection.snapshot().expect("snapshot");
         assert_eq!(cursor, RuntimeClientCursor::new(11));
@@ -2580,21 +2694,9 @@ mod tests {
             model_view(),
             4,
         );
-        apply_event(
-            &mut projection,
-            RuntimeEvent::AssistantMessageStarted {
-                message_id: MessageId::new("msg-1"),
-            },
-        );
-        for index in 0..20 {
-            apply_event(
-                &mut projection,
-                RuntimeEvent::AssistantTextDelta {
-                    message_id: MessageId::new("msg-1"),
-                    block_index: ContentBlockIndex::new(0),
-                    delta: format!("{index}"),
-                },
-            );
+        apply_publication_open(&mut projection);
+        for index in 0..20u64 {
+            apply_frame(&mut projection, index, text_frame(&index.to_string()));
         }
         let error = projection
             .subscribe(RuntimeClientCursor::new(1))
@@ -2651,26 +2753,14 @@ mod tests {
             model_view(),
             limit,
         );
-        apply_event(
-            &mut projection,
-            RuntimeEvent::AssistantMessageStarted {
-                message_id: MessageId::new("msg-1"),
-            },
-        );
+        apply_publication_open(&mut projection);
         let (stalled, _notify) = projection
             .subscribe(RuntimeClientCursor::new(1))
             .expect("the current cursor is serviceable");
 
         // The subscriber never polls while 200 events are published.
-        for index in 0..200 {
-            apply_event(
-                &mut projection,
-                RuntimeEvent::AssistantTextDelta {
-                    message_id: MessageId::new("msg-1"),
-                    block_index: ContentBlockIndex::new(0),
-                    delta: format!("{index}"),
-                },
-            );
+        for index in 0..200u64 {
+            apply_frame(&mut projection, index, text_frame(&index.to_string()));
             assert!(
                 projection.replay_len() <= limit,
                 "the one retained backlog stays within its bound at every publication"
@@ -2707,15 +2797,8 @@ mod tests {
             .subscribe(projection.cursor())
             .expect("the current cursor is serviceable");
         let base = projection.cursor().get();
-        for step in 1..=3 {
-            apply_event(
-                &mut projection,
-                RuntimeEvent::AssistantTextDelta {
-                    message_id: MessageId::new("msg-1"),
-                    block_index: ContentBlockIndex::new(0),
-                    delta: "x".to_owned(),
-                },
-            );
+        for step in 1..=3u64 {
+            apply_frame(&mut projection, 199 + step, text_frame("x"));
             let poll = projection.poll_subscriber(live);
             let SubscriberPoll::Event(event) = poll else {
                 panic!("the live subscriber must receive, got {poll:?}");
@@ -2744,14 +2827,7 @@ mod tests {
         );
         assert_eq!(projection.cursor(), RuntimeClientCursor::new(u64::MAX));
         apply_event(&mut projection, RuntimeEvent::TurnStarted);
-        apply_event(
-            &mut projection,
-            RuntimeEvent::AssistantTextDelta {
-                message_id: MessageId::new("msg-1"),
-                block_index: ContentBlockIndex::new(0),
-                delta: "x".to_owned(),
-            },
-        );
+        apply_frame(&mut projection, 0, text_frame("x"));
         assert_eq!(
             projection.cursor(),
             RuntimeClientCursor::new(u64::MAX),
