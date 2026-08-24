@@ -83,7 +83,7 @@ FILLER = _filler(COMPACTION_MARKER)
 SUMMARY_TEXT = "conformance summary: the assistant produced one long report."
 #: The exact deterministic prefix `ModelBackedSummarizer` sends. A summary
 #: request is identified structurally, never by guessing at its content.
-SUMMARY_INSTRUCTION = "Summarize the following conversation history for continuation."
+SUMMARY_INSTRUCTION = "Summarize the following retired conversation history"
 
 # -- repeated compaction ---------------------------------------------------
 

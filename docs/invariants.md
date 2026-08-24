@@ -1822,6 +1822,34 @@ window minus effective output budget; tools, Agent Status, Skill catalog, and
 provider continuation are absent from this invocation. Retention remains a
 token target, not a message-count target.
 
+The primary request and summary side request have different lineages. A
+primary request uses the attempt-pinned Runtime Resource Snapshot and
+CapabilitySnapshot, current Effective System Prompt, active Surface, current
+Tools, and compatible primary continuation. The summary side request contains
+only runtime-owned summary guidance plus the exact selected retired messages.
+It has no Tools, primary System/project/Skill/extension guidance, primary
+continuation, prompt-prefix dependency, or provider-cache continuity. It does
+not recurse through the Agent Loop. The Pi-inspired organization of the
+guidance is optional free-form prompt guidance; the durable contract remains
+`Result<String, ContextError>`, with no JSON/schema/heading parser or typed
+summary fields. Any useful non-empty text is accepted, while empty or
+whitespace-only text fails.
+
+Runtime observations in the retired span remain historical evidence. A
+summary may say that a task ran earlier and later completed, but summary text
+never reconstructs current Agent Status, background ownership, Tool execution,
+or subagent state. Missing extension Status output is not completion unless
+that extension's explicit contract says so.
+
+The Ledger is immutable historical fact storage; the Surface is the active
+historical representation sent to the primary model; compaction replaces one
+Surface span only; and RequestSnapshot freezes exact historical request-time
+System bytes, ordered sections, Tool definitions, model values, Surface
+revision, and continuation. The process-local Runtime Resource Snapshot is
+current executable authority, not durable compaction state. Compaction never
+discovers or reloads it; explicit reload remains quiescent, and cold reopen
+may publish a new generation only for future attempts.
+
 A successful compaction must make measurable progress: coverage advances and
 the deterministic post-compaction estimate decreases. Invalid, stale,
 cancelled, failed, or post-summary-fit compactions leave both Ledger and

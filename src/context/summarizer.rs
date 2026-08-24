@@ -121,9 +121,7 @@ pub struct ModelBackedSummarizer {
     invocation: ResolvedModelInvocation,
 }
 
-const SUMMARY_INSTRUCTION: &str = "Summarize the following conversation history for continuation. \
-     Preserve all decisions, tool outcomes, and open threads; produce a \
-     compact factual summary. Output only the summary text.";
+const SUMMARY_INSTRUCTION: &str = "Summarize the following retired conversation history so a later primary model turn can continue the work. Preserve, where applicable, the user's goal; important constraints and preferences; progress and completed work; current work and blockers; key decisions and rationale; important tool outcomes; unresolved threads; next steps; important files, artifacts, paths, and references; and relevant historical runtime observations. Treat Agent Status and other runtime observations as historical evidence, not live authority: for example, observations that a task was running at one time and completed later may be summarized as having run earlier and completed, never as a claim about what is currently running or completed. If an extension Status section is absent from a later observation, do not infer lifecycle completion or disappearance unless that section's explicit contract says absence has that meaning. Use concise factual free-form text. Any organization or headings are prompt guidance only, not a required schema; output only the summary text.";
 
 impl ModelBackedSummarizer {
     /// Creates a summarizer over one resolved summary invocation.

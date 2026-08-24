@@ -587,6 +587,102 @@ fn compaction_cannot_remove_request_time_skill_catalog_guidance() {
     );
 }
 
+/// Proactive compaction uses the complete frozen `ContextAssembly`, including
+/// extension System sections, before it selects a Surface span. Otherwise a
+/// candidate can pass baseline accounting and fail again after staging the
+/// real request-time System authority.
+#[tokio::test]
+async fn proactive_compaction_accounts_for_frozen_extension_system_sections() {
+    let extension_guidance = "[baseline-extension-system-guidance]\n".repeat(6);
+    let mut assembly = ContextAssembly::new();
+    let identity = assembly
+        .register_extension(
+            "baseline.extension",
+            Some("generation-1".to_owned()),
+            Arc::new(|_: &rustx::context::ContributorInputSnapshot| Ok(Vec::new())),
+        )
+        .expect("register extension");
+    assembly
+        .register_extension_system_section(&identity, extension_guidance.clone())
+        .expect("register extension System section");
+
+    let model = fake_model(vec![vec![
+        FakeStep::Emit(started()),
+        FakeStep::Emit(text_delta(0, "answer")),
+        FakeStep::Emit(done(ModelFinishReason::Stop)),
+    ]]);
+    let summarizer = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
+        "baseline summary".to_owned(),
+    )]));
+    let runtime = ContextRuntime::with_scripted_summarizer_and_assembly(
+        engine(250, 0, 100, weighted(100, 10, 0)),
+        summarizer.clone(),
+        rustx::context::AgentStatusComposer::default(),
+        assembly,
+        CompactionBudgets::new(1, 1, 1_000_000),
+    );
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let tool_runtime = common::tool_runtime("conv-1");
+    let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            request(
+                "attempt-1",
+                vec![
+                    user("old", "old history"),
+                    user("middle", "middle history"),
+                    user("recent", "recent history"),
+                ],
+                1,
+                &model,
+            ),
+            capability.into_lease(),
+            &cancellation,
+            runtime,
+            &tool_runtime,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime")
+        .run()
+        .await,
+        tool_runtime.durable_store().as_ref(),
+    );
+    assert_outcome(
+        &result,
+        &AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop,
+        },
+    );
+
+    let summary_requests = summarizer.requests();
+    assert_eq!(summary_requests.len(), 1);
+    assert_eq!(
+        summary_requests[0]
+            .retired
+            .iter()
+            .map(message_id_of)
+            .collect::<Vec<_>>(),
+        vec!["old", "middle"],
+        "the full frozen System authority makes the one-message candidate fail"
+    );
+    assert_eq!(
+        result
+            .conversation
+            .active_ids()
+            .iter()
+            .map(MessageId::as_str)
+            .collect::<Vec<_>>(),
+        vec!["conv-1-summary-1", "recent", "attempt-1-agent-1"]
+    );
+    let requests = model.requests();
+    assert_eq!(requests.len(), 1);
+    assert!(
+        requests[0]
+            .effective_system_prompt
+            .contains(&extension_guidance)
+    );
+}
+
 /// The projection is exactly the current Surface, in Surface order, as
 /// complete canonical messages — and it is a pure function of that Surface
 /// revision.
@@ -1341,6 +1437,91 @@ fn candidate_selection_is_deterministic() {
         )
         .expect("plan again");
     assert_eq!(first, second);
+}
+
+/// Retention is a token target over a deterministic inclusive Surface prefix,
+/// and the canonical active sequence has no hidden System barrier.
+#[test]
+fn planner_selects_the_exact_inclusive_span_without_a_system_barrier() {
+    let history = state(vec![
+        user("old", "old history"),
+        user("middle", "middle history"),
+        user("recent", "recent history"),
+        user("newest", "newest history"),
+    ]);
+    let retaining = engine(
+        1_000,
+        0,
+        30,
+        scripted(
+            10,
+            10,
+            0,
+            &[("old", 40), ("middle", 30), ("recent", 20), ("newest", 10)],
+        ),
+    );
+    let projection = retaining
+        .build_projection(&history, &[], None, "")
+        .expect("projection");
+    let plan = retaining
+        .plan_compaction(
+            &history,
+            &projection,
+            &[],
+            CompactionBudgets::new(0, 0, 1_000_000),
+            &rustx::context::CompactionConstraints::default(),
+        )
+        .expect("plan");
+    assert_eq!(plan.span.start, MessageId::new("old"));
+    assert_eq!(plan.span.end, MessageId::new("middle"));
+    assert_eq!(
+        plan.retired.iter().map(message_id_of).collect::<Vec<_>>(),
+        vec!["old", "middle"],
+        "the retired span is the exact inclusive prefix selected by the token target"
+    );
+    assert_eq!(
+        history.active_ids()[2..]
+            .iter()
+            .map(MessageId::as_str)
+            .collect::<Vec<_>>(),
+        vec!["recent", "newest"],
+        "the retained suffix is the exact recent Surface suffix"
+    );
+
+    let all_history = engine(
+        1_000,
+        0,
+        0,
+        scripted(
+            10,
+            10,
+            0,
+            &[("old", 40), ("middle", 30), ("recent", 20), ("newest", 10)],
+        ),
+    );
+    let all_projection = all_history
+        .build_projection(&history, &[], None, "")
+        .expect("projection");
+    let all_plan = all_history
+        .plan_compaction(
+            &history,
+            &all_projection,
+            &[],
+            CompactionBudgets::new(0, 0, 1_000_000),
+            &rustx::context::CompactionConstraints::default(),
+        )
+        .expect("the complete canonical prefix is compactable");
+    assert_eq!(all_plan.span.start, MessageId::new("old"));
+    assert_eq!(all_plan.span.end, MessageId::new("newest"));
+    assert_eq!(
+        all_plan
+            .retired
+            .iter()
+            .map(message_id_of)
+            .collect::<Vec<_>>(),
+        vec!["old", "middle", "recent", "newest"],
+        "canonical System authority cannot create an invisible planner barrier"
+    );
 }
 
 /// Message count alone does not control the cut: the token target does.
@@ -4450,7 +4631,25 @@ async fn model_backed_summarizer_issues_a_canonical_request() {
         UserContentBlock::Text(block) => &block.text,
         _ => panic!("summary instruction must be text"),
     };
-    assert!(text.contains("Summarize the following conversation history"));
+    assert!(text.contains("retired conversation history"));
+    for required in [
+        "user's goal",
+        "constraints and preferences",
+        "progress and completed work",
+        "current work and blockers",
+        "key decisions and rationale",
+        "important tool outcomes",
+        "unresolved threads",
+        "next steps",
+        "important files, artifacts, paths, and references",
+        "historical evidence, not live authority",
+        "not a required schema",
+    ] {
+        assert!(
+            text.contains(required),
+            "summary instruction must preserve continuation guidance: {required}"
+        );
+    }
     // The serialized input is deterministic and embedded verbatim.
     let serialized = serde_json::to_string(&request).expect("serialize");
     assert!(text.contains(&serialized));

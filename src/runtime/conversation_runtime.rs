@@ -6332,6 +6332,12 @@ mod tests {
             runtime.compact_context().await,
             Err(ManualCompactionError::Busy)
         );
+        assert!(matches!(
+            runtime.reload_resources().await,
+            Err(super::RuntimeResourceReloadError::Busy {
+                reason: super::RuntimeResourceReloadBusyReason::Compaction
+            })
+        ));
         let (during, _) = host.snapshot().expect("snapshot during settlement park");
         assert!(during.context.compaction_in_progress);
         assert_eq!(during.context.compaction_count, 0);
@@ -7131,6 +7137,319 @@ mod tests {
         );
         assert_eq!(snapshots[0].runtime_resource_revision.get(), 1);
         assert_eq!(snapshots[1].runtime_resource_revision.get(), 2);
+    }
+
+    /// A cold reopen publishes current resource authority for a new attempt,
+    /// while the old compaction summary and old `RequestSnapshot` remain exact
+    /// historical values. Reopen does not synthesize a resource-change fact.
+    #[allow(clippy::too_many_lines)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cold_reopen_uses_current_resources_without_rewriting_history() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("workspace/AGENTS.md");
+        std::fs::create_dir_all(path.parent().expect("workspace")).expect("workspace");
+        std::fs::write(&path, "old project authority").expect("old project file");
+
+        let (runtime_a, model_a) = headless_runtime_with_options(
+            &dir,
+            vec![one_turn_script(), text_turn_script("summary-A")],
+            None,
+            None,
+            HeadlessRuntimeOptions {
+                project_context_files: vec![project_file(&path, "old project authority")],
+                ..HeadlessRuntimeOptions::default()
+            },
+        )
+        .await;
+        runtime_a.activate();
+        runtime_a
+            .submit_inbound(text_content("historical request A"))
+            .expect("request A");
+        let _ = await_settled_ledger(&runtime_a).await;
+        let snapshots_a = request_snapshots(&runtime_a.request_history());
+        assert_eq!(snapshots_a.len(), 1);
+        assert!(
+            snapshots_a[0]
+                .effective_system_prompt
+                .contains("old project authority")
+        );
+        let snapshot_a_bytes = serde_json::to_vec(&snapshots_a[0]).expect("snapshot A bytes");
+
+        let outcome = runtime_a
+            .compact_context()
+            .await
+            .expect("compaction under resource generation A");
+        let ledger_a = runtime_a.coordinator_ledger().expect("generation A ledger");
+        let summary_a = ledger_a
+            .iter()
+            .find(|message| {
+                matches!(
+                    message,
+                    MessageBlock::User(user)
+                        if user.id == outcome.summary_message_id
+                            && user.kind == InboundKind::CompactionSummary
+                )
+            })
+            .cloned()
+            .expect("summary A");
+        let summary_a_bytes = serde_json::to_vec(&summary_a).expect("summary A bytes");
+        assert!(
+            ledger_a.iter().all(|message| {
+                !serde_json::to_string(message)
+                    .expect("ledger message JSON")
+                    .contains("old project authority")
+            }),
+            "project instructions remain request-time authority, not history"
+        );
+        runtime_a.shutdown().await.expect("stop generation A");
+        drop(runtime_a);
+        drop(model_a);
+
+        std::fs::write(&path, "new project authority").expect("new project file");
+        let (runtime_b, model_b) = headless_runtime_with_options(
+            &dir,
+            vec![one_turn_script()],
+            None,
+            None,
+            HeadlessRuntimeOptions {
+                project_context_files: vec![project_file(&path, "new project authority")],
+                ..HeadlessRuntimeOptions::default()
+            },
+        )
+        .await;
+        runtime_b.activate();
+        runtime_b
+            .submit_inbound(text_content("new request B"))
+            .expect("request B");
+        let ledger_b = await_settled_ledger(&runtime_b).await;
+        let snapshots_b = request_snapshots(&runtime_b.request_history());
+        assert_eq!(snapshots_b.len(), 2);
+        assert_eq!(
+            serde_json::to_vec(&snapshots_b[0]).expect("reopened snapshot bytes"),
+            snapshot_a_bytes,
+            "cold reopen does not rewrite the old RequestSnapshot"
+        );
+        assert_eq!(
+            serde_json::to_vec(
+                ledger_b
+                    .iter()
+                    .find(|message| {
+                        matches!(
+                            message,
+                            MessageBlock::User(user)
+                                if user.id == outcome.summary_message_id
+                                    && user.kind == InboundKind::CompactionSummary
+                        )
+                    })
+                    .expect("reopened summary A")
+            )
+            .expect("reopened summary bytes"),
+            summary_a_bytes,
+            "cold reopen does not rewrite the old CompactionSummary"
+        );
+        assert!(
+            model_b.requests()[0]
+                .effective_system_prompt
+                .contains("new project authority")
+        );
+        assert!(
+            !model_b.requests()[0]
+                .effective_system_prompt
+                .contains("old project authority")
+        );
+        assert!(
+            snapshots_b[1]
+                .effective_system_prompt
+                .contains("new project authority")
+        );
+        assert!(ledger_b.iter().all(|message| {
+            !serde_json::to_string(message)
+                .expect("ledger message JSON")
+                .contains("resources changed")
+        }));
+        runtime_b.shutdown().await.expect("stop generation B");
+    }
+
+    /// External resource edits made while an admitted provider call is
+    /// parked cannot splice a new generation into that attempt's automatic
+    /// overflow-compaction retry. Project instructions, Skill metadata, and
+    /// Tool definitions all remain byte-identical across the retry.
+    #[allow(clippy::too_many_lines)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn automatic_compaction_keeps_attempt_pinned_resources_after_external_edits() {
+        use crate::model::error::{ModelError, ModelErrorKind};
+        use crate::model::event::ModelEvent;
+
+        fn tool_registry(id: &str, name: &str, description: &str) -> ToolRegistry {
+            let definition = ToolDefinition {
+                id: ToolId::new(id),
+                name: name.to_owned(),
+                description: description.to_owned(),
+                input_schema: serde_json::json!({"type": "object", "properties": {}}),
+                execution_policy: ToolExecutionPolicy::ForegroundOnly,
+                concurrency_policy: ToolConcurrencyPolicy::default(),
+                approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
+                replay_policy: ToolReplayPolicy::Never,
+                origin: ToolOrigin::Builtin,
+            };
+            let tool = FakeTool::new(definition, success_result("unused"));
+            let mut registry = ToolRegistry::new();
+            tool.register(&mut registry);
+            registry
+        }
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let workspace = dir.path().join("workspace");
+        let project_path = workspace.join("AGENTS.md");
+        let skill = workspace.join(".agents/skills/pinned-skill");
+        let skill_markdown = skill.join("SKILL.md");
+        std::fs::create_dir_all(&skill).expect("Skill package");
+        std::fs::write(&project_path, "project authority generation A")
+            .expect("project generation A");
+        std::fs::write(
+            &skill_markdown,
+            "---\nname: pinned-skill\ndescription: Skill generation A.\n---\n\nBody A.\n",
+        )
+        .expect("Skill generation A");
+
+        let loader = Arc::new(MutableResourceLoader::new(vec![project_file(
+            &project_path,
+            "project authority generation B",
+        )]));
+        let loader_trait: Arc<dyn crate::runtime::RuntimeResourceLoader> = loader.clone();
+        let (release, release_rx) = model_release();
+        let overflow_script = vec![
+            FakeStep::ParkUntilReleased(release_rx),
+            FakeStep::Emit(ModelEvent::Started),
+            FakeStep::Emit(ModelEvent::Failed {
+                error: ModelError {
+                    kind: ModelErrorKind::ContextWindowExceeded,
+                    message: "context window exceeded".to_owned(),
+                    retry_after_ms: None,
+                    provider_code: None,
+                },
+            }),
+        ];
+        let (runtime, model) = headless_runtime_with_options(
+            &dir,
+            vec![overflow_script, text_turn_script("s"), one_turn_script()],
+            Some(tool_registry(
+                "tool-generation-a",
+                "tool_generation_a",
+                "Tool generation A",
+            )),
+            None,
+            HeadlessRuntimeOptions {
+                skill_discovery: crate::skills::SkillDiscoveryConfig {
+                    automatic_roots: Vec::new(),
+                    explicit_paths: vec![skill.clone()],
+                },
+                initial_messages: vec![seed_user("old", "old history")],
+                project_context_files: vec![project_file(
+                    &project_path,
+                    "project authority generation A",
+                )],
+                resource_loader: Some(loader_trait),
+                ..HeadlessRuntimeOptions::default()
+            },
+        )
+        .await;
+        runtime.activate();
+        runtime
+            .submit_inbound(text_content("fresh request"))
+            .expect("fresh request");
+        let mut parked = model.parked();
+        parked
+            .wait_for(|is_parked| *is_parked)
+            .await
+            .expect("the first provider request is parked");
+
+        std::fs::write(&project_path, "project authority generation B")
+            .expect("edit project authority");
+        std::fs::write(
+            &skill_markdown,
+            "---\nname: pinned-skill\ndescription: Skill generation B.\n---\n\nBody B.\n",
+        )
+        .expect("edit Skill metadata");
+        loader.set_capability_inputs(crate::capabilities::CapabilityResourceInputs {
+            base_tool_registry: Arc::new(tool_registry(
+                "tool-generation-b",
+                "tool_generation_b",
+                "Tool generation B",
+            )),
+            tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+            skill_discovery: crate::skills::SkillDiscoveryConfig {
+                automatic_roots: Vec::new(),
+                explicit_paths: vec![skill],
+            },
+            mcp_servers: std::collections::BTreeMap::new(),
+            base_environment: runtime.tool_runtime().environment().clone(),
+        });
+        release
+            .send(true)
+            .expect("release the first provider request");
+        let _ = await_settled_ledger(&runtime).await;
+
+        let requests = model.requests();
+        assert_eq!(requests.len(), 3, "overflow, isolated summary, and retry");
+        assert!(
+            requests[0]
+                .effective_system_prompt
+                .contains("project authority generation A")
+        );
+        assert!(
+            requests[0]
+                .effective_system_prompt
+                .contains("Skill generation A.")
+        );
+        assert!(!requests[0].effective_system_prompt.contains("generation B"));
+        assert!(
+            requests[0]
+                .tools
+                .iter()
+                .any(|tool| tool.name == "tool_generation_a")
+        );
+        assert!(
+            requests[0]
+                .tools
+                .iter()
+                .all(|tool| tool.name != "tool_generation_b")
+        );
+
+        assert!(requests[1].tools.is_empty());
+        assert!(requests[1].effective_system_prompt.is_empty());
+        assert!(requests[1].continuation.is_none());
+
+        assert_eq!(
+            requests[2].effective_system_prompt, requests[0].effective_system_prompt,
+            "the retry keeps the admitted System bytes"
+        );
+        assert_eq!(
+            requests[2].tools, requests[0].tools,
+            "the retry keeps the admitted Tool definitions"
+        );
+        assert!(
+            requests[2]
+                .effective_system_prompt
+                .contains("project authority generation A")
+        );
+        assert!(
+            requests[2]
+                .effective_system_prompt
+                .contains("Skill generation A.")
+        );
+        assert!(!requests[2].effective_system_prompt.contains("generation B"));
+        assert!(
+            requests[2]
+                .tools
+                .iter()
+                .all(|tool| tool.name != "tool_generation_b")
+        );
+        assert_eq!(
+            loader.prepare_count(),
+            0,
+            "no reload occurred during compaction"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
