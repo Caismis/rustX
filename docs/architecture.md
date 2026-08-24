@@ -30,13 +30,13 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 5. An incompatible database
+The SQLite schema is development schema version 6. An incompatible database
 fails explicitly; there is no migration chain, legacy reader, compatibility
 fallback, dual write, or old storage mode. File-backed stores use WAL,
 `synchronous=FULL`, foreign-key enforcement, and a busy timeout. A successful
 SQLite commit is the local durability linearization point documented here.
 
-The version-5 physical tables are deliberately semantic rather than generic:
+The version-6 physical tables are deliberately semantic rather than generic:
 
 | Table | Purpose and constraints |
 | --- | --- |
@@ -53,7 +53,7 @@ The version-5 physical tables are deliberately semantic rather than generic:
 | `lifecycle_state` | Durable terminal markers enforcing zero-or-one terminal event and terminal absorption for attempt, turn, and background-execution lifecycles. |
 | `publication_streams` | One frozen publication generation per provider request, with terminal marker and one of the three settlements. |
 | `publication_frames` | Contiguous transient release staging for one publication stream. |
-| `publication_proposals` | Proposal ownership keyed by `(stream_id, ToolCallId)`, plus execution and settlement state. Provider call IDs are publication-scoped. |
+| `publication_proposals` | Proposal ownership keyed by `(stream_id, ToolCallId)`, with frozen block/tool/name identity, explicit `started`/`completed` state, execution, and settlement state. Provider call IDs are publication-scoped. |
 | `publication_audits` | One bounded immutable audit for each non-canonical publication settlement. |
 
 `MessageId`, `InboundSequence`, `SurfaceRevision`, `RequestId`, `EventId`,
@@ -4443,10 +4443,14 @@ Provider ModelEvent delta
 ```
 
 The coalescer (`src/publication/coalescer.rs`) flushes on a bounded
-deterministic policy: a maximum byte threshold, a maximum latency measured
-through an injected `PublicationClock`, a structural boundary (a tool-call
-proposal start or completion), or the stream terminal. Deterministic tests
-install a manually advanced clock; no sleep decides a flush.
+deterministic policy: a maximum byte threshold, a structural boundary (a
+tool-call proposal start or completion), or the stream terminal. When the
+first payload enters an empty buffer, it owns one absolute monotonic deadline
+`oldest_pending_time + max_latency`; later provider events never reset it. The
+coalescer owns that deadline and asks the same `PublicationClock` for the
+wake-up future, so a quiet provider still flushes at the deadline and the
+Agent Loop never starts a fresh full-duration debounce timer. Deterministic
+tests install a manually advanced clock; no wall-clock sleep decides a flush.
 
 ### 6.1.3 The U transaction
 
@@ -4500,7 +4504,29 @@ immutable audit object. A stream that staged ten thousand frames therefore
 leaves either nothing or one bounded record, never O(number-of-frames)
 permanent history.
 
-### 6.1.6 Audit semantics
+### 6.1.6 Proposal staging state machine
+
+`publication_proposals` is the store-owned proposal state machine; the
+assembler and Agent Loop may reject the same malformed sequence earlier, but
+they are not the authority. A `ProposedToolCallStarted` frame creates exactly
+one `(stream_id, call_id)` owner and freezes its block index, tool ID, and
+name. An arguments suffix requires that same stream-local owner, the frozen
+block index, and the `started` state. A completion requires the same owner,
+block index, tool ID, and name, and changes `started` to `completed` exactly
+once. Duplicate starts, duplicate completions, completion without start,
+foreign stream ownership, and suffixes after completion are typed durable
+violations. The complete frame batch is preflighted before any frame, owner,
+sequence, or terminal marker is changed, and the same validator is used by
+ordinary staging and U terminal staging.
+
+Audit consolidation may only materialize a proposal that has this durable
+owner and matching state. C additionally requires every canonical Assistant
+`ToolCall` to match its frozen stream-local owner and a durable `completed`
+state before retaining that owner as canonical. Thus a provider may reuse a
+raw call ID in a later publication, but ownership can never be silently
+reassigned to an earlier stream.
+
+### 6.1.7 Audit semantics
 
 A publication audit records the semantic output rustX durably committed **for
 release**. It is an upper bound on what may have been displayed and never
@@ -4514,7 +4540,7 @@ A publication audit never enters:
 - a tree/fork/clone seed;
 - any future `ModelRequest` context.
 
-### 6.1.7 Model-proposed tool calls versus Tool Plane execution
+### 6.1.8 Model-proposed tool calls versus Tool Plane execution
 
 A tool call appearing in a publication frame or audit is only a **model
 proposal**. The vocabulary names it so (`ProposedToolCallStarted`,
@@ -4537,7 +4563,7 @@ resolve the exact accepted proposal. Audited rows remain permanently barred.
 Transcript and UI consumers therefore distinguish a released proposal from a
 real Tool Plane invocation fact by which plane it came from.
 
-### 6.1.8 Request-pinned resource generation
+### 6.1.9 Request-pinned resource generation
 
 A publication stream is pinned to the exact attempt, turn, request, and
 provisional message identity that opened it. FND-01 (Issue #106) owns resource
@@ -4558,7 +4584,7 @@ A process death followed by a cold reopen may load current resources for
 future requests, but the old stream's publication settlement stays tied to its
 frozen historical request.
 
-### 6.1.9 Intentional tail-latency tradeoff
+### 6.1.10 Intentional tail-latency tradeoff
 
 Any user-facing payload still buffered when provider completion is accepted
 waits for P to commit and then for U to commit before it is released. If no

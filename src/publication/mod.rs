@@ -31,14 +31,16 @@
 //! ```text
 //! Provider ModelEvent delta
 //!   -> in-memory assembler          (canonical message assembly)
-//!   -> bounded publication coalescer(bytes / latency / structure / terminal)
+//!   -> bounded publication coalescer(bytes / oldest-deadline latency / structure / terminal)
 //!   -> typed publication frame
 //!   -> durable publication staging
 //!   -> user-facing release
 //! ```
 //!
-//! [`PublicationCoalescer`] owns the bounded deterministic flush policy.
-//! Latency flushing reads a [`PublicationClock`], so deterministic tests use
+//! [`PublicationCoalescer`] owns the bounded deterministic flush policy. When
+//! the first payload enters an empty buffer it owns one absolute deadline;
+//! later provider events never reset it. The same [`PublicationClock`] owns
+//! the wake-up mechanism, so deterministic tests use
 //! [`ManualPublicationClock`] and never a sleep.
 //!
 //! # Three mutually exclusive settlements
@@ -79,6 +81,9 @@
 //! durable store enforces the hard invariant that no proposal belonging to an
 //! Incomplete or Unaccepted publication may have a dependent
 //! `ToolExecutionStarted`, `ToolResult`, or side-effect authorization.
+//! The store also owns the proposal staging state machine: Started freezes the
+//! stream-local block/tool/name identity, arguments require Started, and
+//! Completion advances it exactly once to Completed.
 
 pub mod coalescer;
 pub mod frame;

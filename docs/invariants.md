@@ -40,7 +40,7 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 5 is the only accepted schema; incompatible files fail
+schema version 6 is the only accepted schema; incompatible files fail
 explicitly and are not migrated.
 
 The durable request-start invariant is strict: the provider adapter cannot be
@@ -2898,9 +2898,14 @@ complete" sequence to crash inside.
 ### Bounded publication writes
 
 Provider chunk size is not the publication unit. The bounded coalescer flushes
-on maximum bytes, maximum latency (measured through an injected clock), a
-structural boundary (a tool-call proposal start or completion), or the stream
-terminal. Nothing is released before its staging transaction commits.
+on maximum bytes, a structural boundary (a tool-call proposal start or
+completion), or the stream terminal. When the first payload enters an empty
+buffer, it owns one absolute monotonic deadline `oldest_pending_time +
+max_latency`; later provider events do not reset or extend it. The coalescer
+owns the deadline and the same `PublicationClock` owns the wake-up mechanism,
+so a quiet provider is released at the deadline without a provider event and
+no new full-duration debounce timer can postpone it. Nothing is released
+before its staging transaction commits.
 
 ### Three mutually exclusive settlements
 
@@ -2964,9 +2969,21 @@ progress, completion, failure, single and batch canonical ToolResult commits,
 recovery repair commits, background authorization, and subagent ownership.
 The proposal key is `(stream_id, ToolCallId)`: provider call IDs are scoped to
 one publication generation, so reuse in another stream is a new exact owner
-and never an `INSERT OR IGNORE` reassignment. Canonical C retains and marks
-its proposal ownership row so legitimate execution and recovery remain
-resolvable; audited ownership is permanently forbidden.
+and never an `INSERT OR IGNORE` reassignment.
+
+The store owns the complete staging state machine. `Started` creates one owner
+and freezes block index, tool ID, and name. Arguments require that exact
+stream-local owner in `Started`; completion requires the same owner and exact
+frozen identity, then changes it once to `Completed`. Duplicate starts,
+duplicate completions, completion without start, foreign stream lookup,
+foreign block index/tool/name, and suffixes after completion are rejected
+before the frame transaction can change rows or sequence. Ordinary staging and
+U terminal staging share this preflight. Audit materialization proves every
+proposal has the matching durable owner/state, while C requires every
+canonical Assistant `ToolCall` to match a completed owner before retaining it
+as canonical. Audited ownership remains permanently forbidden; canonical C
+retains its completed owner so legitimate execution and recovery remain
+resolvable.
 
 ### Request-pinned generation
 

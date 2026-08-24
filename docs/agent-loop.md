@@ -826,7 +826,7 @@ linearization points in a fixed order:
 provider stream begins
     ↓ open_publication_stream          (frozen attempt/turn/request/message identity)
 provider deltas
-    ↓ assembler.push  +  coalescer     (bytes / latency / structure)
+    ↓ assembler.push  +  coalescer     (bytes / oldest-deadline latency / structure)
     ↓ stage_publication_frames         durable staging commit
     ↓ release to the observation seam  ← never before its own commit
 provider terminal
@@ -837,6 +837,25 @@ provider terminal
     ↓ ToolRegistry preflight           a rejection here leaves the stream Unaccepted
     ↓ commit_canonical_publication     C — Ledger + Surface + event + staging clear
 ```
+
+The latency policy is an oldest-payload bound, not a quiet-period debounce.
+When the first payload enters an empty coalescer, it creates one absolute
+monotonic deadline. Later provider events use only the remaining budget and
+cannot restart or extend it; a quiet provider is woken by that deadline. The
+coalescer owns both the deadline and the `PublicationClock` wake future, so
+the Agent Loop does not maintain a second time domain. Byte, structural,
+terminal, failure, and cancellation boundaries still follow their normal
+precedence, and a successful drain is the only point that permits a new
+deadline.
+
+The store also owns the proposal staging state machine. `Started` freezes
+`(stream_id, call_id, block_index, tool_id, name)`, argument suffixes require
+that exact owner in `Started`, and `Completed` requires the same frozen
+identity and advances the owner exactly once. Duplicate, orphan, foreign, or
+post-completion frames are rejected atomically by both ordinary staging and U
+terminal staging. Audit consolidation proves the owner exists; C requires a
+canonical Assistant ToolCall to match a completed owner before that owner is
+retained for Tool Plane execution or recovery.
 
 `run_turn` is the one mutual-exclusion point of settlement. A turn that
 reached canonical acceptance already cleared its stream inside the compound C
