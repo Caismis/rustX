@@ -352,6 +352,11 @@ pub struct AgentExecution<'a> {
     /// request. Exactly one stream is open at a time: a stream settles — as
     /// canonical, unaccepted, or incomplete — before the next one opens.
     publication: Option<OpenPublication>,
+    /// Set when an attempted audit settlement failed. The stream remains in
+    /// durable authority for startup recovery, but the Agent Loop must not
+    /// retry the transition in the same control-flow turn and accidentally
+    /// continue into a second request.
+    publication_settlement_failed: bool,
     /// The optional live observation seam: when attached, every emitted
     /// runtime fact, every committed canonical message, and every composed
     /// Agent Status is observed at its commit linearization point. The
@@ -670,6 +675,7 @@ impl<'a> AgentExecution<'a> {
             publication_policy: CoalescePolicy::default(),
             publication_clock: std::sync::Arc::new(SystemPublicationClock::new()),
             publication: None,
+            publication_settlement_failed: false,
             observer: None,
             #[cfg(test)]
             continuation_pause: std::sync::Mutex::new(None),
@@ -844,7 +850,13 @@ impl<'a> AgentExecution<'a> {
     /// terminalization can therefore never both happen for one stream.
     async fn run_turn(&mut self) -> Option<Terminal> {
         let terminal = self.run_turn_body().await;
-        self.settle_publication_audit();
+        if !self.publication_settlement_failed
+            && let Err(error) = self.settle_publication_audit()
+        {
+            return Some(Terminal::Failed {
+                failure: AttemptFailure::Runtime { error },
+            });
+        }
         terminal
     }
 
@@ -856,8 +868,12 @@ impl<'a> AgentExecution<'a> {
         // retry stays inside this function and therefore retains the accepted
         // context below.
         self.accepted_context = None;
-        let assistant_message_id =
-            MessageId::new(format!("{}-agent-{}", self.request.attempt_id, self.turn));
+        let assistant_message_id = RequestIdentity {
+            attempt_id: self.request.attempt_id.clone(),
+            turn: TurnId::new(self.turn.to_string()),
+            retry_number: 0,
+        }
+        .provisional_message_id();
         self.emit(RuntimeEvent::TurnStarted);
         if let Some(message) = self.durable_failure.clone() {
             return Some(Terminal::Failed {
@@ -2250,6 +2266,14 @@ impl<'a> AgentExecution<'a> {
                 reason: self.cancellation.reason(),
             });
         }
+        // The abandoned publication is a durable predecessor of this retry.
+        // It must settle before compaction, a retry snapshot/start commit, or
+        // the second adapter invocation can occur.
+        if let Err(error) = self.settle_publication_audit() {
+            return Err(Terminal::Failed {
+                failure: AttemptFailure::Runtime { error },
+            });
+        }
         let effective_system_prompt = self.effective_system_prompt()?;
         let must_cover = self.continuation_owner.clone();
         // ContextWindowExceeded is a rejected provider request, not evidence
@@ -2290,10 +2314,12 @@ impl<'a> AgentExecution<'a> {
         if let Some(terminal) = self.durable_failure_terminal_from_state() {
             return Err(terminal);
         }
-        let retry_message_id = MessageId::new(format!(
-            "{}-agent-{}-retry-{}",
-            self.request.attempt_id, self.turn, retry_number
-        ));
+        let retry_message_id = RequestIdentity {
+            attempt_id: self.request.attempt_id.clone(),
+            turn: TurnId::new(self.turn.to_string()),
+            retry_number,
+        }
+        .provisional_message_id();
         // The retry is another actual provider request: it stages no new
         // request-scoped context (the original request's start transaction
         // already committed it), freezes its own Request Snapshot, and
@@ -3227,11 +3253,6 @@ impl<'a> AgentExecution<'a> {
     /// during streaming can never re-associate this stream with a newer
     /// generation, and recovery classifies it from these identities alone.
     fn open_publication(&mut self, message_id: &MessageId) {
-        // An overflow retry starts a second provider request inside one turn.
-        // The abandoned request's stream never reached canonical acceptance,
-        // so it settles as an audit before the retry's stream opens; exactly
-        // one stream is open at a time.
-        self.settle_publication_audit();
         let Some(request_id) = self.last_request_id.clone() else {
             self.record_publication_failure(
                 "a publication stream cannot open without a started request",
@@ -3404,23 +3425,34 @@ impl<'a> AgentExecution<'a> {
     /// alone, so this path can never mislabel an Incomplete publication as
     /// Unaccepted (or the reverse) no matter which control-flow exit reached
     /// it. Canonical acceptance of the stream becomes permanently forbidden.
-    fn settle_publication_audit(&mut self) {
-        let Some(publication) = self.publication.take() else {
-            return;
+    fn settle_publication_audit(&mut self) -> Result<(), RuntimeError> {
+        let Some(stream_id) = self
+            .publication
+            .as_ref()
+            .map(|publication| publication.start.stream_id.clone())
+        else {
+            return Ok(());
         };
         match self
             .store
-            .terminalize_publication_audit(&publication.start.stream_id, Utc::now())
+            .terminalize_publication_audit(&stream_id, Utc::now())
         {
             Ok(audit) => {
+                // Only remove the in-memory owner after the durable
+                // settlement committed. On failure it remains the one
+                // recoverable unsettled stream.
+                self.publication.take();
                 if let Some(observer) = self.observer {
                     observer.observe_publication_settled(&self.request.attempt_id, &audit);
                 }
+                Ok(())
             }
             Err(error) => {
-                self.record_publication_failure(&format!(
-                    "the publication audit could not be terminalized durably: {error}"
-                ));
+                let message =
+                    format!("the publication audit could not be terminalized durably: {error}");
+                self.record_publication_failure(&message);
+                self.publication_settlement_failed = true;
+                Err(RuntimeError::DurableStore { message })
             }
         }
     }

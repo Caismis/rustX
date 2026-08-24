@@ -3183,19 +3183,21 @@ async fn overflow_retry_reuses_the_admitted_context_generation() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
-    let result = common::durable_agent_result(
-        AgentExecution::new(
-            request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
-            capability.into_lease(),
-            &cancellation,
-            runtime,
-            &tool_runtime,
-            rustx::agent::AttemptLifecycle::inert(),
-        )
-        .expect("conversation identity matches the tool runtime")
-        .run()
-        .await,
+    let publication = common::RecordingPublicationObserver::default();
+    let mut execution = AgentExecution::new(
+        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
+        capability.into_lease(),
+        &cancellation,
+        runtime,
+        &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
+    )
+    .expect("conversation identity matches the tool runtime");
+    execution.observe(&publication);
+    let result = common::durable_agent_result_with_publication(
+        execution.run().await,
         tool_runtime.durable_store().as_ref(),
+        &publication,
     );
 
     assert_outcome(
@@ -3214,6 +3216,36 @@ async fn overflow_retry_reuses_the_admitted_context_generation() {
         result.snapshot_history()[0].surface_revision,
         result.snapshot_history()[1].surface_revision,
         "compaction changes the retry Surface revision"
+    );
+    let opened = publication.opened();
+    assert_eq!(opened.len(), 2, "each provider request owns one stream");
+    assert_ne!(
+        opened[0].message_id, opened[1].message_id,
+        "the retry freezes its own provisional Assistant identity"
+    );
+    assert_eq!(publication.audits().len(), 1);
+    assert_eq!(
+        publication.audits()[0].kind,
+        rustx::publication::PublicationAuditKind::Incomplete
+    );
+    assert_eq!(
+        publication.trace(),
+        vec![
+            common::PublicationObservation::Opened(opened[0].stream_id.clone()),
+            common::PublicationObservation::Settled(
+                opened[0].stream_id.clone(),
+                rustx::publication::PublicationAuditKind::Incomplete,
+            ),
+            common::PublicationObservation::Opened(opened[1].stream_id.clone()),
+        ],
+        "the abandoned stream settles before the retry stream opens"
+    );
+    assert!(
+        tool_runtime
+            .durable_store()
+            .load_unsettled_publication_streams()
+            .expect("unsettled publication streams")
+            .is_empty()
     );
 
     let requests = model.requests();

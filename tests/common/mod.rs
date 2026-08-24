@@ -42,8 +42,10 @@ use rustx::agent::{
 use rustx::durable::ConversationStore;
 use rustx::events::types::RuntimeEvent;
 use rustx::message::types::MessageBlock;
-use rustx::publication::{PublicationAudit, PublicationFrame, PublicationStreamStart};
-use rustx::runtime::identity::AttemptId;
+use rustx::publication::{
+    PublicationAudit, PublicationAuditKind, PublicationFrame, PublicationStreamStart,
+};
+use rustx::runtime::identity::{AttemptId, PublicationStreamId};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
@@ -623,6 +625,16 @@ pub struct RecordingPublicationObserver {
     opened: Mutex<Vec<PublicationStreamStart>>,
     frames: Mutex<Vec<PublicationFrame>>,
     audits: Mutex<Vec<PublicationAudit>>,
+    trace: Mutex<Vec<PublicationObservation>>,
+}
+
+/// One deterministic publication lifecycle observation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PublicationObservation {
+    /// A physical provider start opened a stream.
+    Opened(PublicationStreamId),
+    /// A non-canonical stream reached its one audit settlement.
+    Settled(PublicationStreamId, PublicationAuditKind),
 }
 
 impl RecordingPublicationObserver {
@@ -642,6 +654,12 @@ impl RecordingPublicationObserver {
     #[must_use]
     pub fn audits(&self) -> Vec<PublicationAudit> {
         self.audits.lock().expect("publication audit lock").clone()
+    }
+
+    /// The stream lifecycle trace, in the order the Agent Loop observed it.
+    #[must_use]
+    pub fn trace(&self) -> Vec<PublicationObservation> {
+        self.trace.lock().expect("publication trace lock").clone()
     }
 
     /// The released text of one block, folded from the frames.
@@ -671,6 +689,10 @@ impl AgentExecutionObserver for RecordingPublicationObserver {
             .lock()
             .expect("publication opened lock")
             .push(start.clone());
+        self.trace
+            .lock()
+            .expect("publication trace lock")
+            .push(PublicationObservation::Opened(start.stream_id.clone()));
     }
 
     fn observe_publication(&self, _attempt_id: &AttemptId, frame: &PublicationFrame) {
@@ -685,6 +707,13 @@ impl AgentExecutionObserver for RecordingPublicationObserver {
             .lock()
             .expect("publication audit lock")
             .push(audit.clone());
+        self.trace
+            .lock()
+            .expect("publication trace lock")
+            .push(PublicationObservation::Settled(
+                audit.stream_id.clone(),
+                audit.kind,
+            ));
     }
 }
 

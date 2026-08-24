@@ -38,7 +38,7 @@ use rustx::publication::{
     PublicationClock, PublicationPayload,
 };
 use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolCallId, ToolId};
-use rustx::runtime::types::CancellationReason;
+use rustx::runtime::types::{CancellationReason, RuntimeClock};
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::{ToolCall, ToolCallStart};
 use support::fake::{FakeModel, FakeStep, fake_model};
@@ -91,6 +91,8 @@ fn context_runtime(model: &Arc<FakeModel>) -> rustx::context::ContextRuntime {
 struct Run {
     audit: common::DurableExecutionAudit,
     clock: Arc<ManualPublicationClock>,
+    publication_opened: Vec<rustx::publication::PublicationStreamStart>,
+    publication_trace: Vec<common::PublicationObservation>,
 }
 
 /// A policy that never flushes on bytes or latency by itself, so a test that
@@ -99,6 +101,17 @@ fn quiet_policy() -> CoalescePolicy {
     CoalescePolicy {
         max_bytes: usize::MAX,
         max_latency_millis: u64::MAX,
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FixedRecoveryClock;
+
+impl RuntimeClock for FixedRecoveryClock {
+    fn now(&self) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339("2026-08-24T12:00:00Z")
+            .expect("fixed recovery timestamp")
+            .with_timezone(&chrono::Utc)
     }
 }
 
@@ -132,6 +145,8 @@ async fn run_with(
     execution.install_publication_policy(policy, Arc::clone(&clock) as Arc<dyn PublicationClock>);
     execution.observe(&publication);
     let result = execution.run().await;
+    let publication_opened = publication.opened();
+    let publication_trace = publication.trace();
     Run {
         audit: common::durable_agent_result_with_publication(
             result,
@@ -139,6 +154,8 @@ async fn run_with(
             &publication,
         ),
         clock,
+        publication_opened,
+        publication_trace,
     }
 }
 
@@ -648,6 +665,96 @@ async fn a_failed_audit_terminalization_leaves_the_stream_unsettled() {
         unsettled[0].audit_kind(),
         PublicationAuditKind::Incomplete,
         "a later recovery reaches the same classification from the same evidence"
+    );
+}
+
+/// Overflow retry preparation is allowed to begin only after the abandoned
+/// publication's audit is durable. If that settlement fails, the attempt
+/// stops at the original stream: no second Request Snapshot, provider start,
+/// adapter invocation, or publication open may exist.
+#[tokio::test]
+async fn failed_overflow_audit_blocks_the_retry_request() {
+    let store = Arc::new(
+        rustx::durable::SqliteConversationStore::in_memory(ConversationId::new(
+            "conv-overflow-audit-fault",
+        ))
+        .expect("durable store"),
+    );
+    store.arm_fail_publication_audit_times(1);
+    let model = fake_model(vec![
+        vec![
+            started(),
+            FakeStep::Emit(ModelEvent::Failed {
+                error: rustx::model::ModelError {
+                    kind: rustx::model::ModelErrorKind::ContextWindowExceeded,
+                    message: "context window exceeded".to_owned(),
+                    retry_after_ms: None,
+                    provider_code: None,
+                },
+            }),
+        ],
+        vec![started(), done(ModelFinishReason::Stop)],
+    ]);
+    let run = run_with(
+        "conv-overflow-audit-fault",
+        &model,
+        ToolRegistry::new(),
+        quiet_policy(),
+        Some(Arc::clone(&store)),
+    )
+    .await;
+
+    assert_eq!(
+        model.requests().len(),
+        1,
+        "the retry adapter is never invoked after audit failure"
+    );
+    assert_eq!(run.audit.snapshot_history().len(), 1);
+    assert_eq!(
+        run.audit
+            .event_history
+            .iter()
+            .filter(|event| matches!(event, RuntimeEvent::ModelRequestStarted { .. }))
+            .count(),
+        1,
+        "only the original Request Snapshot reached ModelRequestStarted"
+    );
+    assert!(
+        !run.audit
+            .event_history
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::ModelRetryScheduled { .. }))
+    );
+    assert_eq!(run.publication_opened.len(), 1);
+    assert!(matches!(
+        run.publication_trace.as_slice(),
+        [common::PublicationObservation::Opened(_)]
+    ));
+    assert_eq!(
+        run.audit
+            .durable_failure_kind
+            .map(rustx::agent::DurableFailureKind::as_str),
+        Some("publication")
+    );
+    assert!(matches!(run.audit.outcome, AttemptOutcome::Failed { .. }));
+
+    let unsettled = store
+        .load_unsettled_publication_streams()
+        .expect("unsettled stream");
+    assert_eq!(unsettled.len(), 1);
+    assert!(
+        store
+            .load_publication_audit(&run.publication_opened[0].stream_id)
+            .expect("audit")
+            .is_none()
+    );
+
+    let report = rustx::runtime::recovery::recover(&*store, &FixedRecoveryClock)
+        .expect("startup recovery classifies the original stream");
+    assert_eq!(report.publication_classes().len(), 1);
+    assert_eq!(
+        report.publication_classes()[0].kind,
+        PublicationAuditKind::Incomplete
     );
 }
 

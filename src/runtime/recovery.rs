@@ -1335,9 +1335,10 @@ impl RecoveryPlan {
     /// The order is fixed and load-bearing:
     ///
     /// ```text
-    /// 1. canonical tool-turn repair   -> the Surface can form a valid model request again
-    /// 2. attempt recovery terminal    -> the interrupted attempt settles exactly once
-    /// 3. background terminal publication -> the model-visible notification, exactly once
+    /// 1. publication audit settlement -> no old stream remains unsettled staging
+    /// 2. canonical tool-turn repair   -> the Surface can form a valid model request again
+    /// 3. attempt recovery terminal    -> the interrupted attempt settles exactly once
+    /// 4. background/subagent terminal publication -> model-visible notifications, exactly once
     /// ```
     ///
     /// Repairing the structure before terminalizing the attempt is what keeps

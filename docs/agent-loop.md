@@ -847,15 +847,45 @@ the P/U evidence. Canonical acceptance and audit terminalization can therefore
 never both happen for one stream.
 
 An overflow retry starts a second provider request inside one turn. The
-abandoned request's stream never reached canonical acceptance, so it settles
-as an audit before the retry's stream opens: exactly one publication stream is
-open at a time.
+abandoned request's stream never reached canonical acceptance, so the Agent
+Loop commits its audit before any retry preparation or second provider start:
+
+```text
+first request ends with recoverable ContextWindowExceeded
+    ↓
+terminalize old publication as Incomplete (must COMMIT)
+    ↓ only after success
+compact / prepare retry
+    ↓
+durably start retry Request Snapshot + ModelRequestStarted
+    ↓
+invoke retry adapter
+    ↓ physical Started
+open retry publication stream
+```
+
+Exactly one publication stream is open at any instant. If the old audit
+transaction fails, the attempt records `DurableFailureKind::Publication` and
+fails at the original request: no compaction, retry schedule, retry snapshot,
+`ModelRequestStarted`, adapter invocation, or second stream is allowed. The
+original stream remains unsettled staging for startup recovery to classify from
+its durable evidence.
 
 A publication-plane failure — a stream that cannot open, frames that cannot
 stage before release, a terminal that cannot commit, an audit that cannot
 terminalize — is a durable-authority failure like any other. The attempt
 reports `DurableFailureKind::Publication` and never returns to a healthy
 durability state.
+
+The durable store independently enforces the publication contract. Opening
+proves the exact Request Snapshot/start-event generation; U and C re-prove
+that identity and the exact successful provider outcome; C also proves the
+frozen provisional Assistant message and its exact event envelope. The store's
+single proposal-dependency transition rejects every dependent Tool Plane
+fact for Incomplete or Unaccepted proposals, including execution outcomes,
+single/batch/recovery ToolResults, background authorization, and subagent
+ownership. Agent Loop order is therefore a necessary sequencing rule, not the
+only protection.
 
 ## 5. Usage
 
