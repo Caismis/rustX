@@ -830,6 +830,14 @@ impl RuntimeClientProjection {
             | RuntimeEvent::BackgroundTerminalPublished { .. }
             | RuntimeEvent::SubagentOwnershipCommitted { .. }
             | RuntimeEvent::SubagentTerminalPublished { .. } => Vec::new(),
+            // The interaction requested/settled facts are durable audit
+            // evidence (Issue #109). The client already learns the live
+            // pending/settled transitions from the coordinator's own
+            // observation seam, so replaying the Journal fact here would
+            // publish the same prompt twice under two different vocabularies.
+            RuntimeEvent::InteractionRequested { .. } | RuntimeEvent::InteractionSettled { .. } => {
+                Vec::new()
+            }
         }
     }
 

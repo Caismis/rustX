@@ -333,6 +333,78 @@ recovery settles the owning interrupted work from durable evidence, does not
 replay the old request, and does not regenerate it from current policy or
 tool configuration.
 
+### Durable interaction audit (FND-04 / Issue #109)
+
+Pending interaction is workflow state; requested/settled facts are audit:
+
+```text
+pending waiter / prompt lifecycle  = process-owned workflow state (never durable)
+requested / settled semantic facts = durable audit evidence (Event Journal)
+```
+
+The Event Journal carries exactly two low-frequency interaction facts,
+`InteractionRequested { interaction_id, subject }` and
+`InteractionSettled { interaction_id, settlement }`, covering Approval and
+Question/`ask_user` alike. The coordinator reaches them only through the
+narrow `ConversationInteractionAudit` capability, which rejects every other
+payload; it holds no Ledger, Surface, publication, or general Journal
+authority. `InteractionRequested` opens `interaction:{id}` and
+`InteractionSettled` closes it exactly once. The durable authority rejects a
+duplicate request, a duplicate or contradictory settlement, a settlement
+without its request, and a settlement whose terminal its subject cannot
+produce; cancellation is the one terminal both subjects share.
+
+Two ordering rules hold:
+
+- **Durable before prompt.** The requested fact commits before rustX releases
+  the prompt to a user-facing client, in the same critical section that admits
+  the pending entry. A failed commit publishes no prompt and fails closed as
+  `Unavailable`, exactly like a missing provider, so no audit record exists
+  for a question no user saw.
+- **Approval settles before execution authority.**
+  `InteractionSettled(Approved)` is durable before `ToolExecutionStarted`,
+  which is durable before the external side effect. The settled fact also
+  commits before the responding client learns its response was accepted, so
+  the user-facing approval response cannot race ahead of durable evidence that
+  the approval existed. A failed settled commit releases the waiter
+  fail-closed as `Unavailable` and answers the client
+  `interaction_audit_failed`.
+
+Denial semantics are unchanged: a denial remains the canonical denied
+`ToolResult` and gains a matching `Denied { reason }` audit fact. A Question
+settlement retains the exact user answer as evidence while the canonical tool
+result carries that answer to the model; the interaction audit records the
+human decision and canonical history records the conversation, without
+duplicating each other.
+
+**A historical `Approved` interaction is audit evidence only. It never grants
+execution authority after recovery/restart.** Recovery has no interaction
+dimension: it takes the attempt identity watermark these facts carry and
+nothing else, reconstructs no waiter, republishes no prompt, and never treats
+an old approval as permission to execute. A call whose `ToolExecutionStarted`
+is absent is a call that never started, and it receives the ordinary
+cancelled/interrupted canonical result slot. After restart the historical
+identity is durably spent in both directions, so current semantics must reach
+a new live approval under a new identity.
+
+Payloads are bounded. A Question subject is stored by value (the Question
+contract already bounds prompt and choices); an Approval subject names
+call/tool identity and the policy reason by value and pins the exact argument
+value by SHA-256 digest, which the canonical `ToolCall` already stores
+by value. Keypresses, focus changes, editing state, and TUI presentation
+details are never interaction facts.
+
+A pending interaction stays pinned to its admitted resource/capability
+generation. `reload_resources` returns `Busy { reason: Interaction }` while a
+waiter owns the attempt, and the complete old generation is retained: external
+edits to `AGENTS.md`-style files, Skills, extension instructions, or Tool
+configuration cannot change the pending prompt, approval subject, policy, Tool
+schema, or execution authority underneath the waiter. Only after settlement
+and attempt completion may a reload publish a new generation, affecting a
+later admitted attempt only. A cold reopen may load current resources for
+future attempts, but it can neither reinterpret nor authorize execution from a
+historical interaction.
+
 The one active Runtime Client attachment is the 0.1 interaction provider. If
 none is present when an `Ask` is published, the coordinator returns
 `Unavailable` and approval fails closed as `Denied`; if `ask_user` cannot find

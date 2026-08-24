@@ -70,9 +70,15 @@ use super::inbox::{
 ///
 /// Version 6 completes that ownership contract. Every proposal row now stores
 /// its frozen block/tool/name identity and its explicit `started` or
-/// `completed` staging state. A v3/v4/v5 database must fail at store open;
-/// there is no migration or compatibility path.
-pub const SQLITE_SCHEMA_VERSION: i64 = 6;
+/// `completed` staging state.
+///
+/// Version 7 froze the Issue #109 durable interaction audit: the
+/// `InteractionRequested` / `InteractionSettled` Journal vocabulary and the
+/// `interaction:{id}` lifecycle domain that makes a settlement exactly-once
+/// and forbids a settled fact without its requested fact. A v3/v4/v5/v6
+/// database must fail at store open; there is no migration or compatibility
+/// path.
+pub const SQLITE_SCHEMA_VERSION: i64 = 7;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -4531,6 +4537,80 @@ fn validate_event_reference(
                 )));
             }
         }
+        // The interaction audit plane (Issue #109). Both facts carry the
+        // canonical event identity of their interaction, so the durable
+        // authority resolves the pair through the unique `event_id` index in
+        // bounded time instead of scanning the Journal.
+        RuntimeEvent::InteractionRequested { interaction_id, .. } => {
+            let canonical =
+                crate::runtime::interaction::interaction_requested_event_id(interaction_id);
+            if envelope.event_id != canonical {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "interaction requested event identity {} does not match the canonical identity {canonical} for {interaction_id}",
+                    envelope.event_id
+                )));
+            }
+            let key = format!("interaction:{interaction_id}");
+            let exists: bool = transaction
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM lifecycle_state WHERE lifecycle_key=?1)",
+                    [&key],
+                    |row| row.get(0),
+                )
+                .map_err(|error| storage(format!("interaction uniqueness probe: {error}")))?;
+            if exists {
+                return Err(ConversationStoreError::TerminalViolation(format!(
+                    "interaction {interaction_id} already has a durable requested fact"
+                )));
+            }
+        }
+        RuntimeEvent::InteractionSettled {
+            interaction_id,
+            settlement,
+        } => {
+            let canonical =
+                crate::runtime::interaction::interaction_settled_event_id(interaction_id);
+            if envelope.event_id != canonical {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "interaction settled event identity {} does not match the canonical identity {canonical} for {interaction_id}",
+                    envelope.event_id
+                )));
+            }
+            // A settlement is meaningless without the request it settles: a
+            // settled-without-requested fact would assert that a decision was
+            // made about a prompt that never durably existed.
+            let requested_id =
+                crate::runtime::interaction::interaction_requested_event_id(interaction_id);
+            let requested = find_event_by_id(transaction, &requested_id)?.ok_or_else(|| {
+                ConversationStoreError::InvalidReference(format!(
+                    "interaction settlement has no durable requested fact for {interaction_id}"
+                ))
+            })?;
+            let RuntimeEvent::InteractionRequested {
+                interaction_id: embedded,
+                subject,
+            } = &requested.event
+            else {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "the interaction requested event {requested_id} is not the typed requested fact"
+                )));
+            };
+            if embedded != interaction_id {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "interaction requested event {requested_id} belongs to {embedded}, not {interaction_id}"
+                )));
+            }
+            if requested.attempt_id != envelope.attempt_id {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "interaction {interaction_id} settled under a foreign attempt envelope"
+                )));
+            }
+            if !subject.accepts(settlement) {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "interaction {interaction_id} settled with a terminal its requested subject cannot produce"
+                )));
+            }
+        }
         RuntimeEvent::AssistantMessageCommitted { message_id } => {
             if !ledger_message_exists(transaction, message_id)? {
                 return Err(ConversationStoreError::InvalidReference(format!(
@@ -4888,6 +4968,20 @@ fn lifecycle_keys(event: &RuntimeEventEnvelope) -> Vec<(String, bool)> {
     if let RuntimeEvent::SubagentTerminalPublished { subagent_id, .. } = &event.event {
         return vec![(format!("subagent:{subagent_id}"), true)];
     }
+    // The interaction lifecycle (Issue #109) is the same shape: opened by the
+    // requested fact — which commits before the prompt reaches a client — and
+    // closed exactly once by the settled fact. It is deliberately its own
+    // lifecycle domain and never touches the enclosing `attempt:`/`turn:`
+    // keys, so an interaction audit fact can neither be blocked by nor block
+    // the attempt's own terminal transition. An interaction that stays open
+    // across a restart is durable evidence of an unanswered prompt; it is
+    // never an instruction to recreate a waiter.
+    if let RuntimeEvent::InteractionRequested { interaction_id, .. } = &event.event {
+        return vec![(format!("interaction:{interaction_id}"), false)];
+    }
+    if let RuntimeEvent::InteractionSettled { interaction_id, .. } = &event.event {
+        return vec![(format!("interaction:{interaction_id}"), true)];
+    }
     let attempt = event.attempt_id.as_ref().or(match &event.event {
         RuntimeEvent::AttemptStarted { attempt_id }
         | RuntimeEvent::AttemptCompleted { attempt_id, .. }
@@ -4925,6 +5019,7 @@ fn is_terminal(event: &RuntimeEvent) -> bool {
             | RuntimeEvent::AttemptFailed { .. }
             | RuntimeEvent::BackgroundTerminalPublished { .. }
             | RuntimeEvent::SubagentTerminalPublished { .. }
+            | RuntimeEvent::InteractionSettled { .. }
     )
 }
 

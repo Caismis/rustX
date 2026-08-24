@@ -60,5 +60,5 @@ impl RuntimeEventSink for RecordingEventSink {
 
 pub use types::{
     AttemptFailure, AttemptLimit, AttemptOutcome, BackgroundTerminalState, EVENT_SCHEMA_VERSION,
-    RuntimeEvent, RuntimeEventEnvelope,
+    InteractionSettlement, InteractionSubject, RuntimeEvent, RuntimeEventEnvelope,
 };

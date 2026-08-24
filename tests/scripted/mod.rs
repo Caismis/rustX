@@ -48,6 +48,7 @@ pub(crate) mod common;
 pub(crate) mod support;
 
 mod issue108_publication;
+mod issue109_interaction_audit;
 mod issue27_multi_compaction;
 mod issue37_binding;
 mod issue37_capability;

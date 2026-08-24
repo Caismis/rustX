@@ -947,6 +947,14 @@ pub enum RuntimeClientError {
         /// The bounded validation diagnostic.
         message: String,
     },
+    /// The response left the interaction pending map, but its durable settled
+    /// fact could not commit (Issue #109). The interaction is settled
+    /// fail-closed and the decision granted no authority; the client is told
+    /// rather than shown an acceptance the durable audit does not support.
+    InteractionAuditFailed {
+        /// The interaction whose settlement was not durably recorded.
+        interaction_id: InteractionId,
+    },
     /// The runtime has not been activated for an `ApprovalMode` update.
     ApprovalModeInactive,
     /// The runtime's durability authority rejected an `ApprovalMode` update.

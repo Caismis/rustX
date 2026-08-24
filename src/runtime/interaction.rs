@@ -19,17 +19,49 @@
 //! Pending interactions are process/operation-owned in 0.1.  They are not
 //! durable workflow records and are not recovered from client state or
 //! current policy configuration.
+//!
+//! # The two planes (Issue #109)
+//!
+//! ```text
+//! pending waiter / prompt lifecycle  = process-owned workflow state (never durable)
+//! requested / settled semantic facts = durable audit evidence (Event Journal)
+//! ```
+//!
+//! The coordinator owns both, and keeps them strictly separate. It commits
+//! the requested fact **before** the prompt is released to a client, and the
+//! settled fact **before** the semantic waiter is released, which is what
+//! makes the durable order
+//!
+//! ```text
+//! InteractionRequested -> prompt reaches the client
+//! InteractionSettled(Approved) -> ToolExecutionStarted -> external side effect
+//! ```
+//!
+//! observable rather than merely intended. Nothing recovers from those facts:
+//! a process death settles or reconciles the enclosing operation through the
+//! existing recovery semantics and never resurrects a prompt waiter, and a
+//! historical `Approved` is audit evidence that never grants execution
+//! authority to a later process.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+use chrono::{DateTime, Utc};
 #[cfg(test)]
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tokio::sync::oneshot;
 
+use crate::durable::ConversationInteractionAudit;
+use crate::events::types::{
+    EVENT_SCHEMA_VERSION, InteractionSettlement, InteractionSubject, RuntimeEvent,
+    RuntimeEventEnvelope,
+};
 use crate::runtime::cancellation::ExecutionCancellation;
-use crate::runtime::identity::{AttemptId, ConversationId, InteractionId, ToolCallId, ToolId};
+use crate::runtime::identity::{
+    AttemptId, ConversationId, EventId, InteractionId, ToolCallId, ToolId, TurnId,
+};
 use crate::runtime::types::{CancellationReason, ConversationLifecycle, LifecycleAdmission};
 use crate::tools::types::{ToolInvocationMode, ToolOrigin};
 
@@ -286,6 +318,255 @@ impl QuestionFacts {
     }
 }
 
+/// The canonical durable identity of one interaction's requested fact.
+///
+/// The identity is derived from the interaction identity alone, so the
+/// durable authority can resolve the requested/settled pair through its unique
+/// `event_id` index instead of scanning the Event Journal.
+#[must_use]
+pub(crate) fn interaction_requested_event_id(interaction_id: &InteractionId) -> EventId {
+    EventId::new(format!("interaction-requested-event:{interaction_id}"))
+}
+
+/// The canonical durable identity of one interaction's settled fact.
+#[must_use]
+pub(crate) fn interaction_settled_event_id(interaction_id: &InteractionId) -> EventId {
+    EventId::new(format!("interaction-settled-event:{interaction_id}"))
+}
+
+/// The lowercase hex SHA-256 of one approval subject's exact arguments.
+///
+/// The audit pins the argument value rather than copying it: the Journal is
+/// the low-frequency plane, and the argument value itself is already durable
+/// by-value in the canonical `ToolCall` the Message Ledger owns.
+fn arguments_digest(arguments: &serde_json::Value) -> String {
+    use std::fmt::Write as _;
+    let mut hasher = Sha256::new();
+    hasher.update(b"rustx-interaction-arguments-v1\n");
+    // `serde_json::Value` serializes object keys in sorted order, so the same
+    // logical arguments always produce the same digest.
+    hasher.update(arguments.to_string().as_bytes());
+    let mut digest = String::new();
+    for byte in hasher.finalize() {
+        let _ = write!(digest, "{byte:02x}");
+    }
+    digest
+}
+
+/// Projects one live request onto its bounded durable audit subject.
+fn audit_subject(kind: &InteractionKind) -> InteractionSubject {
+    match kind {
+        InteractionKind::Approval {
+            call_id,
+            tool_id,
+            tool_name,
+            arguments,
+            reason,
+            ..
+        } => InteractionSubject::Approval {
+            call_id: call_id.clone(),
+            tool_id: tool_id.clone(),
+            tool_name: tool_name.clone(),
+            arguments_digest: arguments_digest(arguments),
+            reason: reason.clone(),
+        },
+        InteractionKind::Question {
+            prompt,
+            choices,
+            allow_free_text,
+        } => InteractionSubject::Question {
+            prompt: prompt.clone(),
+            choices: choices.clone(),
+            allow_free_text: *allow_free_text,
+        },
+    }
+}
+
+/// Projects one terminal outcome onto its bounded durable settlement.
+///
+/// [`InteractionOutcome::Unavailable`] has no settlement: it is refused before
+/// the requested fact commits, so there is never an audit record for a prompt
+/// no user saw.
+fn audit_settlement(outcome: &InteractionOutcome) -> Option<InteractionSettlement> {
+    match outcome {
+        InteractionOutcome::Answered { response } => match response {
+            InteractionResponse::Approval { decision } => Some(match decision {
+                ApprovalDecision::Allow => InteractionSettlement::Approved,
+                ApprovalDecision::Deny { reason } => InteractionSettlement::Denied {
+                    reason: reason.clone(),
+                },
+            }),
+            InteractionResponse::Question { answer } => Some(InteractionSettlement::Answered {
+                answer: answer.clone(),
+            }),
+        },
+        InteractionOutcome::Cancelled { reason } => {
+            Some(InteractionSettlement::Cancelled { reason: *reason })
+        }
+        InteractionOutcome::Unavailable => None,
+    }
+}
+
+/// Builds the durable requested envelope of one live request.
+fn requested_envelope(
+    request: &InteractionRequest,
+    timestamp: DateTime<Utc>,
+) -> RuntimeEventEnvelope {
+    RuntimeEventEnvelope {
+        schema_version: EVENT_SCHEMA_VERSION,
+        event_id: interaction_requested_event_id(&request.id),
+        sequence: 0,
+        conversation_id: request.conversation_id.clone(),
+        attempt_id: Some(request.attempt_id.clone()),
+        turn_id: Some(TurnId::new(request.turn.to_string())),
+        timestamp,
+        event: RuntimeEvent::InteractionRequested {
+            interaction_id: request.id.clone(),
+            subject: audit_subject(&request.kind),
+        },
+    }
+}
+
+/// Builds the durable settled envelope of one interaction, pinned to the
+/// exact attempt/turn envelope its requested fact committed under.
+fn settled_envelope(
+    request: &InteractionRequest,
+    settlement: InteractionSettlement,
+    timestamp: DateTime<Utc>,
+) -> RuntimeEventEnvelope {
+    RuntimeEventEnvelope {
+        schema_version: EVENT_SCHEMA_VERSION,
+        event_id: interaction_settled_event_id(&request.id),
+        sequence: 0,
+        conversation_id: request.conversation_id.clone(),
+        attempt_id: Some(request.attempt_id.clone()),
+        turn_id: Some(TurnId::new(request.turn.to_string())),
+        timestamp,
+        event: RuntimeEvent::InteractionSettled {
+            interaction_id: request.id.clone(),
+            settlement,
+        },
+    }
+}
+
+/// A deterministic in-memory interaction audit capability for tests.
+///
+/// It records exactly the envelopes the coordinator commits, in commit order,
+/// and can be armed to fail the next requested or settled commit. It is a
+/// recording seam only: it is never a durable authority, and the real
+/// exactly-once/ordering rules are proven against
+/// [`SqliteConversationStore`](crate::durable::SqliteConversationStore).
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct RecordingInteractionAudit {
+    conversation_id: ConversationId,
+    state: Mutex<RecordingInteractionAuditState>,
+}
+
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct RecordingInteractionAuditState {
+    committed: Vec<RuntimeEventEnvelope>,
+    fail_requested: bool,
+    fail_settled: bool,
+}
+
+#[cfg(test)]
+impl RecordingInteractionAudit {
+    pub(crate) fn new(conversation_id: ConversationId) -> Arc<Self> {
+        Arc::new(Self {
+            conversation_id,
+            state: Mutex::new(RecordingInteractionAuditState::default()),
+        })
+    }
+
+    /// The committed audit facts in durable commit order.
+    pub(crate) fn events(&self) -> Vec<RuntimeEvent> {
+        self.state
+            .lock()
+            .expect("recording interaction audit lock")
+            .committed
+            .iter()
+            .map(|envelope| envelope.event.clone())
+            .collect()
+    }
+
+    /// The committed audit envelopes in durable commit order.
+    pub(crate) fn committed(&self) -> Vec<RuntimeEventEnvelope> {
+        self.state
+            .lock()
+            .expect("recording interaction audit lock")
+            .committed
+            .clone()
+    }
+
+    /// Fails the next requested commit exactly once.
+    pub(crate) fn fail_next_requested(&self) {
+        self.state
+            .lock()
+            .expect("recording interaction audit lock")
+            .fail_requested = true;
+    }
+
+    /// Fails the next settled commit exactly once.
+    pub(crate) fn fail_next_settled(&self) {
+        self.state
+            .lock()
+            .expect("recording interaction audit lock")
+            .fail_settled = true;
+    }
+
+    fn commit(
+        &self,
+        event: RuntimeEventEnvelope,
+        fail: bool,
+    ) -> Result<RuntimeEventEnvelope, crate::durable::ConversationStoreError> {
+        let mut state = self.state.lock().expect("recording interaction audit lock");
+        if fail {
+            return Err(crate::durable::ConversationStoreError::Storage(
+                "fault injected: interaction audit commit".to_owned(),
+            ));
+        }
+        state.committed.push(event.clone());
+        Ok(event)
+    }
+}
+
+#[cfg(test)]
+impl ConversationInteractionAudit for RecordingInteractionAudit {
+    fn conversation_id(&self) -> &ConversationId {
+        &self.conversation_id
+    }
+
+    fn commit_interaction_requested(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, crate::durable::ConversationStoreError> {
+        let fail = std::mem::take(
+            &mut self
+                .state
+                .lock()
+                .expect("recording interaction audit lock")
+                .fail_requested,
+        );
+        self.commit(event, fail)
+    }
+
+    fn commit_interaction_settled(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, crate::durable::ConversationStoreError> {
+        let fail = std::mem::take(
+            &mut self
+                .state
+                .lock()
+                .expect("recording interaction audit lock")
+                .fail_settled,
+        );
+        self.commit(event, fail)
+    }
+}
+
 /// A Runtime Client-facing observation sink for the coordinator.
 ///
 /// Implementations must be leaf publications. `on_pending` runs while the
@@ -516,6 +797,10 @@ struct CoordinatorState {
 pub(crate) struct InteractionCoordinator {
     conversation_id: ConversationId,
     lifecycle: ConversationLifecycle,
+    /// The narrow durable audit capability. It carries no Ledger, Surface,
+    /// publication, or general Journal authority: the coordinator may commit
+    /// exactly the requested and settled facts of its own interactions.
+    audit: Arc<dyn ConversationInteractionAudit>,
     state: Mutex<CoordinatorState>,
     observer: Mutex<Option<Arc<dyn InteractionObserver>>>,
     #[cfg(test)]
@@ -576,12 +861,23 @@ impl core::fmt::Debug for InteractionCoordinator {
 }
 
 impl InteractionCoordinator {
-    /// Creates the coordinator for one conversation and shared lifecycle.
+    /// Creates the coordinator for one conversation, shared lifecycle, and
+    /// narrow durable audit capability.
     #[must_use]
-    pub(crate) fn new(conversation_id: ConversationId, lifecycle: ConversationLifecycle) -> Self {
+    pub(crate) fn new(
+        conversation_id: ConversationId,
+        lifecycle: ConversationLifecycle,
+        audit: Arc<dyn ConversationInteractionAudit>,
+    ) -> Self {
+        debug_assert_eq!(
+            audit.conversation_id(),
+            &conversation_id,
+            "the interaction audit capability serves one conversation"
+        );
         Self {
             conversation_id,
             lifecycle,
+            audit,
             state: Mutex::new(CoordinatorState::default()),
             observer: Mutex::new(None),
             #[cfg(test)]
@@ -676,8 +972,8 @@ impl InteractionCoordinator {
     /// # Errors
     ///
     /// Returns [`InteractionOutcome::Unavailable`] when no interaction-capable
-    /// provider is present or the shared lifecycle has already closed
-    /// semantic admission.
+    /// provider is present, the shared lifecycle has already closed semantic
+    /// admission, or the durable requested fact could not commit.
     ///
     /// # Panics
     ///
@@ -690,33 +986,13 @@ impl InteractionCoordinator {
     ) -> Result<InteractionTicket, InteractionOutcome> {
         let id = self.allocate_id(&attempt_id)?;
         let request = facts.into_request(self.conversation_id.clone(), attempt_id, id.clone());
-        let (sender, receiver) = oneshot::channel();
-        self.lifecycle
-            .admit_running_commit(|admission| {
-                let mut state = self.state.lock().expect("interaction state poisoned");
-                if !state.provider_available {
-                    return Err(InteractionOutcome::Unavailable);
-                }
-                let previous = state.pending.insert(
-                    id.clone(),
-                    PendingInteraction {
-                        request: request.clone(),
-                        cancellation: cancellation.clone(),
-                        sender,
-                        admission,
-                    },
-                );
-                debug_assert!(previous.is_none(), "interaction identity was reused");
-                self.notify_pending(&request);
-                drop(state);
-                Ok(InteractionTicket { id, receiver })
-            })
-            .map_err(|_| InteractionOutcome::Unavailable)?
+        self.publish(request, cancellation)
     }
 
     /// Publishes one bounded Question request and returns the owner-owned
     /// waiter. It uses the exact same lifecycle admission, identity,
-    /// publication, and terminal settlement path as Approval.
+    /// durable-before-prompt publication, and terminal settlement path as
+    /// Approval.
     fn publish_question_with_cancellation(
         &self,
         attempt_id: AttemptId,
@@ -728,6 +1004,24 @@ impl InteractionCoordinator {
         }
         let id = self.allocate_id(&attempt_id)?;
         let request = facts.into_request(self.conversation_id.clone(), attempt_id, id.clone());
+        self.publish(request, cancellation)
+    }
+
+    /// The one publication transition shared by Approval and Question.
+    ///
+    /// The durable requested fact commits inside the same critical section
+    /// that admits the pending entry, and strictly **before**
+    /// [`Self::notify_pending`] releases the prompt to a client. A failed
+    /// commit therefore leaves no pending entry, publishes no prompt, and
+    /// fails closed as [`InteractionOutcome::Unavailable`] — the same
+    /// outcome as a missing provider — so no user is ever asked a question
+    /// that durable state does not record.
+    fn publish(
+        &self,
+        request: InteractionRequest,
+        cancellation: &ExecutionCancellation,
+    ) -> Result<InteractionTicket, InteractionOutcome> {
+        let id = request.id.clone();
         let (sender, receiver) = oneshot::channel();
         self.lifecycle
             .admit_running_commit(|admission| {
@@ -735,17 +1029,27 @@ impl InteractionCoordinator {
                 if !state.provider_available {
                     return Err(InteractionOutcome::Unavailable);
                 }
+                if self
+                    .audit
+                    .commit_interaction_requested(requested_envelope(&request, Utc::now()))
+                    .is_err()
+                {
+                    return Err(InteractionOutcome::Unavailable);
+                }
                 let previous = state.pending.insert(
                     id.clone(),
                     PendingInteraction {
-                        request: request.clone(),
+                        request,
                         cancellation: cancellation.clone(),
                         sender,
                         admission,
                     },
                 );
                 debug_assert!(previous.is_none(), "interaction identity was reused");
-                self.notify_pending(&request);
+                // The prompt is released from the admitted entry itself, so a
+                // client can never be shown a request the pending map does not
+                // already own.
+                self.notify_pending(&state.pending[&id].request);
                 drop(state);
                 Ok(InteractionTicket { id, receiver })
             })
@@ -829,22 +1133,30 @@ impl InteractionCoordinator {
     /// # Errors
     ///
     /// Returns [`InteractionError::NotPending`] for a stale, duplicate, or
-    /// already-cancelled identity, and [`InteractionError::InvalidResponse`]
+    /// already-cancelled identity, [`InteractionError::InvalidResponse`]
     /// when the typed response violates the bounded Approval or Question
-    /// contract.
+    /// contract, and [`InteractionError::AuditFailed`] when the durable
+    /// settled fact could not commit. The last case is reported to the client
+    /// exactly because the response must never appear accepted ahead of the
+    /// durable evidence that it existed.
     pub(crate) fn respond(
         &self,
         interaction_id: &InteractionId,
         response: InteractionResponse,
     ) -> Result<(), InteractionError> {
         let outcome = InteractionOutcome::Answered { response };
-        if self.settle(interaction_id, outcome, true)? {
-            Err(InteractionError::NotPending {
+        let transition = self.settle(interaction_id, outcome, true)?;
+        if transition.cancellation_won {
+            return Err(InteractionError::NotPending {
                 interaction_id: interaction_id.clone(),
-            })
-        } else {
-            Ok(())
+            });
         }
+        if !transition.audit_committed {
+            return Err(InteractionError::AuditFailed {
+                interaction_id: interaction_id.clone(),
+            });
+        }
+        Ok(())
     }
 
     /// Cancels one pending interaction with the owner's first-winner cause.
@@ -927,7 +1239,7 @@ impl InteractionCoordinator {
         interaction_id: &InteractionId,
         mut outcome: InteractionOutcome,
         validate_response: bool,
-    ) -> Result<bool, InteractionError> {
+    ) -> Result<SettleTransition, InteractionError> {
         // Keep the observer callback inside the lifecycle's narrow
         // settlement path. This admission is acquired before the pending
         // state lock, preserving the lifecycle -> coordinator lock order
@@ -966,6 +1278,30 @@ impl InteractionCoordinator {
             .pending
             .remove(interaction_id)
             .expect("pending entry existed under the same lock");
+        // Durable-before-release (Issue #109): the one terminal transition is
+        // committed to the audit plane before the semantic waiter is notified
+        // and before the responding client is told the response was accepted.
+        // For Approval this is exactly what keeps
+        // `InteractionSettled(Approved)` ahead of `ToolExecutionStarted`: the
+        // waiter cannot reach the tool-start frontier until this returns.
+        //
+        // A failed commit must not grant authority the durable record does not
+        // support, so the waiter receives `Unavailable` instead — the same
+        // fail-closed outcome Approval maps to a denial. The interaction stays
+        // durably open, which is the honest record: a prompt existed and its
+        // settlement never committed.
+        let settled = audit_settlement(&outcome).is_some_and(|settlement| {
+            self.audit
+                .commit_interaction_settled(settled_envelope(
+                    &pending.request,
+                    settlement,
+                    Utc::now(),
+                ))
+                .is_ok()
+        });
+        if !settled {
+            outcome = InteractionOutcome::Unavailable;
+        }
         let observer = self
             .observer
             .lock()
@@ -985,7 +1321,10 @@ impl InteractionCoordinator {
         #[cfg(test)]
         self.park_after_terminal_transition();
         let _ = pending.sender.send(payload);
-        Ok(cancellation_won)
+        Ok(SettleTransition {
+            cancellation_won,
+            audit_committed: settled,
+        })
     }
 
     fn notify_pending(&self, request: &InteractionRequest) {
@@ -1000,6 +1339,18 @@ impl InteractionCoordinator {
     }
 }
 
+/// The result of the one terminal coordinator transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SettleTransition {
+    /// The owning attempt's cancellation authority had already won, so the
+    /// terminal outcome is that cancellation rather than the response.
+    cancellation_won: bool,
+    /// The durable settled fact committed. When false the waiter received the
+    /// fail-closed [`InteractionOutcome::Unavailable`] instead of the
+    /// requested terminal.
+    audit_committed: bool,
+}
+
 /// A typed protocol-facing coordinator error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum InteractionError {
@@ -1008,6 +1359,10 @@ pub(crate) enum InteractionError {
     NotPending { interaction_id: InteractionId },
     /// The response shape is not valid for the pending interaction.
     InvalidResponse { message: String },
+    /// The interaction left the pending map, but its durable settled fact
+    /// could not commit. The waiter was released fail-closed and no execution
+    /// authority was granted.
+    AuditFailed { interaction_id: InteractionId },
 }
 
 impl core::fmt::Display for InteractionError {
@@ -1017,6 +1372,10 @@ impl core::fmt::Display for InteractionError {
                 write!(f, "interaction {interaction_id} is not pending")
             }
             Self::InvalidResponse { message } => f.write_str(message),
+            Self::AuditFailed { interaction_id } => write!(
+                f,
+                "interaction {interaction_id} could not commit its durable settlement"
+            ),
         }
     }
 }
@@ -1180,12 +1539,21 @@ mod tests {
     }
 
     fn coordinator() -> Arc<InteractionCoordinator> {
+        audited_coordinator().0
+    }
+
+    /// A live coordinator plus the recording audit capability it commits to.
+    fn audited_coordinator() -> (Arc<InteractionCoordinator>, Arc<RecordingInteractionAudit>) {
         let lifecycle = ConversationLifecycle::new();
         assert!(lifecycle.activate());
-        Arc::new(InteractionCoordinator::new(
-            ConversationId::new("conversation"),
+        let conversation_id = ConversationId::new("conversation");
+        let audit = RecordingInteractionAudit::new(conversation_id.clone());
+        let coordinator = Arc::new(InteractionCoordinator::new(
+            conversation_id,
             lifecycle,
-        ))
+            audit.clone(),
+        ));
+        (coordinator, audit)
     }
 
     #[test]
@@ -1802,15 +2170,237 @@ mod tests {
 
     #[test]
     fn no_provider_fails_closed_without_creating_pending_work() {
-        let coordinator = coordinator();
+        let (coordinator, audit) = audited_coordinator();
         let outcome =
             coordinator.publish_approval(AttemptId::new("conversation-attempt-1"), facts("c1"));
         assert!(matches!(outcome, Err(InteractionOutcome::Unavailable)));
         assert_eq!(coordinator.pending_count(), 0);
+        assert!(
+            audit.events().is_empty(),
+            "a prompt no client could see leaves no audit record"
+        );
         assert_eq!(
             coordinator.lifecycle.state(),
             ConversationLifecycleState::Running
         );
+    }
+
+    /// The requested fact is committed inside the same critical section that
+    /// admits the pending entry, strictly before the prompt is published. The
+    /// publication callback therefore always runs with the audit already
+    /// durable, and a pending entry never exists without it.
+    #[test]
+    fn requested_audit_commits_before_the_pending_entry_is_observable() {
+        struct AuditAtPrompt {
+            audit: Arc<RecordingInteractionAudit>,
+            seen: Mutex<Vec<RuntimeEvent>>,
+        }
+
+        impl InteractionObserver for AuditAtPrompt {
+            fn on_pending(&self, _request: &InteractionRequest) {
+                *self.seen.lock().unwrap() = self.audit.events();
+            }
+            fn on_settled(&self, _id: &InteractionId, _outcome: &InteractionOutcome) {}
+        }
+
+        let (coordinator, audit) = audited_coordinator();
+        coordinator.set_provider_available(true);
+        let observer = Arc::new(AuditAtPrompt {
+            audit: audit.clone(),
+            seen: Mutex::new(Vec::new()),
+        });
+        coordinator.install_observer(observer.clone());
+        let ticket = coordinator
+            .publish_approval(AttemptId::new("conversation-attempt-1"), facts("c1"))
+            .expect("provider is available");
+
+        let seen = observer.seen.lock().unwrap().clone();
+        assert!(
+            matches!(
+                seen.as_slice(),
+                [RuntimeEvent::InteractionRequested { interaction_id, subject: InteractionSubject::Approval { call_id, tool_name, .. } }]
+                    if *interaction_id == ticket.id
+                        && *call_id == ToolCallId::new("c1")
+                        && tool_name == "read"
+            ),
+            "the requested fact must be durable when the prompt is released, saw {seen:?}"
+        );
+
+        let envelope = audit.committed().remove(0);
+        assert_eq!(
+            envelope.event_id,
+            interaction_requested_event_id(&ticket.id)
+        );
+        assert_eq!(
+            envelope.attempt_id,
+            Some(AttemptId::new("conversation-attempt-1"))
+        );
+        assert_eq!(envelope.turn_id, Some(TurnId::new("3")));
+    }
+
+    /// A requested fact that cannot commit publishes no prompt at all: the
+    /// interaction fails closed exactly like a missing provider, so a user is
+    /// never asked something durable state does not record.
+    #[test]
+    fn a_failed_requested_commit_publishes_no_prompt() {
+        let (coordinator, audit) = audited_coordinator();
+        coordinator.set_provider_available(true);
+        let observer = Arc::new(RecordingObserver::default());
+        coordinator.install_observer(observer.clone());
+        audit.fail_next_requested();
+
+        assert!(matches!(
+            coordinator.publish_approval(AttemptId::new("conversation-attempt-1"), facts("c1")),
+            Err(InteractionOutcome::Unavailable)
+        ));
+        assert_eq!(coordinator.pending_count(), 0);
+        assert!(observer.pending.lock().unwrap().is_empty());
+        assert!(audit.events().is_empty());
+
+        // The next publication is unaffected: the fault was one commit, not a
+        // coordinator state change.
+        coordinator
+            .publish_approval(AttemptId::new("conversation-attempt-1"), facts("c2"))
+            .expect("the coordinator still publishes");
+        assert_eq!(coordinator.pending_count(), 1);
+    }
+
+    /// The settled fact commits before the waiter is released. When that
+    /// commit fails the waiter receives the fail-closed `Unavailable` outcome
+    /// — Approval maps it to a denial — and the responding client is told
+    /// rather than shown an acceptance the audit does not support.
+    #[tokio::test]
+    async fn a_failed_settled_commit_releases_the_waiter_fail_closed() {
+        let (coordinator, audit) = audited_coordinator();
+        coordinator.set_provider_available(true);
+        let ticket = coordinator
+            .publish_approval(AttemptId::new("conversation-attempt-1"), facts("c1"))
+            .expect("provider is available");
+        let id = ticket.id.clone();
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let wait = coordinator.wait(ticket, cancellation.execution_cancellation());
+
+        audit.fail_next_settled();
+        assert_eq!(
+            coordinator.respond(
+                &id,
+                InteractionResponse::Approval {
+                    decision: ApprovalDecision::Allow,
+                },
+            ),
+            Err(InteractionError::AuditFailed {
+                interaction_id: id.clone()
+            })
+        );
+        assert_eq!(wait.await, InteractionOutcome::Unavailable);
+        assert!(
+            matches!(
+                audit.events().as_slice(),
+                [RuntimeEvent::InteractionRequested { .. }]
+            ),
+            "the interaction stays durably open, which is the honest record"
+        );
+        assert_eq!(
+            coordinator.respond(
+                &id,
+                InteractionResponse::Approval {
+                    decision: ApprovalDecision::Allow,
+                },
+            ),
+            Err(InteractionError::NotPending { interaction_id: id }),
+            "the identity is spent even though its settlement did not commit"
+        );
+    }
+
+    /// A cancellation terminal is durable audit exactly like an answer: it
+    /// records that a prompt existed and that the owning attempt's
+    /// cancellation authority, not a user, settled it.
+    #[tokio::test]
+    async fn cancellation_settlement_is_durable_audit() {
+        let (coordinator, audit) = audited_coordinator();
+        coordinator.set_provider_available(true);
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let ticket = coordinator
+            .publish_approval_with_cancellation(
+                AttemptId::new("conversation-attempt-1"),
+                facts("c1"),
+                &cancellation.execution_cancellation(),
+            )
+            .expect("provider is available");
+        assert!(cancellation.request_cancel(CancellationReason::RuntimeShutdown));
+        assert_eq!(
+            coordinator
+                .wait(ticket, cancellation.execution_cancellation())
+                .await,
+            InteractionOutcome::Cancelled {
+                reason: CancellationReason::RuntimeShutdown
+            }
+        );
+        assert!(matches!(
+            audit.events().as_slice(),
+            [
+                RuntimeEvent::InteractionRequested { .. },
+                RuntimeEvent::InteractionSettled {
+                    settlement: InteractionSettlement::Cancelled {
+                        reason: CancellationReason::RuntimeShutdown
+                    },
+                    ..
+                }
+            ]
+        ));
+    }
+
+    /// A coordinator constructed over durable state that already holds an
+    /// unanswered interaction starts with **no** pending waiter. Pending
+    /// interaction is process-owned workflow state; it is never reconstructed
+    /// from the audit plane. The restarted coordinator asks its own new
+    /// question under its own new identity.
+    #[test]
+    fn a_restarted_coordinator_reconstructs_no_pending_waiter() {
+        let (first, audit) = audited_coordinator();
+        first.set_provider_available(true);
+        let ticket = first
+            .publish_approval(AttemptId::new("conversation-attempt-1"), facts("c1"))
+            .expect("provider is available");
+        assert_eq!(first.pending_count(), 1);
+        assert_eq!(audit.events().len(), 1, "requested, never settled");
+
+        // The process dies here. A new coordinator is built over the very same
+        // durable audit capability.
+        drop(first);
+        let lifecycle = ConversationLifecycle::new();
+        assert!(lifecycle.activate());
+        let restarted = Arc::new(InteractionCoordinator::new(
+            ConversationId::new("conversation"),
+            lifecycle,
+            audit.clone(),
+        ));
+        restarted.set_provider_available(true);
+        assert_eq!(
+            restarted.pending_count(),
+            0,
+            "no waiter and no prompt is recreated from durable state"
+        );
+        assert!(restarted.pending_snapshot().is_empty());
+
+        // The historical identity grants nothing; a new ask allocates a new
+        // one and is refused for the old one.
+        assert_eq!(
+            restarted.respond(
+                &ticket.id,
+                InteractionResponse::Approval {
+                    decision: ApprovalDecision::Allow,
+                },
+            ),
+            Err(InteractionError::NotPending {
+                interaction_id: ticket.id.clone()
+            })
+        );
+        let fresh = restarted
+            .publish_approval(AttemptId::new("conversation-attempt-2"), facts("c2"))
+            .expect("a restarted coordinator asks its own new question");
+        assert_ne!(fresh.id, ticket.id);
+        assert_eq!(audit.events().len(), 2);
     }
 
     /// Detach only closes future provider admission. It never fabricates an

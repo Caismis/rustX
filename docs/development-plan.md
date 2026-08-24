@@ -1130,6 +1130,60 @@ waiter-settlement tests; and TUI projection/render/typed-response tests.
 No permission framework, durable human workflow, provider-specific payload,
 generic runtime participant abstraction, or generic forms were added.
 
+### FND-04 — Durable interaction audit (Issue #109, delivered)
+
+FND-04 keeps the M9.2 pending waiter exactly as it is — process-owned,
+non-durable, never recovered — and adds the missing durable *evidence* half of
+the same plane. Two low-frequency Event Journal facts,
+`InteractionRequested { interaction_id, subject }` and
+`InteractionSettled { interaction_id, settlement }`, cover Approval and
+Question/`ask_user`. The coordinator reaches them only through the narrow
+`ConversationInteractionAudit` capability, which rejects every other payload
+so an audit seam can never become a second authorization path.
+`InteractionRequested` opens `interaction:{id}` and `InteractionSettled`
+closes it exactly once, reusing the background/subagent lifecycle shape.
+
+Two ordering rules are enforced where the decision is made, not merely
+documented: the requested fact commits before the prompt is released to a
+client (a failed commit publishes no prompt and fails closed as
+`Unavailable`), and `InteractionSettled(Approved)` commits before the waiter
+is released, so it necessarily precedes `ToolExecutionStarted` and the
+external side effect. A failed settled commit releases the waiter fail-closed
+and answers the client `interaction_audit_failed`.
+
+The hard invariant is that a historical `Approved` is evidence only and never
+restart authorization. Recovery has no interaction dimension at all: it takes
+the attempt identity watermark and nothing else, so a call whose
+`ToolExecutionStarted` is absent is a call that never started. A pending
+interaction stays pinned to its admitted resource/capability generation:
+reload returns `Busy { reason: Interaction }` while a waiter owns the attempt,
+and external resource edits cannot mutate the prompt, subject, policy, Tool
+schema, or authority underneath it.
+
+Payloads stay bounded: a Question subject is stored by value, an Approval
+subject pins its exact arguments by digest because the canonical `ToolCall`
+already stores them by value, and no keypress, focus, editing, or TUI
+presentation state enters the Journal.
+
+The durable event vocabulary changed incompatibly, so `SQLITE_SCHEMA_VERSION`
+moved 6 → 7 and older development databases are rejected at open. There is no
+migration and no compatibility layer.
+
+Exit criteria (met): durable-before-prompt proved inside the publication
+callback; `requested < settled(approved) < ToolExecutionStarted` proved on
+durable sequences through the real Agent Loop; approval durable plus crash
+before tool start executes nothing after restart; a historical approval cannot
+be replayed as current authority; denial keeps its canonical denied
+`ToolResult` with matching audit; one Question produces one durable
+requested/settled pair and exactly one answer; exactly-once settlement at both
+the coordinator and the store; audit unaffected by client detach/reattach and
+headless execution writing no audit at all; an external resource edit unable
+to mutate a pending interaction, with reload returning `Busy` and the old
+generation retained; and a restarted coordinator reconstructing no waiter.
+No durable pending waiter, unanswered-Question replay, durable TUI state,
+human-task workflow engine, scheduler, or resource-watcher lifecycle change
+was added.
+
 ### M9.25 — Native async one-shot subagents (Issue #60, delivered)
 
 M9.25 adds conversation-owned, asynchronous, one-shot child rustX runtimes.

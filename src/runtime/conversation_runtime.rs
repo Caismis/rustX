@@ -2915,9 +2915,13 @@ impl ConversationRuntime {
             crate::runtime::recovery::ResumeDisposition::ContinueAdoptedTurn
         );
         let next_attempt_seq = recovery.next_attempt_ordinal();
+        // The coordinator receives the narrow interaction audit capability
+        // only (Issue #109): it may commit the requested/settled facts of its
+        // own interactions and reach no other durable domain.
         let interaction = Arc::new(InteractionCoordinator::new(
             conversation_id.clone(),
             lifecycle.clone(),
+            crate::durable::interaction_audit_capability(store.clone()),
         ));
         // The shared durability frontier: one gate carries the
         // `DurabilityFailed` fact to the conversation-owned registries so
@@ -9429,6 +9433,292 @@ mod tests {
             vec![CancellationReason::RuntimeShutdown],
             "the interaction, tool, and attempt all use the same winner"
         );
+    }
+
+    /// Issue #109 regressions 10, 11, and 12: a pending interaction is pinned
+    /// to the resource/capability generation its attempt was admitted under.
+    ///
+    /// While a waiter owns the attempt, an external workspace edit changes
+    /// nothing that the pending prompt depends on: the quiescent reload
+    /// operation returns `Busy`, the complete old generation is retained, and
+    /// the prompt, approval subject, and tool schema the client is looking at
+    /// are byte-identical before and after the edit. Only after the
+    /// interaction settles and the attempt completes may a reload publish a
+    /// new generation — and that new generation affects a later attempt only,
+    /// never the decision that already happened.
+    #[allow(clippy::too_many_lines)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn an_external_resource_edit_cannot_mutate_a_pending_interaction() {
+        use crate::events::types::{InteractionSettlement, RuntimeEvent};
+        use crate::message::types::ContentBlockIndex;
+        use crate::model::event::ModelEvent;
+        use crate::model::finish::ModelFinishReason;
+        use crate::tools::types::{ToolCall, ToolCallStart};
+
+        let definition = ToolDefinition {
+            id: ToolId::new("tool-pinned-approval"),
+            name: "approval".to_owned(),
+            description: "a deterministic approval test tool".to_owned(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {"text": {"type": "string"}},
+                "required": ["text"]
+            }),
+            execution_policy: ToolExecutionPolicy::ForegroundOnly,
+            concurrency_policy: ToolConcurrencyPolicy::default(),
+            approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
+            replay_policy: ToolReplayPolicy::Never,
+            origin: ToolOrigin::Builtin,
+        };
+        let tool = FakeTool::new(definition.clone(), success_result("ran"));
+        let tool_calls = tool.calls();
+        let mut registry = ToolRegistry::new();
+        tool.register(&mut registry);
+
+        let call_id = ToolCallId::new("call-pinned-approval");
+        let scripts = vec![
+            vec![
+                FakeStep::Emit(ModelEvent::Started),
+                FakeStep::Emit(ModelEvent::ToolCallStarted {
+                    block_index: ContentBlockIndex::new(0),
+                    call: ToolCallStart {
+                        id: call_id.clone(),
+                        tool_id: definition.id.clone(),
+                        name: definition.name.clone(),
+                    },
+                }),
+                FakeStep::Emit(ModelEvent::ToolCallArgumentsDelta {
+                    block_index: ContentBlockIndex::new(0),
+                    call_id: call_id.clone(),
+                    arguments_delta: "{\"text\":\"hi\"}".to_owned(),
+                }),
+                FakeStep::Emit(ModelEvent::ToolCallCompleted {
+                    block_index: ContentBlockIndex::new(0),
+                    call: ToolCall {
+                        id: call_id.clone(),
+                        tool_id: definition.id.clone(),
+                        name: definition.name.clone(),
+                        arguments: serde_json::json!({"text": "hi"}),
+                    },
+                }),
+                FakeStep::Emit(ModelEvent::Completed {
+                    finish_reason: ModelFinishReason::ToolCalls,
+                    usage: None,
+                }),
+            ],
+            text_turn_script("done"),
+        ];
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (runtime, _) = headless_runtime(&dir, scripts, Some(registry), None).await;
+        runtime.install_test_pre_tool_policy(Arc::new(RuntimeAskPolicy));
+
+        let host = RuntimeClientHost::new(RuntimeClientHostConfig {
+            runtime: runtime.clone(),
+            replay_limit: None,
+        })
+        .expect("Runtime Client host");
+        let (attachment, initialized) = host
+            .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .expect("Runtime Client attachment");
+        let cursor = match initialized {
+            RuntimeClientResult::Initialized { cursor, .. } => cursor,
+            other => panic!("unexpected initialization result: {other:?}"),
+        };
+        let subscription = attachment
+            .subscribe_events(cursor)
+            .expect("Runtime Client subscription");
+
+        runtime.activate();
+        let accepted = attachment.handle_request(RuntimeClientRequest::SubmitInbound {
+            id: RequestId::new(1),
+            content: text_content("request approval"),
+        });
+        assert!(matches!(
+            accepted.result,
+            Some(RuntimeClientResult::InboundAccepted { .. })
+        ));
+
+        let pending = loop {
+            match subscription.next().await {
+                EventDelivery::Event(RuntimeClientProtocolEvent { event, .. }) => {
+                    if let RuntimeClientEvent::InteractionPending { interaction } = event {
+                        break interaction;
+                    }
+                }
+                EventDelivery::Pending => unreachable!("next never returns Pending"),
+                delivery => panic!("pending interaction stream ended: {delivery:?}"),
+            }
+        };
+        let pinned_resources = runtime.runtime_resources();
+        let pinned_revision = pinned_resources.revision();
+        let pinned_capability = pinned_resources.capability_revision();
+        let pinned_tool_schema = pinned_resources
+            .capability()
+            .tool_registry()
+            .definitions()
+            .into_iter()
+            .find(|tool| tool.name == "approval")
+            .expect("the admitted generation offers the approved tool")
+            .input_schema;
+
+        // The requested audit fact is already durable: the client is looking
+        // at a prompt the Event Journal has recorded.
+        let facts_at_prompt = interaction_journal(&runtime);
+        assert!(
+            matches!(
+                facts_at_prompt.as_slice(),
+                [RuntimeEvent::InteractionRequested { interaction_id, .. }]
+                    if *interaction_id == pending.id
+            ),
+            "expected exactly the requested fact, saw {facts_at_prompt:?}"
+        );
+
+        // The external edit lands while the waiter owns the attempt.
+        let skills = dir
+            .path()
+            .join("workspace")
+            .join(".agents")
+            .join("skills")
+            .join("late-skill");
+        std::fs::create_dir_all(&skills).expect("skill dir");
+        std::fs::write(
+            skills.join("SKILL.md"),
+            "---\nname: late-skill\ndescription: \"an edit made mid-interaction\"\n---\nbody\n",
+        )
+        .expect("SKILL.md");
+
+        assert!(
+            matches!(
+                runtime.reload_resources().await,
+                Err(super::RuntimeResourceReloadError::Busy {
+                    reason: super::RuntimeResourceReloadBusyReason::Interaction
+                })
+            ),
+            "a pending interaction waiter owns the attempt, so reload is refused"
+        );
+
+        // Nothing the pending prompt depends on moved.
+        let (snapshot, _) = host.snapshot().expect("pending snapshot");
+        assert_eq!(
+            snapshot.pending_interactions,
+            vec![pending.clone()],
+            "the prompt and approval subject are unchanged by the edit"
+        );
+        let after_edit = runtime.runtime_resources();
+        assert_eq!(after_edit.revision(), pinned_revision);
+        assert_eq!(after_edit.capability_revision(), pinned_capability);
+        assert_eq!(
+            after_edit
+                .capability()
+                .tool_registry()
+                .definitions()
+                .into_iter()
+                .find(|tool| tool.name == "approval")
+                .expect("the pinned generation still offers the approved tool")
+                .input_schema,
+            pinned_tool_schema,
+            "the Tool schema the approval subject names cannot be replaced underneath the waiter"
+        );
+        assert_eq!(interaction_journal(&runtime), facts_at_prompt);
+
+        // The decision proceeds under the generation it was admitted with.
+        let answered = attachment.handle_request(RuntimeClientRequest::InteractionRespond {
+            id: RequestId::new(2),
+            interaction_id: pending.id.clone(),
+            response: InteractionResponse::Approval {
+                decision: ApprovalDecision::Allow,
+            },
+        });
+        assert!(matches!(
+            answered.result,
+            Some(RuntimeClientResult::InteractionResponseAccepted { .. })
+        ));
+        loop {
+            match subscription.next().await {
+                EventDelivery::Event(RuntimeClientProtocolEvent { event, .. }) => {
+                    if matches!(event, RuntimeClientEvent::AttemptSettled { .. }) {
+                        break;
+                    }
+                }
+                EventDelivery::Pending => unreachable!("next never returns Pending"),
+                delivery => panic!("attempt stream ended: {delivery:?}"),
+            }
+        }
+        assert_eq!(tool_calls.borrow().len(), 1, "the approved tool ran once");
+
+        let journal = runtime
+            .inner
+            .store
+            .read_events(None, 256)
+            .expect("runtime event journal")
+            .events;
+        let sequence = |matcher: fn(&RuntimeEvent) -> bool| {
+            journal
+                .iter()
+                .find(|envelope| matcher(&envelope.event))
+                .map(|envelope| envelope.sequence)
+                .expect("the fact is durable")
+        };
+        let requested =
+            sequence(|event| matches!(event, RuntimeEvent::InteractionRequested { .. }));
+        let settled = sequence(|event| {
+            matches!(
+                event,
+                RuntimeEvent::InteractionSettled {
+                    settlement: InteractionSettlement::Approved,
+                    ..
+                }
+            )
+        });
+        let started = sequence(|event| matches!(event, RuntimeEvent::ToolExecutionStarted { .. }));
+        assert!(
+            requested < settled && settled < started,
+            "requested < settled(approved) < tool start, got {requested} {settled} {started}"
+        );
+
+        // Only now may a reload publish a new generation, and it affects a
+        // later attempt only — the settled interaction is unchanged.
+        let reloaded = runtime.reload_resources().await.expect("reload after idle");
+        assert_eq!(reloaded.resource_revision, pinned_revision.next());
+        assert_eq!(
+            runtime.runtime_resources().revision(),
+            reloaded.resource_revision,
+            "the new generation is what a later attempt acquires"
+        );
+        assert_eq!(
+            interaction_journal(&runtime).len(),
+            2,
+            "the historical interaction pair is untouched by the new generation"
+        );
+
+        runtime
+            .shutdown()
+            .await
+            .expect("runtime reaches quiescence");
+    }
+
+    /// The interaction audit facts of one runtime, in durable sequence order.
+    fn interaction_journal(
+        runtime: &ConversationRuntime,
+    ) -> Vec<crate::events::types::RuntimeEvent> {
+        use crate::events::types::RuntimeEvent;
+        runtime
+            .inner
+            .store
+            .read_events(None, 256)
+            .expect("runtime event journal")
+            .events
+            .into_iter()
+            .filter(|envelope| {
+                matches!(
+                    envelope.event,
+                    RuntimeEvent::InteractionRequested { .. }
+                        | RuntimeEvent::InteractionSettled { .. }
+                )
+            })
+            .map(|envelope| envelope.event)
+            .collect()
     }
 
     /// A user cancellation that wins the owning attempt must remain the cause

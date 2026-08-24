@@ -727,6 +727,22 @@ settlement observation is published after that authority is released under a
 second counted settlement admission. This composes with M9c drain without a
 second lifecycle or shutdown participant framework.
 
+Interaction publication and settlement are also durable-before-release
+(Issue #109). The requested audit fact commits before the prompt reaches a
+client, and `InteractionSettled(Approved)` commits before the Agent Loop can
+emit `ToolExecutionStarted`, so the durable order the Journal shows is always
+
+```text
+InteractionRequested -> InteractionSettled(Approved) -> ToolExecutionStarted -> side effect
+```
+
+That ordering is a consequence of the wait itself: the semantic waiter is not
+released until the settled fact is committed, so the post-wait cancellation
+checkpoint and the start frontier are both strictly downstream of the durable
+decision. The audit is still only evidence — the `Answered(Allow)` recheck
+above is what grants execution authority in this process, and a historical
+approval read back after a restart grants none.
+
 The coordinator does not arbitrate cancellation causes. Each runtime-owned
 pending interaction retains an `ExecutionCancellation` observation view, not
 the owning attempt's `AgentCancellation` handle. Generic ToolExecutors receive

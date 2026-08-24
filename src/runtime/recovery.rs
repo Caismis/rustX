@@ -739,6 +739,17 @@ impl RecoveryEvidence {
                 // The terminal publication is absorbing.
                 subagents.remove(subagent_id);
             }
+            // Every remaining fact contributes its attempt identity watermark
+            // and nothing else.
+            //
+            // The interaction audit facts (Issue #109) land here deliberately,
+            // and their absence from every arm above *is* the invariant: they
+            // are evidence, never authority. Recovery reconstructs no pending
+            // waiter, republishes no prompt, and never treats a historical
+            // `InteractionSettled(Approved)` as permission to run the tool it
+            // referred to. A call whose `ToolExecutionStarted` is absent is
+            // simply a call that never started, exactly as if no approval had
+            // ever been asked for.
             _ => {
                 if let Some(attempt_id) = envelope.attempt_id.as_ref() {
                     self.note_attempt(attempt_id);
