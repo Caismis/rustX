@@ -2979,9 +2979,11 @@ duplicate completions, completion without start, foreign stream lookup,
 foreign block index/tool/name, and suffixes after completion are rejected
 before the frame transaction can change rows or sequence. Ordinary staging and
 U terminal staging share this preflight. Audit materialization proves every
-proposal has the matching durable owner/state, while C requires every
-canonical Assistant `ToolCall` to match a completed owner before retaining it
-as canonical. Audited ownership remains permanently forbidden; canonical C
+proposal has the matching durable owner/state. C validates the complete set in
+both directions: every canonical Assistant `ToolCall` must match a completed
+owner on `call_id`, block index, tool ID, and name; every completed current
+stream owner must occur exactly once in that Assistant; and no Started-only
+owner may remain. Audited ownership remains permanently forbidden; canonical C
 retains its completed owner so legitimate execution and recovery remain
 resolvable.
 

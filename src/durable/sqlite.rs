@@ -2142,11 +2142,10 @@ fn validate_audit_proposal_ownership(
     Ok(())
 }
 
-/// A canonical Assistant carrying a tool call must accept the same completed
-/// proposal identity that the publication stream durably assembled. This is
-/// the C-side owner of the final proposal-state boundary; Tool Plane events
-/// can then resolve the retained canonical owner without reconstructing frame
-/// JSON.
+/// C must accept exactly the completed proposal set that the publication
+/// stream durably assembled. This is the C-side owner of the final
+/// proposal-state boundary; Tool Plane events can then resolve the retained
+/// canonical owner without reconstructing frame JSON.
 fn validate_canonical_tool_proposals(
     transaction: &Transaction<'_>,
     stream_id: &PublicationStreamId,
@@ -2155,23 +2154,25 @@ fn validate_canonical_tool_proposals(
     let MessageBlock::Assistant(assistant) = message else {
         return Ok(());
     };
+    let owners = load_publication_proposal_owners(transaction, stream_id)?;
+    let mut accepted_call_ids = BTreeSet::new();
     for (index, block) in assistant.content.iter().enumerate() {
         let AssistantContentBlock::ToolCall(call) = block else {
             continue;
         };
+        if !accepted_call_ids.insert(call.id.as_str().to_owned()) {
+            return Err(proposal_violation(
+                stream_id,
+                format!(
+                    "canonical Assistant contains duplicate ToolCall {}",
+                    call.id
+                ),
+            ));
+        }
         let block_index = u32::try_from(index)
             .map(ContentBlockIndex::new)
             .map_err(|_| storage("canonical Assistant block index overflow"))?;
-        let owner: Option<(i64, String, String, String)> = transaction
-            .query_row(
-                "SELECT block_index,tool_id,tool_name,state
-                 FROM publication_proposals WHERE stream_id=?1 AND call_id=?2",
-                params![stream_id.as_str(), call.id.as_str()],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .optional()
-            .map_err(|error| storage(format!("canonical proposal owner probe: {error}")))?;
-        let Some((stored_block_index, stored_tool_id, stored_name, stored_state)) = owner else {
+        let Some(owner) = owners.iter().find(|owner| owner.call_id == call.id) else {
             return Err(proposal_violation(
                 stream_id,
                 format!(
@@ -2180,15 +2181,9 @@ fn validate_canonical_tool_proposals(
                 ),
             ));
         };
-        let stored_block_index = u32::try_from(stored_block_index).map_err(|_| {
-            ConversationStoreError::InvalidReference(
-                "publication proposal block index is invalid".to_owned(),
-            )
-        })?;
-        let stored_state = PublicationProposalState::parse(&stored_state)?;
-        if ContentBlockIndex::new(stored_block_index) != block_index
-            || stored_tool_id != call.tool_id.as_str()
-            || stored_name != call.name
+        if owner.block_index != block_index
+            || owner.tool_id != call.tool_id
+            || owner.name != call.name
         {
             return Err(proposal_violation(
                 stream_id,
@@ -2198,7 +2193,7 @@ fn validate_canonical_tool_proposals(
                 ),
             ));
         }
-        if stored_state != PublicationProposalState::Completed {
+        if owner.state != PublicationProposalState::Completed {
             return Err(proposal_violation(
                 stream_id,
                 format!(
@@ -2206,6 +2201,31 @@ fn validate_canonical_tool_proposals(
                     call.id
                 ),
             ));
+        }
+    }
+    for owner in owners {
+        match owner.state {
+            PublicationProposalState::Started => {
+                return Err(proposal_violation(
+                    stream_id,
+                    format!(
+                        "canonical acceptance leaves Started-only proposal {}",
+                        owner.call_id
+                    ),
+                ));
+            }
+            PublicationProposalState::Completed
+                if !accepted_call_ids.contains(owner.call_id.as_str()) =>
+            {
+                return Err(proposal_violation(
+                    stream_id,
+                    format!(
+                        "canonical Assistant omits Completed proposal {}",
+                        owner.call_id
+                    ),
+                ));
+            }
+            PublicationProposalState::Completed => {}
         }
     }
     Ok(())
@@ -2284,6 +2304,7 @@ fn record_tool_proposal_dependency(
     call_id: &ToolCallId,
     attempt_id: Option<&AttemptId>,
     turn_id: Option<&TurnId>,
+    expected_tool_id: Option<&ToolId>,
     dependency: &str,
     allow_unowned_canonical: bool,
 ) -> Result<(), ConversationStoreError> {
@@ -2299,7 +2320,7 @@ fn record_tool_proposal_dependency(
     };
     let mut statement = transaction
         .prepare(
-            "SELECT p.stream_id,s.attempt_id,s.turn_id,s.message_id,p.settlement,p.state
+            "SELECT p.stream_id,s.attempt_id,s.turn_id,s.message_id,p.tool_id,p.settlement,p.state
              FROM publication_proposals p
              JOIN publication_streams s ON s.stream_id=p.stream_id
              WHERE p.call_id=?1
@@ -2313,8 +2334,9 @@ fn record_tool_proposal_dependency(
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, String>(5)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, String>(6)?,
             ))
         })
         .map_err(|error| storage(format!("tool proposal rows: {error}")))?;
@@ -2331,7 +2353,14 @@ fn record_tool_proposal_dependency(
         // direct canonical ToolMessage or detached lifecycle opening may
         // still be admitted without a model proposal: neither is a
         // ToolResult or execution fact for a publication proposal.
-        if canonical_surface_contains_tool_call(transaction, call_id)? {
+        if let Some(owner_tool_id) = canonical_surface_tool_id(transaction, call_id)? {
+            if let Some(expected_tool_id) = expected_tool_id
+                && *expected_tool_id != owner_tool_id
+            {
+                return Err(ConversationStoreError::PublicationViolation(format!(
+                    "{dependency} for tool call {call_id} uses tool id {expected_tool_id}, but the canonical Assistant owner freezes {owner_tool_id}"
+                )));
+            }
             return Ok(());
         }
         if allow_unowned_canonical {
@@ -2344,7 +2373,7 @@ fn record_tool_proposal_dependency(
     let matching: Vec<_> = candidates
         .iter()
         .filter(
-            |(_, candidate_attempt, candidate_turn, candidate_message, _, _)| {
+            |(_, candidate_attempt, candidate_turn, candidate_message, _, _, _)| {
                 attempt_id.is_none_or(|attempt| candidate_attempt == attempt.as_str())
                     && turn_id.is_none_or(|turn| candidate_turn == turn.as_str())
                     && detached_active_messages.as_ref().is_none_or(|active| {
@@ -2362,7 +2391,7 @@ fn record_tool_proposal_dependency(
     }
     let canonical: Vec<_> = matching
         .iter()
-        .filter(|(_, _, _, _, settlement, _)| {
+        .filter(|(_, _, _, _, _, settlement, _)| {
             settlement.as_deref() == Some(PublicationSettlement::Canonical.as_str())
         })
         .collect();
@@ -2374,7 +2403,7 @@ fn record_tool_proposal_dependency(
             )));
         }
         std::cmp::Ordering::Less => {
-            let audited = matching.iter().find_map(|(_, _, _, _, settlement, _)| {
+            let audited = matching.iter().find_map(|(_, _, _, _, _, settlement, _)| {
                 settlement.as_deref().filter(|settlement| {
                     *settlement == PublicationSettlement::Incomplete.as_str()
                         || *settlement == PublicationSettlement::Unaccepted.as_str()
@@ -2393,7 +2422,15 @@ fn record_tool_proposal_dependency(
             matching[0]
         }
     };
-    let state = &selected.5;
+    if let Some(expected_tool_id) = expected_tool_id
+        && selected.4.as_str() != expected_tool_id.as_str()
+    {
+        return Err(ConversationStoreError::PublicationViolation(format!(
+            "{dependency} for tool call {call_id} uses tool id {expected_tool_id}, but the frozen proposal owner uses {}",
+            selected.4
+        )));
+    }
+    let state = &selected.6;
     let state = PublicationProposalState::parse(state)?;
     if state != PublicationProposalState::Completed {
         return Err(ConversationStoreError::PublicationViolation(format!(
@@ -2413,27 +2450,27 @@ fn record_tool_proposal_dependency(
 /// prefixes without turning a missing publication owner into a bare call-id
 /// authority. The active canonical Assistant is the only durable fact that
 /// can authorize a Tool Plane transition when no publication proposal row
-/// exists.
-fn canonical_surface_contains_tool_call(
+/// exists, and it freezes the tool ID used for that authorization.
+fn canonical_surface_tool_id(
     transaction: &Transaction<'_>,
     call_id: &ToolCallId,
-) -> Result<bool, ConversationStoreError> {
+) -> Result<Option<ToolId>, ConversationStoreError> {
     let head = load_head(transaction)?;
     for message_id in head.active_message_ids {
         let message = load_message_tx(transaction, &message_id)?;
         let MessageBlock::Assistant(assistant) = message else {
             continue;
         };
-        if assistant.content.iter().any(|block| {
-            matches!(
-                block,
-                AssistantContentBlock::ToolCall(call) if call.id == *call_id
-            )
+        if let Some(tool_id) = assistant.content.iter().find_map(|block| match block {
+            AssistantContentBlock::ToolCall(call) if call.id == *call_id => {
+                Some(call.tool_id.clone())
+            }
+            _ => None,
         }) {
-            return Ok(true);
+            return Ok(Some(tool_id));
         }
     }
-    Ok(false)
+    Ok(None)
 }
 
 fn accept_inbound_tx(
@@ -2555,6 +2592,7 @@ fn append_canonical_messages(
                 &tool.tool_call_id,
                 None,
                 None,
+                Some(&tool.tool_id),
                 "canonical ToolMessage",
                 true,
             )?;
@@ -4406,25 +4444,46 @@ fn validate_event_reference(
         // Every Tool Plane transition that names a proposal uses the same
         // semantic owner. This includes execution starts/progress/outcomes
         // and detached background authorization.
-        RuntimeEvent::ToolExecutionStarted { tool_call_id, .. }
-        | RuntimeEvent::ToolExecutionProgress { tool_call_id, .. }
-        | RuntimeEvent::ToolExecutionCompleted { tool_call_id, .. }
-        | RuntimeEvent::ToolExecutionFailed { tool_call_id, .. } => {
+        RuntimeEvent::ToolExecutionStarted {
+            tool_call_id,
+            tool_id,
+        }
+        | RuntimeEvent::ToolExecutionProgress {
+            tool_call_id,
+            tool_id,
+            ..
+        }
+        | RuntimeEvent::ToolExecutionCompleted {
+            tool_call_id,
+            tool_id,
+            ..
+        }
+        | RuntimeEvent::ToolExecutionFailed {
+            tool_call_id,
+            tool_id,
+            ..
+        } => {
             record_tool_proposal_dependency(
                 transaction,
                 tool_call_id,
                 envelope.attempt_id.as_ref(),
                 envelope.turn_id.as_ref(),
+                Some(tool_id),
                 runtime_event_dependency_name(&envelope.event),
                 false,
             )?;
         }
-        RuntimeEvent::BackgroundExecutionCommitted { tool_call_id, .. } => {
+        RuntimeEvent::BackgroundExecutionCommitted {
+            tool_call_id,
+            tool_id,
+            ..
+        } => {
             record_tool_proposal_dependency(
                 transaction,
                 tool_call_id,
                 envelope.attempt_id.as_ref(),
                 envelope.turn_id.as_ref(),
+                Some(tool_id),
                 runtime_event_dependency_name(&envelope.event),
                 true,
             )?;
@@ -4439,6 +4498,7 @@ fn validate_event_reference(
                 tool_call_id,
                 envelope.attempt_id.as_ref(),
                 envelope.turn_id.as_ref(),
+                None,
                 runtime_event_dependency_name(&envelope.event),
                 true,
             )?;
@@ -4512,6 +4572,7 @@ fn validate_event_reference(
                 tool_call_id,
                 envelope.attempt_id.as_ref(),
                 envelope.turn_id.as_ref(),
+                Some(&tool.tool_id),
                 runtime_event_dependency_name(&envelope.event),
                 false,
             )?;

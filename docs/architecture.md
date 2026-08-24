@@ -4520,11 +4520,14 @@ sequence, or terminal marker is changed, and the same validator is used by
 ordinary staging and U terminal staging.
 
 Audit consolidation may only materialize a proposal that has this durable
-owner and matching state. C additionally requires every canonical Assistant
-`ToolCall` to match its frozen stream-local owner and a durable `completed`
-state before retaining that owner as canonical. Thus a provider may reuse a
-raw call ID in a later publication, but ownership can never be silently
-reassigned to an earlier stream.
+owner and matching state. C performs the reverse check as well: every
+canonical Assistant `ToolCall` must match a frozen stream-local owner and a
+durable `completed` state, every current-stream `completed` owner must appear
+exactly once in that Assistant, and no `started`-only owner may remain. The
+comparison covers `call_id`, block index, tool ID, and name before the compound
+C transaction begins. Thus a provider may reuse a raw call ID in a later
+publication, but ownership can never be silently reassigned to an earlier
+stream or silently omitted at canonicalization.
 
 ### 6.1.7 Audit semantics
 
@@ -4554,11 +4557,14 @@ durable store enforces the hard invariant:
 This is one store-layer owner, reused for foreground execution start,
 progress, completion and failure, single and batch canonical ToolResult
 commits, recovery ToolResult repair, background authorization, and subagent
-ownership. The proposal table owns `(stream_id, ToolCallId)` rather than a
-conversation-global bare call ID; a provider reuse in another publication is
-a distinct proposal, never a silent reassignment. Canonical C retains the
-accepted ownership row and marks it canonical so later Tool Plane transitions
-resolve the exact accepted proposal. Audited rows remain permanently barred.
+ownership. Whenever a transition carries a tool ID, the owner compares that
+ID with the proposal or canonical Assistant owner frozen for the call; a
+matching bare `call_id` is not enough. The proposal table owns
+`(stream_id, ToolCallId)` rather than a conversation-global bare call ID; a
+provider reuse in another publication is a distinct proposal, never a silent
+reassignment. Canonical C retains the accepted ownership row and marks it
+canonical so later Tool Plane transitions resolve the exact accepted proposal.
+Audited rows remain permanently barred.
 
 Transcript and UI consumers therefore distinguish a released proposal from a
 real Tool Plane invocation fact by which plane it came from.

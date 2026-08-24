@@ -225,32 +225,50 @@ fn assistant(message_id: &MessageId, body: &str) -> MessageBlock {
 }
 
 fn assistant_with_tool(message_id: &MessageId, call_id: &ToolCallId) -> MessageBlock {
-    MessageBlock::Assistant(AssistantMessageBlock {
-        id: message_id.clone(),
-        content: vec![AssistantContentBlock::ToolCall(ToolCall {
+    assistant_with_tools(
+        message_id,
+        vec![ToolCall {
             id: call_id.clone(),
             tool_id: ToolId::new("tool-alpha"),
             name: "alpha".to_owned(),
             arguments: serde_json::json!({}),
-        })],
+        }],
+    )
+}
+
+fn assistant_with_tools(message_id: &MessageId, calls: Vec<ToolCall>) -> MessageBlock {
+    MessageBlock::Assistant(AssistantMessageBlock {
+        id: message_id.clone(),
+        content: calls
+            .into_iter()
+            .map(AssistantContentBlock::ToolCall)
+            .collect(),
     })
 }
 
 fn tool_message(message_id: &str, call_id: &ToolCallId) -> MessageBlock {
+    tool_message_with_tool(message_id, call_id, ToolId::new("tool-alpha"))
+}
+
+fn tool_message_with_tool(message_id: &str, call_id: &ToolCallId, tool_id: ToolId) -> MessageBlock {
     MessageBlock::Tool(ToolMessageBlock {
         id: MessageId::new(message_id),
         tool_call_id: call_id.clone(),
-        tool_id: ToolId::new("tool-alpha"),
-        result: ToolExecutionResult {
-            status: ToolExecutionStatus::Success,
-            content: Vec::new(),
-            duration_ms: 1,
-            exit_code: Some(0),
-            artifacts: Vec::new(),
-            truncation: None,
-            managed_output: None,
-        },
+        tool_id,
+        result: successful_tool_result(),
     })
+}
+
+fn successful_tool_result() -> ToolExecutionResult {
+    ToolExecutionResult {
+        status: ToolExecutionStatus::Success,
+        content: Vec::new(),
+        duration_ms: 1,
+        exit_code: Some(0),
+        artifacts: Vec::new(),
+        truncation: None,
+        managed_output: None,
+    }
 }
 
 fn proposal_start_frame(
@@ -329,6 +347,38 @@ fn proposal_complete_frame_with(
             },
         },
     )
+}
+
+fn stage_completed_proposal(
+    store: &SqliteConversationStore,
+    start: &PublicationStreamStart,
+    sequence: u64,
+    block_index: ContentBlockIndex,
+    call_id: &ToolCallId,
+    tool_id: ToolId,
+    name: &str,
+) -> u64 {
+    store
+        .stage_publication_frames(&[proposal_start_frame_with(
+            start,
+            sequence,
+            block_index,
+            call_id,
+            tool_id.clone(),
+            name,
+        )])
+        .expect("proposal Started");
+    store
+        .stage_publication_frames(&[proposal_complete_frame_with(
+            start,
+            sequence + 1,
+            block_index,
+            call_id,
+            tool_id,
+            name,
+        )])
+        .expect("proposal Completed");
+    sequence + 2
 }
 
 fn committed_event(message_id: &MessageId, turn: &str) -> RuntimeEventEnvelope {
@@ -756,6 +806,387 @@ fn orphan_completion_cannot_become_an_audited_tool_proposal() {
         "an unowned orphan call must not be accepted as a no-op: {rejected:?}"
     );
     assert_eq!(event_count(&store), events_before);
+}
+
+/// C is bidirectional: a completed durable proposal cannot disappear between
+/// publication assembly and the canonical Assistant acceptance. The failed C
+/// transaction leaves the stream available for honest audit settlement.
+#[test]
+fn canonical_acceptance_rejects_an_omitted_completed_proposal_atomically() {
+    let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
+    store.initialize(&[]).expect("initialize");
+    let (request_id, start) = opened_test_stream(&store, "canonical-omitted");
+    let call_id = ToolCallId::new("call-omitted");
+    let next = stage_completed_proposal(
+        &store,
+        &start,
+        0,
+        ContentBlockIndex::new(0),
+        &call_id,
+        ToolId::new("tool-alpha"),
+        "alpha",
+    );
+    commit_provider_outcome(&store, "canonical-omitted", &request_id);
+    store
+        .commit_publication_terminal(&start.stream_id, &[text(next, &start, "done")])
+        .expect("U");
+
+    let before_head = store.load_head().expect("head");
+    let before_events = event_count(&store);
+    let before_streams = store.load_unsettled_publication_streams().expect("streams");
+    let rejected = store.commit_canonical_publication(
+        &start.stream_id,
+        &assistant(&start.message_id, "done"),
+        committed_event(&start.message_id, "canonical-omitted"),
+    );
+    assert!(
+        matches!(
+            &rejected,
+            Err(ConversationStoreError::PublicationViolation(detail))
+                if detail.contains("omits Completed proposal")
+        ),
+        "C accepted an omitted Completed proposal: {rejected:?}"
+    );
+    assert_eq!(store.load_head().expect("head"), before_head);
+    assert_eq!(event_count(&store), before_events);
+    assert_eq!(store.load_canonical().expect("canonical").len(), 0);
+    assert_eq!(
+        store.load_unsettled_publication_streams().expect("streams"),
+        before_streams
+    );
+    assert!(
+        store
+            .load_publication_audit(&start.stream_id)
+            .expect("audit")
+            .is_none()
+    );
+
+    let audit = store
+        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .expect("failed C left the proposal settlement untouched");
+    assert_eq!(audit.proposed_call_ids(), vec![call_id]);
+}
+
+/// C must accept the complete proposal set, not merely a valid subset. This
+/// also rejects a duplicate/missing ownership projection before any Ledger,
+/// Surface, Journal, or settlement mutation can begin.
+#[test]
+fn canonical_acceptance_rejects_a_strict_proposal_subset_atomically() {
+    let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
+    store.initialize(&[]).expect("initialize");
+    let (request_id, start) = opened_test_stream(&store, "canonical-subset");
+    let first = ToolCallId::new("call-subset-a");
+    let second = ToolCallId::new("call-subset-b");
+    let next = stage_completed_proposal(
+        &store,
+        &start,
+        0,
+        ContentBlockIndex::new(0),
+        &first,
+        ToolId::new("tool-alpha"),
+        "alpha",
+    );
+    let next = stage_completed_proposal(
+        &store,
+        &start,
+        next,
+        ContentBlockIndex::new(1),
+        &second,
+        ToolId::new("tool-beta"),
+        "beta",
+    );
+    commit_provider_outcome(&store, "canonical-subset", &request_id);
+    store
+        .commit_publication_terminal(&start.stream_id, &[text(next, &start, "done")])
+        .expect("U");
+
+    let accepted_subset = assistant_with_tools(
+        &start.message_id,
+        vec![ToolCall {
+            id: first.clone(),
+            tool_id: ToolId::new("tool-alpha"),
+            name: "alpha".to_owned(),
+            arguments: serde_json::json!({}),
+        }],
+    );
+    let before_head = store.load_head().expect("head");
+    let before_events = event_count(&store);
+    let before_streams = store.load_unsettled_publication_streams().expect("streams");
+    let rejected = store.commit_canonical_publication(
+        &start.stream_id,
+        &accepted_subset,
+        committed_event(&start.message_id, "canonical-subset"),
+    );
+    assert!(
+        matches!(
+            &rejected,
+            Err(ConversationStoreError::PublicationViolation(detail))
+                if detail.contains("omits Completed proposal")
+        ),
+        "C accepted a strict proposal subset: {rejected:?}"
+    );
+    assert_eq!(store.load_head().expect("head"), before_head);
+    assert_eq!(event_count(&store), before_events);
+    assert_eq!(store.load_canonical().expect("canonical").len(), 0);
+    assert_eq!(
+        store.load_unsettled_publication_streams().expect("streams"),
+        before_streams
+    );
+    assert!(
+        store
+            .load_publication_audit(&start.stream_id)
+            .expect("audit")
+            .is_none()
+    );
+
+    let audit = store
+        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .expect("failed C left both proposal owners intact");
+    assert_eq!(audit.proposed_call_ids(), vec![first, second]);
+}
+
+/// A Started-only proposal is not a valid C-side ownership set. It remains an
+/// immutable incomplete proposal audit after the rejected canonical attempt.
+#[test]
+fn canonical_acceptance_rejects_a_started_only_proposal_atomically() {
+    let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
+    store.initialize(&[]).expect("initialize");
+    let (request_id, start) = opened_test_stream(&store, "canonical-started-only");
+    let call_id = ToolCallId::new("call-started-only");
+    store
+        .stage_publication_frames(&[proposal_start_frame(&start, 0, &call_id)])
+        .expect("Started");
+    commit_provider_outcome(&store, "canonical-started-only", &request_id);
+    store
+        .commit_publication_terminal(&start.stream_id, &[text(1, &start, "done")])
+        .expect("U");
+
+    let before_head = store.load_head().expect("head");
+    let before_events = event_count(&store);
+    let before_streams = store.load_unsettled_publication_streams().expect("streams");
+    let rejected = store.commit_canonical_publication(
+        &start.stream_id,
+        &assistant(&start.message_id, "done"),
+        committed_event(&start.message_id, "canonical-started-only"),
+    );
+    assert!(
+        matches!(
+            &rejected,
+            Err(ConversationStoreError::PublicationViolation(detail))
+                if detail.contains("Started-only proposal")
+        ),
+        "C accepted a Started-only proposal: {rejected:?}"
+    );
+    assert_eq!(store.load_head().expect("head"), before_head);
+    assert_eq!(event_count(&store), before_events);
+    assert_eq!(store.load_canonical().expect("canonical").len(), 0);
+    assert_eq!(
+        store.load_unsettled_publication_streams().expect("streams"),
+        before_streams
+    );
+    assert!(
+        store
+            .load_publication_audit(&start.stream_id)
+            .expect("audit")
+            .is_none()
+    );
+
+    let audit = store
+        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .expect("failed C left the Started proposal auditable");
+    assert_eq!(audit.proposed_call_ids(), vec![call_id]);
+    assert!(matches!(
+        audit.content.as_slice(),
+        [
+            PublicationAuditBlock::ProposedToolCall {
+                complete: false,
+                ..
+            },
+            ..
+        ]
+    ));
+}
+
+/// Tool execution authorization is bound to the frozen tool identity, not
+/// merely the provider call ID. The rejected event also leaves `executed=0`:
+/// the stream can still be terminalized as an audit in the same transaction
+/// boundary that would otherwise detect a leaked execution fact.
+#[test]
+fn tool_execution_started_rejects_a_foreign_tool_id_atomically() {
+    let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
+    store.initialize(&[]).expect("initialize");
+    let (request_id, start) = opened_test_stream(&store, "tool-id-mismatch");
+    let call_id = ToolCallId::new("call-tool-id-mismatch");
+    let next = stage_completed_proposal(
+        &store,
+        &start,
+        0,
+        ContentBlockIndex::new(0),
+        &call_id,
+        ToolId::new("tool-alpha"),
+        "alpha",
+    );
+    commit_provider_outcome(&store, "tool-id-mismatch", &request_id);
+    store
+        .commit_publication_terminal(&start.stream_id, &[text(next, &start, "done")])
+        .expect("U");
+
+    let before_head = store.load_head().expect("head");
+    let before_events = event_count(&store);
+    let before_streams = store.load_unsettled_publication_streams().expect("streams");
+    let rejected = store.append_event(envelope(
+        "wrong-tool-id-start",
+        "tool-id-mismatch",
+        RuntimeEvent::ToolExecutionStarted {
+            tool_call_id: call_id.clone(),
+            tool_id: ToolId::new("tool-beta"),
+        },
+    ));
+    assert!(
+        matches!(
+            &rejected,
+            Err(ConversationStoreError::PublicationViolation(detail))
+                if detail.contains("tool id")
+        ),
+        "wrong tool ID was authorized: {rejected:?}"
+    );
+    assert_eq!(store.load_head().expect("head"), before_head);
+    assert_eq!(event_count(&store), before_events);
+    assert_eq!(
+        store.load_unsettled_publication_streams().expect("streams"),
+        before_streams
+    );
+    assert!(
+        store
+            .load_publication_audit(&start.stream_id)
+            .expect("audit")
+            .is_none()
+    );
+
+    let audit = store
+        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .expect("wrong ToolExecutionStarted left no executed fact");
+    assert_eq!(audit.proposed_call_ids(), vec![call_id]);
+}
+
+/// Two proposals in one canonical Assistant remain independently owned by
+/// their `(stream_id, call_id)` rows, including their frozen tool IDs, and can
+/// complete the ordinary execution plus atomic `ToolResult` batch path.
+#[test]
+fn canonical_multiple_proposals_execute_and_commit_results() {
+    let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
+    store.initialize(&[]).expect("initialize");
+    let (request_id, start) = opened_test_stream(&store, "canonical-multiple");
+    let first = ToolCallId::new("call-multiple-a");
+    let second = ToolCallId::new("call-multiple-b");
+    let next = stage_completed_proposal(
+        &store,
+        &start,
+        0,
+        ContentBlockIndex::new(0),
+        &first,
+        ToolId::new("tool-alpha"),
+        "alpha",
+    );
+    let next = stage_completed_proposal(
+        &store,
+        &start,
+        next,
+        ContentBlockIndex::new(1),
+        &second,
+        ToolId::new("tool-beta"),
+        "beta",
+    );
+    commit_provider_outcome(&store, "canonical-multiple", &request_id);
+    store
+        .commit_publication_terminal(&start.stream_id, &[text(next, &start, "done")])
+        .expect("U");
+    let assistant = assistant_with_tools(
+        &start.message_id,
+        vec![
+            ToolCall {
+                id: first.clone(),
+                tool_id: ToolId::new("tool-alpha"),
+                name: "alpha".to_owned(),
+                arguments: serde_json::json!({}),
+            },
+            ToolCall {
+                id: second.clone(),
+                tool_id: ToolId::new("tool-beta"),
+                name: "beta".to_owned(),
+                arguments: serde_json::json!({}),
+            },
+        ],
+    );
+    store
+        .commit_canonical_publication(
+            &start.stream_id,
+            &assistant,
+            committed_event(&start.message_id, "canonical-multiple"),
+        )
+        .expect("C");
+
+    let before_wrong_tool_event = event_count(&store);
+    let rejected = store.append_event(envelope(
+        "multiple-wrong-tool-id",
+        "canonical-multiple",
+        RuntimeEvent::ToolExecutionStarted {
+            tool_call_id: first.clone(),
+            tool_id: ToolId::new("tool-beta"),
+        },
+    ));
+    assert!(
+        matches!(
+            rejected,
+            Err(ConversationStoreError::PublicationViolation(_))
+        ),
+        "canonical owner accepted a foreign tool ID"
+    );
+    assert_eq!(event_count(&store), before_wrong_tool_event);
+
+    for (event_id, call_id, tool_id) in [
+        ("multiple-start-a", first.clone(), ToolId::new("tool-alpha")),
+        ("multiple-start-b", second.clone(), ToolId::new("tool-beta")),
+    ] {
+        store
+            .append_event(envelope(
+                event_id,
+                "canonical-multiple",
+                RuntimeEvent::ToolExecutionStarted {
+                    tool_call_id: call_id,
+                    tool_id,
+                },
+            ))
+            .expect("ToolExecutionStarted");
+    }
+    let first_result =
+        tool_message_with_tool("multiple-result-a", &first, ToolId::new("tool-alpha"));
+    let second_result =
+        tool_message_with_tool("multiple-result-b", &second, ToolId::new("tool-beta"));
+    store
+        .append_canonical_batch_with_events(
+            &[first_result, second_result],
+            &[
+                envelope(
+                    "multiple-result-event-a",
+                    "canonical-multiple",
+                    RuntimeEvent::ToolMessageCommitted {
+                        message_id: MessageId::new("multiple-result-a"),
+                        tool_call_id: first,
+                    },
+                ),
+                envelope(
+                    "multiple-result-event-b",
+                    "canonical-multiple",
+                    RuntimeEvent::ToolMessageCommitted {
+                        message_id: MessageId::new("multiple-result-b"),
+                        tool_call_id: second,
+                    },
+                ),
+            ],
+        )
+        .expect("atomic multi ToolResult batch");
+    assert_eq!(store.load_canonical().expect("canonical").len(), 3);
 }
 
 // ---------------------------------------------------------------------------

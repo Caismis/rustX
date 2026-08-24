@@ -853,9 +853,14 @@ The store also owns the proposal staging state machine. `Started` freezes
 that exact owner in `Started`, and `Completed` requires the same frozen
 identity and advances the owner exactly once. Duplicate, orphan, foreign, or
 post-completion frames are rejected atomically by both ordinary staging and U
-terminal staging. Audit consolidation proves the owner exists; C requires a
-canonical Assistant ToolCall to match a completed owner before that owner is
-retained for Tool Plane execution or recovery.
+terminal staging. Audit consolidation proves the owner exists; C validates
+proposal ownership in both directions: every canonical Assistant ToolCall
+must match one completed owner on call ID, block index, tool ID, and name, and
+every completed owner must appear exactly once, with no Started-only owner
+left behind. Only then is that owner retained for Tool Plane execution or
+recovery. The same Store dependency guard also rejects a dependent event whose
+tool ID differs from the frozen proposal or canonical owner, even when its
+call ID matches.
 
 `run_turn` is the one mutual-exclusion point of settlement. A turn that
 reached canonical acceptance already cleared its stream inside the compound C
@@ -903,8 +908,8 @@ frozen provisional Assistant message and its exact event envelope. The store's
 single proposal-dependency transition rejects every dependent Tool Plane
 fact for Incomplete or Unaccepted proposals, including execution outcomes,
 single/batch/recovery ToolResults, background authorization, and subagent
-ownership. Agent Loop order is therefore a necessary sequencing rule, not the
-only protection.
+ownership, and compares every supplied tool ID with the accepted owner. Agent
+Loop order is therefore a necessary sequencing rule, not the only protection.
 
 ## 5. Usage
 
