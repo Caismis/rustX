@@ -25,6 +25,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use sha2::{Digest, Sha256};
 
 use crate::conversation::{SurfaceOp, SurfaceRevision, SurfaceSpan};
+use crate::events::interaction::{
+    InteractionSubject, interaction_arguments_digest, validate_interaction_settlement,
+    validate_interaction_subject,
+};
 use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use crate::message::types::{
     AssistantContentBlock, ContentBlockIndex, InboundKind, MessageBlock, UserMessageBlock,
@@ -38,8 +42,8 @@ use crate::publication::{
     consolidate_audit_content,
 };
 use crate::runtime::identity::{
-    AgentId, AttemptId, ConversationId, EventId, MessageId, PublicationStreamId, RequestId,
-    ToolCallId, ToolId, TurnId,
+    AgentId, AttemptId, ConversationId, EventId, InteractionId, MessageId, PublicationStreamId,
+    RequestId, ToolCallId, ToolId, TurnId,
 };
 use crate::runtime::inbound::InboundSequence;
 
@@ -70,9 +74,23 @@ use super::inbox::{
 ///
 /// Version 6 completes that ownership contract. Every proposal row now stores
 /// its frozen block/tool/name identity and its explicit `started` or
-/// `completed` staging state. A v3/v4/v5 database must fail at store open;
-/// there is no migration or compatibility path.
-pub const SQLITE_SCHEMA_VERSION: i64 = 6;
+/// `completed` staging state.
+///
+/// Version 7 froze the Issue #109 durable interaction audit: the
+/// `InteractionRequested` / `InteractionSettled` Journal vocabulary and the
+/// `interaction:{id}` lifecycle domain that makes a settlement exactly-once
+/// and forbids a settled fact without its requested fact. The pair is pinned
+/// to one conversation + attempt + turn envelope; an Approval subject must
+/// describe the canonical Assistant `ToolCall` of the exact generation its
+/// envelope names, resolved through the v5/v6 `(stream_id, call_id)` proposal
+/// ownership and the stream's frozen attempt/turn/message identity, and that
+/// owning message must still be on the active Surface; payload bounds are
+/// store invariants; and a Question settlement must satisfy the exact
+/// requested Question. No new table or column was needed — the generation
+/// proof reuses the retained publication ownership v5 and v6 introduced. A
+/// v3/v4/v5/v6 database must fail at store open; there is no migration or
+/// compatibility path.
+pub const SQLITE_SCHEMA_VERSION: i64 = 7;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -2473,6 +2491,174 @@ fn canonical_surface_tool_id(
     Ok(None)
 }
 
+/// The canonical Assistant message that owns `call_id` inside the exact
+/// durable generation `(attempt_id, turn_id)` names.
+///
+/// A `ToolCallId` is request/publication-scoped, never conversation-global, so
+/// "a canonical `ToolCall` with this id exists somewhere" is not ownership.
+/// The retained FND-03 publication owner is: the proposal row is keyed by
+/// `(stream_id, call_id)`, its stream froze the attempt, turn, and Assistant
+/// message identity when it opened, and canonical acceptance stamped both rows
+/// `canonical`. Resolving through that join is what makes the generation part
+/// of the identity rather than an afterthought.
+///
+/// Returns `None` when this generation proposed no such canonical call. An
+/// ambiguous canonical owner is a durable contradiction and is reported as
+/// one, matching the guard [`record_tool_proposal_dependency`] already applies.
+fn canonical_generation_owner(
+    transaction: &Transaction<'_>,
+    call_id: &ToolCallId,
+    attempt_id: &AttemptId,
+    turn_id: &TurnId,
+) -> Result<Option<MessageId>, ConversationStoreError> {
+    let mut statement = transaction
+        .prepare(
+            "SELECT s.message_id
+             FROM publication_proposals p
+             JOIN publication_streams s ON s.stream_id=p.stream_id
+             WHERE p.call_id=?1 AND p.settlement=?2
+               AND s.attempt_id=?3 AND s.turn_id=?4
+             ORDER BY s.message_id",
+        )
+        .map_err(|error| storage(format!("canonical generation owner probe: {error}")))?;
+    let rows = statement
+        .query_map(
+            params![
+                call_id.as_str(),
+                PublicationSettlement::Canonical.as_str(),
+                attempt_id.as_str(),
+                turn_id.as_str()
+            ],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|error| storage(format!("canonical generation owner rows: {error}")))?;
+    let owners = rows
+        .map(|row| row.map_err(|error| storage(format!("canonical generation owner row: {error}"))))
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+    match owners.len() {
+        0 => Ok(None),
+        1 => Ok(Some(MessageId::new(owners[0].clone()))),
+        _ => Err(ConversationStoreError::PublicationViolation(format!(
+            "tool call {call_id} has ambiguous canonical proposal ownership in attempt {attempt_id} turn {turn_id}"
+        ))),
+    }
+}
+
+/// The attempt and turn envelope one interaction audit fact is pinned to.
+///
+/// An interaction is always owned by exactly one model turn of exactly one
+/// attempt, so an audit fact with no attempt or no turn could neither be
+/// compared to its partner nor resolved to a durable generation — and an
+/// unpinnable fact is not a pinned fact.
+fn require_interaction_envelope<'a>(
+    envelope: &'a RuntimeEventEnvelope,
+    interaction_id: &InteractionId,
+) -> Result<(&'a AttemptId, &'a TurnId), ConversationStoreError> {
+    let (Some(attempt_id), Some(turn_id)) = (&envelope.attempt_id, &envelope.turn_id) else {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "interaction {interaction_id} audit facts must carry their owning attempt and turn"
+        )));
+    };
+    Ok((attempt_id, turn_id))
+}
+
+/// Verifies that one Approval audit subject describes the canonical `ToolCall`
+/// it names **in the generation its own envelope names** (Issue #109).
+///
+/// The subject is deliberately bounded: it names the call and tool identity by
+/// value and pins the exact arguments by digest rather than copying them,
+/// because the canonical `ToolCall` in the Message Ledger already holds those
+/// arguments by value. That economy is only honest if the durable authority
+/// checks the correspondence, and the correspondence is only meaningful if it
+/// includes the generation. Content equality alone is not ownership: two turns
+/// of one attempt, or two attempts of one conversation, can hold canonical
+/// calls that compare equal in every field the subject carries.
+///
+/// The proof therefore composes the two ownerships the durable model already
+/// retains, and never falls back to a conversation-global bare `call_id`:
+///
+/// ```text
+/// retained canonical publication generation   (attempt, turn) -> message_id
+///                     +
+/// active canonical Surface ownership          message_id is still canonical
+///                     =
+/// the exact canonical Assistant ToolCall this approval may describe
+/// ```
+///
+/// Every real Approval reaches this with a publication owner: the Agent Loop
+/// commits an Assistant message through `commit_canonical_publication` and
+/// refuses to commit one at all without an open stream, so a canonical
+/// `ToolCall` without a frozen `(attempt, turn, message_id)` owner cannot occur
+/// on the approval path. There is deliberately no lenient fallback for a state
+/// the runtime cannot produce and no database can already contain.
+fn validate_approval_subject_against_canonical(
+    transaction: &Transaction<'_>,
+    interaction_id: &InteractionId,
+    attempt_id: &AttemptId,
+    turn_id: &TurnId,
+    subject: &InteractionSubject,
+) -> Result<(), ConversationStoreError> {
+    let InteractionSubject::Approval {
+        call_id,
+        tool_id,
+        tool_name,
+        arguments_digest,
+        ..
+    } = subject
+    else {
+        return Ok(());
+    };
+    // 1. The generation that is asking must be the generation that proposed
+    //    the call. This is the check that makes "turn 2 approved turn 1's
+    //    ToolCall" — a permanently false audit fact — unrepresentable.
+    let Some(owner) = canonical_generation_owner(transaction, call_id, attempt_id, turn_id)? else {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "interaction {interaction_id} approves tool call {call_id}, which attempt {attempt_id} turn {turn_id} never canonically proposed"
+        )));
+    };
+    // 2. That owner must still be canonical: an Assistant message that left
+    //    the active Surface is no longer a call the conversation is making.
+    if !load_head(transaction)?.active_message_ids.contains(&owner) {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "interaction {interaction_id} approves tool call {call_id}, whose canonical owner {owner} is no longer on the active Surface"
+        )));
+    }
+    let MessageBlock::Assistant(assistant) = load_message_tx(transaction, &owner)? else {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "the canonical owner {owner} of tool call {call_id} is not an Assistant message"
+        )));
+    };
+    let Some(call) = assistant.content.iter().find_map(|block| match block {
+        AssistantContentBlock::ToolCall(call) if call.id == *call_id => Some(call),
+        _ => None,
+    }) else {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "the canonical owner {owner} of tool call {call_id} does not contain that call"
+        )));
+    };
+    // 3. And the frozen identity and arguments must match the subject exactly.
+    if call.tool_id != *tool_id {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "interaction {interaction_id} names tool id {tool_id} for call {call_id}, but the canonical ToolCall froze {}",
+            call.tool_id
+        )));
+    }
+    if call.name != *tool_name {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "interaction {interaction_id} names tool {tool_name} for call {call_id}, but the canonical ToolCall froze {}",
+            call.name
+        )));
+    }
+    let canonical = interaction_arguments_digest(&call.arguments);
+    if canonical != *arguments_digest {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "interaction {interaction_id} pins arguments digest {arguments_digest} for call {call_id}, but the canonical ToolCall arguments digest to {canonical}"
+        )));
+    }
+    Ok(())
+}
+
 fn accept_inbound_tx(
     store: &SqliteConversationStore,
     transaction: &Transaction<'_>,
@@ -4531,6 +4717,111 @@ fn validate_event_reference(
                 )));
             }
         }
+        // The interaction audit plane (Issue #109). Both facts carry the
+        // canonical event identity of their interaction, so the durable
+        // authority resolves the pair through the unique `event_id` index in
+        // bounded time instead of scanning the Journal.
+        RuntimeEvent::InteractionRequested {
+            interaction_id,
+            subject,
+        } => {
+            let canonical =
+                crate::runtime::interaction::interaction_requested_event_id(interaction_id);
+            if envelope.event_id != canonical {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "interaction requested event identity {} does not match the canonical identity {canonical} for {interaction_id}",
+                    envelope.event_id
+                )));
+            }
+            let (attempt_id, turn_id) = require_interaction_envelope(envelope, interaction_id)?;
+            // Bounded payloads are a durable invariant, not a coordinator
+            // convention: an interaction fact constructed or deserialized
+            // outside the live coordinator is refused here by the very same
+            // contract the coordinator validates against.
+            validate_interaction_subject(subject).map_err(|message| {
+                ConversationStoreError::InvalidReference(format!(
+                    "interaction {interaction_id} requested an unbounded subject: {message}"
+                ))
+            })?;
+            validate_approval_subject_against_canonical(
+                transaction,
+                interaction_id,
+                attempt_id,
+                turn_id,
+                subject,
+            )?;
+            let key = format!("interaction:{interaction_id}");
+            let exists: bool = transaction
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM lifecycle_state WHERE lifecycle_key=?1)",
+                    [&key],
+                    |row| row.get(0),
+                )
+                .map_err(|error| storage(format!("interaction uniqueness probe: {error}")))?;
+            if exists {
+                return Err(ConversationStoreError::TerminalViolation(format!(
+                    "interaction {interaction_id} already has a durable requested fact"
+                )));
+            }
+        }
+        RuntimeEvent::InteractionSettled {
+            interaction_id,
+            settlement,
+        } => {
+            let canonical =
+                crate::runtime::interaction::interaction_settled_event_id(interaction_id);
+            if envelope.event_id != canonical {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "interaction settled event identity {} does not match the canonical identity {canonical} for {interaction_id}",
+                    envelope.event_id
+                )));
+            }
+            // A settlement is meaningless without the request it settles: a
+            // settled-without-requested fact would assert that a decision was
+            // made about a prompt that never durably existed.
+            let requested_id =
+                crate::runtime::interaction::interaction_requested_event_id(interaction_id);
+            let requested = find_event_by_id(transaction, &requested_id)?.ok_or_else(|| {
+                ConversationStoreError::InvalidReference(format!(
+                    "interaction settlement has no durable requested fact for {interaction_id}"
+                ))
+            })?;
+            let RuntimeEvent::InteractionRequested {
+                interaction_id: embedded,
+                subject,
+            } = &requested.event
+            else {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "the interaction requested event {requested_id} is not the typed requested fact"
+                )));
+            };
+            if embedded != interaction_id {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "interaction requested event {requested_id} belongs to {embedded}, not {interaction_id}"
+                )));
+            }
+            let _ = require_interaction_envelope(envelope, interaction_id)?;
+            // Both facts of one interaction belong to the exact same
+            // conversation + attempt + turn envelope. The conversation is
+            // already guaranteed by `persist_event_tx`, which refuses a
+            // foreign conversation outright; the attempt and the turn are
+            // pinned here. Checking only the attempt would durably admit a
+            // settlement committed under a later turn of the same attempt,
+            // which the contract of a pinned audit pair forbids — and the
+            // durable authority must not rely on the coordinator happening to
+            // rebuild the same turn.
+            if requested.attempt_id != envelope.attempt_id || requested.turn_id != envelope.turn_id
+            {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "interaction {interaction_id} settled under a foreign attempt or turn envelope"
+                )));
+            }
+            validate_interaction_settlement(subject, settlement).map_err(|message| {
+                ConversationStoreError::InvalidReference(format!(
+                    "interaction {interaction_id} settlement is not one its requested subject could produce: {message}"
+                ))
+            })?;
+        }
         RuntimeEvent::AssistantMessageCommitted { message_id } => {
             if !ledger_message_exists(transaction, message_id)? {
                 return Err(ConversationStoreError::InvalidReference(format!(
@@ -4888,6 +5179,20 @@ fn lifecycle_keys(event: &RuntimeEventEnvelope) -> Vec<(String, bool)> {
     if let RuntimeEvent::SubagentTerminalPublished { subagent_id, .. } = &event.event {
         return vec![(format!("subagent:{subagent_id}"), true)];
     }
+    // The interaction lifecycle (Issue #109) is the same shape: opened by the
+    // requested fact — which commits before the prompt reaches a client — and
+    // closed exactly once by the settled fact. It is deliberately its own
+    // lifecycle domain and never touches the enclosing `attempt:`/`turn:`
+    // keys, so an interaction audit fact can neither be blocked by nor block
+    // the attempt's own terminal transition. An interaction that stays open
+    // across a restart is durable evidence of an unanswered prompt; it is
+    // never an instruction to recreate a waiter.
+    if let RuntimeEvent::InteractionRequested { interaction_id, .. } = &event.event {
+        return vec![(format!("interaction:{interaction_id}"), false)];
+    }
+    if let RuntimeEvent::InteractionSettled { interaction_id, .. } = &event.event {
+        return vec![(format!("interaction:{interaction_id}"), true)];
+    }
     let attempt = event.attempt_id.as_ref().or(match &event.event {
         RuntimeEvent::AttemptStarted { attempt_id }
         | RuntimeEvent::AttemptCompleted { attempt_id, .. }
@@ -4925,6 +5230,7 @@ fn is_terminal(event: &RuntimeEvent) -> bool {
             | RuntimeEvent::AttemptFailed { .. }
             | RuntimeEvent::BackgroundTerminalPublished { .. }
             | RuntimeEvent::SubagentTerminalPublished { .. }
+            | RuntimeEvent::InteractionSettled { .. }
     )
 }
 

@@ -2751,6 +2751,7 @@ impl<'a> AgentExecution<'a> {
                 origin: &prepared.origin,
                 mode: invocation.mode,
                 arguments: &invocation.arguments,
+                canonical_arguments: &slot.call.arguments,
                 approval_policy: prepared.approval,
             };
             // A policy future is allowed to settle, but its result is not

@@ -333,6 +333,133 @@ recovery settles the owning interrupted work from durable evidence, does not
 replay the old request, and does not regenerate it from current policy or
 tool configuration.
 
+### Durable interaction audit (FND-04 / Issue #109)
+
+Pending interaction is workflow state; requested/settled facts are audit:
+
+```text
+pending waiter / prompt lifecycle  = process-owned workflow state (never durable)
+requested / settled semantic facts = durable audit evidence (Event Journal)
+```
+
+The Event Journal carries exactly two low-frequency interaction facts,
+`InteractionRequested { interaction_id, subject }` and
+`InteractionSettled { interaction_id, settlement }`, covering Approval and
+Question/`ask_user` alike. The coordinator reaches them only through the
+narrow `ConversationInteractionAudit` capability, which rejects every other
+payload; it holds no Ledger, Surface, publication, or general Journal
+authority. `InteractionRequested` opens `interaction:{id}` and
+`InteractionSettled` closes it exactly once. The durable authority rejects a
+duplicate request, a duplicate or contradictory settlement, a settlement
+without its request, and a settlement whose terminal its subject cannot
+produce; cancellation is the one terminal both subjects share.
+
+The durable authority enforces four further semantic invariants. Each is a
+store invariant, not a coordinator convention: the payload types are ordinary
+deserializable event payloads, so a fact that bypassed the live coordinator
+must still be refused.
+
+- **One envelope.** `InteractionRequested` and `InteractionSettled` belong to
+  the exact same conversation + attempt + turn envelope. The conversation is
+  guaranteed by the store's own envelope check; the attempt and the turn are
+  compared against the committed requested fact, and an audit fact that
+  carries no attempt or no turn is refused because it cannot be pinned to its
+  pair at all. The store does not rely on the coordinator happening to rebuild
+  the same turn identity.
+- **An Approval audit subject must match the canonical `ToolCall` it
+  references, in the generation its own envelope names.** Content equality is
+  not ownership: a `ToolCallId` is request/publication-scoped, so two turns of
+  one attempt — or two attempts of one conversation — can hold canonical calls
+  that compare equal in every field the subject carries. The store therefore
+  composes the two ownerships the durable model already retains:
+
+  ```text
+  retained canonical publication generation   (attempt_id, turn_id) -> message_id
+                      +
+  active canonical Surface ownership          message_id is still canonical
+                      =
+  the exact canonical Assistant ToolCall this approval may describe
+  ```
+
+  The requested fact must carry an attempt and a turn; `(call_id, attempt_id,
+  turn_id)` must resolve — through `publication_proposals` joined to
+  `publication_streams` on a `canonical` settlement — to exactly one owning
+  Assistant `message_id`; that message must still be on the active Surface and
+  must contain that call; and the call's `tool_id`, name, and
+  `interaction_arguments_digest(arguments)` must equal the subject's. Same
+  attempt with a different turn is rejected, a different attempt is rejected,
+  and finding one matching call id on the Surface is never by itself
+  sufficient. There is no conversation-global bare `call_id` lookup and no
+  Event Journal scan.
+- **Interaction audit payload bounds are durable-store invariants.** The
+  prompt, choice count, choice length, choice uniqueness, answer mode, answer
+  length, approval request reason, denial reason, tool-name length, and the
+  canonical lowercase-hex form of `arguments_digest` are all checked by the
+  store. The bounds have exactly one semantic source, `events::interaction`,
+  which the live coordinator validates against before publishing and the store
+  validates against before committing, so a future non-SQLite backend enforces
+  the same contract by calling the same functions.
+- **A Question settlement must satisfy the exact requested Question contract,
+  not merely have the `Answered` variant.** A `Choice` must be one the
+  requested Question actually offered, and a `FreeText` answer requires a
+  Question that accepted free text. The audit claims to record the typed
+  answer that was accepted, so a settlement no live coordinator could have
+  produced is refused.
+
+Two ordering rules hold:
+
+- **Durable before prompt.** The requested fact commits before rustX releases
+  the prompt to a user-facing client, in the same critical section that admits
+  the pending entry. A failed commit publishes no prompt and fails closed as
+  `Unavailable`, exactly like a missing provider, so no audit record exists
+  for a question no user saw.
+- **Approval settles before execution authority.**
+  `InteractionSettled(Approved)` is durable before `ToolExecutionStarted`,
+  which is durable before the external side effect. The settled fact also
+  commits before the responding client learns its response was accepted, so
+  the user-facing approval response cannot race ahead of durable evidence that
+  the approval existed. A failed settled commit releases the waiter
+  fail-closed as `Unavailable` and answers the client
+  `interaction_audit_failed`.
+
+Denial semantics are unchanged: a denial remains the canonical denied
+`ToolResult` and gains a matching `Denied { reason }` audit fact. A Question
+settlement retains the exact user answer as evidence while the canonical tool
+result carries that answer to the model; the interaction audit records the
+human decision and canonical history records the conversation, without
+duplicating each other.
+
+**A historical `Approved` interaction is audit evidence only. It never grants
+execution authority after recovery/restart.** Recovery has no interaction
+dimension: it takes the attempt identity watermark these facts carry and
+nothing else, reconstructs no waiter, republishes no prompt, and never treats
+an old approval as permission to execute. A call whose `ToolExecutionStarted`
+is absent is a call that never started, and it receives the ordinary
+cancelled/interrupted canonical result slot. After restart the historical
+identity is durably spent in both directions, so current semantics must reach
+a new live approval under a new identity.
+
+Payloads are bounded. A Question subject is stored by value (the Question
+contract already bounds prompt and choices); an Approval subject names
+call/tool identity and the policy reason by value and pins the exact
+model-issued argument value by SHA-256 digest, which the canonical `ToolCall`
+already stores by value. The digest is taken over the canonical `ToolCall`
+arguments precisely so the pin is verifiable from durable state alone —
+otherwise the audit would name a value no durable record contains.
+Keypresses, focus changes, editing state, and TUI presentation details are
+never interaction facts.
+
+A pending interaction stays pinned to its admitted resource/capability
+generation. `reload_resources` returns `Busy { reason: Interaction }` while a
+waiter owns the attempt, and the complete old generation is retained: external
+edits to `AGENTS.md`-style files, Skills, extension instructions, or Tool
+configuration cannot change the pending prompt, approval subject, policy, Tool
+schema, or execution authority underneath the waiter. Only after settlement
+and attempt completion may a reload publish a new generation, affecting a
+later admitted attempt only. A cold reopen may load current resources for
+future attempts, but it can neither reinterpret nor authorize execution from a
+historical interaction.
+
 The one active Runtime Client attachment is the 0.1 interaction provider. If
 none is present when an `Ask` is published, the coordinator returns
 `Unavailable` and approval fails closed as `Denied`; if `ask_user` cannot find

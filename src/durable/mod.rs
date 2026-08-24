@@ -26,6 +26,12 @@
 //! Publication plane      = user-facing release durability (Issue #108)
 //! ```
 //!
+//! Human interaction (Issue #109) deliberately adds **no** seventh domain. A
+//! pending Question/Approval waiter is process-owned workflow state and is
+//! never made durable; only its low-frequency requested/settled semantic facts
+//! are persisted, and those are ordinary Event Journal facts reached through
+//! the narrow [`inbox::ConversationInteractionAudit`] capability.
+//!
 //! The publication plane is the newest and most easily confused of the six. It
 //! owns exactly one question — *what did rustX durably commit for release to a
 //! user-facing client, and how did that release settle* — and nothing else. It
@@ -62,8 +68,9 @@ pub mod sqlite;
 
 pub use inbox::{
     AcceptedInbound, CanonicalMessagePage, CompactionCommitInput, ConversationInboundCapability,
-    ConversationStore, ConversationStoreBinding, ConversationStoreError, DurableConversationHead,
-    EventPage, InboundDraft, PendingBatch, PendingInboundItem, RequestSnapshotPage,
-    SurfaceUserMessageBoundary, SurfaceUserMessageBoundaryPage,
+    ConversationInteractionAudit, ConversationStore, ConversationStoreBinding,
+    ConversationStoreError, DurableConversationHead, EventPage, InboundDraft, PendingBatch,
+    PendingInboundItem, RequestSnapshotPage, SurfaceUserMessageBoundary,
+    SurfaceUserMessageBoundaryPage, interaction_audit_capability,
 };
 pub use sqlite::SqliteConversationStore;

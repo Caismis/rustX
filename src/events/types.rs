@@ -64,17 +64,34 @@
 //! linearization points — P ([`RuntimeEvent::ModelRequestCompleted`]) and C
 //! ([`RuntimeEvent::AssistantMessageCommitted`]) — while U lives in the
 //! publication plane. The required ordering is `P < U < C`.
+//!
+//! ## Human interaction audit
+//!
+//! [`RuntimeEvent::InteractionRequested`] and
+//! [`RuntimeEvent::InteractionSettled`] (Issue #109) are the low-frequency
+//! semantic facts of the Question/Approval plane. They are **audit evidence
+//! only**: the pending waiter that they describe is process-owned workflow
+//! state and is never reconstructed from them. In particular a historical
+//! `InteractionSettled(Approved)` never authorizes a tool execution after a
+//! restart. Keypresses, focus changes, editing state, and TUI presentation
+//! details are not interaction facts and never enter the Journal.
+//!
+//! The audit vocabulary itself — [`InteractionSubject`],
+//! [`InteractionSettlement`], the argument digest, and the bounded-payload
+//! contract every backend enforces — lives in
+//! [`crate::events::interaction`].
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::conversation::SurfaceRevision;
+use crate::events::interaction::{InteractionSettlement, InteractionSubject};
 use crate::model::error::ModelError;
 use crate::model::finish::ModelFinishReason;
 use crate::model::types::ModelUsage;
 use crate::runtime::identity::{
-    AgentId, AttemptId, ConversationId, EventId, MessageId, RequestId, SubagentId, ToolCallId,
-    ToolExecutionId, ToolId, TurnId,
+    AgentId, AttemptId, ConversationId, EventId, InteractionId, MessageId, RequestId, SubagentId,
+    ToolCallId, ToolExecutionId, ToolId, TurnId,
 };
 use crate::runtime::types::{CancellationReason, RuntimeError, TokenMeasurement};
 use crate::tools::types::{ToolExecutionResult, ToolProgress};
@@ -372,6 +389,45 @@ pub enum RuntimeEvent {
         message_id: MessageId,
         /// The terminal state represented by the publication.
         state: SubagentTerminalState,
+    },
+
+    /// One human interaction was requested (Issue #109).
+    ///
+    /// This is the **requested** half of the durable interaction audit. It
+    /// commits strictly before rustX releases the prompt to a user-facing
+    /// client, so no user can be shown a Question or Approval without durable
+    /// evidence that the interaction existed, which attempt/turn owned it, and
+    /// exactly what was asked.
+    ///
+    /// The fact opens the `interaction:{interaction_id}` durable lifecycle;
+    /// [`RuntimeEvent::InteractionSettled`] closes it exactly once. An
+    /// interaction that stays open across a process death is durable evidence
+    /// of an unanswered prompt — never an instruction to recreate the waiter.
+    InteractionRequested {
+        /// The runtime-owned, non-reused interaction identity.
+        interaction_id: InteractionId,
+        /// The bounded by-value audit subject.
+        subject: InteractionSubject,
+    },
+    /// One human interaction reached its single terminal settlement
+    /// (Issue #109).
+    ///
+    /// For Approval this commits strictly before execution authority
+    /// proceeds, so the durable order is always
+    ///
+    /// ```text
+    /// InteractionSettled(Approved) -> ToolExecutionStarted -> external side effect
+    /// ```
+    ///
+    /// The settled fact is audit evidence and nothing more. A historical
+    /// `Approved` never grants execution authority to a later process: after a
+    /// restart the current runtime must reach a new live approval under
+    /// current semantics.
+    InteractionSettled {
+        /// The interaction whose one terminal transition this fact records.
+        interaction_id: InteractionId,
+        /// The bounded terminal settlement.
+        settlement: InteractionSettlement,
     },
 }
 

@@ -28,7 +28,8 @@ use tokio::sync::{oneshot, watch};
 
 use crate::runtime::interaction::{
     ApprovalDecision, ApprovalFacts, InteractionCoordinator, InteractionError, InteractionObserver,
-    InteractionOutcome, InteractionRequest, InteractionResponse, TestInteractionRendezvous,
+    InteractionOutcome, InteractionRequest, InteractionResponse, RecordingInteractionAudit,
+    TestInteractionRendezvous,
 };
 use rustx::agent::{
     AgentCancellation, AgentExecution, AgentExecutionRequest, AgentExecutionResult,
@@ -1116,9 +1117,11 @@ async fn cancellation_after_pending_pre_tool_error_does_not_fail_closed_as_denie
 async fn native_ask_cancellation_settles_through_the_real_coordinator() {
     let lifecycle = ConversationLifecycle::new();
     assert!(lifecycle.activate());
+    let conversation_id = ConversationId::new("conv-issue56");
     let coordinator = Arc::new(InteractionCoordinator::new(
-        ConversationId::new("conv-issue56"),
+        conversation_id.clone(),
         lifecycle,
+        RecordingInteractionAudit::new(conversation_id),
     ));
     coordinator.set_provider_available(true);
     let (observer, mut published) = NativePendingSignal::new();

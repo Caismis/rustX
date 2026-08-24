@@ -372,6 +372,72 @@ fn commit_subagent_ownership_through(
     store.append_event(event)
 }
 
+/// Commits one durable interaction audit fact through a store handle,
+/// rejecting every other event payload.
+///
+/// The narrow capability must not become a general Event Journal seam: the
+/// interaction plane may commit exactly the two semantic facts that make a
+/// human decision auditable, and nothing else.
+fn commit_interaction_audit_through(
+    store: &(impl ConversationStore + ?Sized),
+    event: RuntimeEventEnvelope,
+) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+    if !matches!(
+        event.event,
+        crate::events::types::RuntimeEvent::InteractionRequested { .. }
+            | crate::events::types::RuntimeEvent::InteractionSettled { .. }
+    ) {
+        return Err(ConversationStoreError::InvalidReference(
+            "the interaction capability commits only interaction audit facts".to_owned(),
+        ));
+    }
+    store.append_event(event)
+}
+
+/// The narrow backend-independent audit capability of the native interaction
+/// plane (Issue #109).
+///
+/// The [`InteractionCoordinator`](crate::runtime::interaction::InteractionCoordinator)
+/// owns a pending waiter, which is process-local workflow state, and a pair of
+/// durable semantic facts, which are audit evidence. This capability is the
+/// only durable authority it receives: no Ledger, no Surface, no Request
+/// Snapshot, no publication plane, and no general Event Journal append.
+///
+/// ```text
+/// commit_interaction_requested -> InteractionRequested  (before the prompt is released)
+/// commit_interaction_settled   -> InteractionSettled    (before the waiter is released)
+/// ```
+///
+/// Both are typed single-purpose transitions; every other payload is
+/// rejected.
+#[allow(clippy::missing_errors_doc)]
+pub trait ConversationInteractionAudit: Send + Sync + 'static {
+    /// The conversation this capability serves.
+    fn conversation_id(&self) -> &ConversationId;
+
+    /// Commits the durable requested fact of one interaction.
+    ///
+    /// The commit happens strictly **before** the prompt is released to a
+    /// user-facing client, so no user can be asked without durable evidence
+    /// that the interaction existed. The payload must be a
+    /// [`RuntimeEvent::InteractionRequested`](crate::events::types::RuntimeEvent::InteractionRequested).
+    fn commit_interaction_requested(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+
+    /// Commits the durable settled fact of one interaction.
+    ///
+    /// The commit happens strictly **before** the semantic waiter is
+    /// released, so an approval can never reach the tool-start frontier ahead
+    /// of durable evidence that the approval existed. The payload must be a
+    /// [`RuntimeEvent::InteractionSettled`](crate::events::types::RuntimeEvent::InteractionSettled).
+    fn commit_interaction_settled(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+}
+
 /// The narrow backend-independent capability used by the Pending Inbound
 /// Inbox and its process-local mailbox.
 ///
@@ -891,6 +957,78 @@ impl<T: ConversationStore + ?Sized> ConversationInboundCapability for T {
 
     fn load_pending(&self) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {
         ConversationStore::load_pending(self)
+    }
+}
+
+impl<T: ConversationStore + ?Sized> ConversationInteractionAudit for T {
+    fn conversation_id(&self) -> &ConversationId {
+        ConversationStore::conversation_id(self)
+    }
+
+    fn commit_interaction_requested(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        if !matches!(
+            event.event,
+            crate::events::types::RuntimeEvent::InteractionRequested { .. }
+        ) {
+            return Err(ConversationStoreError::InvalidReference(
+                "the interaction capability commits a requested fact only".to_owned(),
+            ));
+        }
+        commit_interaction_audit_through(self, event)
+    }
+
+    fn commit_interaction_settled(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        if !matches!(
+            event.event,
+            crate::events::types::RuntimeEvent::InteractionSettled { .. }
+        ) {
+            return Err(ConversationStoreError::InvalidReference(
+                "the interaction capability commits a settled fact only".to_owned(),
+            ));
+        }
+        commit_interaction_audit_through(self, event)
+    }
+}
+
+/// Erases the full store behind the narrow interaction audit capability.
+///
+/// The wrapper carries the same store handle; it creates no second durable
+/// authority. A `dyn ConversationStore` cannot be re-coerced to another trait
+/// object directly, so this is the one place the narrowing happens.
+#[must_use]
+pub fn interaction_audit_capability(
+    store: Arc<dyn ConversationStore>,
+) -> Arc<dyn ConversationInteractionAudit> {
+    Arc::new(StoreInteractionAudit { store })
+}
+
+struct StoreInteractionAudit {
+    store: Arc<dyn ConversationStore>,
+}
+
+impl ConversationInteractionAudit for StoreInteractionAudit {
+    fn conversation_id(&self) -> &ConversationId {
+        self.store.conversation_id()
+    }
+
+    fn commit_interaction_requested(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        self.store.commit_interaction_requested(event)
+    }
+
+    fn commit_interaction_settled(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        self.store.commit_interaction_settled(event)
     }
 }
 

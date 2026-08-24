@@ -727,6 +727,40 @@ settlement observation is published after that authority is released under a
 second counted settlement admission. This composes with M9c drain without a
 second lifecycle or shutdown participant framework.
 
+Interaction publication and settlement are also durable-before-release
+(Issue #109). The requested audit fact commits before the prompt reaches a
+client, and `InteractionSettled(Approved)` commits before the Agent Loop can
+emit `ToolExecutionStarted`, so the durable order the Journal shows is always
+
+```text
+InteractionRequested -> InteractionSettled(Approved) -> ToolExecutionStarted -> side effect
+```
+
+That ordering is a consequence of the wait itself: the semantic waiter is not
+released until the settled fact is committed, so the post-wait cancellation
+checkpoint and the start frontier are both strictly downstream of the durable
+decision. The audit is still only evidence — the `Answered(Allow)` recheck
+above is what grants execution authority in this process, and a historical
+approval read back after a restart grants none.
+
+The approval subject the Loop hands the coordinator is derived from the exact
+canonical `ToolCall` of the committed Assistant message, not from the pending
+invocation alone: it carries the call/tool identity the `ToolCall` froze and
+the digest of the `ToolCall`'s own model-issued arguments. The client is still
+shown the normalized invocation that will actually run, but the durable
+subject pins the value the Message Ledger holds, and the durable authority
+refuses a subject that does not match it. This is why the canonical Assistant
+message is committed before `resolve_pre_tool_decisions` runs: at the pre-tool
+policy boundary the call the approval names is already durable.
+
+The audit fact is pinned to the turn as well as the call. Both the publication
+stream (`open_publication`) and the interaction envelope derive their turn
+identity from the same `self.turn`, so an approval asked during turn *n*
+carries turn *n* and resolves to the publication generation of turn *n*. The
+store requires exactly that correspondence, which is what makes "turn 2
+approved turn 1's `ToolCall`" — an approval that looks perfect field by field
+but describes a call the asking turn never made — impossible to record.
+
 The coordinator does not arbitrate cancellation causes. Each runtime-owned
 pending interaction retains an `ExecutionCancellation` observation view, not
 the owning attempt's `AgentCancellation` handle. Generic ToolExecutors receive

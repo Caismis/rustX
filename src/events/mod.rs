@@ -7,6 +7,7 @@
 //! progress projection for detached background work; it is not a second
 //! durable journal.
 
+pub mod interaction;
 pub mod types;
 
 /// The narrow optional non-durable execution-fact projection of the tool
@@ -58,6 +59,10 @@ impl RuntimeEventSink for RecordingEventSink {
     }
 }
 
+pub use interaction::{
+    InteractionSettlement, InteractionSubject, interaction_arguments_digest,
+    validate_interaction_settlement, validate_interaction_subject, validate_question_contract,
+};
 pub use types::{
     AttemptFailure, AttemptLimit, AttemptOutcome, BackgroundTerminalState, EVENT_SCHEMA_VERSION,
     RuntimeEvent, RuntimeEventEnvelope,

@@ -626,6 +626,9 @@ impl ClientInner {
                 InteractionError::InvalidResponse { message } => {
                     RuntimeClientError::InteractionInvalidResponse { message }
                 }
+                InteractionError::AuditFailed { interaction_id } => {
+                    RuntimeClientError::InteractionAuditFailed { interaction_id }
+                }
             })
     }
 

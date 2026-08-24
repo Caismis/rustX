@@ -1176,6 +1176,7 @@ export type RuntimeClientError =
   | { type: "resource_reload_busy"; reason: string }
   | { type: "interaction_not_pending"; interaction_id: InteractionId }
   | { type: "interaction_invalid_response"; message: string }
+  | { type: "interaction_audit_failed"; interaction_id: InteractionId }
   | { type: "approval_mode_inactive" }
   | { type: "approval_mode_durability_failed"; message: string }
   | { type: "unknown_background_execution"; execution_id: ToolExecutionId }
@@ -1307,6 +1308,8 @@ export function describeProtocolError(error: RuntimeClientError): string {
       return `interaction ${error.interaction_id} is no longer pending`;
     case "interaction_invalid_response":
       return `invalid interaction response: ${error.message}`;
+    case "interaction_audit_failed":
+      return `interaction ${error.interaction_id} was settled fail-closed: its durable audit could not be recorded`;
     case "approval_mode_inactive":
       return "the runtime is not activated for ApprovalMode changes";
     case "approval_mode_durability_failed":

@@ -391,10 +391,19 @@ mod tests {
         fn on_settled(&self, _interaction_id: &InteractionId, _outcome: &InteractionOutcome) {}
     }
 
+    /// The live coordinator and its durable audit capability, returned so a
+    /// regression can assert the interaction plane as well as the tool result.
+    struct AskUserRun {
+        coordinator: Arc<InteractionCoordinator>,
+        audit: Arc<crate::runtime::interaction::RecordingInteractionAudit>,
+        request: InteractionRequest,
+        result: ToolExecutionResult,
+    }
+
     async fn execute_through_real_coordinator(
         arguments: serde_json::Value,
         answer: QuestionAnswer,
-    ) -> (InteractionRequest, ToolExecutionResult) {
+    ) -> AskUserRun {
         let registry = registry();
         let PreflightOutcome::Ready(prepared) = registry
             .preflight(&ToolCall {
@@ -410,9 +419,13 @@ mod tests {
 
         let lifecycle = ConversationLifecycle::new();
         assert!(lifecycle.activate());
+        let conversation_id = ConversationId::new("ask-user-production-conversation");
+        let audit =
+            crate::runtime::interaction::RecordingInteractionAudit::new(conversation_id.clone());
         let coordinator = Arc::new(InteractionCoordinator::new(
-            ConversationId::new("ask-user-production-conversation"),
+            conversation_id,
             lifecycle,
+            audit.clone(),
         ));
         coordinator.set_provider_available(true);
         let (pending_sender, pending_receiver) = oneshot::channel();
@@ -442,7 +455,12 @@ mod tests {
             .respond(&request.id, InteractionResponse::Question { answer })
             .expect("Question response accepted");
         let result = execution.await;
-        (request, result)
+        AskUserRun {
+            coordinator,
+            audit,
+            request,
+            result,
+        }
     }
 
     #[test]
@@ -614,7 +632,9 @@ mod tests {
 
     #[tokio::test]
     async fn production_path_publishes_bare_open_ended_question() {
-        let (request, result) = execute_through_real_coordinator(
+        let AskUserRun {
+            request, result, ..
+        } = execute_through_real_coordinator(
             serde_json::json!({"prompt": "What should I call it?"}),
             QuestionAnswer::FreeText {
                 value: "typed answer".to_owned(),
@@ -640,7 +660,9 @@ mod tests {
 
     #[tokio::test]
     async fn production_path_publishes_choice_only_question() {
-        let (request, result) = execute_through_real_coordinator(
+        let AskUserRun {
+            request, result, ..
+        } = execute_through_real_coordinator(
             serde_json::json!({
                 "prompt": "Where should I deploy?",
                 "choices": ["staging", "production"]
@@ -663,7 +685,9 @@ mod tests {
 
     #[tokio::test]
     async fn production_path_publishes_choice_and_free_text_question() {
-        let (request, result) = execute_through_real_coordinator(
+        let AskUserRun {
+            request, result, ..
+        } = execute_through_real_coordinator(
             serde_json::json!({
                 "prompt": "Where should I deploy?",
                 "choices": ["staging", "production"],
@@ -685,6 +709,82 @@ mod tests {
         assert_eq!(result.status, ToolExecutionStatus::Success);
     }
 
+    /// Issue #109 regression 6: one Question request and answer produce the
+    /// durable requested/settled audit pair, and the live operation receives
+    /// exactly one answer.
+    ///
+    /// The audit keeps the user's exact words as evidence; the canonical tool
+    /// result carries the same answer to the model. Neither duplicates the
+    /// other's job: the Journal records the human decision, canonical history
+    /// records the conversation.
+    #[tokio::test]
+    async fn question_settlement_is_durable_audit_and_exactly_one_answer() {
+        use crate::events::interaction::{InteractionSettlement, InteractionSubject};
+        use crate::events::types::RuntimeEvent;
+
+        let run = execute_through_real_coordinator(
+            serde_json::json!({
+                "prompt": "Where should I deploy?",
+                "choices": ["staging", "production"]
+            }),
+            QuestionAnswer::Choice {
+                value: "staging".to_owned(),
+            },
+        )
+        .await;
+
+        assert!(
+            matches!(
+                run.audit.events().as_slice(),
+                [
+                    RuntimeEvent::InteractionRequested {
+                        interaction_id: requested_id,
+                        subject: InteractionSubject::Question {
+                            prompt,
+                            choices: Some(choices),
+                            allow_free_text: false,
+                        },
+                    },
+                    RuntimeEvent::InteractionSettled {
+                        interaction_id: settled_id,
+                        settlement: InteractionSettlement::Answered {
+                            answer: QuestionAnswer::Choice { value },
+                        },
+                    }
+                ] if *requested_id == run.request.id
+                    && settled_id == requested_id
+                    && prompt == "Where should I deploy?"
+                    && choices == &["staging".to_owned(), "production".to_owned()]
+                    && value == "staging"
+            ),
+            "expected one requested/settled pair, saw {:?}",
+            run.audit.events()
+        );
+
+        assert_eq!(run.result.status, ToolExecutionStatus::Success);
+        assert_eq!(
+            run.result.content,
+            vec![crate::tools::types::ToolResultContent::Json {
+                value: serde_json::json!({"answer": "staging", "kind": "choice"})
+            }]
+        );
+
+        // The live operation already consumed its one answer; a second one is
+        // refused and writes no further audit fact.
+        assert!(matches!(
+            run.coordinator.respond(
+                &run.request.id,
+                InteractionResponse::Question {
+                    answer: QuestionAnswer::Choice {
+                        value: "production".to_owned(),
+                    },
+                },
+            ),
+            Err(crate::runtime::interaction::InteractionError::NotPending { .. })
+        ));
+        assert_eq!(run.audit.events().len(), 2);
+    }
+
     #[tokio::test]
     async fn production_path_cancellation_returns_one_cancelled_tool_result() {
         let registry = registry();
@@ -701,9 +801,11 @@ mod tests {
         };
         let lifecycle = ConversationLifecycle::new();
         assert!(lifecycle.activate());
+        let conversation_id = ConversationId::new("ask-user-cancel-conversation");
         let coordinator = Arc::new(InteractionCoordinator::new(
-            ConversationId::new("ask-user-cancel-conversation"),
+            conversation_id.clone(),
             lifecycle,
+            crate::runtime::interaction::RecordingInteractionAudit::new(conversation_id),
         ));
         coordinator.set_provider_available(true);
         let (pending_sender, pending_receiver) = oneshot::channel();
