@@ -694,6 +694,23 @@ impl<'a> AgentExecution<'a> {
         self.observer = Some(observer);
     }
 
+    /// Installs the deterministic publication policy and clock of one attempt
+    /// (Issue #108 regressions).
+    ///
+    /// Production always uses the default bounded policy and the monotonic
+    /// system clock. A test installs an explicit byte threshold and a manually
+    /// advanced clock so a coalescing or latency regression is decided by the
+    /// policy alone and never by wall-clock timing.
+    #[cfg(test)]
+    pub(crate) fn install_publication_policy(
+        &mut self,
+        policy: CoalescePolicy,
+        clock: std::sync::Arc<dyn PublicationClock>,
+    ) {
+        self.publication_policy = policy;
+        self.publication_clock = clock;
+    }
+
     /// Installs the test-only start-boundary pause (Issue #12, M9b
     /// deterministic race tests).
     #[cfg(test)]

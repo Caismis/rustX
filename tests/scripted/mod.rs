@@ -47,6 +47,7 @@ pub(crate) mod common;
 /// The fixtures that need a `cfg(test)`-only seam.
 pub(crate) mod support;
 
+mod issue108_publication;
 mod issue27_multi_compaction;
 mod issue37_binding;
 mod issue37_capability;
