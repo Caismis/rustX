@@ -26,16 +26,20 @@ use sha2::{Digest, Sha256};
 
 use crate::conversation::{SurfaceOp, SurfaceRevision, SurfaceSpan};
 use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
-use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock, UserSource};
+use crate::message::types::{
+    AssistantContentBlock, ContentBlockIndex, InboundKind, MessageBlock, UserMessageBlock,
+    UserSource,
+};
 use crate::model::snapshot::RequestSnapshot;
 use crate::model::types::ModelRequest;
 use crate::publication::{
-    PublicationAudit, PublicationFrame, PublicationPayload, PublicationSettlement,
-    PublicationStreamRecord, PublicationStreamStart, consolidate_audit_content,
+    PublicationAudit, PublicationAuditBlock, PublicationFrame, PublicationPayload,
+    PublicationSettlement, PublicationStreamRecord, PublicationStreamStart,
+    consolidate_audit_content,
 };
 use crate::runtime::identity::{
     AgentId, AttemptId, ConversationId, EventId, MessageId, PublicationStreamId, RequestId,
-    ToolCallId, TurnId,
+    ToolCallId, ToolId, TurnId,
 };
 use crate::runtime::inbound::InboundSequence;
 
@@ -59,13 +63,16 @@ use super::inbox::{
 /// P-marker column, and the `ModelRequestCompleted` / `ModelRequestFailed`
 /// payload change that names the exact request.
 ///
-/// Version 5 freezes the store-enforced generation and proposal ownership
+/// Version 5 froze the store-enforced generation and proposal ownership
 /// rules: a Request Snapshot carries its provisional Assistant identity, and
 /// publication proposals are owned by `(stream_id, call_id)` because provider
 /// `ToolCallIds` are request/publication-scoped rather than conversation-global.
-/// A v3/v4 database must fail at store open; there is no migration or
-/// compatibility path.
-pub const SQLITE_SCHEMA_VERSION: i64 = 5;
+///
+/// Version 6 completes that ownership contract. Every proposal row now stores
+/// its frozen block/tool/name identity and its explicit `started` or
+/// `completed` staging state. A v3/v4/v5 database must fail at store open;
+/// there is no migration or compatibility path.
+pub const SQLITE_SCHEMA_VERSION: i64 = 6;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -1464,6 +1471,7 @@ impl ConversationStore for SqliteConversationStore {
             message,
             &event,
         )?;
+        validate_canonical_tool_proposals(&transaction, stream_id, message)?;
         if let Some(settlement) = stream.settlement {
             return Err(ConversationStoreError::PublicationViolation(format!(
                 "publication stream {stream_id} already settled as {}; canonical acceptance is permanently forbidden",
@@ -1585,6 +1593,8 @@ impl ConversationStore for SqliteConversationStore {
             )));
         }
         let frames = read_publication_frames(&transaction, stream_id)?;
+        let content = consolidate_audit_content(&frames);
+        validate_audit_proposal_ownership(&transaction, stream_id, &content)?;
         let audit = PublicationAudit {
             stream_id: stream_id.clone(),
             attempt_id: stream.start.attempt_id.clone(),
@@ -1592,7 +1602,7 @@ impl ConversationStore for SqliteConversationStore {
             request_id: stream.start.request_id.clone(),
             message_id: stream.start.message_id.clone(),
             kind,
-            content: consolidate_audit_content(&frames),
+            content,
             settled_at: timestamp,
         };
         let settlement = PublicationSettlement::from(kind);
@@ -1751,6 +1761,201 @@ fn publication_record(
     })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PublicationProposalState {
+    Started,
+    Completed,
+}
+
+impl PublicationProposalState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Started => "started",
+            Self::Completed => "completed",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, ConversationStoreError> {
+        match value {
+            "started" => Ok(Self::Started),
+            "completed" => Ok(Self::Completed),
+            other => Err(ConversationStoreError::InvalidReference(format!(
+                "publication proposal has unknown state {other}"
+            ))),
+        }
+    }
+}
+
+/// The store-owned identity and assembly state of one staged proposal.
+///
+/// `persisted_state` is `None` for a proposal first created by the current
+/// transaction. Keeping it alongside the working state lets one transaction
+/// stage `Started` and `Completed` together without inserting an intermediate
+/// row or losing the exact state transition.
+#[derive(Debug, Clone)]
+struct PublicationProposalOwner {
+    call_id: ToolCallId,
+    block_index: ContentBlockIndex,
+    tool_id: ToolId,
+    name: String,
+    state: PublicationProposalState,
+    persisted_state: Option<PublicationProposalState>,
+}
+
+fn load_publication_proposal_owners(
+    transaction: &Transaction<'_>,
+    stream_id: &PublicationStreamId,
+) -> Result<Vec<PublicationProposalOwner>, ConversationStoreError> {
+    let mut statement = transaction
+        .prepare(
+            "SELECT call_id,block_index,tool_id,tool_name,state
+             FROM publication_proposals WHERE stream_id=?1 ORDER BY call_id",
+        )
+        .map_err(|error| storage(format!("publication proposal owner query: {error}")))?;
+    let rows = statement
+        .query_map([stream_id.as_str()], |row| {
+            let block_index: i64 = row.get(1)?;
+            let state: String = row.get(4)?;
+            Ok((
+                row.get::<_, String>(0)?,
+                block_index,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                state,
+            ))
+        })
+        .map_err(|error| storage(format!("publication proposal owner rows: {error}")))?;
+    rows.map(|row| {
+        let (call_id, block_index, tool_id, name, state) =
+            row.map_err(|error| storage(format!("publication proposal owner row: {error}")))?;
+        let block_index = u32::try_from(block_index).map_err(|_| {
+            ConversationStoreError::InvalidReference(
+                "publication proposal block index is invalid".to_owned(),
+            )
+        })?;
+        let state = PublicationProposalState::parse(&state)?;
+        Ok(PublicationProposalOwner {
+            call_id: ToolCallId::new(call_id),
+            block_index: ContentBlockIndex::new(block_index),
+            tool_id: ToolId::new(tool_id),
+            name,
+            state,
+            persisted_state: Some(state),
+        })
+    })
+    .collect()
+}
+
+fn proposal_owner<'a>(
+    owners: &'a mut [PublicationProposalOwner],
+    call_id: &ToolCallId,
+) -> Option<&'a mut PublicationProposalOwner> {
+    owners.iter_mut().find(|owner| owner.call_id == *call_id)
+}
+
+fn proposal_violation(
+    stream_id: &PublicationStreamId,
+    detail: impl Into<String>,
+) -> ConversationStoreError {
+    ConversationStoreError::PublicationViolation(format!(
+        "publication stream {stream_id} proposal violation: {}",
+        detail.into()
+    ))
+}
+
+fn require_started_proposal<'a>(
+    owners: &'a mut [PublicationProposalOwner],
+    stream_id: &PublicationStreamId,
+    call_id: &ToolCallId,
+) -> Result<&'a mut PublicationProposalOwner, ConversationStoreError> {
+    let owner = proposal_owner(owners, call_id).ok_or_else(|| {
+        proposal_violation(
+            stream_id,
+            format!("tool proposal {call_id} has no Started frame"),
+        )
+    })?;
+    if owner.state == PublicationProposalState::Completed {
+        return Err(proposal_violation(
+            stream_id,
+            format!("tool proposal {call_id} is already completed"),
+        ));
+    }
+    Ok(owner)
+}
+
+fn validate_proposal_frames(
+    stream_id: &PublicationStreamId,
+    frames: &[PublicationFrame],
+    owners: &mut Vec<PublicationProposalOwner>,
+) -> Result<(), ConversationStoreError> {
+    for frame in frames {
+        match &frame.payload {
+            PublicationPayload::ProposedToolCallStarted { block_index, call } => {
+                if proposal_owner(owners, &call.id).is_some() {
+                    return Err(proposal_violation(
+                        stream_id,
+                        format!("tool proposal {} already has a Started frame", call.id),
+                    ));
+                }
+                owners.push(PublicationProposalOwner {
+                    call_id: call.id.clone(),
+                    block_index: *block_index,
+                    tool_id: call.tool_id.clone(),
+                    name: call.name.clone(),
+                    state: PublicationProposalState::Started,
+                    persisted_state: None,
+                });
+            }
+            PublicationPayload::ProposedToolCallArgumentsSuffix {
+                block_index,
+                call_id,
+                ..
+            } => {
+                let owner = require_started_proposal(owners, stream_id, call_id)?;
+                if owner.block_index != *block_index {
+                    return Err(proposal_violation(
+                        stream_id,
+                        format!(
+                            "tool proposal {call_id} arguments use block {block_index}, but block {} is frozen",
+                            owner.block_index
+                        ),
+                    ));
+                }
+            }
+            PublicationPayload::ProposedToolCallCompleted { block_index, call } => {
+                let owner = require_started_proposal(owners, stream_id, &call.id)?;
+                if owner.block_index != *block_index {
+                    return Err(proposal_violation(
+                        stream_id,
+                        format!(
+                            "tool proposal {} completes block {block_index}, but block {} is frozen",
+                            call.id, owner.block_index
+                        ),
+                    ));
+                }
+                if owner.tool_id != call.tool_id {
+                    return Err(proposal_violation(
+                        stream_id,
+                        format!("tool proposal {} completion changes tool id", call.id),
+                    ));
+                }
+                if owner.name != call.name {
+                    return Err(proposal_violation(
+                        stream_id,
+                        format!("tool proposal {} completion changes tool name", call.id),
+                    ));
+                }
+                owner.state = PublicationProposalState::Completed;
+            }
+            PublicationPayload::TextSuffix { .. }
+            | PublicationPayload::ReasoningSuffix { .. }
+            | PublicationPayload::RefusalSuffix { .. }
+            | PublicationPayload::TerminalOnly => {}
+        }
+    }
+    Ok(())
+}
+
 /// Stages one contiguous run of frames onto an open unsettled stream and
 /// returns the stream as it was before the staging.
 fn stage_frames_tx(
@@ -1777,6 +1982,11 @@ fn stage_frames_tx(
             |row| row.get(0),
         )
         .map_err(|error| storage(format!("publication sequence read: {error}")))?;
+    let mut owners = load_publication_proposal_owners(transaction, stream_id)?;
+
+    // Preflight the complete transaction before inserting a frame or changing
+    // an ownership row. In particular, a suffix/completion cannot become an
+    // orphaned audit proposal merely because it appeared in a later batch.
     for frame in frames {
         if frame.message_id != stream.start.message_id {
             return Err(ConversationStoreError::PublicationViolation(format!(
@@ -1790,6 +2000,13 @@ fn stage_frames_tx(
                 frame.sequence
             )));
         }
+        next = next
+            .checked_add(1)
+            .ok_or_else(|| storage("publication frame sequence overflow"))?;
+    }
+    validate_proposal_frames(stream_id, frames, &mut owners)?;
+
+    for frame in frames {
         transaction
             .execute(
                 "INSERT INTO publication_frames(stream_id,sequence,frame_json) VALUES(?1,?2,?3)",
@@ -1800,33 +2017,35 @@ fn stage_frames_tx(
                 ],
             )
             .map_err(|error| storage(format!("stage publication frame: {error}")))?;
-        if let PublicationPayload::ProposedToolCallStarted { call, .. } = &frame.payload {
-            // Provider ToolCallIds are scoped to a publication generation, not
-            // globally to the conversation. A duplicate registration in the
-            // same stream is a typed ownership violation; a reuse in another
-            // stream is a distinct proposal and is never silently attributed
-            // to the first owner.
-            let already_registered: bool = transaction
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM publication_proposals WHERE stream_id=?1 AND call_id=?2)",
-                    params![stream_id.as_str(), call.id.as_str()],
-                    |row| row.get(0),
-                )
-                .map_err(|error| storage(format!("probe tool proposal ownership: {error}")))?;
-            if already_registered {
-                return Err(ConversationStoreError::PublicationViolation(format!(
-                    "publication stream {stream_id} already owns tool proposal {}",
-                    call.id
-                )));
+    }
+    for owner in owners {
+        match owner.persisted_state {
+            None => {
+                transaction
+                    .execute(
+                        "INSERT INTO publication_proposals(stream_id,call_id,block_index,tool_id,tool_name,state,executed,settlement)
+                         VALUES(?1,?2,?3,?4,?5,?6,0,NULL)",
+                        params![
+                            stream_id.as_str(),
+                            owner.call_id.as_str(),
+                            i64::from(owner.block_index.get()),
+                            owner.tool_id.as_str(),
+                            owner.name,
+                            owner.state.as_str(),
+                        ],
+                    )
+                    .map_err(|error| storage(format!("register tool proposal: {error}")))?;
             }
-            transaction
-                .execute(
-                    "INSERT INTO publication_proposals(stream_id,call_id,executed,settlement) VALUES(?1,?2,0,NULL)",
-                    params![stream_id.as_str(), call.id.as_str()],
-                )
-                .map_err(|error| storage(format!("register tool proposal: {error}")))?;
+            Some(previous) if previous != owner.state => {
+                transaction
+                    .execute(
+                        "UPDATE publication_proposals SET state=?1 WHERE stream_id=?2 AND call_id=?3",
+                        params![owner.state.as_str(), stream_id.as_str(), owner.call_id.as_str()],
+                    )
+                    .map_err(|error| storage(format!("advance tool proposal state: {error}")))?;
+            }
+            Some(_) => {}
         }
-        next += 1;
     }
     transaction
         .execute(
@@ -1853,6 +2072,143 @@ fn read_publication_frames(
         frames.push(decode(&json, "publication frame")?);
     }
     Ok(frames)
+}
+
+/// Proves that every proposal materialized into an audit is backed by the
+/// stream-local durable owner created by the staging state machine.
+fn validate_audit_proposal_ownership(
+    transaction: &Transaction<'_>,
+    stream_id: &PublicationStreamId,
+    content: &[PublicationAuditBlock],
+) -> Result<(), ConversationStoreError> {
+    for block in content {
+        let PublicationAuditBlock::ProposedToolCall {
+            block_index,
+            call_id,
+            tool_id,
+            name,
+            complete,
+            ..
+        } = block
+        else {
+            continue;
+        };
+        let owner: Option<(i64, String, String, String)> = transaction
+            .query_row(
+                "SELECT block_index,tool_id,tool_name,state
+                 FROM publication_proposals WHERE stream_id=?1 AND call_id=?2",
+                params![stream_id.as_str(), call_id.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(|error| storage(format!("audit proposal owner probe: {error}")))?;
+        let Some((stored_block_index, stored_tool_id, stored_name, stored_state)) = owner else {
+            return Err(proposal_violation(
+                stream_id,
+                format!("audit proposal {call_id} has no durable Started owner"),
+            ));
+        };
+        let stored_block_index = u32::try_from(stored_block_index).map_err(|_| {
+            ConversationStoreError::InvalidReference(
+                "publication proposal block index is invalid".to_owned(),
+            )
+        })?;
+        let stored_state = PublicationProposalState::parse(&stored_state)?;
+        if ContentBlockIndex::new(stored_block_index) != *block_index
+            || stored_tool_id != tool_id.as_str()
+            || stored_name != *name
+        {
+            return Err(proposal_violation(
+                stream_id,
+                format!("audit proposal {call_id} disagrees with its frozen owner identity"),
+            ));
+        }
+        let expected_state = if *complete {
+            PublicationProposalState::Completed
+        } else {
+            PublicationProposalState::Started
+        };
+        if stored_state != expected_state {
+            return Err(proposal_violation(
+                stream_id,
+                format!(
+                    "audit proposal {call_id} has state {}, expected {}",
+                    stored_state.as_str(),
+                    expected_state.as_str()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// A canonical Assistant carrying a tool call must accept the same completed
+/// proposal identity that the publication stream durably assembled. This is
+/// the C-side owner of the final proposal-state boundary; Tool Plane events
+/// can then resolve the retained canonical owner without reconstructing frame
+/// JSON.
+fn validate_canonical_tool_proposals(
+    transaction: &Transaction<'_>,
+    stream_id: &PublicationStreamId,
+    message: &MessageBlock,
+) -> Result<(), ConversationStoreError> {
+    let MessageBlock::Assistant(assistant) = message else {
+        return Ok(());
+    };
+    for (index, block) in assistant.content.iter().enumerate() {
+        let AssistantContentBlock::ToolCall(call) = block else {
+            continue;
+        };
+        let block_index = u32::try_from(index)
+            .map(ContentBlockIndex::new)
+            .map_err(|_| storage("canonical Assistant block index overflow"))?;
+        let owner: Option<(i64, String, String, String)> = transaction
+            .query_row(
+                "SELECT block_index,tool_id,tool_name,state
+                 FROM publication_proposals WHERE stream_id=?1 AND call_id=?2",
+                params![stream_id.as_str(), call.id.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(|error| storage(format!("canonical proposal owner probe: {error}")))?;
+        let Some((stored_block_index, stored_tool_id, stored_name, stored_state)) = owner else {
+            return Err(proposal_violation(
+                stream_id,
+                format!(
+                    "canonical ToolCall {} has no stream-local Started owner",
+                    call.id
+                ),
+            ));
+        };
+        let stored_block_index = u32::try_from(stored_block_index).map_err(|_| {
+            ConversationStoreError::InvalidReference(
+                "publication proposal block index is invalid".to_owned(),
+            )
+        })?;
+        let stored_state = PublicationProposalState::parse(&stored_state)?;
+        if ContentBlockIndex::new(stored_block_index) != block_index
+            || stored_tool_id != call.tool_id.as_str()
+            || stored_name != call.name
+        {
+            return Err(proposal_violation(
+                stream_id,
+                format!(
+                    "canonical ToolCall {} disagrees with its frozen owner",
+                    call.id
+                ),
+            ));
+        }
+        if stored_state != PublicationProposalState::Completed {
+            return Err(proposal_violation(
+                stream_id,
+                format!(
+                    "canonical ToolCall {} has no durable Completed frame",
+                    call.id
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn clear_publication_staging(
@@ -1922,12 +2278,14 @@ fn request_outcome_is_durable(
 /// This is the durable half of the hard Issue #108 invariant: no tool
 /// proposal from an Incomplete or Unaccepted publication may have a dependent
 /// `ToolExecutionStarted`, `ToolResult`, or side-effect authorization.
+#[allow(clippy::too_many_lines)] // One store-layer owner keeps every dependency path identical.
 fn record_tool_proposal_dependency(
     transaction: &Transaction<'_>,
     call_id: &ToolCallId,
     attempt_id: Option<&AttemptId>,
     turn_id: Option<&TurnId>,
     dependency: &str,
+    allow_unowned_canonical: bool,
 ) -> Result<(), ConversationStoreError> {
     // Detached authorization facts intentionally outlive an attempt and carry
     // no envelope generation. Resolve those facts through the current durable
@@ -1941,7 +2299,7 @@ fn record_tool_proposal_dependency(
     };
     let mut statement = transaction
         .prepare(
-            "SELECT p.stream_id,s.attempt_id,s.turn_id,s.message_id,p.settlement
+            "SELECT p.stream_id,s.attempt_id,s.turn_id,s.message_id,p.settlement,p.state
              FROM publication_proposals p
              JOIN publication_streams s ON s.stream_id=p.stream_id
              WHERE p.call_id=?1
@@ -1956,6 +2314,7 @@ fn record_tool_proposal_dependency(
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, Option<String>>(4)?,
+                row.get::<_, String>(5)?,
             ))
         })
         .map_err(|error| storage(format!("tool proposal rows: {error}")))?;
@@ -1964,12 +2323,28 @@ fn record_tool_proposal_dependency(
         .collect::<Result<Vec<_>, _>>()?;
     drop(statement);
     if candidates.is_empty() {
-        return Ok(());
+        // A direct canonical Assistant commit predates the publication plane
+        // in a few durable recovery prefixes. It is a valid owner only when
+        // the active Surface still contains that exact ToolCall. An arbitrary
+        // call id with no publication owner and no canonical Assistant owner
+        // is a malformed foreground dependency, not an idempotent no-op. A
+        // direct canonical ToolMessage or detached lifecycle opening may
+        // still be admitted without a model proposal: neither is a
+        // ToolResult or execution fact for a publication proposal.
+        if canonical_surface_contains_tool_call(transaction, call_id)? {
+            return Ok(());
+        }
+        if allow_unowned_canonical {
+            return Ok(());
+        }
+        return Err(ConversationStoreError::PublicationViolation(format!(
+            "{dependency} for tool call {call_id} has no durable proposal or canonical Assistant owner"
+        )));
     }
     let matching: Vec<_> = candidates
         .iter()
         .filter(
-            |(_, candidate_attempt, candidate_turn, candidate_message, _)| {
+            |(_, candidate_attempt, candidate_turn, candidate_message, _, _)| {
                 attempt_id.is_none_or(|attempt| candidate_attempt == attempt.as_str())
                     && turn_id.is_none_or(|turn| candidate_turn == turn.as_str())
                     && detached_active_messages.as_ref().is_none_or(|active| {
@@ -1987,7 +2362,7 @@ fn record_tool_proposal_dependency(
     }
     let canonical: Vec<_> = matching
         .iter()
-        .filter(|(_, _, _, _, settlement)| {
+        .filter(|(_, _, _, _, settlement, _)| {
             settlement.as_deref() == Some(PublicationSettlement::Canonical.as_str())
         })
         .collect();
@@ -1999,7 +2374,7 @@ fn record_tool_proposal_dependency(
             )));
         }
         std::cmp::Ordering::Less => {
-            let audited = matching.iter().find_map(|(_, _, _, _, settlement)| {
+            let audited = matching.iter().find_map(|(_, _, _, _, settlement, _)| {
                 settlement.as_deref().filter(|settlement| {
                     *settlement == PublicationSettlement::Incomplete.as_str()
                         || *settlement == PublicationSettlement::Unaccepted.as_str()
@@ -2018,6 +2393,13 @@ fn record_tool_proposal_dependency(
             matching[0]
         }
     };
+    let state = &selected.5;
+    let state = PublicationProposalState::parse(state)?;
+    if state != PublicationProposalState::Completed {
+        return Err(ConversationStoreError::PublicationViolation(format!(
+            "{dependency} for tool call {call_id} has no durable Completed proposal frame"
+        )));
+    }
     transaction
         .execute(
             "UPDATE publication_proposals SET executed=1 WHERE stream_id=?1 AND call_id=?2",
@@ -2025,6 +2407,33 @@ fn record_tool_proposal_dependency(
         )
         .map_err(|error| storage(format!("record tool proposal dependency: {error}")))?;
     Ok(())
+}
+
+/// Resolves the non-publication canonical path used by older recovery
+/// prefixes without turning a missing publication owner into a bare call-id
+/// authority. The active canonical Assistant is the only durable fact that
+/// can authorize a Tool Plane transition when no publication proposal row
+/// exists.
+fn canonical_surface_contains_tool_call(
+    transaction: &Transaction<'_>,
+    call_id: &ToolCallId,
+) -> Result<bool, ConversationStoreError> {
+    let head = load_head(transaction)?;
+    for message_id in head.active_message_ids {
+        let message = load_message_tx(transaction, &message_id)?;
+        let MessageBlock::Assistant(assistant) = message else {
+            continue;
+        };
+        if assistant.content.iter().any(|block| {
+            matches!(
+                block,
+                AssistantContentBlock::ToolCall(call) if call.id == *call_id
+            )
+        }) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn accept_inbound_tx(
@@ -2147,6 +2556,7 @@ fn append_canonical_messages(
                 None,
                 None,
                 "canonical ToolMessage",
+                true,
             )?;
         }
         append_message_and_surface(&transaction, message)?;
@@ -2374,6 +2784,10 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
             CREATE TABLE IF NOT EXISTS publication_proposals (
                 stream_id TEXT NOT NULL,
                 call_id TEXT NOT NULL,
+                block_index INTEGER NOT NULL CHECK(block_index >= 0),
+                tool_id TEXT NOT NULL,
+                tool_name TEXT NOT NULL,
+                state TEXT NOT NULL CHECK(state IN ('started','completed')),
                 executed INTEGER NOT NULL CHECK(executed IN (0,1)),
                 settlement TEXT,
                 PRIMARY KEY(stream_id, call_id)
@@ -2494,7 +2908,16 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         ),
         (
             "publication_proposals",
-            &["call_id", "stream_id", "executed", "settlement"],
+            &[
+                "call_id",
+                "stream_id",
+                "block_index",
+                "tool_id",
+                "tool_name",
+                "state",
+                "executed",
+                "settlement",
+            ],
         ),
         ("publication_audits", &["stream_id", "audit_json"]),
         (
@@ -3986,14 +4409,24 @@ fn validate_event_reference(
         RuntimeEvent::ToolExecutionStarted { tool_call_id, .. }
         | RuntimeEvent::ToolExecutionProgress { tool_call_id, .. }
         | RuntimeEvent::ToolExecutionCompleted { tool_call_id, .. }
-        | RuntimeEvent::ToolExecutionFailed { tool_call_id, .. }
-        | RuntimeEvent::BackgroundExecutionCommitted { tool_call_id, .. } => {
+        | RuntimeEvent::ToolExecutionFailed { tool_call_id, .. } => {
             record_tool_proposal_dependency(
                 transaction,
                 tool_call_id,
                 envelope.attempt_id.as_ref(),
                 envelope.turn_id.as_ref(),
                 runtime_event_dependency_name(&envelope.event),
+                false,
+            )?;
+        }
+        RuntimeEvent::BackgroundExecutionCommitted { tool_call_id, .. } => {
+            record_tool_proposal_dependency(
+                transaction,
+                tool_call_id,
+                envelope.attempt_id.as_ref(),
+                envelope.turn_id.as_ref(),
+                runtime_event_dependency_name(&envelope.event),
+                true,
             )?;
         }
         RuntimeEvent::SubagentOwnershipCommitted {
@@ -4007,6 +4440,7 @@ fn validate_event_reference(
                 envelope.attempt_id.as_ref(),
                 envelope.turn_id.as_ref(),
                 runtime_event_dependency_name(&envelope.event),
+                true,
             )?;
             // The durable identity of an ownership fact is canonical: the
             // EventId must be the deterministic `subagent-committed-event:{id}`
@@ -4079,6 +4513,7 @@ fn validate_event_reference(
                 envelope.attempt_id.as_ref(),
                 envelope.turn_id.as_ref(),
                 runtime_event_dependency_name(&envelope.event),
+                false,
             )?;
         }
         RuntimeEvent::CompactionCompleted {
@@ -6437,6 +6872,32 @@ mod tests {
             SqliteConversationStore::open(conversation_id, &path),
             Err(ConversationStoreError::SchemaVersionMismatch {
                 stored: 2,
+                expected: SQLITE_SCHEMA_VERSION
+            })
+        ));
+    }
+
+    /// Issue #108 proposal-state rows are a development-only physical
+    /// contract. A version-5 database is rejected explicitly instead of
+    /// attempting to interpret its older proposal table or migrate it.
+    #[test]
+    fn pre_proposal_state_machine_schema_is_rejected_explicitly() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("pre-proposal-state-machine.sqlite");
+        let conversation_id = ConversationId::new("conv-pre-proposal-state-machine");
+        {
+            let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
+            store
+                .conn
+                .lock()
+                .unwrap()
+                .execute("UPDATE rustx_store SET schema_version = 5 WHERE id = 1", [])
+                .unwrap();
+        }
+        assert!(matches!(
+            SqliteConversationStore::open(conversation_id, &path),
+            Err(ConversationStoreError::SchemaVersionMismatch {
+                stored: 5,
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));

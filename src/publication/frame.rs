@@ -390,8 +390,10 @@ impl PublicationStreamRecord {
     }
 }
 
-/// Folds a stream's staged frames, in sequence order, into the bounded
-/// immutable audit content.
+/// Folds a valid stream's staged frames, in sequence order, into the bounded
+/// immutable audit content. The durable store validates the proposal state
+/// machine before calling this fold; an orphan completion is ignored
+/// defensively rather than being promoted into an audit proposal.
 ///
 /// The fold is pure and total: the same frames always produce the same audit,
 /// so a consolidation performed at settlement time and one performed by a
@@ -438,7 +440,7 @@ pub fn consolidate_audit_content(frames: &[PublicationFrame]) -> Vec<Publication
                     arguments.push_str(suffix);
                 }
             }
-            PublicationPayload::ProposedToolCallCompleted { block_index, call } => {
+            PublicationPayload::ProposedToolCallCompleted { call, .. } => {
                 if let Some(PublicationAuditBlock::ProposedToolCall {
                     arguments,
                     complete,
@@ -449,15 +451,6 @@ pub fn consolidate_audit_content(frames: &[PublicationFrame]) -> Vec<Publication
                     if arguments.is_empty() {
                         *arguments = call.arguments.to_string();
                     }
-                } else {
-                    blocks.push(PublicationAuditBlock::ProposedToolCall {
-                        block_index: *block_index,
-                        call_id: call.id.clone(),
-                        tool_id: call.tool_id.clone(),
-                        name: call.name.clone(),
-                        arguments: call.arguments.to_string(),
-                        complete: true,
-                    });
                 }
             }
             PublicationPayload::TerminalOnly => {}
@@ -698,6 +691,26 @@ mod tests {
             PublicationAuditBlock::ProposedToolCall { arguments, complete, .. }
                 if arguments == r#"{"x":1}"# && *complete
         ));
+    }
+
+    /// A pure fold cannot invent proposal ownership from an orphan completion.
+    /// The durable store rejects that frame before this function is reached,
+    /// and the defensive fold keeps the malformed payload out of an audit.
+    #[test]
+    fn orphan_completion_does_not_synthesize_an_audit_proposal() {
+        let content = consolidate_audit_content(&[frame(
+            0,
+            PublicationPayload::ProposedToolCallCompleted {
+                block_index: ContentBlockIndex::new(0),
+                call: ToolCall {
+                    id: ToolCallId::new("orphan"),
+                    tool_id: ToolId::new("tool-a"),
+                    name: "alpha".to_owned(),
+                    arguments: serde_json::json!({}),
+                },
+            },
+        )]);
+        assert!(content.is_empty());
     }
 
     /// The durable settlement form round-trips.

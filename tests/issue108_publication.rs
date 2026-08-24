@@ -258,15 +258,74 @@ fn proposal_start_frame(
     sequence: u64,
     call_id: &ToolCallId,
 ) -> PublicationFrame {
+    proposal_start_frame_with(
+        start,
+        sequence,
+        ContentBlockIndex::new(0),
+        call_id,
+        ToolId::new("tool-alpha"),
+        "alpha",
+    )
+}
+
+fn proposal_start_frame_with(
+    start: &PublicationStreamStart,
+    sequence: u64,
+    block_index: ContentBlockIndex,
+    call_id: &ToolCallId,
+    tool_id: ToolId,
+    name: &str,
+) -> PublicationFrame {
     frame(
         start,
         sequence,
         PublicationPayload::ProposedToolCallStarted {
-            block_index: ContentBlockIndex::new(0),
+            block_index,
             call: ToolCallStart {
                 id: call_id.clone(),
-                tool_id: ToolId::new("tool-alpha"),
-                name: "alpha".to_owned(),
+                tool_id,
+                name: name.to_owned(),
+            },
+        },
+    )
+}
+
+fn proposal_arguments_frame(
+    start: &PublicationStreamStart,
+    sequence: u64,
+    block_index: ContentBlockIndex,
+    call_id: &ToolCallId,
+    suffix: &str,
+) -> PublicationFrame {
+    frame(
+        start,
+        sequence,
+        PublicationPayload::ProposedToolCallArgumentsSuffix {
+            block_index,
+            call_id: call_id.clone(),
+            suffix: suffix.to_owned(),
+        },
+    )
+}
+
+fn proposal_complete_frame_with(
+    start: &PublicationStreamStart,
+    sequence: u64,
+    block_index: ContentBlockIndex,
+    call_id: &ToolCallId,
+    tool_id: ToolId,
+    name: &str,
+) -> PublicationFrame {
+    frame(
+        start,
+        sequence,
+        PublicationPayload::ProposedToolCallCompleted {
+            block_index,
+            call: ToolCall {
+                id: call_id.clone(),
+                tool_id,
+                name: name.to_owned(),
+                arguments: serde_json::json!({}),
             },
         },
     )
@@ -286,6 +345,417 @@ fn committed_event(message_id: &MessageId, turn: &str) -> RuntimeEventEnvelope {
 fn recover_reopened(durable: &Durable) -> RecoveryReport {
     let store = durable.open();
     recover(&store, &FixedClock).expect("recovery succeeds")
+}
+
+fn opened_test_stream(
+    store: &SqliteConversationStore,
+    turn: &str,
+) -> (RequestId, PublicationStreamStart) {
+    let request_id = start_request(store, turn);
+    let start = stream_start(&request_id, turn, "ignored");
+    store.open_publication_stream(&start).expect("open stream");
+    (request_id, start)
+}
+
+fn event_count(store: &SqliteConversationStore) -> usize {
+    store.read_events(None, 256).expect("events").events.len()
+}
+
+// ---------------------------------------------------------------------------
+// Proposal staging state machine (Issue #108)
+// ---------------------------------------------------------------------------
+
+/// A suffix and a completion cannot create ownership by themselves. The
+/// failed transaction leaves sequence zero available for the real Started
+/// frame, proving that no frame or proposal row was partially inserted.
+#[test]
+fn proposal_arguments_and_completion_require_a_started_owner() {
+    for (label, payload) in [
+        (
+            "arguments",
+            PublicationPayload::ProposedToolCallArgumentsSuffix {
+                block_index: ContentBlockIndex::new(0),
+                call_id: ToolCallId::new("orphan-arguments"),
+                suffix: "{}".to_owned(),
+            },
+        ),
+        (
+            "completion",
+            PublicationPayload::ProposedToolCallCompleted {
+                block_index: ContentBlockIndex::new(0),
+                call: ToolCall {
+                    id: ToolCallId::new("orphan-completion"),
+                    tool_id: ToolId::new("tool-alpha"),
+                    name: "alpha".to_owned(),
+                    arguments: serde_json::json!({}),
+                },
+            },
+        ),
+    ] {
+        let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
+        store.initialize(&[]).expect("initialize");
+        let (_request_id, start) = opened_test_stream(&store, "proposal-orphan");
+        let before_head = store.load_head().expect("head");
+        let before_events = event_count(&store);
+        let rejected = store.stage_publication_frames(&[frame(&start, 0, payload)]);
+        assert!(
+            matches!(
+                &rejected,
+                Err(ConversationStoreError::PublicationViolation(detail))
+                    if detail.contains("no Started frame")
+            ),
+            "orphan {label} must be rejected: {rejected:?}"
+        );
+        assert_eq!(store.load_head().expect("head"), before_head);
+        assert_eq!(event_count(&store), before_events);
+        assert_eq!(store.load_canonical().expect("canonical").len(), 0);
+        assert!(
+            store
+                .load_publication_audit(&start.stream_id)
+                .expect("audit")
+                .is_none()
+        );
+        assert_eq!(
+            store
+                .load_unsettled_publication_streams()
+                .expect("streams")
+                .len(),
+            1
+        );
+
+        // Sequence zero and the ownership slot were untouched by the
+        // rejected transaction.
+        let call_id = ToolCallId::new(format!("valid-{label}"));
+        store
+            .stage_publication_frames(&[proposal_start_frame(&start, 0, &call_id)])
+            .expect("Started can be staged at the unchanged sequence");
+    }
+}
+
+/// Duplicate starts, duplicate completions, and argument suffixes after
+/// completion are all rejected without consuming the next frame sequence.
+#[test]
+fn proposal_duplicate_and_post_completion_transitions_are_rejected() {
+    let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
+    store.initialize(&[]).expect("initialize");
+    let (_request_id, start) = opened_test_stream(&store, "proposal-duplicates");
+    let call_id = ToolCallId::new("duplicate-call");
+    store
+        .stage_publication_frames(&[proposal_start_frame(&start, 0, &call_id)])
+        .expect("first Started");
+
+    let duplicate_start =
+        store.stage_publication_frames(&[proposal_start_frame(&start, 1, &call_id)]);
+    assert!(matches!(
+        duplicate_start,
+        Err(ConversationStoreError::PublicationViolation(_))
+    ));
+    store
+        .stage_publication_frames(&[proposal_arguments_frame(
+            &start,
+            1,
+            ContentBlockIndex::new(0),
+            &call_id,
+            "{}",
+        )])
+        .expect("the duplicate start did not consume sequence one");
+    store
+        .stage_publication_frames(&[proposal_complete_frame_with(
+            &start,
+            2,
+            ContentBlockIndex::new(0),
+            &call_id,
+            ToolId::new("tool-alpha"),
+            "alpha",
+        )])
+        .expect("completion");
+
+    let duplicate_completion = store.stage_publication_frames(&[proposal_complete_frame_with(
+        &start,
+        3,
+        ContentBlockIndex::new(0),
+        &call_id,
+        ToolId::new("tool-alpha"),
+        "alpha",
+    )]);
+    assert!(matches!(
+        duplicate_completion,
+        Err(ConversationStoreError::PublicationViolation(_))
+    ));
+    let suffix_after_completion = store.stage_publication_frames(&[proposal_arguments_frame(
+        &start,
+        3,
+        ContentBlockIndex::new(0),
+        &call_id,
+        "more",
+    )]);
+    assert!(matches!(
+        suffix_after_completion,
+        Err(ConversationStoreError::PublicationViolation(_))
+    ));
+
+    // Both rejected transitions left sequence three free, and the complete
+    // proposal can still enter U and the bounded audit exactly once.
+    let request_id = RequestId::new(start.request_id.as_str());
+    commit_provider_outcome(&store, "proposal-duplicates", &request_id);
+    store
+        .commit_publication_terminal(&start.stream_id, &[text(3, &start, "done")])
+        .expect("U after rejected duplicate transitions");
+    let audit = store
+        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .expect("audit");
+    assert_eq!(audit.proposed_call_ids(), vec![call_id]);
+    assert!(matches!(
+        audit.content[0],
+        PublicationAuditBlock::ProposedToolCall { complete: true, .. }
+    ));
+}
+
+/// The frozen block index, tool identity, and tool name belong to the Started
+/// owner. A mismatched completion is rejected atomically, and the exact
+/// completion can reuse that same sequence afterwards.
+#[test]
+fn proposal_completion_must_match_frozen_identity() {
+    let cases = [
+        (
+            "foreign-block",
+            ContentBlockIndex::new(1),
+            ToolId::new("tool-alpha"),
+            "alpha",
+        ),
+        (
+            "foreign-tool",
+            ContentBlockIndex::new(0),
+            ToolId::new("tool-beta"),
+            "alpha",
+        ),
+        (
+            "foreign-name",
+            ContentBlockIndex::new(0),
+            ToolId::new("tool-alpha"),
+            "beta",
+        ),
+    ];
+    for (label, block_index, tool_id, name) in cases {
+        let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
+        store.initialize(&[]).expect("initialize");
+        let (_request_id, start) = opened_test_stream(&store, &format!("proposal-{label}"));
+        let call_id = ToolCallId::new(format!("call-{label}"));
+        store
+            .stage_publication_frames(&[proposal_start_frame(&start, 0, &call_id)])
+            .expect("Started");
+        let rejected = store.stage_publication_frames(&[proposal_complete_frame_with(
+            &start,
+            1,
+            block_index,
+            &call_id,
+            tool_id,
+            name,
+        )]);
+        assert!(
+            matches!(
+                rejected,
+                Err(ConversationStoreError::PublicationViolation(_))
+            ),
+            "mismatched {label} completion was accepted: {rejected:?}"
+        );
+        store
+            .stage_publication_frames(&[proposal_complete_frame_with(
+                &start,
+                1,
+                ContentBlockIndex::new(0),
+                &call_id,
+                ToolId::new("tool-alpha"),
+                "alpha",
+            )])
+            .expect("exact completion reuses the unchanged sequence");
+    }
+}
+
+/// A call ID owned by one stream never satisfies a suffix or completion in a
+/// different stream. Reusing the provider ID is legal only after the second
+/// stream creates its own Started owner.
+#[test]
+fn proposal_ownership_is_namespaced_by_stream_for_every_staging_transition() {
+    let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
+    store.initialize(&[]).expect("initialize");
+    let (_first_request, first) = opened_test_stream(&store, "proposal-owner-first");
+    let (_second_request, second) = opened_test_stream(&store, "proposal-owner-second");
+    let call_id = ToolCallId::new("reused-provider-call");
+    store
+        .stage_publication_frames(&[proposal_start_frame(&first, 0, &call_id)])
+        .expect("first owner");
+
+    for payload in [
+        proposal_arguments_frame(&second, 0, ContentBlockIndex::new(0), &call_id, "{}"),
+        proposal_complete_frame_with(
+            &second,
+            0,
+            ContentBlockIndex::new(0),
+            &call_id,
+            ToolId::new("tool-alpha"),
+            "alpha",
+        ),
+    ] {
+        assert!(matches!(
+            store.stage_publication_frames(&[payload]),
+            Err(ConversationStoreError::PublicationViolation(_))
+        ));
+    }
+    store
+        .stage_publication_frames(&[proposal_start_frame(&second, 0, &call_id)])
+        .expect("second stream creates its own owner");
+    store
+        .stage_publication_frames(&[proposal_arguments_frame(
+            &second,
+            1,
+            ContentBlockIndex::new(0),
+            &call_id,
+            "{}",
+        )])
+        .expect("second stream arguments");
+    store
+        .stage_publication_frames(&[proposal_complete_frame_with(
+            &second,
+            2,
+            ContentBlockIndex::new(0),
+            &call_id,
+            ToolId::new("tool-alpha"),
+            "alpha",
+        )])
+        .expect("second stream completion");
+    store
+        .stage_publication_frames(&[proposal_complete_frame_with(
+            &first,
+            1,
+            ContentBlockIndex::new(0),
+            &call_id,
+            ToolId::new("tool-alpha"),
+            "alpha",
+        )])
+        .expect("first stream still resolves its own owner");
+}
+
+/// The same proposal-state validator is used by U. A malformed terminal batch
+/// rolls back its frame rows, owner rows, sequence, and terminal marker as one
+/// unit; the valid batch can then use the original sequence zero.
+#[test]
+fn terminal_staging_uses_the_proposal_state_machine_atomically() {
+    let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
+    store.initialize(&[]).expect("initialize");
+    let (request_id, start) = opened_test_stream(&store, "proposal-terminal");
+    commit_provider_outcome(&store, "proposal-terminal", &request_id);
+    let before_head = store.load_head().expect("head");
+    let before_events = event_count(&store);
+    let before_streams = store.load_unsettled_publication_streams().expect("streams");
+    let orphan_id = ToolCallId::new("orphan-terminal");
+    let rejected = store.commit_publication_terminal(
+        &start.stream_id,
+        &[
+            proposal_start_frame(&start, 0, &ToolCallId::new("valid-terminal")),
+            proposal_complete_frame_with(
+                &start,
+                1,
+                ContentBlockIndex::new(0),
+                &orphan_id,
+                ToolId::new("tool-alpha"),
+                "alpha",
+            ),
+        ],
+    );
+    assert!(matches!(
+        rejected,
+        Err(ConversationStoreError::PublicationViolation(_))
+    ));
+    assert_eq!(store.load_head().expect("head"), before_head);
+    assert_eq!(event_count(&store), before_events);
+    assert_eq!(
+        store.load_unsettled_publication_streams().expect("streams"),
+        before_streams
+    );
+    assert!(
+        store
+            .load_publication_audit(&start.stream_id)
+            .expect("audit")
+            .is_none()
+    );
+    assert!(store.load_canonical().expect("canonical").is_empty());
+
+    let valid_id = ToolCallId::new("valid-terminal");
+    store
+        .commit_publication_terminal(
+            &start.stream_id,
+            &[
+                proposal_start_frame(&start, 0, &valid_id),
+                proposal_complete_frame_with(
+                    &start,
+                    1,
+                    ContentBlockIndex::new(0),
+                    &valid_id,
+                    ToolId::new("tool-alpha"),
+                    "alpha",
+                ),
+            ],
+        )
+        .expect("valid terminal batch after rollback");
+    let audit = store
+        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .expect("valid audit");
+    assert_eq!(audit.proposed_call_ids(), vec![valid_id]);
+}
+
+/// The former orphan-completion exploit is rejected before it can reach U or
+/// an audit. No audited content can therefore be resolved by a later Tool
+/// Plane transition under that unowned provider call ID.
+#[test]
+fn orphan_completion_cannot_become_an_audited_tool_proposal() {
+    let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
+    store.initialize(&[]).expect("initialize");
+    let (request_id, start) = opened_test_stream(&store, "proposal-orphan-exploit");
+    let orphan_id = ToolCallId::new("call-1");
+    let rejected = store.stage_publication_frames(&[proposal_complete_frame_with(
+        &start,
+        0,
+        ContentBlockIndex::new(0),
+        &orphan_id,
+        ToolId::new("tool-alpha"),
+        "alpha",
+    )]);
+    assert!(matches!(
+        rejected,
+        Err(ConversationStoreError::PublicationViolation(_))
+    ));
+    commit_provider_outcome(&store, "proposal-orphan-exploit", &request_id);
+    let audit = store
+        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .expect("the empty stream can settle as Incomplete");
+    assert!(audit.proposed_call_ids().is_empty());
+    assert!(
+        store
+            .load_publication_audit(&start.stream_id)
+            .expect("audit")
+            .expect("audit exists")
+            .proposed_call_ids()
+            .is_empty()
+    );
+    let events_before = event_count(&store);
+    let rejected = store.append_event(envelope(
+        "orphan-tool-start",
+        "proposal-orphan-exploit",
+        RuntimeEvent::ToolExecutionStarted {
+            tool_call_id: orphan_id,
+            tool_id: ToolId::new("tool-alpha"),
+        },
+    ));
+    assert!(
+        matches!(
+            rejected,
+            Err(ConversationStoreError::PublicationViolation(ref detail))
+                if detail.contains("no durable proposal or canonical Assistant owner")
+        ),
+        "an unowned orphan call must not be accepted as a no-op: {rejected:?}"
+    );
+    assert_eq!(event_count(&store), events_before);
 }
 
 // ---------------------------------------------------------------------------
@@ -1121,9 +1591,19 @@ fn canonical_proposal_can_execute_and_commit_its_tool_result() {
     store
         .stage_publication_frames(&[proposal_start_frame(&start, 0, &call_id)])
         .expect("proposal");
+    store
+        .stage_publication_frames(&[proposal_complete_frame_with(
+            &start,
+            1,
+            ContentBlockIndex::new(0),
+            &call_id,
+            ToolId::new("tool-alpha"),
+            "alpha",
+        )])
+        .expect("complete proposal");
     commit_provider_outcome(&store, "1", &request_id);
     store
-        .commit_publication_terminal(&start.stream_id, &[text(1, &start, "done")])
+        .commit_publication_terminal(&start.stream_id, &[text(2, &start, "done")])
         .expect("U");
     let assistant = assistant_with_tool(&start.message_id, &call_id);
     store
@@ -1210,9 +1690,19 @@ fn recovery_repairs_a_canonical_proposal_without_audit_aliasing() {
     store
         .stage_publication_frames(&[proposal_start_frame(&start, 0, &call_id)])
         .expect("proposal");
+    store
+        .stage_publication_frames(&[proposal_complete_frame_with(
+            &start,
+            1,
+            ContentBlockIndex::new(0),
+            &call_id,
+            ToolId::new("tool-alpha"),
+            "alpha",
+        )])
+        .expect("complete proposal");
     commit_provider_outcome(&store, "1", &request_id);
     store
-        .commit_publication_terminal(&start.stream_id, &[text(1, &start, "done")])
+        .commit_publication_terminal(&start.stream_id, &[text(2, &start, "done")])
         .expect("U");
     store
         .commit_canonical_publication(
@@ -1255,9 +1745,19 @@ fn reused_tool_call_id_keeps_publication_ownership_exact() {
     store
         .stage_publication_frames(&[proposal_start_frame(&first, 0, &call_id)])
         .expect("first proposal");
+    store
+        .stage_publication_frames(&[proposal_complete_frame_with(
+            &first,
+            1,
+            ContentBlockIndex::new(0),
+            &call_id,
+            ToolId::new("tool-alpha"),
+            "alpha",
+        )])
+        .expect("first complete proposal");
     commit_provider_outcome(&store, "1", &first_request);
     store
-        .commit_publication_terminal(&first.stream_id, &[text(1, &first, "first")])
+        .commit_publication_terminal(&first.stream_id, &[text(2, &first, "first")])
         .expect("first U");
     store
         .terminalize_publication_audit(&first.stream_id, fixed_time())
@@ -1269,9 +1769,19 @@ fn reused_tool_call_id_keeps_publication_ownership_exact() {
     store
         .stage_publication_frames(&[proposal_start_frame(&second, 0, &call_id)])
         .expect("same provider call id has a distinct owner");
+    store
+        .stage_publication_frames(&[proposal_complete_frame_with(
+            &second,
+            1,
+            ContentBlockIndex::new(0),
+            &call_id,
+            ToolId::new("tool-alpha"),
+            "alpha",
+        )])
+        .expect("second complete proposal");
     commit_provider_outcome(&store, "2", &second_request);
     store
-        .commit_publication_terminal(&second.stream_id, &[text(1, &second, "second")])
+        .commit_publication_terminal(&second.stream_id, &[text(2, &second, "second")])
         .expect("second U");
     store
         .commit_canonical_publication(
