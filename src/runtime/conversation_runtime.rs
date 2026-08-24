@@ -1270,6 +1270,11 @@ impl RuntimeInner {
             // one drives its physical process to settlement before releasing
             // the counted admission the drain below waits on.
             self.capability.cancel_conversation_preparation();
+            // The published MCP generation is also retired at the drain
+            // transition. Its explicit attempt/background leases, if any,
+            // keep the physical runtime alive until those owners settle, but
+            // the generation itself no longer blocks drain indefinitely.
+            self.capability.retire_current_mcp_runtimes();
             if self
                 .drain_started
                 .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -3242,54 +3247,55 @@ impl ConversationRuntime {
             .prepare(&self.inner.capability)
             .await;
 
-        let mut state = self.inner.lock_state();
-        if !self.inner.lifecycle.is_running() {
-            reload_gate.clear(&mut state);
-            drop(state);
-            self.inner.wake.notify.notify_one();
-            return Err(RuntimeResourceReloadError::Shutdown);
-        }
-        let prepared = match prepared {
-            Ok(prepared) => prepared,
-            Err(error) => {
+        let outcome = {
+            let mut state = self.inner.lock_state();
+            if self.inner.lifecycle.is_running() {
+                match prepared {
+                    Err(error) => {
+                        reload_gate.clear(&mut state);
+                        Err(RuntimeResourceReloadError::Failed {
+                            message: error.message,
+                        })
+                    }
+                    Ok(prepared) => {
+                        let (capability_candidate, resource_data) = prepared.into_parts();
+                        match self.inner.capability.commit(capability_candidate) {
+                            Err(error) => {
+                                reload_gate.clear(&mut state);
+                                Err(RuntimeResourceReloadError::Failed {
+                                    message:
+                                        crate::runtime::resources::RuntimeResourceLoadError::new(
+                                            format!("cannot publish capability resources: {error}"),
+                                        )
+                                        .message,
+                                })
+                            }
+                            Ok(capability) => {
+                                let revision = state.resources.revision().next();
+                                let resources = Arc::new(RuntimeResourceSnapshot::from_prepared(
+                                    revision,
+                                    resource_data,
+                                    capability,
+                                ));
+                                let capability_revision = resources.capability_revision();
+                                state.resources = resources;
+                                reload_gate.clear(&mut state);
+                                Ok(RuntimeResourceReloaded {
+                                    resource_revision: revision,
+                                    capability_revision,
+                                })
+                            }
+                        }
+                    }
+                }
+            } else {
                 reload_gate.clear(&mut state);
-                drop(state);
-                self.inner.wake.notify.notify_one();
-                return Err(RuntimeResourceReloadError::Failed {
-                    message: error.message,
-                });
+                Err(RuntimeResourceReloadError::Shutdown)
             }
         };
-        let (capability_candidate, resource_data) = prepared.into_parts();
-        let capability = match self.inner.capability.commit(capability_candidate) {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                reload_gate.clear(&mut state);
-                drop(state);
-                self.inner.wake.notify.notify_one();
-                return Err(RuntimeResourceReloadError::Failed {
-                    message: crate::runtime::resources::RuntimeResourceLoadError::new(format!(
-                        "cannot publish capability resources: {error}"
-                    ))
-                    .message,
-                });
-            }
-        };
-        let revision = state.resources.revision().next();
-        let resources = Arc::new(RuntimeResourceSnapshot::from_prepared(
-            revision,
-            resource_data,
-            capability,
-        ));
-        let capability_revision = resources.capability_revision();
-        state.resources = resources;
-        reload_gate.clear(&mut state);
-        drop(state);
         self.inner.wake.notify.notify_one();
-        Ok(RuntimeResourceReloaded {
-            resource_revision: revision,
-            capability_revision,
-        })
+        self.inner.capability.settle_ready_mcp_runtimes().await;
+        outcome
     }
 
     /// The complete generation future attempts currently acquire.
@@ -4685,12 +4691,37 @@ mod tests {
         FakeModel, FakeStep, FakeTool, model_release, success_result,
     };
     use crate::scripted_suites::support::model::scripted_session_model;
-    use crate::tools::executor::ToolRegistry;
+    use crate::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
     use crate::tools::types::{
         ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionStatus,
-        ToolOrigin, ToolReplayPolicy,
+        ToolInvocation, ToolInvocationMode, ToolOrigin, ToolReplayPolicy,
     };
     use futures_util::future::BoxFuture;
+
+    struct ParkedMcpBackgroundExecutor {
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    impl ToolExecutor for ParkedMcpBackgroundExecutor {
+        fn execute<'a>(
+            &'a self,
+            _invocation: ToolInvocation,
+            _context: ToolExecutionContext<'a>,
+        ) -> BoxFuture<'a, crate::tools::types::ToolExecutionResult> {
+            Box::pin(async move {
+                self.started.notify_one();
+                self.release.notified().await;
+                success_result("background settled")
+            })
+        }
+    }
+
+    struct NoProgressForMcp;
+
+    impl crate::tools::executor::ProgressReporter for NoProgressForMcp {
+        fn report(&self, _progress: crate::tools::types::ToolProgress) {}
+    }
 
     fn test_resources(
         capability: &crate::capabilities::CapabilityCoordinator,
@@ -4721,6 +4752,8 @@ mod tests {
         >,
         capability_inputs: std::sync::Mutex<Option<crate::capabilities::CapabilityResourceInputs>>,
         context_assembly: std::sync::Mutex<crate::context::ContextAssembly>,
+        candidate_close_probe:
+            std::sync::Mutex<Option<Arc<crate::tools::mcp::test_sync::CloseProbe>>>,
         prepare_count: std::sync::atomic::AtomicU64,
     }
 
@@ -4730,6 +4763,7 @@ mod tests {
                 project_files: std::sync::Mutex::new(Ok(project_files)),
                 capability_inputs: std::sync::Mutex::new(None),
                 context_assembly: std::sync::Mutex::new(crate::context::ContextAssembly::new()),
+                candidate_close_probe: std::sync::Mutex::new(None),
                 prepare_count: std::sync::atomic::AtomicU64::new(0),
             }
         }
@@ -4745,6 +4779,13 @@ mod tests {
 
         fn set_context_assembly(&self, assembly: crate::context::ContextAssembly) {
             *self.context_assembly.lock().expect("context assembly") = assembly;
+        }
+
+        fn set_candidate_close_probe(&self, probe: Arc<crate::tools::mcp::test_sync::CloseProbe>) {
+            *self
+                .candidate_close_probe
+                .lock()
+                .expect("candidate close probe") = Some(probe);
         }
 
         fn prepare_count(&self) -> u64 {
@@ -4767,7 +4808,6 @@ mod tests {
             Box::pin(async move {
                 self.prepare_count
                     .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                let project_files = self.project_files.lock().expect("project files").clone()?;
                 let inputs = self
                     .capability_inputs
                     .lock()
@@ -4785,6 +4825,18 @@ mod tests {
                 .map_err(|error| {
                     crate::runtime::RuntimeResourceLoadError::new(error.to_string())
                 })?;
+                if let Some(probe) = self
+                    .candidate_close_probe
+                    .lock()
+                    .expect("candidate close probe")
+                    .clone()
+                {
+                    candidate.install_mcp_close_probe(&probe);
+                }
+                // Candidate preparation deliberately precedes project-context
+                // loading so a later project-file failure exercises the same
+                // candidate-retirement path as the production loader.
+                let project_files = self.project_files.lock().expect("project files").clone()?;
                 Ok(crate::runtime::PreparedRuntimeResources::new(
                     project_files,
                     None,
@@ -4927,6 +4979,10 @@ mod tests {
         project_context_files: Vec<crate::runtime::ProjectContextFile>,
         agent_profile: Option<String>,
         resource_loader: Option<Arc<dyn crate::runtime::RuntimeResourceLoader>>,
+        mcp_servers: std::collections::BTreeMap<
+            crate::runtime::identity::McpServerId,
+            crate::tools::mcp::McpServerBinding,
+        >,
     }
 
     impl Default for HeadlessRuntimeOptions {
@@ -4943,6 +4999,7 @@ mod tests {
                 project_context_files: Vec::new(),
                 agent_profile: None,
                 resource_loader: None,
+                mcp_servers: std::collections::BTreeMap::new(),
             }
         }
     }
@@ -4972,7 +5029,7 @@ mod tests {
                 base_tool_registry: Arc::new(base_tool_registry.unwrap_or_default()),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: options.skill_discovery,
-                mcp_servers: std::collections::BTreeMap::new(),
+                mcp_servers: options.mcp_servers.clone(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
             },
@@ -7084,6 +7141,313 @@ mod tests {
         assert_eq!(after.revision().get(), 1);
         assert_eq!(after.project_instructions(), Some("old authority"));
         assert_eq!(loader.prepare_count(), 1);
+    }
+
+    #[cfg(feature = "mcp-fixture")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn failed_reload_retires_candidate_mcp_runtime_after_project_failure() {
+        use crate::tools::mcp::fixture::{
+            FIXTURE_MODE_ENV, FixtureServer, PAGE_SIZE_ENV, fixture_spawn_args,
+            serve_if_fixture_mode,
+        };
+        use crate::tools::mcp::test_sync::CloseProbe;
+
+        if serve_if_fixture_mode(FixtureServer::from_env()).await {
+            return;
+        }
+
+        let test_name = "runtime::conversation_runtime::tests::failed_reload_retires_candidate_mcp_runtime_after_project_failure";
+        let fixture_binding = |page_size: Option<&str>| {
+            let mut environment =
+                std::collections::BTreeMap::from([(FIXTURE_MODE_ENV.to_owned(), "1".to_owned())]);
+            if let Some(page_size) = page_size {
+                environment.insert(PAGE_SIZE_ENV.to_owned(), page_size.to_owned());
+            }
+            crate::tools::mcp::McpServerBinding {
+                transport: crate::tools::mcp::McpTransportConfig::Stdio {
+                    program: std::env::current_exe()
+                        .expect("test executable")
+                        .display()
+                        .to_string(),
+                    args: fixture_spawn_args(test_name),
+                    cwd: None,
+                    environment,
+                },
+                policy: crate::tools::types::ToolInvocationPolicy::default(),
+            }
+        };
+        let server_id = crate::runtime::identity::McpServerId::new("failed-reload");
+        let candidate_binding = fixture_binding(Some("2"));
+        let loader = Arc::new(MutableResourceLoader::new(Vec::new()));
+        loader.set_capability_inputs(crate::capabilities::CapabilityResourceInputs {
+            base_tool_registry: Arc::new(ToolRegistry::new()),
+            tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+            skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
+            mcp_servers: std::collections::BTreeMap::from([(server_id.clone(), candidate_binding)]),
+            base_environment: crate::tools::environment::ToolEnvironment::new(),
+        });
+        loader.fail("project context discovery failed after MCP preparation");
+        let candidate_close = Arc::new(CloseProbe::parking());
+        loader.set_candidate_close_probe(candidate_close.clone());
+        let loader_trait: Arc<dyn crate::runtime::RuntimeResourceLoader> = loader.clone();
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (runtime, _) = headless_runtime_with_options(
+            &dir,
+            Vec::new(),
+            None,
+            None,
+            HeadlessRuntimeOptions {
+                resource_loader: Some(loader_trait),
+                mcp_servers: std::collections::BTreeMap::from([(
+                    server_id.clone(),
+                    fixture_binding(None),
+                )]),
+                ..HeadlessRuntimeOptions::default()
+            },
+        )
+        .await;
+        runtime.activate();
+        let old_resources = runtime.runtime_resources();
+        let old_runtime = runtime
+            .inner
+            .capability
+            .current_mcp_runtime(&server_id)
+            .expect("published MCP runtime");
+
+        let reload_runtime = runtime.clone();
+        let reload = tokio::spawn(async move { reload_runtime.reload_resources().await });
+        candidate_close.wait_entered().await;
+        assert!(
+            Arc::ptr_eq(&old_resources, &runtime.runtime_resources()),
+            "failed preparation does not publish a resource generation"
+        );
+        assert!(
+            Arc::ptr_eq(
+                &old_runtime,
+                &runtime
+                    .inner
+                    .capability
+                    .current_mcp_runtime(&server_id)
+                    .expect("old MCP runtime remains published")
+            ),
+            "failed preparation does not replace physical MCP authority"
+        );
+        candidate_close.release();
+        assert!(matches!(
+            reload.await.expect("reload task"),
+            Err(super::RuntimeResourceReloadError::Failed { .. })
+        ));
+        assert_eq!(
+            runtime.inner.capability.pending_mcp_retirements(),
+            0,
+            "candidate-only physical ownership is reaped after failed reload"
+        );
+        runtime.shutdown().await.expect("shutdown");
+    }
+
+    #[cfg(feature = "mcp-fixture")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
+    async fn mcp_reload_generations_are_bounded_and_background_owners_keep_old_runtime_alive() {
+        use crate::tools::mcp::fixture::{
+            FIXTURE_MODE_ENV, FixtureServer, PAGE_SIZE_ENV, fixture_spawn_args,
+            serve_if_fixture_mode,
+        };
+        use crate::tools::mcp::test_sync::CloseProbe;
+
+        if serve_if_fixture_mode(FixtureServer::from_env()).await {
+            return;
+        }
+
+        let test_name = "runtime::conversation_runtime::tests::mcp_reload_generations_are_bounded_and_background_owners_keep_old_runtime_alive";
+        let fixture_binding = |page_size: Option<&str>| {
+            let mut environment =
+                std::collections::BTreeMap::from([(FIXTURE_MODE_ENV.to_owned(), "1".to_owned())]);
+            if let Some(page_size) = page_size {
+                environment.insert(PAGE_SIZE_ENV.to_owned(), page_size.to_owned());
+            }
+            crate::tools::mcp::McpServerBinding {
+                transport: crate::tools::mcp::McpTransportConfig::Stdio {
+                    program: std::env::current_exe()
+                        .expect("test executable")
+                        .display()
+                        .to_string(),
+                    args: fixture_spawn_args(test_name),
+                    cwd: None,
+                    environment,
+                },
+                policy: crate::tools::types::ToolInvocationPolicy::default(),
+            }
+        };
+        let server_id = crate::runtime::identity::McpServerId::new("reload-server");
+        let loader = Arc::new(MutableResourceLoader::new(Vec::new()));
+        let binding_b = fixture_binding(Some("2"));
+        let binding_c = fixture_binding(None);
+        let inputs = |binding| crate::capabilities::CapabilityResourceInputs {
+            base_tool_registry: Arc::new(ToolRegistry::new()),
+            tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+            skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
+            mcp_servers: std::collections::BTreeMap::from([(server_id.clone(), binding)]),
+            base_environment: crate::tools::environment::ToolEnvironment::new(),
+        };
+        loader.set_capability_inputs(inputs(binding_b.clone()));
+        let loader_trait: Arc<dyn crate::runtime::RuntimeResourceLoader> = loader.clone();
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (runtime, _) = headless_runtime_with_options(
+            &dir,
+            Vec::new(),
+            None,
+            None,
+            HeadlessRuntimeOptions {
+                resource_loader: Some(loader_trait),
+                mcp_servers: std::collections::BTreeMap::from([(
+                    server_id.clone(),
+                    fixture_binding(None),
+                )]),
+                ..HeadlessRuntimeOptions::default()
+            },
+        )
+        .await;
+        runtime.activate();
+
+        let old_runtime = runtime
+            .inner
+            .capability
+            .current_mcp_runtime(&server_id)
+            .expect("generation A");
+        assert_eq!(old_runtime.list_tools().await.expect("A catalog").len(), 3);
+        let old_close = Arc::new(CloseProbe::parking());
+        old_runtime.install_close_probe(old_close.clone());
+
+        let attempt = runtime.inner.capability.acquire_attempt_lease();
+        let mcp_leases = attempt
+            .mcp_leases()
+            .expect("the admitted MCP generation remains dispatchable");
+        drop(attempt);
+        let background_executor = Arc::new(ParkedMcpBackgroundExecutor {
+            started: Arc::new(tokio::sync::Notify::new()),
+            release: Arc::new(tokio::sync::Notify::new()),
+        });
+        let invocation = ToolInvocation {
+            call_id: ToolCallId::new("background-mcp-call"),
+            tool_id: ToolId::new("background-mcp-tool"),
+            tool_name: "background-mcp-tool".to_owned(),
+            mode: ToolInvocationMode::Background,
+            arguments: serde_json::json!({}),
+        };
+        let background = runtime.tool_runtime().background();
+        let prepared = background
+            .prepare_dispatch_with_mcp_leases(
+                &invocation,
+                &(background_executor.clone() as Arc<dyn ToolExecutor>),
+                runtime
+                    .inner
+                    .capability
+                    .current_snapshot()
+                    .effective_environment()
+                    .clone(),
+                mcp_leases,
+            )
+            .expect("prepare background owner");
+        let cancellation = crate::runtime::CancellationSignal::new();
+        let execution_id = match background
+            .commit_dispatch(prepared, &cancellation)
+            .expect("commit background owner")
+        {
+            crate::tools::background::BackgroundDispatchOutcome::Accepted {
+                execution_id, ..
+            } => execution_id,
+            crate::tools::background::BackgroundDispatchOutcome::RolledBack => {
+                panic!("background owner rolled back")
+            }
+        };
+        background_executor.started.notified().await;
+
+        runtime.reload_resources().await.expect("reload A -> B");
+        let runtime_b = runtime
+            .inner
+            .capability
+            .current_mcp_runtime(&server_id)
+            .expect("generation B");
+        assert!(!Arc::ptr_eq(&old_runtime, &runtime_b));
+        assert_eq!(runtime_b.list_tools().await.expect("B catalog").len(), 5);
+        assert!(!old_close.was_entered(), "background lease keeps A open");
+        assert_eq!(runtime.inner.capability.pending_mcp_retirements(), 1);
+
+        let old_tools = old_runtime
+            .list_tools()
+            .await
+            .expect("old catalog remains usable");
+        let (old_definition, old_executor) = crate::tools::mcp::definitions(
+            &server_id,
+            crate::tools::types::ToolInvocationPolicy::default(),
+            &old_runtime,
+            old_tools,
+        )
+        .into_iter()
+        .find(|(definition, _)| definition.name == "echo")
+        .expect("old echo tool");
+        let progress = NoProgressForMcp;
+        let tool_runtime = runtime.tool_runtime();
+        let old_result = old_executor
+            .execute(
+                ToolInvocation {
+                    call_id: ToolCallId::new("old-generation-call"),
+                    tool_id: old_definition.id,
+                    tool_name: "echo".to_owned(),
+                    mode: ToolInvocationMode::Foreground,
+                    arguments: serde_json::json!({}),
+                },
+                ToolExecutionContext::new(
+                    tool_runtime.conversation_id(),
+                    None,
+                    crate::runtime::ExecutionCancellation::detached(
+                        crate::runtime::CancellationSignal::new(),
+                        CancellationReason::UserRequested,
+                    ),
+                    tool_runtime.workspace(),
+                    &progress,
+                    tool_runtime.artifacts(),
+                    tool_runtime.tool_output(),
+                    tool_runtime.environment(),
+                ),
+            )
+            .await;
+        assert!(matches!(old_result.status, ToolExecutionStatus::Success));
+
+        loader.set_capability_inputs(inputs(binding_c));
+        runtime.reload_resources().await.expect("reload B -> C");
+        let runtime_c = runtime
+            .inner
+            .capability
+            .current_mcp_runtime(&server_id)
+            .expect("generation C");
+        assert!(!Arc::ptr_eq(&runtime_b, &runtime_c));
+        assert_eq!(runtime_c.list_tools().await.expect("C catalog").len(), 3);
+        assert_eq!(runtime.inner.capability.pending_mcp_retirements(), 1);
+        assert!(
+            runtime
+                .inner
+                .capability
+                .current_snapshot()
+                .tool_registry()
+                .definitions()
+                .iter()
+                .all(|definition| definition.name != "alpha"),
+            "new capability authority does not retain B-only tools"
+        );
+
+        background_executor.release.notify_one();
+        background.wait_until_settled(&execution_id).await;
+        tokio::time::timeout(std::time::Duration::from_secs(60), old_close.wait_entered())
+            .await
+            .expect("A closes after the background owner settles");
+        old_close.release();
+        runtime.inner.capability.settle_ready_mcp_runtimes().await;
+        assert_eq!(runtime.inner.capability.pending_mcp_retirements(), 0);
+        runtime.shutdown().await.expect("shutdown");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

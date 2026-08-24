@@ -40,8 +40,8 @@ pub mod fixture;
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Instant;
 
 use base64::Engine;
@@ -60,6 +60,7 @@ use sha2::Digest;
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::{McpServerId, ToolId};
 use crate::runtime::interactive_process::{InteractiveProcessSpec, SupervisedInteractiveProcess};
+use crate::runtime::types::LifecycleAdmission;
 use crate::tools::artifacts::ArtifactStore;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::{
@@ -342,6 +343,419 @@ pub struct McpServerRuntime {
     /// Test-only close synchronization/fault seam, installed at most once.
     #[cfg(test)]
     close_probe: std::sync::OnceLock<Arc<test_sync::CloseProbe>>,
+}
+
+/// The coordinator-owned retirement registry for MCP physical generations.
+///
+/// A generation is registered only after its publication/candidate owner has
+/// retired. The registry contains no active pool: it is a bounded list of
+/// close tasks that have not yet been reaped, plus terminal close diagnostics
+/// retained until the owning runtime drains them.
+pub(crate) struct McpRuntimeRetirementRegistry {
+    inner: Arc<McpRuntimeRetirementRegistryInner>,
+}
+
+struct McpRuntimeRetirementRegistryInner {
+    entries: Mutex<Vec<Arc<McpRuntimeGenerationInner>>>,
+    failures: Mutex<Vec<(McpServerId, String)>>,
+}
+
+impl McpRuntimeRetirementRegistry {
+    /// Creates the one retirement registry of a capability coordinator.
+    pub(crate) fn new() -> Arc<Self> {
+        Arc::new(Self {
+            inner: Arc::new(McpRuntimeRetirementRegistryInner {
+                entries: Mutex::new(Vec::new()),
+                failures: Mutex::new(Vec::new()),
+            }),
+        })
+    }
+
+    fn register(&self, generation: Arc<McpRuntimeGenerationInner>) {
+        let mut entries = self
+            .inner
+            .entries
+            .lock()
+            .expect("MCP retirement lock poisoned");
+        if !entries.iter().any(|entry| Arc::ptr_eq(entry, &generation)) {
+            entries.push(generation);
+        }
+    }
+
+    fn record_failure(&self, server_id: &McpServerId, error: &str) {
+        self.inner
+            .failures
+            .lock()
+            .expect("MCP retirement failure lock poisoned")
+            .push((server_id.clone(), error.to_owned()));
+    }
+
+    fn snapshot(&self) -> Vec<Arc<McpRuntimeGenerationInner>> {
+        self.inner
+            .entries
+            .lock()
+            .expect("MCP retirement lock poisoned")
+            .clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_count(&self) -> usize {
+        self.inner
+            .entries
+            .lock()
+            .expect("MCP retirement lock poisoned")
+            .len()
+    }
+
+    fn reap(&self) {
+        let mut entries = self
+            .inner
+            .entries
+            .lock()
+            .expect("MCP retirement lock poisoned");
+        entries.retain(|entry| {
+            if entry.is_closed() {
+                if let Some(error) = entry.close_error() {
+                    self.record_failure(&entry.server_id, &error);
+                }
+                false
+            } else {
+                true
+            }
+        });
+    }
+
+    /// Waits for retired generations that are already free of execution
+    /// leases. This is used after successful reload to keep the retired list
+    /// bounded without waiting for legitimate background owners.
+    pub(crate) async fn settle_ready(&self) {
+        for generation in self.snapshot() {
+            if generation.can_close() {
+                generation.wait_closed().await;
+            }
+        }
+        self.reap();
+    }
+
+    /// Waits for every retired generation to settle. Runtime drain calls this
+    /// only after all attempt/background owners have settled.
+    pub(crate) async fn settle_all(&self) -> Vec<String> {
+        for generation in self.snapshot() {
+            generation.wait_closed().await;
+        }
+        self.reap();
+        let mut failures = self
+            .inner
+            .failures
+            .lock()
+            .expect("MCP retirement failure lock poisoned")
+            .drain(..)
+            .collect::<Vec<_>>();
+        failures.sort();
+        failures
+            .into_iter()
+            .map(|(server_id, error)| format!("MCP server {server_id}: {error}"))
+            .collect()
+    }
+}
+
+/// The publication/candidate owner of one physical MCP runtime generation.
+///
+/// This owner is moved from a prepared capability candidate into the
+/// coordinator's published generation state. Dropping it retires the
+/// generation; the physical runtime closes only after every explicit
+/// execution lease has settled.
+pub(crate) struct McpRuntimeGeneration {
+    inner: Arc<McpRuntimeGenerationInner>,
+}
+
+struct McpRuntimeGenerationInner {
+    server_id: McpServerId,
+    runtime: Arc<McpServerRuntime>,
+    retirement: Weak<McpRuntimeRetirementRegistryInner>,
+    handle: tokio::runtime::Handle,
+    lifecycle_admission: Mutex<Option<LifecycleAdmission>>,
+    state: Mutex<McpRuntimeGenerationState>,
+    closed: tokio::sync::Notify,
+}
+
+struct McpRuntimeGenerationState {
+    retired: bool,
+    execution_leases: usize,
+    close_started: bool,
+    closed: bool,
+    close_error: Option<String>,
+}
+
+/// A non-owning binding used by an MCP executor. It does not keep a physical
+/// generation alive by itself; each execution acquires an explicit lease.
+#[derive(Clone)]
+pub(crate) struct McpRuntimeBinding {
+    inner: Arc<McpRuntimeGenerationInner>,
+}
+
+/// One explicit physical-runtime execution lease.
+pub(crate) struct McpRuntimeLease {
+    inner: Arc<McpRuntimeGenerationInner>,
+}
+
+/// The leases captured by one detached background execution. Keeping this
+/// value in the runner makes dispatch ownership explicit even while the
+/// originating attempt and capability snapshot have settled.
+#[derive(Default)]
+pub(crate) struct McpRuntimeLeaseSet {
+    #[allow(dead_code)]
+    leases: Vec<McpRuntimeLease>,
+}
+
+impl std::fmt::Debug for McpRuntimeGeneration {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("McpRuntimeGeneration")
+            .field("server_id", &self.inner.server_id)
+            .field("retired", &self.is_retired())
+            .field("execution_leases", &self.execution_lease_count())
+            .finish()
+    }
+}
+
+impl McpRuntimeGeneration {
+    pub(crate) fn from_connected(
+        server_id: McpServerId,
+        runtime: Arc<McpServerRuntime>,
+        lifecycle_admission: Option<LifecycleAdmission>,
+        handle: tokio::runtime::Handle,
+        retirement: &Arc<McpRuntimeRetirementRegistry>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(McpRuntimeGenerationInner {
+                server_id,
+                runtime,
+                retirement: Arc::downgrade(&retirement.inner),
+                handle,
+                lifecycle_admission: Mutex::new(lifecycle_admission),
+                state: Mutex::new(McpRuntimeGenerationState {
+                    retired: false,
+                    execution_leases: 0,
+                    close_started: false,
+                    closed: false,
+                    close_error: None,
+                }),
+                closed: tokio::sync::Notify::new(),
+            }),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn server_id(&self) -> &McpServerId {
+        &self.inner.server_id
+    }
+
+    #[cfg(test)]
+    pub(crate) fn runtime(&self) -> Arc<McpServerRuntime> {
+        self.inner.runtime.clone()
+    }
+
+    pub(crate) fn binding(&self) -> McpRuntimeBinding {
+        McpRuntimeBinding {
+            inner: self.inner.clone(),
+        }
+    }
+
+    pub(crate) fn lease(&self) -> McpRuntimeLease {
+        self.binding()
+            .acquire_lease()
+            .expect("a current MCP generation must accept an attempt lease")
+    }
+
+    pub(crate) fn retire(&self) {
+        let first_retirement = {
+            let mut state = self
+                .inner
+                .state
+                .lock()
+                .expect("MCP generation lock poisoned");
+            if state.retired {
+                false
+            } else {
+                state.retired = true;
+                true
+            }
+        };
+        if first_retirement && let Some(retirement) = self.inner.retirement.upgrade() {
+            McpRuntimeRetirementRegistry { inner: retirement }.register(self.inner.clone());
+        }
+        self.inner.maybe_schedule_close();
+    }
+
+    pub(crate) async fn retire_and_close(self) -> Option<String> {
+        self.retire();
+        self.inner.wait_closed().await;
+        self.inner.close_error()
+    }
+
+    fn is_retired(&self) -> bool {
+        self.inner
+            .state
+            .lock()
+            .expect("MCP generation lock poisoned")
+            .retired
+    }
+
+    pub(crate) fn execution_lease_count(&self) -> usize {
+        self.inner.execution_lease_count()
+    }
+}
+
+impl Drop for McpRuntimeGeneration {
+    fn drop(&mut self) {
+        self.retire();
+    }
+}
+
+impl McpRuntimeBinding {
+    pub(crate) fn acquire_lease(&self) -> Option<McpRuntimeLease> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .expect("MCP generation lock poisoned");
+        if state.close_started || state.closed {
+            return None;
+        }
+        state.execution_leases += 1;
+        Some(McpRuntimeLease {
+            inner: self.inner.clone(),
+        })
+    }
+
+    pub(crate) fn runtime(&self) -> &Arc<McpServerRuntime> {
+        &self.inner.runtime
+    }
+}
+
+impl McpRuntimeLease {
+    fn try_clone(&self) -> Option<Self> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .expect("MCP generation lock poisoned");
+        if state.close_started || state.closed {
+            return None;
+        }
+        state.execution_leases += 1;
+        Some(Self {
+            inner: self.inner.clone(),
+        })
+    }
+}
+
+impl Drop for McpRuntimeLease {
+    fn drop(&mut self) {
+        {
+            let mut state = self
+                .inner
+                .state
+                .lock()
+                .expect("MCP generation lock poisoned");
+            state.execution_leases = state
+                .execution_leases
+                .checked_sub(1)
+                .expect("MCP execution lease count underflow");
+        }
+        self.inner.maybe_schedule_close();
+    }
+}
+
+impl McpRuntimeLeaseSet {
+    pub(crate) fn try_clone(&self) -> Option<Self> {
+        let mut leases = Vec::with_capacity(self.leases.len());
+        for lease in &self.leases {
+            leases.push(lease.try_clone()?);
+        }
+        Some(Self { leases })
+    }
+
+    pub(crate) fn from_generations(generations: &[McpRuntimeGeneration]) -> Self {
+        Self {
+            leases: generations
+                .iter()
+                .map(McpRuntimeGeneration::lease)
+                .collect(),
+        }
+    }
+}
+
+impl McpRuntimeGenerationInner {
+    fn execution_lease_count(&self) -> usize {
+        self.state
+            .lock()
+            .expect("MCP generation lock poisoned")
+            .execution_leases
+    }
+
+    fn can_close(&self) -> bool {
+        let state = self.state.lock().expect("MCP generation lock poisoned");
+        state.retired && state.execution_leases == 0
+    }
+
+    fn is_closed(&self) -> bool {
+        self.state
+            .lock()
+            .expect("MCP generation lock poisoned")
+            .closed
+    }
+
+    fn close_error(&self) -> Option<String> {
+        self.state
+            .lock()
+            .expect("MCP generation lock poisoned")
+            .close_error
+            .clone()
+    }
+
+    fn maybe_schedule_close(self: &Arc<Self>) {
+        let admission = {
+            let mut state = self.state.lock().expect("MCP generation lock poisoned");
+            if !state.retired || state.execution_leases != 0 || state.close_started {
+                return;
+            }
+            state.close_started = true;
+            self.lifecycle_admission
+                .lock()
+                .expect("MCP lifecycle admission lock poisoned")
+                .take()
+        };
+        let inner = self.clone();
+        self.handle.spawn(async move {
+            let result = inner.runtime.close().await;
+            {
+                let mut state = inner.state.lock().expect("MCP generation lock poisoned");
+                state.closed = true;
+                state.close_error = result.err().map(|error| error.to_string());
+            }
+            inner.closed.notify_waiters();
+            drop(admission);
+            if let Some(retirement) = inner.retirement.upgrade() {
+                McpRuntimeRetirementRegistry { inner: retirement }.reap();
+            }
+        });
+    }
+
+    async fn wait_closed(&self) {
+        loop {
+            if self.is_closed() {
+                return;
+            }
+            let notified = self.closed.notified();
+            tokio::pin!(notified);
+            if self.is_closed() {
+                return;
+            }
+            notified.await;
+        }
+    }
 }
 
 impl std::fmt::Debug for McpServerRuntime {
@@ -1224,6 +1638,10 @@ impl TryFrom<rmcp::model::Tool> for CanonicalMcpTool {
 /// capability preparation.
 pub struct McpToolExecutor {
     runtime: Arc<McpServerRuntime>,
+    /// The generation binding is present for coordinator-owned tools. Direct
+    /// public adapter users retain the standalone runtime path and explicitly
+    /// own/close that runtime themselves.
+    binding: Option<McpRuntimeBinding>,
     remote_name: String,
 }
 
@@ -1233,6 +1651,15 @@ impl McpToolExecutor {
     pub fn new(runtime: Arc<McpServerRuntime>, remote_name: String) -> Self {
         Self {
             runtime,
+            binding: None,
+            remote_name,
+        }
+    }
+
+    fn new_owned(binding: McpRuntimeBinding, remote_name: String) -> Self {
+        Self {
+            runtime: binding.runtime().clone(),
+            binding: Some(binding),
             remote_name,
         }
     }
@@ -1245,6 +1672,17 @@ impl ToolExecutor for McpToolExecutor {
         context: ToolExecutionContext<'a>,
     ) -> futures_util::future::BoxFuture<'a, ToolExecutionResult> {
         Box::pin(async move {
+            let lease = self
+                .binding
+                .as_ref()
+                .and_then(McpRuntimeBinding::acquire_lease);
+            if self.binding.is_some() && lease.is_none() {
+                return failed_mcp(
+                    "MCP server runtime generation is physically retired",
+                    &context,
+                    Instant::now(),
+                );
+            }
             self.runtime
                 .call(&self.remote_name, invocation.arguments, &context)
                 .await
@@ -1280,6 +1718,42 @@ pub fn definitions(
             (
                 definition,
                 Arc::new(McpToolExecutor::new(runtime.clone(), tool.name)) as Arc<dyn ToolExecutor>,
+            )
+        })
+        .collect()
+}
+
+/// Converts a server catalog into registrations bound to a prepared MCP
+/// generation. The generation owner remains with the candidate or published
+/// capability state; each executor acquires a short explicit execution lease
+/// when it runs.
+pub(crate) fn definitions_owned(
+    server_id: &McpServerId,
+    policy: ToolInvocationPolicy,
+    binding: &McpRuntimeBinding,
+    tools: Vec<CanonicalMcpTool>,
+) -> Vec<(ToolDefinition, Arc<dyn ToolExecutor>)> {
+    tools
+        .into_iter()
+        .map(|tool| {
+            let id = ToolId::new(mcp_tool_id(server_id, &tool.name));
+            let definition = ToolDefinition {
+                id,
+                name: tool.name.clone(),
+                description: tool.description,
+                input_schema: tool.input_schema,
+                execution_policy: policy.execution,
+                concurrency_policy: policy.concurrency,
+                approval_policy: policy.approval,
+                replay_policy: ToolReplayPolicy::Never,
+                origin: ToolOrigin::Mcp {
+                    server_id: server_id.clone(),
+                },
+            };
+            (
+                definition,
+                Arc::new(McpToolExecutor::new_owned(binding.clone(), tool.name))
+                    as Arc<dyn ToolExecutor>,
             )
         })
         .collect()

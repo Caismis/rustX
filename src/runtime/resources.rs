@@ -431,40 +431,124 @@ mod tests {
     use super::{concatenate_project_instructions, load_project_context_files};
 
     #[test]
-    fn project_context_precedence_and_order_are_deterministic() {
+    fn project_context_order_is_root_to_leaf_on_canonical_paths() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let root = directory.path().join("root");
-        let child = root.join("a/b");
+        let middle = root.join("middle");
+        let child = middle.join("leaf");
         std::fs::create_dir_all(&child).expect("workspace");
         std::fs::write(root.join("AGENTS.md"), "\u{feff}root agents").expect("root AGENTS");
-        std::fs::write(root.join("CLAUDE.md"), "shadowed root claude").expect("root CLAUDE");
-        std::fs::write(root.join("a/AGENTS.MD"), "middle agents").expect("middle AGENTS");
+        std::fs::write(middle.join("AGENTS.MD"), "middle agents").expect("middle AGENTS");
         std::fs::write(child.join("AGENTS.md"), "shadowed child agents").expect("child AGENTS");
         std::fs::write(child.join("AGENTS.override.md"), "child override").expect("child override");
 
         let files = load_project_context_files(&child).expect("project context");
+        let canonical_root = std::fs::canonicalize(&root).expect("canonical root");
         assert_eq!(
             files
                 .iter()
-                .filter(|file| file.path.starts_with(&root))
-                .map(|file| (
+                .filter_map(|file| {
                     file.path
-                        .file_name()
-                        .unwrap()
-                        .to_string_lossy()
-                        .into_owned(),
-                    file.content.clone()
-                ))
+                        .strip_prefix(&canonical_root)
+                        .ok()
+                        .map(|relative| (relative.to_path_buf(), file.content.clone()))
+                })
                 .collect::<Vec<_>>(),
             vec![
-                ("AGENTS.md".to_owned(), "root agents".to_owned()),
-                ("AGENTS.MD".to_owned(), "middle agents".to_owned()),
-                ("AGENTS.override.md".to_owned(), "child override".to_owned()),
+                (
+                    std::path::PathBuf::from("AGENTS.md"),
+                    "root agents".to_owned(),
+                ),
+                (
+                    std::path::PathBuf::from("middle/AGENTS.MD"),
+                    "middle agents".to_owned(),
+                ),
+                (
+                    std::path::PathBuf::from("middle/leaf/AGENTS.override.md"),
+                    "child override".to_owned(),
+                ),
             ]
         );
         assert_eq!(
             concatenate_project_instructions(&files),
             Some("root agents\n\nmiddle agents\n\nchild override".to_owned())
         );
+    }
+
+    #[test]
+    fn project_context_override_beats_agents_and_agents_beats_claude() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        let agents_directory = workspace.join("agents");
+        std::fs::create_dir_all(&agents_directory).expect("workspace");
+
+        std::fs::write(workspace.join("AGENTS.override.md"), "override wins").expect("override");
+        std::fs::write(workspace.join("AGENTS.md"), "ordinary is shadowed").expect("AGENTS");
+        std::fs::write(workspace.join("CLAUDE.md"), "claude is shadowed").expect("CLAUDE");
+        std::fs::write(agents_directory.join("AGENTS.md"), "agents beats claude")
+            .expect("nested AGENTS");
+        std::fs::write(
+            agents_directory.join("CLAUDE.md"),
+            "nested claude is shadowed",
+        )
+        .expect("nested CLAUDE");
+
+        let files = load_project_context_files(&agents_directory).expect("project context");
+        let canonical_workspace = std::fs::canonicalize(&workspace).expect("canonical workspace");
+        let selected = files
+            .iter()
+            .filter(|file| file.path.starts_with(&canonical_workspace))
+            .map(|file| file.content.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(selected, vec!["override wins", "agents beats claude"]);
+    }
+
+    #[test]
+    fn project_context_filename_variants_are_recognized_without_case_only_files() {
+        for (directory_name, filename, content) in [
+            ("agents-lower", "AGENTS.md", "agents lower"),
+            ("agents-upper", "AGENTS.MD", "agents upper"),
+            ("claude-lower", "CLAUDE.md", "claude lower"),
+            ("claude-upper", "CLAUDE.MD", "claude upper"),
+        ] {
+            let directory = tempfile::tempdir().expect("temporary directory");
+            let workspace = directory.path().join(directory_name);
+            std::fs::create_dir_all(&workspace).expect("workspace");
+            std::fs::write(workspace.join(filename), content).expect("context file");
+
+            let files = load_project_context_files(&workspace).expect("project context");
+            let canonical_workspace =
+                std::fs::canonicalize(&workspace).expect("canonical workspace");
+            let selected = files
+                .iter()
+                .filter(|file| file.path.starts_with(&canonical_workspace))
+                .collect::<Vec<_>>();
+            assert_eq!(selected.len(), 1, "variant {filename} was selected");
+            assert_eq!(selected[0].content, content);
+            assert_eq!(
+                selected[0]
+                    .path
+                    .file_name()
+                    .expect("filename")
+                    .to_string_lossy(),
+                filename
+            );
+        }
+    }
+
+    #[test]
+    fn project_context_bom_removal_is_deterministic() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        std::fs::write(workspace.join("CLAUDE.MD"), b"\xef\xbb\xbfwith bom").expect("context file");
+
+        let files = load_project_context_files(&workspace).expect("project context");
+        let canonical_workspace = std::fs::canonicalize(&workspace).expect("canonical workspace");
+        let selected = files
+            .iter()
+            .find(|file| file.path.starts_with(&canonical_workspace))
+            .expect("context file");
+        assert_eq!(selected.content, "with bom");
     }
 }

@@ -2930,10 +2930,13 @@ impl<'a> AgentExecution<'a> {
         // whole lifetime, even after this attempt terminates and later
         // revisions activate.
         let environment = self.capability.snapshot().effective_environment().clone();
+        let Some(mcp_leases) = self.capability.mcp_leases() else {
+            return failed_result("the admitted MCP generation is already physically retired");
+        };
         match self
             .tool_runtime
             .background()
-            .prepare_dispatch(invocation, &executor, environment)
+            .prepare_dispatch_with_mcp_leases(invocation, &executor, environment, mcp_leases)
         {
             Ok(prepared) => {
                 match self
