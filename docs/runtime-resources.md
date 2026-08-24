@@ -43,6 +43,16 @@ attempt-pinned System and Tool authority. A maintenance summary invocation is
 not a second continuity history, and merely retaining historical messages does
 not make their former executable authority current.
 
+Compaction's summary invocation is intentionally outside that primary
+lineage. It is assembled from the runtime-owned summary instruction and the
+exact planned retired historical messages only. It sends no Tools, primary
+Effective System Prompt, project instructions, Skill catalog, extension Tool
+definitions, or primary continuation; it does not share a provider prefix or
+KV cache and does not recurse through the Agent Loop. Its result is opaque
+free-form text. Any suggested Pi-style organization is prompt guidance, not a
+durable schema or parser. Historical Status observations may be summarized as
+past evidence, but the summary is never current runtime authority.
+
 ## Project instruction discovery
 
 At runtime creation or explicit reload, applicable directories are traversed
@@ -77,6 +87,14 @@ path/source identity. An already-discovered `SKILL.md` remains ordinary file
 content: native Read observes its current body at execution time and returns
 the normal read error if the file disappeared. Reload never rewrites an old
 ToolResult.
+
+Compaction is not a resource reload boundary. It does not discover, refresh,
+suppress, resurrect, or serialize resources. An admitted attempt keeps its
+one pinned resource/capability pair across primary requests, continuations,
+and automatic compaction. A cold reopen is different: it may load current
+resources for a newly admitted attempt, while old summaries and old
+RequestSnapshots remain historical values and no synthetic resource-change
+message is added to canonical history.
 
 ## Admission, pinning, and reload
 

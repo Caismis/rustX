@@ -419,9 +419,11 @@ impl ContextEngine {
 
     /// Plans one compaction of the current Surface.
     ///
-    /// The compactable region is the earliest contiguous run of non-`System`
-    /// active messages. Candidate spans are the inclusive prefixes of that
-    /// run; every candidate must contain complete canonical messages only,
+    /// The compactable region is the complete canonical active prefix.
+    /// Canonical System authority is request-time resource state, not a
+    /// message in this sequence. Candidate spans are the inclusive prefixes
+    /// of that active prefix; every candidate must contain complete messages
+    /// only,
     /// must never separate a tool call from its result, must satisfy the
     /// continuation and fresh-inbound constraints, and must fit the summary
     /// model's input limit.

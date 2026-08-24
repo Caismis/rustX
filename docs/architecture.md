@@ -1115,6 +1115,16 @@ Key contracts:
   summary output safety cap is applied through the runtime-owned protected
   max-output field and never by mutating a reasoning profile or a
   request-parameter object.
+- Primary model requests retain the attempt-pinned Runtime Resource Snapshot,
+  CapabilitySnapshot, Effective System Prompt, active Surface, Tools, and
+  compatible primary continuation. The compaction summary is a separate
+  one-off side request containing only runtime-owned summary guidance and the
+  exact planned retired messages. It does not inherit primary System/project/
+  Skill/extension guidance, Tools, continuation, prompt-prefix/cache
+  continuity, or Agent Loop execution. Pi-inspired headings are optional
+  prompt guidance only; the returned summary remains opaque free-form text.
+  Runtime/Agent Status observations remain historical evidence and are never
+  reconstructed as live state from summary text.
 - The mandatory progress rule (coverage advances and projected estimate
   strictly decreases) is the anti-loop invariant; successful compaction
   invalidates the pending provider continuation, and
@@ -1133,6 +1143,12 @@ Key contracts:
   the maintenance slot is clear. Pending inbound admits after restoration. It
   owns no attempt identity and is rejected while an attempt or another manual
   compaction is active.
+- The Ledger remains immutable historical facts, the Surface is the active
+  model working set, and RequestSnapshot is the exact historical request-time
+  authority for System bytes and Tool definitions. Runtime Resource Snapshot
+  is process-local executable authority, not durable compaction state;
+  compaction never reloads it. Explicit reload and cold recreation remain
+  separate lifecycle boundaries.
 - Agent Status is sampled from authoritative runtime facts and admitted as a
   canonical `UserSource::Runtime` context message with
   `InboundKind::Context(ContextKind::AgentStatus)`. It is rendered by the

@@ -82,8 +82,8 @@ use crate::context::projection::ContextProjection;
 use crate::context::tokens::ProviderObservedInput;
 use crate::context::{
     AcceptedContext, ContextRuntime, ContributorInputSnapshot, DeferredContextProposal,
-    MAX_DEFERRED_CONTEXT_PROPOSALS, MAX_PROPOSALS_PER_CONTRIBUTOR, native_system_sections,
-    render_effective_system_prompt, validate_user_message_proposal,
+    MAX_DEFERRED_CONTEXT_PROPOSALS, MAX_PROPOSALS_PER_CONTRIBUTOR, render_effective_system_prompt,
+    validate_user_message_proposal,
 };
 use crate::conversation::{ConversationError, ConversationState, PreparedCanonicalCommit};
 use crate::durable::ConversationStore;
@@ -1699,8 +1699,11 @@ impl<'a> AgentExecution<'a> {
         if let Some(accepted) = &self.accepted_context {
             return Ok(render_effective_system_prompt(&accepted.system_sections));
         }
-        let sections =
-            native_system_sections(&self.context_runtime.native_system).map_err(|error| {
+        let sections = self
+            .context_runtime
+            .assembly
+            .system_sections(&self.context_runtime.native_system)
+            .map_err(|error| {
                 Self::context_failure_terminal(&ContextError::new(
                     ContextErrorKind::Internal,
                     error.to_string(),

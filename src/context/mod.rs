@@ -43,7 +43,6 @@ use std::sync::Arc;
 
 use crate::model::session::AttemptModelSnapshot;
 
-pub(crate) use assembly::native_system_sections;
 pub use assembly::{
     AcceptedContext, AcceptedSystemSection, AcceptedUserContext, CONTEXT_COMPATIBILITY_ABI_VERSION,
     ContextAssembly, ContextAssemblyError, ContextCompatibilityManifest, ContextContributor,

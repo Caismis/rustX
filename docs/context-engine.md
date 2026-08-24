@@ -383,6 +383,61 @@ current model catalog, Skill discovery, contributor registration or
 execution, package contents, filesystem state, runtime status, or latest
 Surface head.
 
+### Primary request lineage and the summary side request
+
+The primary model lineage is:
+
+~~~text
+pinned RuntimeResourceSnapshot + pinned CapabilitySnapshot
+    + current Effective System Prompt
+    + canonical active Surface
+    + current Tool definitions
+    + the primary provider continuation, when compatible
+~~~
+
+Compaction deliberately leaves that lineage. Its summarizer is one isolated,
+runtime-owned side request:
+
+~~~text
+runtime-owned summary instruction
+    + exactly the planned retired Surface messages, in order
+    + no Tools
+    + no primary System guidance, project instructions, Skill catalog,
+      extension Tool definitions, or primary continuation
+~~~
+
+The summary request does not inherit the primary Effective System Prompt,
+depend on the primary request prefix, share provider KV/cache continuity, or
+re-enter the Agent Loop. The returned value remains an opaque free-form
+`String`. Its Pi-inspired organization is prompt guidance only: rustX does
+not parse headings, validate a schema, extract fields, or maintain a separate
+previous-summary accumulator. A useful non-empty summary is accepted even
+when it does not follow suggested organization; empty or whitespace-only text
+fails the compaction.
+
+Runtime and Agent Status observations in retired history are historical
+evidence. The summarizer may describe a task as having run earlier and later
+completed, but the resulting text never becomes current runtime authority.
+Absence of a later extension Status section is not lifecycle completion unless
+that section's explicit contract gives absence that meaning.
+
+The Ledger, Surface, and RequestSnapshot have separate ownership:
+
+- the Ledger is the immutable, auditable set of historical conversation facts;
+- the Surface is the active historical representation currently sent to a
+  primary model, and compaction replaces exactly one valid span in it;
+- a RequestSnapshot freezes the exact request-time Effective System Prompt,
+  System sections, Tool definitions, model values, Surface revision, and
+  continuation needed to reconstruct one historical primary request;
+- the Runtime Resource Snapshot is process-local current executable
+  authority, not durable compaction state and not a source for rewriting old
+  snapshots or summaries.
+
+Compaction never discovers or reloads resources. Explicit reload remains a
+quiescent runtime lifecycle operation, and a cold reopen may publish a new
+current resource generation for future attempts while preserving old Ledger
+facts, summaries, and RequestSnapshots byte-for-byte.
+
 ## 6. Context Engine responsibilities
 
 The Context Engine receives canonical messages, immutable model/tool inputs,
