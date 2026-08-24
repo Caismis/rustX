@@ -1,6 +1,6 @@
 //! The native durable conversation authority (Issue #11).
 //!
-//! This module exposes one backend-independent semantic store for the five
+//! This module exposes one backend-independent semantic store for the six
 //! distinct durable domains. Pending Inbound remains its own authority for
 //! accepted-but-not-yet-canonically-adopted work:
 //!
@@ -23,12 +23,21 @@
 //! Conversation Surface   = current model-visible ordering/projection
 //! ConversationRuntime    = admission + safe-boundary adoption owner
 //! Event Journal          = execution facts
+//! Publication plane      = user-facing release durability (Issue #108)
 //! ```
+//!
+//! The publication plane is the newest and most easily confused of the six. It
+//! owns exactly one question — *what did rustX durably commit for release to a
+//! user-facing client, and how did that release settle* — and nothing else. It
+//! is not the Message Ledger (its content is never conversation history), not
+//! the Event Journal (it carries no execution fact), and not a display cache.
+//! Its three linearization points are documented on
+//! [`crate::publication`].
 //!
 //! # Backend independence
 //!
 //! [`inbox::ConversationStore`] declares the backend-independent semantic
-//! transitions of all five durable domains. [`sqlite::SqliteConversationStore`]
+//! transitions of all six durable domains. [`sqlite::SqliteConversationStore`]
 //! is the M8 concrete backend. A future M11 `PostgreSQL` backend must provide
 //! the same observable contract. The abstraction level is deliberately the
 //! rustX domain transitions — never a generic repository/queue/CRUD frame.
@@ -41,6 +50,12 @@
 //! 2. **Adoption**: [`ConversationStore::adopt_pending_batch`] atomically
 //!    appends the selected pending messages to the durable canonical Message
 //!    Ledger, advances the Surface/checkpoint, and removes pending records.
+//!
+//! The publication plane adds its own three (Issue #108): the provider outcome
+//! **P**, the publication terminal **U**
+//! ([`ConversationStore::commit_publication_terminal`]), and canonical
+//! acceptance **C** ([`ConversationStore::commit_canonical_publication`]),
+//! ordered `P < U < C` and enforced by the store as `C => U => P`.
 
 pub mod inbox;
 pub mod sqlite;

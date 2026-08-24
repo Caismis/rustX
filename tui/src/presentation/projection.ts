@@ -272,6 +272,15 @@ export function reduce(
         event.delta,
       );
 
+    case "assistant_publication_settled":
+      // The stream settled without ever becoming a canonical Assistant
+      // message, so the in-flight card is dropped exactly as the Rust
+      // projection drops it. The audit is committed-for-release output, not
+      // conversation history, so it never enters the transcript and its
+      // proposed tool calls never create a foreground execution slot.
+      next.transcript = dropStreaming(state.transcript, event.attempt_id);
+      return next;
+
     case "tool_call_started": {
       // The foreground slot is created here, exactly as the Rust projection
       // creates it, so an incremental client and a fresh snapshot describe

@@ -1,0 +1,10 @@
+{
+  "stream_id": "attempt-1-publication-msg-agent-a-gen-4",
+  "message_id": "msg-agent-a-gen-4",
+  "sequence": 7,
+  "payload": {
+    "kind": "refusal_suffix",
+    "block_index": 1,
+    "suffix": "I cannot comply with that request."
+  }
+}

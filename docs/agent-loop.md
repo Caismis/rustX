@@ -13,6 +13,10 @@ The loop (`src/agent`) executes one attempt to its single terminal outcome:
   normally one committed terminal event)
 - turn lifecycle (one model response plus its tool calls and results)
 - canonical `ModelEvent` stream consumption, validation, and message assembly
+- the durable publication stream of every model request (Issue #108): opening
+  it, feeding the bounded coalescer, committing frames before releasing them,
+  committing the publication terminal (U) after the provider outcome (P), and
+  settling the stream exactly once as canonical, unaccepted, or incomplete
 - tool resolution and tool execution (in deterministic block order)
 - canonical continuation state retention and propagation
 - safe-boundary inbound mailbox consumption (one finite drain per boundary)
@@ -811,6 +815,101 @@ These are absent by decision, not as TODO compatibility hooks:
 - **Subagent lifecycle observation** — Issue #60 owns the native subagent
   runtime; the observation seam follows the owner.
 - **`TurnStoppingPolicy` / forced continuation** — no native owner exists.
+
+## 4.4 The publication boundary of a model turn (FND-03 / Issue #108)
+
+Streaming output is released through the durable publication plane, never
+through the Event Journal. One model turn traverses three distinct
+linearization points in a fixed order:
+
+```text
+provider stream begins
+    ↓ open_publication_stream          (frozen attempt/turn/request/message identity)
+provider deltas
+    ↓ assembler.push  +  coalescer     (bytes / oldest-deadline latency / structure)
+    ↓ stage_publication_frames         durable staging commit
+    ↓ release to the observation seam  ← never before its own commit
+provider terminal
+    ↓ assembler.finish()               structural acceptance; a rejection here is Incomplete
+    ↓ ModelRequestCompleted            P
+    ↓ commit_publication_terminal      U — final frame + marker, one transaction
+    ↓ release the final buffered payload
+    ↓ ToolRegistry preflight           a rejection here leaves the stream Unaccepted
+    ↓ commit_canonical_publication     C — Ledger + Surface + event + staging clear
+```
+
+The latency policy is an oldest-payload bound, not a quiet-period debounce.
+When the first payload enters an empty coalescer, it creates one absolute
+monotonic deadline. Later provider events use only the remaining budget and
+cannot restart or extend it; a quiet provider is woken by that deadline. The
+coalescer owns both the deadline and the `PublicationClock` wake future, so
+the Agent Loop does not maintain a second time domain. Byte, structural,
+terminal, failure, and cancellation boundaries still follow their normal
+precedence, and a successful drain is the only point that permits a new
+deadline.
+
+The store also owns the proposal staging state machine. `Started` freezes
+`(stream_id, call_id, block_index, tool_id, name)`, argument suffixes require
+that exact owner in `Started`, and `Completed` requires the same frozen
+identity and advances the owner exactly once. Duplicate, orphan, foreign, or
+post-completion frames are rejected atomically by both ordinary staging and U
+terminal staging. Audit consolidation proves the owner exists; C validates
+proposal ownership in both directions: every canonical Assistant ToolCall
+must match one completed owner on call ID, block index, tool ID, and name, and
+every completed owner must appear exactly once, with no Started-only owner
+left behind. Only then is that owner retained for Tool Plane execution or
+recovery. The same Store dependency guard also rejects a dependent event whose
+tool ID differs from the frozen proposal or canonical owner, even when its
+call ID matches.
+
+`run_turn` is the one mutual-exclusion point of settlement. A turn that
+reached canonical acceptance already cleared its stream inside the compound C
+transition; every other exit — cancellation, model failure, structural
+assembly rejection, preflight rejection, a durable failure — leaves the stream
+open and it terminalizes as an audit whose kind the durable store derives from
+the P/U evidence. Canonical acceptance and audit terminalization can therefore
+never both happen for one stream.
+
+An overflow retry starts a second provider request inside one turn. The
+abandoned request's stream never reached canonical acceptance, so the Agent
+Loop commits its audit before any retry preparation or second provider start:
+
+```text
+first request ends with recoverable ContextWindowExceeded
+    ↓
+terminalize old publication as Incomplete (must COMMIT)
+    ↓ only after success
+compact / prepare retry
+    ↓
+durably start retry Request Snapshot + ModelRequestStarted
+    ↓
+invoke retry adapter
+    ↓ physical Started
+open retry publication stream
+```
+
+Exactly one publication stream is open at any instant. If the old audit
+transaction fails, the attempt records `DurableFailureKind::Publication` and
+fails at the original request: no compaction, retry schedule, retry snapshot,
+`ModelRequestStarted`, adapter invocation, or second stream is allowed. The
+original stream remains unsettled staging for startup recovery to classify from
+its durable evidence.
+
+A publication-plane failure — a stream that cannot open, frames that cannot
+stage before release, a terminal that cannot commit, an audit that cannot
+terminalize — is a durable-authority failure like any other. The attempt
+reports `DurableFailureKind::Publication` and never returns to a healthy
+durability state.
+
+The durable store independently enforces the publication contract. Opening
+proves the exact Request Snapshot/start-event generation; U and C re-prove
+that identity and the exact successful provider outcome; C also proves the
+frozen provisional Assistant message and its exact event envelope. The store's
+single proposal-dependency transition rejects every dependent Tool Plane
+fact for Incomplete or Unaccepted proposals, including execution outcomes,
+single/batch/recovery ToolResults, background authorization, and subagent
+ownership, and compares every supplied tool ID with the accepted owner. Agent
+Loop order is therefore a necessary sequencing rule, not the only protection.
 
 ## 5. Usage
 

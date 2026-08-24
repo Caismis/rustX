@@ -98,9 +98,14 @@ use crate::model::finish::ModelFinishReason;
 use crate::model::session::AttemptModelSnapshot;
 use crate::model::snapshot::{RequestIdentity, RequestSnapshot};
 use crate::model::types::{ModelRequest, ModelUsage};
+use crate::publication::{
+    CoalescePolicy, PublicationClock, PublicationCoalescer, PublicationFrame, PublicationPayload,
+    PublicationStreamStart, SystemPublicationClock,
+};
 use crate::runtime::continuation::ProviderContinuationState;
 use crate::runtime::identity::{
-    AgentId, AttemptId, ConversationId, EventId, MessageId, ToolCallId, ToolId, TurnId,
+    AgentId, AttemptId, ConversationId, EventId, MessageId, PublicationStreamId, RequestId,
+    ToolCallId, ToolId, TurnId,
 };
 use crate::runtime::inbound::{FreshInboundTurn, InitialTurnTrigger, MailboxError};
 use crate::runtime::interaction::{ApprovalDecision, InteractionOutcome, InteractionResponse};
@@ -186,6 +191,10 @@ pub enum DurableFailureKind {
     Compaction,
     /// A standalone or terminal Event Journal append failed.
     EventJournal,
+    /// A durable publication-plane transition failed: a stream could not
+    /// open, frames could not be staged before release, the publication
+    /// terminal could not commit, or an audit could not terminalize.
+    Publication,
 }
 
 impl DurableFailureKind {
@@ -197,6 +206,7 @@ impl DurableFailureKind {
             Self::RequestStart => "request_start",
             Self::Compaction => "compaction",
             Self::EventJournal => "event_journal",
+            Self::Publication => "publication",
         }
     }
 }
@@ -330,6 +340,23 @@ pub struct AgentExecution<'a> {
     context_generation_serial: u64,
     observed: Option<ProviderObservedInput>,
     last_request_fingerprint: Option<u64>,
+    /// The exact request identity of the in-flight provider request. The
+    /// provider outcome fact (P) and the publication stream both name it, so
+    /// neither can be attributed to a different request of the same turn.
+    last_request_id: Option<RequestId>,
+    /// The bounded publication policy of the attempt.
+    publication_policy: CoalescePolicy,
+    /// The monotonic clock the publication latency policy reads.
+    publication_clock: std::sync::Arc<dyn PublicationClock>,
+    /// The open, not-yet-settled publication stream of the in-flight model
+    /// request. Exactly one stream is open at a time: a stream settles — as
+    /// canonical, unaccepted, or incomplete — before the next one opens.
+    publication: Option<OpenPublication>,
+    /// Set when an attempted audit settlement failed. The stream remains in
+    /// durable authority for startup recovery, but the Agent Loop must not
+    /// retry the transition in the same control-flow turn and accidentally
+    /// continue into a second request.
+    publication_settlement_failed: bool,
     /// The optional live observation seam: when attached, every emitted
     /// runtime fact, every committed canonical message, and every composed
     /// Agent Status is observed at its commit linearization point. The
@@ -362,6 +389,22 @@ pub struct AgentExecution<'a> {
     tool_start_pause: std::sync::Mutex<Option<test_sync::ToolStartPause>>,
     turn: u32,
     terminal_emitted: bool,
+}
+
+/// The open publication stream of one in-flight model request.
+///
+/// The stream owns the release plane of exactly one provider request: the
+/// bounded coalescer that decides when a frame exists, and the durable facts
+/// of whether U has committed. It is deliberately not the assembler: the
+/// assembler builds the canonical message, this builds what rustX committed
+/// for release.
+struct OpenPublication {
+    /// The frozen identity, pinned to the exact request generation.
+    start: PublicationStreamStart,
+    /// The bounded coalescer of this stream.
+    coalescer: PublicationCoalescer,
+    /// Whether the publication terminal transaction (U) committed.
+    terminal_committed: bool,
 }
 
 /// How one model stream of a turn ended.
@@ -628,6 +671,11 @@ impl<'a> AgentExecution<'a> {
             context_generation_serial: 0,
             observed: None,
             last_request_fingerprint: None,
+            last_request_id: None,
+            publication_policy: CoalescePolicy::default(),
+            publication_clock: std::sync::Arc::new(SystemPublicationClock::new()),
+            publication: None,
+            publication_settlement_failed: false,
             observer: None,
             #[cfg(test)]
             continuation_pause: std::sync::Mutex::new(None),
@@ -650,6 +698,23 @@ impl<'a> AgentExecution<'a> {
     /// available for historical reads regardless.
     pub fn observe(&mut self, observer: &'a dyn AgentExecutionObserver) {
         self.observer = Some(observer);
+    }
+
+    /// Installs the deterministic publication policy and clock of one attempt
+    /// (Issue #108 regressions).
+    ///
+    /// Production always uses the default bounded policy and the monotonic
+    /// system clock. A test installs an explicit byte threshold and a manually
+    /// advanced clock so a coalescing or latency regression is decided by the
+    /// policy alone and never by wall-clock timing.
+    #[cfg(test)]
+    pub(crate) fn install_publication_policy(
+        &mut self,
+        policy: CoalescePolicy,
+        clock: std::sync::Arc<dyn PublicationClock>,
+    ) {
+        self.publication_policy = policy;
+        self.publication_clock = clock;
     }
 
     /// Installs the test-only start-boundary pause (Issue #12, M9b
@@ -774,16 +839,41 @@ impl<'a> AgentExecution<'a> {
         settlement.expect("the execution state machine must accept the settlement");
     }
 
+    /// Executes one turn and settles its publication stream exactly once.
+    ///
+    /// This is the one mutual-exclusion point of the three publication
+    /// settlements. A turn that reached canonical acceptance already cleared
+    /// its stream through the compound C transition; every other exit —
+    /// cancellation, model failure, structural assembly rejection, preflight
+    /// rejection, a durable failure — leaves the stream open here and it
+    /// terminalizes as an audit. Canonical acceptance and audit
+    /// terminalization can therefore never both happen for one stream.
+    async fn run_turn(&mut self) -> Option<Terminal> {
+        let terminal = self.run_turn_body().await;
+        if !self.publication_settlement_failed
+            && let Err(error) = self.settle_publication_audit()
+        {
+            return Some(Terminal::Failed {
+                failure: AttemptFailure::Runtime { error },
+            });
+        }
+        terminal
+    }
+
     /// Executes one turn: one model request, its tool calls, and their
     /// results. Returns the terminal outcome when the attempt settled.
-    async fn run_turn(&mut self) -> Option<Terminal> {
+    async fn run_turn_body(&mut self) -> Option<Terminal> {
         self.turn += 1;
         // A new primary step gets one fresh assembly generation. An overflow
         // retry stays inside this function and therefore retains the accepted
         // context below.
         self.accepted_context = None;
-        let assistant_message_id =
-            MessageId::new(format!("{}-agent-{}", self.request.attempt_id, self.turn));
+        let assistant_message_id = RequestIdentity {
+            attempt_id: self.request.attempt_id.clone(),
+            turn: TurnId::new(self.turn.to_string()),
+            retry_number: 0,
+        }
+        .provisional_message_id();
         self.emit(RuntimeEvent::TurnStarted);
         if let Some(message) = self.durable_failure.clone() {
             return Some(Terminal::Failed {
@@ -867,6 +957,7 @@ impl<'a> AgentExecution<'a> {
     /// continuation retention, message commit, tool execution, and the
     /// turn-completion event. Returns the terminal outcome when the attempt
     /// settled.
+    #[allow(clippy::too_many_lines)] // One P -> U -> C ordering, one place.
     async fn complete_turn(
         &mut self,
         assistant_message_id: MessageId,
@@ -892,12 +983,34 @@ impl<'a> AgentExecution<'a> {
         // final usage: the terminal event's reported usage, else the
         // latest usage update, never a sum of snapshots.
         let reported_usage = turn_assembly.usage;
+        let Some(request_id) = self.last_request_id.clone() else {
+            return Some(Terminal::Failed {
+                failure: AttemptFailure::Runtime {
+                    error: RuntimeError::ContractViolation {
+                        message: "a model stream completed with no started request".to_owned(),
+                    },
+                },
+            });
+        };
+        // P: the provider outcome of this exact request becomes durable.
         self.emit(RuntimeEvent::ModelRequestCompleted {
+            request_id,
             finish_reason: finish_reason.clone(),
             usage: reported_usage.clone(),
         });
         if let Some(terminal) = self.durable_failure_terminal_from_state() {
             return Some(terminal);
+        }
+        // U: P is durable and provider completion is structurally accepted,
+        // so the remaining publication payload and the publication terminal
+        // marker commit in one transaction — and only then is the final
+        // buffered payload released. This is the intentional tail-latency
+        // cost of correct ordering; with nothing buffered, a terminal-only
+        // frame commits and no visible text waits.
+        if let Err(error) = self.commit_publication_terminal() {
+            return Some(Terminal::Failed {
+                failure: AttemptFailure::Runtime { error },
+            });
         }
         // A provider-reported input measurement applies only to the
         // exact projection the completed request used.
@@ -1639,6 +1752,7 @@ impl<'a> AgentExecution<'a> {
         }
         self.record_persisted_event(started);
         self.last_request_fingerprint = Some(prepared.fingerprint);
+        self.last_request_id = Some(prepared.snapshot.request_id.clone());
         let reconstructed = self
             .store
             .reconstruct_model_request(&prepared.snapshot.request_id)
@@ -2152,6 +2266,14 @@ impl<'a> AgentExecution<'a> {
                 reason: self.cancellation.reason(),
             });
         }
+        // The abandoned publication is a durable predecessor of this retry.
+        // It must settle before compaction, a retry snapshot/start commit, or
+        // the second adapter invocation can occur.
+        if let Err(error) = self.settle_publication_audit() {
+            return Err(Terminal::Failed {
+                failure: AttemptFailure::Runtime { error },
+            });
+        }
         let effective_system_prompt = self.effective_system_prompt()?;
         let must_cover = self.continuation_owner.clone();
         // ContextWindowExceeded is a rejected provider request, not evidence
@@ -2192,10 +2314,12 @@ impl<'a> AgentExecution<'a> {
         if let Some(terminal) = self.durable_failure_terminal_from_state() {
             return Err(terminal);
         }
-        let retry_message_id = MessageId::new(format!(
-            "{}-agent-{}-retry-{}",
-            self.request.attempt_id, self.turn, retry_number
-        ));
+        let retry_message_id = RequestIdentity {
+            attempt_id: self.request.attempt_id.clone(),
+            turn: TurnId::new(self.turn.to_string()),
+            retry_number,
+        }
+        .provisional_message_id();
         // The retry is another actual provider request: it stages no new
         // request-scoped context (the original request's start transaction
         // already committed it), freezes its own Request Snapshot, and
@@ -2227,7 +2351,36 @@ impl<'a> AgentExecution<'a> {
         stream: &mut ModelEventStream,
     ) -> Result<StreamTerminal, Terminal> {
         let mut stream_terminal = None;
-        while let Some(event) = stream.next().await {
+        loop {
+            // A quiet provider must not hold committed-for-release payload
+            // hostage: while payload is buffered, the coalescer-owned
+            // absolute deadline competes with the next provider chunk. With
+            // an empty buffer there is nothing to flush and the loop simply
+            // awaits the provider. Later chunks cannot restart that deadline.
+            let next = if self.has_buffered_publication() {
+                let latency_wait = self
+                    .publication
+                    .as_ref()
+                    .and_then(|publication| publication.coalescer.latency_wait())
+                    .expect("a buffered publication has an owned latency deadline");
+                tokio::select! {
+                    biased;
+                    event = stream.next() => event,
+                    () = self.cancellation.cancelled() => {
+                        return Err(self.cancelled_terminal());
+                    }
+                    () = latency_wait => {
+                        self.flush_publication();
+                        if let Some(terminal) = self.durable_failure_terminal_from_state() {
+                            return Err(terminal);
+                        }
+                        continue;
+                    }
+                }
+            } else {
+                stream.next().await
+            };
+            let Some(event) = next else { break };
             if stream_terminal.is_none() && self.cancellation.is_cancelled() {
                 return Err(Terminal::Cancelled {
                     reason: self.cancellation.reason(),
@@ -2249,9 +2402,12 @@ impl<'a> AgentExecution<'a> {
                     });
                 }
                 ModelEvent::Failed { error } => {
-                    self.emit(RuntimeEvent::ModelRequestFailed {
-                        error: error.clone(),
-                    });
+                    if let Some(request_id) = self.last_request_id.clone() {
+                        self.emit(RuntimeEvent::ModelRequestFailed {
+                            request_id,
+                            error: error.clone(),
+                        });
+                    }
                     if let Some(terminal) = self.durable_failure_terminal_from_state() {
                         return Err(terminal);
                     }
@@ -2259,9 +2415,19 @@ impl<'a> AgentExecution<'a> {
                         error: error.clone(),
                     });
                 }
+                ModelEvent::Started => {
+                    // The provider stream physically began: the publication
+                    // stream opens durably before any of its output can be
+                    // staged, so a crash always leaves either no stream at
+                    // all or a stream recovery can classify.
+                    self.open_publication(assistant_message_id);
+                    if let Some(terminal) = self.durable_failure_terminal_from_state() {
+                        return Err(terminal);
+                    }
+                }
                 _ => {
                     if stream_terminal.is_none() {
-                        self.emit_model_event(&event, assistant_message_id);
+                        self.publish_model_event(&event);
                         if let Some(terminal) = self.durable_failure_terminal_from_state() {
                             return Err(terminal);
                         }
@@ -2991,60 +3157,51 @@ impl<'a> AgentExecution<'a> {
         }
     }
 
-    /// Commits the assembled Assistant message into the conversation state.
+    /// Commits **C**: the assembled Assistant message joins canonical history
+    /// as one compound durable transition with its publication stream.
+    ///
+    /// The transition validates that the exact stream is publication-complete,
+    /// appends the canonical Ledger fact, advances the Surface, records
+    /// `AssistantMessageCommitted`, and clears the stream's publication
+    /// staging — all in one transaction. `ModelRequestCompleted` is
+    /// deliberately not part of it: provider completion remains an external
+    /// execution fact even when canonicalization later fails.
     fn commit_assistant_message(
         &mut self,
         message_id: &MessageId,
         content: &[crate::message::types::AssistantContentBlock],
     ) -> Result<(), CanonicalCommitError> {
-        self.commit_canonical(&MessageBlock::Assistant(AssistantMessageBlock {
+        let block = MessageBlock::Assistant(AssistantMessageBlock {
             id: message_id.clone(),
             content: content.to_vec(),
-        }))?;
-        Ok(())
-    }
-
-    /// The one canonical commit path of the loop: prepare, durable append,
-    /// then infallible install.
-    ///
-    /// Every canonical commit of the attempt — drained inbound user
-    /// messages (through [`AgentExecution::safe_boundary_drain`]), committed
-    /// Assistant messages, committed Tool messages, admitted context facts —
-    /// goes through here. The durable Message Ledger append and Surface
-    /// advancement happen through one `ConversationStore` transition; the
-    /// bounded hot state installs only the validated current working result
-    /// and never becomes a second historical transcript.
-    fn commit_canonical(
-        &mut self,
-        block: &MessageBlock,
-    ) -> Result<MessageId, CanonicalCommitError> {
-        // Prepare: validate the fallible in-memory conditions first, so the
-        // post-commit installation below is infallible. The prepared value
-        // binds the exact message.
-        let prepared = self.conversation.prepare_commit(block)?;
-        // Durable append through the canonical Message Ledger seam.
-        let persisted_event = if let Some(event) = Self::canonical_event(block) {
-            Some(
-                self.store
-                    .append_canonical_with_event(prepared.message(), self.event_envelope(event))
-                    .map_err(CanonicalCommitError::Durable)?,
-            )
-        } else {
-            self.store
-                .append_canonical(prepared.message())
-                .map_err(CanonicalCommitError::Durable)?;
-            None
+        });
+        let Some(publication) = self.publication.as_ref() else {
+            return Err(CanonicalCommitError::Durable(
+                crate::durable::ConversationStoreError::PublicationViolation(format!(
+                    "Assistant message {message_id} has no open publication stream"
+                )),
+            ));
         };
-        // Infallible install: the identity was validated above and the
-        // attempt holds exclusive ownership of the conversation state.
-        let message_id = self.conversation.install_prepared(prepared);
+        let stream_id = publication.start.stream_id.clone();
+        let prepared = self.conversation.prepare_commit(&block)?;
+        let event = Self::canonical_event(&block).expect("an Assistant commit has its event");
+        let persisted = self
+            .store
+            .commit_canonical_publication(
+                &stream_id,
+                prepared.message(),
+                self.event_envelope(event),
+            )
+            .map_err(CanonicalCommitError::Durable)?;
+        // The stream settled canonically: the Ledger is the long-term
+        // authority and no audit may ever be created for it.
+        self.publication = None;
+        self.conversation.install_prepared(prepared);
         if let Some(observer) = self.observer {
-            observer.observe_committed(&self.request.attempt_id, block);
+            observer.observe_committed(&self.request.attempt_id, &block);
         }
-        if let Some(event) = persisted_event {
-            self.record_persisted_event(event);
-        }
-        Ok(message_id)
+        self.record_persisted_event(persisted);
+        Ok(())
     }
 
     /// Commits one complete `ToolResult` batch atomically.
@@ -3094,63 +3251,233 @@ impl<'a> AgentExecution<'a> {
         Ok(())
     }
 
-    /// Emits the runtime events for one non-terminal model event.
-    fn emit_model_event(&mut self, event: &ModelEvent, message_id: &MessageId) {
+    /// Opens the publication stream of one model request.
+    ///
+    /// The stream is pinned to the exact request generation that started it:
+    /// attempt, turn, request, and provisional message identity are frozen
+    /// here, so a resource, Skill, or Tool configuration edit that lands
+    /// during streaming can never re-associate this stream with a newer
+    /// generation, and recovery classifies it from these identities alone.
+    fn open_publication(&mut self, message_id: &MessageId) {
+        let Some(request_id) = self.last_request_id.clone() else {
+            self.record_publication_failure(
+                "a publication stream cannot open without a started request",
+            );
+            return;
+        };
+        let start = PublicationStreamStart {
+            stream_id: PublicationStreamId::for_request(&self.request.attempt_id, message_id),
+            attempt_id: self.request.attempt_id.clone(),
+            turn_id: TurnId::new(self.turn.to_string()),
+            request_id,
+            message_id: message_id.clone(),
+        };
+        if let Err(error) = self.store.open_publication_stream(&start) {
+            self.record_publication_failure(&format!(
+                "the publication stream could not be opened durably: {error}"
+            ));
+            return;
+        }
+        let coalescer = PublicationCoalescer::new(
+            start.stream_id.clone(),
+            message_id.clone(),
+            self.publication_policy,
+            std::sync::Arc::clone(&self.publication_clock),
+        );
+        if let Some(observer) = self.observer {
+            observer.observe_publication_opened(&self.request.attempt_id, &start);
+        }
+        self.publication = Some(OpenPublication {
+            start,
+            coalescer,
+            terminal_committed: false,
+        });
+    }
+
+    /// The publication payload of one non-terminal model event, when the
+    /// event carries user-facing semantic output.
+    ///
+    /// Usage and provider continuation state are request bookkeeping, not
+    /// released output, so they produce no publication frame.
+    fn publication_payload(event: &ModelEvent) -> Option<PublicationPayload> {
         match event {
-            ModelEvent::Started => {
-                self.emit(RuntimeEvent::AssistantMessageStarted {
-                    message_id: message_id.clone(),
-                });
-            }
-            ModelEvent::TextDelta { block_index, text } => {
-                self.emit(RuntimeEvent::AssistantTextDelta {
-                    message_id: message_id.clone(),
-                    block_index: *block_index,
-                    delta: text.clone(),
-                });
-            }
+            ModelEvent::TextDelta { block_index, text } => Some(PublicationPayload::TextSuffix {
+                block_index: *block_index,
+                suffix: text.clone(),
+            }),
             ModelEvent::ReasoningDelta { block_index, text } => {
-                self.emit(RuntimeEvent::AssistantReasoningDelta {
-                    message_id: message_id.clone(),
+                Some(PublicationPayload::ReasoningSuffix {
                     block_index: *block_index,
-                    delta: text.clone(),
-                });
+                    suffix: text.clone(),
+                })
             }
             ModelEvent::RefusalDelta { block_index, text } => {
-                self.emit(RuntimeEvent::AssistantRefusalDelta {
-                    message_id: message_id.clone(),
+                Some(PublicationPayload::RefusalSuffix {
                     block_index: *block_index,
-                    delta: text.clone(),
-                });
+                    suffix: text.clone(),
+                })
             }
             ModelEvent::ToolCallStarted { block_index, call } => {
-                self.emit(RuntimeEvent::ToolCallStarted {
-                    message_id: message_id.clone(),
+                Some(PublicationPayload::ProposedToolCallStarted {
                     block_index: *block_index,
                     call: call.clone(),
-                });
+                })
             }
             ModelEvent::ToolCallArgumentsDelta {
                 block_index,
                 call_id,
                 arguments_delta,
-            } => {
-                self.emit(RuntimeEvent::ToolCallArgumentsDelta {
-                    message_id: message_id.clone(),
-                    block_index: *block_index,
-                    call_id: call_id.clone(),
-                    arguments_delta: arguments_delta.clone(),
-                });
-            }
+            } => Some(PublicationPayload::ProposedToolCallArgumentsSuffix {
+                block_index: *block_index,
+                call_id: call_id.clone(),
+                suffix: arguments_delta.clone(),
+            }),
             ModelEvent::ToolCallCompleted { block_index, call } => {
-                self.emit(RuntimeEvent::ToolCallCompleted {
-                    message_id: message_id.clone(),
+                Some(PublicationPayload::ProposedToolCallCompleted {
                     block_index: *block_index,
                     call: call.clone(),
-                });
+                })
             }
-            ModelEvent::UsageUpdate { .. } | ModelEvent::ContinuationState { .. } => {}
-            ModelEvent::Completed { .. } | ModelEvent::Failed { .. } => unreachable!(),
+            ModelEvent::Started
+            | ModelEvent::UsageUpdate { .. }
+            | ModelEvent::ContinuationState { .. }
+            | ModelEvent::Completed { .. }
+            | ModelEvent::Failed { .. } => None,
+        }
+    }
+
+    /// Buffers one non-terminal model event into the publication coalescer
+    /// and performs the bounded flush the policy requires.
+    fn publish_model_event(&mut self, event: &ModelEvent) {
+        let Some(payload) = Self::publication_payload(event) else {
+            return;
+        };
+        let Some(publication) = self.publication.as_mut() else {
+            self.record_publication_failure(
+                "a model delta arrived with no open publication stream",
+            );
+            return;
+        };
+        let must_flush = publication.coalescer.push(payload);
+        if must_flush || publication.coalescer.latency_elapsed() {
+            self.flush_publication();
+        }
+    }
+
+    /// Stages the buffered publication payload durably and only then releases
+    /// it.
+    ///
+    /// The order is the whole point: nothing reaches a user-facing Runtime
+    /// Client before its staging transaction committed.
+    fn flush_publication(&mut self) {
+        let Some(publication) = self.publication.as_mut() else {
+            return;
+        };
+        let frames = publication.coalescer.take_frames();
+        if frames.is_empty() {
+            return;
+        }
+        if let Err(error) = self.store.stage_publication_frames(&frames) {
+            self.record_publication_failure(&format!(
+                "publication frames could not be staged before release: {error}"
+            ));
+            return;
+        }
+        self.release_publication(&frames);
+    }
+
+    /// Commits **U** — the final publication frame and the publication
+    /// terminal marker in one transaction — and only then releases the final
+    /// buffered payload.
+    ///
+    /// P must already be durable; the durable store enforces that. When no
+    /// visible payload remains, a terminal-only frame still commits and no
+    /// visible text is delayed.
+    fn commit_publication_terminal(&mut self) -> Result<(), RuntimeError> {
+        let Some(publication) = self.publication.as_mut() else {
+            return Ok(());
+        };
+        if publication.terminal_committed {
+            return Ok(());
+        }
+        let stream_id = publication.start.stream_id.clone();
+        let frames = publication.coalescer.take_terminal_frames();
+        if let Err(error) = self.store.commit_publication_terminal(&stream_id, &frames) {
+            let message =
+                format!("the publication terminal could not be committed durably: {error}");
+            self.record_publication_failure(&message);
+            return Err(RuntimeError::DurableStore { message });
+        }
+        if let Some(publication) = self.publication.as_mut() {
+            publication.terminal_committed = true;
+        }
+        self.release_publication(&frames);
+        Ok(())
+    }
+
+    /// Releases already-committed frames to the live observation seam.
+    fn release_publication(&self, frames: &[PublicationFrame]) {
+        let Some(observer) = self.observer else {
+            return;
+        };
+        for frame in frames {
+            observer.observe_publication(&self.request.attempt_id, frame);
+        }
+    }
+
+    /// Settles a still-open publication stream as an audit.
+    ///
+    /// The audit kind is derived by the durable store from P/U evidence
+    /// alone, so this path can never mislabel an Incomplete publication as
+    /// Unaccepted (or the reverse) no matter which control-flow exit reached
+    /// it. Canonical acceptance of the stream becomes permanently forbidden.
+    fn settle_publication_audit(&mut self) -> Result<(), RuntimeError> {
+        let Some(stream_id) = self
+            .publication
+            .as_ref()
+            .map(|publication| publication.start.stream_id.clone())
+        else {
+            return Ok(());
+        };
+        match self
+            .store
+            .terminalize_publication_audit(&stream_id, Utc::now())
+        {
+            Ok(audit) => {
+                // Only remove the in-memory owner after the durable
+                // settlement committed. On failure it remains the one
+                // recoverable unsettled stream.
+                self.publication.take();
+                if let Some(observer) = self.observer {
+                    observer.observe_publication_settled(&self.request.attempt_id, &audit);
+                }
+                Ok(())
+            }
+            Err(error) => {
+                let message =
+                    format!("the publication audit could not be terminalized durably: {error}");
+                self.record_publication_failure(&message);
+                self.publication_settlement_failed = true;
+                Err(RuntimeError::DurableStore { message })
+            }
+        }
+    }
+
+    /// Whether the open publication stream is holding buffered payload.
+    fn has_buffered_publication(&self) -> bool {
+        self.publication
+            .as_ref()
+            .is_some_and(|publication| !publication.coalescer.is_empty())
+    }
+
+    /// Records a publication-plane durability failure exactly once.
+    ///
+    /// A publication failure is a durable-authority failure like any other:
+    /// the attempt must not report a healthy durability state afterwards.
+    fn record_publication_failure(&mut self, message: &str) {
+        if self.durable_failure.is_none() {
+            self.durable_failure_kind = Some(DurableFailureKind::Publication);
+            self.durable_failure = Some(message.to_owned());
         }
     }
 
@@ -3901,9 +4228,17 @@ mod tests {
         }
     }
 
+    use crate::publication::{PublicationFrame, PublicationStreamStart};
+
     #[derive(Default)]
     struct RecordingObserver {
         events: Mutex<Vec<RuntimeEvent>>,
+        /// The released publication frames, in release order. Every frame
+        /// here is already durably committed for release.
+        frames: Mutex<Vec<PublicationFrame>>,
+        /// The audits of every stream that settled without canonical
+        /// acceptance.
+        audits: Mutex<Vec<crate::publication::PublicationAudit>>,
     }
 
     impl AgentExecutionObserver for RecordingObserver {
@@ -3917,6 +4252,31 @@ mod tests {
         fn observe_committed(&self, _attempt_id: &AttemptId, _block: &MessageBlock) {}
 
         fn observe_status(&self, _observation: &AgentStatusObservation) {}
+
+        fn observe_publication_opened(
+            &self,
+            _attempt_id: &AttemptId,
+            _start: &PublicationStreamStart,
+        ) {
+        }
+
+        fn observe_publication(&self, _attempt_id: &AttemptId, frame: &PublicationFrame) {
+            self.frames
+                .lock()
+                .expect("observer frame lock")
+                .push(frame.clone());
+        }
+
+        fn observe_publication_settled(
+            &self,
+            _attempt_id: &AttemptId,
+            audit: &crate::publication::PublicationAudit,
+        ) {
+            self.audits
+                .lock()
+                .expect("observer audit lock")
+                .push(audit.clone());
+        }
     }
 
     /// A contributor whose bounded work is explicitly held at an awaited
@@ -4087,35 +4447,10 @@ mod tests {
                 request_id: RequestId::new("request:9:attempt-1:1:1:0"),
                 model: "scripted".to_owned(),
             },
-            RuntimeEvent::AssistantMessageStarted {
-                message_id: MessageId::new("attempt-1-agent-1"),
-            },
-            RuntimeEvent::ToolCallStarted {
-                message_id: MessageId::new("attempt-1-agent-1"),
-                block_index: ContentBlockIndex::new(0),
-                call: ToolCallStart {
-                    id: ToolCallId::new("call-1"),
-                    tool_id: ToolId::new("tool-alpha"),
-                    name: "alpha".to_owned(),
-                },
-            },
-            RuntimeEvent::ToolCallArgumentsDelta {
-                message_id: MessageId::new("attempt-1-agent-1"),
-                block_index: ContentBlockIndex::new(0),
-                call_id: ToolCallId::new("call-1"),
-                arguments_delta: "{}".to_owned(),
-            },
-            RuntimeEvent::ToolCallCompleted {
-                message_id: MessageId::new("attempt-1-agent-1"),
-                block_index: ContentBlockIndex::new(0),
-                call: ToolCall {
-                    id: ToolCallId::new("call-1"),
-                    tool_id: ToolId::new("tool-alpha"),
-                    name: "alpha".to_owned(),
-                    arguments: serde_json::json!({}),
-                },
-            },
+            // Assistant streaming assembly is no longer an Event Journal
+            // fact (Issue #108): it lives in the durable publication plane.
             RuntimeEvent::ModelRequestCompleted {
+                request_id: RequestId::new("request:9:attempt-1:1:1:0"),
                 finish_reason: ModelFinishReason::ToolCalls,
                 usage: None,
             },

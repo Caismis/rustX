@@ -10,6 +10,7 @@ use rustx::message::types::{
     AssistantContentBlock, InboundKind, MessageBlock, UserMessageBlock, UserSource,
 };
 use rustx::protocol::manifest::RuntimeManifest;
+use rustx::publication::{PublicationFrame, PublicationPayload};
 use rustx::runtime::continuation::{OpenAiResponsesContinuation, ProviderContinuationState};
 use rustx::runtime::identity::{CapabilityRevision, EventId, MessageId};
 use rustx::runtime::types::{TokenMeasurement, TokenMeasurementSource};
@@ -249,57 +250,56 @@ fn attempt_started_envelope_round_trip() {
     let _ = round_trip(&envelope);
 }
 
-/// A model delta event is an execution fact, never a conversation message.
+/// A streaming text increment is a publication frame, never a conversation
+/// message and — since Issue #108 — never an Event Journal fact either.
 #[test]
-fn assistant_text_delta_envelope_round_trip() {
-    let envelope: RuntimeEventEnvelope =
-        serde_json::from_str(&read_fixture("f_assistant_text_delta.json")).expect("parse fixture");
-    assert!(matches!(
-        envelope.event,
-        RuntimeEvent::AssistantTextDelta {
-            ref message_id,
-            block_index,
-            ref delta
-        } if message_id.as_str() == "msg-agent-a-gen-3"
-            && block_index.get() == 0
-            && delta.contains("Cargo manifest")
-    ));
-    assert_eq!(
-        envelope
-            .turn_id
-            .as_ref()
-            .map(rustx::runtime::identity::TurnId::as_str),
-        Some("turn-1")
-    );
-    let json = serde_json::to_string(&envelope).expect("serialize envelope");
+fn publication_text_frame_round_trip() {
+    let frame: PublicationFrame =
+        serde_json::from_str(&read_fixture("f_publication_text_frame.json"))
+            .expect("parse fixture");
+    assert_eq!(frame.message_id.as_str(), "msg-agent-a-gen-3");
+    assert_eq!(frame.sequence, 2);
+    let PublicationPayload::TextSuffix {
+        block_index,
+        suffix,
+    } = &frame.payload
+    else {
+        panic!("fixture F-text must deserialize as a text suffix");
+    };
+    assert_eq!(block_index.get(), 0);
+    assert!(suffix.contains("Cargo manifest"));
+    let json = serde_json::to_string(&frame).expect("serialize frame");
     assert!(
         serde_json::from_str::<MessageBlock>(&json).is_err(),
-        "an event envelope must never deserialize as a MessageBlock"
+        "a publication frame must never deserialize as a MessageBlock"
     );
-    let _ = round_trip(&envelope);
+    assert!(
+        serde_json::from_str::<RuntimeEventEnvelope>(&json).is_err(),
+        "a publication frame must never deserialize as an Event Journal envelope"
+    );
+    let _ = round_trip(&frame);
 }
 
-/// A refusal delta event preserves refusal semantics as an execution fact,
+/// A refusal increment preserves refusal semantics in the publication plane,
 /// never flattening it into text.
 #[test]
-fn assistant_refusal_delta_envelope_round_trip() {
-    let envelope: RuntimeEventEnvelope =
-        serde_json::from_str(&read_fixture("f_assistant_refusal_delta.json"))
+fn publication_refusal_frame_round_trip() {
+    let frame: PublicationFrame =
+        serde_json::from_str(&read_fixture("f_publication_refusal_frame.json"))
             .expect("parse fixture");
-    let RuntimeEvent::AssistantRefusalDelta {
-        message_id,
+    let PublicationPayload::RefusalSuffix {
         block_index,
-        delta,
-    } = &envelope.event
+        suffix,
+    } = &frame.payload
     else {
-        panic!("fixture F-refusal must deserialize as AssistantRefusalDelta");
+        panic!("fixture F-refusal must deserialize as a refusal suffix");
     };
-    assert_eq!(message_id.as_str(), "msg-agent-a-gen-4");
+    assert_eq!(frame.message_id.as_str(), "msg-agent-a-gen-4");
     assert_eq!(block_index.get(), 1);
-    assert_eq!(delta, "I cannot comply with that request.");
-    let value = serde_json::to_value(&envelope.event).expect("serialize event");
-    assert_eq!(value["type"], "assistant_refusal_delta");
-    let _ = round_trip(&envelope);
+    assert_eq!(suffix, "I cannot comply with that request.");
+    let value = serde_json::to_value(&frame.payload).expect("serialize payload");
+    assert_eq!(value["kind"], "refusal_suffix");
+    let _ = round_trip(&frame);
 }
 
 /// Tool execution completion is an event that stays attributable to its

@@ -40,7 +40,7 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 3 is the only accepted schema; incompatible files fail
+schema version 6 is the only accepted schema; incompatible files fail
 explicitly and are not migrated.
 
 The durable request-start invariant is strict: the provider adapter cannot be
@@ -90,7 +90,13 @@ historical Surface operations.
 
 ## Events are not messages
 
-Runtime events describe execution. Message blocks describe model-context history. Streaming deltas, retries, progress updates, container state, and similar facts do not become message blocks merely because they are observable.
+Runtime events describe execution. Message blocks describe model-context history. Streaming publication, retries, progress updates, container state, and similar facts do not become message blocks merely because they are observable.
+
+High-frequency Assistant streaming content is not an Event Journal fact
+either. Assistant text, reasoning, refusal, and tool-call argument increments
+belong to the durable publication plane (see "Durable user-facing
+publication"), so the Journal's size is O(execution facts) rather than
+O(provider deltas).
 
 Committed-message events reference the committed message by its stable message identity; they never embed canonical message content, which lives only in the durable Message Ledger.
 
@@ -2616,6 +2622,14 @@ semantic normalization boundary. The frozen invariants:
   with their own versioning, lifecycle, and cursor domain. Every external
   observation is classified PROJECT / FOLD INTO CLIENT STATE ONLY /
   INTERNAL by one mapping owner.
+- **Streaming Assistant output reaches a client only as a durably committed
+  publication frame** (Issue #108). The projection folds frames into the same
+  client streaming vocabulary it always published, but every one of them was
+  committed for release before it arrived. A stream that settles without
+  canonical acceptance publishes `AssistantPublicationSettled`, whose audit a
+  transcript consumer must present as committed-for-release output containing
+  model **proposals** — never as conversation history and never as Tool Plane
+  invocation facts.
 - **Client detach never implies semantic cancellation.** Detaching an
   attachment changes only attachment state; the current attempt,
   conversation-owned background executions, mailbox contents, canonical
@@ -2832,8 +2846,164 @@ terminal fact nor a synthetic substitute; the owning runtime enters its
 explicit durable-failure state.
 
 A complete canonical Assistant message is committed only after a model
-response has been successfully assembled. Partial model deltas may be durable
-events but are not canonical messages.
+response has been successfully assembled. Partial model output is durable in
+the publication plane and is never a canonical message.
+
+## Durable user-facing publication (FND-03 / Issue #108)
+
+No semantic output is released to a user-facing Runtime Client before rustX
+has durably committed that publication.
+
+### Three linearization points
+
+```text
+P — Provider outcome         ModelRequestCompleted durable   (Event Journal)
+U — Publication outcome      final frame + terminal marker   (publication plane)
+C — Conversation acceptance  canonical Assistant durable     (Message Ledger)
+```
+
+The required commit ordering is `P < U < C`, and the durable store — not only
+Agent Loop control flow — enforces `C => U => P`. P and U are never combined
+into one transaction: they are different facts and a crash between them must
+stay distinguishable. `ModelRequestCompleted` is likewise never merged with
+the Assistant commit, because provider completion remains an external
+execution fact even when canonicalization later fails.
+
+The store re-proves the exact chain at U and C. It decodes the named Request
+Snapshot and its durable `ModelRequestStarted` envelope, checks the stream's
+exact request/attempt/turn/provisional-message identity, and verifies that P
+is the successful completion event for that same snapshot. C additionally
+requires an Assistant message whose ID equals the frozen provisional ID and an
+`AssistantMessageCommitted` event with the stream's exact conversation,
+attempt, and turn envelope. These checks precede every Ledger, Surface,
+Journal, staging, lifecycle, proposal, or settlement mutation.
+
+`ModelRequestCompleted` and `ModelRequestFailed` name the exact request they
+report, and a request outcome may be recorded at most once for a request that
+actually started.
+
+The store validates both outcome envelopes against the Request Snapshot's
+conversation, attempt, and turn, and rejects malformed, foreign, duplicate,
+or contradictory outcomes atomically. A successful completion is the only
+outcome that can establish P.
+
+### The U transaction
+
+The final publication frame and the publication terminal marker commit in one
+transaction; only after it succeeds may the final buffered payload be
+released. When no visible payload remains, a terminal-only frame carries the
+terminal transition. There is no "write the final frame, publish, then mark
+complete" sequence to crash inside.
+
+### Bounded publication writes
+
+Provider chunk size is not the publication unit. The bounded coalescer flushes
+on maximum bytes, a structural boundary (a tool-call proposal start or
+completion), or the stream terminal. When the first payload enters an empty
+buffer, it owns one absolute monotonic deadline `oldest_pending_time +
+max_latency`; later provider events do not reset or extend it. The coalescer
+owns the deadline and the same `PublicationClock` owns the wake-up mechanism,
+so a quiet provider is released at the deadline without a provider event and
+no new full-duration debounce timer can postpone it. Nothing is released
+before its staging transaction commits.
+
+### Three mutually exclusive settlements
+
+One publication stream settles exactly once:
+
+```text
+Canonical                   U reached, C reached
+UnacceptedPublicationAudit  U reached, C never
+IncompletePublicationAudit  U never reached
+```
+
+> Incomplete Publication means user-facing publication did not reach its own
+> durable terminal boundary. It does not imply that the provider necessarily
+> failed to reach transport termination.
+
+A durably known provider outcome with no U is therefore Incomplete, and an
+`assembler.finish()` rejection after frames were already released is
+Incomplete with no P at all.
+
+Once either audit commits, canonical acceptance of that stream is permanently
+forbidden; once canonical acceptance commits, no audit may be created for it.
+The canonical transition validates that the exact stream is
+publication-complete, appends the Ledger fact, advances the Surface, records
+`AssistantMessageCommitted`, and clears the stream's publication staging — all
+in one transaction.
+
+The first stream open is itself a durable generation admission: the named
+Request Snapshot must exist and decode, its start fact must be present, and
+`RequestId`, `AttemptId`, `TurnId`, provisional Assistant `MessageId`, and
+derived `PublicationStreamId` must all match. An identical reopen is
+idempotent only after this validation succeeds.
+
+### Staging versus immutable audit
+
+In-flight frames are transient lifecycle staging. Canonical acceptance deletes
+them; audit terminalization consolidates them into one bounded immutable
+audit and removes them. No settled stream leaves O(number-of-frames)
+permanent history.
+
+### Audit semantics
+
+A publication audit records the semantic output rustX durably committed **for
+release**. It is an upper bound on what may have been displayed, never proof
+of perception; there is no Runtime Client ACK protocol.
+
+A publication audit never enters the Message Ledger as an Assistant
+conversation fact, the active Surface, a `RequestSnapshot` model input, a
+tree/fork/clone seed, or any future `ModelRequest` context.
+
+### Model proposals are not executions
+
+A tool call in a publication frame or audit is a model **proposal**, never a
+Tool Plane execution fact.
+
+> No tool proposal from an Incomplete or Unaccepted publication may have a
+> dependent `ToolExecutionStarted`, `ToolResult`, or side-effect
+> authorization.
+
+One store-layer dependency owner enforces this for `ToolExecutionStarted`,
+progress, completion, failure, single and batch canonical ToolResult commits,
+recovery repair commits, background authorization, and subagent ownership.
+The proposal key is `(stream_id, ToolCallId)`: provider call IDs are scoped to
+one publication generation, so reuse in another stream is a new exact owner
+and never an `INSERT OR IGNORE` reassignment.
+
+The store owns the complete staging state machine. `Started` creates one owner
+and freezes block index, tool ID, and name. Arguments require that exact
+stream-local owner in `Started`; completion requires the same owner and exact
+frozen identity, then changes it once to `Completed`. Duplicate starts,
+duplicate completions, completion without start, foreign stream lookup,
+foreign block index/tool/name, and suffixes after completion are rejected
+before the frame transaction can change rows or sequence. Ordinary staging and
+U terminal staging share this preflight. Audit materialization proves every
+proposal has the matching durable owner/state. C validates the complete set in
+both directions: every canonical Assistant `ToolCall` must match a completed
+owner on `call_id`, block index, tool ID, and name; every completed current
+stream owner must occur exactly once in that Assistant; and no Started-only
+owner may remain. Audited ownership remains permanently forbidden; canonical C
+retains its completed owner so legitimate execution and recovery remain
+resolvable.
+
+### Request-pinned generation
+
+A publication stream is pinned to the exact attempt, turn, request, and
+provisional message identity that opened it. External resource, Skill, or Tool
+configuration edits during streaming cannot alter the in-flight request, the
+model Tool schemas, preflight authority, publication classification, or the
+later canonical Assistant of that stream. The public reload operation returns
+busy while the attempt owns the session; it never aborts or splices a new
+generation into publication. A cold reopen may load current resources for a
+later attempt, but the old stream's settlement stays tied to its frozen
+historical request.
+
+### Tail latency
+
+Payload still buffered when provider completion is accepted waits for P and
+then U before release. With nothing buffered, a terminal-only U frame commits
+and no visible text is delayed. This tail latency is intentional.
 
 ## Recovery
 
@@ -2872,11 +3042,27 @@ runtime supervision/quiescence contract.
 
 - **the recovery-prefix invariant**: every successfully committed prefix of
   recovery reconciliation is itself a valid, truth-preserving input to a
-  subsequent recovery. Reconciliation commits tool-turn repair, the attempt
-  recovery terminal, and background terminal publication as separate atomic
-  transitions on purpose, so a crash between any two of them must leave a
-  durable state that the next startup classifies exactly as truthfully as the
-  first did;
+  subsequent recovery. Reconciliation commits publication settlement,
+  tool-turn repair, the attempt recovery terminal, and background terminal
+  publication as separate atomic transitions on purpose, so a crash between
+  any two of them must leave a durable state that the next startup classifies
+  exactly as truthfully as the first did;
+
+- Each reconciliation transaction is a valid prefix boundary: if one fails,
+  the next recovery re-reads the remaining durable evidence and never assumes
+  later steps happened. Multiple unsettled streams from an older valid crash
+  prefix are each classified from their own frozen stream evidence; live
+  overflow control flow cannot create a second one because the old audit must
+  commit before retry preparation or start. Recovery repair uses the same
+  store-layer proposal dependency owner, so it cannot create a ToolResult for
+  an audited proposal;
+
+- **publication settlement is classified from durable evidence alone**
+  (Issue #108): `staging + no U -> Incomplete`, `U + no C -> Unaccepted`, and
+  a canonically accepted stream leaves no staging to classify. Recovery never
+  consults the current provider, the current resource generation, the current
+  Tool registry, or the workspace to decide a settlement, and it never
+  produces a canonical Assistant message from an audit;
 
 - recovery policy is owned by `ConversationRuntime` and consumes
   `ConversationStore` evidence. It is never located in the SQLite backend, the

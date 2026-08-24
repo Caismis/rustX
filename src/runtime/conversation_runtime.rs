@@ -313,6 +313,7 @@ use crate::model::session::{
     AttemptModelSnapshot, SessionModelConfig, SessionModelState, SessionModelView,
 };
 use crate::model::{ModelRequest, RequestIdentity, invocation::ModelInvocationError};
+use crate::publication::{PublicationAudit, PublicationFrame, PublicationStreamStart};
 use crate::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolExecutionId};
 use crate::runtime::inbound::{
     ConversationInboundMailbox, FreshInboundTurn, InboundBatch, InboundItem, InboundObserver,
@@ -4647,6 +4648,27 @@ impl AgentExecutionObserver for RuntimeObserver {
     fn observe_status(&self, observation: &AgentStatusObservation) {
         self.push(ConversationObservation::Status(observation.clone()));
     }
+
+    fn observe_publication_opened(&self, attempt_id: &AttemptId, start: &PublicationStreamStart) {
+        self.push(ConversationObservation::PublicationOpened {
+            attempt_id: attempt_id.clone(),
+            start: start.clone(),
+        });
+    }
+
+    fn observe_publication(&self, attempt_id: &AttemptId, frame: &PublicationFrame) {
+        self.push(ConversationObservation::Publication {
+            attempt_id: attempt_id.clone(),
+            frame: frame.clone(),
+        });
+    }
+
+    fn observe_publication_settled(&self, attempt_id: &AttemptId, audit: &PublicationAudit) {
+        self.push(ConversationObservation::PublicationSettled {
+            attempt_id: attempt_id.clone(),
+            audit: Box::new(audit.clone()),
+        });
+    }
 }
 
 // The mailbox fires `on_enqueued`/`on_drained` while the mailbox lock is
@@ -4851,7 +4873,7 @@ mod tests {
     use crate::model::adapter::ModelAdapter;
     use crate::runtime::ApprovalMode;
     use crate::runtime::identity::{
-        AgentId, AttemptId, ConversationId, SubagentId, ToolCallId, ToolId,
+        AgentId, AttemptId, ConversationId, SubagentId, ToolCallId, ToolId, TurnId,
     };
     use crate::runtime::interaction::{
         ApprovalDecision, ApprovalFacts, InteractionOutcome, InteractionResponse,
@@ -13903,6 +13925,26 @@ mod tests {
         }
     }
 
+    fn append_completed_request(
+        store: &crate::durable::SqliteConversationStore,
+        conversation_id: &ConversationId,
+        attempt_id: &AttemptId,
+        request_id: &crate::runtime::identity::RequestId,
+    ) {
+        let mut event = attempt_event(
+            conversation_id,
+            "request-completed",
+            attempt_id,
+            crate::events::types::RuntimeEvent::ModelRequestCompleted {
+                request_id: request_id.clone(),
+                finish_reason: crate::model::finish::ModelFinishReason::Stop,
+                usage: None,
+            },
+        );
+        event.turn_id = Some(TurnId::new("0"));
+        store.append_event(event).expect("request completed");
+    }
+
     /// Issue #12 (M9a), Test A (runtime half): an idle runtime recovered with
     /// pending inbound admits it by itself.
     ///
@@ -14808,17 +14850,7 @@ mod tests {
             store
                 .commit_model_turn_start(&[], &snapshot, fixed_time())
                 .expect("request start");
-            store
-                .append_event(attempt_event(
-                    conversation_id,
-                    "request-completed",
-                    &dead,
-                    crate::events::types::RuntimeEvent::ModelRequestCompleted {
-                        finish_reason: crate::model::finish::ModelFinishReason::Stop,
-                        usage: None,
-                    },
-                ))
-                .expect("request completed");
+            append_completed_request(store, conversation_id, &dead, &snapshot.request_id);
             // CRASH: the provider outcome is durably known, but the
             // canonical Assistant message never committed.
         });

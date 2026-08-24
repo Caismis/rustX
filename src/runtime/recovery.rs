@@ -109,9 +109,10 @@ use crate::conversation::{RecoverySafetyError, recovery_safety};
 use crate::durable::{ConversationStore, ConversationStoreError, PendingInboundItem};
 use crate::events::types::{AttemptFailure, RuntimeEvent, RuntimeEventEnvelope};
 use crate::message::types::{AssistantContentBlock, InboundKind, MessageBlock, ToolMessageBlock};
+use crate::publication::{PublicationAuditKind, PublicationStreamRecord};
 use crate::runtime::identity::{
-    AttemptId, ConversationId, EventId, MessageId, RequestId, SubagentId, ToolCallId,
-    ToolExecutionId, ToolId,
+    AttemptId, ConversationId, EventId, MessageId, PublicationStreamId, RequestId, SubagentId,
+    ToolCallId, ToolExecutionId, ToolId,
 };
 use crate::runtime::types::{CancellationReason, RuntimeClock, RuntimeError};
 use crate::tools::types::{ToolExecutionResult, ToolExecutionStatus};
@@ -387,6 +388,13 @@ pub struct RecoveryEvidence {
     highest_subagent_ordinal: u64,
     /// Whether the Event Journal contains any attempt fact at all.
     saw_any_attempt: bool,
+    /// Publication streams that never settled (Issue #108).
+    ///
+    /// The records carry frozen identities and the durable P/U evidence only.
+    /// Classifying them consults neither the current provider, the current
+    /// resources, nor the workspace: a stream's settlement follows from its
+    /// own frozen historical request and nothing else.
+    unsettled_publications: Vec<PublicationStreamRecord>,
 }
 
 impl RecoveryEvidence {
@@ -420,6 +428,7 @@ impl RecoveryEvidence {
             highest_background_ordinal: 0,
             highest_subagent_ordinal: 0,
             saw_any_attempt: false,
+            unsettled_publications: store.load_unsettled_publication_streams()?,
         };
         evidence.active_ids = evidence
             .active
@@ -996,6 +1005,27 @@ pub struct RecoveryPlan {
     /// The classification itself is fully determined by the enum; this field
     /// is diagnostic context, never class evidence.
     tool_summary: Option<ToolExternalSummary>,
+    /// The publication streams that must terminalize as audits, with the kind
+    /// derived from durable P/U evidence alone.
+    publications: Vec<PublicationRecoveryClass>,
+}
+
+/// The recovery classification of one unsettled publication stream.
+///
+/// ```text
+/// staging + no U  -> IncompletePublicationAudit
+/// U + no C        -> UnacceptedPublicationAudit
+/// C               -> canonical authority; the stream already settled and is
+///                    never seen here
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicationRecoveryClass {
+    /// The unsettled stream.
+    pub stream_id: PublicationStreamId,
+    /// The owning attempt of the stream.
+    pub attempt_id: AttemptId,
+    /// The audit settlement this stream must reach.
+    pub kind: PublicationAuditKind,
 }
 
 /// One structurally incomplete canonical tool turn and its repair batch.
@@ -1059,6 +1089,15 @@ impl RecoveryPlan {
             pending_inbound: evidence.pending.len(),
             unsettled_attempts: evidence.unsettled_attempts.keys().cloned().collect(),
             tool_summary: evidence.unsettled_attempts.values().next().map(|a| a.tools),
+            publications: evidence
+                .unsettled_publications
+                .iter()
+                .map(|record| PublicationRecoveryClass {
+                    stream_id: record.start.stream_id.clone(),
+                    attempt_id: record.start.attempt_id.clone(),
+                    kind: record.audit_kind(),
+                })
+                .collect(),
         }
     }
 
@@ -1278,6 +1317,12 @@ impl RecoveryPlan {
         &self.subagents
     }
 
+    /// The publication streams classified as needing audit terminalization.
+    #[must_use]
+    pub fn publication_classes(&self) -> &[PublicationRecoveryClass] {
+        &self.publications
+    }
+
     /// What the recovered runtime is permitted to continue.
     #[must_use]
     pub fn resume(&self) -> ResumeDisposition {
@@ -1290,9 +1335,10 @@ impl RecoveryPlan {
     /// The order is fixed and load-bearing:
     ///
     /// ```text
-    /// 1. canonical tool-turn repair   -> the Surface can form a valid model request again
-    /// 2. attempt recovery terminal    -> the interrupted attempt settles exactly once
-    /// 3. background terminal publication -> the model-visible notification, exactly once
+    /// 1. publication audit settlement -> no old stream remains unsettled staging
+    /// 2. canonical tool-turn repair   -> the Surface can form a valid model request again
+    /// 3. attempt recovery terminal    -> the interrupted attempt settles exactly once
+    /// 4. background/subagent terminal publication -> model-visible notifications, exactly once
     /// ```
     ///
     /// Repairing the structure before terminalizing the attempt is what keeps
@@ -1333,6 +1379,12 @@ impl RecoveryPlan {
             )));
         }
         let mut committed = RecoveryReconciliation::default();
+        // Publication settles first. A stream that never reached canonical
+        // acceptance must stop being unsettled staging before any repair or
+        // attempt terminal is committed, so a crash inside the remaining
+        // reconciliation still leaves a state the next startup classifies
+        // exactly as truthfully.
+        self.terminalize_publications(store, clock, &mut committed)?;
         self.repair_tool_turns(store, clock, &mut committed)?;
         self.settle_interrupted_attempt(store, clock, &mut committed)?;
         self.publish_background_terminals(store, clock, &mut committed)?;
@@ -1341,6 +1393,7 @@ impl RecoveryPlan {
             attempt: self.attempt,
             background: self.background,
             subagents: self.subagents,
+            publications: self.publications,
             resume: self.resume,
             reconciliation: committed,
             next_attempt_ordinal: self.next_attempt_ordinal,
@@ -1348,6 +1401,30 @@ impl RecoveryPlan {
             highest_subagent_ordinal: self.highest_subagent_ordinal,
             pending_inbound: self.pending_inbound,
         })
+    }
+
+    /// **Reconciliation 0.** Terminalizes every unsettled publication stream
+    /// as a bounded immutable audit.
+    ///
+    /// Classification is entirely durable: the store derives Incomplete from
+    /// an absent publication terminal and Unaccepted from a present one. No
+    /// provider is consulted, no current resource generation is read, and no
+    /// canonical Assistant is ever produced from an audit. Consolidation
+    /// replaces the stream's staging rows, so a stream that staged thousands
+    /// of frames leaves exactly one bounded object behind.
+    fn terminalize_publications(
+        &self,
+        store: &dyn ConversationStore,
+        clock: &dyn RuntimeClock,
+        committed: &mut RecoveryReconciliation,
+    ) -> Result<(), RecoveryError> {
+        for class in &self.publications {
+            let audit = store.terminalize_publication_audit(&class.stream_id, clock.now())?;
+            committed
+                .publication_audits
+                .push((audit.stream_id.clone(), audit.kind));
+        }
+        Ok(())
     }
 
     /// **Reconciliation 1.** Completes every structurally incomplete canonical
@@ -1665,6 +1742,9 @@ pub struct RecoveryReconciliation {
     /// Subagent children whose interrupted terminal notice was published
     /// (Issue #60).
     pub subagent_terminals: Vec<SubagentId>,
+    /// Publication streams terminalized as bounded immutable audits, with the
+    /// settlement each one reached (Issue #108).
+    pub publication_audits: Vec<(PublicationStreamId, PublicationAuditKind)>,
 }
 
 impl RecoveryReconciliation {
@@ -1678,6 +1758,7 @@ impl RecoveryReconciliation {
             && self.attempt_terminal.is_none()
             && self.background_terminals.is_empty()
             && self.subagent_terminals.is_empty()
+            && self.publication_audits.is_empty()
     }
 }
 
@@ -1687,6 +1768,7 @@ pub struct RecoveryReport {
     attempt: AttemptRecoveryClass,
     background: Vec<BackgroundRecoveryClass>,
     subagents: Vec<SubagentRecoveryClass>,
+    publications: Vec<PublicationRecoveryClass>,
     resume: ResumeDisposition,
     reconciliation: RecoveryReconciliation,
     next_attempt_ordinal: u64,
@@ -1712,6 +1794,12 @@ impl RecoveryReport {
     #[must_use]
     pub fn subagent_classes(&self) -> &[SubagentRecoveryClass] {
         &self.subagents
+    }
+
+    /// The publication streams classified as needing audit terminalization.
+    #[must_use]
+    pub fn publication_classes(&self) -> &[PublicationRecoveryClass] {
+        &self.publications
     }
 
     /// What the recovered runtime is permitted to continue.
@@ -1876,6 +1964,7 @@ mod tests {
             highest_background_ordinal: 0,
             highest_subagent_ordinal: 0,
             saw_any_attempt: false,
+            unsettled_publications: Vec::new(),
         }
     }
 
@@ -2032,6 +2121,7 @@ mod tests {
                 ),
                 envelope(
                     RuntimeEvent::ModelRequestCompleted {
+                        request_id: request_id.clone(),
                         finish_reason: ModelFinishReason::Stop,
                         usage: None,
                     },

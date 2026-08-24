@@ -63,6 +63,7 @@ use crate::capabilities::{CapabilityAvailability, CapabilitySnapshot};
 use crate::events::types::RuntimeEvent;
 use crate::message::types::MessageBlock;
 use crate::model::session::{AttemptModelView, SessionModelView};
+use crate::publication::{PublicationAudit, PublicationFrame, PublicationStreamStart};
 use crate::runtime::identity::AttemptId;
 use crate::runtime::identity::InteractionId;
 use crate::runtime::inbound::{InboundBatch, InboundItem};
@@ -107,6 +108,31 @@ pub(crate) enum ConversationObservation {
     },
     /// One composed Agent Status observation.
     Status(AgentStatusObservation),
+    /// One publication stream opened (Issue #108). The frozen identity pins
+    /// the stream to the exact request generation that started it.
+    PublicationOpened {
+        /// The streaming attempt.
+        attempt_id: AttemptId,
+        /// The frozen publication identity.
+        start: PublicationStreamStart,
+    },
+    /// One durably committed publication frame, observed at its release
+    /// point. Nothing here reached a client before its own commit.
+    Publication {
+        /// The streaming attempt.
+        attempt_id: AttemptId,
+        /// The committed-for-release frame.
+        frame: PublicationFrame,
+    },
+    /// One publication stream settled as an audit: the released output was
+    /// either never accepted as a conversation Assistant message, or never
+    /// reached its own durable publication terminal.
+    PublicationSettled {
+        /// The streaming attempt.
+        attempt_id: AttemptId,
+        /// The bounded immutable audit.
+        audit: Box<PublicationAudit>,
+    },
     /// One mailbox enqueue (authoritative item + sequence).
     InboundEnqueued(InboundItem),
     /// One mailbox finite drain (authoritative batch).

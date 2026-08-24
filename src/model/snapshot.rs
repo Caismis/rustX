@@ -41,6 +41,24 @@ impl RequestIdentity {
             self.retry_number
         ))
     }
+
+    /// Derives the provisional Assistant message identity frozen for this
+    /// request generation.
+    ///
+    /// The Request Snapshot is the authority for this mapping. Publication
+    /// streams and canonical acceptance must use the value frozen here rather
+    /// than deriving a second identity from live Agent Loop state.
+    #[must_use]
+    pub fn provisional_message_id(&self) -> MessageId {
+        if self.retry_number == 0 {
+            MessageId::new(format!("{}-agent-{}", self.attempt_id, self.turn))
+        } else {
+            MessageId::new(format!(
+                "{}-agent-{}-retry-{}",
+                self.attempt_id, self.turn, self.retry_number
+            ))
+        }
+    }
 }
 
 /// A provider-independent frozen request boundary.
@@ -50,6 +68,9 @@ pub struct RequestSnapshot {
     pub request_id: RequestId,
     /// Request identity.
     pub identity: RequestIdentity,
+    /// The provisional Assistant message identity frozen with this request.
+    /// Publication opening and canonical acceptance must use this exact value.
+    pub provisional_message_id: MessageId,
     /// The exact immutable Surface revision used by this request.
     pub surface_revision: SurfaceRevision,
     /// The exact request-time rendered Effective System Prompt.
@@ -136,9 +157,11 @@ impl RequestSnapshot {
         continuation: Option<ProviderContinuationState>,
         request_context_ids: Vec<MessageId>,
     ) -> Self {
+        let provisional_message_id = identity.provisional_message_id();
         Self {
             request_id: identity.request_id(),
             identity,
+            provisional_message_id,
             surface_revision,
             effective_system_prompt,
             system_sections,

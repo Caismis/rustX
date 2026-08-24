@@ -31,6 +31,7 @@ use crate::message::types::{ContentBlockIndex, MessageBlock, UserMessageBlock};
 use crate::model::error::ModelErrorKind;
 use crate::model::finish::ModelFinishReason;
 use crate::model::session::{AttemptModelView, SessionModelView};
+use crate::publication::PublicationAudit;
 use crate::runtime::identity::{AttemptId, MessageId, ToolCallId, ToolExecutionId, ToolId};
 use crate::runtime::inbound::InboundSequence;
 use crate::runtime::interaction::{InteractionOutcome, InteractionRequest};
@@ -218,6 +219,25 @@ pub enum RuntimeClientEvent {
         block_index: ContentBlockIndex,
         /// The fully assembled tool call.
         call: ToolCall,
+    },
+
+    /// The in-flight Assistant publication settled without ever becoming a
+    /// canonical Assistant message (Issue #108).
+    ///
+    /// The carried audit is what rustX durably committed **for release**: an
+    /// upper bound on what the client may have displayed, never proof that
+    /// anything was perceived. Its
+    /// [`ProposedToolCall`](crate::publication::PublicationAuditBlock::ProposedToolCall)
+    /// entries are model proposals that were never authorized and never
+    /// executed — a transcript consumer must present them differently from
+    /// the [`ToolExecutionStarted`](Self::ToolExecutionStarted) /
+    /// [`ToolExecutionSettled`](Self::ToolExecutionSettled) Tool Plane facts,
+    /// and must never fold the audit into conversation history.
+    AssistantPublicationSettled {
+        /// The attempt that streamed the publication.
+        attempt_id: AttemptId,
+        /// The bounded immutable audit of the settled stream.
+        audit: Box<PublicationAudit>,
     },
 
     /// A foreground tool execution started.

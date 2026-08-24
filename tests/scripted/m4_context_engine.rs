@@ -49,7 +49,7 @@ use rustx::runtime::identity::{
 use rustx::runtime::inbound::ConversationInboundMailbox;
 use rustx::runtime::types::{CancellationReason, TokenMeasurement, TokenMeasurementSource};
 use rustx::tools::executor::ToolRegistry;
-use rustx::tools::types::{ToolCall, ToolCallStart, ToolExecutionResult, ToolExecutionStatus};
+use rustx::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus};
 use support::context::{FakeContextSummarizer, FakeSummaryStep, ScriptedEstimator};
 use support::fake::{
     FakeModel, FakeStep, FakeTool, ScriptedCall, fake_model, model_release, success_result,
@@ -352,23 +352,6 @@ fn describe_trace(events: &[RuntimeEvent]) -> String {
         .map(|event| serde_json::to_string(event).expect("serialize event"))
         .collect::<Vec<_>>()
         .join("\n          ")
-}
-
-fn call_start() -> ToolCallStart {
-    ToolCallStart {
-        id: ToolCallId::new("call-1"),
-        tool_id: ToolId::new("tool-alpha"),
-        name: "alpha".to_owned(),
-    }
-}
-
-fn call_done() -> ToolCall {
-    ToolCall {
-        id: ToolCallId::new("call-1"),
-        tool_id: ToolId::new("tool-alpha"),
-        name: "alpha".to_owned(),
-        arguments: serde_json::json!({}),
-    }
 }
 
 fn scripted_call() -> ScriptedCall {
@@ -2600,26 +2583,8 @@ async fn proactive_compaction_before_the_next_turn() {
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "fake-model".to_owned(),
         },
-        RuntimeEvent::AssistantMessageStarted {
-            message_id: assistant_message_id(1),
-        },
-        RuntimeEvent::ToolCallStarted {
-            message_id: assistant_message_id(1),
-            block_index: ContentBlockIndex::new(0),
-            call: call_start(),
-        },
-        RuntimeEvent::ToolCallArgumentsDelta {
-            message_id: assistant_message_id(1),
-            block_index: ContentBlockIndex::new(0),
-            call_id: ToolCallId::new("call-1"),
-            arguments_delta: "{}".to_owned(),
-        },
-        RuntimeEvent::ToolCallCompleted {
-            message_id: assistant_message_id(1),
-            block_index: ContentBlockIndex::new(0),
-            call: call_done(),
-        },
         RuntimeEvent::ModelRequestCompleted {
+            request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             finish_reason: ModelFinishReason::ToolCalls,
             usage: Some(ModelUsage {
                 input_tokens: 15,
@@ -2658,15 +2623,8 @@ async fn proactive_compaction_before_the_next_turn() {
             request_id: RequestId::new("request:9:attempt-1:1:2:0"),
             model: "fake-model".to_owned(),
         },
-        RuntimeEvent::AssistantMessageStarted {
-            message_id: assistant_message_id(2),
-        },
-        RuntimeEvent::AssistantTextDelta {
-            message_id: assistant_message_id(2),
-            block_index: ContentBlockIndex::new(0),
-            delta: "answer".to_owned(),
-        },
         RuntimeEvent::ModelRequestCompleted {
+            request_id: RequestId::new("request:9:attempt-1:1:2:0"),
             finish_reason: ModelFinishReason::Stop,
             usage: None,
         },
@@ -2872,15 +2830,8 @@ async fn overflow_compact_and_retry_succeeds() {
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "fake-model".to_owned(),
         },
-        RuntimeEvent::AssistantMessageStarted {
-            message_id: assistant_message_id(1),
-        },
-        RuntimeEvent::AssistantTextDelta {
-            message_id: assistant_message_id(1),
-            block_index: ContentBlockIndex::new(0),
-            delta: "provisional".to_owned(),
-        },
         RuntimeEvent::ModelRequestFailed {
+            request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             error: overflow_error(),
         },
         RuntimeEvent::CompactionStarted,
@@ -2899,15 +2850,8 @@ async fn overflow_compact_and_retry_succeeds() {
             request_id: RequestId::new("request:9:attempt-1:1:1:1"),
             model: "fake-model".to_owned(),
         },
-        RuntimeEvent::AssistantMessageStarted {
-            message_id: retry_message_id(1),
-        },
-        RuntimeEvent::AssistantTextDelta {
-            message_id: retry_message_id(1),
-            block_index: ContentBlockIndex::new(0),
-            delta: "retry ok".to_owned(),
-        },
         RuntimeEvent::ModelRequestCompleted {
+            request_id: RequestId::new("request:9:attempt-1:1:1:1"),
             finish_reason: ModelFinishReason::Stop,
             usage: Some(ModelUsage {
                 input_tokens: 4,
@@ -3239,19 +3183,21 @@ async fn overflow_retry_reuses_the_admitted_context_generation() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
-    let result = common::durable_agent_result(
-        AgentExecution::new(
-            request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
-            capability.into_lease(),
-            &cancellation,
-            runtime,
-            &tool_runtime,
-            rustx::agent::AttemptLifecycle::inert(),
-        )
-        .expect("conversation identity matches the tool runtime")
-        .run()
-        .await,
+    let publication = common::RecordingPublicationObserver::default();
+    let mut execution = AgentExecution::new(
+        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
+        capability.into_lease(),
+        &cancellation,
+        runtime,
+        &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
+    )
+    .expect("conversation identity matches the tool runtime");
+    execution.observe(&publication);
+    let result = common::durable_agent_result_with_publication(
+        execution.run().await,
         tool_runtime.durable_store().as_ref(),
+        &publication,
     );
 
     assert_outcome(
@@ -3270,6 +3216,36 @@ async fn overflow_retry_reuses_the_admitted_context_generation() {
         result.snapshot_history()[0].surface_revision,
         result.snapshot_history()[1].surface_revision,
         "compaction changes the retry Surface revision"
+    );
+    let opened = publication.opened();
+    assert_eq!(opened.len(), 2, "each provider request owns one stream");
+    assert_ne!(
+        opened[0].message_id, opened[1].message_id,
+        "the retry freezes its own provisional Assistant identity"
+    );
+    assert_eq!(publication.audits().len(), 1);
+    assert_eq!(
+        publication.audits()[0].kind,
+        rustx::publication::PublicationAuditKind::Incomplete
+    );
+    assert_eq!(
+        publication.trace(),
+        vec![
+            common::PublicationObservation::Opened(opened[0].stream_id.clone()),
+            common::PublicationObservation::Settled(
+                opened[0].stream_id.clone(),
+                rustx::publication::PublicationAuditKind::Incomplete,
+            ),
+            common::PublicationObservation::Opened(opened[1].stream_id.clone()),
+        ],
+        "the abandoned stream settles before the retry stream opens"
+    );
+    assert!(
+        tool_runtime
+            .durable_store()
+            .load_unsettled_publication_streams()
+            .expect("unsettled publication streams")
+            .is_empty()
     );
 
     let requests = model.requests();
@@ -3945,6 +3921,7 @@ async fn compaction_failure_after_overflow_preserves_the_overflow() {
 
     let expected_tail = vec![
         RuntimeEvent::ModelRequestFailed {
+            request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             error: overflow_error(),
         },
         RuntimeEvent::CompactionStarted,
