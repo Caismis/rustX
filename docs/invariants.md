@@ -40,7 +40,7 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 3 is the only accepted schema; incompatible files fail
+schema version 5 is the only accepted schema; incompatible files fail
 explicitly and are not migrated.
 
 The durable request-start invariant is strict: the provider adapter cannot be
@@ -2869,9 +2869,23 @@ stay distinguishable. `ModelRequestCompleted` is likewise never merged with
 the Assistant commit, because provider completion remains an external
 execution fact even when canonicalization later fails.
 
+The store re-proves the exact chain at U and C. It decodes the named Request
+Snapshot and its durable `ModelRequestStarted` envelope, checks the stream's
+exact request/attempt/turn/provisional-message identity, and verifies that P
+is the successful completion event for that same snapshot. C additionally
+requires an Assistant message whose ID equals the frozen provisional ID and an
+`AssistantMessageCommitted` event with the stream's exact conversation,
+attempt, and turn envelope. These checks precede every Ledger, Surface,
+Journal, staging, lifecycle, proposal, or settlement mutation.
+
 `ModelRequestCompleted` and `ModelRequestFailed` name the exact request they
 report, and a request outcome may be recorded at most once for a request that
 actually started.
+
+The store validates both outcome envelopes against the Request Snapshot's
+conversation, attempt, and turn, and rejects malformed, foreign, duplicate,
+or contradictory outcomes atomically. A successful completion is the only
+outcome that can establish P.
 
 ### The U transaction
 
@@ -2913,6 +2927,12 @@ publication-complete, appends the Ledger fact, advances the Surface, records
 `AssistantMessageCommitted`, and clears the stream's publication staging — all
 in one transaction.
 
+The first stream open is itself a durable generation admission: the named
+Request Snapshot must exist and decode, its start fact must be present, and
+`RequestId`, `AttemptId`, `TurnId`, provisional Assistant `MessageId`, and
+derived `PublicationStreamId` must all match. An identical reopen is
+idempotent only after this validation succeeds.
+
 ### Staging versus immutable audit
 
 In-flight frames are transient lifecycle staging. Canonical acceptance deletes
@@ -2938,6 +2958,15 @@ Tool Plane execution fact.
 > No tool proposal from an Incomplete or Unaccepted publication may have a
 > dependent `ToolExecutionStarted`, `ToolResult`, or side-effect
 > authorization.
+
+One store-layer dependency owner enforces this for `ToolExecutionStarted`,
+progress, completion, failure, single and batch canonical ToolResult commits,
+recovery repair commits, background authorization, and subagent ownership.
+The proposal key is `(stream_id, ToolCallId)`: provider call IDs are scoped to
+one publication generation, so reuse in another stream is a new exact owner
+and never an `INSERT OR IGNORE` reassignment. Canonical C retains and marks
+its proposal ownership row so legitimate execution and recovery remain
+resolvable; audited ownership is permanently forbidden.
 
 ### Request-pinned generation
 
@@ -2999,6 +3028,15 @@ runtime supervision/quiescence contract.
   publication as separate atomic transitions on purpose, so a crash between
   any two of them must leave a durable state that the next startup classifies
   exactly as truthfully as the first did;
+
+- Each reconciliation transaction is a valid prefix boundary: if one fails,
+  the next recovery re-reads the remaining durable evidence and never assumes
+  later steps happened. Multiple unsettled streams from an older valid crash
+  prefix are each classified from their own frozen stream evidence; live
+  overflow control flow cannot create a second one because the old audit must
+  commit before retry preparation or start. Recovery repair uses the same
+  store-layer proposal dependency owner, so it cannot create a ToolResult for
+  an audited proposal;
 
 - **publication settlement is classified from durable evidence alone**
   (Issue #108): `staging + no U -> Incomplete`, `U + no C -> Unaccepted`, and

@@ -4873,7 +4873,7 @@ mod tests {
     use crate::model::adapter::ModelAdapter;
     use crate::runtime::ApprovalMode;
     use crate::runtime::identity::{
-        AgentId, AttemptId, ConversationId, SubagentId, ToolCallId, ToolId,
+        AgentId, AttemptId, ConversationId, SubagentId, ToolCallId, ToolId, TurnId,
     };
     use crate::runtime::interaction::{
         ApprovalDecision, ApprovalFacts, InteractionOutcome, InteractionResponse,
@@ -13925,6 +13925,26 @@ mod tests {
         }
     }
 
+    fn append_completed_request(
+        store: &crate::durable::SqliteConversationStore,
+        conversation_id: &ConversationId,
+        attempt_id: &AttemptId,
+        request_id: &crate::runtime::identity::RequestId,
+    ) {
+        let mut event = attempt_event(
+            conversation_id,
+            "request-completed",
+            attempt_id,
+            crate::events::types::RuntimeEvent::ModelRequestCompleted {
+                request_id: request_id.clone(),
+                finish_reason: crate::model::finish::ModelFinishReason::Stop,
+                usage: None,
+            },
+        );
+        event.turn_id = Some(TurnId::new("0"));
+        store.append_event(event).expect("request completed");
+    }
+
     /// Issue #12 (M9a), Test A (runtime half): an idle runtime recovered with
     /// pending inbound admits it by itself.
     ///
@@ -14830,18 +14850,7 @@ mod tests {
             store
                 .commit_model_turn_start(&[], &snapshot, fixed_time())
                 .expect("request start");
-            store
-                .append_event(attempt_event(
-                    conversation_id,
-                    "request-completed",
-                    &dead,
-                    crate::events::types::RuntimeEvent::ModelRequestCompleted {
-                        request_id: snapshot.request_id.clone(),
-                        finish_reason: crate::model::finish::ModelFinishReason::Stop,
-                        usage: None,
-                    },
-                ))
-                .expect("request completed");
+            append_completed_request(store, conversation_id, &dead, &snapshot.request_id);
             // CRASH: the provider outcome is durably known, but the
             // canonical Assistant message never committed.
         });

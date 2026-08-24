@@ -25,13 +25,15 @@
 //! `tests/scripted/issue108_publication.rs`, because it needs the scripted
 //! model adapter.
 
+#![allow(clippy::too_many_lines)] // deterministic store scenarios stay linear
+
 use chrono::{DateTime, TimeZone, Utc};
 use rustx::context::ContextGeneration;
 use rustx::durable::{ConversationStore, ConversationStoreError, SqliteConversationStore};
 use rustx::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
-    AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, MessageBlock,
+    AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, MessageBlock, ToolMessageBlock,
 };
 use rustx::model::catalog::{ModelCapabilities, ModelCompat};
 use rustx::model::{
@@ -43,12 +45,13 @@ use rustx::publication::{
     PublicationStreamStart,
 };
 use rustx::runtime::identity::{
-    AttemptId, CapabilityRevision, ConversationId, EventId, MessageId, PublicationStreamId,
-    RequestId, ToolCallId, ToolId, TurnId,
+    AgentId, AttemptId, CapabilityRevision, ConversationId, EventId, MessageId,
+    PublicationStreamId, RequestId, SubagentId, ToolCallId, ToolId, TurnId,
 };
 use rustx::runtime::recovery::{RecoveryReport, recover};
 use rustx::runtime::types::RuntimeClock;
 use rustx::tools::types::{ToolCall, ToolCallStart};
+use rustx::tools::types::{ToolExecutionResult, ToolExecutionStatus};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -175,8 +178,10 @@ fn commit_provider_outcome(store: &SqliteConversationStore, turn: &str, request_
         .expect("provider outcome");
 }
 
-fn stream_start(request_id: &RequestId, turn: &str, message_id: &str) -> PublicationStreamStart {
-    let message_id = MessageId::new(message_id);
+fn stream_start(request_id: &RequestId, turn: &str, _message_id: &str) -> PublicationStreamStart {
+    // The Request Snapshot owns this mapping now; the old fixture argument is
+    // retained only to keep each scenario visually tied to its turn.
+    let message_id = MessageId::new(format!("{}-agent-{turn}", attempt()));
     PublicationStreamStart {
         stream_id: PublicationStreamId::for_request(&attempt(), &message_id),
         attempt_id: attempt(),
@@ -217,6 +222,54 @@ fn assistant(message_id: &MessageId, body: &str) -> MessageBlock {
             text: body.to_owned(),
         })],
     })
+}
+
+fn assistant_with_tool(message_id: &MessageId, call_id: &ToolCallId) -> MessageBlock {
+    MessageBlock::Assistant(AssistantMessageBlock {
+        id: message_id.clone(),
+        content: vec![AssistantContentBlock::ToolCall(ToolCall {
+            id: call_id.clone(),
+            tool_id: ToolId::new("tool-alpha"),
+            name: "alpha".to_owned(),
+            arguments: serde_json::json!({}),
+        })],
+    })
+}
+
+fn tool_message(message_id: &str, call_id: &ToolCallId) -> MessageBlock {
+    MessageBlock::Tool(ToolMessageBlock {
+        id: MessageId::new(message_id),
+        tool_call_id: call_id.clone(),
+        tool_id: ToolId::new("tool-alpha"),
+        result: ToolExecutionResult {
+            status: ToolExecutionStatus::Success,
+            content: Vec::new(),
+            duration_ms: 1,
+            exit_code: Some(0),
+            artifacts: Vec::new(),
+            truncation: None,
+            managed_output: None,
+        },
+    })
+}
+
+fn proposal_start_frame(
+    start: &PublicationStreamStart,
+    sequence: u64,
+    call_id: &ToolCallId,
+) -> PublicationFrame {
+    frame(
+        start,
+        sequence,
+        PublicationPayload::ProposedToolCallStarted {
+            block_index: ContentBlockIndex::new(0),
+            call: ToolCallStart {
+                id: call_id.clone(),
+                tool_id: ToolId::new("tool-alpha"),
+                name: "alpha".to_owned(),
+            },
+        },
+    )
 }
 
 fn committed_event(message_id: &MessageId, turn: &str) -> RuntimeEventEnvelope {
@@ -742,7 +795,7 @@ fn a_partial_tool_proposal_settles_incomplete_and_can_never_execute() {
         "tool-started",
         "1",
         RuntimeEvent::ToolExecutionStarted {
-            tool_call_id: call_id,
+            tool_call_id: call_id.clone(),
             tool_id: ToolId::new("tool-alpha"),
         },
     ));
@@ -825,6 +878,431 @@ fn a_complete_unaccepted_proposal_never_acquires_an_execution_fact() {
         )),
         Err(ConversationStoreError::PublicationViolation(_))
     ));
+}
+
+/// Every dependent Tool Plane transition is owned by the same durable
+/// proposal guard. An audit may not be bypassed by writing an outcome,
+/// canonical `ToolResult`, batched `ToolResult`, or detached authorization fact
+/// through a different store API.
+#[test]
+fn audited_proposals_reject_all_dependent_tool_transitions_atomically() {
+    for reaches_u in [false, true] {
+        let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
+        store.initialize(&[]).expect("initialize");
+        let request_id = start_request(&store, "1");
+        let start = stream_start(&request_id, "1", "msg-1");
+        let call_id = ToolCallId::new("call-audited");
+        store.open_publication_stream(&start).expect("open");
+        store
+            .stage_publication_frames(&[proposal_start_frame(&start, 0, &call_id)])
+            .expect("proposal registration");
+        if reaches_u {
+            commit_provider_outcome(&store, "1", &request_id);
+            store
+                .commit_publication_terminal(&start.stream_id, &[text(1, &start, "done")])
+                .expect("U");
+        }
+        let expected_kind = if reaches_u {
+            PublicationAuditKind::Unaccepted
+        } else {
+            PublicationAuditKind::Incomplete
+        };
+        let audit = store
+            .terminalize_publication_audit(&start.stream_id, fixed_time())
+            .expect("audit");
+        assert_eq!(audit.kind, expected_kind);
+
+        let assert_unchanged = |before_head: &rustx::durable::DurableConversationHead,
+                                before_events: usize,
+                                label: &str| {
+            assert_eq!(
+                store.load_head().expect("head"),
+                *before_head,
+                "{label}: head changed"
+            );
+            assert_eq!(
+                store.load_canonical().expect("canonical").len(),
+                0,
+                "{label}: Ledger changed"
+            );
+            assert_eq!(
+                store.read_events(None, 256).expect("events").events.len(),
+                before_events,
+                "{label}: Journal changed"
+            );
+            assert_eq!(
+                store
+                    .load_unsettled_publication_streams()
+                    .expect("streams")
+                    .len(),
+                0,
+                "{label}: stream changed"
+            );
+            assert_eq!(
+                store
+                    .load_publication_audit(&start.stream_id)
+                    .expect("audit"),
+                Some(audit.clone()),
+                "{label}: audit changed"
+            );
+        };
+
+        let before_head = store.load_head().expect("head");
+        let before_events = store.read_events(None, 256).expect("events").events.len();
+        let dependent_events = [
+            envelope(
+                "audited-start",
+                "1",
+                RuntimeEvent::ToolExecutionStarted {
+                    tool_call_id: call_id.clone(),
+                    tool_id: ToolId::new("tool-alpha"),
+                },
+            ),
+            envelope(
+                "audited-progress",
+                "1",
+                RuntimeEvent::ToolExecutionProgress {
+                    tool_call_id: call_id.clone(),
+                    tool_id: ToolId::new("tool-alpha"),
+                    execution_id: None,
+                    progress: rustx::tools::types::ToolProgress::default(),
+                },
+            ),
+            envelope(
+                "audited-completed",
+                "1",
+                RuntimeEvent::ToolExecutionCompleted {
+                    tool_call_id: call_id.clone(),
+                    tool_id: ToolId::new("tool-alpha"),
+                    result: ToolExecutionResult {
+                        status: ToolExecutionStatus::Success,
+                        content: Vec::new(),
+                        duration_ms: 0,
+                        exit_code: Some(0),
+                        artifacts: Vec::new(),
+                        truncation: None,
+                        managed_output: None,
+                    },
+                },
+            ),
+            envelope(
+                "audited-failed",
+                "1",
+                RuntimeEvent::ToolExecutionFailed {
+                    tool_call_id: call_id.clone(),
+                    tool_id: ToolId::new("tool-alpha"),
+                    error: "failed".to_owned(),
+                },
+            ),
+        ];
+        for event in dependent_events {
+            let rejected = store.append_event(event);
+            assert!(
+                matches!(
+                    rejected,
+                    Err(ConversationStoreError::PublicationViolation(_))
+                ),
+                "audited proposal accepted a dependent event: {rejected:?}"
+            );
+            assert_unchanged(&before_head, before_events, "dependent event");
+        }
+
+        let single = tool_message("tool-result-single", &call_id);
+        let single_event = envelope(
+            "audited-tool-message",
+            "1",
+            RuntimeEvent::ToolMessageCommitted {
+                message_id: MessageId::new("tool-result-single"),
+                tool_call_id: call_id.clone(),
+            },
+        );
+        let rejected = store.append_canonical_with_event(&single, single_event);
+        assert!(
+            matches!(
+                rejected,
+                Err(ConversationStoreError::PublicationViolation(_))
+            ),
+            "audited proposal accepted a single ToolResult: {rejected:?}"
+        );
+        assert_unchanged(&before_head, before_events, "single ToolResult");
+
+        let batch = [
+            tool_message("tool-result-batch-a", &call_id),
+            tool_message("tool-result-batch-b", &call_id),
+        ];
+        let batch_events = [
+            envelope(
+                "audited-tool-batch-a",
+                "1",
+                RuntimeEvent::ToolMessageCommitted {
+                    message_id: MessageId::new("tool-result-batch-a"),
+                    tool_call_id: call_id.clone(),
+                },
+            ),
+            envelope(
+                "audited-tool-batch-b",
+                "1",
+                RuntimeEvent::ToolMessageCommitted {
+                    message_id: MessageId::new("tool-result-batch-b"),
+                    tool_call_id: call_id.clone(),
+                },
+            ),
+        ];
+        let rejected = store.append_canonical_batch_with_events(&batch, &batch_events);
+        assert!(
+            matches!(
+                rejected,
+                Err(ConversationStoreError::PublicationViolation(_))
+            ),
+            "audited proposal accepted a ToolResult batch: {rejected:?}"
+        );
+        assert_unchanged(&before_head, before_events, "ToolResult batch");
+
+        let mut background = envelope(
+            "audited-background",
+            "1",
+            RuntimeEvent::BackgroundExecutionCommitted {
+                execution_id: rustx::runtime::identity::ToolExecutionId::new("exec-audited"),
+                tool_call_id: call_id.clone(),
+                tool_id: ToolId::new("tool-alpha"),
+                tool_name: "alpha".to_owned(),
+            },
+        );
+        background.attempt_id = None;
+        background.turn_id = None;
+        let rejected = store.append_event(background);
+        assert!(
+            matches!(
+                rejected,
+                Err(ConversationStoreError::PublicationViolation(_))
+            ),
+            "audited proposal accepted background authorization: {rejected:?}"
+        );
+        assert_unchanged(&before_head, before_events, "background authorization");
+
+        let subagent_id = SubagentId::new("subagent-audited");
+        let mut subagent = envelope(
+            "audited-subagent",
+            "1",
+            RuntimeEvent::SubagentOwnershipCommitted {
+                subagent_id: subagent_id.clone(),
+                child_agent_id: AgentId::new("child-audited"),
+                child_conversation_id: ConversationId::new("child-conversation"),
+                tool_call_id: call_id,
+                profile: "profile".to_owned(),
+            },
+        );
+        subagent.event_id = EventId::new(format!("subagent-committed-event:{subagent_id}"));
+        subagent.attempt_id = None;
+        subagent.turn_id = None;
+        let rejected = store.append_event(subagent);
+        assert!(
+            matches!(
+                rejected,
+                Err(ConversationStoreError::PublicationViolation(_))
+            ),
+            "audited proposal accepted subagent authorization: {rejected:?}"
+        );
+        assert_unchanged(&before_head, before_events, "subagent authorization");
+    }
+}
+
+/// A proposal owned by a canonical Assistant may take the normal execution
+/// and `ToolResult` path, including the same policy-result representation used
+/// for denied/cancelled slots.
+#[test]
+fn canonical_proposal_can_execute_and_commit_its_tool_result() {
+    let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
+    store.initialize(&[]).expect("initialize");
+    let request_id = start_request(&store, "1");
+    let start = stream_start(&request_id, "1", "msg-1");
+    let call_id = ToolCallId::new("call-canonical");
+    store.open_publication_stream(&start).expect("open");
+    store
+        .stage_publication_frames(&[proposal_start_frame(&start, 0, &call_id)])
+        .expect("proposal");
+    commit_provider_outcome(&store, "1", &request_id);
+    store
+        .commit_publication_terminal(&start.stream_id, &[text(1, &start, "done")])
+        .expect("U");
+    let assistant = assistant_with_tool(&start.message_id, &call_id);
+    store
+        .commit_canonical_publication(
+            &start.stream_id,
+            &assistant,
+            committed_event(&start.message_id, "1"),
+        )
+        .expect("C");
+
+    store
+        .append_event(envelope(
+            "canonical-tool-start",
+            "1",
+            RuntimeEvent::ToolExecutionStarted {
+                tool_call_id: call_id.clone(),
+                tool_id: ToolId::new("tool-alpha"),
+            },
+        ))
+        .expect("tool start");
+    store
+        .append_event(envelope(
+            "canonical-tool-completed",
+            "1",
+            RuntimeEvent::ToolExecutionCompleted {
+                tool_call_id: call_id.clone(),
+                tool_id: ToolId::new("tool-alpha"),
+                result: ToolExecutionResult {
+                    status: ToolExecutionStatus::Denied {
+                        reason: "policy".to_owned(),
+                    },
+                    content: Vec::new(),
+                    duration_ms: 0,
+                    exit_code: None,
+                    artifacts: Vec::new(),
+                    truncation: None,
+                    managed_output: None,
+                },
+            },
+        ))
+        .expect("tool outcome");
+    let result = tool_message("canonical-tool-result", &call_id);
+    store
+        .append_canonical_with_event(
+            &result,
+            envelope(
+                "canonical-tool-message",
+                "1",
+                RuntimeEvent::ToolMessageCommitted {
+                    message_id: MessageId::new("canonical-tool-result"),
+                    tool_call_id: call_id,
+                },
+            ),
+        )
+        .expect("canonical ToolResult");
+    assert_eq!(store.load_canonical().expect("canonical").len(), 2);
+}
+
+/// Startup repair of a genuinely canonical Assistant turn is still legal: the
+/// retained composite proposal row resolves the recovery-generated `ToolResult`
+/// to the canonical stream, while an audited proposal would be rejected.
+#[test]
+fn recovery_repairs_a_canonical_proposal_without_audit_aliasing() {
+    let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
+    store.initialize(&[]).expect("initialize");
+    store
+        .append_event(RuntimeEventEnvelope {
+            schema_version: EVENT_SCHEMA_VERSION,
+            event_id: EventId::new("attempt-start-repair"),
+            sequence: 0,
+            conversation_id: conversation_id(),
+            attempt_id: Some(attempt()),
+            turn_id: None,
+            timestamp: fixed_time(),
+            event: RuntimeEvent::AttemptStarted {
+                attempt_id: attempt(),
+            },
+        })
+        .expect("attempt start");
+    let request_id = start_request(&store, "1");
+    let start = stream_start(&request_id, "1", "msg-1");
+    let call_id = ToolCallId::new("call-repair");
+    store.open_publication_stream(&start).expect("open");
+    store
+        .stage_publication_frames(&[proposal_start_frame(&start, 0, &call_id)])
+        .expect("proposal");
+    commit_provider_outcome(&store, "1", &request_id);
+    store
+        .commit_publication_terminal(&start.stream_id, &[text(1, &start, "done")])
+        .expect("U");
+    store
+        .commit_canonical_publication(
+            &start.stream_id,
+            &assistant_with_tool(&start.message_id, &call_id),
+            committed_event(&start.message_id, "1"),
+        )
+        .expect("C");
+    store
+        .append_event(envelope(
+            "repair-tool-start",
+            "1",
+            RuntimeEvent::ToolExecutionStarted {
+                tool_call_id: call_id.clone(),
+                tool_id: ToolId::new("tool-alpha"),
+            },
+        ))
+        .expect("tool start");
+
+    let report = recover(&store, &FixedClock).expect("recovery");
+    assert_eq!(report.reconciliation().repaired_tool_results, vec![call_id]);
+    assert!(store.load_canonical().expect("canonical").iter().any(|message| {
+        matches!(message, MessageBlock::Tool(tool) if tool.tool_call_id == ToolCallId::new("call-repair"))
+    }));
+}
+
+/// Provider reuse of a `ToolCallId` is legal across publication generations,
+/// but the durable owner is never selected by bare call id. The exact turn
+/// resolves the accepted proposal; an event for the audited generation is
+/// rejected.
+#[test]
+fn reused_tool_call_id_keeps_publication_ownership_exact() {
+    let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
+    store.initialize(&[]).expect("initialize");
+    let call_id = ToolCallId::new("provider-reused-call");
+
+    let first_request = start_request(&store, "1");
+    let first = stream_start(&first_request, "1", "msg-1");
+    store.open_publication_stream(&first).expect("first open");
+    store
+        .stage_publication_frames(&[proposal_start_frame(&first, 0, &call_id)])
+        .expect("first proposal");
+    commit_provider_outcome(&store, "1", &first_request);
+    store
+        .commit_publication_terminal(&first.stream_id, &[text(1, &first, "first")])
+        .expect("first U");
+    store
+        .terminalize_publication_audit(&first.stream_id, fixed_time())
+        .expect("first audit");
+
+    let second_request = start_request(&store, "2");
+    let second = stream_start(&second_request, "2", "msg-2");
+    store.open_publication_stream(&second).expect("second open");
+    store
+        .stage_publication_frames(&[proposal_start_frame(&second, 0, &call_id)])
+        .expect("same provider call id has a distinct owner");
+    commit_provider_outcome(&store, "2", &second_request);
+    store
+        .commit_publication_terminal(&second.stream_id, &[text(1, &second, "second")])
+        .expect("second U");
+    store
+        .commit_canonical_publication(
+            &second.stream_id,
+            &assistant_with_tool(&second.message_id, &call_id),
+            committed_event(&second.message_id, "2"),
+        )
+        .expect("second C");
+
+    store
+        .append_event(envelope(
+            "reused-call-second-start",
+            "2",
+            RuntimeEvent::ToolExecutionStarted {
+                tool_call_id: call_id.clone(),
+                tool_id: ToolId::new("tool-alpha"),
+            },
+        ))
+        .expect("the accepted second proposal resolves exactly");
+    let rejected = store.append_event(envelope(
+        "reused-call-first-start",
+        "1",
+        RuntimeEvent::ToolExecutionStarted {
+            tool_call_id: call_id,
+            tool_id: ToolId::new("tool-alpha"),
+        },
+    ));
+    assert!(
+        matches!(rejected, Err(ConversationStoreError::PublicationViolation(ref detail)) if detail.contains("may never execute")),
+        "the audited first owner must remain forbidden: {rejected:?}"
+    );
 }
 
 /// **Regression 19.** A cold reopen classifies an old stream solely from its
@@ -927,7 +1405,7 @@ fn a_publication_stream_is_pinned_to_its_opening_generation() {
         matches!(
             &rejected,
             Err(ConversationStoreError::PublicationViolation(detail))
-                if detail.contains("different request generation")
+                if detail.contains("exact Request Snapshot generation")
         ),
         "a newer generation must never splice into an in-flight stream, got {rejected:?}"
     );
@@ -949,6 +1427,169 @@ fn a_publication_stream_is_pinned_to_its_opening_generation() {
     store
         .stage_publication_frames(&[text(0, &start, "x")])
         .expect("the next contiguous sequence is accepted");
+}
+
+/// Opening, provider P, and canonical C each re-prove the exact durable
+/// generation. Foreign request/attempt/turn/message tuples fail before their
+/// transition can change Ledger, Surface, Journal, lifecycle, or publication
+/// state.
+#[test]
+fn publication_generation_rejections_are_side_effect_free() {
+    let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
+    store.initialize(&[]).expect("initialize");
+    let request_id = start_request(&store, "1");
+    let valid = stream_start(&request_id, "1", "msg-1");
+    let foreign_request_id = start_request(&store, "2");
+    let before_head = store.load_head().expect("head");
+    let before_events = store.read_events(None, 256).expect("events").events.len();
+
+    let missing = stream_start(&RequestId::new("request-missing"), "1", "msg-1");
+    assert!(matches!(
+        store.open_publication_stream(&missing),
+        Err(ConversationStoreError::InvalidReference(_))
+    ));
+    let mut foreign_request = valid.clone();
+    foreign_request.request_id = foreign_request_id;
+    assert!(matches!(
+        store.open_publication_stream(&foreign_request),
+        Err(ConversationStoreError::PublicationViolation(_))
+    ));
+    let mut foreign_attempt = valid.clone();
+    foreign_attempt.attempt_id = AttemptId::new("foreign-attempt");
+    assert!(matches!(
+        store.open_publication_stream(&foreign_attempt),
+        Err(ConversationStoreError::PublicationViolation(_))
+    ));
+    let mut foreign_turn = valid.clone();
+    foreign_turn.turn_id = TurnId::new("foreign-turn");
+    assert!(matches!(
+        store.open_publication_stream(&foreign_turn),
+        Err(ConversationStoreError::PublicationViolation(_))
+    ));
+    assert_eq!(store.load_head().expect("head"), before_head);
+    assert_eq!(
+        store.read_events(None, 256).expect("events").events.len(),
+        before_events
+    );
+    assert!(
+        store
+            .load_unsettled_publication_streams()
+            .expect("streams")
+            .is_empty()
+    );
+
+    store.open_publication_stream(&valid).expect("valid open");
+    let provider_before = store.read_events(None, 256).expect("events").events.len();
+    let mut foreign_provider_attempt = envelope(
+        "foreign-provider-attempt",
+        "1",
+        RuntimeEvent::ModelRequestCompleted {
+            request_id: request_id.clone(),
+            finish_reason: ModelFinishReason::Stop,
+            usage: None,
+        },
+    );
+    foreign_provider_attempt.attempt_id = Some(AttemptId::new("foreign-attempt"));
+    assert!(matches!(
+        store.append_event(foreign_provider_attempt),
+        Err(ConversationStoreError::InvalidReference(_))
+    ));
+    let mut foreign_provider_turn = envelope(
+        "foreign-provider-turn",
+        "1",
+        RuntimeEvent::ModelRequestCompleted {
+            request_id: request_id.clone(),
+            finish_reason: ModelFinishReason::Stop,
+            usage: None,
+        },
+    );
+    foreign_provider_turn.turn_id = Some(TurnId::new("foreign-turn"));
+    assert!(matches!(
+        store.append_event(foreign_provider_turn),
+        Err(ConversationStoreError::InvalidReference(_))
+    ));
+    assert_eq!(
+        store.read_events(None, 256).expect("events").events.len(),
+        provider_before
+    );
+    commit_provider_outcome(&store, "1", &request_id);
+    let after_provider = store.read_events(None, 256).expect("events").events.len();
+    let duplicate = store.append_event(envelope(
+        "duplicate-provider-outcome",
+        "1",
+        RuntimeEvent::ModelRequestCompleted {
+            request_id: request_id.clone(),
+            finish_reason: ModelFinishReason::Stop,
+            usage: None,
+        },
+    ));
+    assert!(matches!(
+        duplicate,
+        Err(ConversationStoreError::TerminalViolation(_))
+    ));
+    let contradictory = store.append_event(envelope(
+        "contradictory-provider-outcome",
+        "1",
+        RuntimeEvent::ModelRequestFailed {
+            request_id: request_id.clone(),
+            error: rustx::model::ModelError {
+                kind: rustx::model::ModelErrorKind::ProviderError,
+                message: "contradictory".to_owned(),
+                retry_after_ms: None,
+                provider_code: None,
+            },
+        },
+    ));
+    assert!(matches!(
+        contradictory,
+        Err(ConversationStoreError::TerminalViolation(_))
+    ));
+    assert_eq!(
+        store.read_events(None, 256).expect("events").events.len(),
+        after_provider
+    );
+    store
+        .commit_publication_terminal(&valid.stream_id, &[text(0, &valid, "answer")])
+        .expect("U");
+
+    let exact_assistant = assistant(&valid.message_id, "answer");
+    let c_head = store.load_head().expect("head");
+    let c_events = store.read_events(None, 256).expect("events").events.len();
+    let mut foreign_c_attempt = committed_event(&valid.message_id, "1");
+    foreign_c_attempt.attempt_id = Some(AttemptId::new("foreign-attempt"));
+    assert!(matches!(
+        store.commit_canonical_publication(&valid.stream_id, &exact_assistant, foreign_c_attempt),
+        Err(ConversationStoreError::PublicationViolation(_))
+    ));
+    let mut foreign_c_turn = committed_event(&valid.message_id, "1");
+    foreign_c_turn.turn_id = Some(TurnId::new("foreign-turn"));
+    assert!(matches!(
+        store.commit_canonical_publication(&valid.stream_id, &exact_assistant, foreign_c_turn),
+        Err(ConversationStoreError::PublicationViolation(_))
+    ));
+    let foreign_message_id = MessageId::new("foreign-message");
+    assert!(matches!(
+        store.commit_canonical_publication(
+            &valid.stream_id,
+            &assistant(&foreign_message_id, "foreign"),
+            committed_event(&foreign_message_id, "1"),
+        ),
+        Err(ConversationStoreError::PublicationViolation(_))
+    ));
+    assert_eq!(store.load_head().expect("head"), c_head);
+    assert_eq!(
+        store.read_events(None, 256).expect("events").events.len(),
+        c_events
+    );
+    assert!(store.load_canonical().expect("canonical").is_empty());
+    store
+        .commit_canonical_publication(
+            &valid.stream_id,
+            &exact_assistant,
+            committed_event(&valid.message_id, "1"),
+        )
+        .expect("exact P -> U -> C generation");
+    assert_eq!(store.load_canonical().expect("canonical").len(), 1);
 }
 
 // ---------------------------------------------------------------------------

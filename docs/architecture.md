@@ -30,13 +30,13 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 3. An incompatible database
+The SQLite schema is development schema version 5. An incompatible database
 fails explicitly; there is no migration chain, legacy reader, compatibility
 fallback, dual write, or old storage mode. File-backed stores use WAL,
 `synchronous=FULL`, foreign-key enforcement, and a busy timeout. A successful
 SQLite commit is the local durability linearization point documented here.
 
-The version-2 physical tables are deliberately semantic rather than generic:
+The version-5 physical tables are deliberately semantic rather than generic:
 
 | Table | Purpose and constraints |
 | --- | --- |
@@ -48,9 +48,13 @@ The version-2 physical tables are deliberately semantic rather than generic:
 | `surface_ops` | One immutable `Append` or `Replace` operation per `SurfaceRevision`, with compaction generation. |
 | `surface_head` | Current Surface revision, active identity order, and compaction generation. |
 | `context_checkpoints` | Current structural/index checkpoint matching `surface_head`; it is not message history. |
-| `request_snapshots` | One immutable non-history snapshot per `RequestId`, its Surface revision, and committed start sequence. |
+| `request_snapshots` | One immutable non-history snapshot per `RequestId`, its frozen provisional Assistant identity, Surface revision, and committed start sequence. |
 | `events` | Append-only typed envelopes keyed by per-conversation Event Journal sequence and unique `EventId`. |
 | `lifecycle_state` | Durable terminal markers enforcing zero-or-one terminal event and terminal absorption for attempt, turn, and background-execution lifecycles. |
+| `publication_streams` | One frozen publication generation per provider request, with terminal marker and one of the three settlements. |
+| `publication_frames` | Contiguous transient release staging for one publication stream. |
+| `publication_proposals` | Proposal ownership keyed by `(stream_id, ToolCallId)`, plus execution and settlement state. Provider call IDs are publication-scoped. |
+| `publication_audits` | One bounded immutable audit for each non-canonical publication settlement. |
 
 `MessageId`, `InboundSequence`, `SurfaceRevision`, `RequestId`, `EventId`,
 Event Journal sequence, `AttemptId`, `TurnId`, `ToolCallId`,
@@ -81,6 +85,14 @@ metadata, and `CompactionCompleted` reference together. Request start commits
 the immutable Request Snapshot and `ModelRequestStarted` fact together before
 the provider adapter is called. Background terminal publication commits its
 terminal inbound row and reference fact together.
+
+Publication opening is a second durable admission boundary: the store decodes
+the named Request Snapshot and its exact start event before it can insert or
+idempotently reopen a stream. The stream must match the snapshot's
+`RequestId`, `AttemptId`, `TurnId`, provisional Assistant `MessageId`, and
+derived `PublicationStreamId`. Provider outcomes must identify that same
+started snapshot and envelope generation; only one successful
+`ModelRequestCompleted` can establish P.
 
 The durable request-start flow is:
 
@@ -4401,6 +4413,15 @@ implication:
 C => U => P
 ```
 
+The store proves this chain on every dependent transition. U and C reload and
+decode the exact Request Snapshot, verify its durable `ModelRequestStarted`
+envelope, and re-check the successful `ModelRequestCompleted` fact for that
+same request. C additionally requires the frozen provisional Assistant
+`MessageId`, an `AssistantMessageCommitted` event whose conversation,
+attempt, and turn envelope equal the stream, and an event payload naming that
+same message. These checks happen before the compound transaction can change
+the Ledger, Surface, Journal, staging, proposal, or settlement state.
+
 P and U are deliberately never combined into one transaction. "The provider
 finished" and "rustX committed this output for release" are different facts,
 and a crash between them must stay distinguishable. Likewise
@@ -4465,6 +4486,11 @@ publication-complete, appends the Ledger fact, advances the Surface, records
 `AssistantMessageCommitted`, and clears the stream's publication staging — all
 in one transaction.
 
+The first `open_publication_stream` transition applies the same proof before
+inserting anything. A missing or malformed Request Snapshot, foreign request,
+attempt, turn, message, or derived stream identity is rejected. Identical
+reopens remain idempotent only after that proof succeeds.
+
 ### 6.1.5 Durable lifecycle staging versus immutable audit
 
 While a stream is in flight, its frames are **transient lifecycle staging**.
@@ -4498,6 +4524,15 @@ durable store enforces the hard invariant:
 > No tool proposal from an Incomplete or Unaccepted publication may have a
 > dependent `ToolExecutionStarted`, `ToolResult`, or side-effect
 > authorization.
+
+This is one store-layer owner, reused for foreground execution start,
+progress, completion and failure, single and batch canonical ToolResult
+commits, recovery ToolResult repair, background authorization, and subagent
+ownership. The proposal table owns `(stream_id, ToolCallId)` rather than a
+conversation-global bare call ID; a provider reuse in another publication is
+a distinct proposal, never a silent reassignment. Canonical C retains the
+accepted ownership row and marks it canonical so later Tool Plane transitions
+resolve the exact accepted proposal. Audited rows remain permanently barred.
 
 Transcript and UI consumers therefore distinguish a released proposal from a
 real Tool Plane invocation fact by which plane it came from.

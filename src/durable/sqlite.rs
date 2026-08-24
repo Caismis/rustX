@@ -53,17 +53,19 @@ use super::inbox::{
 /// messages were removed and `RequestSnapshot` gained exact ordered System
 /// Sections plus the process-local resource revision.
 ///
-/// Version 4 freezes the Issue #108 durable publication plane: the
+/// Version 4 froze the Issue #108 durable publication plane: the
 /// `publication_streams`, `publication_frames`, `publication_proposals`, and
 /// `publication_audits` tables, the `request_snapshots.completed_sequence`
 /// P-marker column, and the `ModelRequestCompleted` / `ModelRequestFailed`
-/// payload change that names the exact request. A v3 database has no
-/// publication plane and its request-outcome facts cannot be attributed to a
-/// request, so an older development database must fail at store open with an
-/// explicit [`ConversationStoreError::SchemaVersionMismatch`] rather than a
-/// later accidental JSON decode failure. There is no migration and no
+/// payload change that names the exact request.
+///
+/// Version 5 freezes the store-enforced generation and proposal ownership
+/// rules: a Request Snapshot carries its provisional Assistant identity, and
+/// publication proposals are owned by `(stream_id, call_id)` because provider
+/// `ToolCallIds` are request/publication-scoped rather than conversation-global.
+/// A v3/v4 database must fail at store open; there is no migration or
 /// compatibility path.
-pub const SQLITE_SCHEMA_VERSION: i64 = 4;
+pub const SQLITE_SCHEMA_VERSION: i64 = 5;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -1108,6 +1110,11 @@ impl ConversationStore for SqliteConversationStore {
                 "request snapshot {request_id} start event sequence disagrees"
             )));
         }
+        if event.conversation_id != self.conversation_id {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "request snapshot {request_id} start event belongs to a foreign conversation"
+            )));
+        }
         validate_request_start_metadata(&snapshot, &event)?;
         Ok(snapshot)
     }
@@ -1295,6 +1302,12 @@ impl ConversationStore for SqliteConversationStore {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("publication open transaction: {error}")))?;
+        // The first open is the publication generation admission boundary.
+        // Prove the complete Request Snapshot/start-event identity before an
+        // idempotent reopen probe or any publication row can be written.
+        let (snapshot, _) =
+            require_started_request_tx(&transaction, &self.conversation_id, &start.request_id)?;
+        validate_publication_generation(&snapshot, start)?;
         if let Some(existing) = read_publication_stream(&transaction, &start.stream_id)? {
             // Re-opening is idempotent only for the identical frozen identity:
             // a stream may never be re-associated with another request,
@@ -1380,6 +1393,25 @@ impl ConversationStore for SqliteConversationStore {
         if Self::consume(&self.fail_publication_terminal_remaining) {
             return Err(storage("fault injected: publication terminal commit"));
         }
+        let stream = require_publication_stream(&transaction, stream_id)?;
+        let (snapshot, _) = require_started_request_tx(
+            &transaction,
+            &self.conversation_id,
+            &stream.start.request_id,
+        )?;
+        validate_publication_generation(&snapshot, &stream.start)?;
+        // U may never precede P: prove the exact provider outcome before the
+        // frame/proposal staging transaction does any durable work.
+        if !request_outcome_is_durable(
+            &transaction,
+            &self.conversation_id,
+            &stream.start.request_id,
+        )? {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "publication terminal for {stream_id} has no durable provider outcome for request {}",
+                stream.start.request_id
+            )));
+        }
         let stream = stage_frames_tx(&transaction, frames)?;
         if stream.start.stream_id != *stream_id {
             return Err(ConversationStoreError::PublicationViolation(format!(
@@ -1390,14 +1422,6 @@ impl ConversationStore for SqliteConversationStore {
         if stream.terminal_sequence.is_some() {
             return Err(ConversationStoreError::PublicationViolation(format!(
                 "publication stream {stream_id} already committed its terminal boundary"
-            )));
-        }
-        // U may never precede P: the exact provider request's durable outcome
-        // must already exist.
-        if !request_outcome_is_durable(&transaction, &stream.start.request_id)? {
-            return Err(ConversationStoreError::PublicationViolation(format!(
-                "publication terminal for {stream_id} has no durable provider outcome for request {}",
-                stream.start.request_id
             )));
         }
         let terminal_sequence = frames
@@ -1423,12 +1447,23 @@ impl ConversationStore for SqliteConversationStore {
         message: &MessageBlock,
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
-        validate_canonical_event_for_message(message, &event.event)?;
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("canonical publication transaction: {error}")))?;
         let stream = require_publication_stream(&transaction, stream_id)?;
+        let (snapshot, _) = require_started_request_tx(
+            &transaction,
+            &self.conversation_id,
+            &stream.start.request_id,
+        )?;
+        validate_publication_generation(&snapshot, &stream.start)?;
+        validate_canonical_publication_event(
+            &self.conversation_id,
+            &stream.start,
+            message,
+            &event,
+        )?;
         if let Some(settlement) = stream.settlement {
             return Err(ConversationStoreError::PublicationViolation(format!(
                 "publication stream {stream_id} already settled as {}; canonical acceptance is permanently forbidden",
@@ -1441,9 +1476,19 @@ impl ConversationStore for SqliteConversationStore {
                 "publication stream {stream_id} has no durable publication terminal; canonical acceptance requires U"
             )));
         }
-        if crate::conversation::message_id_of(message) != stream.start.message_id {
+        if !matches!(message, MessageBlock::Assistant(_)) {
             return Err(ConversationStoreError::PublicationViolation(format!(
-                "canonical acceptance of publication stream {stream_id} names a foreign message identity"
+                "canonical acceptance of publication stream {stream_id} requires an Assistant message"
+            )));
+        }
+        if !request_outcome_is_durable(
+            &transaction,
+            &self.conversation_id,
+            &stream.start.request_id,
+        )? {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "canonical acceptance of publication stream {stream_id} has no durable provider outcome for request {}",
+                stream.start.request_id
             )));
         }
         ensure_surface_head(&transaction)?;
@@ -1457,12 +1502,19 @@ impl ConversationStore for SqliteConversationStore {
         // the Ledger is now the long-term authority and no transient frame
         // survives it.
         clear_publication_staging(&transaction, stream_id)?;
+        // Proposal ownership remains as one bounded `(stream_id, call_id)`
+        // fact after C. Recovery ToolResult repair and later Tool Plane
+        // transitions must still resolve the exact accepted proposal rather
+        // than falling back to a bare call id.
         transaction
             .execute(
-                "DELETE FROM publication_proposals WHERE stream_id=?1",
-                [stream_id.as_str()],
+                "UPDATE publication_proposals SET settlement=?1 WHERE stream_id=?2",
+                params![
+                    PublicationSettlement::Canonical.as_str(),
+                    stream_id.as_str()
+                ],
             )
-            .map_err(|error| storage(format!("clear publication proposals: {error}")))?;
+            .map_err(|error| storage(format!("settle canonical publication proposals: {error}")))?;
         transaction
             .execute(
                 "UPDATE publication_streams SET settlement=?1 WHERE stream_id=?2",
@@ -1492,10 +1544,27 @@ impl ConversationStore for SqliteConversationStore {
             return Err(storage("fault injected: publication audit commit"));
         }
         let stream = require_publication_stream(&transaction, stream_id)?;
+        let (snapshot, _) = require_started_request_tx(
+            &transaction,
+            &self.conversation_id,
+            &stream.start.request_id,
+        )?;
+        validate_publication_generation(&snapshot, &stream.start)?;
         if let Some(settlement) = stream.settlement {
             return Err(ConversationStoreError::PublicationViolation(format!(
                 "publication stream {stream_id} already settled as {}",
                 settlement.as_str()
+            )));
+        }
+        if stream.terminal_sequence.is_some()
+            && !request_outcome_is_durable(
+                &transaction,
+                &self.conversation_id,
+                &stream.start.request_id,
+            )?
+        {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "publication audit for {stream_id} has U without the exact successful provider outcome"
             )));
         }
         // The kind is derived from durable evidence, never supplied: U
@@ -1732,13 +1801,28 @@ fn stage_frames_tx(
             )
             .map_err(|error| storage(format!("stage publication frame: {error}")))?;
         if let PublicationPayload::ProposedToolCallStarted { call, .. } = &frame.payload {
-            // A released proposal is registered so the Tool Plane can never
-            // execute one that belongs to a settled audit, and so an audit can
-            // never terminalize over a proposal that already executed.
+            // Provider ToolCallIds are scoped to a publication generation, not
+            // globally to the conversation. A duplicate registration in the
+            // same stream is a typed ownership violation; a reuse in another
+            // stream is a distinct proposal and is never silently attributed
+            // to the first owner.
+            let already_registered: bool = transaction
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM publication_proposals WHERE stream_id=?1 AND call_id=?2)",
+                    params![stream_id.as_str(), call.id.as_str()],
+                    |row| row.get(0),
+                )
+                .map_err(|error| storage(format!("probe tool proposal ownership: {error}")))?;
+            if already_registered {
+                return Err(ConversationStoreError::PublicationViolation(format!(
+                    "publication stream {stream_id} already owns tool proposal {}",
+                    call.id
+                )));
+            }
             transaction
                 .execute(
-                    "INSERT OR IGNORE INTO publication_proposals(call_id,stream_id,executed,settlement) VALUES(?1,?2,0,NULL)",
-                    params![call.id.as_str(), stream_id.as_str()],
+                    "INSERT INTO publication_proposals(stream_id,call_id,executed,settlement) VALUES(?1,?2,0,NULL)",
+                    params![stream_id.as_str(), call.id.as_str()],
                 )
                 .map_err(|error| storage(format!("register tool proposal: {error}")))?;
         }
@@ -1787,51 +1871,159 @@ fn clear_publication_staging(
 /// Whether **P** is durable for one exact provider request.
 fn request_outcome_is_durable(
     transaction: &Transaction<'_>,
+    conversation_id: &ConversationId,
     request_id: &RequestId,
 ) -> Result<bool, ConversationStoreError> {
-    let completed: Option<Option<i64>> = transaction
+    let Some((snapshot, _, completed_sequence)) =
+        read_request_snapshot_tx(transaction, request_id)?
+    else {
+        return Ok(false);
+    };
+    let _ = require_started_request_tx(transaction, conversation_id, request_id)?;
+    let Some(completed_sequence) = completed_sequence else {
+        return Ok(false);
+    };
+    let event_json: String = transaction
         .query_row(
-            "SELECT completed_sequence FROM request_snapshots WHERE request_id=?1",
-            [request_id.as_str()],
+            "SELECT event_json FROM events WHERE sequence=?1",
+            [seq_to_i64(completed_sequence)?],
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(format!("request outcome probe: {error}")))?;
-    Ok(completed.flatten().is_some())
+        .map_err(|error| storage(format!("request outcome lookup: {error}")))?
+        .ok_or_else(|| {
+            ConversationStoreError::InvalidReference(format!(
+                "request {request_id} completed marker has no Event Journal fact"
+            ))
+        })?;
+    let event: RuntimeEventEnvelope = decode(&event_json, "request outcome")?;
+    if event.sequence != completed_sequence
+        || event.conversation_id != *conversation_id
+        || event.attempt_id.as_ref() != Some(&snapshot.identity.attempt_id)
+        || event.turn_id.as_ref() != Some(&snapshot.identity.turn)
+        || !matches!(
+            &event.event,
+            RuntimeEvent::ModelRequestCompleted {
+                request_id: completed_request,
+                ..
+            } if completed_request == request_id
+        )
+    {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request {request_id} completed marker does not identify its exact successful provider outcome"
+        )));
+    }
+    Ok(true)
 }
 
-/// Rejects a Tool Plane execution fact for a proposal that belongs to a
-/// settled publication audit, and records the execution otherwise.
+/// Rejects every dependent Tool Plane transition for a proposal that belongs
+/// to a settled publication audit, and records the dependency otherwise.
 ///
 /// This is the durable half of the hard Issue #108 invariant: no tool
 /// proposal from an Incomplete or Unaccepted publication may have a dependent
 /// `ToolExecutionStarted`, `ToolResult`, or side-effect authorization.
-fn record_tool_proposal_execution(
+fn record_tool_proposal_dependency(
     transaction: &Transaction<'_>,
     call_id: &ToolCallId,
+    attempt_id: Option<&AttemptId>,
+    turn_id: Option<&TurnId>,
+    dependency: &str,
 ) -> Result<(), ConversationStoreError> {
-    let settlement: Option<Option<String>> = transaction
-        .query_row(
-            "SELECT settlement FROM publication_proposals WHERE call_id=?1",
-            [call_id.as_str()],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|error| storage(format!("tool proposal probe: {error}")))?;
-    let Some(settlement) = settlement else {
-        return Ok(());
+    // Detached authorization facts intentionally outlive an attempt and carry
+    // no envelope generation. Resolve those facts through the current durable
+    // Surface: an active canonical Assistant is the only valid owner, and the
+    // active Surface rejects duplicate ToolCallIds. This keeps a historical
+    // audited/canonical reuse from becoming a bare-call-id alias.
+    let detached_active_messages = if attempt_id.is_none() && turn_id.is_none() {
+        Some(load_head(transaction)?.active_message_ids)
+    } else {
+        None
     };
-    if let Some(settlement) = settlement {
+    let mut statement = transaction
+        .prepare(
+            "SELECT p.stream_id,s.attempt_id,s.turn_id,s.message_id,p.settlement
+             FROM publication_proposals p
+             JOIN publication_streams s ON s.stream_id=p.stream_id
+             WHERE p.call_id=?1
+             ORDER BY p.stream_id",
+        )
+        .map_err(|error| storage(format!("tool proposal probe: {error}")))?;
+    let rows = statement
+        .query_map([call_id.as_str()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        })
+        .map_err(|error| storage(format!("tool proposal rows: {error}")))?;
+    let candidates = rows
+        .map(|row| row.map_err(|error| storage(format!("tool proposal row: {error}"))))
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    let matching: Vec<_> = candidates
+        .iter()
+        .filter(
+            |(_, candidate_attempt, candidate_turn, candidate_message, _)| {
+                attempt_id.is_none_or(|attempt| candidate_attempt == attempt.as_str())
+                    && turn_id.is_none_or(|turn| candidate_turn == turn.as_str())
+                    && detached_active_messages.as_ref().is_none_or(|active| {
+                        active
+                            .iter()
+                            .any(|message_id| message_id.as_str() == candidate_message)
+                    })
+            },
+        )
+        .collect();
+    if matching.is_empty() {
         return Err(ConversationStoreError::PublicationViolation(format!(
-            "tool call {call_id} is a model proposal of an {settlement} publication and may never execute"
+            "{dependency} for tool call {call_id} does not match any exact publication generation"
         )));
     }
+    let canonical: Vec<_> = matching
+        .iter()
+        .filter(|(_, _, _, _, settlement)| {
+            settlement.as_deref() == Some(PublicationSettlement::Canonical.as_str())
+        })
+        .collect();
+    let selected = match canonical.len().cmp(&1) {
+        std::cmp::Ordering::Equal => canonical[0],
+        std::cmp::Ordering::Greater => {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "{dependency} for tool call {call_id} has ambiguous canonical proposal ownership"
+            )));
+        }
+        std::cmp::Ordering::Less => {
+            let audited = matching.iter().find_map(|(_, _, _, _, settlement)| {
+                settlement.as_deref().filter(|settlement| {
+                    *settlement == PublicationSettlement::Incomplete.as_str()
+                        || *settlement == PublicationSettlement::Unaccepted.as_str()
+                })
+            });
+            if let Some(settlement) = audited {
+                return Err(ConversationStoreError::PublicationViolation(format!(
+                    "tool call {call_id} is a model proposal of an {settlement} publication and may never execute or acquire {dependency}"
+                )));
+            }
+            if matching.len() != 1 {
+                return Err(ConversationStoreError::PublicationViolation(format!(
+                    "{dependency} for tool call {call_id} has ambiguous unsettled proposal ownership"
+                )));
+            }
+            matching[0]
+        }
+    };
     transaction
         .execute(
-            "UPDATE publication_proposals SET executed=1 WHERE call_id=?1",
-            [call_id.as_str()],
+            "UPDATE publication_proposals SET executed=1 WHERE stream_id=?1 AND call_id=?2",
+            params![selected.0.as_str(), call_id.as_str()],
         )
-        .map_err(|error| storage(format!("record tool proposal execution: {error}")))?;
+        .map_err(|error| storage(format!("record tool proposal dependency: {error}")))?;
     Ok(())
 }
 
@@ -1948,6 +2140,15 @@ fn append_canonical_messages(
         .map_err(|error| storage(format!("canonical transaction: {error}")))?;
     ensure_surface_head(&transaction)?;
     for message in messages {
+        if let MessageBlock::Tool(tool) = message {
+            record_tool_proposal_dependency(
+                &transaction,
+                &tool.tool_call_id,
+                None,
+                None,
+                "canonical ToolMessage",
+            )?;
+        }
         append_message_and_surface(&transaction, message)?;
     }
     transaction
@@ -2171,10 +2372,11 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 PRIMARY KEY(stream_id, sequence)
             );
             CREATE TABLE IF NOT EXISTS publication_proposals (
-                call_id TEXT PRIMARY KEY,
                 stream_id TEXT NOT NULL,
+                call_id TEXT NOT NULL,
                 executed INTEGER NOT NULL CHECK(executed IN (0,1)),
-                settlement TEXT
+                settlement TEXT,
+                PRIMARY KEY(stream_id, call_id)
             );
             CREATE TABLE IF NOT EXISTS publication_audits (
                 stream_id TEXT PRIMARY KEY,
@@ -2333,11 +2535,15 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         ("events", "event_id"),
         ("request_snapshots", "request_id"),
         ("publication_streams", "stream_id"),
-        ("publication_proposals", "call_id"),
         ("publication_audits", "stream_id"),
     ] {
         verify_unique_column(connection, table, column)?;
     }
+    verify_unique_columns(
+        connection,
+        "publication_proposals",
+        &["stream_id", "call_id"],
+    )?;
     Ok(())
 }
 
@@ -2345,6 +2551,14 @@ fn verify_unique_column(
     connection: &Connection,
     table: &str,
     column: &str,
+) -> Result<(), ConversationStoreError> {
+    verify_unique_columns(connection, table, &[column])
+}
+
+fn verify_unique_columns(
+    connection: &Connection,
+    table: &str,
+    expected: &[&str],
 ) -> Result<(), ConversationStoreError> {
     let mut indexes = connection
         .prepare(&format!("PRAGMA index_list({table})"))
@@ -2369,12 +2583,18 @@ fn verify_unique_column(
             .map_err(|error| storage(format!("inspect schema index {index}: {error}")))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| storage(format!("read schema index {index}: {error}")))?;
-        if columns == [column.to_owned()] {
+        if columns
+            == expected
+                .iter()
+                .map(|column| (*column).to_owned())
+                .collect::<Vec<_>>()
+        {
             return Ok(());
         }
     }
     Err(ConversationStoreError::IncompatibleSchema(format!(
-        "table {table} is missing a unique constraint on {column}"
+        "table {table} is missing a unique constraint on ({})",
+        expected.join(", ")
     )))
 }
 
@@ -3492,6 +3712,184 @@ fn find_request_start_event(
     Ok(found)
 }
 
+/// Reads one Request Snapshot row through the same durable decoder used by
+/// request history. The row's denormalized Surface and sequence columns are
+/// checked against the frozen JSON so publication cannot trust a mismatched
+/// tuple assembled by a caller.
+type RequestSnapshotRow = (RequestSnapshot, Option<u64>, Option<u64>);
+
+fn read_request_snapshot_tx(
+    transaction: &Transaction<'_>,
+    request_id: &RequestId,
+) -> Result<Option<RequestSnapshotRow>, ConversationStoreError> {
+    let row: Option<(i64, String, Option<i64>, Option<i64>)> = transaction
+        .query_row(
+            "SELECT surface_revision,snapshot_json,started_sequence,completed_sequence
+             FROM request_snapshots WHERE request_id=?1",
+            [request_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()
+        .map_err(|error| storage(format!("request snapshot transaction lookup: {error}")))?;
+    let Some((stored_surface_revision, json, started_sequence, completed_sequence)) = row else {
+        return Ok(None);
+    };
+    let snapshot: RequestSnapshot = decode(&json, "request snapshot")?;
+    validate_snapshot_identity(&snapshot)?;
+    if snapshot.request_id != *request_id {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request snapshot row {request_id} contains a different RequestId"
+        )));
+    }
+    if stored_surface_revision != seq_to_i64(snapshot.surface_revision.get())? {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request snapshot {request_id} Surface column disagrees with its frozen snapshot"
+        )));
+    }
+    Ok(Some((
+        snapshot,
+        started_sequence.map(sequence_from_i64).transpose()?,
+        completed_sequence.map(sequence_from_i64).transpose()?,
+    )))
+}
+
+/// Proves that a Request Snapshot has exactly one durable request-start fact
+/// and that the fact's envelope identifies the same conversation, attempt,
+/// turn, request, and model.
+fn require_started_request_tx(
+    transaction: &Transaction<'_>,
+    conversation_id: &ConversationId,
+    request_id: &RequestId,
+) -> Result<(RequestSnapshot, u64), ConversationStoreError> {
+    let Some((snapshot, started_sequence, _)) = read_request_snapshot_tx(transaction, request_id)?
+    else {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request snapshot {request_id} does not exist"
+        )));
+    };
+    let Some(started_sequence) = started_sequence else {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request snapshot {request_id} has no durable start sequence"
+        )));
+    };
+    let Some(started) = find_request_start_event(transaction, request_id)? else {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request snapshot {request_id} has no durable request-start fact"
+        )));
+    };
+    if started.sequence != started_sequence {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request snapshot {request_id} start sequence disagrees with its request-start fact"
+        )));
+    }
+    if started.conversation_id != *conversation_id {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request-start fact for {request_id} belongs to a foreign conversation"
+        )));
+    }
+    validate_request_start_metadata(&snapshot, &started)?;
+    Ok((snapshot, started_sequence))
+}
+
+/// Finds any already durable provider terminal for one request. Both success
+/// and failure are terminal outcomes: a contradictory second outcome is never
+/// accepted, while only a successful outcome establishes P.
+fn find_request_outcome_event(
+    transaction: &Transaction<'_>,
+    request_id: &RequestId,
+) -> Result<Option<RuntimeEventEnvelope>, ConversationStoreError> {
+    let mut statement = transaction
+        .prepare("SELECT event_json FROM events ORDER BY sequence")
+        .map_err(|error| storage(format!("request outcome probe: {error}")))?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| storage(format!("request outcome query: {error}")))?;
+    for row in rows {
+        let json = row.map_err(|error| storage(format!("request outcome row: {error}")))?;
+        let event: RuntimeEventEnvelope = decode(&json, "request outcome")?;
+        if matches!(
+            &event.event,
+            RuntimeEvent::ModelRequestCompleted {
+                request_id: candidate,
+                ..
+            }
+                | RuntimeEvent::ModelRequestFailed {
+                    request_id: candidate,
+                    ..
+                } if candidate == request_id
+        ) {
+            return Ok(Some(event));
+        }
+    }
+    Ok(None)
+}
+
+/// Validates the complete immutable identity of a publication stream against
+/// the Request Snapshot that owns it.
+fn validate_publication_generation(
+    snapshot: &RequestSnapshot,
+    start: &PublicationStreamStart,
+) -> Result<(), ConversationStoreError> {
+    let expected_stream = PublicationStreamId::for_request(
+        &snapshot.identity.attempt_id,
+        &snapshot.provisional_message_id,
+    );
+    if start.request_id != snapshot.request_id
+        || start.attempt_id != snapshot.identity.attempt_id
+        || start.turn_id != snapshot.identity.turn
+        || start.message_id != snapshot.provisional_message_id
+        || start.stream_id != expected_stream
+    {
+        return Err(ConversationStoreError::PublicationViolation(format!(
+            "publication stream {} does not identify the exact Request Snapshot generation {}",
+            start.stream_id, snapshot.request_id
+        )));
+    }
+    Ok(())
+}
+
+/// Validates C's event envelope and message identity against the frozen
+/// publication generation before the compound Ledger/Surface/Journal
+/// transaction can mutate anything.
+fn validate_canonical_publication_event(
+    conversation_id: &ConversationId,
+    start: &PublicationStreamStart,
+    message: &MessageBlock,
+    event: &RuntimeEventEnvelope,
+) -> Result<(), ConversationStoreError> {
+    validate_canonical_event_for_message(message, &event.event)?;
+    if !matches!(message, MessageBlock::Assistant(_))
+        || !matches!(
+            &event.event,
+            RuntimeEvent::AssistantMessageCommitted { message_id }
+                if message_id == &start.message_id
+        )
+        || crate::conversation::message_id_of(message) != start.message_id
+        || event.conversation_id != *conversation_id
+        || event.attempt_id.as_ref() != Some(&start.attempt_id)
+        || event.turn_id.as_ref() != Some(&start.turn_id)
+    {
+        return Err(ConversationStoreError::PublicationViolation(format!(
+            "canonical acceptance of publication stream {} does not identify its exact Assistant generation",
+            start.stream_id
+        )));
+    }
+    Ok(())
+}
+
+fn runtime_event_dependency_name(event: &RuntimeEvent) -> &'static str {
+    match event {
+        RuntimeEvent::ToolExecutionStarted { .. } => "ToolExecutionStarted",
+        RuntimeEvent::ToolExecutionProgress { .. } => "ToolExecutionProgress",
+        RuntimeEvent::ToolExecutionCompleted { .. } => "ToolExecutionCompleted",
+        RuntimeEvent::ToolExecutionFailed { .. } => "ToolExecutionFailed",
+        RuntimeEvent::ToolMessageCommitted { .. } => "ToolMessageCommitted",
+        RuntimeEvent::BackgroundExecutionCommitted { .. } => "background side-effect authorization",
+        RuntimeEvent::SubagentOwnershipCommitted { .. } => "subagent side-effect authorization",
+        _ => unreachable!("dependency name requested for a non-tool event"),
+    }
+}
+
 fn find_event_by_id(
     transaction: &Transaction<'_>,
     event_id: &EventId,
@@ -3563,25 +3961,53 @@ fn validate_event_reference(
         // durable start fact.
         RuntimeEvent::ModelRequestCompleted { request_id, .. }
         | RuntimeEvent::ModelRequestFailed { request_id, .. } => {
-            let exists: bool = transaction
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM request_snapshots WHERE request_id=?1)",
-                    [request_id.as_str()],
-                    |row| row.get(0),
-                )
-                .map_err(|error| storage(format!("request outcome reference probe: {error}")))?;
-            if !exists {
+            let Some((snapshot, _, _)) = read_request_snapshot_tx(transaction, request_id)? else {
                 return Err(ConversationStoreError::InvalidReference(format!(
                     "model request outcome references request {request_id}, which never started"
                 )));
+            };
+            let _ = require_started_request_tx(transaction, &envelope.conversation_id, request_id)?;
+            if envelope.attempt_id.as_ref() != Some(&snapshot.identity.attempt_id)
+                || envelope.turn_id.as_ref() != Some(&snapshot.identity.turn)
+            {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "model request outcome for {request_id} has a foreign attempt or turn envelope"
+                )));
+            }
+            if find_request_outcome_event(transaction, request_id)?.is_some() {
+                return Err(ConversationStoreError::TerminalViolation(format!(
+                    "request {request_id} already has a durable provider outcome"
+                )));
             }
         }
-        // The Tool Plane may never act on a proposal that belongs to a settled
-        // publication audit.
-        RuntimeEvent::ToolExecutionStarted { tool_call_id, .. } => {
-            record_tool_proposal_execution(transaction, tool_call_id)?;
+        // Every Tool Plane transition that names a proposal uses the same
+        // semantic owner. This includes execution starts/progress/outcomes
+        // and detached background authorization.
+        RuntimeEvent::ToolExecutionStarted { tool_call_id, .. }
+        | RuntimeEvent::ToolExecutionProgress { tool_call_id, .. }
+        | RuntimeEvent::ToolExecutionCompleted { tool_call_id, .. }
+        | RuntimeEvent::ToolExecutionFailed { tool_call_id, .. }
+        | RuntimeEvent::BackgroundExecutionCommitted { tool_call_id, .. } => {
+            record_tool_proposal_dependency(
+                transaction,
+                tool_call_id,
+                envelope.attempt_id.as_ref(),
+                envelope.turn_id.as_ref(),
+                runtime_event_dependency_name(&envelope.event),
+            )?;
         }
-        RuntimeEvent::SubagentOwnershipCommitted { subagent_id, .. } => {
+        RuntimeEvent::SubagentOwnershipCommitted {
+            subagent_id,
+            tool_call_id,
+            ..
+        } => {
+            record_tool_proposal_dependency(
+                transaction,
+                tool_call_id,
+                envelope.attempt_id.as_ref(),
+                envelope.turn_id.as_ref(),
+                runtime_event_dependency_name(&envelope.event),
+            )?;
             // The durable identity of an ownership fact is canonical: the
             // EventId must be the deterministic `subagent-committed-event:{id}`
             // derived from the very SubagentId embedded in the payload. A
@@ -3647,6 +4073,13 @@ fn validate_event_reference(
                     tool_call_id, tool.tool_call_id
                 )));
             }
+            record_tool_proposal_dependency(
+                transaction,
+                tool_call_id,
+                envelope.attempt_id.as_ref(),
+                envelope.turn_id.as_ref(),
+                runtime_event_dependency_name(&envelope.event),
+            )?;
         }
         RuntimeEvent::CompactionCompleted {
             generation,
@@ -3718,6 +4151,7 @@ fn validate_event_reference(
                 )));
             };
             let snapshot: RequestSnapshot = decode(&json, "request-start snapshot")?;
+            validate_snapshot_identity(&snapshot)?;
             if snapshot.request_id != *request_id {
                 return Err(ConversationStoreError::InvalidReference(format!(
                     "request-start snapshot identity does not match {request_id}"
@@ -3879,6 +4313,13 @@ fn validate_snapshot_identity(snapshot: &RequestSnapshot) -> Result<(), Conversa
     if snapshot.request_id != derived {
         return Err(ConversationStoreError::InvalidReference(format!(
             "Request Snapshot identity {} disagrees with its RequestIdentity-derived id {derived}",
+            snapshot.request_id
+        )));
+    }
+    let derived_message = snapshot.identity.provisional_message_id();
+    if snapshot.provisional_message_id != derived_message {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "Request Snapshot {} provisional message identity disagrees with its RequestIdentity-derived id {derived_message}",
             snapshot.request_id
         )));
     }
