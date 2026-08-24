@@ -133,15 +133,20 @@ former case.
 
 The failure is persistent runtime authority even while the conversation is
 inactive. Installing the runtime callback replays failures already retained
-by the retirement registry; the callback latches the first failure under the
-runtime coordinator lock and an inactive runtime enters the explicit failure
-drain lifecycle. Activation uses that same lock, so a failure ordered first
-cannot be followed by `Inactive -> Running`; if activation orders first, the
-callback immediately transitions the running runtime into drain before later
-ordinary admission. A ready-at-reload failure is therefore returned
-synchronously as `PostPublicationSettlementFailed`, while a failure that only
-becomes ready after a legitimate background lease settles fences the already
-completed reload asynchronously.
+by the retirement registry. MCP PhysicalSettlement failure publication and
+the `ConversationLifecycle` transition to `Draining` are one runtime
+coordinator linearization point: the callback's single coordinator critical
+section records the persistent latch, performs any current-attempt
+cancellation arbitration, and closes healthy admission before releasing the
+coordinator lock. The latch is diagnostic/admission evidence retained by the
+coordinator; `ConversationLifecycle` remains the generic gate for semantic
+work. There is no interval after the authoritative failure transition in
+which the runtime is still healthily `Running`. If activation orders first,
+the same failure operation immediately transitions the running runtime into
+drain before later ordinary admission. A ready-at-reload failure is therefore
+returned synchronously as `PostPublicationSettlementFailed`, while a failure
+that only becomes ready after a legitimate background lease settles uses the
+same atomic failure-drain transition asynchronously.
 
 `wait_close_attempt()` is the complete terminal-publication boundary, not a
 notification that the underlying `close()` future merely returned. The close

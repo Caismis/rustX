@@ -876,10 +876,19 @@ hold attempt leases and never block a capability commit.
   generation; it is not converted into a pre-publication reload failure.
 - MCP `PhysicalSettlement` failure is persistent runtime fencing authority even
   while the runtime is inactive. Retirement-registry callback installation
-  replays pre-existing failures; the runtime latches the failure under the
-  coordinator lock, enters the explicit failure-drain lifecycle, and refuses
-  any later healthy activation. Failure publication and activation therefore
-  have one deterministic total order. A generation's close completion becomes
+  replays pre-existing failures. MCP PhysicalSettlement failure publication
+  and the `ConversationLifecycle` transition to `Draining` are one runtime
+  coordinator linearization point: the callback's single coordinator
+  critical section publishes the persistent failure latch, performs current-
+  attempt cancellation arbitration, and closes healthy lifecycle admission
+  before releasing the coordinator lock. The latch is diagnostic/admission
+  evidence retained by the coordinator; `ConversationLifecycle` remains the
+  generic gate for inbound, attempt, compaction, reload, interaction,
+  background, and subagent semantic ownership. There is no interval after
+  the authoritative failure transition in which the runtime is still
+  healthily `Running`. Activation therefore cannot reopen a failure-fenced
+  runtime, and a background-late settlement failure uses the same atomic
+  failure-drain transition. A generation's close completion becomes
   observable only after its generation state, registry evidence, fencing
   callback, and lifecycle-admission release are complete, so a ready reload
   cannot return `Ok` before a post-publication retirement failure is visible.
@@ -2318,10 +2327,11 @@ The frozen invariants:
   therefore publishes no `ConversationObservation` at all.
   The one terminal exception is an authoritative MCP physical-settlement
   failure replayed or published before activation. It is not healthy semantic
-  work: the runtime latches the evidence under the coordinator lock, explicitly
-  transitions `Inactive -> Draining`, and starts the normal drain supervisor
-  for final reporting. `activate()` then observes `Draining` (or the persistent
-  failure latch) and cannot open ordinary admission.
+  work: one coordinator critical section publishes the persistent failure
+  evidence, explicitly transitions `Inactive -> Draining`, and
+  starts the normal drain supervisor for final reporting. `activate()`
+  then observes `Draining` (or the persistent failure latch) and
+  cannot open ordinary admission.
 - **Runtime drain is a stronger contract than cancellation.** The one public
   `ConversationRuntime::shutdown()` operation linearizes `Running -> Draining`
   under the coordinator lock shared with inbound acceptance and attempt

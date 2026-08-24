@@ -128,6 +128,16 @@ updates, and attempt admission. Background ownership transfer and capability
 revision commit use the same lifecycle at their native registry/coordinator
 boundaries; they cannot commit new semantic work after drain wins.
 
+An authoritative MCP `PhysicalSettlement` failure uses that same coordinator
+critical section: failure publication and the `ConversationLifecycle`
+transition to `Draining` are one runtime coordinator linearization point. The
+persistent MCP failure latch is retained as diagnostic/admission evidence;
+`ConversationLifecycle` remains the generic gate that closes inbound,
+attempt, compaction, reload, interaction, background, and subagent semantic
+ownership. A background-late settlement failure follows this identical
+failure-drain transition, so there is no post-publication interval in which a
+runtime is still healthily `Running`.
+
 `ConversationRuntime::shutdown()` is the one public semantic shutdown
 operation. It is asynchronous and idempotent: concurrent and repeated calls
 join one drain completion, and success means `Quiescent`, not merely that a
@@ -1192,14 +1202,15 @@ settlement failure while preserving the new logical authority. It is not
 reported as though publication had failed.
 
 This evidence is persistent runtime fencing authority even before activation.
-The runtime callback replays failures already in the retirement registry and
-latches them under the coordinator admission lock; an inactive runtime enters
-the explicit failure-drain lifecycle, so `activate()` cannot later open
-healthy admission. Failure publication and activation therefore have one
-deterministic lock order. The MCP generation close task marks completion only
-after generation state, registry failure evidence, callback fencing, and
-lifecycle-admission release are published. `wait_close_attempt()` thus waits
-for the complete terminal result. A ready retirement failure is reported
+The runtime callback replays failures already in the retirement registry
+through one coordinator critical section that publishes the latch and closes
+the lifecycle admission together; an inactive runtime enters the explicit
+failure-drain lifecycle, so `activate()` cannot later open healthy
+admission. Failure publication and lifecycle closure therefore have one
+deterministic linearization point. The MCP generation close task marks
+completion only after generation state, registry failure evidence, callback
+fencing, and lifecycle-admission release are published. `wait_close_attempt()`
+thus waits for the complete terminal result. A ready retirement failure is reported
 synchronously as `PostPublicationSettlementFailed`; a later background-driven
 failure fences the runtime asynchronously without changing an already returned
 reload result.

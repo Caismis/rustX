@@ -44,6 +44,10 @@ pub const CANCEL_FILE_ENV: &str = "RUSTX_M7_FIXTURE_CANCEL_FILE";
 /// The environment variable selecting the paginated `tools/list` catalog
 /// page size (self-spawned stdio fixtures).
 pub const PAGE_SIZE_ENV: &str = "RUSTX_M7_FIXTURE_PAGE_SIZE";
+/// The environment variable prefixing fixture tool names. This is primarily
+/// a multi-server test seam: MCP tool names are model-facing and therefore
+/// must be unique across simultaneously active fixture servers.
+pub const TOOL_PREFIX_ENV: &str = "RUSTX_M7_FIXTURE_TOOL_PREFIX";
 /// The environment variable narrowing the protocol revisions the fixture
 /// server supports, as a comma-separated list (self-spawned stdio fixtures).
 ///
@@ -97,6 +101,7 @@ impl FixtureServer {
             page_size: std::env::var(PAGE_SIZE_ENV)
                 .ok()
                 .and_then(|value| value.parse::<usize>().ok()),
+            tool_prefix: std::env::var(TOOL_PREFIX_ENV).ok(),
             supported_versions: std::env::var(PROTOCOL_VERSIONS_ENV)
                 .ok()
                 .map(|value| parse_protocol_versions(&value)),
@@ -131,22 +136,36 @@ impl FixtureServer {
         if let Some(page_size) = self.page_size {
             let _ = page_size;
             return vec![
-                fixture_tool_named("alpha"),
-                fixture_tool_named("beta"),
-                fixture_tool_named("delta"),
-                fixture_tool_named("echo"),
-                fixture_tool_named("gamma"),
+                self.fixture_tool_named("alpha"),
+                self.fixture_tool_named("beta"),
+                self.fixture_tool_named("delta"),
+                self.fixture_tool_named("echo"),
+                self.fixture_tool_named("gamma"),
             ];
         }
         if self.changed.load(Ordering::Acquire) {
-            vec![fixture_tool_named("echo"), fixture_tool_named("new_tool")]
+            vec![
+                self.fixture_tool_named("echo"),
+                self.fixture_tool_named("new_tool"),
+            ]
         } else {
             vec![
-                fixture_tool_named("echo"),
-                fixture_tool_named("mutate"),
-                fixture_tool_named("slow"),
+                self.fixture_tool_named("echo"),
+                self.fixture_tool_named("mutate"),
+                self.fixture_tool_named("slow"),
             ]
         }
+    }
+
+    fn fixture_tool_named(&self, name: &str) -> Tool {
+        let name = self.tool_name(name);
+        fixture_tool_named(&name)
+    }
+
+    fn tool_name(&self, name: &str) -> String {
+        self.tool_prefix
+            .as_deref()
+            .map_or_else(|| name.to_owned(), |prefix| format!("{prefix}{name}"))
     }
 }
 
@@ -173,6 +192,8 @@ pub struct FixtureServer {
     /// When set, the exact protocol revisions this server supports; `None`
     /// means every revision the SDK knows.
     pub supported_versions: Option<Vec<ProtocolVersion>>,
+    /// Optional prefix applied to model-facing fixture tool names.
+    pub tool_prefix: Option<String>,
     /// The number of `subscriptions/listen` streams this server has accepted.
     ///
     /// A client that installed more than one invalidation mechanism per
@@ -305,8 +326,11 @@ impl ServerHandler for FixtureServer {
         let cancel_observed_file = self.cancel_observed_file.clone();
         let result_bytes = self.result_bytes;
         let result_block_bytes = self.result_block_bytes.clone();
+        let echo_name = self.tool_name("echo");
+        let mutate_name = self.tool_name("mutate");
+        let slow_name = self.tool_name("slow");
         async move {
-            if request.name == "echo" {
+            if request.name == echo_name {
                 let blocks = result_block_bytes.map_or_else(
                     || {
                         vec![ContentBlock::text(result_bytes.map_or_else(
@@ -322,7 +346,7 @@ impl ServerHandler for FixtureServer {
                     },
                 );
                 Ok(CallToolResult::success(blocks).into())
-            } else if request.name == "mutate" {
+            } else if request.name == mutate_name {
                 changed.store(true, Ordering::Release);
                 if let Some(token) = context.meta.get_progress_token() {
                     context
@@ -363,7 +387,7 @@ impl ServerHandler for FixtureServer {
                         })?;
                 }
                 Ok(CallToolResult::success(vec![ContentBlock::text("fixture changed")]).into())
-            } else if request.name == "slow" {
+            } else if request.name == slow_name {
                 if let Some(token) = context.meta.get_progress_token() {
                     context
                         .peer
