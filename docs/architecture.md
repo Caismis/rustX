@@ -745,8 +745,8 @@ within the ordered `AssistantContentBlock[]` of the message being assembled.
 Interleaved text, reasoning, refusal, tool-call, and provider
 continuation-state streaming therefore assembles unambiguously without
 exposing any provider block id type. Refusal streams as refusal
-(`RefusalDelta` / `AssistantRefusalDelta`) and assembles into
-`AssistantContentBlock::Refusal`, never into plain text. `ToolCallStarted`
+(`ModelEvent::RefusalDelta`, published as a `RefusalSuffix` publication frame)
+and assembles into `AssistantContentBlock::Refusal`, never into plain text. `ToolCallStarted`
 carries only the data known at start (`ToolCallStart`: call id, tool id,
 name); raw argument fragments stream via `ToolCallArgumentsDelta`, and the
 fully assembled `ToolCall` is emitted only at `ToolCallCompleted`.
@@ -4335,7 +4335,17 @@ append must commit before the event is published to external subscribers. A
 failed required terminal append publishes neither the terminal event nor a
 synthetic replacement; the owning runtime reports the durable failure.
 
-Partial model deltas are execution facts. A canonical `AssistantMessageBlock` is committed only when a complete model response has been assembled. The model plane communicates through the normalized `ModelEvent` streaming protocol, which is an adapter-to-kernel fact stream and is never inserted into the canonical conversation history; the agent kernel assembles one `AssistantMessageBlock` from it.
+A canonical `AssistantMessageBlock` is committed only when a complete model
+response has been assembled. The model plane communicates through the
+normalized `ModelEvent` streaming protocol, which is an adapter-to-kernel fact
+stream and is never inserted into the canonical conversation history; the
+agent kernel assembles one `AssistantMessageBlock` from it.
+
+Partial model deltas are **not** Event Journal facts. They belong to the
+durable publication plane described in section 6.1, which owns the user-facing
+release contract and its own bounded write policy. The Event Journal keeps the
+low-frequency recovery-significant semantic facts only, so its size is
+O(execution facts) rather than O(provider deltas).
 
 Normally exactly one terminal runtime event settles an attempt (see section
 2.2). If its required append fails, the attempt has a typed settlement
@@ -4358,6 +4368,168 @@ ConversationStore transaction so publication never outruns its authority.
 Successful publication does not add the committed event to an attempt-local
 trace: the observer is a live projection seam, while the durable Event
 Journal remains the historical authority.
+
+## 6.1 Durable user-facing publication (FND-03 / Issue #108)
+
+Publication durability is a **separate plane** from provider outcome and from
+canonical conversation acceptance. It exists to hold one user-facing contract:
+
+> No semantic output is released to a user-facing Runtime Client before rustX
+> has durably committed that publication.
+
+### 6.1.1 Three linearization points
+
+Any request that emits user-facing model output has three distinct commit
+points, owned by three distinct planes:
+
+```text
+P — Provider outcome         ModelRequestCompleted durable   (Event Journal)
+U — Publication outcome      final frame + terminal marker   (publication plane)
+C — Conversation acceptance  canonical Assistant durable     (Message Ledger)
+```
+
+The required commit ordering is:
+
+```text
+P < U < C
+```
+
+and the durable store — not only Agent Loop control flow — enforces the
+implication:
+
+```text
+C => U => P
+```
+
+P and U are deliberately never combined into one transaction. "The provider
+finished" and "rustX committed this output for release" are different facts,
+and a crash between them must stay distinguishable. Likewise
+`ModelRequestCompleted` is never merged with the Assistant commit: provider
+completion remains an external execution fact even when canonicalization later
+fails.
+
+### 6.1.2 Pipeline
+
+Provider chunk size is not the publication unit:
+
+```text
+Provider ModelEvent delta
+  -> in-memory assembler            (canonical message assembly)
+  -> bounded publication coalescer  (bytes / latency / structure / terminal)
+  -> typed publication frame
+  -> durable publication staging
+  -> user-facing release
+```
+
+The coalescer (`src/publication/coalescer.rs`) flushes on a bounded
+deterministic policy: a maximum byte threshold, a maximum latency measured
+through an injected `PublicationClock`, a structural boundary (a tool-call
+proposal start or completion), or the stream terminal. Deterministic tests
+install a manually advanced clock; no sleep decides a flush.
+
+### 6.1.3 The U transaction
+
+There is deliberately no "write the final frame, publish, then mark the stream
+complete" sequence to crash inside. When P has committed and provider
+completion is structurally accepted, the remaining publication payload and the
+publication terminal marker commit in **one** transaction; only then is the
+final buffered payload released. When no payload remains, a terminal-only
+frame still carries the terminal transition, so nothing visible is delayed
+that does not exist.
+
+### 6.1.4 Three mutually exclusive settlements
+
+One publication stream settles exactly once:
+
+```text
+Canonical                   U reached, C reached — the Ledger is the authority
+UnacceptedPublicationAudit  U reached, C never   — complete output, never accepted
+IncompletePublicationAudit  U never reached      — publication has no durable terminal
+```
+
+Incomplete is defined on the **publication** boundary, never the provider
+boundary:
+
+> Incomplete Publication means user-facing publication did not reach its own
+> durable terminal boundary. It does not imply that the provider necessarily
+> failed to reach transport termination.
+
+So a stream whose `ModelRequestCompleted` is durable but whose U never
+committed is Incomplete, and a structural `assembler.finish()` rejection after
+frames were already released is Incomplete (no P exists at all).
+
+Once either audit commits, canonical Assistant acceptance of that stream is
+permanently forbidden, and once canonical acceptance commits, no audit may be
+created for it. The canonical transition validates that the exact stream is
+publication-complete, appends the Ledger fact, advances the Surface, records
+`AssistantMessageCommitted`, and clears the stream's publication staging — all
+in one transaction.
+
+### 6.1.5 Durable lifecycle staging versus immutable audit
+
+While a stream is in flight, its frames are **transient lifecycle staging**.
+Settlement removes that staging in both directions: canonical acceptance
+deletes it, and audit terminalization consolidates it into one bounded
+immutable audit object. A stream that staged ten thousand frames therefore
+leaves either nothing or one bounded record, never O(number-of-frames)
+permanent history.
+
+### 6.1.6 Audit semantics
+
+A publication audit records the semantic output rustX durably committed **for
+release**. It is an upper bound on what may have been displayed and never
+proof of perception; rustX adds no Runtime Client ACK protocol.
+
+A publication audit never enters:
+
+- the Message Ledger as an Assistant conversation fact;
+- the active Surface;
+- a `RequestSnapshot` model input;
+- a tree/fork/clone seed;
+- any future `ModelRequest` context.
+
+### 6.1.7 Model-proposed tool calls versus Tool Plane execution
+
+A tool call appearing in a publication frame or audit is only a **model
+proposal**. The vocabulary names it so (`ProposedToolCallStarted`,
+`ProposedToolCallArgumentsSuffix`, `ProposedToolCallCompleted`), and the
+durable store enforces the hard invariant:
+
+> No tool proposal from an Incomplete or Unaccepted publication may have a
+> dependent `ToolExecutionStarted`, `ToolResult`, or side-effect
+> authorization.
+
+Transcript and UI consumers therefore distinguish a released proposal from a
+real Tool Plane invocation fact by which plane it came from.
+
+### 6.1.8 Request-pinned resource generation
+
+A publication stream is pinned to the exact attempt, turn, request, and
+provisional message identity that opened it. FND-01 (Issue #106) owns resource
+loading and reload; this plane preserves that boundary:
+
+- external edits to project instructions, Skills, or extension Tool
+  configuration during streaming cannot alter the in-flight provider request,
+  the model Tool schemas, preflight authority, publication classification, or
+  the later canonical Assistant of that stream;
+- the public reload operation returns `Busy` while the attempt owns the
+  session; it never aborts or splices a new generation into publication;
+- after the attempt ends, a successful reload may affect a later admitted
+  attempt only;
+- recovery classifies P/U/C and tool-proposal state from rustX-owned durable
+  evidence, never by re-reading current resources or the current Tool registry.
+
+A process death followed by a cold reopen may load current resources for
+future requests, but the old stream's publication settlement stays tied to its
+frozen historical request.
+
+### 6.1.9 Intentional tail-latency tradeoff
+
+Any user-facing payload still buffered when provider completion is accepted
+waits for P to commit and then for U to commit before it is released. If no
+payload remains, a terminal-only U frame still commits but no visible text is
+delayed. This tail latency is the cost of correct ordering and honest audit
+classification, and it is intentional.
 
 ## 7. Recovery model
 
@@ -4439,6 +4611,7 @@ Startup may consume only rustX-owned durable authority:
 | Pending Inbound Inbox | accepted-but-unadopted work |
 | Request Snapshots | exact historical request reconstruction |
 | Event Journal (paged fold) | attempt/turn/model/tool/background lifecycle |
+| Publication streams (unsettled rows + staged frames) | publication settlement classification (FND-03) |
 
 Historical truth is never reconstructed from a Runtime Client snapshot or
 cache, TUI cards, current DSH state, current Skill discovery, current Agent
@@ -4514,6 +4687,7 @@ Per plane:
 | `append_canonical_batch_with_events` (tool-turn repair) | the turn is structurally incomplete; no recovered result exists | every issued call owns exactly one committed `ToolResult`; the turn can form a valid later model request |
 | `append_event(AttemptFailed { RestartInterrupted })` | the attempt is durably non-terminal | the attempt is absorbing; a second reconciliation is refused by the durable lifecycle |
 | `accept_inbound_with_event(terminal notification, BackgroundTerminalPublished)` | no model-visible terminal exists; recovery owns publication | the notification and the terminal fact both exist, exactly once |
+| `terminalize_publication_audit` | a publication stream is unsettled staging | the stream holds one bounded immutable audit, its staging rows are gone, and canonical acceptance of it is permanently forbidden |
 
 Recovery-generated canonical facts carry **no** attempt or turn identity: they
 are facts of the startup recovery phase, never retroactive claims about what
@@ -4527,6 +4701,32 @@ holds two concurrently non-terminal attempts: that contradicts the
 one-active-attempt admission invariant, so recovery reports it instead of
 settling whichever attempt sorted first and silently leaving the other
 unresolved.
+
+### 7.5.1 Publication settlement classification (FND-03 / Issue #108)
+
+Recovery reconciles publication staging without consulting the current
+provider or workspace. The classification is entirely durable:
+
+```text
+staging + no U   -> IncompletePublicationAudit
+U + no C         -> UnacceptedPublicationAudit
+C                -> canonical authority; staging must not survive
+```
+
+The audit kind is derived by the durable store from the P/U evidence alone, so
+no control-flow path — live settlement or recovery — can mislabel an
+Incomplete publication as Unaccepted or the reverse. Terminalization
+consolidates the transient frames into one bounded immutable audit and removes
+the staging rows, so a stream that staged thousands of frames leaves one
+bounded object behind.
+
+Publication settlement runs **before** tool-turn repair and the attempt
+terminal, so a crash inside the remaining reconciliation still leaves a state
+the next startup classifies exactly as truthfully (see section 7.11).
+
+An audit is never a canonical Assistant message: recovery produces no Ledger
+row, no Surface advance, and no model-visible context from it. Any tool
+proposal it records may never acquire a dependent Tool Plane execution fact.
 
 ### 7.6 Terminal uniqueness and repeated-restart idempotence
 

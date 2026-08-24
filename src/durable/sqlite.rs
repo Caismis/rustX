@@ -1,8 +1,9 @@
 //! `SQLite` implementation of the semantic conversation durability contract.
 //!
-//! One database contains five deliberately separate authority domains:
+//! One database contains six deliberately separate authority domains:
 //! Pending Inbound, the append-only Message Ledger, immutable Surface
-//! operations, immutable Request Snapshots, and the append-only Event Journal.
+//! operations, immutable Request Snapshots, the append-only Event Journal, and
+//! the durable publication plane (Issue #108).
 //! The tables share transactions where rustX needs one semantic linearization
 //! point, but no table is a serialized `ConversationRecord` or transcript.
 

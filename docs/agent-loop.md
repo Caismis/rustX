@@ -13,6 +13,10 @@ The loop (`src/agent`) executes one attempt to its single terminal outcome:
   normally one committed terminal event)
 - turn lifecycle (one model response plus its tool calls and results)
 - canonical `ModelEvent` stream consumption, validation, and message assembly
+- the durable publication stream of every model request (Issue #108): opening
+  it, feeding the bounded coalescer, committing frames before releasing them,
+  committing the publication terminal (U) after the provider outcome (P), and
+  settling the stream exactly once as canonical, unaccepted, or incomplete
 - tool resolution and tool execution (in deterministic block order)
 - canonical continuation state retention and propagation
 - safe-boundary inbound mailbox consumption (one finite drain per boundary)
@@ -811,6 +815,47 @@ These are absent by decision, not as TODO compatibility hooks:
 - **Subagent lifecycle observation** — Issue #60 owns the native subagent
   runtime; the observation seam follows the owner.
 - **`TurnStoppingPolicy` / forced continuation** — no native owner exists.
+
+## 4.4 The publication boundary of a model turn (FND-03 / Issue #108)
+
+Streaming output is released through the durable publication plane, never
+through the Event Journal. One model turn traverses three distinct
+linearization points in a fixed order:
+
+```text
+provider stream begins
+    ↓ open_publication_stream          (frozen attempt/turn/request/message identity)
+provider deltas
+    ↓ assembler.push  +  coalescer     (bytes / latency / structure)
+    ↓ stage_publication_frames         durable staging commit
+    ↓ release to the observation seam  ← never before its own commit
+provider terminal
+    ↓ assembler.finish()               structural acceptance; a rejection here is Incomplete
+    ↓ ModelRequestCompleted            P
+    ↓ commit_publication_terminal      U — final frame + marker, one transaction
+    ↓ release the final buffered payload
+    ↓ ToolRegistry preflight           a rejection here leaves the stream Unaccepted
+    ↓ commit_canonical_publication     C — Ledger + Surface + event + staging clear
+```
+
+`run_turn` is the one mutual-exclusion point of settlement. A turn that
+reached canonical acceptance already cleared its stream inside the compound C
+transition; every other exit — cancellation, model failure, structural
+assembly rejection, preflight rejection, a durable failure — leaves the stream
+open and it terminalizes as an audit whose kind the durable store derives from
+the P/U evidence. Canonical acceptance and audit terminalization can therefore
+never both happen for one stream.
+
+An overflow retry starts a second provider request inside one turn. The
+abandoned request's stream never reached canonical acceptance, so it settles
+as an audit before the retry's stream opens: exactly one publication stream is
+open at a time.
+
+A publication-plane failure — a stream that cannot open, frames that cannot
+stage before release, a terminal that cannot commit, an audit that cannot
+terminalize — is a durable-authority failure like any other. The attempt
+reports `DurableFailureKind::Publication` and never returns to a healthy
+durability state.
 
 ## 5. Usage
 

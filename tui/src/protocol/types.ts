@@ -742,6 +742,43 @@ export interface RuntimeClientSnapshot {
 // Events
 // ---------------------------------------------------------------------------
 
+/**
+ * One consolidated block of a settled publication audit.
+ *
+ * `proposed_tool_call` is a model proposal the runtime committed for release.
+ * It is never evidence that the call was authorized, started, or executed.
+ */
+export type PublicationAuditBlock =
+  | { kind: "text"; block_index: ContentBlockIndex; text: string }
+  | { kind: "reasoning"; block_index: ContentBlockIndex; text: string }
+  | { kind: "refusal"; block_index: ContentBlockIndex; text: string }
+  | {
+      kind: "proposed_tool_call";
+      block_index: ContentBlockIndex;
+      call_id: ToolCallId;
+      tool_id: ToolId;
+      name: string;
+      /** The released raw argument text, exactly as far as it was released. */
+      arguments: string;
+      /** Whether the proposal finished assembling before the stream ended. */
+      complete: boolean;
+    };
+
+/** Why a publication stream settled without canonical acceptance. */
+export type PublicationAuditKind = "unaccepted" | "incomplete";
+
+/** The bounded immutable audit of one settled publication stream. */
+export interface PublicationAudit {
+  stream_id: string;
+  attempt_id: AttemptId;
+  turn_id: string;
+  request_id: string;
+  message_id: MessageId;
+  kind: PublicationAuditKind;
+  content: PublicationAuditBlock[];
+  settled_at: string;
+}
+
 export type RuntimeClientEvent =
   | {
       type: "attempt_started";
@@ -841,6 +878,23 @@ export type RuntimeClientEvent =
       message_id: MessageId;
       block_index: ContentBlockIndex;
       call: ToolCall;
+    }
+  | {
+      /**
+       * The in-flight Assistant publication settled without ever becoming a
+       * canonical Assistant message (Issue #108).
+       *
+       * The carried audit is what the runtime durably committed **for
+       * release**: an upper bound on what this client may have displayed,
+       * never proof that anything was perceived. Its `proposed_tool_call`
+       * entries are model proposals that were never authorized and never
+       * executed, so they must never be presented as the
+       * `tool_execution_started` / `tool_execution_settled` Tool Plane facts,
+       * and the audit must never be folded into conversation history.
+       */
+      type: "assistant_publication_settled";
+      attempt_id: AttemptId;
+      audit: PublicationAudit;
     }
   | {
       type: "tool_execution_started";
@@ -1182,6 +1236,7 @@ export function isKnownRuntimeClientEvent(
     case "tool_call_started":
     case "tool_call_arguments_delta":
     case "tool_call_assembled":
+    case "assistant_publication_settled":
     case "tool_execution_started":
     case "tool_execution_progress":
     case "tool_execution_settled":
