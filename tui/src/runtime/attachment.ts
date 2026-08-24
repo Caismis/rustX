@@ -210,6 +210,21 @@ export class RuntimeClientAttachment {
     return result.context;
   }
 
+  /** Atomically reloads resources for future admitted attempts. */
+  async reloadResources(): Promise<{
+    resourceRevision: number;
+    capabilityRevision: number;
+  }> {
+    const result = await this.#connection.request({ method: "reload_resources" });
+    if (result.type !== "resources_reloaded") {
+      throw new Error(`reload_resources returned ${result.type}`);
+    }
+    return {
+      resourceRevision: result.resource_revision,
+      capabilityRevision: result.capability_revision,
+    };
+  }
+
   /** Answers one runtime-owned approval interaction. */
   async respondInteraction(
     interactionId: InteractionId,

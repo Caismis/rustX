@@ -728,27 +728,16 @@ struct Candidate {
     summary_input_tokens: u64,
 }
 
-/// The compactable region: the earliest contiguous run of non-`System`
-/// active messages, as an inclusive `(first, last)` index pair.
-///
-/// The narrow interim rule of Issue #54 is that trusted `System` content is
-/// never replaced by a runtime summary. A later `System` message therefore
-/// bounds the *current* compactable run at that point, but it never pins
-/// older conversational messages (they are compactable in the run before it)
-/// and it never resurrects retired Surface history. The request-time
-/// Effective System Prompt is assembled before this engine and is carried
-/// through compaction unchanged.
+/// The full canonical active prefix, as an inclusive `(first, last)` index
+/// pair. System authority is request-time state and is never stored in this
+/// conversational sequence.
 fn compactable_run(index: &StructuralIndex) -> Result<(usize, usize), ContextError> {
-    let systems = index.system_positions();
-    let first = (0..index.len())
-        .find(|position| !systems.contains(position))
-        .ok_or_else(|| no_progress("the active surface holds no compactable message"))?;
-    let run_end = systems
-        .iter()
-        .copied()
-        .find(|position| *position > first)
-        .map_or(index.len() - 1, |position| position - 1);
-    Ok((first, run_end))
+    if index.is_empty() {
+        return Err(no_progress(
+            "the active surface holds no compactable message",
+        ));
+    }
+    Ok((0, index.len() - 1))
 }
 
 /// The smallest span end the continuation constraint requires.

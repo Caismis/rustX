@@ -20,7 +20,7 @@ use crate::runtime::identity::{
 };
 
 /// The ABI version of the native context contribution contract.
-pub const CONTEXT_COMPATIBILITY_ABI_VERSION: u32 = 2;
+pub const CONTEXT_COMPATIBILITY_ABI_VERSION: u32 = 3;
 
 /// The finite user-context semantic lanes owned by rustX.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -44,8 +44,6 @@ pub enum UserContextLane {
     /// workspace/extension and Agent Status lanes describe the
     /// *current* step.
     RuntimeToolObservation,
-    /// Workspace/project instructions, with one semantic owner.
-    WorkspaceInstructions,
     /// Generic certified-extension/environment context.
     ExtensionEnvironment,
     /// Native runtime/Agent Status context.
@@ -54,10 +52,9 @@ pub enum UserContextLane {
 
 impl UserContextLane {
     /// The contract's deterministic total order.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 4] = [
         Self::ClaimedInbound,
         Self::RuntimeToolObservation,
-        Self::WorkspaceInstructions,
         Self::ExtensionEnvironment,
         Self::AgentStatus,
     ];
@@ -68,7 +65,6 @@ impl UserContextLane {
         match self {
             Self::ClaimedInbound => "claimed_inbound",
             Self::RuntimeToolObservation => "runtime_tool_observation",
-            Self::WorkspaceInstructions => "workspace_instructions",
             Self::ExtensionEnvironment => "extension_environment",
             Self::AgentStatus => "agent_status",
         }
@@ -83,6 +79,9 @@ pub enum SystemSectionLane {
     CoreRuntimeIdentity,
     /// Agent profile/persona. Single-owner and native-reserved.
     AgentProfile,
+    /// Runtime-loaded workspace/project instructions. Single-owner and
+    /// native-reserved; never canonical conversation history.
+    WorkspaceInstructions,
     /// Certified-extension sections, ordered by logical contributor identity.
     CertifiedExtension,
     /// Native capability guidance sections, including the request-time Skill
@@ -92,9 +91,10 @@ pub enum SystemSectionLane {
 
 impl SystemSectionLane {
     /// The contract's deterministic total order.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::CoreRuntimeIdentity,
         Self::AgentProfile,
+        Self::WorkspaceInstructions,
         Self::CertifiedExtension,
         Self::NativeCapabilityGuidance,
     ];
@@ -105,6 +105,7 @@ impl SystemSectionLane {
         match self {
             Self::CoreRuntimeIdentity => "core_runtime_identity",
             Self::AgentProfile => "agent_profile",
+            Self::WorkspaceInstructions => "workspace_instructions",
             Self::CertifiedExtension => "certified_extension",
             Self::NativeCapabilityGuidance => "native_capability_guidance",
         }
@@ -117,13 +118,11 @@ impl SystemSectionLane {
 pub enum ContextProposalKind {
     /// A bounded model-visible canonical User context fact.
     UserMessage,
-    /// A bounded request-time effective-system-prompt section.
-    SystemPromptSection,
 }
 
 impl ContextProposalKind {
     /// Every proposal kind accepted by the core assembly contract.
-    pub const ALL: [Self; 2] = [Self::UserMessage, Self::SystemPromptSection];
+    pub const ALL: [Self; 1] = [Self::UserMessage];
 }
 
 /// The finite immutable input visible to one contributor invocation.
@@ -255,11 +254,6 @@ fn user_semantics(
 ) -> Option<(UserContextLane, UserSource, ContextKind)> {
     match identity {
         ContextContributorIdentity::Native(owner) => match owner {
-            NativeContextContributor::WorkspaceInstructions => Some((
-                UserContextLane::WorkspaceInstructions,
-                UserSource::Runtime,
-                ContextKind::WorkspaceInstructions,
-            )),
             NativeContextContributor::AgentStatus => Some((
                 UserContextLane::AgentStatus,
                 UserSource::Runtime,
@@ -270,7 +264,8 @@ fn user_semantics(
                 UserSource::Runtime,
                 ContextKind::RuntimeToolObservation,
             )),
-            NativeContextContributor::SkillGuidance
+            NativeContextContributor::WorkspaceInstructions
+            | NativeContextContributor::SkillGuidance
             | NativeContextContributor::CoreSystemIdentity
             | NativeContextContributor::AgentProfile => None,
         },
@@ -304,23 +299,12 @@ pub struct UserMessageProposal {
     pub content: Vec<UserContentBlock>,
 }
 
-/// A transient request-time system-section proposal. Its family, identity,
-/// and ordering are supplied by the registered contributor, not by this
-/// value.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SystemPromptSectionProposal {
-    /// The section text before rustX's final deterministic rendering.
-    pub content: String,
-}
-
 /// One transient proposal returned by a contributor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ContextProposal {
     /// A normal model-visible canonical User context fact.
     UserMessage(UserMessageProposal),
-    /// A request-time effective-system-prompt section.
-    SystemPromptSection(SystemPromptSectionProposal),
 }
 
 impl ContextProposal {
@@ -329,7 +313,6 @@ impl ContextProposal {
     pub const fn kind(&self) -> ContextProposalKind {
         match self {
             Self::UserMessage(_) => ContextProposalKind::UserMessage,
-            Self::SystemPromptSection(_) => ContextProposalKind::SystemPromptSection,
         }
     }
 }
@@ -566,6 +549,7 @@ pub fn validate_user_message_proposal(
 struct RegisteredExtension {
     identity: CertifiedExtensionIdentity,
     generation: ContributorGeneration,
+    system_sections: Vec<String>,
     contributor: Arc<dyn ContextContributor>,
 }
 
@@ -636,9 +620,40 @@ impl ContextAssembly {
         self.extensions.push(RegisteredExtension {
             identity: identity.clone(),
             generation,
+            system_sections: Vec::new(),
             contributor,
         });
         Ok(identity)
+    }
+
+    /// Adds one immutable System section to a registered extension resource.
+    /// The section is copied into every [`ContextAssembly`] clone and is
+    /// therefore frozen by the owning Runtime Resource Snapshot. Dynamic
+    /// request-time contributors can publish only conversational User facts.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unknown extension, empty/oversized content, or
+    /// more than the bounded number of sections.
+    pub fn register_extension_system_section(
+        &mut self,
+        identity: &CertifiedExtensionIdentity,
+        content: impl Into<String>,
+    ) -> Result<(), ContextAssemblyError> {
+        let content = content.into();
+        validate_text(&content, "extension system section")?;
+        let registered = self
+            .extensions
+            .iter_mut()
+            .find(|registered| &registered.identity == identity)
+            .ok_or_else(|| {
+                ContextAssemblyError::UnregisteredContributor(identity.as_str().to_owned())
+            })?;
+        if registered.system_sections.len() >= MAX_PROPOSALS_PER_CONTRIBUTOR {
+            return Err(ContextAssemblyError::ProposalLimitExceeded);
+        }
+        registered.system_sections.push(content);
+        Ok(())
     }
 
     /// Returns the registered extension identities in canonical logical order.
@@ -657,6 +672,31 @@ impl ContextAssembly {
     #[must_use]
     pub fn compatibility_manifest() -> ContextCompatibilityManifest {
         ContextCompatibilityManifest::native()
+    }
+
+    /// Returns the exact resource-frozen System sections plus native values
+    /// for this generation. This path invokes no dynamic contributor and is
+    /// shared by primary request assembly and manual compaction accounting.
+    pub(crate) fn system_sections(
+        &self,
+        native: &NativeContextInput,
+    ) -> Result<Vec<AcceptedSystemSection>, ContextAssemblyError> {
+        let mut sections = native_system_sections(native)?;
+        for registered in &self.extensions {
+            for content in &registered.system_sections {
+                sections.push(AcceptedSystemSection {
+                    lane: SystemSectionLane::CertifiedExtension,
+                    contributor: registered.generation.identity.clone(),
+                    content: content.clone(),
+                });
+            }
+        }
+        sections.sort_by(|left, right| {
+            left.lane
+                .cmp(&right.lane)
+                .then_with(|| left.contributor.cmp(&right.contributor))
+        });
+        Ok(sections)
     }
 
     /// Resolves one deferred producer reference to a trusted contributor
@@ -717,7 +757,7 @@ impl ContextAssembly {
         deferred: &[DeferredContextProposal],
     ) -> Result<AcceptedContext, ContextAssemblyError> {
         let mut entries = Vec::new();
-        let mut native_sections = native_system_sections(native)?;
+        let mut native_sections = self.system_sections(native)?;
         let mut generations = vec![
             native
                 .workspace_instructions
@@ -773,12 +813,6 @@ impl ContextAssembly {
             generations.push(generation);
         }
 
-        if let Some(text) = &native.workspace_instructions {
-            entries.push(ContributionEntry::native_user(
-                NativeContextContributor::WorkspaceInstructions,
-                text.clone(),
-            )?);
-        }
         if let Some(text) = &native.agent_status {
             entries.push(ContributionEntry::native_user(
                 NativeContextContributor::AgentStatus,
@@ -810,14 +844,6 @@ impl ContextAssembly {
                             content: text,
                             phase: ContributionPhase::RequestTime,
                             sequence,
-                        });
-                    }
-                    ContextProposal::SystemPromptSection(section) => {
-                        validate_text(&section.content, "extension system section")?;
-                        native_sections.push(AcceptedSystemSection {
-                            lane: SystemSectionLane::CertifiedExtension,
-                            contributor: registered.generation.identity.clone(),
-                            content: section.content,
                         });
                     }
                 }
@@ -933,6 +959,14 @@ pub(crate) fn native_system_sections(
     native: &NativeContextInput,
 ) -> Result<Vec<AcceptedSystemSection>, ContextAssemblyError> {
     let mut sections = Vec::new();
+    if let Some(text) = &native.workspace_instructions {
+        validate_text(text, "workspace instructions")?;
+        sections.push(native_section(
+            SystemSectionLane::WorkspaceInstructions,
+            NativeContextContributor::WorkspaceInstructions,
+            text.clone(),
+        ));
+    }
     if let Some(text) = &native.skill_guidance {
         validate_text(text, "native Skill capability guidance")?;
         sections.push(native_section(
@@ -1015,21 +1049,16 @@ fn text_content(
     Ok(content.to_vec())
 }
 
-/// Renders the exact provider-neutral Effective System Prompt from active
-/// canonical System messages plus already-admitted request-time sections.
+/// Renders the exact provider-neutral Effective System Prompt from the
+/// already-admitted request-time sections. Canonical history has no System
+/// role and therefore cannot become executable instruction authority.
 #[must_use]
-pub fn render_effective_system_prompt(
-    messages: &[MessageBlock],
-    sections: &[AcceptedSystemSection],
-) -> String {
-    let mut parts = Vec::new();
-    for message in messages {
-        if let MessageBlock::System(system) = message {
-            parts.extend(system.content.iter().map(|text| text.text.clone()));
-        }
-    }
-    parts.extend(sections.iter().map(|section| section.content.clone()));
-    parts.join("\n\n")
+pub fn render_effective_system_prompt(sections: &[AcceptedSystemSection]) -> String {
+    sections
+        .iter()
+        .map(|section| section.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 #[cfg(test)]
@@ -1204,32 +1233,26 @@ mod tests {
     #[tokio::test]
     async fn system_sections_use_native_slots_and_stable_extension_order() {
         let mut assembly = ContextAssembly::new();
-        assembly
+        let zeta = assembly
             .register_extension(
                 "zeta.extension",
                 Some("package-v2".to_owned()),
-                Arc::new(|_: &ContributorInputSnapshot| {
-                    Ok(vec![ContextProposal::SystemPromptSection(
-                        SystemPromptSectionProposal {
-                            content: "zeta section".to_owned(),
-                        },
-                    )])
-                }),
+                Arc::new(|_: &ContributorInputSnapshot| Ok(Vec::<ContextProposal>::new())),
             )
             .expect("zeta extension");
         assembly
+            .register_extension_system_section(&zeta, "zeta section")
+            .expect("zeta section");
+        let alpha = assembly
             .register_extension(
                 "alpha.extension",
                 Some("package-v1".to_owned()),
-                Arc::new(|_: &ContributorInputSnapshot| {
-                    Ok(vec![ContextProposal::SystemPromptSection(
-                        SystemPromptSectionProposal {
-                            content: "alpha section".to_owned(),
-                        },
-                    )])
-                }),
+                Arc::new(|_: &ContributorInputSnapshot| Ok(Vec::<ContextProposal>::new())),
             )
             .expect("alpha extension");
+        assembly
+            .register_extension_system_section(&alpha, "alpha section")
+            .expect("alpha section");
 
         let accepted = assembly
             .assemble(
@@ -1237,6 +1260,7 @@ mod tests {
                 &NativeContextInput {
                     core_runtime_identity: Some("core identity".to_owned()),
                     agent_profile: Some("agent profile".to_owned()),
+                    workspace_instructions: Some("workspace".to_owned()),
                     skill_guidance: Some("skill catalog".to_owned()),
                     ..NativeContextInput::default()
                 },
@@ -1253,6 +1277,7 @@ mod tests {
             vec![
                 "core identity",
                 "agent profile",
+                "workspace",
                 "alpha section",
                 "zeta section",
                 "skill catalog"
@@ -1264,12 +1289,12 @@ mod tests {
         );
         assert!(accepted.user_messages.is_empty());
         assert_eq!(
-            accepted.system_sections[4].contributor,
+            accepted.system_sections[5].contributor,
             ContextContributorIdentity::Native(NativeContextContributor::SkillGuidance)
         );
         assert_eq!(
-            render_effective_system_prompt(&[], &accepted.system_sections),
-            "core identity\n\nagent profile\n\nalpha section\n\nzeta section\n\nskill catalog"
+            render_effective_system_prompt(&accepted.system_sections),
+            "core identity\n\nagent profile\n\nworkspace\n\nalpha section\n\nzeta section\n\nskill catalog"
         );
     }
 
@@ -1282,7 +1307,7 @@ mod tests {
         assert!(accepted.user_messages.is_empty());
         assert!(accepted.system_sections.is_empty());
         assert_eq!(
-            render_effective_system_prompt(&[], &accepted.system_sections),
+            render_effective_system_prompt(&accepted.system_sections),
             ""
         );
     }
@@ -1716,7 +1741,6 @@ mod tests {
             vec![
                 (ContextKind::RuntimeToolObservation, UserSource::Runtime),
                 (ContextKind::RuntimeToolObservation, UserSource::Runtime),
-                (ContextKind::WorkspaceInstructions, UserSource::Runtime),
                 (
                     ContextKind::ExtensionEnvironment,
                     extension_source("example.extension")
@@ -1734,33 +1758,37 @@ mod tests {
             vec![
                 "A1".to_owned(),
                 "A2".to_owned(),
-                "workspace".to_owned(),
                 "deferred extension".to_owned(),
                 "extension context".to_owned(),
                 "status".to_owned(),
             ]
         );
+        assert_eq!(
+            accepted
+                .system_sections
+                .iter()
+                .map(|section| section.content.as_str())
+                .collect::<Vec<_>>(),
+            vec!["workspace"]
+        );
     }
 
     /// The deferred seam carries User context only, so an admitted deferred
-    /// batch never contributes an effective-system-prompt section. Sections
-    /// come from the request-time contributor path alone.
+    /// batch never contributes an effective-system-prompt section. Extension
+    /// sections come only from the immutable resource registration.
     #[tokio::test]
     async fn deferred_context_never_reaches_the_effective_system_prompt() {
         let mut assembly = ContextAssembly::new();
-        assembly
+        let identity = assembly
             .register_extension(
                 "example.extension",
                 None,
-                Arc::new(|_: &ContributorInputSnapshot| {
-                    Ok(vec![ContextProposal::SystemPromptSection(
-                        SystemPromptSectionProposal {
-                            content: "request-time section".to_owned(),
-                        },
-                    )])
-                }),
+                Arc::new(|_: &ContributorInputSnapshot| Ok(Vec::<ContextProposal>::new())),
             )
             .expect("register extension");
+        assembly
+            .register_extension_system_section(&identity, "resource section")
+            .expect("resource section");
         let accepted = assembly
             .assemble(
                 &input(),
@@ -1781,12 +1809,12 @@ mod tests {
                 .iter()
                 .map(|section| section.content.as_str())
                 .collect::<Vec<_>>(),
-            vec!["core identity", "request-time section"],
-            "every section came from a request-time owner"
+            vec!["core identity", "resource section"],
+            "the extension section came from its immutable resource generation"
         );
         assert_eq!(
-            render_effective_system_prompt(&[], &accepted.system_sections),
-            "core identity\n\nrequest-time section",
+            render_effective_system_prompt(&accepted.system_sections),
+            "core identity\n\nresource section",
             "no deferred text reaches the Effective System Prompt"
         );
         assert_eq!(
@@ -1837,8 +1865,8 @@ mod tests {
     fn manifest_is_derived_from_contract_constants() {
         let manifest = ContextAssembly::compatibility_manifest();
         assert_eq!(
-            CONTEXT_COMPATIBILITY_ABI_VERSION, 2,
-            "moving Skill guidance out of canonical User context is a v2 ABI"
+            CONTEXT_COMPATIBILITY_ABI_VERSION, 3,
+            "resource-frozen extension System sections are a v3 ABI"
         );
         assert_eq!(manifest.user_context_lanes, UserContextLane::ALL);
         assert_eq!(manifest.system_section_lanes, SystemSectionLane::ALL);

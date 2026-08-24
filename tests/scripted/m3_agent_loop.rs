@@ -2487,7 +2487,6 @@ fn inbound_user(id: &str, text: &str, source: UserSource) -> UserMessageBlock {
 /// The message id of one canonical block.
 fn block_id(block: &MessageBlock) -> String {
     match block {
-        MessageBlock::System(system) => system.id.to_string(),
         MessageBlock::User(user) => user.id.to_string(),
         MessageBlock::Assistant(assistant) => assistant.id.to_string(),
         MessageBlock::Tool(tool) => tool.id.to_string(),

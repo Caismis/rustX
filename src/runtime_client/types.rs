@@ -54,7 +54,9 @@ use crate::message::types::UserContentBlock;
 use crate::model::catalog::ModelCatalogView;
 use crate::model::session::{SessionModelConfig, SessionModelView};
 use crate::runtime::identity::InteractionId;
-use crate::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolExecutionId};
+use crate::runtime::identity::{
+    AgentId, AttemptId, CapabilityRevision, ConversationId, MessageId, ToolExecutionId,
+};
 use crate::runtime::inbound::InboundSequence;
 use crate::runtime::interaction::InteractionResponse;
 use crate::runtime::types::ApprovalMode;
@@ -350,6 +352,11 @@ pub enum RuntimeClientRequest {
         /// Attachment-scoped request id.
         id: RequestId,
     },
+    /// Atomically reload the runtime-owned resource/capability generation.
+    ReloadResources {
+        /// Attachment-scoped request id.
+        id: RequestId,
+    },
     /// Answer one live native interaction through the runtime-owned
     /// coordinator. The response has no tool-argument replacement channel.
     InteractionRespond {
@@ -550,6 +557,7 @@ impl RuntimeClientRequest {
             | Self::SubmitInbound { id, .. }
             | Self::CancelCurrentAttempt { id, .. }
             | Self::CompactContext { id, .. }
+            | Self::ReloadResources { id, .. }
             | Self::InteractionRespond { id, .. }
             | Self::SnapshotGet { id, .. }
             | Self::SubscribeEvents { id, .. }
@@ -584,6 +592,7 @@ impl RuntimeClientRequest {
             Self::SubmitInbound { .. } => "submit_inbound",
             Self::CancelCurrentAttempt { .. } => "cancel_current_attempt",
             Self::CompactContext { .. } => "compact_context",
+            Self::ReloadResources { .. } => "reload_resources",
             Self::InteractionRespond { .. } => "interaction_respond",
             Self::SnapshotGet { .. } => "snapshot_get",
             Self::SubscribeEvents { .. } => "subscribe_events",
@@ -631,8 +640,10 @@ impl RuntimeClientRequest {
     /// Whether this request must run through the async semantic endpoint.
     #[must_use]
     pub fn requires_async(&self) -> bool {
-        matches!(self, Self::CompactContext { .. } | Self::Shutdown { .. })
-            || self.is_session_request()
+        matches!(
+            self,
+            Self::CompactContext { .. } | Self::ReloadResources { .. } | Self::Shutdown { .. }
+        ) || self.is_session_request()
     }
 
     /// Converts the wire request into the typed native Session control
@@ -747,6 +758,13 @@ pub enum RuntimeClientResult {
     ContextCompacted {
         /// The authoritative context projection after the commit.
         context: RuntimeClientContextView,
+    },
+    /// `reload_resources` published a complete new generation.
+    ResourcesReloaded {
+        /// Published process-local resource generation.
+        resource_revision: u64,
+        /// Compatible published capability generation.
+        capability_revision: CapabilityRevision,
     },
     /// `interaction_respond` succeeded: the coordinator accepted the one
     /// terminal response transition.
@@ -913,6 +931,11 @@ pub enum RuntimeClientError {
     },
     /// No attempt is currently cancellable.
     NoCurrentAttempt,
+    /// Resource reload was refused because semantic work owns the Session.
+    ResourceReloadBusy {
+        /// Bounded machine-readable busy category.
+        reason: String,
+    },
     /// The interaction was no longer pending. Duplicate, stale, pre-crash,
     /// and post-quiescent responses all use this bounded contract.
     InteractionNotPending {

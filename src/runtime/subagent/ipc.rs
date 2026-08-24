@@ -86,8 +86,8 @@ pub(crate) struct SubagentChildSpec {
     pub parent_agent_id: AgentId,
     /// The frozen profile identity.
     pub profile: String,
-    /// The profile persona composed as the child's bootstrap system
-    /// configuration.
+    /// The profile persona composed as the child's request-time
+    /// `AgentProfile` System section.
     pub persona: String,
     /// The model catalog file path (inherited from parent startup).
     pub models: PathBuf,

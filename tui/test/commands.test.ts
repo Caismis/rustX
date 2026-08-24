@@ -95,6 +95,7 @@ describe("command registry", () => {
         "/skills",
         "/status",
         "/compact",
+        "/reload",
         "/debug",
         "/reasoning",
         "/expand",
@@ -942,6 +943,62 @@ describe("CommandDispatcher", () => {
       assert.match(outcome.text, /usage: \/compact/);
     }
     assert.equal(peer.requests.length, 2);
+  });
+
+  it("runs /reload through one canonical Runtime Client operation", async () => {
+    const { peer, dispatcher } = await harness();
+    const reloading = dispatcher.submit("/reload");
+    await peer.awaitRequests(3);
+    assert.equal(peer.requests[2]?.method, "reload_resources");
+    peer.respond(3, {
+      type: "resources_reloaded",
+      resource_revision: 2,
+      capability_revision: 4,
+    });
+    const outcome = await reloading;
+    assert.deepEqual(outcome, {
+      kind: "transient",
+      level: "info",
+      text: "runtime resources reloaded to generation 2 (capabilities 4)",
+    });
+  });
+
+  it("rejects /reload arguments without reaching the runtime", async () => {
+    const { peer, dispatcher } = await harness();
+    const outcome = await dispatcher.submit("/reload now");
+    assert.equal(outcome.kind, "transient");
+    if (outcome.kind === "transient") {
+      assert.equal(outcome.level, "error");
+      assert.match(outcome.text, /usage: \/reload/);
+    }
+    assert.equal(peer.requests.length, 2);
+  });
+
+  it("presents a typed busy refusal from /reload", async () => {
+    const { peer, dispatcher } = await harness();
+    const reloading = dispatcher.submit("/reload");
+    await peer.awaitRequests(3);
+    peer.respondError(3, { type: "resource_reload_busy", reason: "attempt" });
+    assert.deepEqual(await reloading, {
+      kind: "transient",
+      level: "error",
+      text: "runtime resources are busy: attempt",
+    });
+  });
+
+  it("presents a bounded reload preparation failure", async () => {
+    const { peer, dispatcher } = await harness();
+    const reloading = dispatcher.submit("/reload");
+    await peer.awaitRequests(3);
+    peer.respondError(3, {
+      type: "runtime_failure",
+      message: "runtime resource reload failed: malformed Skill metadata",
+    });
+    assert.deepEqual(await reloading, {
+      kind: "transient",
+      level: "error",
+      text: "runtime failure: runtime resource reload failed: malformed Skill metadata",
+    });
   });
 
   it("renders bounded /debug diagnostics without any credential", async () => {

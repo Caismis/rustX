@@ -256,6 +256,8 @@ export class CommandDispatcher {
           return inspect("Runtime status", renderStatus(state));
         case "/compact":
           return await this.#compact(session, argument);
+        case "/reload":
+          return await this.#reload(session, argument);
         case "/debug":
           return inspect("Client diagnostics", renderDebug(state, this.#context.diagnostics()));
         case "/reasoning":
@@ -406,6 +408,20 @@ export class CommandDispatcher {
     return transient(
       "info",
       `context compacted to generation ${latest.generation}: ${latest.tokens_before.input_tokens} → ${latest.estimated_tokens_after} tokens`,
+    );
+  }
+
+  async #reload(
+    session: RuntimeClientAttachment,
+    argument: string,
+  ): Promise<CommandOutcome> {
+    if (argument.length > 0) {
+      return transient("error", "usage: /reload");
+    }
+    const reloaded = await session.reloadResources();
+    return transient(
+      "info",
+      `runtime resources reloaded to generation ${reloaded.resourceRevision} (capabilities ${reloaded.capabilityRevision})`,
     );
   }
 

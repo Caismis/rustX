@@ -269,7 +269,7 @@ fn translate_messages(
     request: &crate::model::types::ModelRequest,
     tools: &ValidatedTools,
 ) -> Result<(Vec<WireTextBlock>, Vec<WireRequestMessage>), ModelError> {
-    let mut system: Vec<WireTextBlock> = if request.effective_system_prompt.is_empty() {
+    let system: Vec<WireTextBlock> = if request.effective_system_prompt.is_empty() {
         Vec::new()
     } else {
         vec![WireTextBlock {
@@ -287,17 +287,6 @@ fn translate_messages(
 
     for (position, block) in request.messages.iter().enumerate() {
         match block {
-            MessageBlock::System(system_block) => {
-                if !request.effective_system_prompt.is_empty() {
-                    continue;
-                }
-                for text in &system_block.content {
-                    system.push(WireTextBlock {
-                        r#type: "text",
-                        text: text.text.clone(),
-                    });
-                }
-            }
             MessageBlock::User(user) => {
                 flush_tool_results(&mut pending_tool_results, &mut messages);
                 let mut content = Vec::new();

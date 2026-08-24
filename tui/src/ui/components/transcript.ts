@@ -306,21 +306,6 @@ function renderCommitted(
       return [toolBlock(entry.key, callId, context, part)];
     }
 
-    case "system":
-      return [
-        {
-          kind: "text",
-          key: entry.key,
-          text: [
-            role.meta(`▌ system · ${message.authority}`),
-            ...bar(
-              message.content.map((block) => block.text).join("\n"),
-              role.meta,
-            ),
-          ].join("\n"),
-        },
-      ];
-
     default:
       return [];
   }

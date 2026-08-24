@@ -82,7 +82,7 @@ use crate::context::projection::ContextProjection;
 use crate::context::tokens::ProviderObservedInput;
 use crate::context::{
     AcceptedContext, ContextRuntime, ContributorInputSnapshot, DeferredContextProposal,
-    MAX_DEFERRED_CONTEXT_PROPOSALS, MAX_PROPOSALS_PER_CONTRIBUTOR, NativeContextInput,
+    MAX_DEFERRED_CONTEXT_PROPOSALS, MAX_PROPOSALS_PER_CONTRIBUTOR, native_system_sections,
     render_effective_system_prompt, validate_user_message_proposal,
 };
 use crate::conversation::{ConversationError, ConversationState, PreparedCanonicalCommit};
@@ -1243,7 +1243,6 @@ impl<'a> AgentExecution<'a> {
             Ok(status) => status,
             Err(error) => return Err(Self::context_failure_terminal(&error)),
         };
-        let skill_guidance = self.capability.snapshot().skill_catalog();
         let input = match self.contributor_input_snapshot() {
             Ok(input) => input,
             Err(terminal) => return Err(terminal),
@@ -1255,11 +1254,8 @@ impl<'a> AgentExecution<'a> {
         // model-visible dynamic-context admission path: an observer has no
         // privileged committer role and cannot bypass the policy below.
         let deferred = core::mem::take(&mut self.deferred_context);
-        let native = NativeContextInput {
-            skill_guidance,
-            agent_status: status,
-            ..NativeContextInput::default()
-        };
+        let mut native = self.context_runtime.native_system.clone();
+        native.agent_status = status;
         let accepted = self
             .context_runtime
             .assembly
@@ -1467,17 +1463,11 @@ impl<'a> AgentExecution<'a> {
                 ))
             })?;
         }
-        let messages = scratch.active_messages().map_err(|error| {
-            Self::context_failure_terminal(&ContextError::new(
-                ContextErrorKind::MalformedHistory,
-                error.to_string(),
-            ))
-        })?;
         let sections = self
             .accepted_context
             .as_ref()
             .map_or(&[][..], |accepted| accepted.system_sections.as_slice());
-        let effective_system_prompt = render_effective_system_prompt(&messages, sections);
+        let effective_system_prompt = render_effective_system_prompt(sections);
         let projection = self
             .context_runtime
             .engine
@@ -1504,6 +1494,8 @@ impl<'a> AgentExecution<'a> {
             },
             projection.surface_revision,
             effective_system_prompt.clone(),
+            accepted.system_sections.clone(),
+            self.context_runtime.resource_revision,
             request.invocation.clone(),
             primary.context_window(),
             primary.reasoning_profile().cloned(),
@@ -1701,20 +1693,20 @@ impl<'a> AgentExecution<'a> {
             .map_err(|error| Self::context_failure_terminal(&error))
     }
 
-    /// Renders the exact request-time Effective System Prompt from the
-    /// current finite Surface messages and the accepted system sections.
+    /// Renders the exact request-time Effective System Prompt solely from
+    /// the attempt-pinned resource generation and accepted request sections.
     fn effective_system_prompt(&self) -> Result<String, Terminal> {
-        let messages = self.conversation.active_messages().map_err(|error| {
-            Self::context_failure_terminal(&ContextError::new(
-                ContextErrorKind::MalformedHistory,
-                error.to_string(),
-            ))
-        })?;
-        let sections = self
-            .accepted_context
-            .as_ref()
-            .map_or(&[][..], |accepted| accepted.system_sections.as_slice());
-        Ok(render_effective_system_prompt(&messages, sections))
+        if let Some(accepted) = &self.accepted_context {
+            return Ok(render_effective_system_prompt(&accepted.system_sections));
+        }
+        let sections =
+            native_system_sections(&self.context_runtime.native_system).map_err(|error| {
+                Self::context_failure_terminal(&ContextError::new(
+                    ContextErrorKind::Internal,
+                    error.to_string(),
+                ))
+            })?;
+        Ok(render_effective_system_prompt(&sections))
     }
 
     /// Creates the finite immutable input visible to all contributors.
@@ -2938,10 +2930,13 @@ impl<'a> AgentExecution<'a> {
         // whole lifetime, even after this attempt terminates and later
         // revisions activate.
         let environment = self.capability.snapshot().effective_environment().clone();
+        let Some(mcp_leases) = self.capability.mcp_leases() else {
+            return failed_result("the admitted MCP generation is already physically retired");
+        };
         match self
             .tool_runtime
             .background()
-            .prepare_dispatch(invocation, &executor, environment)
+            .prepare_dispatch_with_mcp_leases(invocation, &executor, environment, mcp_leases)
         {
             Ok(prepared) => {
                 match self
@@ -3165,7 +3160,7 @@ impl<'a> AgentExecution<'a> {
                 message_id: message.id.clone(),
                 tool_call_id: message.tool_call_id.clone(),
             }),
-            MessageBlock::System(_) | MessageBlock::User(_) => None,
+            MessageBlock::User(_) => None,
         }
     }
 

@@ -40,7 +40,7 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 2 is the only accepted schema; incompatible files fail
+schema version 3 is the only accepted schema; incompatible files fail
 explicitly and are not migrated.
 
 The durable request-start invariant is strict: the provider adapter cannot be
@@ -64,12 +64,14 @@ it is not a late event inside a turn that already emitted `TurnCompleted`.
 
 ## Message semantics
 
-The canonical conversation model contains exactly four top-level message roles:
+The canonical conversation model contains exactly three top-level message roles:
 
-- System
 - User
 - Assistant
 - Tool
+
+System instructions are request-time authority in
+`ModelRequest.effective_system_prompt`, never canonical conversation messages.
 
 A `UserMessageBlock` means inbound information to the current agent. Its provenance is explicit metadata and may identify a human, another agent, the control plane, or an external source.
 
@@ -740,6 +742,13 @@ that a live child produced an Interrupted physical result.
   settings, approval settings reserved for #100, and future capability
   sources therefore come from the current launch. A valid old Session can
   never make an invalid current configuration disappear.
+- **Runtime resources are process-local generations.** Composition discovers
+  project instructions, Skill catalog identity/metadata, extension System
+  Sections, and extension Tool registrations once and publishes them with one
+  compatible immutable `CapabilitySnapshot`. Ordinary requests, tool
+  continuations, compaction, attachment changes, and lineage projection never
+  rediscover them. Explicit reload is the only in-process replacement; cold
+  resume composes a fresh generation without restoring one from history.
 - **First-Session publication follows model validation.** On a fresh
   `runtime-root`, composition loads the current `models.json` and validates
   the current runtime default before creating or publishing the root Session.
@@ -806,7 +815,9 @@ that a live child produced an Interrupted physical result.
   remains the sole candidate/commit authority. An admitted attempt retains
   one immutable capability snapshot until terminal settlement. #96 does not
   add approval/HITL (#100), Execution Modes (#98), model-turn leases or
-  deferred discovery (`#99`), file watching, or hot reload.
+  deferred discovery (`#99`), or file watching. Issue #106 later adds only
+  explicit quiescent runtime-resource reload; it does not add automatic
+  invalidation.
 - **Clients are projections.** Runtime Client exposes typed active and
   available Tool lists and the model-visible Skill catalog. The TUI forwards
   startup paths and renders that projection; it never parses configuration,
@@ -847,9 +858,41 @@ hold attempt leases and never block a capability commit.
   Skill change yields a new Skill version and a new capability revision
   without changing environment identities when dependency inputs are
   unchanged.
-- Skill, native-tool, MCP, and Python capability mutations may occur only
-  while the conversation runtime is quiescent in the M6 sense;
-  broader runtime-wide busy semantics (active tool calls, foreground or
+- Skill, native-tool, MCP, and Python capability mutations in a live product
+  runtime occur through its explicit resource reload and only while the
+  conversation runtime is quiescent in the M6 sense. After the runtime claim,
+  the ordinary `CapabilityCoordinator::commit` API is rejected; only the
+  runtime's private resource-publication authority can advance live
+  capability state.
+- The immutable `CapabilitySnapshot` carries the physical MCP lease authority
+  for its paired generation. Attempt leases acquire from that snapshot, never
+  from a later mutable coordinator-current MCP vector.
+- MCP retirement is semantic ownership, not an `Arc`-counting accident:
+  candidate ownership transfers only at publication, superseded generations
+  remain owned while attempt/background leases exist, and only proven
+  physical settlement permits registry reclamation. A
+  `PhysicalSettlement` failure is retained as terminal evidence, fences
+  healthy runtime continuation, and is reported after the committed new
+  generation; it is not converted into a pre-publication reload failure.
+- MCP `PhysicalSettlement` failure is persistent runtime fencing authority even
+  while the runtime is inactive. Retirement-registry callback installation
+  replays pre-existing failures. MCP PhysicalSettlement failure publication
+  and the `ConversationLifecycle` transition to `Draining` are one runtime
+  coordinator linearization point: the callback's single coordinator
+  critical section publishes the persistent failure latch, performs current-
+  attempt cancellation arbitration, and closes healthy lifecycle admission
+  before releasing the coordinator lock. The latch is diagnostic/admission
+  evidence retained by the coordinator; `ConversationLifecycle` remains the
+  generic gate for inbound, attempt, compaction, reload, interaction,
+  background, and subagent semantic ownership. There is no interval after
+  the authoritative failure transition in which the runtime is still
+  healthily `Running`. Activation therefore cannot reopen a failure-fenced
+  runtime, and a background-late settlement failure uses the same atomic
+  failure-drain transition. A generation's close completion becomes
+  observable only after its generation state, registry evidence, fencing
+  callback, and lifecycle-admission release are complete, so a ready reload
+  cannot return `Ok` before a post-publication retirement failure is visible.
+- The broader runtime-wide busy semantics (active tool calls, foreground or
   background processes, event-writer or drain transitions) remain the M9
   scheduler's concern, not part of the M6 commit guard.
 
@@ -1767,10 +1810,9 @@ owns the `ToolCall` identity and arguments, while Tool owns the result and
 references the `ToolCallId`. Orphan calls/results, duplicate call identity,
 duplicate result, and invalid structural spans are rejected.
 
-The narrow #54 system rule is bounded: a Replace span cannot contain a
-trusted `System` message. A later System message does not pin all preceding
-conversation and never resurrects retired history. Issue #55 owns the full
-Effective System Prompt and Request Snapshot architecture.
+Because canonical history has no System role, the whole structurally valid
+active prefix is eligible for replacement. Effective System authority remains
+outside Surface history and is carried exactly by each Request Snapshot.
 
 Planning bounds the actual summary-model request, not the raw retired span.
 `SummaryRequest::model_input()` is the shared deterministic assembly of the
@@ -1894,8 +1936,10 @@ message role, history shape, or timestamps:
   start-commit failure rolls the whole transaction back, so canonical
   request-scoped User context can never become canonical without its request
   starting.
-- Effective System Prompt is rustX-rendered from canonical System content
-  and ordered native/extension sections. The active Skill catalog is one
+- `ModelRequest.effective_system_prompt` is the sole System authority. It is
+  rustX-rendered from ordered native/extension sections; canonical history
+  has no System role. Frozen project instructions occupy the
+  `WorkspaceInstructions` lane and the active Skill catalog is one
   request-time `NativeCapabilityGuidance` section rendered from the attempt's
   immutable `CapabilitySnapshot`; it is absent when no model-visible Skills
   exist. The rendered string is frozen by value in RequestSnapshot; native
@@ -1907,12 +1951,12 @@ message role, history shape, or timestamps:
   result of an explicit native Read.
   Compaction operates on canonical facts and cannot remove Skill catalog
   visibility.
-- RequestSnapshot contains RequestIdentity, SurfaceRevision,
-  effective_system_prompt, ModelInvocationConfig, context window,
-  reasoning values, tool definitions, capability revision,
-  ContextGeneration, and opaque continuation state. It references only the
-  exact historical Surface revision; all request-time derived values that
-  are not durably addressable are values.
+- RequestSnapshot contains RequestIdentity, SurfaceRevision, the exact
+  ordered System Sections and effective_system_prompt, runtime-resource and
+  capability revisions, ModelInvocationConfig, context window, reasoning
+  values, exact tool definitions, ContextGeneration, and opaque continuation
+  state. It references only the exact historical Surface revision; all
+  request-time derived values that are not durably addressable are values.
 - RequestSnapshot::reconstruct resolves that historical Surface and combines
   it with the frozen fields. The Agent Loop compares the reconstructed
   provider-neutral ModelRequest structurally with the actual request before
@@ -2107,8 +2151,7 @@ The load-bearing split of this seam:
   request-time proposals:
   - `NativeRuntimeObservation` → the native-reserved
     `UserContextLane::RuntimeToolObservation` (immediately after
-    `ClaimedInbound` and before `WorkspaceInstructions`,
-    `ExtensionEnvironment`, and `AgentStatus`),
+    `ClaimedInbound` and before `ExtensionEnvironment` and `AgentStatus`),
     `UserSource::Runtime`,
     `InboundKind::Context(ContextKind::RuntimeToolObservation)`. rustX owns
     this owner, so it needs no registration and carries no attestation;
@@ -2254,10 +2297,11 @@ The frozen invariants:
     `BackgroundDispatchError::ConversationInactive` while its mailbox is
     runtime-owned inactive: a new background ownership commit cannot begin
     before activation, and the prepared dispatch rolls back completely;
-  - the capability coordinator refuses a runtime-owned `commit` with
-    `CapabilityCommitError::ConversationInactive` before activation; the
-    startup commit performed *before* the conversation runtime is
-    constructed remains allowed.
+  - the capability coordinator refuses a runtime-owned ordinary `commit` with
+    `CapabilityCommitError::RuntimePublicationRequired` before and after
+    activation; the startup commit performed *before* the conversation
+    runtime is constructed remains allowed. Live publication uses the
+    runtime's resource reload owner.
 
   Capability candidate preparation is the one composition/readiness
   exception: it may run while inactive, but its counted owner prevents an
@@ -2281,6 +2325,13 @@ The frozen invariants:
   admits new work. `admit_next_attempt` returns without admitting, no
   admission worker exists before activation, and an inactive runtime
   therefore publishes no `ConversationObservation` at all.
+  The one terminal exception is an authoritative MCP physical-settlement
+  failure replayed or published before activation. It is not healthy semantic
+  work: one coordinator critical section publishes the persistent failure
+  evidence, explicitly transitions `Inactive -> Draining`, and
+  starts the normal drain supervisor for final reporting. `activate()`
+  then observes `Draining` (or the persistent failure latch) and
+  cannot open ordinary admission.
 - **Runtime drain is a stronger contract than cancellation.** The one public
   `ConversationRuntime::shutdown()` operation linearizes `Running -> Draining`
   under the coordinator lock shared with inbound acceptance and attempt
@@ -2488,8 +2539,10 @@ The frozen invariants:
   refuses `commit_dispatch` while its mailbox is bound inactive, so no
   background record exists across `[T0, R]` and none can be created; the
   mailbox refuses `enqueue` while its bound runtime is inactive; the
-  capability coordinator refuses a runtime-owned `commit` before
-  activation; and the capability snapshot is captured *at* `R`.
+  capability coordinator refuses a runtime-owned ordinary `commit` before
+  activation; and the capability snapshot is captured *at* `R`. Live
+  capability publication is only available through the runtime resource
+  owner.
   Each authority installs its observer in the same lock section that
   captures its seed, so no transition is both seeded and queued, and none
   is neither. The bootstrap cut `R` **precedes** the activation

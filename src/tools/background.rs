@@ -190,6 +190,7 @@ use crate::tools::artifacts::ArtifactStore;
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::executor::{ProgressReporter, ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::bound_tool_progress;
+use crate::tools::mcp::McpRuntimeLeaseSet;
 use crate::tools::types::{
     ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolProgress,
     ToolResultContent,
@@ -846,6 +847,25 @@ impl ConversationBackgroundRegistry {
         executor: &Arc<dyn ToolExecutor>,
         environment: ToolEnvironment,
     ) -> Result<PreparedBackgroundDispatch, BackgroundDispatchError> {
+        self.prepare_dispatch_with_mcp_leases(
+            invocation,
+            executor,
+            environment,
+            McpRuntimeLeaseSet::default(),
+        )
+    }
+
+    /// Stages a background dispatch while transferring explicit physical MCP
+    /// generation leases from the originating attempt. The leases are owned
+    /// by the detached runner after the dispatch commit and are released only
+    /// when that runner settles or is rolled back.
+    pub(crate) fn prepare_dispatch_with_mcp_leases(
+        &self,
+        invocation: &ToolInvocation,
+        executor: &Arc<dyn ToolExecutor>,
+        environment: ToolEnvironment,
+        mcp_leases: McpRuntimeLeaseSet,
+    ) -> Result<PreparedBackgroundDispatch, BackgroundDispatchError> {
         if invocation.mode != ToolInvocationMode::Background {
             return Err(BackgroundDispatchError::NotBackgroundInvocation);
         }
@@ -896,6 +916,7 @@ impl ConversationBackgroundRegistry {
             cancellation.clone(),
             gate.clone(),
             environment,
+            mcp_leases,
         );
         let prepared = PreparedRecord {
             record: BackgroundRecord {
@@ -1766,6 +1787,7 @@ impl ConversationBackgroundRegistry {
     }
 
     /// Spawns the gated runner of one background execution.
+    #[allow(clippy::too_many_arguments)]
     fn spawn_runner(
         &self,
         execution_id: ToolExecutionId,
@@ -1774,10 +1796,14 @@ impl ConversationBackgroundRegistry {
         cancellation: CancellationSignal,
         gate: Arc<Notify>,
         environment: ToolEnvironment,
+        mcp_leases: McpRuntimeLeaseSet,
     ) -> tokio::task::JoinHandle<()> {
         let registry = self.clone();
         tokio::spawn(async move {
             gate.notified().await;
+            // Keep the explicit physical generation owners alive from
+            // dispatch publication until the detached execution settles.
+            let _mcp_leases = mcp_leases;
             registry.mark_running(&execution_id);
             let reporter = BackgroundProgressReporter {
                 registry: registry.clone(),

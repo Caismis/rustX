@@ -82,15 +82,15 @@ pub enum CapabilityCommitError {
     },
     /// A capability commit while an attempt lease is active is rejected.
     Busy,
-    /// A capability commit on a coordinator already claimed by an inactive
-    /// `ConversationRuntime` is rejected (Issue #61).
-    ///
-    /// Once a conversation runtime owns this coordinator, active capability
-    /// mutation follows the runtime lifecycle: the startup commit that
-    /// happens *before* the conversation runtime is constructed remains
-    /// allowed, and after `ConversationRuntime::activate` commits follow
-    /// the normal quiescence rules.
+    /// An internal runtime-owned publication was attempted while the claimed
+    /// `ConversationRuntime` is inactive (Issue #61). Ordinary public
+    /// coordinator commits are rejected earlier with
+    /// [`Self::RuntimePublicationRequired`].
     ConversationInactive,
+    /// A live `ConversationRuntime` owns publication of this coordinator's
+    /// capability/resource generation. Ordinary coordinator commits cannot
+    /// bypass that owner after the runtime claim.
+    RuntimePublicationRequired,
     /// A tools/list candidate was invalidated before the swap.
     StaleMcpCandidate {
         server_id: crate::runtime::identity::McpServerId,
@@ -115,6 +115,10 @@ impl core::fmt::Display for CapabilityCommitError {
             Self::ConversationInactive => write!(
                 f,
                 "a capability commit is rejected while the owning conversation runtime is inactive"
+            ),
+            Self::RuntimePublicationRequired => write!(
+                f,
+                "a live conversation runtime owns capability publication; use its resource reload boundary"
             ),
             Self::StaleMcpCandidate { server_id } => write!(
                 f,

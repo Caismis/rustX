@@ -48,12 +48,6 @@ pub enum StructuralError {
         /// The tool call whose relationship the span would break.
         tool_call_id: ToolCallId,
     },
-    /// A requested span contains a trusted `System` message.
-    ///
-    /// This is the narrow interim rule of Issue #54: trusted System content
-    /// is never demoted into a runtime `User` compaction summary. The full
-    /// Effective System Prompt architecture belongs to Issue #55.
-    SystemMessageInSpan(MessageId),
 }
 
 impl core::fmt::Display for StructuralError {
@@ -84,11 +78,6 @@ impl core::fmt::Display for StructuralError {
                 f,
                 "the requested span would separate tool call {tool_call_id} from its result"
             ),
-            Self::SystemMessageInSpan(id) => write!(
-                f,
-                "the requested span contains trusted system message {id}; \
-                 system content is never replaced by a runtime compaction summary"
-            ),
         }
     }
 }
@@ -106,8 +95,6 @@ pub struct StructuralIndex {
     results: BTreeMap<ToolCallId, usize>,
     /// Assistant position → the last active position of its turn.
     turn_ends: BTreeMap<usize, usize>,
-    /// active position → whether the message is a `System` message.
-    system_positions: Vec<usize>,
     /// active position → the message identity at that position.
     ids: Vec<MessageId>,
 }
@@ -123,12 +110,10 @@ impl StructuralIndex {
         let mut assistant_positions = Vec::new();
         let mut call_owners: BTreeMap<ToolCallId, usize> = BTreeMap::new();
         let mut results: BTreeMap<ToolCallId, usize> = BTreeMap::new();
-        let mut system_positions = Vec::new();
         let mut ids = Vec::with_capacity(active.len());
         for (position, message) in active.iter().enumerate() {
             ids.push(super::ledger::message_id_of(message));
             match message {
-                MessageBlock::System(_) => system_positions.push(position),
                 MessageBlock::Assistant(assistant) => {
                     assistant_positions.push(position);
                     for block in &assistant.content {
@@ -179,7 +164,6 @@ impl StructuralIndex {
             call_owners,
             results,
             turn_ends,
-            system_positions,
             ids,
         })
     }
@@ -214,12 +198,6 @@ impl StructuralIndex {
         &self.assistant_positions
     }
 
-    /// Every `System` message position, in active order.
-    #[must_use]
-    pub fn system_positions(&self) -> &[usize] {
-        &self.system_positions
-    }
-
     /// The last active position of the turn owned by the Assistant message at
     /// `assistant_position`: its own position, or the greatest position of its
     /// committed results.
@@ -236,24 +214,13 @@ impl StructuralIndex {
     /// replaceable unit.
     ///
     /// The span must contain complete canonical messages only (which it does
-    /// by construction: it is a range of whole active messages), it must not
-    /// contain a trusted `System` message, and it must never separate a tool
-    /// call from its result in either direction.
+    /// by construction: it is a range of whole active messages), and it must
+    /// never separate a tool call from its result in either direction.
     ///
     /// # Errors
     ///
-    /// Returns [`StructuralError::SystemMessageInSpan`] or
-    /// [`StructuralError::SplitToolPair`].
+    /// Returns [`StructuralError::SplitToolPair`].
     pub fn validate_span(&self, start: usize, end: usize) -> Result<(), StructuralError> {
-        if let Some(&position) = self
-            .system_positions
-            .iter()
-            .find(|&&position| position >= start && position <= end)
-        {
-            return Err(StructuralError::SystemMessageInSpan(
-                self.ids[position].clone(),
-            ));
-        }
         for (call_id, &owner) in &self.call_owners {
             let Some(&result) = self.results.get(call_id) else {
                 // A pending call with no committed result imposes no edge:
@@ -277,8 +244,8 @@ mod tests {
     use super::{StructuralError, StructuralIndex};
     use crate::message::content::TextBlock;
     use crate::message::types::{
-        AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, SystemAuthority,
-        SystemMessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+        AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, ToolMessageBlock,
+        UserContentBlock, UserMessageBlock, UserSource,
     };
     use crate::runtime::identity::{MessageId, ToolCallId, ToolId};
     use crate::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus};
@@ -292,16 +259,6 @@ mod tests {
             source: UserSource::Human,
             kind: InboundKind::Message,
             timestamp: None,
-        })
-    }
-
-    fn system(id: &str) -> MessageBlock {
-        MessageBlock::System(SystemMessageBlock {
-            id: MessageId::new(id),
-            authority: SystemAuthority::Platform,
-            content: vec![TextBlock {
-                text: "be concise".to_owned(),
-            }],
         })
     }
 
@@ -386,24 +343,6 @@ mod tests {
         let index = StructuralIndex::build(&active).expect("well-formed");
         assert!(index.validate_span(0, 1).is_ok());
         assert!(index.validate_span(0, 0).is_ok());
-    }
-
-    /// Trusted system content is never inside a replaceable span.
-    #[test]
-    fn system_messages_are_never_inside_a_span() {
-        let active = vec![system("s1"), user("u1"), system("s2"), user("u2")];
-        let index = StructuralIndex::build(&active).expect("well-formed");
-        assert_eq!(
-            index.validate_span(0, 1).expect_err("leading system"),
-            StructuralError::SystemMessageInSpan(MessageId::new("s1"))
-        );
-        assert!(index.validate_span(1, 1).is_ok());
-        assert_eq!(
-            index.validate_span(1, 3).expect_err("later system"),
-            StructuralError::SystemMessageInSpan(MessageId::new("s2"))
-        );
-        assert!(index.validate_span(3, 3).is_ok());
-        assert_eq!(index.system_positions(), &[0, 2]);
     }
 
     /// The turn end covers the Assistant message and all of its results.

@@ -372,20 +372,3 @@ describe("inbound provenance", () => {
     );
   });
 });
-
-describe("system messages", () => {
-  it("shows the authority that produced them", () => {
-    const state = stateOf({
-      messages: [
-        {
-          role: "system",
-          id: "m1",
-          authority: "platform",
-          content: [{ text: "a platform note" }],
-        },
-      ],
-    });
-    assert.match(plain(transcriptString(state)), /system · platform/);
-    assert.match(transcriptString(state), /a platform note/);
-  });
-});

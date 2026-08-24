@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::context::assembly::ContextGeneration;
+use crate::context::assembly::{AcceptedSystemSection, ContextGeneration};
 use crate::conversation::{ConversationError, ConversationState, SurfaceRevision};
 use crate::model::invocation::ModelInvocationConfig;
 use crate::model::types::ModelRequest;
@@ -54,6 +54,11 @@ pub struct RequestSnapshot {
     pub surface_revision: SurfaceRevision,
     /// The exact request-time rendered Effective System Prompt.
     pub effective_system_prompt: String,
+    /// Exact ordered System-section result from which the prompt was
+    /// rendered. No historical discovery or extension logic is rerun.
+    pub system_sections: Vec<AcceptedSystemSection>,
+    /// Process-local resource generation observed by the admitted attempt.
+    pub runtime_resource_revision: crate::runtime::RuntimeResourceRevision,
     /// The effective provider-neutral model invocation values.
     pub invocation: ModelInvocationConfig,
     /// The model context limit frozen for this request.
@@ -119,6 +124,8 @@ impl RequestSnapshot {
         identity: RequestIdentity,
         surface_revision: SurfaceRevision,
         effective_system_prompt: String,
+        system_sections: Vec<AcceptedSystemSection>,
+        runtime_resource_revision: crate::runtime::RuntimeResourceRevision,
         invocation: ModelInvocationConfig,
         context_window_tokens: u64,
         reasoning_profile: Option<crate::model::catalog::ReasoningProfileId>,
@@ -134,6 +141,8 @@ impl RequestSnapshot {
             identity,
             surface_revision,
             effective_system_prompt,
+            system_sections,
+            runtime_resource_revision,
             invocation,
             context_window_tokens,
             reasoning_profile,

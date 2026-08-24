@@ -110,6 +110,16 @@ fn try_config(
             status_composer: AgentStatusComposer::default(),
         },
         tool_runtime: runtime,
+        resources: Arc::new(rustx::runtime::RuntimeResourceSnapshot::new(
+            rustx::runtime::RuntimeResourceRevision::new(1),
+            Vec::new(),
+            None,
+            rustx::context::ContextAssembly::new(),
+            coordinator.current_snapshot(),
+        )),
+        resource_loader: Arc::new(rustx::runtime::FilesystemRuntimeResourceLoader::new(
+            coordinator.current_snapshot().workspace_root(),
+        )),
         capability: coordinator,
         clock: None,
         initial_messages: Vec::new(),
@@ -340,8 +350,8 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
         .expect("enqueue");
     // The enqueued message is admitted by the runtime's idle wakeup; the
     // admitted attempt settles immediately. Waiting for its request-history
-    // transfer makes the runtime provably idle before the capability commit
-    // below, so the commit can never be rejected as Busy by an active attempt
+    // transfer makes the runtime provably idle before the resource reload
+    // below, so the reload can never be rejected as Busy by an active attempt
     // lease.
     tokio::time::timeout(std::time::Duration::from_secs(120), async {
         loop {
@@ -352,7 +362,7 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
         }
     })
     .await
-    .expect("the admitted attempt must settle before the capability commit");
+    .expect("the admitted attempt must settle before the resource reload");
     // Consume the first attempt's terminal event before submitting the next
     // inbound. Otherwise the later wait could mistake this already-published
     // event for the second attempt, making the request-count assertion depend
@@ -370,12 +380,7 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
         }
     }
     write_skill(&bundle.dir.path().join("workspace"), "binding-skill");
-    let candidate = bundle
-        .coordinator
-        .prepare_candidate()
-        .await
-        .expect("prepare");
-    let committed = bundle.coordinator.commit(candidate).expect("commit");
+    let committed = runtime.reload_resources().await.expect("resource reload");
     // The background registry transition is published under the registry's
     // ownership commit, so its arrival at the observer is exact.
     let background_id = dispatch_background(&bundle.runtime);
@@ -385,8 +390,7 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
     // seam still reaches host A even after the rejected second host.
     let (observed, _) = await_message_committed(&host_a, "msg-seam").await;
     assert_eq!(
-        observed.capabilities.revision,
-        committed.revision(),
+        observed.capabilities.revision, committed.capability_revision,
         "the capability seam still reaches host A"
     );
     assert!(

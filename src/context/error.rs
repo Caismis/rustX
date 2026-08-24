@@ -34,9 +34,10 @@ pub enum ContextErrorKind {
     /// positive effective input budget after reserve and output tokens.
     InvalidConfiguration,
     /// The current context cannot fit even after the available complete
-    /// messages have been retired: non-retirable context (system messages,
-    /// tool definitions, or the summary request itself) consumes the whole
-    /// budget. Compaction cannot fix this; the caller must fail explicitly.
+    /// messages have been retired: non-retirable request input (the Effective
+    /// System Prompt, tool definitions, or the summary request itself)
+    /// consumes the whole budget. Compaction cannot fix this; the caller must
+    /// fail explicitly.
     CannotFit,
     /// The canonical conversation violates the structural contract: a
     /// `ToolMessageBlock` whose tool call resolves to no requesting

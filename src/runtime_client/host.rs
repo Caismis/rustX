@@ -126,7 +126,7 @@ use crate::model::session::SessionModelConfig;
 use crate::model::{ModelRequest, RequestIdentity};
 use crate::runtime::conversation_runtime::{
     CancelAttemptError, ConversationRuntime, InboundAdmissionError, ManualCompactionError,
-    ModelUpdateError, RuntimeBootstrapError,
+    ModelUpdateError, RuntimeBootstrapError, RuntimeResourceReloadError,
 };
 use crate::runtime::identity::{ConversationId, InteractionId, ToolExecutionId};
 use crate::runtime::interaction::{InteractionError, InteractionResponse};
@@ -561,6 +561,44 @@ impl ClientInner {
             })?;
         let context = self.lock_state().projection.snapshot_ref().context.clone();
         Ok(RuntimeClientResult::ContextCompacted { context })
+    }
+
+    /// Atomically reloads one complete resource/capability generation.
+    pub(crate) async fn reload_resources(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.ensure_session_runtime_live()?;
+        let reloaded = self
+            .runtime
+            .reload_resources()
+            .await
+            .map_err(|error| match error {
+                RuntimeResourceReloadError::Inactive => RuntimeClientError::InvalidState {
+                    message: error.to_string(),
+                },
+                RuntimeResourceReloadError::Shutdown => RuntimeClientError::RuntimeShutdown,
+                RuntimeResourceReloadError::Busy { reason } => {
+                    RuntimeClientError::ResourceReloadBusy {
+                        reason: reason.as_str().to_owned(),
+                    }
+                }
+                RuntimeResourceReloadError::Failed { message } => {
+                    RuntimeClientError::RuntimeFailure {
+                        message: format!("runtime resource reload failed: {message}"),
+                    }
+                }
+                RuntimeResourceReloadError::PostPublicationSettlementFailed {
+                    published,
+                    message,
+                } => RuntimeClientError::RuntimeFailure {
+                    message: format!(
+                        "runtime resource reload published resource revision {:?} and capability revision {:?}, but MCP retirement settlement is unproven: {message}",
+                        published.resource_revision, published.capability_revision
+                    ),
+                },
+            })?;
+        Ok(RuntimeClientResult::ResourcesReloaded {
+            resource_revision: reloaded.resource_revision.get(),
+            capability_revision: reloaded.capability_revision,
+        })
     }
 
     /// Accepts one typed native interaction response through the
@@ -1248,6 +1286,16 @@ impl RuntimeClientHost {
         self.inner.compact_context().await
     }
 
+    /// Reloads current runtime resources for future attempts only.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed busy result while an attempt, interaction, compaction,
+    /// or another reload owns the semantic boundary.
+    pub async fn reload_resources(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.inner.reload_resources().await
+    }
+
     /// Responds to one live native interaction through Runtime Client
     /// semantics. The response is finite and cannot replace tool arguments.
     ///
@@ -1691,6 +1739,26 @@ mod tests {
         ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolOrigin, ToolReplayPolicy,
     };
 
+    fn test_resources(
+        capability: &crate::capabilities::CapabilityCoordinator,
+    ) -> Arc<crate::runtime::RuntimeResourceSnapshot> {
+        Arc::new(crate::runtime::RuntimeResourceSnapshot::new(
+            crate::runtime::RuntimeResourceRevision::new(1),
+            Vec::new(),
+            None,
+            crate::context::ContextAssembly::new(),
+            capability.current_snapshot(),
+        ))
+    }
+
+    fn test_resource_loader(
+        capability: &crate::capabilities::CapabilityCoordinator,
+    ) -> Arc<dyn crate::runtime::RuntimeResourceLoader> {
+        Arc::new(crate::runtime::FilesystemRuntimeResourceLoader::new(
+            capability.current_snapshot().workspace_root(),
+        ))
+    }
+
     fn request_snapshots(history: &RequestHistory) -> Vec<crate::model::RequestSnapshot> {
         let mut snapshots = Vec::new();
         let mut cursor = None;
@@ -2062,6 +2130,8 @@ mod tests {
                 status_composer: composer,
             },
             tool_runtime,
+            resources: test_resources(&coordinator),
+            resource_loader: test_resource_loader(&coordinator),
             capability: coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
@@ -2139,6 +2209,8 @@ mod tests {
                     status_composer: composer(),
                 },
                 tool_runtime,
+                resources: test_resources(&coordinator),
+                resource_loader: test_resource_loader(&coordinator),
                 capability: coordinator.clone(),
                 clock: Some(Arc::new(FixedRuntimeClock)),
                 initial_messages: Vec::new(),
@@ -3377,7 +3449,6 @@ mod tests {
                 MessageBlock::User(_) => "user",
                 MessageBlock::Assistant(_) => "assistant",
                 MessageBlock::Tool(_) => "tool",
-                MessageBlock::System(_) => "system",
             })
             .collect();
         assert_eq!(
@@ -3498,8 +3569,10 @@ mod tests {
         await_request_history_len(&host, 2).await;
         runtime.settlement_signal().notified().await;
         write_probe_skill(&dir.path().join("workspace"), "lifetime-skill");
-        let candidate = coordinator.prepare_candidate().await.expect("prepare");
-        coordinator.commit(candidate).expect("commit");
+        runtime
+            .reload_resources()
+            .await
+            .expect("the runtime owns capability publication");
 
         // Every seam has fired and the projection folded them.
         let (before, _) = host.snapshot().expect("snapshot");
@@ -3623,18 +3696,15 @@ mod tests {
         )
         .await;
 
-        // Authoritative capability transition: same.
+        // A claimed coordinator remains runtime-owned even after the runtime
+        // and host are dropped; a surviving clone cannot bypass the resource
+        // publication owner.
         write_probe_skill(&dir.path().join("workspace"), "after-skill");
         let candidate = coordinator.prepare_candidate().await.expect("prepare");
-        let committed = coordinator
-            .commit(candidate)
-            .expect("the coordinator remains authoritative");
-        assert!(
-            committed
-                .skills()
-                .catalog_entries()
-                .iter()
-                .any(|entry| entry.name == "after-skill")
+        assert_eq!(
+            coordinator.commit(candidate),
+            Err(crate::capabilities::CapabilityCommitError::RuntimePublicationRequired),
+            "a claimed coordinator cannot publish outside its runtime owner"
         );
 
         // None of those transitions resurrected the runtime or the host.
@@ -3773,9 +3843,9 @@ mod tests {
     }
 
     /// The same lock-order invariant for the capability coordinator, with a
-    /// stronger barrier: the coordinator is parked *inside* `commit`, with
-    /// its state lock held, and the host lock is taken from another thread
-    /// while it is parked.
+    /// stronger barrier: the runtime-owned reload is parked *inside* the
+    /// capability publication boundary, with its state lock held, and the
+    /// host lock is taken while it is parked.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_capability_commit_never_waits_on_the_host_lock() {
         let probe = Arc::new(crate::runtime_client::test_sync::ProjectionProbe::default());
@@ -3797,23 +3867,18 @@ mod tests {
             "---\nname: probe-skill\ndescription: \"a probe skill\"\n---\nbody\n",
         )
         .expect("SKILL.md");
-        let candidate = fixture
-            .coordinator
-            .prepare_candidate()
-            .await
-            .expect("prepare candidate");
-
-        // T1 parks inside commit while holding the capability state lock.
+        // T1 parks inside the runtime-owned commit while holding the
+        // capability state lock.
         let hook = Arc::new(crate::capabilities::test_sync::CommitBoundaryHook::default());
         fixture
             .coordinator
             .install_commit_boundary_hook(hook.clone());
-        let committing = fixture.coordinator.clone();
+        let reloading = fixture.runtime.clone();
         let (done_tx, done_rx) = std::sync::mpsc::channel();
-        let commit_task = tokio::task::spawn_blocking(move || {
-            let snapshot = committing.commit(candidate);
+        let reload_task = tokio::spawn(async move {
+            let result = reloading.reload_resources().await;
             done_tx.send(()).expect("the test still listens");
-            snapshot
+            result
         });
         hook.wait_entered();
 
@@ -3825,21 +3890,22 @@ mod tests {
             "the uncommitted candidate is not observable"
         );
 
-        // Release: the commit fires its observer with the capability lock
-        // still held and completes without ever taking the host lock.
+        // Release: the runtime publication fires its observer with the
+        // capability lock still held and completes without ever taking the
+        // host lock.
         hook.proceed();
         done_rx
             .recv()
-            .expect("an authoritative capability commit never waits on the host lock");
-        let committed = commit_task
+            .expect("an authoritative runtime publication never waits on the host lock");
+        let committed = reload_task
             .await
-            .expect("commit task")
-            .expect("commit succeeds");
-        assert!(committed.revision() > before.capabilities.revision);
+            .expect("reload task")
+            .expect("reload succeeds");
+        assert!(committed.capability_revision > before.capabilities.revision);
 
         // The enqueued observation folds at the next host lock acquisition.
         let (after, _) = fixture.host.snapshot().expect("snapshot");
-        assert_eq!(after.capabilities.revision, committed.revision());
+        assert_eq!(after.capabilities.revision, committed.capability_revision);
         assert!(
             after
                 .capabilities
@@ -3885,18 +3951,13 @@ mod tests {
             "schema_version = 1\nname = \"other-name\"\ndescription = \"Broken\"\nentrypoint = \"tool:main\"\nexecution = \"foreground_only\"\nconcurrency = \"sequential\"\n",
         )
         .expect("broken manifest");
-        let candidate = fixture
-            .coordinator
-            .prepare_candidate()
-            .await
-            .expect("prepare the availability-only candidate");
         let committed = fixture
-            .coordinator
-            .commit(candidate)
-            .expect("an availability-only commit succeeds");
+            .runtime
+            .reload_resources()
+            .await
+            .expect("an availability-only reload succeeds");
         assert_eq!(
-            committed.revision(),
-            revision_before,
+            committed.capability_revision, revision_before,
             "an availability-only change never fabricates a revision"
         );
 
@@ -3952,7 +4013,9 @@ mod tests {
                 activation_gate: None,
                 manual_compaction_settlement_gate: None,
                 submit_gate: None,
+                submit_arrival: None,
                 shutdown_arrival: None,
+                mcp_failure_drain_gate: None,
                 start_boundary_pause: None,
                 drain_linearization: None,
                 tool_start_pause: None,
@@ -4040,7 +4103,9 @@ mod tests {
                 activation_gate: None,
                 manual_compaction_settlement_gate: None,
                 submit_gate: None,
+                submit_arrival: None,
                 shutdown_arrival: None,
+                mcp_failure_drain_gate: None,
                 start_boundary_pause: None,
                 drain_linearization: None,
                 tool_start_pause: None,
@@ -4412,6 +4477,37 @@ mod tests {
         );
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn resource_reload_dispatches_through_the_async_runtime_client_control() {
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
+        let (attachment, _) = fixture
+            .host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .expect("attach");
+
+        let response = attachment
+            .handle_request_async(RuntimeClientRequest::ReloadResources {
+                id: crate::runtime_client::RequestId::new(1),
+            })
+            .await;
+        assert!(response.error.is_none());
+        assert!(matches!(
+            response.result,
+            Some(RuntimeClientResult::ResourcesReloaded {
+                resource_revision: 2,
+                capability_revision,
+            }) if capability_revision == fixture.coordinator.current_snapshot().revision()
+        ));
+        assert!(
+            fixture
+                .runtime
+                .coordinator_ledger()
+                .expect("idle canonical history")
+                .is_empty(),
+            "reload creates no conversation history"
+        );
+    }
+
     /// Shutdown is distinct from detach: it drains the current attempt to
     /// quiescence, and detach remains available afterwards.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -4562,7 +4658,9 @@ mod tests {
                 activation_gate: None,
                 manual_compaction_settlement_gate: None,
                 submit_gate: None,
+                submit_arrival: None,
                 shutdown_arrival: None,
+                mcp_failure_drain_gate: None,
                 start_boundary_pause: None,
                 drain_linearization: None,
                 tool_start_pause: None,
@@ -4649,7 +4747,9 @@ mod tests {
                 activation_gate: None,
                 manual_compaction_settlement_gate: None,
                 submit_gate: None,
+                submit_arrival: None,
                 shutdown_arrival: None,
+                mcp_failure_drain_gate: None,
                 start_boundary_pause: None,
                 drain_linearization: None,
                 tool_start_pause: None,
@@ -4880,7 +4980,9 @@ mod tests {
                 activation_gate: None,
                 manual_compaction_settlement_gate: None,
                 submit_gate: None,
+                submit_arrival: None,
                 shutdown_arrival: None,
+                mcp_failure_drain_gate: None,
                 start_boundary_pause: None,
                 drain_linearization: None,
                 tool_start_pause: None,
@@ -5044,22 +5146,19 @@ mod tests {
         })
         .await;
 
-        // A capability commit lands mid-attempt: the coordinator rejects it
+        // A resource reload lands mid-attempt: the runtime rejects it
         // deterministically — the attempt's lease pins the revision.
         write_probe_skill(
             fixture.runtime.tool_runtime().workspace().root(),
             "mid-attempt-skill",
         );
-        let candidate = fixture
-            .coordinator
-            .prepare_candidate()
-            .await
-            .expect("prepare");
-        let rejected = fixture.coordinator.commit(candidate);
+        let rejected = fixture.runtime.reload_resources().await;
         assert!(
             matches!(
                 rejected,
-                Err(crate::capabilities::CapabilityCommitError::Busy)
+                Err(crate::runtime::RuntimeResourceReloadError::Busy {
+                    reason: crate::runtime::RuntimeResourceReloadBusyReason::Attempt
+                })
             ),
             "an active attempt lease blocks capability mutation"
         );
@@ -5072,19 +5171,15 @@ mod tests {
         .await;
         await_request_history_len(&fixture.host, 1).await;
 
-        // After settlement the same commit succeeds; the admitted attempt's
+        // After settlement the same reload succeeds; the admitted attempt's
         // request facts still carry the pre-commit revision, and the
         // projection observes the post-commit revision.
-        let candidate = fixture
-            .coordinator
-            .prepare_candidate()
-            .await
-            .expect("prepare");
         let committed = fixture
-            .coordinator
-            .commit(candidate)
-            .expect("commit after settlement");
-        assert!(committed.revision() > revision_at_admission);
+            .runtime
+            .reload_resources()
+            .await
+            .expect("reload after settlement");
+        assert!(committed.capability_revision > revision_at_admission);
         let history = fixture.host.request_history();
         assert_eq!(
             request_snapshots(&history)[0].capability_revision,
@@ -5092,7 +5187,10 @@ mod tests {
             "the later capability change never retroactively mutates the admitted attempt"
         );
         let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
-        assert_eq!(snapshot.capabilities.revision, committed.revision());
+        assert_eq!(
+            snapshot.capabilities.revision,
+            committed.capability_revision
+        );
     }
 
     /// Builds a host with the projection linearization probe installed.
@@ -5166,6 +5264,8 @@ mod tests {
                 status_composer: composer(),
             },
             tool_runtime,
+            resources: test_resources(&coordinator),
+            resource_loader: test_resource_loader(&coordinator),
             capability: coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
@@ -5247,6 +5347,8 @@ mod tests {
                     status_composer: composer(),
                 },
                 tool_runtime,
+                resources: test_resources(&coordinator),
+                resource_loader: test_resource_loader(&coordinator),
                 capability: coordinator.clone(),
                 clock: Some(Arc::new(FixedRuntimeClock)),
                 initial_messages: Vec::new(),
@@ -5354,6 +5456,8 @@ mod tests {
                 status_composer: composer(),
             },
             tool_runtime,
+            resources: test_resources(&coordinator),
+            resource_loader: test_resource_loader(&coordinator),
             capability: coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
@@ -6186,8 +6290,8 @@ mod tests {
         let refused = fixture.coordinator.commit(candidate);
         assert_eq!(
             refused,
-            Err(crate::capabilities::CapabilityCommitError::ConversationInactive),
-            "a runtime-owned capability commit before activation is refused typed"
+            Err(crate::capabilities::CapabilityCommitError::RuntimePublicationRequired),
+            "a runtime-owned capability commit cannot bypass resource publication"
         );
 
         // The bootstrap snapshot is exactly the startup state at cursor 0.
@@ -6221,20 +6325,19 @@ mod tests {
         );
 
         // Activation opens every gate at once. The first real transition
-        // — the capability commit — receives cursor 1, the next — the
+        // — the resource/capability publication — receives cursor 1, the next — the
         // background dispatch commit — cursor 2.
         fixture.runtime.activate();
         let activated = fixture
-            .coordinator
-            .commit(
-                fixture
-                    .coordinator
-                    .prepare_candidate()
-                    .await
-                    .expect("prepare after activation"),
-            )
-            .expect("a runtime-owned commit succeeds after activation");
-        assert_eq!(activated.revision().get(), 1, "the first real activation");
+            .runtime
+            .reload_resources()
+            .await
+            .expect("a runtime-owned resource reload succeeds after activation");
+        assert_eq!(
+            activated.capability_revision.get(),
+            1,
+            "the first real activation"
+        );
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = registry
             .commit_dispatch(
                 registry
@@ -6420,6 +6523,8 @@ mod tests {
                 status_composer: composer(),
             },
             tool_runtime: fixture.tool_runtime.clone(),
+            resources: test_resources(&fixture.coordinator),
+            resource_loader: test_resource_loader(&fixture.coordinator),
             capability: fixture.coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
@@ -6676,7 +6781,9 @@ mod tests {
     /// transfer linearizes first, and a background commit that arrives
     /// afterwards fails typed `ConversationInactive` — no record published,
     /// the prepared runner rolls back, and the runtime remains inert until
-    /// `activate()`, after which a fresh dispatch commits normally.
+    /// `activate()`. Ordinary capability commits are independently rejected
+    /// because live publication belongs to resource reload; after activation,
+    /// a fresh background dispatch commits normally.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn runtime_claim_racing_the_background_commit_wins_and_commit_fails_inactive() {
         let fixture = ownership_fixture(Vec::new(), ToolRegistry::new()).await;
@@ -6768,6 +6875,7 @@ mod tests {
             fixture
                 .coordinator
                 .claim_conversation_runtime(&crate::runtime::types::ConversationLifecycle::new())
+                .is_some()
         );
 
         let refused = ConversationRuntime::new(claim_config(&fixture))
@@ -6794,10 +6902,11 @@ mod tests {
     /// runtime-owned semantic boundary observes exactly that transition.
     ///
     /// The activation gate parks `activate` before the lifecycle
-    /// transition: while parked, a background commit, a capability commit,
-    /// and a mailbox enqueue all observe `Inactive` and are refused typed
-    /// (consuming nothing); after the gate is released the same operations
-    /// observe `Running` and follow the normal running semantics. The park
+    /// transition: while parked, a background commit, an ordinary capability
+    /// commit, and a mailbox enqueue are refused typed (consuming nothing);
+    /// after the gate is released, live capability mutation uses resource
+    /// reload and the other operations observe `Running` and follow normal
+    /// semantics. The park
     /// proves both sides against the *one* shared decision — the mailbox,
     /// the background registry, and the capability coordinator can never
     /// observe contradictory lifecycle states, because there is only one
@@ -6815,7 +6924,9 @@ mod tests {
                 activation_gate: Some(gate.clone()),
                 manual_compaction_settlement_gate: None,
                 submit_gate: None,
+                submit_arrival: None,
                 shutdown_arrival: None,
+                mcp_failure_drain_gate: None,
                 start_boundary_pause: None,
                 drain_linearization: None,
                 tool_start_pause: None,
@@ -6871,7 +6982,7 @@ mod tests {
             .expect_err("a pre-transition capability commit is refused");
         assert_eq!(
             refused,
-            crate::capabilities::CapabilityCommitError::ConversationInactive
+            crate::capabilities::CapabilityCommitError::RuntimePublicationRequired
         );
 
         let refused = fixture
@@ -6910,11 +7021,13 @@ mod tests {
         };
         await_background_started(&mut started, "the post-transition runner starts").await;
 
-        let committed = coordinator
-            .commit(coordinator.prepare_candidate().await.expect("prepare"))
-            .expect("a post-transition capability commit succeeds");
+        let reloaded = fixture
+            .runtime
+            .reload_resources()
+            .await
+            .expect("a post-transition resource/capability reload succeeds");
         assert_eq!(
-            committed.revision().get(),
+            reloaded.capability_revision.get(),
             1,
             "the first live capability revision"
         );
@@ -6940,18 +7053,17 @@ mod tests {
         );
     }
 
-    /// The real-time ordered cross-subsystem regression: the old
-    /// implementation could produce "background commit succeeds, then a
-    /// capability commit that starts afterwards returns
-    /// `ConversationInactive`" across one activation call. With the one
-    /// shared lifecycle authority that history is structurally impossible.
+    /// The real-time ordered cross-subsystem regression: live capability
+    /// publication must use the runtime resource boundary even when a
+    /// background ownership commit has already observed `Running` and is
+    /// parked in its own commit section.
     ///
-    /// The registry commit-boundary hook parks a background commit after
-    /// it has already observed `Running` inside its critical section; a
-    /// capability commit that begins afterwards — and a second one that
-    /// begins after the background commit completed — must observe the
-    /// same `Running` lifecycle. The park and the task join prove the
-    /// real-time ordering with no timing assumptions.
+    /// The registry commit-boundary hook parks a background commit after it
+    /// has already observed `Running` inside its critical section; a
+    /// resource reload that begins afterwards is parked at the capability
+    /// publication boundary, then a second reload follows the background
+    /// completion. The parks and task joins prove the real-time ordering with
+    /// no timing assumptions.
     #[allow(clippy::too_many_lines)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn runtime_semantic_commits_cannot_disagree_across_activation() {
@@ -6965,7 +7077,7 @@ mod tests {
         let coordinator = fixture.coordinator.clone();
         fixture.runtime.activate();
 
-        // Real capability candidates for the two post-activation commits.
+        // Real resource generations for the two post-activation commits.
         write_probe_skill(&fixture.workspace, "pdf");
 
         // Prepare a background dispatch and park its commit at the
@@ -6994,13 +7106,21 @@ mod tests {
                 .expect("the background commit entered its boundary after observing Running");
         }
 
-        // A capability commit that begins now — real-time after the
-        // background commit's lifecycle observation — must observe the
-        // same Running lifecycle: it cannot fail ConversationInactive.
-        let committed = coordinator
-            .commit(coordinator.prepare_candidate().await.expect("prepare"))
-            .expect("the capability observes Running, never a stale Inactive");
-        assert_eq!(committed.revision().get(), 1);
+        // A resource reload that begins now — real-time after the background
+        // commit's lifecycle observation — owns both capability and resource
+        // publication. Park its capability half to make the ordering exact.
+        let capability_hook =
+            Arc::new(crate::capabilities::test_sync::CommitBoundaryHook::default());
+        coordinator.install_commit_boundary_hook(capability_hook.clone());
+        let reload_runtime = fixture.runtime.clone();
+        let reload_task = tokio::spawn(async move { reload_runtime.reload_resources().await });
+        capability_hook.wait_entered();
+        capability_hook.proceed();
+        let committed = reload_task
+            .await
+            .expect("reload task")
+            .expect("the runtime-owned publication observes Running");
+        assert_eq!(committed.capability_revision.get(), 1);
 
         // The background commit completes successfully.
         {
@@ -7019,12 +7139,14 @@ mod tests {
         await_background_started(&mut started, "the runner starts").await;
 
         // The old contradiction shape: B completed successfully, then C
-        // begins — C must still observe Running, never a stale Inactive.
+        // begins through a second resource publication.
         write_probe_skill(&fixture.workspace, "docx");
-        let committed = coordinator
-            .commit(coordinator.prepare_candidate().await.expect("prepare"))
-            .expect("a capability commit after the background completion cannot observe Inactive");
-        assert_eq!(committed.revision().get(), 2);
+        let committed = fixture
+            .runtime
+            .reload_resources()
+            .await
+            .expect("a second resource publication remains live");
+        assert_eq!(committed.capability_revision.get(), 2);
 
         // Settle the background execution cleanly.
         release.send_replace(true);
@@ -7063,7 +7185,9 @@ mod tests {
                 activation_gate: Some(gate.clone()),
                 manual_compaction_settlement_gate: None,
                 submit_gate: None,
+                submit_arrival: None,
                 shutdown_arrival: None,
+                mcp_failure_drain_gate: None,
                 start_boundary_pause: None,
                 drain_linearization: None,
                 tool_start_pause: None,

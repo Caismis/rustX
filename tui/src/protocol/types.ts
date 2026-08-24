@@ -133,12 +133,6 @@ export type AssistantContentBlock =
   | ({ type: "refusal" } & RefusalBlock)
   | ({ type: "image" } & ImageReference);
 
-export interface SystemMessageBlock {
-  id: MessageId;
-  authority: "platform" | "agent" | "runtime" | "skill" | "fleet";
-  content: TextBlock[];
-}
-
 export interface UserMessageBlock {
   id: MessageId;
   content: UserContentBlock[];
@@ -160,7 +154,6 @@ export interface ToolMessageBlock {
 }
 
 export type MessageBlock =
-  | ({ role: "system" } & SystemMessageBlock)
   | ({ role: "user" } & UserMessageBlock)
   | ({ role: "assistant" } & AssistantMessageBlock)
   | ({ role: "tool" } & ToolMessageBlock);
@@ -919,6 +912,7 @@ export type RuntimeClientRequest =
   | { method: "submit_inbound"; id: RequestId; content: UserContentBlock[] }
   | { method: "cancel_current_attempt"; id: RequestId }
   | { method: "compact_context"; id: RequestId }
+  | { method: "reload_resources"; id: RequestId }
   | {
       method: "interaction_respond";
       id: RequestId;
@@ -1006,6 +1000,7 @@ export type RuntimeClientRequestBody =
       "id"
     >
   | Omit<Extract<RuntimeClientRequest, { method: "compact_context" }>, "id">
+  | Omit<Extract<RuntimeClientRequest, { method: "reload_resources" }>, "id">
   | Omit<
       Extract<RuntimeClientRequest, { method: "interaction_respond" }>,
       "id"
@@ -1049,6 +1044,11 @@ export type RuntimeClientResult =
     }
   | { type: "attempt_cancellation_accepted"; attempt_id: AttemptId }
   | { type: "context_compacted"; context: RuntimeClientContextView }
+  | {
+      type: "resources_reloaded";
+      resource_revision: number;
+      capability_revision: CapabilityRevision;
+    }
   | { type: "interaction_response_accepted"; interaction_id: InteractionId }
   | {
       type: "snapshot";
@@ -1119,6 +1119,7 @@ export type RuntimeClientError =
   | { type: "not_attached" }
   | { type: "invalid_request"; message: string }
   | { type: "no_current_attempt" }
+  | { type: "resource_reload_busy"; reason: string }
   | { type: "interaction_not_pending"; interaction_id: InteractionId }
   | { type: "interaction_invalid_response"; message: string }
   | { type: "approval_mode_inactive" }
@@ -1245,6 +1246,8 @@ export function describeProtocolError(error: RuntimeClientError): string {
       return `invalid request: ${error.message}`;
     case "no_current_attempt":
       return "no attempt is currently cancellable";
+    case "resource_reload_busy":
+      return `runtime resources are busy: ${error.reason}`;
     case "interaction_not_pending":
       return `interaction ${error.interaction_id} is no longer pending`;
     case "interaction_invalid_response":

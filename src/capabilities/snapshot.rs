@@ -10,6 +10,7 @@ use crate::skills::SkillSnapshot;
 use crate::skills::environments::{NodeEnvironment, PythonEnvironment};
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::executor::ToolRegistry;
+use crate::tools::mcp::{McpRuntimeLeaseAuthority, McpRuntimeLeaseSet};
 
 /// The immutable capability snapshot observed by one attempt.
 ///
@@ -39,6 +40,11 @@ pub struct CapabilitySnapshot {
     python_environment: Option<PythonEnvironment>,
     node_environment: Option<NodeEnvironment>,
     effective_environment: ToolEnvironment,
+    /// The physical MCP lease authority paired with this exact immutable
+    /// capability generation. It is deliberately part of the snapshot
+    /// rather than read from mutable coordinator-current state at attempt
+    /// admission.
+    mcp_lease_authority: Arc<McpRuntimeLeaseAuthority>,
 }
 
 /// Two snapshots are equal when their capability content is equal: the
@@ -88,6 +94,7 @@ impl CapabilitySnapshot {
         python_environment: Option<PythonEnvironment>,
         node_environment: Option<NodeEnvironment>,
         effective_environment: ToolEnvironment,
+        mcp_lease_authority: Arc<McpRuntimeLeaseAuthority>,
     ) -> Self {
         Self {
             conversation_id,
@@ -99,6 +106,7 @@ impl CapabilitySnapshot {
             python_environment,
             node_environment,
             effective_environment,
+            mcp_lease_authority,
         }
     }
 
@@ -158,6 +166,12 @@ impl CapabilitySnapshot {
     #[must_use]
     pub fn effective_environment(&self) -> &ToolEnvironment {
         &self.effective_environment
+    }
+
+    /// Acquires the physical MCP leases paired with this immutable
+    /// capability generation.
+    pub(crate) fn acquire_mcp_leases(&self) -> Option<McpRuntimeLeaseSet> {
+        self.mcp_lease_authority.acquire()
     }
 
     /// The exact rendered Skill capability guidance of this immutable

@@ -35,12 +35,12 @@ use async_openai::types::chat::{
     ChatCompletionRequestAssistantMessageContent, ChatCompletionRequestAssistantMessageContentPart,
     ChatCompletionRequestMessage, ChatCompletionRequestMessageContentPartRefusal,
     ChatCompletionRequestMessageContentPartText, ChatCompletionRequestSystemMessage,
-    ChatCompletionRequestSystemMessageContent, ChatCompletionRequestSystemMessageContentPart,
-    ChatCompletionRequestToolMessage, ChatCompletionRequestToolMessageContent,
-    ChatCompletionRequestToolMessageContentPart, ChatCompletionRequestUserMessage,
-    ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
-    ChatCompletionStreamOptions, ChatCompletionTool, ChatCompletionTools, CompletionUsage,
-    CreateChatCompletionRequestArgs, FunctionCall, FunctionObject,
+    ChatCompletionRequestSystemMessageContent, ChatCompletionRequestToolMessage,
+    ChatCompletionRequestToolMessageContent, ChatCompletionRequestToolMessageContentPart,
+    ChatCompletionRequestUserMessage, ChatCompletionRequestUserMessageContent,
+    ChatCompletionRequestUserMessageContentPart, ChatCompletionStreamOptions, ChatCompletionTool,
+    ChatCompletionTools, CompletionUsage, CreateChatCompletionRequestArgs, FunctionCall,
+    FunctionObject,
 };
 use futures_util::StreamExt;
 use serde::Deserialize;
@@ -1200,38 +1200,6 @@ fn translate_messages(request: &ModelRequest) -> Result<Vec<TranslatedChatMessag
     }
     for block in &request.messages {
         let (translated, reasoning) = match block {
-            MessageBlock::System(system) => {
-                if !request.effective_system_prompt.is_empty() {
-                    continue;
-                }
-                let texts: Vec<String> = system
-                    .content
-                    .iter()
-                    .map(|text| text.text.clone())
-                    .collect();
-                let content = match texts.len() {
-                    1 => ChatCompletionRequestSystemMessageContent::Text(
-                        texts.into_iter().next().expect("exactly one text"),
-                    ),
-                    _ => ChatCompletionRequestSystemMessageContent::Array(
-                        texts
-                            .into_iter()
-                            .map(|text| {
-                                ChatCompletionRequestSystemMessageContentPart::Text(
-                                    ChatCompletionRequestMessageContentPartText { text },
-                                )
-                            })
-                            .collect(),
-                    ),
-                };
-                (
-                    ChatCompletionRequestMessage::System(ChatCompletionRequestSystemMessage {
-                        content,
-                        name: None,
-                    }),
-                    None,
-                )
-            }
             MessageBlock::User(user) => (translate_user_message(user)?, None),
             MessageBlock::Assistant(assistant) => {
                 let (message, reasoning) =

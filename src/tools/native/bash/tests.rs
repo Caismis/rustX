@@ -352,7 +352,7 @@ async fn spill_write_failure_after_allocation_fails_the_invocation_explicitly() 
         );
     };
     assert!(
-        diagnostic.contains("output"),
+        diagnostic.contains("capture") || diagnostic.contains("output"),
         "storage diagnostic: {diagnostic}"
     );
     assert!(

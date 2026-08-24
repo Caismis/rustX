@@ -268,6 +268,7 @@ mod tests {
     /// bundled asset through the same relative spelling `SKILL.md` uses —
     /// exactly what Bash would run. No virtual namespace participates.
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn reads_skill_files_at_their_published_host_paths() {
         let directory = tempfile::tempdir().expect("temporary root");
         let workspace = Workspace::new(directory.path()).expect("workspace");
@@ -291,6 +292,7 @@ mod tests {
         .expect("Skill discovery");
         let snapshot = SkillSnapshot::new(packages.into_iter().map(Arc::new).collect());
         let location = snapshot.catalog_entries()[0].location.clone();
+        let frozen_catalog = crate::skills::render_skill_catalog(snapshot.catalog_entries());
         assert_eq!(
             Path::new(&location),
             // Canonical, so this holds on platforms whose temporary root is
@@ -343,6 +345,33 @@ mod tests {
             panic!("Read returned unexpected content: {result:?}");
         };
         assert!(text.text.contains("assets/checklist.md"));
+
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: release-guide\ndescription: Release guidance.\n---\nCurrent body.\n",
+        )
+        .expect("edit known SKILL.md body");
+        let (invocation, execution) = context("read-skill-current", &location);
+        let current = ReadTool.execute(invocation, execution).await;
+        assert_eq!(current.status, ToolExecutionStatus::Success);
+        let Some(ToolResultContent::Text(current_text)) = current.content.first() else {
+            panic!("Read returned unexpected current content: {current:?}");
+        };
+        assert!(current_text.text.contains("Current body."));
+        assert!(
+            text.text.contains("assets/checklist.md"),
+            "the earlier ToolResult value is not rewritten"
+        );
+        assert_eq!(
+            crate::skills::render_skill_catalog(snapshot.catalog_entries()),
+            frozen_catalog,
+            "editing a known body cannot mutate the frozen catalog"
+        );
+
+        std::fs::remove_file(skill.join("SKILL.md")).expect("remove known SKILL.md");
+        let (invocation, execution) = context("read-skill-removed", &location);
+        let removed = ReadTool.execute(invocation, execution).await;
+        assert!(matches!(removed.status, ToolExecutionStatus::Failed { .. }));
 
         // The Skill's own relative reference, resolved against the package
         // directory the location names.

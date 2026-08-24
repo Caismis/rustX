@@ -112,7 +112,7 @@ impl ContextSummarizer for FakeContextSummarizer {
 ///
 /// Weights:
 ///
-/// - `per_message`: one whole user/tool/system message.
+/// - `per_message`: one whole canonical User or Tool message.
 /// - `per_block`: one content block of an Assistant message.
 /// - `per_tool`: one tool definition.
 /// - `per_summary_byte`: one summary text byte; a compaction summary message
@@ -195,7 +195,6 @@ impl ScriptedEstimator {
 
 fn message_id(message: &MessageBlock) -> rustx::runtime::identity::MessageId {
     match message {
-        MessageBlock::System(system) => system.id.clone(),
         MessageBlock::User(user) => user.id.clone(),
         MessageBlock::Assistant(assistant) => assistant.id.clone(),
         MessageBlock::Tool(tool) => tool.id.clone(),

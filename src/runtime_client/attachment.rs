@@ -100,6 +100,9 @@ impl RuntimeAttachment {
             RuntimeClientRequest::CompactContext { .. } => {
                 unreachable!("manual compaction is handled asynchronously")
             }
+            RuntimeClientRequest::ReloadResources { .. } => {
+                unreachable!("resource reload is handled asynchronously")
+            }
             RuntimeClientRequest::InteractionRespond {
                 interaction_id,
                 response,
@@ -181,6 +184,17 @@ impl RuntimeAttachment {
         if !matches!(request, RuntimeClientRequest::Shutdown { .. }) {
             if matches!(request, RuntimeClientRequest::CompactContext { .. }) {
                 let result = self.inner.compact_context().await;
+                return match result {
+                    Ok(result) => RuntimeClientResponse {
+                        id,
+                        result: Some(result),
+                        error: None,
+                    },
+                    Err(error) => Self::error_response(id, error),
+                };
+            }
+            if matches!(request, RuntimeClientRequest::ReloadResources { .. }) {
+                let result = self.inner.reload_resources().await;
                 return match result {
                     Ok(result) => RuntimeClientResponse {
                         id,

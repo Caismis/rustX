@@ -996,7 +996,6 @@ pub fn validate_content_modalities(
     };
     for message in messages {
         match message {
-            MessageBlock::System(_) => require(Modality::Text),
             MessageBlock::User(user) => {
                 for content in &user.content {
                     match content {

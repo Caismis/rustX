@@ -196,7 +196,6 @@ impl MessageLedger {
 #[must_use]
 pub fn message_id_of(message: &MessageBlock) -> MessageId {
     match message {
-        MessageBlock::System(system) => system.id.clone(),
         MessageBlock::User(user) => user.id.clone(),
         MessageBlock::Assistant(assistant) => assistant.id.clone(),
         MessageBlock::Tool(tool) => tool.id.clone(),
