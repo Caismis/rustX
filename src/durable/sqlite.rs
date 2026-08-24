@@ -1,9 +1,10 @@
 //! `SQLite` implementation of the semantic conversation durability contract.
 //!
-//! One database contains six deliberately separate authority domains:
+//! One database contains the deliberately separate authority domains:
 //! Pending Inbound, the append-only Message Ledger, immutable Surface
 //! operations, immutable Request Snapshots, the append-only Event Journal, and
-//! the durable publication plane (Issue #108).
+//! the durable publication plane (Issue #108). A narrow transcript ordering
+//! spine stores references only; it is not a body store or a second history.
 //! The tables share transactions where rustX needs one semantic linearization
 //! point, but no table is a serialized `ConversationRecord` or transcript.
 
@@ -51,7 +52,8 @@ use super::inbox::{
     AcceptedInbound, CanonicalMessagePage, CompactionCommitInput, ConversationStore,
     ConversationStoreError, DurableConversationHead, EventPage, InboundDraft, PendingBatch,
     PendingInboundItem, RequestSnapshotPage, SurfaceUserMessageBoundary,
-    SurfaceUserMessageBoundaryPage,
+    SurfaceUserMessageBoundaryPage, TRANSCRIPT_PAGE_LIMIT_MAX, TranscriptCursor, TranscriptEntry,
+    TranscriptItem, TranscriptPage,
 };
 
 /// The only schema accepted by this pre-production store. Incompatible
@@ -87,10 +89,14 @@ use super::inbox::{
 /// owning message must still be on the active Surface; payload bounds are
 /// store invariants; and a Question settlement must satisfy the exact
 /// requested Question. No new table or column was needed — the generation
-/// proof reuses the retained publication ownership v5 and v6 introduced. A
-/// v3/v4/v5/v6 database must fail at store open; there is no migration or
-/// compatibility path.
-pub const SQLITE_SCHEMA_VERSION: i64 = 7;
+/// proof reuses the retained publication ownership v5 and v6 introduced.
+/// Version 8 froze the Issue #110 derived transcript ordering spine: accepted
+/// inbound, visible canonical messages, publication audits, and interaction
+/// audit facts receive one durable reference position. Bodies remain owned by
+/// Pending Inbound, the Message Ledger, the publication plane, or the Event
+/// Journal. A v3/v4/v5/v6/v7 database must fail at store open; there is no
+/// migration or compatibility path.
+pub const SQLITE_SCHEMA_VERSION: i64 = 8;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -1031,6 +1037,15 @@ impl ConversationStore for SqliteConversationStore {
         })
     }
 
+    fn load_transcript_page(
+        &self,
+        before: Option<TranscriptCursor>,
+        limit: usize,
+    ) -> Result<TranscriptPage, ConversationStoreError> {
+        let connection = self.lock()?;
+        load_transcript_page(&connection, before, limit)
+    }
+
     fn commit_model_turn_start(
         &self,
         context: &[MessageBlock],
@@ -1630,6 +1645,7 @@ impl ConversationStore for SqliteConversationStore {
                 params![stream_id.as_str(), encode(&audit, "publication audit")?],
             )
             .map_err(|error| storage(format!("insert publication audit: {error}")))?;
+        append_transcript_reference(&transaction, "publication_audit", stream_id.as_str())?;
         // Consolidation replaces the transient frames: the durable footprint
         // of a settled audit is one bounded object, never O(frames) rows.
         clear_publication_staging(&transaction, stream_id)?;
@@ -2751,6 +2767,14 @@ fn accept_inbound_tx(
             )
             .map_err(|error| storage(format!("insert correlation: {error}")))?;
     }
+    // Acceptance is the durable-before-display frontier for an ordinary
+    // inbound user message. Context facts are durable model input but are not
+    // ordinary transcript content, so they never receive an ordering row.
+    // Adoption later reuses this same reference when a visible body moves
+    // into the Message Ledger.
+    if !matches!(message.kind, InboundKind::Context(_)) {
+        append_transcript_reference(transaction, "message", message_id.as_str())?;
+    }
     Ok(AcceptedInbound {
         sequence: InboundSequence::new(sequence),
         message_id,
@@ -2942,7 +2966,8 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 schema_version INTEGER NOT NULL,
                 conversation_id TEXT NOT NULL,
                 next_inbound_sequence INTEGER NOT NULL CHECK(next_inbound_sequence >= 0),
-                next_event_sequence INTEGER NOT NULL CHECK(next_event_sequence >= 0)
+                next_event_sequence INTEGER NOT NULL CHECK(next_event_sequence >= 0),
+                next_transcript_position INTEGER NOT NULL CHECK(next_transcript_position >= 0)
             );
             CREATE TABLE IF NOT EXISTS pending_inbound (
                 sequence INTEGER PRIMARY KEY,
@@ -2959,6 +2984,11 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 position INTEGER PRIMARY KEY,
                 message_id TEXT NOT NULL UNIQUE,
                 message_json TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS transcript_order (
+                position INTEGER PRIMARY KEY,
+                reference_kind TEXT NOT NULL,
+                reference_id TEXT NOT NULL UNIQUE
             );
             CREATE TABLE IF NOT EXISTS bootstrap_identity (
                 id INTEGER PRIMARY KEY CHECK(id=1),
@@ -3035,6 +3065,7 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
             );
             CREATE INDEX IF NOT EXISTS pending_inbound_sequence_idx ON pending_inbound(sequence);
             CREATE INDEX IF NOT EXISTS message_ledger_id_idx ON message_ledger(message_id);
+            CREATE INDEX IF NOT EXISTS transcript_order_reference_idx ON transcript_order(reference_kind, reference_id);
             CREATE INDEX IF NOT EXISTS surface_ops_revision_idx ON surface_ops(revision);
             CREATE INDEX IF NOT EXISTS events_sequence_idx ON events(sequence);
             CREATE INDEX IF NOT EXISTS events_attempt_idx ON events(attempt_id, sequence);
@@ -3045,7 +3076,7 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
         .map_err(|error| storage(format!("create schema: {error}")))?;
     connection
         .execute(
-            "INSERT OR IGNORE INTO rustx_store(id,schema_version,conversation_id,next_inbound_sequence,next_event_sequence) VALUES(1,?1,'',0,0)",
+            "INSERT OR IGNORE INTO rustx_store(id,schema_version,conversation_id,next_inbound_sequence,next_event_sequence,next_transcript_position) VALUES(1,?1,'',0,0,0)",
             params![SQLITE_SCHEMA_VERSION],
         )
         .map_err(|error| storage(format!("create schema root: {error}")))?;
@@ -3076,6 +3107,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "conversation_id",
                 "next_inbound_sequence",
                 "next_event_sequence",
+                "next_transcript_position",
             ] as &[&str],
         ),
         (
@@ -3089,6 +3121,10 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         (
             "message_ledger",
             &["position", "message_id", "message_json"],
+        ),
+        (
+            "transcript_order",
+            &["position", "reference_kind", "reference_id"],
         ),
         ("bootstrap_identity", &["message_count", "history_digest"]),
         (
@@ -3179,6 +3215,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         ("pending_inbound", "message_id"),
         ("inbound_correlation", "message_id"),
         ("message_ledger", "message_id"),
+        ("transcript_order", "reference_id"),
         ("events", "event_id"),
         ("request_snapshots", "request_id"),
         ("publication_streams", "stream_id"),
@@ -3551,6 +3588,71 @@ fn append_message_ledger(
             params![position, id.as_str(), encode(message, "canonical message")?],
         )
         .map_err(|error| map_insert_error(&error, &id))?;
+    if transcript_visible_message(message) {
+        append_transcript_reference(transaction, "message", id.as_str())?;
+    }
+    Ok(())
+}
+
+/// Whether one canonical message is ordinary user-facing transcript content.
+///
+/// Context messages remain durable model history but are deliberately absent
+/// from the normal transcript. User messages, including compaction summaries,
+/// Assistant generations, and Tool results are visible semantic content.
+fn transcript_visible_message(message: &MessageBlock) -> bool {
+    !matches!(
+        message,
+        MessageBlock::User(user)
+            if matches!(user.kind, InboundKind::Context(_))
+    )
+}
+
+/// Appends one low-frequency transcript reference, or verifies the existing
+/// reference when an accepted Pending Inbound message is adopted into the
+/// Ledger. No message, audit, or event body is stored here.
+fn append_transcript_reference(
+    transaction: &Transaction<'_>,
+    reference_kind: &str,
+    reference_id: &str,
+) -> Result<(), ConversationStoreError> {
+    let existing: Option<(String, i64)> = transaction
+        .query_row(
+            "SELECT reference_kind,position FROM transcript_order WHERE reference_id=?1",
+            [reference_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|error| storage(format!("transcript reference probe: {error}")))?;
+    if let Some((existing_kind, _)) = existing {
+        if existing_kind != reference_kind {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "transcript reference {reference_id} changes kind from {existing_kind} to {reference_kind}"
+            )));
+        }
+        return Ok(());
+    }
+    let current: i64 = transaction
+        .query_row(
+            "SELECT next_transcript_position FROM rustx_store WHERE id=1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| storage(format!("read transcript position: {error}")))?;
+    let position = current
+        .checked_add(1)
+        .ok_or_else(|| storage("transcript position exhausted"))?;
+    transaction
+        .execute(
+            "INSERT INTO transcript_order(position,reference_kind,reference_id) VALUES(?1,?2,?3)",
+            params![position, reference_kind, reference_id],
+        )
+        .map_err(|error| storage(format!("insert transcript reference: {error}")))?;
+    transaction
+        .execute(
+            "UPDATE rustx_store SET next_transcript_position=?1 WHERE id=1",
+            [position],
+        )
+        .map_err(|error| storage(format!("update transcript position: {error}")))?;
     Ok(())
 }
 
@@ -3739,6 +3841,186 @@ fn load_canonical_rows(
         Ok(message)
     })
     .collect()
+}
+
+/// Reads the bounded transcript ordering spine newest-first, resolves each
+/// reference through its canonical durable owner, and returns the selected
+/// rows in chronological order.
+fn load_transcript_page(
+    connection: &Connection,
+    before: Option<TranscriptCursor>,
+    limit: usize,
+) -> Result<TranscriptPage, ConversationStoreError> {
+    if limit == 0 {
+        return Ok(TranscriptPage {
+            entries: Vec::new(),
+            next_cursor: None,
+        });
+    }
+    if limit > TRANSCRIPT_PAGE_LIMIT_MAX {
+        return Err(storage(format!(
+            "transcript page limit {limit} exceeds maximum {TRANSCRIPT_PAGE_LIMIT_MAX}"
+        )));
+    }
+    let before = before
+        .map(|cursor| seq_to_i64(cursor.get()))
+        .transpose()?
+        .unwrap_or(i64::MAX);
+    let fetch_limit = i64::try_from(limit + 1)
+        .map_err(|_| storage("transcript page limit is not representable"))?;
+    let mut statement = connection
+        .prepare(
+            "SELECT position,reference_kind,reference_id
+             FROM transcript_order
+             WHERE position < ?1
+             ORDER BY position DESC
+             LIMIT ?2",
+        )
+        .map_err(|error| storage(format!("transcript page: {error}")))?;
+    let rows = statement
+        .query_map(params![before, fetch_limit], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|error| storage(format!("transcript page query: {error}")))?;
+    let mut references = rows
+        .map(|row| row.map_err(|error| storage(format!("transcript page row: {error}"))))
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+
+    let has_more = references.len() > limit;
+    references.truncate(limit);
+    let next_cursor = has_more
+        .then(|| references.last().map(|(position, _, _)| *position))
+        .flatten()
+        .map(|position| {
+            TranscriptCursor::new(
+                u64::try_from(position).expect("transcript positions are non-negative"),
+            )
+        });
+    references.reverse();
+    let entries = references
+        .into_iter()
+        .map(|(position, reference_kind, reference_id)| {
+            let cursor = TranscriptCursor::new(
+                u64::try_from(position).map_err(|_| storage("negative transcript position"))?,
+            );
+            let item = load_transcript_item(connection, &reference_kind, &reference_id)?;
+            Ok(TranscriptEntry { cursor, item })
+        })
+        .collect::<Result<Vec<_>, ConversationStoreError>>()?;
+    Ok(TranscriptPage {
+        entries,
+        next_cursor,
+    })
+}
+
+/// Resolves one transcript reference without copying its body into the
+/// ordering table.
+fn load_transcript_item(
+    connection: &Connection,
+    reference_kind: &str,
+    reference_id: &str,
+) -> Result<TranscriptItem, ConversationStoreError> {
+    match reference_kind {
+        "message" => {
+            let ledger_json: Option<String> = connection
+                .query_row(
+                    "SELECT message_json FROM message_ledger WHERE message_id=?1",
+                    [reference_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|error| storage(format!("transcript Ledger lookup: {error}")))?;
+            let message = if let Some(json) = ledger_json {
+                decode::<MessageBlock>(&json, "transcript message")?
+            } else {
+                let json: String = connection
+                    .query_row(
+                        "SELECT message_json FROM pending_inbound WHERE message_id=?1",
+                        [reference_id],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(|error| storage(format!("transcript pending lookup: {error}")))?
+                    .ok_or_else(|| {
+                        ConversationStoreError::InvalidReference(format!(
+                            "transcript message reference {reference_id} has no durable owner"
+                        ))
+                    })?;
+                MessageBlock::User(decode::<UserMessageBlock>(
+                    &json,
+                    "transcript pending message",
+                )?)
+            };
+            if crate::conversation::message_id_of(&message).as_str() != reference_id {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "transcript message reference {reference_id} contains a different message"
+                )));
+            }
+            Ok(TranscriptItem::Message { message })
+        }
+        "publication_audit" => {
+            let json: String = connection
+                .query_row(
+                    "SELECT audit_json FROM publication_audits WHERE stream_id=?1",
+                    [reference_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|error| storage(format!("transcript publication audit lookup: {error}")))?
+                .ok_or_else(|| {
+                    ConversationStoreError::InvalidReference(format!(
+                        "transcript publication audit reference {reference_id} has no durable audit"
+                    ))
+                })?;
+            let audit: PublicationAudit = decode(&json, "transcript publication audit")?;
+            if audit.stream_id.as_str() != reference_id {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "transcript publication audit reference {reference_id} contains a different stream"
+                )));
+            }
+            Ok(TranscriptItem::PublicationAudit { audit })
+        }
+        "interaction_event" => {
+            let json: String = connection
+                .query_row(
+                    "SELECT event_json FROM events WHERE event_id=?1",
+                    [reference_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|error| storage(format!("transcript interaction lookup: {error}")))?
+                .ok_or_else(|| {
+                    ConversationStoreError::InvalidReference(format!(
+                        "transcript interaction reference {reference_id} has no durable event"
+                    ))
+                })?;
+            let event: RuntimeEventEnvelope = decode(&json, "transcript interaction")?;
+            if event.event_id.as_str() != reference_id {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "transcript interaction reference {reference_id} contains a different event"
+                )));
+            }
+            match &event.event {
+                RuntimeEvent::InteractionRequested { .. } => {
+                    Ok(TranscriptItem::InteractionRequested { event })
+                }
+                RuntimeEvent::InteractionSettled { .. } => {
+                    Ok(TranscriptItem::InteractionSettled { event })
+                }
+                _ => Err(ConversationStoreError::InvalidReference(format!(
+                    "transcript interaction reference {reference_id} is not an interaction audit"
+                ))),
+            }
+        }
+        other => Err(ConversationStoreError::InvalidReference(format!(
+            "unknown transcript reference kind {other}"
+        ))),
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -4247,6 +4529,12 @@ fn persist_event_tx(
             [sequence],
         )
         .map_err(|error| storage(format!("update event sequence: {error}")))?;
+    if matches!(
+        &event.event,
+        RuntimeEvent::InteractionRequested { .. } | RuntimeEvent::InteractionSettled { .. }
+    ) {
+        append_transcript_reference(transaction, "interaction_event", event.event_id.as_str())?;
+    }
     // The **P** marker: a durable provider outcome is recorded against its
     // exact request, so the publication plane can reject U-without-P with one
     // keyed lookup instead of a Journal scan.

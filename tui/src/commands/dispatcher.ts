@@ -1053,7 +1053,6 @@ export function renderDebug(
     `- inbound pending: ${(state.inbound.pending ?? []).length}`,
     `- background executions: ${state.background.length} (${activeBackground(state).length} active)`,
     `- transcript entries: ${state.transcript.length}`,
-    `- unacknowledged local submissions: ${state.pendingSubmissions.length}`,
   ];
 
   if (diagnostics.stderrTail.length > 0) {

@@ -55,9 +55,6 @@ import {
   type ExpandTarget,
   type PreferenceChange,
 } from "../commands/dispatcher.ts";
-import {
-  withPendingSubmission,
-} from "../presentation/projection.ts";
 import { focusedInteraction } from "../presentation/selectors.ts";
 import { correlateTools } from "../presentation/tools.ts";
 import type { PresentationState } from "../presentation/state.ts";
@@ -160,7 +157,6 @@ export class RustxTuiApp {
   #restarting = false;
   #presentationEpoch = 0;
   #terminalFinishStarted = false;
-  #submissionOrdinal = 0;
   #removeStateListener: (() => void) | undefined;
   #removeSnapshotListener: (() => void) | undefined;
   #removeCloseListener: (() => void) | undefined;
@@ -291,6 +287,21 @@ export class RustxTuiApp {
         // Ctrl+L is presentation-only input. `/model` remains the canonical
         // semantic command, and its complete CommandOutcome comes back
         // through the one app-level interpreter below.
+        if (matchesKey(data, "pageUp")) {
+          if (this.#overlay !== undefined) {
+            return undefined;
+          }
+          const lease = this.#presentationLease();
+          void lease.session.loadOlderTranscript().then((loaded) => {
+            if (!this.#isCurrentPresentationLease(lease) || !loaded) return;
+            this.#showTransient("info", "loaded older transcript history");
+          }).catch((error: unknown) => {
+            if (this.#isCurrentPresentationLease(lease)) {
+              this.#showTransient("error", `transcript page failed: ${compactDiagnostic(error)}`);
+            }
+          });
+          return { consume: true };
+        }
         if (matchesKey(data, "ctrl+l")) {
           // Do not steal this key from a focused overlay. Pi will deliver it
           // to the overlay, where it is ordinary non-editing input.
@@ -349,20 +360,6 @@ export class RustxTuiApp {
     }
     this.#editor.addToHistory(text);
     this.#editor.setText("");
-
-    // Optimistic echo, explicitly transient: it is reconciled away by the
-    // runtime's authoritative inbound fact and is never canonical history.
-    const key = `local-${++this.#submissionOrdinal}`;
-    // Focused interaction answers are not inbound messages. The dispatcher
-    // repeats this projection check at the semantic routing boundary; this
-    // copy only prevents a misleading optimistic inbound echo.
-    const optimistic = !line.startsWith("/") &&
-      focusedInteraction(lease.session.state) === undefined;
-    if (optimistic) {
-      lease.session.updateState((state) =>
-        withPendingSubmission(state, key, line),
-      );
-    }
 
     try {
       const outcome = await this.#dispatcher.submit(text);

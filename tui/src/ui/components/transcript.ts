@@ -36,6 +36,9 @@ import type {
   StreamingMessage,
   TranscriptCommitted,
   TranscriptEntry,
+  TranscriptInteractionRequested,
+  TranscriptInteractionSettled,
+  TranscriptPublicationAudit,
 } from "../../presentation/state.ts";
 import type { RuntimeClientOutcome } from "../../protocol/types.ts";
 import {
@@ -82,7 +85,7 @@ export function transcriptContext(
   return { preferences, correlation: correlateTools(state) };
 }
 
-/** The whole transcript, including the client's unacknowledged echoes. */
+/** The whole transcript, including durable messages and historical audits. */
 export function renderTranscript(
   state: PresentationState,
   preferences: PresentationPreferences,
@@ -99,18 +102,6 @@ export function renderTranscript(
   const attemptOutcome = renderAttemptOutcome(state);
   if (attemptOutcome !== undefined) {
     blocks.push(attemptOutcome);
-  }
-  for (const pending of state.pendingSubmissions) {
-    // Explicitly marked unacknowledged so it can never read as canonical
-    // history. The runtime's own inbound fact replaces it.
-    blocks.push({
-      kind: "text",
-      key: `pending:${pending.key}`,
-      text: [
-        role.meta("▌ awaiting runtime acknowledgement"),
-        ...bar(pending.text, style.dim),
-      ].join("\n"),
-    });
   }
   return blocks;
 }
@@ -193,9 +184,118 @@ export function renderEntryBlocks(
   entry: TranscriptEntry,
   context: TranscriptContext,
 ): TranscriptBlock[] {
-  return entry.kind === "streaming"
-    ? renderStreaming(entry, context)
-    : renderCommitted(entry, context);
+  switch (entry.kind) {
+    case "streaming":
+      return renderStreaming(entry, context);
+    case "committed":
+      return renderCommitted(entry, context);
+    case "publication_audit":
+      return renderPublicationAudit(entry);
+    case "interaction_requested":
+      return renderInteractionRequested(entry);
+    case "interaction_settled":
+      return renderInteractionSettled(entry);
+  }
+}
+
+/** Renders noncanonical publication output without creating Tool Plane cards. */
+function renderPublicationAudit(
+  entry: TranscriptPublicationAudit,
+): TranscriptBlock[] {
+  const audit = entry.audit;
+  const heading =
+    audit.kind === "incomplete" ? "incomplete" : "unaccepted";
+  const blocks: TranscriptBlock[] = [
+    {
+      kind: "text",
+      key: `${entry.key}:heading`,
+      text: role.warning(`▌ assistant output · ${heading} · noncanonical`),
+    },
+  ];
+  for (const [index, block] of audit.content.entries()) {
+    const key = `${entry.key}:${index}`;
+    switch (block.kind) {
+      case "text":
+        blocks.push({ kind: "markdown", key, markdown: block.text });
+        break;
+      case "reasoning":
+        blocks.push({
+          kind: "text",
+          key,
+          text: role.reasoning(block.text),
+        });
+        break;
+      case "refusal":
+        blocks.push(refusalBlock(key, block.text));
+        break;
+      case "proposed_tool_call":
+        blocks.push({
+          kind: "text",
+          key,
+          text: [
+            role.warning(
+              `◇ proposed tool call · ${block.name} · not accepted · not executed`,
+            ),
+            ...bar(block.arguments, style.dim),
+          ].join("\n"),
+        });
+        break;
+    }
+  }
+  return blocks;
+}
+
+/** Renders durable interaction evidence as historical, non-actionable text. */
+function renderInteractionRequested(
+  entry: TranscriptInteractionRequested,
+): TranscriptBlock[] {
+  const lines = [role.meta("▌ historical interaction · requested · not actionable")];
+  if (entry.subject.type === "approval") {
+    lines.push(
+      role.warning(`approval · ${entry.subject.tool_name} · proposed call ${entry.subject.call_id}`),
+      ...bar(entry.subject.reason, style.dim),
+      ...bar(`arguments digest: ${entry.subject.arguments_digest}`, style.dim),
+    );
+  } else {
+    lines.push(role.warning("question"), ...bar(entry.subject.prompt, style.dim));
+    if (entry.subject.choices !== undefined) {
+      lines.push(...bar(`choices: ${entry.subject.choices.join(", ")}`, style.dim));
+    }
+  }
+  return [{ kind: "text", key: entry.key, text: lines.join("\n") }];
+}
+
+/** Renders every settled interaction value without making it actionable. */
+function renderInteractionSettled(
+  entry: TranscriptInteractionSettled,
+): TranscriptBlock[] {
+  const lines = [
+    role.meta(
+      `▌ historical interaction · settled · ${settlementLabel(entry.settlement)}`,
+    ),
+  ];
+  if (entry.settlement.type === "denied" || entry.settlement.type === "cancelled") {
+    lines.push(...bar(entry.settlement.reason, style.dim));
+  } else if (entry.settlement.type === "answered") {
+    const answer = entry.settlement.answer;
+    lines.push(...bar(`${answer.type}: ${answer.value}`, style.dim));
+  }
+  return [{ kind: "text", key: entry.key, text: lines.join("\n") }];
+}
+
+function settlementLabel(
+  settlement: TranscriptInteractionSettled["settlement"],
+): string {
+  switch (settlement.type) {
+    case "approved":
+      return "approved";
+    case "denied":
+      return "denied";
+    case "answered":
+      return "answered";
+    case "cancelled":
+      return "cancelled";
+  }
 }
 
 // ---------------------------------------------------------------------------

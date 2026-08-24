@@ -27,12 +27,15 @@ use serde::{Deserialize, Serialize};
 
 use super::event::RuntimeClientOutcome;
 use crate::conversation::SurfaceRevision;
+use crate::events::interaction::{InteractionSettlement, InteractionSubject};
+use crate::events::types::RuntimeEventEnvelope;
 use crate::message::types::{ContentBlockIndex, MessageBlock, UserMessageBlock};
 use crate::model::session::{AttemptModelView, SessionModelView};
 use crate::model::types::ModelUsage;
+use crate::publication::PublicationAudit;
 use crate::runtime::identity::{
-    AttemptId, CapabilityRevision, ConversationId, MessageId, SkillId, SkillVersionId, ToolCallId,
-    ToolExecutionId, ToolId,
+    AttemptId, CapabilityRevision, ConversationId, EventId, InteractionId, MessageId, SkillId,
+    SkillVersionId, ToolCallId, ToolExecutionId, ToolId, TurnId,
 };
 use crate::runtime::inbound::InboundSequence;
 use crate::runtime::interaction::InteractionRequest;
@@ -89,6 +92,11 @@ pub struct RuntimeClientSnapshot {
     /// current Surface working set, while historical Ledger pages remain
     /// available through `ConversationStore` APIs.
     pub messages: Vec<MessageBlock>,
+    /// The bounded newest page of the derived durable transcript. This is
+    /// distinct from `messages`: the latter is the current Surface working
+    /// set, while this page remains readable after compaction retires Surface
+    /// messages. Older pages are fetched through `transcript_page_get`.
+    pub transcript: RuntimeClientTranscriptPage,
     /// The current/latest attempt view, when any attempt exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempt: Option<RuntimeClientAttempt>,
@@ -131,6 +139,284 @@ pub struct RuntimeClientSnapshot {
     /// No credential, adapter object, provider HTTP client, or
     /// synchronization identity appears here.
     pub model: SessionModelView,
+}
+
+/// One bounded newest-or-older page of derived transcript history.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeClientTranscriptPage {
+    /// Items in chronological order within this page.
+    #[serde(default)]
+    pub entries: Vec<RuntimeClientTranscriptEntry>,
+    /// The exclusive cursor for the next older page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<RuntimeClientTranscriptCursor>,
+}
+
+/// One derived transcript item and its stable durable cursor.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RuntimeClientTranscriptEntry {
+    /// The durable transcript position, not the Runtime Client event cursor.
+    pub cursor: RuntimeClientTranscriptCursor,
+    /// The typed item resolved from a canonical durable owner.
+    pub item: RuntimeClientTranscriptItem,
+}
+
+/// One live-published requested interaction audit projection.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RuntimeClientTranscriptInteractionRequested {
+    /// Durable Event Journal event identity.
+    pub event_id: EventId,
+    /// Event timestamp.
+    pub timestamp: DateTime<Utc>,
+    /// Owning attempt.
+    pub attempt_id: AttemptId,
+    /// Owning turn.
+    pub turn_id: TurnId,
+    /// Interaction identity.
+    pub interaction_id: InteractionId,
+    /// Bounded durable subject.
+    pub subject: InteractionSubject,
+}
+
+/// One live-published settled interaction audit projection.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RuntimeClientTranscriptInteractionSettled {
+    /// Durable Event Journal event identity.
+    pub event_id: EventId,
+    /// Event timestamp.
+    pub timestamp: DateTime<Utc>,
+    /// Owning attempt.
+    pub attempt_id: AttemptId,
+    /// Owning turn.
+    pub turn_id: TurnId,
+    /// Interaction identity.
+    pub interaction_id: InteractionId,
+    /// Bounded durable settlement.
+    pub settlement: InteractionSettlement,
+}
+
+/// The explicit Runtime Client transcript vocabulary.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RuntimeClientTranscriptItem {
+    /// A user, Assistant, or Tool message body from Pending Inbound or Ledger.
+    Message {
+        /// The canonical or durably accepted message.
+        message: MessageBlock,
+    },
+    /// A noncanonical Assistant publication audit.
+    PublicationAudit {
+        /// The bounded immutable publication audit.
+        audit: PublicationAudit,
+    },
+    /// A historical interaction request audit. It is never a live waiter.
+    InteractionRequested {
+        /// Durable Event Journal event identity.
+        event_id: EventId,
+        /// Event timestamp.
+        timestamp: DateTime<Utc>,
+        /// Owning attempt.
+        attempt_id: AttemptId,
+        /// Owning turn.
+        turn_id: TurnId,
+        /// Interaction identity.
+        interaction_id: InteractionId,
+        /// Bounded durable subject.
+        subject: InteractionSubject,
+    },
+    /// A historical interaction settlement audit. It is never actionable.
+    InteractionSettled {
+        /// Durable Event Journal event identity.
+        event_id: EventId,
+        /// Event timestamp.
+        timestamp: DateTime<Utc>,
+        /// Owning attempt.
+        attempt_id: AttemptId,
+        /// Owning turn.
+        turn_id: TurnId,
+        /// Interaction identity.
+        interaction_id: InteractionId,
+        /// Bounded durable settlement.
+        settlement: InteractionSettlement,
+    },
+}
+
+/// The cursor domain of durable transcript paging.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct RuntimeClientTranscriptCursor(u64);
+
+impl RuntimeClientTranscriptCursor {
+    /// Creates a transcript cursor from its wire value.
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    /// Returns the wire value.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl From<crate::durable::TranscriptCursor> for RuntimeClientTranscriptCursor {
+    fn from(cursor: crate::durable::TranscriptCursor) -> Self {
+        Self::new(cursor.get())
+    }
+}
+
+impl From<RuntimeClientTranscriptCursor> for crate::durable::TranscriptCursor {
+    fn from(cursor: RuntimeClientTranscriptCursor) -> Self {
+        Self::new(cursor.get())
+    }
+}
+
+/// Converts one durable transcript page into the explicit Runtime Client
+/// read model. Invalid durable interaction shapes are rejected rather than
+/// fabricated into a display item.
+pub(crate) fn transcript_page_view(
+    page: crate::durable::TranscriptPage,
+) -> Result<RuntimeClientTranscriptPage, String> {
+    let entries = page
+        .entries
+        .into_iter()
+        .map(|entry| {
+            let item = match entry.item {
+                crate::durable::TranscriptItem::Message { message } => {
+                    RuntimeClientTranscriptItem::Message { message }
+                }
+                crate::durable::TranscriptItem::PublicationAudit { audit } => {
+                    RuntimeClientTranscriptItem::PublicationAudit { audit }
+                }
+                crate::durable::TranscriptItem::InteractionRequested { event } => {
+                    let RuntimeEventEnvelope {
+                        event_id,
+                        timestamp,
+                        attempt_id: Some(attempt_id),
+                        turn_id: Some(turn_id),
+                        event:
+                            crate::events::types::RuntimeEvent::InteractionRequested {
+                                interaction_id,
+                                subject,
+                            },
+                        ..
+                    } = event
+                    else {
+                        return Err(
+                            "durable transcript requested interaction has an invalid envelope"
+                                .to_owned(),
+                        );
+                    };
+                    RuntimeClientTranscriptItem::InteractionRequested {
+                        event_id,
+                        timestamp,
+                        attempt_id,
+                        turn_id,
+                        interaction_id,
+                        subject,
+                    }
+                }
+                crate::durable::TranscriptItem::InteractionSettled { event } => {
+                    let RuntimeEventEnvelope {
+                        event_id,
+                        timestamp,
+                        attempt_id: Some(attempt_id),
+                        turn_id: Some(turn_id),
+                        event:
+                            crate::events::types::RuntimeEvent::InteractionSettled {
+                                interaction_id,
+                                settlement,
+                            },
+                        ..
+                    } = event
+                    else {
+                        return Err(
+                            "durable transcript settled interaction has an invalid envelope"
+                                .to_owned(),
+                        );
+                    };
+                    RuntimeClientTranscriptItem::InteractionSettled {
+                        event_id,
+                        timestamp,
+                        attempt_id,
+                        turn_id,
+                        interaction_id,
+                        settlement,
+                    }
+                }
+            };
+            Ok(RuntimeClientTranscriptEntry {
+                cursor: entry.cursor.into(),
+                item,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(RuntimeClientTranscriptPage {
+        entries,
+        next_cursor: page.next_cursor.map(Into::into),
+    })
+}
+
+/// Converts one live requested interaction audit envelope into its client
+/// transcript view.
+pub(crate) fn interaction_requested_view(
+    event: RuntimeEventEnvelope,
+) -> Result<RuntimeClientTranscriptInteractionRequested, String> {
+    let RuntimeEventEnvelope {
+        event_id,
+        timestamp,
+        attempt_id: Some(attempt_id),
+        turn_id: Some(turn_id),
+        event:
+            crate::events::types::RuntimeEvent::InteractionRequested {
+                interaction_id,
+                subject,
+            },
+        ..
+    } = event
+    else {
+        return Err("interaction requested audit has an invalid envelope".to_owned());
+    };
+    Ok(RuntimeClientTranscriptInteractionRequested {
+        event_id,
+        timestamp,
+        attempt_id,
+        turn_id,
+        interaction_id,
+        subject,
+    })
+}
+
+/// Converts one live settled interaction audit envelope into its client
+/// transcript view.
+pub(crate) fn interaction_settled_view(
+    event: RuntimeEventEnvelope,
+) -> Result<RuntimeClientTranscriptInteractionSettled, String> {
+    let RuntimeEventEnvelope {
+        event_id,
+        timestamp,
+        attempt_id: Some(attempt_id),
+        turn_id: Some(turn_id),
+        event:
+            crate::events::types::RuntimeEvent::InteractionSettled {
+                interaction_id,
+                settlement,
+            },
+        ..
+    } = event
+    else {
+        return Err("interaction settled audit has an invalid envelope".to_owned());
+    };
+    Ok(RuntimeClientTranscriptInteractionSettled {
+        event_id,
+        timestamp,
+        attempt_id,
+        turn_id,
+        interaction_id,
+        settlement,
+    })
 }
 
 /// The context diagnostics carried by the Runtime Client snapshot.

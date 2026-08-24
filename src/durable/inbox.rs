@@ -3,7 +3,7 @@
 //! This module owns the domain vocabulary and the [`ConversationStore`] trait,
 //! which is the one durable authority boundary for Pending Inbound, the
 //! Message Ledger, Surface revisions, Request Snapshots, Event Journal facts,
-//! and checkpoint metadata.
+//! checkpoint metadata, and the derived transcript ordering spine.
 //! There is deliberately no generic repository, queue, CRUD, or storage
 //! strategy trait: the operations are the rustX semantic transitions a
 //! `PostgreSQL` backend must reproduce exactly.
@@ -11,6 +11,7 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 use crate::conversation::{SurfaceRevision, SurfaceSpan};
 use crate::events::types::RuntimeEventEnvelope;
@@ -25,6 +26,41 @@ use crate::publication::{
 use crate::runtime::identity::{ConversationId, MessageId, PublicationStreamId, RequestId};
 use crate::runtime::inbound::InboundSequence;
 use crate::runtime::types::TokenMeasurement;
+
+/// The default bounded page used when a Runtime Client first attaches.
+pub const TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT: usize = 64;
+
+/// The largest page a transcript reader may request in one response.
+pub const TRANSCRIPT_PAGE_LIMIT_MAX: usize = 256;
+
+/// A durable transcript cursor.
+///
+/// This cursor belongs to the transcript ordering spine. It is deliberately
+/// distinct from the Runtime Client observation cursor, the Event Journal
+/// sequence, and the inbound mailbox sequence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct TranscriptCursor(u64);
+
+impl TranscriptCursor {
+    /// Creates a cursor from its durable ordering position.
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    /// Returns the durable ordering position.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl core::fmt::Display for TranscriptCursor {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
 
 /// A producer-supplied draft of one inbound item, before acceptance.
 ///
@@ -176,6 +212,55 @@ pub struct RequestSnapshotPage {
     pub snapshots: Vec<RequestSnapshot>,
     /// The exclusive cursor for the next page, when this page is non-empty.
     pub next_sequence: Option<u64>,
+}
+
+/// One item in the derived durable transcript read model.
+///
+/// The item carries bodies only in the bounded read result. Durable storage
+/// keeps the body in its owning Message Ledger, publication-audit, or Event
+/// Journal domain and stores only a reference in the transcript ordering
+/// spine.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TranscriptItem {
+    /// A user, Assistant, or Tool message resolved from the canonical owner.
+    Message {
+        /// The canonical or durably accepted message body.
+        message: MessageBlock,
+    },
+    /// A noncanonical Assistant publication audit.
+    PublicationAudit {
+        /// The bounded audit body owned by the publication plane.
+        audit: PublicationAudit,
+    },
+    /// A historical requested interaction audit fact.
+    InteractionRequested {
+        /// The Event Journal envelope that owns the audit body.
+        event: RuntimeEventEnvelope,
+    },
+    /// A historical settled interaction audit fact.
+    InteractionSettled {
+        /// The Event Journal envelope that owns the audit body.
+        event: RuntimeEventEnvelope,
+    },
+}
+
+/// One ordered item in a bounded transcript page.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TranscriptEntry {
+    /// The stable exclusive cursor for this item.
+    pub cursor: TranscriptCursor,
+    /// The resolved read-model item.
+    pub item: TranscriptItem,
+}
+
+/// A bounded page of the derived durable transcript.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TranscriptPage {
+    /// Items in chronological order within this page.
+    pub entries: Vec<TranscriptEntry>,
+    /// The cursor to pass as `before` for the next older page.
+    pub next_cursor: Option<TranscriptCursor>,
 }
 
 /// The one composition-time binding of a conversation's durable authority.
@@ -748,6 +833,19 @@ pub trait ConversationStore: Send + Sync + 'static {
         after_position: Option<u64>,
         limit: usize,
     ) -> Result<CanonicalMessagePage, ConversationStoreError>;
+
+    /// Reads one bounded page of the derived durable transcript.
+    ///
+    /// With no `before` cursor, the newest page is returned. With a cursor,
+    /// only rows strictly older than that cursor are eligible. Rows are
+    /// returned in chronological order and the next cursor is exclusive, so
+    /// appends after a page has been read cannot create duplicates or gaps in
+    /// an older-page walk.
+    fn load_transcript_page(
+        &self,
+        before: Option<TranscriptCursor>,
+        limit: usize,
+    ) -> Result<TranscriptPage, ConversationStoreError>;
 
     /// Commits one model-turn start atomically (Issue #12, M9b): the
     /// request-scoped canonical context messages (Ledger append + Surface

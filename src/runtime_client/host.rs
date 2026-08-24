@@ -118,10 +118,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use super::projection::{RuntimeClientProjection, SubscriberPoll, background_view, subagent_view};
+use super::snapshot::{
+    RuntimeClientTranscriptCursor, RuntimeClientTranscriptPage, transcript_page_view,
+};
 use super::types::{
     AttachmentId, RUNTIME_CLIENT_PROTOCOL_VERSION_V1, RuntimeClientCursor, RuntimeClientError,
     RuntimeClientProtocolEvent, RuntimeClientResult, RuntimeClientSessionRequest,
 };
+use crate::durable::{TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT, TRANSCRIPT_PAGE_LIMIT_MAX};
 use crate::model::session::SessionModelConfig;
 use crate::model::{ModelRequest, RequestIdentity};
 use crate::runtime::conversation_runtime::{
@@ -299,6 +303,24 @@ impl ClientInner {
         guard
     }
 
+    /// Refreshes the bounded transcript bootstrap page from the durable
+    /// authority. The projection retains only this read result; it never
+    /// owns transcript bodies or an unbounded historical collection.
+    fn refresh_transcript_page(&self, state: &mut ClientState) -> Result<(), RuntimeClientError> {
+        let page = self
+            .runtime
+            .transcript_page(None, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT)
+            .map_err(|error| RuntimeClientError::RuntimeFailure {
+                message: format!("durable transcript bootstrap failed: {error}"),
+            })?;
+        let page =
+            transcript_page_view(page).map_err(|message| RuntimeClientError::RuntimeFailure {
+                message: format!("durable transcript bootstrap is invalid: {message}"),
+            })?;
+        state.projection.set_transcript_page(page);
+        Ok(())
+    }
+
     /// Spawns the projection worker: folds queued runtime observations
     /// promptly so subscribed clients observe mailbox, background, and
     /// capability facts without sending requests.
@@ -387,6 +409,7 @@ impl ClientInner {
                 existing_attachment_id: existing.attachment_id.clone(),
             });
         }
+        self.refresh_transcript_page(&mut state)?;
         let (snapshot, cursor) = state.projection.snapshot()?;
         state.next_attachment_seq = state.next_attachment_seq.saturating_add(1);
         let attachment_id = AttachmentId::new(format!("attachment-{}", state.next_attachment_seq));
@@ -644,8 +667,37 @@ impl ClientInner {
     ) -> Result<(super::snapshot::RuntimeClientSnapshot, RuntimeClientCursor), RuntimeClientError>
     {
         self.ensure_session_runtime_live()?;
-        let state = self.lock_state();
+        let mut state = self.lock_state();
+        self.refresh_transcript_page(&mut state)?;
         state.projection.snapshot()
+    }
+
+    /// Reads one bounded durable transcript page. The transcript cursor is
+    /// intentionally distinct from the Runtime Client observation cursor.
+    pub(crate) fn transcript_page(
+        &self,
+        before: Option<RuntimeClientTranscriptCursor>,
+        limit: usize,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.ensure_session_runtime_live()?;
+        if limit == 0 || limit > TRANSCRIPT_PAGE_LIMIT_MAX {
+            return Err(RuntimeClientError::InvalidRequest {
+                message: format!(
+                    "transcript page limit must be between 1 and {TRANSCRIPT_PAGE_LIMIT_MAX}"
+                ),
+            });
+        }
+        let page = self
+            .runtime
+            .transcript_page(before.map(Into::into), limit)
+            .map_err(|error| RuntimeClientError::RuntimeFailure {
+                message: format!("durable transcript page failed: {error}"),
+            })?;
+        let page =
+            transcript_page_view(page).map_err(|message| RuntimeClientError::RuntimeFailure {
+                message: format!("durable transcript page is invalid: {message}"),
+            })?;
+        Ok(RuntimeClientResult::TranscriptPage { page })
     }
 
     /// Returns a durable request-history read handle owned by the
@@ -1334,6 +1386,27 @@ impl RuntimeClientHost {
     #[must_use]
     pub fn request_history(&self) -> RequestHistory {
         self.inner.request_history()
+    }
+
+    /// Reads one bounded durable transcript page. `before` is exclusive and
+    /// means that the returned page contains only older transcript entries.
+    /// This cursor is independent from the live Runtime Client event cursor.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed Runtime Client error for an invalid limit, a durable
+    /// read failure, or an invalid resolved transcript item.
+    pub fn transcript_page(
+        &self,
+        before: Option<RuntimeClientTranscriptCursor>,
+        limit: usize,
+    ) -> Result<RuntimeClientTranscriptPage, RuntimeClientError> {
+        match self.inner.transcript_page(before, limit)? {
+            RuntimeClientResult::TranscriptPage { page } => Ok(page),
+            other => Err(RuntimeClientError::RuntimeFailure {
+                message: format!("unexpected transcript page result: {other:?}"),
+            }),
+        }
     }
 
     /// Reconstructs one retained provider-neutral request from durable facts.

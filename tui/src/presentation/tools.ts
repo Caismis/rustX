@@ -384,6 +384,9 @@ function callIdByBlock(entry: TranscriptEntry): Array<ToolCallId | undefined> {
       block.kind === "tool_call" ? block.callId : undefined,
     );
   }
+  if (entry.kind !== "committed") {
+    return [];
+  }
   if (entry.message.role !== "assistant") {
     return [];
   }
@@ -404,6 +407,11 @@ function transcriptCalls(entry: TranscriptEntry): CorrelatedTool[] {
         lifecycle: { type: "assembled" } as ToolLifecycle,
         committed: false,
       }));
+  }
+  if (entry.kind !== "committed") {
+    // Publication-audit proposals and interaction audits are historical
+    // evidence, never Tool Plane calls or execution anchors.
+    return [];
   }
   if (entry.message.role !== "assistant") {
     return [];

@@ -12,6 +12,7 @@ import { describe, it } from "node:test";
 import { Markdown } from "@earendil-works/pi-tui";
 
 import { reduce } from "../src/presentation/projection.ts";
+import { correlateTools } from "../src/presentation/tools.ts";
 import { renderTranscript } from "../src/ui/components/transcript.ts";
 import { markdownTheme } from "../src/ui/theme.ts";
 import {
@@ -361,14 +362,111 @@ describe("inbound provenance", () => {
     assert.match(transcriptString(state), /compaction summary/);
   });
 
-  it("marks an unacknowledged local echo as not yet canonical", () => {
-    const state = {
-      ...stateOf(),
-      pendingSubmissions: [{ key: "local-1", text: "just typed" }],
-    };
-    assert.match(
-      transcriptString(state),
-      /awaiting runtime acknowledgement[\s\S]*just typed/,
+  it("does not render a semantic user echo before durable acceptance", () => {
+    assert.doesNotMatch(transcriptString(stateOf()), /just typed/);
+  });
+});
+
+describe("durable transcript audits", () => {
+  const publicationAudit = {
+    stream_id: "stream-audit",
+    attempt_id: "attempt-1",
+    turn_id: "turn-1",
+    request_id: "request-1",
+    message_id: "provisional-1",
+    kind: "incomplete" as const,
+    content: [
+      {
+        kind: "proposed_tool_call" as const,
+        block_index: 0,
+        call_id: "call-proposed",
+        tool_id: "tool-read",
+        name: "Read",
+        arguments: '{"file_path":".agents/skills/read/SKILL.md"}',
+        complete: true,
+      },
+    ],
+    settled_at: "2026-08-24T12:00:00Z",
+  };
+
+  it("renders incomplete and unaccepted publication output as noncanonical audit", () => {
+    const state = stateOf({
+      transcript: {
+        entries: [
+          {
+            cursor: 1,
+            item: { type: "publication_audit", audit: publicationAudit },
+          },
+          {
+            cursor: 2,
+            item: {
+              type: "publication_audit",
+              audit: { ...publicationAudit, stream_id: "stream-unaccepted", kind: "unaccepted" },
+            },
+          },
+        ],
+      },
+    });
+    const blocks = renderTranscript(state, prefs());
+    const rendered = blocks.map(blockText).join("\n");
+
+    assert.match(rendered, /assistant output · incomplete · noncanonical/);
+    assert.match(rendered, /assistant output · unaccepted · noncanonical/);
+    assert.match(rendered, /proposed tool call · Read · not accepted · not executed/);
+    assert.match(rendered, /file_path/);
+    assert.equal(
+      blocks.every((block) => block.kind === "text"),
+      true,
+      "a publication audit never becomes a ToolCard or foreground Tool Plane row",
     );
+    assert.equal(correlateTools(state).byCallId.size, 0);
+  });
+
+  it("renders historical interaction audits without restoring an actionable prompt", () => {
+    const state = stateOf({
+      transcript: {
+        entries: [
+          {
+            cursor: 3,
+            item: {
+              type: "interaction_requested",
+              event_id: "interaction-requested-event",
+              timestamp: "2026-08-24T12:00:00Z",
+              attempt_id: "attempt-1",
+              turn_id: "turn-1",
+              interaction_id: "interaction-1",
+              subject: {
+                type: "question",
+                prompt: "Which environment?",
+                choices: ["staging", "production"],
+                allow_free_text: false,
+              },
+            },
+          },
+          {
+            cursor: 4,
+            item: {
+              type: "interaction_settled",
+              event_id: "interaction-settled-event",
+              timestamp: "2026-08-24T12:00:01Z",
+              attempt_id: "attempt-1",
+              turn_id: "turn-1",
+              interaction_id: "interaction-1",
+              settlement: {
+                type: "answered",
+                answer: { type: "choice", value: "staging" },
+              },
+            },
+          },
+        ],
+      },
+    });
+    const rendered = transcriptString(state);
+
+    assert.match(rendered, /historical interaction · requested · not actionable/);
+    assert.match(rendered, /Which environment/);
+    assert.match(rendered, /historical interaction · settled · answered/);
+    assert.match(rendered, /choice: staging/);
+    assert.doesNotMatch(rendered, /respond|pending prompt|approve action/i);
   });
 });

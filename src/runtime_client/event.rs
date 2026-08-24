@@ -24,7 +24,8 @@ use serde::{Deserialize, Serialize};
 
 use super::snapshot::{
     AgentStatusView, CapabilityView, RuntimeClientBackgroundExecution, RuntimeClientContextView,
-    RuntimeClientSubagent,
+    RuntimeClientSubagent, RuntimeClientTranscriptInteractionRequested,
+    RuntimeClientTranscriptInteractionSettled,
 };
 use crate::events::types::AttemptLimit;
 use crate::message::types::{ContentBlockIndex, MessageBlock, UserMessageBlock};
@@ -101,6 +102,19 @@ pub enum RuntimeClientEvent {
         interaction_id: crate::runtime::identity::InteractionId,
         /// The exact terminal rendezvous outcome.
         outcome: InteractionOutcome,
+    },
+    /// A durable interaction request audit became visible in the transcript.
+    ///
+    /// This is historical audit evidence, not a second pending waiter.
+    InteractionAuditRequested {
+        /// The bounded requested audit projection.
+        audit: Box<RuntimeClientTranscriptInteractionRequested>,
+    },
+    /// A durable interaction settlement audit became visible in the
+    /// transcript. It is never actionable after publication.
+    InteractionAuditSettled {
+        /// The bounded settled audit projection.
+        audit: Box<RuntimeClientTranscriptInteractionSettled>,
     },
     /// The authoritative runtime `ApprovalMode` control state changed.
     ApprovalModeChanged {

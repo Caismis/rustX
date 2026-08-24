@@ -35,7 +35,11 @@ import type {
   RuntimeClientContextView,
   RuntimeClientCursor,
   RuntimeClientSubagent,
+  RuntimeClientTranscriptCursor,
   InteractionRequest,
+  InteractionSettlement,
+  InteractionSubject,
+  PublicationAudit,
   SessionModelView,
   ToolCallId,
   ToolId,
@@ -76,8 +80,47 @@ export interface StreamingMessage {
   blocks: StreamingBlock[];
 }
 
+/** A noncanonical Assistant publication audit shown as historical output. */
+export interface TranscriptPublicationAudit {
+  kind: "publication_audit";
+  key: string;
+  cursor: RuntimeClientTranscriptCursor;
+  audit: PublicationAudit;
+}
+
+/** A historical interaction request audit, never an actionable prompt. */
+export interface TranscriptInteractionRequested {
+  kind: "interaction_requested";
+  key: string;
+  cursor: RuntimeClientTranscriptCursor;
+  eventId: string;
+  timestamp: string;
+  attemptId: string;
+  turnId: string;
+  interactionId: string;
+  subject: InteractionSubject;
+}
+
+/** A historical interaction settlement audit, never a live waiter. */
+export interface TranscriptInteractionSettled {
+  kind: "interaction_settled";
+  key: string;
+  cursor: RuntimeClientTranscriptCursor;
+  eventId: string;
+  timestamp: string;
+  attemptId: string;
+  turnId: string;
+  interactionId: string;
+  settlement: InteractionSettlement;
+}
+
 /** One entry of the rendered transcript. */
-export type TranscriptEntry = TranscriptCommitted | StreamingMessage;
+export type TranscriptEntry =
+  | TranscriptCommitted
+  | StreamingMessage
+  | TranscriptPublicationAudit
+  | TranscriptInteractionRequested
+  | TranscriptInteractionSettled;
 
 /** The client-visible view of the current or latest attempt. */
 export interface AttemptPresentation {
@@ -96,25 +139,14 @@ export interface AttemptPresentation {
   foreground: ForegroundToolExecution[];
 }
 
-/**
- * One locally submitted inbound message awaiting its runtime identity.
- *
- * Optimistic feedback is explicitly modelled as transient client state so it
- * can never be confused with canonical history. It is reconciled away as soon
- * as the runtime publishes the authoritative `inbound_enqueued` fact, whose
- * message id, sequence, timestamp, and provenance are the real ones.
- */
-export interface PendingSubmission {
-  key: string;
-  text: string;
-}
-
 export interface PresentationState {
   conversationId: ConversationId;
   /** The cursor this state is consistent through. */
   cursor: RuntimeClientCursor;
-  /** Committed history plus at most one streaming assistant message. */
+  /** Loaded durable transcript plus at most one streaming assistant message. */
   transcript: TranscriptEntry[];
+  /** Exclusive durable cursor for the next older page. */
+  transcriptNextCursor?: RuntimeClientTranscriptCursor;
   attempt?: AttemptPresentation;
   inbound: InboundDiagnostics;
   /** Runtime-owned live interactions, reconstructed from snapshot/events. */
@@ -132,7 +164,6 @@ export interface PresentationState {
   effectiveApprovalMode: ApprovalMode;
   pendingApprovalMode?: ApprovalMode;
   approvalModeRevision: number;
-  pendingSubmissions: PendingSubmission[];
 }
 
 /** Whether the attempt is doing work the UI should show as busy. */

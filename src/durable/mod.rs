@@ -71,6 +71,8 @@ pub use inbox::{
     ConversationInteractionAudit, ConversationStore, ConversationStoreBinding,
     ConversationStoreError, DurableConversationHead, EventPage, InboundDraft, PendingBatch,
     PendingInboundItem, RequestSnapshotPage, SurfaceUserMessageBoundary,
-    SurfaceUserMessageBoundaryPage, interaction_audit_capability,
+    SurfaceUserMessageBoundaryPage, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT, TRANSCRIPT_PAGE_LIMIT_MAX,
+    TranscriptCursor, TranscriptEntry, TranscriptItem, TranscriptPage,
+    interaction_audit_capability,
 };
 pub use sqlite::SqliteConversationStore;

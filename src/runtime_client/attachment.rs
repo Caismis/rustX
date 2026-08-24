@@ -112,6 +112,11 @@ impl RuntimeAttachment {
                 .inner
                 .snapshot()
                 .map(|(snapshot, cursor)| RuntimeClientResult::Snapshot { snapshot, cursor }),
+            RuntimeClientRequest::TranscriptPageGet {
+                before_cursor,
+                limit,
+                ..
+            } => self.inner.transcript_page(before_cursor, limit),
             RuntimeClientRequest::SubscribeEvents { after_cursor, .. } => {
                 match self
                     .inner

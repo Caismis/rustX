@@ -218,6 +218,7 @@ impl RuntimeClientProjection {
                 approval_mode_revision: 0,
                 durability_failure: None,
                 messages: initial_messages,
+                transcript: super::snapshot::RuntimeClientTranscriptPage::default(),
                 attempt: None,
                 inbound: InboundDiagnostics {
                     pending: Vec::new(),
@@ -275,6 +276,8 @@ impl RuntimeClientProjection {
         &mut self,
         seed: &crate::runtime::conversation_runtime::RuntimeBootstrapSnapshot,
     ) {
+        self.snapshot.transcript = super::snapshot::transcript_page_view(seed.transcript.clone())
+            .expect("runtime bootstrap transcript is valid");
         self.snapshot.shutting_down = seed.shutting_down;
         self.snapshot.effective_approval_mode = seed.approval_mode.effective;
         self.snapshot.pending_approval_mode = (seed.approval_mode.effective
@@ -407,23 +410,39 @@ impl RuntimeClientProjection {
                         .collect(),
                 }]
             }
-            ConversationObservation::InteractionPending(request) => {
+            ConversationObservation::InteractionPending { request, audit } => {
                 upsert_interaction(&mut self.snapshot.pending_interactions, request.clone());
-                vec![RuntimeClientEvent::InteractionPending {
-                    interaction: request,
-                }]
+                let audit_view = super::snapshot::interaction_requested_view(audit)
+                    .expect("runtime interaction requested audit is valid");
+                vec![
+                    RuntimeClientEvent::InteractionPending {
+                        interaction: request,
+                    },
+                    RuntimeClientEvent::InteractionAuditRequested {
+                        audit: Box::new(audit_view),
+                    },
+                ]
             }
             ConversationObservation::InteractionSettled {
                 interaction_id,
                 outcome,
+                audit,
             } => {
                 self.snapshot
                     .pending_interactions
                     .retain(|request| request.id != interaction_id);
-                vec![RuntimeClientEvent::InteractionSettled {
+                let mut events = vec![RuntimeClientEvent::InteractionSettled {
                     interaction_id,
                     outcome,
-                }]
+                }];
+                if let Some(audit) = audit {
+                    let audit_view = super::snapshot::interaction_settled_view(audit)
+                        .expect("runtime interaction settled audit is valid");
+                    events.push(RuntimeClientEvent::InteractionAuditSettled {
+                        audit: Box::new(audit_view),
+                    });
+                }
+                events
             }
             ConversationObservation::Background(snapshot) => {
                 let view = background_view(&snapshot);
@@ -1119,6 +1138,17 @@ impl RuntimeClientProjection {
         Ok((self.snapshot.clone(), self.cursor))
     }
 
+    /// Replaces only the derived durable transcript page with a fresh
+    /// authoritative read. The Surface projection and Runtime Client cursor
+    /// remain untouched: transcript paging is a separate durable cursor
+    /// domain and is not a live observation event.
+    pub(crate) fn set_transcript_page(
+        &mut self,
+        page: super::snapshot::RuntimeClientTranscriptPage,
+    ) {
+        self.snapshot.transcript = page;
+    }
+
     /// The oldest cursor a subscription can still serve: one before the
     /// oldest retained replay entry, or the current cursor when the ring
     /// is empty.
@@ -1573,7 +1603,8 @@ mod tests {
         ContextRuntime,
     };
     use crate::conversation::ConversationState;
-    use crate::events::types::RuntimeEvent;
+    use crate::events::interaction::{InteractionSettlement, InteractionSubject};
+    use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
     use crate::message::content::TextBlock;
     use crate::message::types::{
         AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, InboundKind, MessageBlock,
@@ -1586,7 +1617,8 @@ mod tests {
     use crate::model::types::ModelUsage;
     use crate::publication::{PublicationFrame, PublicationPayload};
     use crate::runtime::identity::{
-        AgentId, AttemptId, ConversationId, InteractionId, MessageId, RequestId, ToolCallId, ToolId,
+        AgentId, AttemptId, ConversationId, EventId, InteractionId, MessageId, RequestId,
+        ToolCallId, ToolId, TurnId,
     };
     use crate::runtime::inbound::{ConversationInboundMailbox, InitialTurnTrigger};
     use crate::runtime::interaction::{
@@ -1612,6 +1644,25 @@ mod tests {
 
     fn attempt() -> AttemptId {
         AttemptId::new("attempt-1")
+    }
+
+    fn interaction_audit(
+        request: &InteractionRequest,
+        event_id: &str,
+        event: RuntimeEvent,
+    ) -> RuntimeEventEnvelope {
+        RuntimeEventEnvelope {
+            schema_version: EVENT_SCHEMA_VERSION,
+            event_id: EventId::new(event_id),
+            sequence: 1,
+            conversation_id: request.conversation_id.clone(),
+            attempt_id: Some(request.attempt_id.clone()),
+            turn_id: Some(TurnId::new(request.turn.to_string())),
+            timestamp: chrono::DateTime::parse_from_rfc3339("2026-08-07T12:00:00Z")
+                .expect("timestamp")
+                .with_timezone(&chrono::Utc),
+            event,
+        }
     }
 
     /// A deterministic session model view for projection unit tests.
@@ -2930,10 +2981,27 @@ mod tests {
                 reason: "native policy".to_owned(),
             },
         };
-        projection.apply(ConversationObservation::InteractionPending(request.clone()));
+        let requested_audit = interaction_audit(
+            &request,
+            "event-requested",
+            RuntimeEvent::InteractionRequested {
+                interaction_id: request.id.clone(),
+                subject: InteractionSubject::Approval {
+                    call_id: ToolCallId::new("call-1"),
+                    tool_id: ToolId::new("tool-alpha"),
+                    tool_name: "alpha".to_owned(),
+                    arguments_digest: "0".repeat(64),
+                    reason: "native policy".to_owned(),
+                },
+            },
+        );
+        projection.apply(ConversationObservation::InteractionPending {
+            request: request.clone(),
+            audit: requested_audit,
+        });
         let (snapshot, cursor) = projection.snapshot().expect("snapshot");
         assert_eq!(snapshot.pending_interactions, vec![request.clone()]);
-        assert_eq!(cursor, RuntimeClientCursor::new(1));
+        assert_eq!(cursor, RuntimeClientCursor::new(2));
         let events = collect(&mut projection, RuntimeClientCursor::new(0));
         assert!(matches!(
             events.first().map(|event| &event.event),
@@ -2946,14 +3014,23 @@ mod tests {
                 decision: ApprovalDecision::Allow,
             },
         };
+        let settled_audit = interaction_audit(
+            &request,
+            "event-settled",
+            RuntimeEvent::InteractionSettled {
+                interaction_id: request.id.clone(),
+                settlement: InteractionSettlement::Approved,
+            },
+        );
         projection.apply(ConversationObservation::InteractionSettled {
             interaction_id: request.id.clone(),
             outcome: outcome.clone(),
+            audit: Some(settled_audit),
         });
         let (snapshot, cursor) = projection.snapshot().expect("snapshot");
         assert!(snapshot.pending_interactions.is_empty());
-        assert_eq!(cursor, RuntimeClientCursor::new(2));
-        let events = collect(&mut projection, RuntimeClientCursor::new(1));
+        assert_eq!(cursor, RuntimeClientCursor::new(4));
+        let events = collect(&mut projection, RuntimeClientCursor::new(2));
         assert!(matches!(
             events.first().map(|event| &event.event),
             Some(RuntimeClientEvent::InteractionSettled {

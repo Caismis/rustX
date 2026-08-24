@@ -248,7 +248,11 @@ impl RespondingObserver {
 }
 
 impl InteractionObserver for RespondingObserver {
-    fn on_pending(&self, request: &InteractionRequest) {
+    fn on_pending(
+        &self,
+        request: &InteractionRequest,
+        _audit: &rustx::events::types::RuntimeEventEnvelope,
+    ) {
         // The durable read happens *inside* the prompt-release callback, so
         // what it sees is exactly what was committed before any client could
         // learn the prompt exists.
@@ -267,7 +271,12 @@ impl InteractionObserver for RespondingObserver {
         // instead. This callback stays a leaf publication.
     }
 
-    fn on_settled(&self, interaction_id: &InteractionId, outcome: &InteractionOutcome) {
+    fn on_settled(
+        &self,
+        interaction_id: &InteractionId,
+        outcome: &InteractionOutcome,
+        _audit: Option<&rustx::events::types::RuntimeEventEnvelope>,
+    ) {
         self.settled
             .lock()
             .expect("settled lock")

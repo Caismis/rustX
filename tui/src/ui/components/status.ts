@@ -339,7 +339,7 @@ function compact(tokens: number): string {
 
 /** Whether the compact welcome block still has a real turn to introduce. */
 export function startupVisible(state: PresentationState): boolean {
-  return state.transcript.length === 0 && state.pendingSubmissions.length === 0;
+  return state.transcript.length === 0;
 }
 
 /**

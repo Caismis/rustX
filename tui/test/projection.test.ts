@@ -9,9 +9,9 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  mergeTranscriptPage,
   reduce,
   replaceFromSnapshot,
-  withPendingSubmission,
 } from "../src/presentation/projection.ts";
 import type { PresentationState, StreamingMessage } from "../src/presentation/state.ts";
 import type {
@@ -77,6 +77,126 @@ describe("presentation projection", () => {
     );
     assert.equal(state.sessionModel.configured.model, "alpha/model-a");
     assert.equal(state.attempt, undefined);
+  });
+
+  it("boots from the bounded transcript page, not the current Surface messages", () => {
+    const state = replaceFromSnapshot(
+      snapshot({
+        messages: [assistantMessage("surface-only", "current Surface")],
+        transcript: {
+          entries: [
+            {
+              cursor: 4,
+              item: {
+                type: "message",
+                message: userMessage("historical", "retained history"),
+              },
+            },
+          ],
+          next_cursor: 3,
+        },
+      }),
+      12,
+    );
+
+    assert.deepEqual(
+      state.transcript.map((entry) => entry.kind === "committed" && entry.messageId),
+      ["historical"],
+    );
+    assert.equal(state.transcriptNextCursor, 3);
+  });
+
+  it("prepends an older page once, without moving the live event cursor", () => {
+    const state = replaceFromSnapshot(
+      snapshot({
+        transcript: {
+          entries: [
+            {
+              cursor: 3,
+              item: {
+                type: "message",
+                message: userMessage("middle", "middle"),
+              },
+            },
+            {
+              cursor: 4,
+              item: {
+                type: "message",
+                message: assistantMessage("newest", "newest"),
+              },
+            },
+          ],
+          next_cursor: 2,
+        },
+      }),
+      19,
+    );
+    const merged = mergeTranscriptPage(state, {
+      entries: [
+        {
+          cursor: 2,
+          item: {
+            type: "message",
+            message: userMessage("oldest", "oldest"),
+          },
+        },
+        {
+          cursor: 3,
+          item: {
+            type: "message",
+            message: userMessage("middle", "duplicate"),
+          },
+        },
+      ],
+      next_cursor: undefined,
+    });
+
+    assert.deepEqual(
+      merged.transcript.map((entry) => entry.kind === "committed" && entry.messageId),
+      ["oldest", "middle", "newest"],
+    );
+    assert.equal(merged.cursor, 19);
+    assert.equal(merged.transcriptNextCursor, undefined);
+  });
+
+  it("adds a user transcript row only when the durable acceptance event arrives", () => {
+    const state = initial();
+    assert.equal(state.transcript.length, 0);
+    const accepted = reduce(state, {
+      cursor: 1,
+      event: {
+        type: "inbound_enqueued",
+        sequence: 1,
+        message: {
+          id: "accepted-user",
+          content: [{ type: "text", text: "accepted" }],
+          source: "human",
+          kind: "message",
+        },
+      },
+    });
+    assert.deepEqual(
+      accepted.transcript.map((entry) => entry.kind === "committed" && entry.messageId),
+      ["accepted-user"],
+    );
+  });
+
+  it("keeps Agent Status context out of the normal transcript", () => {
+    const state = reduce(initial(), {
+      cursor: 1,
+      event: {
+        type: "inbound_enqueued",
+        sequence: 1,
+        message: {
+          id: "status",
+          content: [{ type: "text", text: "internal" }],
+          source: "runtime",
+          kind: { context: "agent_status" },
+        },
+      },
+    });
+    assert.equal(state.transcript.length, 0);
+    assert.equal(state.inbound.pending?.length, 1);
   });
 
   it("folds live approvals and repairs them from snapshot/resync state", () => {
@@ -569,40 +689,32 @@ describe("presentation projection", () => {
     );
   });
 
-  it("keeps optimistic submissions as transient client state", () => {
-    let state = withPendingSubmission(initial(), "local-1", "hello");
-    assert.equal(state.pendingSubmissions.length, 1);
-    // No fake canonical message was appended to authoritative history.
+  it("displays inbound input only after durable acceptance", () => {
+    const state = initial();
+    // No client-side semantic echo exists before the runtime fact arrives.
     assert.equal(state.transcript.length, 0);
 
-    state = fold(state, [
+    const accepted = fold(state, [
       { type: "inbound_enqueued", sequence: 1, message: userMessage("m1", "hello") },
     ]);
 
-    // The runtime's authoritative fact reconciles the local echo away.
-    assert.deepEqual(state.pendingSubmissions, []);
-    assert.equal(state.inbound.pending?.[0]?.message.id, "m1");
+    assert.equal(accepted.transcript.length, 1);
+    assert.equal(accepted.transcript[0]?.kind, "committed");
+    assert.equal(accepted.inbound.pending?.[0]?.message.id, "m1");
   });
 
-  it("does not carry TUI feedback through an authoritative repair", () => {
-    let state = withPendingSubmission(initial(), "local-1", "queued");
-    state = fold(state, [
-      { type: "attempt_started", attempt_id: "a1", model: attemptModel("beta/model-b") },
-    ]);
-
+  it("does not carry local semantic state through an authoritative repair", () => {
     const repaired = replaceFromSnapshot(
       snapshot({
         messages: [userMessage("m1", "queued")],
         model: sessionModel("beta/model-b"),
       }),
       100,
-      { pendingSubmissions: state.pendingSubmissions },
     );
 
     assert.equal(repaired.cursor, 100);
     assert.equal(repaired.transcript.length, 1);
     assert.equal(repaired.attempt, undefined, "the snapshot is authoritative");
-    assert.equal(repaired.pendingSubmissions.length, 1);
     assert.equal("notices" in repaired, false);
   });
 

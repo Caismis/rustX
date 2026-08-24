@@ -61,6 +61,7 @@ use std::sync::{Arc, Mutex};
 use crate::agent::observer::AgentStatusObservation;
 use crate::capabilities::{CapabilityAvailability, CapabilitySnapshot};
 use crate::events::types::RuntimeEvent;
+use crate::events::types::RuntimeEventEnvelope;
 use crate::message::types::MessageBlock;
 use crate::model::session::{AttemptModelView, SessionModelView};
 use crate::publication::{PublicationAudit, PublicationFrame, PublicationStreamStart};
@@ -187,13 +188,21 @@ pub(crate) enum ConversationObservation {
     /// Runtime drain began and new semantic admission closed.
     Shutdown,
     /// One native interaction became pending.
-    InteractionPending(InteractionRequest),
+    InteractionPending {
+        /// The live pending request.
+        request: InteractionRequest,
+        /// The requested audit committed before the prompt was released.
+        audit: RuntimeEventEnvelope,
+    },
     /// One native interaction reached its terminal rendezvous outcome.
     InteractionSettled {
         /// The interaction identity.
         interaction_id: InteractionId,
         /// The terminal outcome delivered to its semantic owner.
         outcome: InteractionOutcome,
+        /// The durable settled audit, when its commit succeeded. `None` is
+        /// the fail-closed unavailable outcome and creates no historical item.
+        audit: Option<RuntimeEventEnvelope>,
     },
     /// The durable authority (Pending Inbound Inbox / Message Ledger) failed
     /// a storage operation the coordinator must not silently swallow

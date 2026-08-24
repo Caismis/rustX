@@ -36,6 +36,7 @@ export const RUNTIME_CLIENT_PROTOCOL_VERSION_V1 = 1;
 export type ConversationId = string;
 export type AgentId = string;
 export type AttemptId = string;
+export type TurnId = string;
 export type MessageId = string;
 export type ToolCallId = string;
 export type ToolExecutionId = string;
@@ -52,6 +53,8 @@ export type SessionNodeId = string;
 export type CapabilityRevision = number;
 /** A position in the Runtime Client observation stream. */
 export type RuntimeClientCursor = number;
+/** A position in the durable derived transcript. Not a Runtime Client cursor. */
+export type RuntimeClientTranscriptCursor = number;
 /** An immutable Conversation Surface revision selected for a seed. */
 export type SurfaceRevision = number;
 /** A mailbox-assigned inbound sequence. Not a cursor. */
@@ -97,7 +100,15 @@ export type UserSource =
   | "runtime"
   | { agent: { agent_id: AgentId } };
 
-export type InboundKind = "message" | "compaction_summary";
+export type InboundKind =
+  | "message"
+  | "compaction_summary"
+  | {
+      context:
+        | "runtime_tool_observation"
+        | "extension_environment"
+        | "agent_status";
+    };
 
 export type UserContentBlock =
   | ({ type: "text" } & TextBlock)
@@ -310,6 +321,30 @@ export type InteractionOutcome =
   | { type: "answered"; response: InteractionResponse }
   | { type: "cancelled"; reason: CancellationReason }
   | { type: "unavailable" };
+
+/** The bounded by-value subject retained by the durable interaction audit. */
+export type InteractionSubject =
+  | {
+      type: "approval";
+      call_id: ToolCallId;
+      tool_id: ToolId;
+      tool_name: string;
+      arguments_digest: string;
+      reason: string;
+    }
+  | {
+      type: "question";
+      prompt: string;
+      choices?: string[];
+      allow_free_text: boolean;
+    };
+
+/** The terminal value retained by the durable interaction audit. */
+export type InteractionSettlement =
+  | { type: "approved" }
+  | { type: "denied"; reason: string }
+  | { type: "answered"; answer: QuestionAnswer }
+  | { type: "cancelled"; reason: CancellationReason };
 
 // ---------------------------------------------------------------------------
 // Model configuration (camelCase on the wire)
@@ -725,6 +760,8 @@ export interface RuntimeClientSnapshot {
   pending_approval_mode?: ApprovalMode;
   approval_mode_revision: number;
   messages: MessageBlock[];
+  /** The bounded newest page of durable transcript history. */
+  transcript: RuntimeClientTranscriptPage;
   attempt?: RuntimeClientAttempt;
   inbound: InboundDiagnostics;
   /** Live runtime-owned interactions; never client-owned approval truth. */
@@ -736,6 +773,38 @@ export interface RuntimeClientSnapshot {
   capabilities: CapabilityView;
   /** The session's *desired* model. Never the running attempt's model. */
   model: SessionModelView;
+}
+
+export type RuntimeClientTranscriptItem =
+  | { type: "message"; message: MessageBlock }
+  | { type: "publication_audit"; audit: PublicationAudit }
+  | {
+      type: "interaction_requested";
+      event_id: string;
+      timestamp: string;
+      attempt_id: AttemptId;
+      turn_id: TurnId;
+      interaction_id: InteractionId;
+      subject: InteractionSubject;
+    }
+  | {
+      type: "interaction_settled";
+      event_id: string;
+      timestamp: string;
+      attempt_id: AttemptId;
+      turn_id: TurnId;
+      interaction_id: InteractionId;
+      settlement: InteractionSettlement;
+    };
+
+export interface RuntimeClientTranscriptEntry {
+  cursor: RuntimeClientTranscriptCursor;
+  item: RuntimeClientTranscriptItem;
+}
+
+export interface RuntimeClientTranscriptPage {
+  entries: RuntimeClientTranscriptEntry[];
+  next_cursor?: RuntimeClientTranscriptCursor;
 }
 
 // ---------------------------------------------------------------------------
@@ -810,6 +879,28 @@ export type RuntimeClientEvent =
       type: "interaction_settled";
       interaction_id: InteractionId;
       outcome: InteractionOutcome;
+    }
+  | {
+      type: "interaction_audit_requested";
+      audit: {
+        event_id: string;
+        timestamp: string;
+        attempt_id: AttemptId;
+        turn_id: TurnId;
+        interaction_id: InteractionId;
+        subject: InteractionSubject;
+      };
+    }
+  | {
+      type: "interaction_audit_settled";
+      audit: {
+        event_id: string;
+        timestamp: string;
+        attempt_id: AttemptId;
+        turn_id: TurnId;
+        interaction_id: InteractionId;
+        settlement: InteractionSettlement;
+      };
     }
   | {
       type: "approval_mode_changed";
@@ -975,6 +1066,12 @@ export type RuntimeClientRequest =
     }
   | { method: "snapshot_get"; id: RequestId }
   | {
+      method: "transcript_page_get";
+      id: RequestId;
+      before_cursor?: RuntimeClientTranscriptCursor;
+      limit: number;
+    }
+  | {
       method: "subscribe_events";
       id: RequestId;
       after_cursor: RuntimeClientCursor;
@@ -1060,6 +1157,7 @@ export type RuntimeClientRequestBody =
       "id"
     >
   | Omit<Extract<RuntimeClientRequest, { method: "snapshot_get" }>, "id">
+  | Omit<Extract<RuntimeClientRequest, { method: "transcript_page_get" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "subscribe_events" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "capability_get" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "model_catalog_get" }>, "id">
@@ -1109,6 +1207,7 @@ export type RuntimeClientResult =
       snapshot: RuntimeClientSnapshot;
       cursor: RuntimeClientCursor;
     }
+  | { type: "transcript_page"; page: RuntimeClientTranscriptPage }
   | { type: "subscribed"; after_cursor: RuntimeClientCursor }
   | { type: "capability"; capabilities: CapabilityView }
   | { type: "model_catalog"; catalog: ModelCatalogView }
@@ -1226,6 +1325,8 @@ export function isKnownRuntimeClientEvent(
     case "attempt_usage_updated":
     case "interaction_pending":
     case "interaction_settled":
+    case "interaction_audit_requested":
+    case "interaction_audit_settled":
     case "approval_mode_changed":
     case "context_compaction_started":
     case "context_compaction_failed":

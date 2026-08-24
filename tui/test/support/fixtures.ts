@@ -19,6 +19,7 @@ import type {
   ModelInvocationView,
   RuntimeClientBackgroundExecution,
   RuntimeClientSnapshot,
+  RuntimeClientTranscriptPage,
   SessionNodeView,
   SessionView,
   SessionModelView,
@@ -154,12 +155,21 @@ export function capabilities(revision: number): CapabilityView {
 export function snapshot(
   overrides: Partial<RuntimeClientSnapshot> = {},
 ): RuntimeClientSnapshot {
+  const messages = overrides.messages ?? [];
+  const transcript: RuntimeClientTranscriptPage =
+    overrides.transcript ?? {
+      entries: messages.map((message, index) => ({
+        cursor: index + 1,
+        item: { type: "message" as const, message },
+      })),
+    };
   return {
     conversation_id: "conv-test",
     shutting_down: false,
     effective_approval_mode: "policy",
     approval_mode_revision: 0,
-    messages: [],
+    messages,
+    transcript,
     inbound: { pending: [] },
     pending_interactions: [],
     background: [],

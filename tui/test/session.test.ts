@@ -80,6 +80,61 @@ describe("RuntimeClientAttachment", () => {
     assert.equal(session.state?.cursor, 12);
   });
 
+  it("loads an older durable transcript page without changing the live cursor", async () => {
+    const { peer, session } = connect();
+    await attach(
+      peer,
+      session,
+      snapshot({
+        transcript: {
+          entries: [
+            {
+              cursor: 2,
+              item: {
+                type: "message",
+                message: userMessage("newer", "newer"),
+              },
+            },
+          ],
+          next_cursor: 1,
+        },
+      }),
+      7,
+    );
+
+    const loading = session.loadOlderTranscript(8);
+    await peer.awaitRequests(3);
+    assert.deepEqual(peer.requests[2], {
+      method: "transcript_page_get",
+      before_cursor: 1,
+      limit: 8,
+      id: 3,
+    });
+    peer.respond(3, {
+      type: "transcript_page",
+      page: {
+        entries: [
+          {
+            cursor: 1,
+            item: {
+              type: "message",
+              message: userMessage("older", "older"),
+            },
+          },
+        ],
+      },
+    });
+    assert.equal(await loading, true);
+    assert.deepEqual(
+      session.state?.transcript.map((entry) =>
+        entry.kind === "committed" ? entry.messageId : entry.kind,
+      ),
+      ["older", "newer"],
+    );
+    assert.equal(session.state?.cursor, 7);
+    assert.equal(session.state?.transcriptNextCursor, undefined);
+  });
+
   it("notifies local-surface owners for initial attach and authoritative resync replacement", async () => {
     const { peer, session } = connect();
     let replacements = 0;
