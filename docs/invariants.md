@@ -874,6 +874,15 @@ hold attempt leases and never block a capability commit.
   `PhysicalSettlement` failure is retained as terminal evidence, fences
   healthy runtime continuation, and is reported after the committed new
   generation; it is not converted into a pre-publication reload failure.
+- MCP `PhysicalSettlement` failure is persistent runtime fencing authority even
+  while the runtime is inactive. Retirement-registry callback installation
+  replays pre-existing failures; the runtime latches the failure under the
+  coordinator lock, enters the explicit failure-drain lifecycle, and refuses
+  any later healthy activation. Failure publication and activation therefore
+  have one deterministic total order. A generation's close completion becomes
+  observable only after its generation state, registry evidence, fencing
+  callback, and lifecycle-admission release are complete, so a ready reload
+  cannot return `Ok` before a post-publication retirement failure is visible.
 - The broader runtime-wide busy semantics (active tool calls, foreground or
   background processes, event-writer or drain transitions) remain the M9
   scheduler's concern, not part of the M6 commit guard.
@@ -2307,6 +2316,12 @@ The frozen invariants:
   admits new work. `admit_next_attempt` returns without admitting, no
   admission worker exists before activation, and an inactive runtime
   therefore publishes no `ConversationObservation` at all.
+  The one terminal exception is an authoritative MCP physical-settlement
+  failure replayed or published before activation. It is not healthy semantic
+  work: the runtime latches the evidence under the coordinator lock, explicitly
+  transitions `Inactive -> Draining`, and starts the normal drain supervisor
+  for final reporting. `activate()` then observes `Draining` (or the persistent
+  failure latch) and cannot open ordinary admission.
 - **Runtime drain is a stronger contract than cancellation.** The one public
   `ConversationRuntime::shutdown()` operation linearizes `Running -> Draining`
   under the coordinator lock shared with inbound acceptance and attempt

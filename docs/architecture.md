@@ -1191,6 +1191,19 @@ the existing drain lifecycle, and a reload reports a post-publication
 settlement failure while preserving the new logical authority. It is not
 reported as though publication had failed.
 
+This evidence is persistent runtime fencing authority even before activation.
+The runtime callback replays failures already in the retirement registry and
+latches them under the coordinator admission lock; an inactive runtime enters
+the explicit failure-drain lifecycle, so `activate()` cannot later open
+healthy admission. Failure publication and activation therefore have one
+deterministic lock order. The MCP generation close task marks completion only
+after generation state, registry failure evidence, callback fencing, and
+lifecycle-admission release are published. `wait_close_attempt()` thus waits
+for the complete terminal result. A ready retirement failure is reported
+synchronously as `PostPublicationSettlementFailed`; a later background-driven
+failure fences the runtime asynchronously without changing an already returned
+reload result.
+
 #### Native Skill capability guidance (Issue #55)
 
 The Skill catalog is rendered deterministically into the immutable

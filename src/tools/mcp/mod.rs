@@ -527,8 +527,10 @@ struct McpRuntimeGenerationState {
     retired: bool,
     execution_leases: usize,
     close_started: bool,
-    /// The close future returned, whether successfully or with a terminal
-    /// settlement error. This is not proof of physical settlement.
+    /// The complete close/retirement terminal outcome was published,
+    /// whether successfully or with a terminal settlement error. This is not
+    /// proof of physical settlement; that fact is represented separately
+    /// below.
     close_attempt_finished: bool,
     /// True only when the owned physical MCP boundary was proven terminal.
     physical_settlement_proven: bool,
@@ -816,22 +818,46 @@ impl McpRuntimeGenerationInner {
             let failure = result.err().map(|error| error.to_string());
             {
                 let mut state = inner.state.lock().expect("MCP generation lock poisoned");
-                state.close_attempt_finished = true;
                 state.physical_settlement_proven = failure.is_none();
                 state.terminal_failure.clone_from(&failure);
             }
-            inner.close_finished.notify_waiters();
-            drop(admission);
             if let Some(retirement) = inner.retirement.upgrade() {
                 let registry = McpRuntimeRetirementRegistry { inner: retirement };
                 if let Some(failure) = failure {
+                    // This hook is intentionally after McpServerRuntime::close
+                    // returned and before the registry/callback publication.
+                    // The completion signal below must remain later than this
+                    // entire terminal-outcome publication sequence.
+                    #[cfg(test)]
+                    inner
+                        .runtime
+                        .wait_before_retirement_failure_publication()
+                        .await;
                     registry.record_failure(&inner.server_id, &failure);
                 }
                 registry.reap();
             }
+            // The lifecycle admission is part of the physical owner's
+            // terminal handoff. Release it only after generation state,
+            // registry evidence, and the runtime fencing callback are all
+            // published, then make completion observable as the final step.
+            drop(admission);
+            {
+                let mut state = inner.state.lock().expect("MCP generation lock poisoned");
+                // `close_attempt_finished` is deliberately the last
+                // publication. `wait_close_attempt` therefore cannot observe
+                // completion before the complete terminal outcome is visible.
+                state.close_attempt_finished = true;
+            }
+            inner.close_finished.notify_waiters();
         });
     }
 
+    /// Waits for the complete terminal outcome publication. The close task
+    /// sets `close_attempt_finished` only after generation state, retirement
+    /// failure evidence, callback fencing, and lifecycle-admission release
+    /// have all completed; this is stronger than merely waiting for the
+    /// underlying `close()` future to return.
     async fn wait_close_attempt(&self) {
         loop {
             if self.close_attempt_finished() {
@@ -918,15 +944,21 @@ pub(crate) mod test_sync {
     pub(crate) struct CloseProbe {
         entered: tokio::sync::Notify,
         release: tokio::sync::Notify,
+        failure_publication_entered: tokio::sync::Notify,
+        failure_publication_release: tokio::sync::Notify,
         state: Mutex<CloseState>,
     }
 
     #[derive(Debug, Default)]
+    #[allow(clippy::struct_excessive_bools)]
     struct CloseState {
         entered: bool,
         parks: bool,
         released: bool,
         failure: Option<String>,
+        pause_before_failure_publication: bool,
+        failure_publication_entered: bool,
+        failure_publication_released: bool,
     }
 
     impl CloseProbe {
@@ -935,6 +967,21 @@ pub(crate) mod test_sync {
             Self {
                 state: Mutex::new(CloseState {
                     failure: Some(diagnostic.to_owned()),
+                    ..CloseState::default()
+                }),
+                ..Self::default()
+            }
+        }
+
+        /// A failing close that parks after `McpServerRuntime::close()` has
+        /// returned and before the retirement registry publishes the failure.
+        /// This is the deterministic race seam for the generation completion
+        /// happens-before contract.
+        pub(crate) fn failing_before_failure_publication(diagnostic: &str) -> Self {
+            Self {
+                state: Mutex::new(CloseState {
+                    failure: Some(diagnostic.to_owned()),
+                    pause_before_failure_publication: true,
                     ..CloseState::default()
                 }),
                 ..Self::default()
@@ -1000,6 +1047,60 @@ pub(crate) mod test_sync {
         pub(crate) fn release(&self) {
             self.state.lock().expect("close probe lock").released = true;
             self.release.notify_waiters();
+        }
+
+        /// Parks the generation close task before retirement failure
+        /// publication when the specialized failing probe is armed.
+        pub(crate) async fn wait_before_failure_publication(&self) {
+            {
+                let mut state = self.state.lock().expect("close probe lock");
+                if !state.pause_before_failure_publication || state.failure_publication_released {
+                    return;
+                }
+                state.failure_publication_entered = true;
+            }
+            self.failure_publication_entered.notify_waiters();
+            loop {
+                let released = self.failure_publication_release.notified();
+                tokio::pin!(released);
+                released.as_mut().enable();
+                if self
+                    .state
+                    .lock()
+                    .expect("close probe lock")
+                    .failure_publication_released
+                {
+                    return;
+                }
+                released.await;
+            }
+        }
+
+        /// Waits until the close task reaches the pre-publication park.
+        pub(crate) async fn wait_before_failure_publication_entered(&self) {
+            loop {
+                let entered = self.failure_publication_entered.notified();
+                tokio::pin!(entered);
+                entered.as_mut().enable();
+                if self
+                    .state
+                    .lock()
+                    .expect("close probe lock")
+                    .failure_publication_entered
+                {
+                    return;
+                }
+                entered.await;
+            }
+        }
+
+        /// Releases the pre-retirement-publication close park.
+        pub(crate) fn release_before_failure_publication(&self) {
+            self.state
+                .lock()
+                .expect("close probe lock")
+                .failure_publication_released = true;
+            self.failure_publication_release.notify_waiters();
         }
     }
 
@@ -1502,6 +1603,17 @@ impl McpServerRuntime {
             self.close_probe.set(probe).is_ok(),
             "one close probe per MCP runtime"
         );
+    }
+
+    /// Parks the generation close task after this runtime has returned from
+    /// `close`, but before the generation's retirement registry and runtime
+    /// failure callback are published. The generation completion boundary is
+    /// intentionally later than this hook.
+    #[cfg(test)]
+    async fn wait_before_retirement_failure_publication(&self) {
+        if let Some(probe) = self.close_probe.get() {
+            probe.wait_before_failure_publication().await;
+        }
     }
 
     async fn call(

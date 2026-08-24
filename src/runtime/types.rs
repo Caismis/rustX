@@ -151,7 +151,8 @@ impl ConversationLifecycle {
         self.state() == ConversationLifecycleState::Running
     }
 
-    /// Whether activation has happened, including during or after drain.
+    /// Whether the lifecycle has left `Inactive`, including failure fencing
+    /// and ordinary drain/quiescence after activation.
     #[must_use]
     pub fn is_activated(&self) -> bool {
         self.state() != ConversationLifecycleState::Inactive
@@ -204,6 +205,29 @@ impl ConversationLifecycle {
             .state
             .compare_exchange(
                 ConversationLifecycleState::RUNNING,
+                ConversationLifecycleState::DRAINING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    /// Linearizes an unrecoverable runtime-owned physical-settlement failure
+    /// before activation. This is deliberately distinct from ordinary
+    /// shutdown: an inactive runtime has no healthy work to cancel, but the
+    /// failure must still move it into the existing drain/failure lifecycle
+    /// so a later activation cannot reopen admission.
+    #[must_use]
+    pub(crate) fn begin_failure_drain(&self) -> bool {
+        let _boundary = self
+            .inner
+            .commit_boundary
+            .lock()
+            .expect("lifecycle commit boundary poisoned");
+        self.inner
+            .state
+            .compare_exchange(
+                ConversationLifecycleState::INACTIVE,
                 ConversationLifecycleState::DRAINING,
                 Ordering::AcqRel,
                 Ordering::Acquire,

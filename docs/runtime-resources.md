@@ -131,6 +131,26 @@ post-publication settlement failure is distinct from a pre-publication reload
 failure: the new generation remains the logical current authority in the
 former case.
 
+The failure is persistent runtime authority even while the conversation is
+inactive. Installing the runtime callback replays failures already retained
+by the retirement registry; the callback latches the first failure under the
+runtime coordinator lock and an inactive runtime enters the explicit failure
+drain lifecycle. Activation uses that same lock, so a failure ordered first
+cannot be followed by `Inactive -> Running`; if activation orders first, the
+callback immediately transitions the running runtime into drain before later
+ordinary admission. A ready-at-reload failure is therefore returned
+synchronously as `PostPublicationSettlementFailed`, while a failure that only
+becomes ready after a legitimate background lease settles fences the already
+completed reload asynchronously.
+
+`wait_close_attempt()` is the complete terminal-publication boundary, not a
+notification that the underlying `close()` future merely returned. The close
+task publishes generation settlement state, retirement-registry evidence, the
+runtime fencing callback, and lifecycle-admission release before setting its
+completion flag and notifying waiters. Consequently a reload cannot return
+success while a ready superseded generation's physical failure is still being
+published.
+
 ## Historical observations and lineage
 
 Agent Status is an append-oriented Context Observation Fact. Multiple status
