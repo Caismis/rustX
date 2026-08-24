@@ -2353,17 +2353,23 @@ impl<'a> AgentExecution<'a> {
         let mut stream_terminal = None;
         loop {
             // A quiet provider must not hold committed-for-release payload
-            // hostage: while payload is buffered, the latency arm of the
-            // bounded policy competes with the next provider chunk. With an
-            // empty buffer there is nothing to flush and the loop simply
-            // awaits the provider.
+            // hostage: while payload is buffered, the coalescer-owned
+            // absolute deadline competes with the next provider chunk. With
+            // an empty buffer there is nothing to flush and the loop simply
+            // awaits the provider. Later chunks cannot restart that deadline.
             let next = if self.has_buffered_publication() {
-                let latency =
-                    std::time::Duration::from_millis(self.publication_policy.max_latency_millis);
+                let latency_wait = self
+                    .publication
+                    .as_ref()
+                    .and_then(|publication| publication.coalescer.latency_wait())
+                    .expect("a buffered publication has an owned latency deadline");
                 tokio::select! {
                     biased;
                     event = stream.next() => event,
-                    () = tokio::time::sleep(latency) => {
+                    () = self.cancellation.cancelled() => {
+                        return Err(self.cancelled_terminal());
+                    }
+                    () = latency_wait => {
                         self.flush_publication();
                         if let Some(terminal) = self.durable_failure_terminal_from_state() {
                             return Err(terminal);

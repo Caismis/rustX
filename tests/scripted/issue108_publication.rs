@@ -23,6 +23,7 @@
 use super::{common, support};
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use rustx::agent::{AgentCancellation, AgentExecution, AgentExecutionRequest};
 use rustx::durable::ConversationStore;
@@ -302,6 +303,173 @@ async fn latency_flush_is_driven_by_the_injected_clock() {
     assert_eq!(flushing.audit.released_publication_text(), "alphabetagamma");
     // The manual clock proves nothing waited on wall-clock time.
     assert_eq!(flushing.clock.now_millis(), 0);
+}
+
+/// The Agent Loop uses the oldest buffered payload's deadline rather than a
+/// fresh full-duration sleep. A second delta arriving at t=49 ms cannot move
+/// the first release past the original t=50 ms boundary.
+#[tokio::test]
+async fn chatty_provider_cannot_postpone_the_oldest_publication_deadline() {
+    let (first_release, first_receiver) = support::fake::model_release();
+    let (second_release, second_receiver) = support::fake::model_release();
+    let model = fake_model(vec![vec![
+        started(),
+        text("a"),
+        FakeStep::ParkUntilReleased(first_receiver),
+        text("b"),
+        FakeStep::ParkUntilReleased(second_receiver),
+        done(ModelFinishReason::Stop),
+    ]]);
+    let fixture = common::tool_runtime_with_store("conv-latency-chatty", None);
+    let tool_runtime: rustx::tools::runtime::ConversationToolRuntime = (*fixture).clone();
+    let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let publication = common::RecordingPublicationObserver::default();
+    let clock = Arc::new(ManualPublicationClock::new());
+    let mut execution = AgentExecution::new(
+        request("conv-latency-chatty", &model),
+        capability.into_lease(),
+        &cancellation,
+        context_runtime(&model),
+        &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
+    )
+    .expect("conversation identity matches the tool runtime");
+    execution.install_publication_policy(
+        CoalescePolicy {
+            max_bytes: usize::MAX,
+            max_latency_millis: 50,
+        },
+        Arc::clone(&clock) as Arc<dyn PublicationClock>,
+    );
+    execution.observe(&publication);
+    let execution = execution.run();
+    tokio::pin!(execution);
+
+    let mut emitted = model.emitted();
+    let mut parked = model.parked();
+    tokio::select! {
+        result = &mut execution => panic!("agent execution ended before first delta: {result:?}"),
+        count = emitted.wait_for(|count| *count >= 2) => {
+            count.expect("first delta emitted");
+        }
+    }
+    tokio::select! {
+        result = &mut execution => panic!("agent execution ended before provider park: {result:?}"),
+        is_parked = parked.wait_for(|is_parked| *is_parked) => {
+            is_parked.expect("provider parked after first delta");
+        }
+    }
+    let mut frame_count = publication.frame_count();
+
+    clock.advance(49);
+    assert_eq!(*frame_count.borrow(), 0, "no early release before t=50 ms");
+    first_release.send_replace(true);
+    tokio::select! {
+        result = &mut execution => panic!("agent execution ended before second delta: {result:?}"),
+        count = emitted.wait_for(|count| *count >= 3) => {
+            count.expect("second delta emitted at t=49 ms");
+        }
+    }
+
+    // If the loop restarted a 50 ms timer here, this liveness guard would
+    // expire. It is only a guard; the exact boundary is controlled by the
+    // manual publication clock.
+    clock.advance(1);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::select! {
+            result = &mut execution => panic!("agent execution ended before deadline release: {result:?}"),
+            count = frame_count.wait_for(|count| *count >= 1) => {
+                count.expect("publication observer remains connected");
+            }
+        }
+    })
+    .await
+    .expect("oldest publication deadline wakes the loop");
+    assert_eq!(publication.released_text(), "ab");
+
+    second_release.send_replace(true);
+    let _ = execution.await;
+}
+
+/// A quiet provider still wakes the Agent Loop at the coalescer deadline;
+/// another provider event is not required to trigger the latency flush.
+#[tokio::test]
+async fn quiet_provider_is_woken_by_the_publication_deadline() {
+    let (release, receiver) = support::fake::model_release();
+    let model = fake_model(vec![vec![
+        started(),
+        text("quiet"),
+        FakeStep::ParkUntilReleased(receiver),
+        done(ModelFinishReason::Stop),
+    ]]);
+    let fixture = common::tool_runtime_with_store("conv-latency-quiet", None);
+    let tool_runtime: rustx::tools::runtime::ConversationToolRuntime = (*fixture).clone();
+    let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let publication = common::RecordingPublicationObserver::default();
+    let clock = Arc::new(ManualPublicationClock::new());
+    let mut execution = AgentExecution::new(
+        request("conv-latency-quiet", &model),
+        capability.into_lease(),
+        &cancellation,
+        context_runtime(&model),
+        &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
+    )
+    .expect("conversation identity matches the tool runtime");
+    execution.install_publication_policy(
+        CoalescePolicy {
+            max_bytes: usize::MAX,
+            max_latency_millis: 50,
+        },
+        Arc::clone(&clock) as Arc<dyn PublicationClock>,
+    );
+    execution.observe(&publication);
+    let execution = execution.run();
+    tokio::pin!(execution);
+
+    let mut emitted = model.emitted();
+    let mut parked = model.parked();
+    tokio::select! {
+        result = &mut execution => panic!("agent execution ended before quiet payload: {result:?}"),
+        count = emitted.wait_for(|count| *count >= 2) => {
+            count.expect("quiet provider emitted its payload");
+        }
+    }
+    tokio::select! {
+        result = &mut execution => panic!("agent execution ended before quiet provider park: {result:?}"),
+        is_parked = parked.wait_for(|is_parked| *is_parked) => {
+            is_parked.expect("quiet provider is parked");
+        }
+    }
+    let mut frame_count = publication.frame_count();
+    assert_eq!(
+        *frame_count.borrow(),
+        0,
+        "payload remains buffered before deadline"
+    );
+
+    clock.advance(50);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::select! {
+            result = &mut execution => panic!("agent execution ended before quiet deadline release: {result:?}"),
+            count = frame_count.wait_for(|count| *count >= 1) => {
+                count.expect("publication observer remains connected");
+            }
+        }
+    })
+    .await
+    .expect("quiet provider deadline wakes the loop");
+    assert_eq!(publication.released_text(), "quiet");
+
+    release.send_replace(true);
+    let _ = execution.await;
+    assert_eq!(
+        model.requests().len(),
+        1,
+        "the test has one provider request"
+    );
 }
 
 /// A tool-call proposal start and completion are structural boundaries: each

@@ -620,12 +620,25 @@ pub fn durable_agent_result_with_publication(
 /// It records the release trace of the publication plane: which frames the
 /// Agent Loop released (all of them already durably committed) and how each
 /// stream settled when it did not reach canonical acceptance.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct RecordingPublicationObserver {
     opened: Mutex<Vec<PublicationStreamStart>>,
     frames: Mutex<Vec<PublicationFrame>>,
     audits: Mutex<Vec<PublicationAudit>>,
     trace: Mutex<Vec<PublicationObservation>>,
+    frame_count: watch::Sender<usize>,
+}
+
+impl Default for RecordingPublicationObserver {
+    fn default() -> Self {
+        Self {
+            opened: Mutex::new(Vec::new()),
+            frames: Mutex::new(Vec::new()),
+            audits: Mutex::new(Vec::new()),
+            trace: Mutex::new(Vec::new()),
+            frame_count: watch::Sender::new(0),
+        }
+    }
 }
 
 /// One deterministic publication lifecycle observation.
@@ -660,6 +673,13 @@ impl RecordingPublicationObserver {
     #[must_use]
     pub fn trace(&self) -> Vec<PublicationObservation> {
         self.trace.lock().expect("publication trace lock").clone()
+    }
+
+    /// A deterministic release count signal for tests that keep the provider
+    /// parked while advancing a publication clock.
+    #[must_use]
+    pub fn frame_count(&self) -> watch::Receiver<usize> {
+        self.frame_count.subscribe()
     }
 
     /// The released text of one block, folded from the frames.
@@ -700,6 +720,7 @@ impl AgentExecutionObserver for RecordingPublicationObserver {
             .lock()
             .expect("publication frame lock")
             .push(frame.clone());
+        self.frame_count.send_modify(|count| *count += 1);
     }
 
     fn observe_publication_settled(&self, _attempt_id: &AttemptId, audit: &PublicationAudit) {
