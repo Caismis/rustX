@@ -498,8 +498,8 @@ payloads and a fact that bypassed the live coordinator must still be refused:
 - `InteractionRequested` and `InteractionSettled` belong to the exact same
   conversation + attempt + turn envelope. The conversation comes free from the
   store's envelope check; the attempt and turn are compared against the
-  committed requested fact, and an audit fact carrying neither is refused
-  because it cannot be pinned to its pair.
+  committed requested fact, and an audit fact missing either its attempt or
+  its turn is refused because it cannot be pinned to its pair.
 - An Approval audit subject must match the canonical `ToolCall` it references
   *and* the generation that proposed it. A `ToolCallId` is
   request/publication-scoped, so equal content is not ownership; the store
