@@ -753,6 +753,14 @@ refuses a subject that does not match it. This is why the canonical Assistant
 message is committed before `resolve_pre_tool_decisions` runs: at the pre-tool
 policy boundary the call the approval names is already durable.
 
+The audit fact is pinned to the turn as well as the call. Both the publication
+stream (`open_publication`) and the interaction envelope derive their turn
+identity from the same `self.turn`, so an approval asked during turn *n*
+carries turn *n* and resolves to the publication generation of turn *n*. The
+store requires exactly that correspondence, which is what makes "turn 2
+approved turn 1's `ToolCall`" — an approval that looks perfect field by field
+but describes a call the asking turn never made — impossible to record.
+
 The coordinator does not arbitrate cancellation causes. Each runtime-owned
 pending interaction retains an `ExecutionCancellation` observation view, not
 the owning attempt's `AgentCancellation` handle. Generic ToolExecutors receive

@@ -1167,16 +1167,18 @@ TUI presentation state enters the Journal.
 
 The durable authority — not the coordinator — is what enforces the semantics.
 It pins the requested/settled pair to one conversation + attempt + turn
-envelope; it verifies that an Approval subject's call id, tool id, tool name,
-and argument digest match the canonical Assistant `ToolCall` it references,
-resolved through the active Surface because a `ToolCallId` is
-request/publication-scoped rather than conversation-global; it enforces every
-interaction payload bound; and it requires a Question settlement to satisfy
-the exact requested Question, so a `Choice` the Question never offered or
-`FreeText` into a choices-only Question is refused. The limits and the digest
-definition live once in `events::interaction`, which both the live coordinator
-and the store call, so the live path and the durable path cannot drift and a
-future PostgreSQL backend reuses the same contract.
+envelope; it binds an Approval subject to the canonical Assistant `ToolCall`
+of the exact generation its envelope names, resolving `(call_id, attempt_id,
+turn_id)` through the retained FND-03 canonical publication owner and then
+requiring that owning message to still be on the active Surface, because a
+`ToolCallId` is request/publication-scoped rather than conversation-global and
+equal content is not ownership; it enforces every interaction payload bound;
+and it requires a Question settlement to satisfy the exact requested Question,
+so a `Choice` the Question never offered or `FreeText` into a choices-only
+Question is refused. The limits and the digest definition live once in
+`events::interaction`, which both the live coordinator and the store call, so
+the live path and the durable path cannot drift and a future PostgreSQL
+backend reuses the same contract.
 
 The durable event vocabulary changed incompatibly, so `SQLITE_SCHEMA_VERSION`
 moved 6 → 7 and older development databases are rejected at open. There is no
@@ -1195,9 +1197,14 @@ to mutate a pending interaction, with reload returning `Busy` and the old
 generation retained; a restarted coordinator reconstructing no waiter; and
 store-level refusal of a settlement under a foreign attempt or turn, an
 Approval subject that does not match its canonical `ToolCall` (missing call,
-wrong tool id, wrong tool name, wrong argument digest), every out-of-bound
-interaction payload, and a Question settlement that the requested Question
-could not have produced.
+wrong tool id, wrong tool name, wrong argument digest) or that names a call
+belonging to another turn or another attempt, every out-of-bound interaction
+payload, and a Question settlement that the requested Question could not have
+produced. The store contract suite is `tests/issue109_interaction_audit.rs`
+(17 tests) and the Agent-Loop-facing half is
+`tests/scripted/issue109_interaction_audit.rs` (6 tests), with unit coverage in
+`src/events/interaction.rs`, `src/runtime/interaction.rs`,
+`src/tools/native/ask_user.rs`, and `src/runtime/conversation_runtime.rs`.
 No durable pending waiter, unanswered-Question replay, durable TUI state,
 human-task workflow engine, scheduler, or resource-watcher lifecycle change
 was added.

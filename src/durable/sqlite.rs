@@ -46,7 +46,6 @@ use crate::runtime::identity::{
     RequestId, ToolCallId, ToolId, TurnId,
 };
 use crate::runtime::inbound::InboundSequence;
-use crate::tools::types::ToolCall;
 
 use super::inbox::{
     AcceptedInbound, CanonicalMessagePage, CompactionCommitInput, ConversationStore,
@@ -81,11 +80,16 @@ use super::inbox::{
 /// `InteractionRequested` / `InteractionSettled` Journal vocabulary and the
 /// `interaction:{id}` lifecycle domain that makes a settlement exactly-once
 /// and forbids a settled fact without its requested fact. The pair is pinned
-/// to one conversation + attempt + turn envelope, an Approval subject must
-/// match the canonical `ToolCall` it references, payload bounds are store
-/// invariants, and a Question settlement must satisfy the exact requested
-/// Question. A v3/v4/v5/v6 database must fail at store open; there is no
-/// migration or compatibility path.
+/// to one conversation + attempt + turn envelope; an Approval subject must
+/// describe the canonical Assistant `ToolCall` of the exact generation its
+/// envelope names, resolved through the v5/v6 `(stream_id, call_id)` proposal
+/// ownership and the stream's frozen attempt/turn/message identity, and that
+/// owning message must still be on the active Surface; payload bounds are
+/// store invariants; and a Question settlement must satisfy the exact
+/// requested Question. No new table or column was needed — the generation
+/// proof reuses the retained publication ownership v5 and v6 introduced. A
+/// v3/v4/v5/v6 database must fail at store open; there is no migration or
+/// compatibility path.
 pub const SQLITE_SCHEMA_VERSION: i64 = 7;
 
 /// One operation in a deterministic admission fault script.
@@ -2469,75 +2473,130 @@ fn canonical_surface_tool_id(
     transaction: &Transaction<'_>,
     call_id: &ToolCallId,
 ) -> Result<Option<ToolId>, ConversationStoreError> {
-    Ok(canonical_surface_tool_call(transaction, call_id)?.map(|call| call.tool_id))
-}
-
-/// Resolves the complete canonical Assistant `ToolCall` that the active
-/// Surface owns for `call_id`.
-///
-/// `ToolCallId` is request/publication-scoped, never conversation-global, so
-/// the only conversation-level domain in which one call identity resolves
-/// unambiguously is the active Surface — which already rejects duplicate
-/// `ToolCallId`s among active messages. This is the same ownership
-/// [`canonical_surface_tool_id`] uses; it simply returns the whole frozen call
-/// so a caller can verify identity *and* arguments against it.
-///
-/// The walk is bounded by the active Surface, never by the Event Journal. Its
-/// callers are low-frequency by construction — a detached canonical
-/// `ToolMessage` with no publication owner, and a human approval that is about
-/// to block on a person — so no index is warranted here.
-fn canonical_surface_tool_call(
-    transaction: &Transaction<'_>,
-    call_id: &ToolCallId,
-) -> Result<Option<ToolCall>, ConversationStoreError> {
     let head = load_head(transaction)?;
     for message_id in head.active_message_ids {
         let message = load_message_tx(transaction, &message_id)?;
         let MessageBlock::Assistant(assistant) = message else {
             continue;
         };
-        if let Some(call) = assistant.content.iter().find_map(|block| match block {
-            AssistantContentBlock::ToolCall(call) if call.id == *call_id => Some(call.clone()),
+        if let Some(tool_id) = assistant.content.iter().find_map(|block| match block {
+            AssistantContentBlock::ToolCall(call) if call.id == *call_id => {
+                Some(call.tool_id.clone())
+            }
             _ => None,
         }) {
-            return Ok(Some(call));
+            return Ok(Some(tool_id));
         }
     }
     Ok(None)
 }
 
-/// Requires that one interaction audit fact carries the attempt and turn
-/// envelope its pair is pinned to.
+/// The canonical Assistant message that owns `call_id` inside the exact
+/// durable generation `(attempt_id, turn_id)` names.
+///
+/// A `ToolCallId` is request/publication-scoped, never conversation-global, so
+/// "a canonical `ToolCall` with this id exists somewhere" is not ownership.
+/// The retained FND-03 publication owner is: the proposal row is keyed by
+/// `(stream_id, call_id)`, its stream froze the attempt, turn, and Assistant
+/// message identity when it opened, and canonical acceptance stamped both rows
+/// `canonical`. Resolving through that join is what makes the generation part
+/// of the identity rather than an afterthought.
+///
+/// Returns `None` when this generation proposed no such canonical call. An
+/// ambiguous canonical owner is a durable contradiction and is reported as
+/// one, matching the guard [`record_tool_proposal_dependency`] already applies.
+fn canonical_generation_owner(
+    transaction: &Transaction<'_>,
+    call_id: &ToolCallId,
+    attempt_id: &AttemptId,
+    turn_id: &TurnId,
+) -> Result<Option<MessageId>, ConversationStoreError> {
+    let mut statement = transaction
+        .prepare(
+            "SELECT s.message_id
+             FROM publication_proposals p
+             JOIN publication_streams s ON s.stream_id=p.stream_id
+             WHERE p.call_id=?1 AND p.settlement=?2
+               AND s.attempt_id=?3 AND s.turn_id=?4
+             ORDER BY s.message_id",
+        )
+        .map_err(|error| storage(format!("canonical generation owner probe: {error}")))?;
+    let rows = statement
+        .query_map(
+            params![
+                call_id.as_str(),
+                PublicationSettlement::Canonical.as_str(),
+                attempt_id.as_str(),
+                turn_id.as_str()
+            ],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|error| storage(format!("canonical generation owner rows: {error}")))?;
+    let owners = rows
+        .map(|row| row.map_err(|error| storage(format!("canonical generation owner row: {error}"))))
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+    match owners.len() {
+        0 => Ok(None),
+        1 => Ok(Some(MessageId::new(owners[0].clone()))),
+        _ => Err(ConversationStoreError::PublicationViolation(format!(
+            "tool call {call_id} has ambiguous canonical proposal ownership in attempt {attempt_id} turn {turn_id}"
+        ))),
+    }
+}
+
+/// The attempt and turn envelope one interaction audit fact is pinned to.
 ///
 /// An interaction is always owned by exactly one model turn of exactly one
-/// attempt, so an audit fact with no attempt or no turn could not be compared
-/// to its partner at all — and an unpinnable pair is not a pinned pair.
-fn require_interaction_envelope(
-    envelope: &RuntimeEventEnvelope,
+/// attempt, so an audit fact with no attempt or no turn could neither be
+/// compared to its partner nor resolved to a durable generation — and an
+/// unpinnable fact is not a pinned fact.
+fn require_interaction_envelope<'a>(
+    envelope: &'a RuntimeEventEnvelope,
     interaction_id: &InteractionId,
-) -> Result<(), ConversationStoreError> {
-    if envelope.attempt_id.is_none() || envelope.turn_id.is_none() {
+) -> Result<(&'a AttemptId, &'a TurnId), ConversationStoreError> {
+    let (Some(attempt_id), Some(turn_id)) = (&envelope.attempt_id, &envelope.turn_id) else {
         return Err(ConversationStoreError::InvalidReference(format!(
             "interaction {interaction_id} audit facts must carry their owning attempt and turn"
         )));
-    }
-    Ok(())
+    };
+    Ok((attempt_id, turn_id))
 }
 
-/// Verifies that one Approval audit subject actually describes the canonical
-/// `ToolCall` it names (Issue #109).
+/// Verifies that one Approval audit subject describes the canonical `ToolCall`
+/// it names **in the generation its own envelope names** (Issue #109).
 ///
 /// The subject is deliberately bounded: it names the call and tool identity by
 /// value and pins the exact arguments by digest rather than copying them,
 /// because the canonical `ToolCall` in the Message Ledger already holds those
 /// arguments by value. That economy is only honest if the durable authority
-/// *checks* the correspondence, so this is where it is checked: a structurally
-/// well-formed but semantically false approval record — a call that was never
-/// proposed, a different tool, or a different argument value — never enters the
-/// Event Journal.
+/// checks the correspondence, and the correspondence is only meaningful if it
+/// includes the generation. Content equality alone is not ownership: two turns
+/// of one attempt, or two attempts of one conversation, can hold canonical
+/// calls that compare equal in every field the subject carries.
+///
+/// The proof therefore composes the two ownerships the durable model already
+/// retains, and never falls back to a conversation-global bare `call_id`:
+///
+/// ```text
+/// retained canonical publication generation   (attempt, turn) -> message_id
+///                     +
+/// active canonical Surface ownership          message_id is still canonical
+///                     =
+/// the exact canonical Assistant ToolCall this approval may describe
+/// ```
+///
+/// Every real Approval reaches this with a publication owner: the Agent Loop
+/// commits an Assistant message through `commit_canonical_publication` and
+/// refuses to commit one at all without an open stream, so a canonical
+/// `ToolCall` without a frozen `(attempt, turn, message_id)` owner cannot occur
+/// on the approval path. There is deliberately no lenient fallback for a state
+/// the runtime cannot produce and no database can already contain.
 fn validate_approval_subject_against_canonical(
     transaction: &Transaction<'_>,
     interaction_id: &InteractionId,
+    attempt_id: &AttemptId,
+    turn_id: &TurnId,
     subject: &InteractionSubject,
 ) -> Result<(), ConversationStoreError> {
     let InteractionSubject::Approval {
@@ -2550,11 +2609,35 @@ fn validate_approval_subject_against_canonical(
     else {
         return Ok(());
     };
-    let Some(call) = canonical_surface_tool_call(transaction, call_id)? else {
+    // 1. The generation that is asking must be the generation that proposed
+    //    the call. This is the check that makes "turn 2 approved turn 1's
+    //    ToolCall" — a permanently false audit fact — unrepresentable.
+    let Some(owner) = canonical_generation_owner(transaction, call_id, attempt_id, turn_id)? else {
         return Err(ConversationStoreError::InvalidReference(format!(
-            "interaction {interaction_id} approves tool call {call_id}, which no canonical Assistant message proposed"
+            "interaction {interaction_id} approves tool call {call_id}, which attempt {attempt_id} turn {turn_id} never canonically proposed"
         )));
     };
+    // 2. That owner must still be canonical: an Assistant message that left
+    //    the active Surface is no longer a call the conversation is making.
+    if !load_head(transaction)?.active_message_ids.contains(&owner) {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "interaction {interaction_id} approves tool call {call_id}, whose canonical owner {owner} is no longer on the active Surface"
+        )));
+    }
+    let MessageBlock::Assistant(assistant) = load_message_tx(transaction, &owner)? else {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "the canonical owner {owner} of tool call {call_id} is not an Assistant message"
+        )));
+    };
+    let Some(call) = assistant.content.iter().find_map(|block| match block {
+        AssistantContentBlock::ToolCall(call) if call.id == *call_id => Some(call),
+        _ => None,
+    }) else {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "the canonical owner {owner} of tool call {call_id} does not contain that call"
+        )));
+    };
+    // 3. And the frozen identity and arguments must match the subject exactly.
     if call.tool_id != *tool_id {
         return Err(ConversationStoreError::InvalidReference(format!(
             "interaction {interaction_id} names tool id {tool_id} for call {call_id}, but the canonical ToolCall froze {}",
@@ -4650,7 +4733,7 @@ fn validate_event_reference(
                     envelope.event_id
                 )));
             }
-            require_interaction_envelope(envelope, interaction_id)?;
+            let (attempt_id, turn_id) = require_interaction_envelope(envelope, interaction_id)?;
             // Bounded payloads are a durable invariant, not a coordinator
             // convention: an interaction fact constructed or deserialized
             // outside the live coordinator is refused here by the very same
@@ -4660,7 +4743,13 @@ fn validate_event_reference(
                     "interaction {interaction_id} requested an unbounded subject: {message}"
                 ))
             })?;
-            validate_approval_subject_against_canonical(transaction, interaction_id, subject)?;
+            validate_approval_subject_against_canonical(
+                transaction,
+                interaction_id,
+                attempt_id,
+                turn_id,
+                subject,
+            )?;
             let key = format!("interaction:{interaction_id}");
             let exists: bool = transaction
                 .query_row(
@@ -4711,7 +4800,7 @@ fn validate_event_reference(
                     "interaction requested event {requested_id} belongs to {embedded}, not {interaction_id}"
                 )));
             }
-            require_interaction_envelope(envelope, interaction_id)?;
+            let _ = require_interaction_envelope(envelope, interaction_id)?;
             // Both facts of one interaction belong to the exact same
             // conversation + attempt + turn envelope. The conversation is
             // already guaranteed by `persist_event_tx`, which refuses a

@@ -197,12 +197,16 @@ fn settled(
 
 /// Commits the one durable request-start transaction of a turn and returns
 /// the started request identity.
-fn start_request(store: &SqliteConversationStore) -> RequestId {
+fn start_request(
+    store: &SqliteConversationStore,
+    attempt_id: &AttemptId,
+    turn: &TurnId,
+) -> RequestId {
     let head = store.load_head().expect("head");
     let snapshot = RequestSnapshot::new(
         RequestIdentity {
-            attempt_id: attempt(),
-            turn: TurnId::new("1"),
+            attempt_id: attempt_id.clone(),
+            turn: turn.clone(),
             retry_number: 0,
         },
         head.revision,
@@ -242,31 +246,119 @@ fn frame(
     }
 }
 
+/// One complete durable model-turn **generation**: the attempt and turn that
+/// own it, and the exact canonical Assistant `ToolCall` its publication stream
+/// froze and its Assistant message committed.
+///
+/// The interaction regressions exist to prove that an Approval audit fact is
+/// bound to one of these, not merely to a call identity that happens to be
+/// findable somewhere in canonical history.
+#[derive(Clone)]
+struct Generation {
+    attempt: AttemptId,
+    turn: TurnId,
+    call: ToolCall,
+}
+
+impl Generation {
+    /// The generation every default fixture builds: `attempt-1`, turn 1, one
+    /// canonical `call-approved` proposing `tool-alpha`/`alpha`.
+    fn first() -> Self {
+        Self {
+            attempt: attempt(),
+            turn: TurnId::new("1"),
+            call: ToolCall {
+                id: call_id(),
+                tool_id: ToolId::new("tool-alpha"),
+                name: "alpha".to_owned(),
+                arguments: canonical_arguments(),
+            },
+        }
+    }
+
+    /// A later generation of the same or another attempt, proposing its own
+    /// distinct canonical call.
+    fn next(attempt: &str, turn: &str, call: &str) -> Self {
+        Self {
+            attempt: AttemptId::new(attempt),
+            turn: TurnId::new(turn),
+            call: ToolCall {
+                id: ToolCallId::new(call),
+                tool_id: ToolId::new("tool-alpha"),
+                name: "alpha".to_owned(),
+                arguments: canonical_arguments(),
+            },
+        }
+    }
+
+    fn message_id(&self) -> MessageId {
+        MessageId::new(format!("{}-agent-{}", self.attempt, self.turn))
+    }
+
+    /// An audit envelope pinned to exactly this generation.
+    fn envelope(&self, event_id: &str, event: RuntimeEvent) -> RuntimeEventEnvelope {
+        RuntimeEventEnvelope {
+            attempt_id: Some(self.attempt.clone()),
+            turn_id: Some(self.turn.clone()),
+            ..envelope(event_id, event)
+        }
+    }
+
+    fn requested(
+        &self,
+        interaction_id: &InteractionId,
+        subject: InteractionSubject,
+    ) -> RuntimeEventEnvelope {
+        self.envelope(
+            &requested_event_id(interaction_id),
+            RuntimeEvent::InteractionRequested {
+                interaction_id: interaction_id.clone(),
+                subject,
+            },
+        )
+    }
+
+    fn settled(
+        &self,
+        interaction_id: &InteractionId,
+        settlement: InteractionSettlement,
+    ) -> RuntimeEventEnvelope {
+        self.envelope(
+            &settled_event_id(interaction_id),
+            RuntimeEvent::InteractionSettled {
+                interaction_id: interaction_id.clone(),
+                settlement,
+            },
+        )
+    }
+
+    /// The one approval subject that truthfully describes this generation's
+    /// canonical call.
+    fn approval_subject(&self) -> InteractionSubject {
+        InteractionSubject::Approval {
+            call_id: self.call.id.clone(),
+            tool_id: self.call.tool_id.clone(),
+            tool_name: self.call.name.clone(),
+            arguments_digest: interaction_arguments_digest(&self.call.arguments),
+            reason: "the policy asked".to_owned(),
+        }
+    }
+}
+
 /// Commits the exact durable prefix a real attempt reaches immediately before
-/// the pre-tool policy boundary: an attempt start, one complete provider
-/// generation, and one canonical Assistant turn proposing `call-approved`.
+/// the pre-tool policy boundary: an attempt start (for a new attempt), one
+/// complete provider generation, and one canonical Assistant turn proposing
+/// this generation's call.
 ///
 /// Nothing here is an execution authorization: no `ToolExecutionStarted`
 /// exists, which is precisely the state the interaction regressions build on.
-fn commit_turn_up_to_the_policy_boundary(store: &SqliteConversationStore) {
-    store.initialize(&[]).expect("initialize");
-    store
-        .append_event(RuntimeEventEnvelope {
-            turn_id: None,
-            ..envelope(
-                "attempt-start",
-                RuntimeEvent::AttemptStarted {
-                    attempt_id: attempt(),
-                },
-            )
-        })
-        .expect("attempt start");
-    let request_id = start_request(store);
-    let message_id = MessageId::new(format!("{}-agent-1", attempt()));
+fn commit_generation(store: &SqliteConversationStore, generation: &Generation) {
+    let request_id = start_request(store, &generation.attempt, &generation.turn);
+    let message_id = generation.message_id();
     let start = PublicationStreamStart {
-        stream_id: PublicationStreamId::for_request(&attempt(), &message_id),
-        attempt_id: attempt(),
-        turn_id: TurnId::new("1"),
+        stream_id: PublicationStreamId::for_request(&generation.attempt, &message_id),
+        attempt_id: generation.attempt.clone(),
+        turn_id: generation.turn.clone(),
         request_id: request_id.clone(),
         message_id: message_id.clone(),
     };
@@ -278,9 +370,9 @@ fn commit_turn_up_to_the_policy_boundary(store: &SqliteConversationStore) {
             PublicationPayload::ProposedToolCallStarted {
                 block_index: ContentBlockIndex::new(0),
                 call: ToolCallStart {
-                    id: call_id(),
-                    tool_id: ToolId::new("tool-alpha"),
-                    name: "alpha".to_owned(),
+                    id: generation.call.id.clone(),
+                    tool_id: generation.call.tool_id.clone(),
+                    name: generation.call.name.clone(),
                 },
             },
         )])
@@ -291,18 +383,16 @@ fn commit_turn_up_to_the_policy_boundary(store: &SqliteConversationStore) {
             1,
             PublicationPayload::ProposedToolCallCompleted {
                 block_index: ContentBlockIndex::new(0),
-                call: ToolCall {
-                    id: call_id(),
-                    tool_id: ToolId::new("tool-alpha"),
-                    name: "alpha".to_owned(),
-                    arguments: canonical_arguments(),
-                },
+                call: generation.call.clone(),
             },
         )])
         .expect("proposal complete");
     store
-        .append_event(envelope(
-            "request-completed-1",
+        .append_event(generation.envelope(
+            &format!(
+                "request-completed-{}-{}",
+                generation.attempt, generation.turn
+            ),
             RuntimeEvent::ModelRequestCompleted {
                 request_id,
                 finish_reason: ModelFinishReason::ToolCalls,
@@ -321,19 +411,40 @@ fn commit_turn_up_to_the_policy_boundary(store: &SqliteConversationStore) {
             &start.stream_id,
             &MessageBlock::Assistant(AssistantMessageBlock {
                 id: message_id.clone(),
-                content: vec![AssistantContentBlock::ToolCall(ToolCall {
-                    id: call_id(),
-                    tool_id: ToolId::new("tool-alpha"),
-                    name: "alpha".to_owned(),
-                    arguments: canonical_arguments(),
-                })],
+                content: vec![AssistantContentBlock::ToolCall(generation.call.clone())],
             }),
-            envelope(
-                "assistant-committed-1",
+            generation.envelope(
+                &format!(
+                    "assistant-committed-{}-{}",
+                    generation.attempt, generation.turn
+                ),
                 RuntimeEvent::AssistantMessageCommitted { message_id },
             ),
         )
         .expect("canonical Assistant");
+}
+
+/// Records the durable start of one attempt.
+fn start_attempt(store: &SqliteConversationStore, attempt_id: &AttemptId) {
+    store
+        .append_event(RuntimeEventEnvelope {
+            turn_id: None,
+            attempt_id: Some(attempt_id.clone()),
+            ..envelope(
+                &format!("attempt-start-{attempt_id}"),
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: attempt_id.clone(),
+                },
+            )
+        })
+        .expect("attempt start");
+}
+
+fn commit_turn_up_to_the_policy_boundary(store: &SqliteConversationStore) {
+    let generation = Generation::first();
+    store.initialize(&[]).expect("initialize");
+    start_attempt(store, &generation.attempt);
+    commit_generation(store, &generation);
 }
 
 /// An in-memory conversation committed exactly up to the pre-tool policy
@@ -668,23 +779,39 @@ fn a_historical_approval_cannot_be_replayed_as_current_authority() {
         Err(ConversationStoreError::TerminalViolation(_))
     ));
 
-    // A new live approval is an ordinary new identity in the current
-    // (post-restart) attempt domain, entirely disjoint from the historical
-    // one.
-    let fresh_attempt = AttemptId::new("attempt-2");
-    let fresh = InteractionId::for_attempt(&fresh_attempt, 1);
+    // The post-restart attempt cannot even *name* the historical call: the
+    // approved `call-approved` belongs to attempt-1 turn 1, and an approval
+    // asked by a new generation must describe that generation's own canonical
+    // ToolCall. Copying the old subject verbatim is refused, which is a second,
+    // independent reason the old decision cannot be recycled.
+    let fresh_generation = Generation::next("attempt-2", "1", "call-post-restart");
+    let fresh = InteractionId::for_attempt(&fresh_generation.attempt, 1);
     assert_ne!(fresh, id);
+    assert!(
+        matches!(
+            store.append_event(fresh_generation.requested(&fresh, approval_subject())),
+            Err(ConversationStoreError::InvalidReference(_))
+        ),
+        "the new attempt cannot re-use the historical call as its own subject"
+    );
+
+    // A new live approval is an ordinary new identity in the current
+    // (post-restart) attempt domain, asking about its own newly proposed call
+    // and entirely disjoint from the historical one.
+    start_attempt(&store, &fresh_generation.attempt);
+    commit_generation(&store, &fresh_generation);
     store
-        .append_event(RuntimeEventEnvelope {
-            attempt_id: Some(fresh_attempt),
-            ..requested(&fresh, approval_subject())
-        })
-        .expect("a new attempt asks its own new question");
+        .append_event(fresh_generation.requested(&fresh, fresh_generation.approval_subject()))
+        .expect("a new attempt asks its own new question about its own new call");
 
     assert_eq!(
         interaction_facts(&store).len(),
         3,
         "the historical pair is untouched and the new request is additive"
+    );
+    assert!(
+        !has_tool_start(&store),
+        "nothing about the new approval executed the historical call"
     );
 }
 
@@ -924,6 +1051,168 @@ fn an_approval_subject_must_match_the_canonical_tool_call_it_references() {
             approval_subject(),
         ))
         .expect("a subject that exactly matches the canonical ToolCall commits");
+}
+
+// ---------------------------------------------------------------------------
+// The Approval subject is bound to one durable generation, not to a call id
+// ---------------------------------------------------------------------------
+
+/// Every durable fact a rejected append must leave untouched.
+///
+/// Comparing the whole fingerprint before and after is what turns "the store
+/// returned an error" into "the store wrote nothing": the Event Journal, the
+/// canonical Ledger, and the Surface head revision are the three durable
+/// authorities an interaction append could otherwise disturb.
+#[derive(Debug, PartialEq)]
+struct DurableFingerprint {
+    events: Vec<RuntimeEvent>,
+    canonical: Vec<MessageBlock>,
+    surface_revision: rustx::conversation::SurfaceRevision,
+}
+
+fn fingerprint(store: &SqliteConversationStore) -> DurableFingerprint {
+    DurableFingerprint {
+        events: journal(store),
+        canonical: store.load_canonical().expect("canonical"),
+        surface_revision: store.load_head().expect("head").revision,
+    }
+}
+
+/// An Approval audit subject must belong to the generation its envelope names,
+/// even when a canonical `ToolCall` with exactly the same identity and
+/// arguments is still active on the Surface.
+///
+/// Turn 1 proposes `call-approved`. Turn 2 of the same attempt then asks for an
+/// approval whose subject copies that call perfectly — same call id, tool id,
+/// name, and canonical argument digest — and pins both audit facts to turn 2.
+/// Accepting it would permanently record "turn 2 approved turn 1's `ToolCall`".
+/// The store refuses it, because the canonical publication owner of
+/// `call-approved` belongs to turn 1.
+#[test]
+fn an_approval_cannot_reference_a_canonical_tool_call_from_another_turn() {
+    let store = policy_boundary_store();
+    let first = Generation::first();
+    let second = Generation::next("attempt-1", "2", "call-second-turn");
+    commit_generation(&store, &second);
+
+    let before = fingerprint(&store);
+    let id = InteractionId::for_attempt(&second.attempt, 1);
+    let error = store
+        .append_event(second.requested(&id, first.approval_subject()))
+        .expect_err("turn 2 cannot approve turn 1's canonical ToolCall");
+    assert!(
+        matches!(error, ConversationStoreError::InvalidReference(_)),
+        "a cross-turn approval is a typed reference violation, got {error:?}"
+    );
+    assert_eq!(
+        fingerprint(&store),
+        before,
+        "the refused append wrote no event, no canonical message, and no Surface revision"
+    );
+
+    // The identity was not consumed and no `interaction:{id}` lifecycle row
+    // exists, so the same interaction still commits once its subject names the
+    // call its own generation actually proposed.
+    store
+        .append_event(second.requested(&id, second.approval_subject()))
+        .expect("the same identity commits for its own generation's call");
+    store
+        .append_event(second.settled(&id, InteractionSettlement::Approved))
+        .expect("and settles exactly once");
+}
+
+/// The same rule across attempts: attempt 1's canonical `ToolCall` is still
+/// active on the Surface, and attempt 2 may not approve it.
+///
+/// This is the case a bare conversation-global `call_id` lookup gets wrong,
+/// because the call really is findable in canonical history — it simply is not
+/// owned by the generation that is asking.
+#[test]
+fn an_approval_cannot_reference_a_canonical_tool_call_from_another_attempt() {
+    let store = policy_boundary_store();
+    let first = Generation::first();
+    let second = Generation::next("attempt-2", "1", "call-second-attempt");
+    start_attempt(&store, &second.attempt);
+    commit_generation(&store, &second);
+
+    // Attempt 1's call is unambiguously still canonical and active.
+    assert!(
+        store
+            .load_canonical()
+            .expect("canonical")
+            .iter()
+            .any(|message| matches!(
+                message,
+                MessageBlock::Assistant(assistant)
+                    if assistant.content.iter().any(|block| matches!(
+                        block,
+                        AssistantContentBlock::ToolCall(call) if call.id == first.call.id
+                    ))
+            )),
+        "the cross-attempt call really is present in active canonical history"
+    );
+
+    let before = fingerprint(&store);
+    let id = InteractionId::for_attempt(&second.attempt, 1);
+    let error = store
+        .append_event(second.requested(&id, first.approval_subject()))
+        .expect_err("attempt 2 cannot approve attempt 1's canonical ToolCall");
+    assert!(
+        matches!(error, ConversationStoreError::InvalidReference(_)),
+        "a cross-attempt approval is a typed reference violation, got {error:?}"
+    );
+    assert_eq!(
+        fingerprint(&store),
+        before,
+        "every durable authority is unchanged by the refusal"
+    );
+}
+
+/// The exact generation commits: when the canonical `ToolCall`'s owning
+/// attempt and turn are the ones the audit envelope names, the requested and
+/// settled facts commit normally and the subject still pins the call id, tool
+/// id, name, and canonical argument digest exactly.
+#[test]
+fn an_approval_commits_in_the_exact_generation_that_proposed_its_call() {
+    let store = policy_boundary_store();
+    let second = Generation::next("attempt-1", "2", "call-second-turn");
+    commit_generation(&store, &second);
+
+    for generation in [Generation::first(), second] {
+        let id = InteractionId::for_attempt(
+            &generation.attempt,
+            generation.turn.as_str().parse().expect("numeric turn"),
+        );
+        store
+            .append_event(generation.requested(&id, generation.approval_subject()))
+            .expect("the owning generation approves its own call");
+        store
+            .append_event(generation.settled(&id, InteractionSettlement::Approved))
+            .expect("and settles exactly once");
+
+        let InteractionSubject::Approval {
+            call_id: subject_call,
+            tool_id: subject_tool,
+            tool_name: subject_name,
+            arguments_digest,
+            ..
+        } = generation.approval_subject()
+        else {
+            panic!("the approval subject is an approval");
+        };
+        assert_eq!(subject_call, generation.call.id);
+        assert_eq!(subject_tool, generation.call.tool_id);
+        assert_eq!(subject_name, generation.call.name);
+        assert_eq!(
+            arguments_digest,
+            interaction_arguments_digest(&generation.call.arguments)
+        );
+    }
+
+    assert!(
+        !has_tool_start(&store),
+        "an approval audit is never an execution authorization"
+    );
 }
 
 /// Interaction audit payload bounds are durable-store invariants, not

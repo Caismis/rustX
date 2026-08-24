@@ -500,14 +500,21 @@ payloads and a fact that bypassed the live coordinator must still be refused:
   store's envelope check; the attempt and turn are compared against the
   committed requested fact, and an audit fact carrying neither is refused
   because it cannot be pinned to its pair.
-- An Approval audit subject must match the canonical `ToolCall` it references.
-  The `call_id` must resolve to a durably committed canonical Assistant
-  `ToolCall` on the active Surface — the domain in which a
-  request/publication-scoped `ToolCallId` resolves unambiguously — and that
-  call's tool id, name, and argument digest must equal the subject's. A
-  well-typed approval naming a call that was never proposed, a different tool,
-  or a different argument value is a *semantically false* audit record and is
-  refused.
+- An Approval audit subject must match the canonical `ToolCall` it references
+  *and* the generation that proposed it. A `ToolCallId` is
+  request/publication-scoped, so equal content is not ownership; the store
+  resolves `(call_id, attempt_id, turn_id)` through the retained FND-03
+  publication owner — `publication_proposals` joined to `publication_streams`
+  on a `canonical` settlement — to exactly one Assistant `message_id`, requires
+  that message to still be on the active Surface and to contain the call, and
+  then requires the frozen tool id, name, and argument digest to equal the
+  subject's. A well-typed approval naming a call that was never proposed, a
+  different tool, a different argument value, *or the same call from another
+  turn or another attempt* is a semantically false audit record and is refused.
+  There is no bare conversation-global `call_id` fallback: the Agent Loop
+  refuses to commit an Assistant message without an open publication stream, so
+  every real approval has a frozen `(attempt, turn, message_id)` owner and no
+  lenient branch is needed for a state the runtime cannot produce.
 - Interaction audit payload bounds are durable-store invariants. Prompt,
   choice count/length/uniqueness, answer mode and length, approval request
   reason, denial reason, tool-name length, and the canonical lowercase-hex

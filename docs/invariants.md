@@ -367,14 +367,30 @@ must still be refused.
   pair at all. The store does not rely on the coordinator happening to rebuild
   the same turn identity.
 - **An Approval audit subject must match the canonical `ToolCall` it
-  references.** The subject's `call_id` must resolve to a canonical Assistant
-  `ToolCall` that is durably committed and active on the Surface — the domain
-  in which a `ToolCallId`, which is request/publication-scoped rather than
-  conversation-global, resolves unambiguously — and that call's `tool_id`,
-  name, and `interaction_arguments_digest(arguments)` must equal the subject's
-  three corresponding fields. An approval naming a call that was never
-  proposed, a different tool, or a different argument value is a structurally
-  valid but semantically false audit record and never enters the Journal.
+  references, in the generation its own envelope names.** Content equality is
+  not ownership: a `ToolCallId` is request/publication-scoped, so two turns of
+  one attempt — or two attempts of one conversation — can hold canonical calls
+  that compare equal in every field the subject carries. The store therefore
+  composes the two ownerships the durable model already retains:
+
+  ```text
+  retained canonical publication generation   (attempt_id, turn_id) -> message_id
+                      +
+  active canonical Surface ownership          message_id is still canonical
+                      =
+  the exact canonical Assistant ToolCall this approval may describe
+  ```
+
+  The requested fact must carry an attempt and a turn; `(call_id, attempt_id,
+  turn_id)` must resolve — through `publication_proposals` joined to
+  `publication_streams` on a `canonical` settlement — to exactly one owning
+  Assistant `message_id`; that message must still be on the active Surface and
+  must contain that call; and the call's `tool_id`, name, and
+  `interaction_arguments_digest(arguments)` must equal the subject's. Same
+  attempt with a different turn is rejected, a different attempt is rejected,
+  and finding one matching call id on the Surface is never by itself
+  sufficient. There is no conversation-global bare `call_id` lookup and no
+  Event Journal scan.
 - **Interaction audit payload bounds are durable-store invariants.** The
   prompt, choice count, choice length, choice uniqueness, answer mode, answer
   length, approval request reason, denial reason, tool-name length, and the
