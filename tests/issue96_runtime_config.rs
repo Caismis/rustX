@@ -144,10 +144,19 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
     )
     .expect("config v1");
     let startup = paths(root.path(), &config_path);
+    std::fs::write(
+        startup.workspace.join("AGENTS.md"),
+        "old project instructions",
+    )
+    .expect("old project instructions");
 
     let product = LocalSessionProduct::compose(&startup, &dependencies())
         .await
         .expect("initial product");
+    assert_eq!(
+        product.runtime().runtime_resources().project_instructions(),
+        Some("old project instructions")
+    );
     assert_eq!(
         product.runtime().model_view().configured.model.to_string(),
         "local/model-a"
@@ -174,6 +183,11 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
     std::fs::remove_dir_all(skills_root.join("old-skill")).expect("remove old Skill");
     write_skill(&skills_root, "new-skill", "New current resource");
     std::fs::write(
+        startup.workspace.join("AGENTS.md"),
+        "new project instructions",
+    )
+    .expect("new project instructions");
+    std::fs::write(
         &config_path,
         config_json(
             "local/model-c",
@@ -191,6 +205,11 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         .await
         .expect("resumed product");
     let runtime = resumed.runtime();
+    assert_eq!(
+        runtime.runtime_resources().project_instructions(),
+        Some("new project instructions"),
+        "cold resume independently discovers current project resources"
+    );
     assert_eq!(
         runtime.model_view().configured.model.to_string(),
         "local/model-b"
@@ -225,10 +244,17 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         id: RequestId::new(3),
         protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
     });
-    assert!(matches!(
-        resumed_initialized.result,
-        Some(RuntimeClientResult::Initialized { .. })
-    ));
+    let initialized_snapshot = match resumed_initialized.result {
+        Some(RuntimeClientResult::Initialized { snapshot, .. }) => snapshot,
+        other => panic!("initialize returned an unexpected result: {other:?}"),
+    };
+    assert!(
+        initialized_snapshot.messages.iter().all(|message| {
+            let json = serde_json::to_string(message).expect("message JSON");
+            !json.contains("project instructions") && !json.contains("current resource")
+        }),
+        "cold resource changes inject no synthetic conversation message"
+    );
     let capability_view = resumed_endpoint.handle_request(RuntimeClientRequest::CapabilityGet {
         id: RequestId::new(5),
     });

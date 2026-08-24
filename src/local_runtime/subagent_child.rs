@@ -509,6 +509,16 @@ mod tests {
                     status_composer: AgentStatusComposer::default(),
                 },
                 tool_runtime,
+                resources: Arc::new(crate::runtime::RuntimeResourceSnapshot::new(
+                    crate::runtime::RuntimeResourceRevision::new(1),
+                    Vec::new(),
+                    None,
+                    crate::context::ContextAssembly::new(),
+                    capability.current_snapshot(),
+                )),
+                resource_loader: Arc::new(crate::runtime::FilesystemRuntimeResourceLoader::new(
+                    &workspace,
+                )),
                 capability,
                 clock: None,
                 initial_messages: Vec::new(),

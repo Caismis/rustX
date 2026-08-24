@@ -100,22 +100,28 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use futures_util::future::BoxFuture;
+
 use crate::capabilities::{
-    CapabilityCoordinator, CapabilityCoordinatorConfig, ToolActivationPolicy,
+    CapabilityCoordinator, CapabilityCoordinatorConfig, CapabilityResourceInputs,
+    ToolActivationPolicy,
 };
 use crate::context::{DefaultTokenEstimator, TokenEstimator};
-use crate::message::content::TextBlock;
-use crate::message::types::{MessageBlock, SystemAuthority, SystemMessageBlock};
 use crate::model::catalog::{
     CredentialEnvironment, ModelCatalog, ModelCatalogError, ProcessCredentialEnvironment,
 };
 use crate::model::invocation::{ModelBindingRegistry, ModelInvocationError};
 use crate::model::session::SessionModelState;
+use crate::runtime::RuntimeResourceRevision;
 use crate::runtime::conversation_runtime::{
     ConversationContextConfig, ConversationRuntime, ConversationRuntimeError,
     RuntimeConversationConfig,
 };
 use crate::runtime::identity::ConversationId;
+use crate::runtime::resources::{
+    FilesystemRuntimeResourceLoader, PreparedRuntimeResources, RuntimeResourceLoadError,
+    RuntimeResourceLoader, RuntimeResourceSnapshot, load_project_context_files,
+};
 use crate::runtime_client::endpoint::RuntimeClientEndpoint;
 use crate::runtime_client::host::{
     HostConstructionError, RuntimeClientHost, RuntimeClientHostConfig, RuntimeClientSessionControl,
@@ -211,6 +217,108 @@ impl std::fmt::Debug for LocalRuntimeDependencies {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LocalRuntimeDependencies")
             .finish_non_exhaustive()
+    }
+}
+
+/// Reload-time resource composition for one local runtime. Command-line
+/// inputs are immutable; `rustx.json` and filesystem resources are read only
+/// when this loader is explicitly invoked by the runtime reload boundary.
+struct LocalRuntimeResourceLoader {
+    paths: LocalRuntimePaths,
+    native_resources: NativeToolResources,
+}
+
+impl LocalRuntimeResourceLoader {
+    fn new(paths: LocalRuntimePaths, native_resources: NativeToolResources) -> Self {
+        Self {
+            paths,
+            native_resources,
+        }
+    }
+}
+
+impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
+    fn prepare<'a>(
+        &'a self,
+        capability: &'a CapabilityCoordinator,
+    ) -> BoxFuture<'a, Result<PreparedRuntimeResources, RuntimeResourceLoadError>> {
+        Box::pin(async move {
+            let config_bytes = std::fs::read(&self.paths.config).map_err(|error| {
+                RuntimeResourceLoadError::new(format!(
+                    "cannot read runtime config {}: {error}",
+                    self.paths.config.display()
+                ))
+            })?;
+            let config = CurrentRuntimeConfig::from_json_slice(&config_bytes)
+                .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
+            let base_environment = config
+                .tool_environment()
+                .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
+            let mut registry = ToolRegistry::new();
+            register_native_tools(
+                &mut registry,
+                self.native_resources.clone(),
+                config.native_tools.to_policies(),
+            )
+            .map_err(|error| {
+                RuntimeResourceLoadError::new(format!(
+                    "cannot register reload-time native tools: {error}"
+                ))
+            })?;
+            let workspace = capability.current_snapshot().workspace_root().to_path_buf();
+            let workspace_authority =
+                crate::tools::Workspace::new(&workspace).map_err(|error| {
+                    RuntimeResourceLoadError::new(format!(
+                        "cannot resolve reload workspace: {error}"
+                    ))
+                })?;
+            let mut skill_discovery =
+                SkillDiscoveryConfig::default_for_workspace(&workspace_authority);
+            if self.paths.no_skills {
+                skill_discovery.automatic_roots.clear();
+            }
+            skill_discovery.explicit_paths.extend(
+                config
+                    .skills
+                    .iter()
+                    .map(|path| resolve_workspace_path(&workspace, path)),
+            );
+            skill_discovery.explicit_paths.extend(
+                self.paths
+                    .skill_paths
+                    .iter()
+                    .map(|path| resolve_workspace_path(&workspace, path)),
+            );
+            let mcp_servers = config
+                .mcp_bindings()
+                .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
+            let candidate = capability
+                .prepare_candidate_with_inputs(CapabilityResourceInputs {
+                    base_tool_registry: Arc::new(registry),
+                    tool_activation: ToolActivationPolicy {
+                        default_tools: Some(config.default_tools.clone()),
+                        no_builtin_tools: self.paths.no_builtin_tools,
+                        no_tools: self.paths.no_tools,
+                        tools: self.paths.tools.clone(),
+                        exclude_tools: self.paths.exclude_tools.clone(),
+                    },
+                    skill_discovery,
+                    mcp_servers,
+                    base_environment,
+                })
+                .await
+                .map_err(|error| {
+                    RuntimeResourceLoadError::new(format!(
+                        "cannot prepare reload capability resources: {error}"
+                    ))
+                })?;
+            Ok(PreparedRuntimeResources::new(
+                load_project_context_files(&workspace)?,
+                None,
+                crate::context::ContextAssembly::new(),
+                candidate,
+            ))
+        })
     }
 }
 
@@ -339,12 +447,13 @@ impl LocalConversationCore {
             },
         );
         let mut base_registry = ToolRegistry::new();
+        let native_resources = NativeToolResources {
+            background: tool_runtime.background().clone(),
+            subagents: Some(subagents.clone()),
+        };
         register_native_tools(
             &mut base_registry,
-            NativeToolResources {
-                background: tool_runtime.background().clone(),
-                subagents: Some(subagents.clone()),
-            },
+            native_resources.clone(),
             runtime_config.native_tools.to_policies(),
         )
         .map_err(|error| LocalRuntimeError::NativeTools {
@@ -417,6 +526,20 @@ impl LocalConversationCore {
             .map_err(|error| LocalRuntimeError::Capability {
                 detail: format!("{error:?}"),
             })?;
+        let resources = Arc::new(RuntimeResourceSnapshot::new(
+            RuntimeResourceRevision::new(1),
+            load_project_context_files(tool_runtime.workspace().root()).map_err(|error| {
+                LocalRuntimeError::Capability {
+                    detail: error.to_string(),
+                }
+            })?,
+            None,
+            crate::context::ContextAssembly::new(),
+            capability.current_snapshot(),
+        ));
+        let resource_loader: Arc<dyn RuntimeResourceLoader> = Arc::new(
+            LocalRuntimeResourceLoader::new(paths.clone(), native_resources),
+        );
 
         // Reopening a selected lineage must re-supply only its immutable
         // bootstrap prefix to ConversationRuntime. Later canonical turns are
@@ -445,6 +568,8 @@ impl LocalConversationCore {
             },
             tool_runtime: tool_runtime.clone(),
             capability: capability.clone(),
+            resources,
+            resource_loader,
             clock: None,
             initial_messages,
             subagents: Some(subagents),
@@ -475,9 +600,8 @@ impl LocalConversationCore {
     ///   (recursive delegation is structurally absent); it never opens or
     ///   creates Python tool storage (Issue #81), so a broken Python store
     ///   location cannot fail child composition;
-    /// - the profile persona enters the canonical history as one bootstrap
-    ///   `SystemMessageBlock` (authority `Platform`), never as a forged
-    ///   user message;
+    /// - the profile persona is immutable `AgentProfile` System authority
+    ///   and canonical history starts empty;
     /// - the durable authority is the child-private store under
     ///   [`SubagentChildSpec::runtime_root`], disjoint from the parent's
     ///   store.
@@ -557,10 +681,24 @@ impl LocalConversationCore {
             .map_err(|error| LocalRuntimeError::Capability {
                 detail: format!("{error:?}"),
             })?;
+        let project_context_files = load_project_context_files(tool_runtime.workspace().root())
+            .map_err(|error| LocalRuntimeError::Capability {
+                detail: error.to_string(),
+            })?;
+        let resources = Arc::new(RuntimeResourceSnapshot::new(
+            RuntimeResourceRevision::new(1),
+            project_context_files,
+            Some(spec.persona.clone()),
+            crate::context::ContextAssembly::new(),
+            capability.current_snapshot(),
+        ));
+        let resource_loader: Arc<dyn RuntimeResourceLoader> = Arc::new(
+            FilesystemRuntimeResourceLoader::base_only(tool_runtime.workspace().root())
+                .with_agent_profile(spec.persona.clone()),
+        );
 
         // 12-13. The one child conversation runtime. The persona enters the
-        // canonical history as one platform-authority bootstrap system
-        // message — instructions, never a fabricated user turn.
+        // request-time AgentProfile System section, never canonical history.
         let runtime = ConversationRuntime::new(RuntimeConversationConfig {
             agent_id: spec.child_agent_id.clone(),
             model,
@@ -573,17 +711,10 @@ impl LocalConversationCore {
             },
             tool_runtime: tool_runtime.clone(),
             capability: capability.clone(),
+            resources,
+            resource_loader,
             clock: None,
-            initial_messages: vec![MessageBlock::System(SystemMessageBlock {
-                id: crate::runtime::identity::MessageId::new(format!(
-                    "{}-bootstrap-persona",
-                    spec.child_conversation_id
-                )),
-                authority: SystemAuthority::Platform,
-                content: vec![TextBlock {
-                    text: spec.persona.clone(),
-                }],
-            })],
+            initial_messages: Vec::new(),
             // A child runtime has no subagent registry: recursive
             // delegation is absent by construction.
             subagents: None,

@@ -40,7 +40,7 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 2 is the only accepted schema; incompatible files fail
+schema version 3 is the only accepted schema; incompatible files fail
 explicitly and are not migrated.
 
 The durable request-start invariant is strict: the provider adapter cannot be
@@ -64,12 +64,14 @@ it is not a late event inside a turn that already emitted `TurnCompleted`.
 
 ## Message semantics
 
-The canonical conversation model contains exactly four top-level message roles:
+The canonical conversation model contains exactly three top-level message roles:
 
-- System
 - User
 - Assistant
 - Tool
+
+System instructions are request-time authority in
+`ModelRequest.effective_system_prompt`, never canonical conversation messages.
 
 A `UserMessageBlock` means inbound information to the current agent. Its provenance is explicit metadata and may identify a human, another agent, the control plane, or an external source.
 
@@ -740,6 +742,13 @@ that a live child produced an Interrupted physical result.
   settings, approval settings reserved for #100, and future capability
   sources therefore come from the current launch. A valid old Session can
   never make an invalid current configuration disappear.
+- **Runtime resources are process-local generations.** Composition discovers
+  project instructions, Skill catalog identity/metadata, extension System
+  Sections, and extension Tool registrations once and publishes them with one
+  compatible immutable `CapabilitySnapshot`. Ordinary requests, tool
+  continuations, compaction, attachment changes, and lineage projection never
+  rediscover them. Explicit reload is the only in-process replacement; cold
+  resume composes a fresh generation without restoring one from history.
 - **First-Session publication follows model validation.** On a fresh
   `runtime-root`, composition loads the current `models.json` and validates
   the current runtime default before creating or publishing the root Session.
@@ -806,7 +815,9 @@ that a live child produced an Interrupted physical result.
   remains the sole candidate/commit authority. An admitted attempt retains
   one immutable capability snapshot until terminal settlement. #96 does not
   add approval/HITL (#100), Execution Modes (#98), model-turn leases or
-  deferred discovery (`#99`), file watching, or hot reload.
+  deferred discovery (`#99`), or file watching. Issue #106 later adds only
+  explicit quiescent runtime-resource reload; it does not add automatic
+  invalidation.
 - **Clients are projections.** Runtime Client exposes typed active and
   available Tool lists and the model-visible Skill catalog. The TUI forwards
   startup paths and renders that projection; it never parses configuration,
@@ -847,8 +858,9 @@ hold attempt leases and never block a capability commit.
   Skill change yields a new Skill version and a new capability revision
   without changing environment identities when dependency inputs are
   unchanged.
-- Skill, native-tool, MCP, and Python capability mutations may occur only
-  while the conversation runtime is quiescent in the M6 sense;
+- Skill, native-tool, MCP, and Python capability mutations in a live product
+  runtime occur through its explicit resource reload and only while the
+  conversation runtime is quiescent in the M6 sense;
   broader runtime-wide busy semantics (active tool calls, foreground or
   background processes, event-writer or drain transitions) remain the M9
   scheduler's concern, not part of the M6 commit guard.
@@ -1767,10 +1779,9 @@ owns the `ToolCall` identity and arguments, while Tool owns the result and
 references the `ToolCallId`. Orphan calls/results, duplicate call identity,
 duplicate result, and invalid structural spans are rejected.
 
-The narrow #54 system rule is bounded: a Replace span cannot contain a
-trusted `System` message. A later System message does not pin all preceding
-conversation and never resurrects retired history. Issue #55 owns the full
-Effective System Prompt and Request Snapshot architecture.
+Because canonical history has no System role, the whole structurally valid
+active prefix is eligible for replacement. Effective System authority remains
+outside Surface history and is carried exactly by each Request Snapshot.
 
 Planning bounds the actual summary-model request, not the raw retired span.
 `SummaryRequest::model_input()` is the shared deterministic assembly of the
@@ -1894,8 +1905,10 @@ message role, history shape, or timestamps:
   start-commit failure rolls the whole transaction back, so canonical
   request-scoped User context can never become canonical without its request
   starting.
-- Effective System Prompt is rustX-rendered from canonical System content
-  and ordered native/extension sections. The active Skill catalog is one
+- `ModelRequest.effective_system_prompt` is the sole System authority. It is
+  rustX-rendered from ordered native/extension sections; canonical history
+  has no System role. Frozen project instructions occupy the
+  `WorkspaceInstructions` lane and the active Skill catalog is one
   request-time `NativeCapabilityGuidance` section rendered from the attempt's
   immutable `CapabilitySnapshot`; it is absent when no model-visible Skills
   exist. The rendered string is frozen by value in RequestSnapshot; native
@@ -1907,12 +1920,12 @@ message role, history shape, or timestamps:
   result of an explicit native Read.
   Compaction operates on canonical facts and cannot remove Skill catalog
   visibility.
-- RequestSnapshot contains RequestIdentity, SurfaceRevision,
-  effective_system_prompt, ModelInvocationConfig, context window,
-  reasoning values, tool definitions, capability revision,
-  ContextGeneration, and opaque continuation state. It references only the
-  exact historical Surface revision; all request-time derived values that
-  are not durably addressable are values.
+- RequestSnapshot contains RequestIdentity, SurfaceRevision, the exact
+  ordered System Sections and effective_system_prompt, runtime-resource and
+  capability revisions, ModelInvocationConfig, context window, reasoning
+  values, exact tool definitions, ContextGeneration, and opaque continuation
+  state. It references only the exact historical Surface revision; all
+  request-time derived values that are not durably addressable are values.
 - RequestSnapshot::reconstruct resolves that historical Surface and combines
   it with the frozen fields. The Agent Loop compares the reconstructed
   provider-neutral ModelRequest structurally with the actual request before
@@ -2107,8 +2120,7 @@ The load-bearing split of this seam:
   request-time proposals:
   - `NativeRuntimeObservation` → the native-reserved
     `UserContextLane::RuntimeToolObservation` (immediately after
-    `ClaimedInbound` and before `WorkspaceInstructions`,
-    `ExtensionEnvironment`, and `AgentStatus`),
+    `ClaimedInbound` and before `ExtensionEnvironment` and `AgentStatus`),
     `UserSource::Runtime`,
     `InboundKind::Context(ContextKind::RuntimeToolObservation)`. rustX owns
     this owner, so it needs no registration and carries no attestation;

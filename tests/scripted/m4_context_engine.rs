@@ -72,16 +72,6 @@ fn user(id: &str, text: &str) -> MessageBlock {
     })
 }
 
-fn system(id: &str, text: &str) -> MessageBlock {
-    MessageBlock::System(rustx::message::types::SystemMessageBlock {
-        id: MessageId::new(id),
-        authority: rustx::message::types::SystemAuthority::Platform,
-        content: vec![TextBlock {
-            text: text.to_owned(),
-        }],
-    })
-}
-
 fn text_block(text: &str) -> AssistantContentBlock {
     AssistantContentBlock::Text(TextBlock {
         text: text.to_owned(),
@@ -498,7 +488,6 @@ fn committed_summary(result: &AgentExecutionResult) -> &UserMessageBlock {
 
 fn message_id_of(message: &MessageBlock) -> String {
     match message {
-        MessageBlock::System(system) => system.id.as_str().to_owned(),
         MessageBlock::User(user) => user.id.as_str().to_owned(),
         MessageBlock::Assistant(assistant) => assistant.id.as_str().to_owned(),
         MessageBlock::Tool(tool) => tool.id.as_str().to_owned(),
@@ -564,10 +553,7 @@ fn compaction_cannot_remove_request_time_skill_catalog_guidance() {
     // leave enough deterministic room for the compact system section while
     // still compacting the canonical messages below it.
     let engine = engine(1_000, 0, 0, weighted(10, 0, 0));
-    let before_messages = state
-        .active_messages()
-        .expect("active messages before compaction");
-    let before_prompt = render_effective_system_prompt(&before_messages, &sections);
+    let before_prompt = render_effective_system_prompt(&sections);
     assert_eq!(before_prompt, skill_catalog);
     let projection = engine
         .build_projection(&state, &[], None, &before_prompt)
@@ -589,7 +575,7 @@ fn compaction_cannot_remove_request_time_skill_catalog_guidance() {
     let after_messages = state
         .active_messages()
         .expect("active messages after compaction");
-    let after_prompt = render_effective_system_prompt(&after_messages, &sections);
+    let after_prompt = render_effective_system_prompt(&sections);
     assert_eq!(after_prompt, skill_catalog);
     assert!(
         after_messages.iter().all(|message| {
@@ -609,7 +595,6 @@ fn projection_is_the_current_surface_in_order() {
     let engine = engine(1_000, 10, 5, weighted(10, 10, 10));
     let state = compacted_state(
         vec![
-            system("sys-1", "Be concise."),
             user("u1", "hi"),
             assistant("a1", vec![text_block("ok")]),
             user("u2", "more"),
@@ -627,20 +612,13 @@ fn projection_is_the_current_surface_in_order() {
     assert_eq!(first.surface_revision, state.revision());
     assert_eq!(
         projected_ids(&first),
-        vec![
-            "sys-1".to_owned(),
-            summary_id(1).as_str().to_owned(),
-            "u2".to_owned(),
-        ],
+        vec![summary_id(1).as_str().to_owned(), "u2".to_owned(),],
         "the projection is exactly the active surface"
     );
     assert!(
         first.messages.iter().all(|message| matches!(
             message,
-            MessageBlock::System(_)
-                | MessageBlock::User(_)
-                | MessageBlock::Assistant(_)
-                | MessageBlock::Tool(_)
+            MessageBlock::User(_) | MessageBlock::Assistant(_) | MessageBlock::Tool(_)
         )),
         "every projected item is a complete canonical message"
     );
@@ -648,7 +626,6 @@ fn projection_is_the_current_surface_in_order() {
     assert_eq!(
         ledger_ids(&state),
         vec![
-            "sys-1".to_owned(),
             "u1".to_owned(),
             "a1".to_owned(),
             "u2".to_owned(),
@@ -1478,168 +1455,6 @@ fn token_target_may_retain_fewer_messages_than_recent() {
     // Target 20: retire the huge message and the next one, keeping exactly
     // the two recent small messages.
     assert_eq!(plan.span.end, MessageId::new("m1"));
-}
-
-// ---------------------------------------------------------------------------
-// System authority
-// ---------------------------------------------------------------------------
-
-/// Trusted System content is never replaced by a runtime summary and never
-/// enters the summary input; the summary itself is a runtime inbound user
-/// message, never elevated to `System`.
-#[test]
-fn system_messages_are_never_replaced_or_summarized() {
-    let engine = engine(300, 0, 0, weighted(100, 10, 100));
-    let system_block = system("sys-1", "Trusted: be concise. Byte-for-byte.");
-    let mut history = state(vec![
-        system_block.clone(),
-        user("u1", ""),
-        assistant("a1", vec![call_block("c1")]),
-        tool_message("t1", "c1"),
-    ]);
-    let projection = engine
-        .build_projection(&history, &[], None, "")
-        .expect("projection");
-    assert_eq!(projection.estimated_input.input_tokens, 310);
-    let plan = engine
-        .plan_compaction(
-            &history,
-            &projection,
-            &[],
-            CompactionBudgets::new(0, 0, 1_000_000),
-            &rustx::context::CompactionConstraints::default(),
-        )
-        .expect("plan");
-    assert_eq!(
-        plan.span.start,
-        MessageId::new("u1"),
-        "the span skips system content"
-    );
-    assert!(
-        !plan
-            .retired
-            .iter()
-            .any(|message| matches!(message, MessageBlock::System(_))),
-        "the system message never enters the summary input"
-    );
-    compact(
-        &engine,
-        &mut history,
-        "summary",
-        CompactionBudgets::new(0, 0, 1_000_000),
-    )
-    .expect("compact");
-    // The surface leads with the trusted system message, byte-for-byte,
-    // followed by the runtime summary.
-    let active = history.active_messages().expect("hydrate");
-    assert_eq!(&active[0], &system_block);
-    assert!(matches!(
-        &active[1],
-        MessageBlock::User(user)
-            if user.kind == InboundKind::CompactionSummary
-                && user.source == UserSource::Runtime
-    ));
-    assert_eq!(active.len(), 2);
-}
-
-/// A later `System` message does not pin every older conversational message
-/// and never resurrects a previously retired Surface span.
-///
-/// This is the direct regression for the bounded Issue #54 System rule.
-#[test]
-fn a_later_system_message_pins_nothing_and_resurrects_nothing() {
-    let engine = engine(10_000, 0, 0, weighted(10, 10, 0));
-    let mut history = state(vec![
-        system("sys-1", "first"),
-        user("u1", ""),
-        user("u2", ""),
-        user("u3", ""),
-    ]);
-    compact(
-        &engine,
-        &mut history,
-        "s1",
-        CompactionBudgets::new(0, 0, 1_000_000),
-    )
-    .expect("first compaction");
-    assert_eq!(
-        active_ids(&history),
-        vec!["sys-1".to_owned(), summary_id(1).as_str().to_owned()]
-    );
-
-    // A later system message arrives, followed by more conversation.
-    history
-        .commit(system("sys-2", "second"))
-        .expect("commit later system");
-    history.commit(user("u4", "")).expect("commit u4");
-    history.commit(user("u5", "")).expect("commit u5");
-    assert_eq!(
-        active_ids(&history),
-        vec![
-            "sys-1".to_owned(),
-            summary_id(1).as_str().to_owned(),
-            "sys-2".to_owned(),
-            "u4".to_owned(),
-            "u5".to_owned(),
-        ],
-        "a later system message never resurrects retired surface history"
-    );
-
-    // The still-active summary remains compactable: the later system
-    // message pins nothing older than itself.
-    let projection = engine
-        .build_projection(&history, &[], None, "")
-        .expect("projection");
-    let plan = engine
-        .plan_compaction(
-            &history,
-            &projection,
-            &[],
-            CompactionBudgets::new(0, 0, 1_000_000),
-            &rustx::context::CompactionConstraints::default(),
-        )
-        .expect("the older run is still compactable");
-    assert_eq!(plan.span.start, summary_id(1));
-    assert_eq!(plan.span.end, summary_id(1));
-    assert!(
-        !history
-            .active_ids()
-            .iter()
-            .any(|id| matches!(id.as_str(), "u1" | "u2" | "u3")),
-        "retired ledger history stays retired"
-    );
-    // Every original is still an addressable ledger fact.
-    for id in ["u1", "u2", "u3"] {
-        assert!(
-            history.ledger().get(&MessageId::new(id)).is_some(),
-            "retired message {id} stays addressable in the ledger"
-        );
-    }
-}
-
-/// If pinned context alone prevents fitting, compaction fails explicitly.
-#[test]
-fn pinned_context_alone_cannot_fit_fails_explicitly() {
-    let engine = engine(120, 0, 5, scripted(10, 10, 10, &[("sys-1", 130)]));
-    let history = state(vec![
-        system("sys-1", "trusted"),
-        user("u1", ""),
-        assistant("a1", vec![call_block("c1")]),
-        tool_message("t1", "c1"),
-    ]);
-    let projection = engine
-        .build_projection(&history, &[], None, "")
-        .expect("projection");
-    let error = engine
-        .plan_compaction(
-            &history,
-            &projection,
-            &[],
-            CompactionBudgets::new(0, 0, 1_000_000),
-            &rustx::context::CompactionConstraints::default(),
-        )
-        .expect_err("cannot fit");
-    assert_eq!(error.kind, ContextErrorKind::CannotFit);
 }
 
 // ---------------------------------------------------------------------------
@@ -2531,74 +2346,6 @@ fn continuation_owner_is_never_split() {
         )
         .expect("plan");
     assert_eq!(plan.span.end, MessageId::new("t2"));
-}
-
-/// When the continuation-owning turn lies outside the current compactable
-/// run, the constraint is unsatisfiable: compaction cannot retire the owner,
-/// so the plan fails explicitly instead of clearing the continuation while
-/// leaving its message active.
-#[test]
-fn continuation_owner_outside_the_compactable_run_is_unsatisfiable() {
-    let engine = engine(1_000, 0, 0, weighted(10, 10, 0));
-    let history = state(vec![
-        user("u1", ""),
-        system("sys-2", "trusted"),
-        assistant("a1", vec![text_block("x")]),
-        user("u2", ""),
-    ]);
-    let projection = engine
-        .build_projection(&history, &[], None, "")
-        .expect("projection");
-    let error = engine
-        .plan_compaction(
-            &history,
-            &projection,
-            &[],
-            CompactionBudgets::new(0, 0, 1_000_000),
-            &rustx::context::CompactionConstraints {
-                must_cover_through: Some(&MessageId::new("a1")),
-                fresh_inbound: None,
-                ..Default::default()
-            },
-        )
-        .expect_err("a continuation owner outside the compactable run cannot be retired");
-    assert_eq!(error.kind, ContextErrorKind::NoProgress);
-    assert!(
-        error.message.contains("compactable region"),
-        "the error explains the constraint: {}",
-        error.message
-    );
-    // The same conversation without the intervening system message
-    // satisfies the constraint: the check is specific to the compactable
-    // run, not to age.
-    let unpinned = state(vec![
-        user("u1", ""),
-        assistant("a1", vec![text_block("x")]),
-        user("u2", ""),
-    ]);
-    let projection = engine
-        .build_projection(&unpinned, &[], None, "")
-        .expect("projection");
-    let plan = engine
-        .plan_compaction(
-            &unpinned,
-            &projection,
-            &[],
-            CompactionBudgets::new(0, 0, 1_000_000),
-            &rustx::context::CompactionConstraints {
-                must_cover_through: Some(&MessageId::new("a1")),
-                fresh_inbound: None,
-                ..Default::default()
-            },
-        )
-        .expect("the continuation owner is retired");
-    assert!(
-        plan.retired.iter().any(
-            |message| matches!(message, MessageBlock::Assistant(assistant) if assistant.id.as_str() == "a1")
-        ),
-        "the continuation-owning turn is covered by the span"
-    );
-    assert_eq!(plan.span.end, MessageId::new("u2"));
 }
 
 // ---------------------------------------------------------------------------
@@ -5035,7 +4782,6 @@ fn inbound_user(id: &str, text: &str, source: UserSource) -> UserMessageBlock {
 
 fn block_id(block: &MessageBlock) -> String {
     match block {
-        MessageBlock::System(system) => system.id.to_string(),
         MessageBlock::User(user) => user.id.to_string(),
         MessageBlock::Assistant(assistant) => assistant.id.to_string(),
         MessageBlock::Tool(tool) => tool.id.to_string(),

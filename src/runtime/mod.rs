@@ -99,6 +99,8 @@ pub mod recovery;
 /// demand from the native durable conversation authority. Not client
 /// projection state.
 pub mod request_history;
+/// Immutable process-local resource generations and their explicit loader.
+pub mod resources;
 /// Native async one-shot subagents (Issue #60): conversation-owned child
 /// rustX runtimes reusing the real runtime stack headlessly. The logical
 /// owner is [`subagent::SubagentRegistry`]; the sole low-level process
@@ -118,12 +120,14 @@ pub use continuation::{
 pub use conversation_runtime::{
     ApprovalModeUpdateError, CancelAttemptError, ConversationContextConfig, ConversationRuntime,
     ConversationRuntimeError, InboundAdmission, InboundAdmissionError, ModelUpdateError,
-    RuntimeConversationConfig,
+    RuntimeConversationConfig, RuntimeResourceReloadBusyReason, RuntimeResourceReloadError,
+    RuntimeResourceReloaded,
 };
 pub use identity::{
     AgentId, AgentVersionId, ArtifactId, AttemptId, CapabilityRevision, ConversationId, EventId,
     InteractionId, McpServerId, MessageId, NodeEnvironmentDigest, PythonEnvironmentDigest,
-    RequestId, SkillId, SkillVersionId, ToolCallId, ToolExecutionId, ToolId, ToolVersionId, TurnId,
+    RequestId, RuntimeResourceRevision, SkillId, SkillVersionId, ToolCallId, ToolExecutionId,
+    ToolId, ToolVersionId, TurnId,
 };
 pub use inbound::{
     ConversationInboundMailbox, InboundBatch, InboundItem, InboundSequence, MailboxError,
@@ -138,6 +142,11 @@ pub use recovery::{
     RequestOutcome, ResumeDisposition,
 };
 pub use request_history::{RequestHistory, RequestHistoryError};
+pub use resources::{
+    FilesystemRuntimeResourceLoader, PreparedRuntimeResources, ProjectContextFile,
+    RuntimeResourceLoadError, RuntimeResourceLoader, RuntimeResourceSnapshot,
+    load_project_context_files,
+};
 pub use types::{
     ApprovalMode, ApprovalModeState, CancellationReason, ConversationLifecycle,
     ConversationLifecycleState, RuntimeClock, RuntimeError, SystemClock, TokenMeasurement,

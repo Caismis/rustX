@@ -242,6 +242,8 @@ fn snapshot_at(
         },
         head.revision,
         "the frozen effective system prompt".to_owned(),
+        Vec::new(),
+        rustx::runtime::RuntimeResourceRevision::new(1),
         invocation(model),
         64_000,
         None,

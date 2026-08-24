@@ -7,8 +7,8 @@
 
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
-    AssistantMessageBlock, InboundKind, MessageBlock, SystemAuthority, SystemMessageBlock,
-    UserContentBlock, UserMessageBlock, UserSource,
+    AssistantMessageBlock, InboundKind, MessageBlock, UserContentBlock, UserMessageBlock,
+    UserSource,
 };
 use rustx::model::{ModelProtocol, ModelRequest, RequestIdentity, RequestSnapshot};
 use rustx::runtime::identity::{AttemptId, CapabilityRevision, MessageId, TurnId};
@@ -23,13 +23,6 @@ fn request(protocol: ModelProtocol) -> ModelRequest {
     ModelRequest {
         invocation: common::invocation(protocol, "m6-test"),
         messages: vec![
-            MessageBlock::System(SystemMessageBlock {
-                id: MessageId::new("msg-system-1"),
-                authority: SystemAuthority::Runtime,
-                content: vec![TextBlock {
-                    text: SYSTEM_TEXT.to_owned(),
-                }],
-            }),
             MessageBlock::Assistant(AssistantMessageBlock {
                 id: MessageId::new("msg-agent-1"),
                 content: vec![rustx::message::types::AssistantContentBlock::Text(
@@ -136,6 +129,57 @@ async fn responses_keeps_the_prompt_across_a_continuation_boundary() {
     );
 }
 
+#[tokio::test]
+async fn empty_effective_prompt_emits_no_system_authority_in_any_protocol() {
+    let chat_server = common::FixtureServer::start(|_attempt, _head| {
+        common::sse_fixture("openai_chat", "plain_text.sse")
+    })
+    .await;
+    let mut chat_request = request(ModelProtocol::OpenAiChatCompletions);
+    chat_request.effective_system_prompt.clear();
+    let chat = rustx::model::OpenAiChatCompletionsAdapter::new(
+        rustx::model::OpenAiAdapterConfig::new("test-key", chat_server.url("/v1")),
+    );
+    common::collect_events(&chat, chat_request).await;
+    let chat_body: serde_json::Value =
+        serde_json::from_str(&chat_server.request_body(0)).expect("chat body");
+    assert!(
+        chat_body["messages"]
+            .as_array()
+            .expect("chat messages")
+            .iter()
+            .all(|message| message["role"] != "system")
+    );
+
+    let responses_server = common::FixtureServer::start(|_attempt, _head| {
+        common::sse_fixture("openai_responses", "plain_text.sse")
+    })
+    .await;
+    let mut responses_request = request(ModelProtocol::OpenAiResponses);
+    responses_request.effective_system_prompt.clear();
+    let responses = rustx::model::OpenAiResponsesAdapter::new(
+        rustx::model::OpenAiAdapterConfig::new("test-key", responses_server.url("/v1")),
+    );
+    common::collect_events(&responses, responses_request).await;
+    let responses_body: serde_json::Value =
+        serde_json::from_str(&responses_server.request_body(0)).expect("responses body");
+    assert!(responses_body.get("instructions").is_none());
+
+    let anthropic_server = common::FixtureServer::start(|_attempt, _head| {
+        common::sse_fixture("anthropic", "text.sse")
+    })
+    .await;
+    let mut anthropic_request = request(ModelProtocol::AnthropicMessages);
+    anthropic_request.effective_system_prompt.clear();
+    let anthropic = rustx::model::AnthropicMessagesAdapter::new(
+        rustx::model::AnthropicAdapterConfig::new("test-key", anthropic_server.url("")),
+    );
+    common::collect_events(&anthropic, anthropic_request).await;
+    let anthropic_body: serde_json::Value =
+        serde_json::from_str(&anthropic_server.request_body(0)).expect("anthropic body");
+    assert!(anthropic_body.get("system").is_none());
+}
+
 #[test]
 fn effective_prompt_is_part_of_projection_measurement() {
     let engine = rustx::context::ContextEngine::new(
@@ -182,6 +226,8 @@ fn request_snapshot_reconstructs_exactly_after_live_state_changes() {
         historical_revision,
         "## Skills\n\n<available_skills>\n  <skill>\n    <name>pdf</name>\n    <description>PDF guidance.</description>\n    <location>/workspace/.agents/skills/pdf/SKILL.md</location>\n  </skill>\n</available_skills>"
             .to_owned(),
+        Vec::new(),
+        rustx::runtime::RuntimeResourceRevision::new(1),
         common::invocation(ModelProtocol::OpenAiChatCompletions, "frozen-model"),
         128_000,
         None,

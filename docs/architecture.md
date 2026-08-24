@@ -30,7 +30,7 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 2. An incompatible database
+The SQLite schema is development schema version 3. An incompatible database
 fails explicitly; there is no migration chain, legacy reader, compatibility
 fallback, dual write, or old storage mode. File-backed stores use WAL,
 `synchronous=FULL`, foreign-key enforcement, and a busy timeout. A successful
@@ -516,8 +516,8 @@ durable/sqlite.rs          SqliteConversationStore: the M8 SQLite backend
 runtime/continuation.rs   ProviderContinuationState boundary (OpenAI Responses
                            stored/stateless, Anthropic opaque state)
 message/content.rs         TextBlock, ImageReference, FileReference
-message/types.rs           MessageBlock (System/User/Assistant/Tool), provenance
-                           (SystemAuthority, UserSource, InboundKind),
+message/types.rs           MessageBlock (User/Assistant/Tool), provenance
+                           (UserSource, InboundKind),
                            UserMessageBlock.timestamp (persisted inbound
                            instant; absent for derived compaction summaries),
                            ContentBlockIndex, content enums per role
@@ -1064,15 +1064,13 @@ Key contracts:
 
 - `ContextProjection` contains only complete canonical messages in current
   Surface order; it never creates a partial Assistant projection.
-- The canonical roles are exactly `System`, `User`, `Assistant`, and `Tool`.
+- Canonical history has only conversational User, Assistant, and Tool roles.
   `Assistant` owns `ToolCall` identity and arguments; `Tool` owns the result
   and references `ToolCallId`. A runtime compaction summary remains a `User`
   message with `UserSource::Runtime` and
   `InboundKind::CompactionSummary`.
-- The interim system rule is bounded: a `Replace` span cannot contain
-  `System`, but a later `System` does not pin all earlier content or resurrect
-  retired Surface history. Issue #55 owns the Effective System Prompt and
-  Request Snapshot architecture.
+  System authority is request-time state and therefore cannot be retired or
+  resurrected by Surface replacement.
 - Token measurements carry explicit provenance
   (`ProviderReported`/`Estimated`); provider-reported `input_tokens` apply
   only to the exact measured projection (deterministic fingerprint), and
@@ -1117,8 +1115,10 @@ Key contracts:
   pipeline for planning, summary generation, exact fit validation, durable
   commit, and hot-state installation. Manual compaction freezes the current
   model/context/capability inputs at admission, including tool definitions and
-  capability-derived Skill guidance in the non-retirable Effective System
-  Prompt used for fit accounting. It checks out the sole `ConversationState`;
+  capability-derived Skill guidance and project instructions in the
+  non-retirable Effective System Prompt used for fit accounting. These values
+  come from the attempt's pinned Runtime Resource Snapshot; compaction never
+  rediscovers them. It checks out the sole `ConversationState`;
   manual completion is client-visible only after that state is restored and
   the maintenance slot is clear. Pending inbound admits after restoration. It
   owns no attempt identity and is rejected while an attempt or another manual
@@ -1171,9 +1171,9 @@ Key contracts:
 
 #### Native Skill capability guidance (Issue #55)
 
-The Skill catalog is rendered deterministically from the attempt's immutable
-`CapabilitySnapshot` / `SkillSnapshot` and enters the existing Context Assembly
-system-section path:
+The Skill catalog is rendered deterministically into the immutable
+`RuntimeResourceSnapshot` from its compatible `CapabilitySnapshot` /
+`SkillSnapshot` and enters the Context Assembly system-section path:
 
 - `NativeContextContributor::SkillGuidance` publishes one
   `SystemSectionLane::NativeCapabilityGuidance` section. It does not publish a
@@ -3389,7 +3389,8 @@ ModelCatalog + CurrentRuntimeConfig + selected SessionPersistentState
         |       +--> SessionModelState (authoritative session model)
         |       +--> ConversationToolRuntime (workspace, artifacts, mailbox,
         |       |                              background registry)
-        |       +--> CapabilityCoordinator / context / Surface / status
+        |       +--> RuntimeResourceSnapshot + compatible CapabilitySnapshot
+        |       |       / context / Surface / status
         |       +--> RuntimeClientHost + LocalSessionSupervisor control
         |       +--> exactly one active ConversationRuntime
         |
@@ -3419,11 +3420,12 @@ activation, Skill roots/resources, environment, context policy, timezone,
 agent settings, and future capability-source settings are launch-scoped
 inputs.
 
-`--config <rustx.json>` is read and validated on every process start before
-the durable catalog is opened. Composition combines that current
+`--config <rustx.json>` and project resources are read and validated once on
+every process start before ordinary request admission. Composition combines that current
 `CurrentRuntimeConfig` with the selected Session state and active node. A
-resume therefore uses current MCP/Skill/Tool/context/timezone/environment
-settings, while the selected Session model remains durable. A new Session
+resume therefore loads a fresh Runtime Resource Snapshot with current
+project/MCP/Skill/Tool/context/timezone/environment settings, while the
+selected Session model remains durable. A new Session
 uses the current runtime model default; clone/fork/tree operations copy only
 the intentionally Session-local state.
 
@@ -3434,7 +3436,10 @@ root Session containing an invalid model. Existing Session models are then
 validated separately and remain authoritative for resume; current defaults
 are still validated on every launch without overwriting them.
 
-The capability coordinator remains the only candidate/commit owner. Its
+The runtime resource owner and capability coordinator form one publication
+boundary. Capability candidate preparation builds one available Tool catalog
+from native, MCP, Python, and future source registrations, applies hard
+eligibility, then applies startup activation. Its
 candidate preparation builds one available Tool catalog from native, MCP,
 Python, and future source registrations, applies hard eligibility, then
 applies startup activation. The selection order is:
@@ -3552,10 +3557,23 @@ and user message, seeds the prefix before that message, and returns the
 original content as uncommitted editor text. Source changes after selection
 cannot change the destination seed.
 
+This is a historical prefix projection, never executable runtime authority.
+Earlier Agent Status observations in the selected prefix remain ordinary
+historical facts; the selected human message and context/status admitted for
+that old turn or later are excluded. The destination's next request uses its
+freshly composed/current Runtime Resource Snapshot, not project instructions,
+Skill guidance, Tool definitions, or control state inferred from source
+history.
+
 Destination seeds remap `MessageId` and `ToolCallId` once, preserving internal
 tool-result correlations. They do not copy AttemptIds, Request Snapshots,
 Event Journal lifecycle facts, Pending Inbound, cancellation state, active or
-background executions, or live interactions. A prepared destination becomes
+background executions, or live interactions. Historical `ToolExecutionId`,
+`SubagentId`, and background identifiers retained inside message bodies remain
+opaque historical references: destination composition never resolves, adopts,
+restarts, or recovers their former owners. Current Session-local intent comes
+from the source Session's current state at materialization, never from an old
+node/message. A prepared destination becomes
 catalog-visible at the rename commit after private seed creation; the
 publication operation reports full success only after the parent-directory
 durability barrier. A pre-rename failure leaves at most an unreferenced
@@ -4189,10 +4207,9 @@ Agent kernel -> control-plane schema
 
 ## 4. Message model
 
-The canonical conversation model contains four message roles:
+The canonical conversation model contains exactly three message roles:
 
 ```text
-SystemMessageBlock
 UserMessageBlock
 AssistantMessageBlock
 ToolMessageBlock
@@ -4200,10 +4217,13 @@ ToolMessageBlock
 
 Semantics:
 
-- `SystemMessageBlock`: trusted instructions or runtime context.
 - `UserMessageBlock`: inbound information supplied to the current agent. The source may be a human, another agent, the control plane, or an external system.
 - `AssistantMessageBlock`: model output produced by the current agent.
 - `ToolMessageBlock`: result of a tool call produced by the current agent.
+
+System instructions are not conversation messages. The runtime assembles
+typed request-time System Sections and renders their only provider-neutral
+authority into `ModelRequest.effective_system_prompt`.
 
 Identity and provenance are metadata. Message role does not encode real-world identity.
 
@@ -4215,9 +4235,8 @@ revision. Normal projection uses current Surface identities and keyed Ledger
 reads only, never full Ledger or Surface-history scans.
 
 Provenance is implemented as typed runtime-owned metadata: `UserSource`
-distinguishes human, agent, fleet, external-system, and runtime sources;
-`SystemAuthority` distinguishes platform, agent, runtime, skill, and fleet
-authority for system blocks. A runtime compaction summary is represented as a
+distinguishes human, agent, fleet, external-system, and runtime sources. A
+runtime compaction summary is represented as a
 `UserMessageBlock` with runtime provenance and `InboundKind::CompactionSummary`;
 no fifth message role exists. Ordinary inbound messages carry their
 persisted UTC instant on `UserMessageBlock.timestamp` (supplied by the

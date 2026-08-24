@@ -1,8 +1,8 @@
 //! The canonical conversation model.
 //!
-//! The canonical conversation contains exactly four top-level message roles:
-//! [`MessageBlock::System`], [`MessageBlock::User`], [`MessageBlock::Assistant`],
-//! and [`MessageBlock::Tool`]. These four semantics are frozen; provider
+//! The canonical conversation contains exactly three top-level message roles:
+//! [`MessageBlock::User`], [`MessageBlock::Assistant`], and
+//! [`MessageBlock::Tool`]. These three semantics are frozen; provider
 //! roles such as `OpenAI`'s `developer` are adapter concerns, not canonical
 //! roles, and are never mapped to a fifth role.
 //!
@@ -24,13 +24,11 @@ use crate::tools::types::{ToolCall, ToolExecutionResult};
 
 /// The canonical conversation message.
 ///
-/// The `role` discriminator is stable: `system`, `user`, `assistant`, `tool`.
+/// The `role` discriminator is stable: `user`, `assistant`, `tool`.
 /// No additional top-level role exists.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "role", rename_all = "snake_case")]
 pub enum MessageBlock {
-    /// Trusted system/runtime instructions or context.
-    System(SystemMessageBlock),
     /// Inbound information supplied to the current agent.
     User(UserMessageBlock),
     /// One completed model generation produced by the current agent.
@@ -68,36 +66,6 @@ impl core::fmt::Display for ContentBlockIndex {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}", self.0)
     }
-}
-
-/// Trusted system/runtime instructions or context.
-///
-/// The authority records who supplied the trusted content, as a typed
-/// category rather than an arbitrary unvalidated string.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SystemMessageBlock {
-    /// Durable message identity.
-    pub id: MessageId,
-    /// Who supplied the trusted content.
-    pub authority: SystemAuthority,
-    /// The trusted instruction or context text.
-    pub content: Vec<TextBlock>,
-}
-
-/// Who supplied a `SystemMessageBlock`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SystemAuthority {
-    /// The platform/product.
-    Platform,
-    /// The agent itself.
-    Agent,
-    /// The conversation runtime.
-    Runtime,
-    /// A bound skill.
-    Skill,
-    /// The fleet/control plane.
-    Fleet,
 }
 
 /// Inbound information supplied to the current agent.
@@ -194,8 +162,6 @@ pub enum InboundKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContextKind {
-    /// Workspace/project instructions.
-    WorkspaceInstructions,
     /// The rustX runtime's own observation of a structurally settled tool
     /// batch (Issue #56).
     ///
@@ -300,23 +266,16 @@ pub struct ToolMessageBlock {
 #[cfg(test)]
 mod tests {
     use super::{
-        AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, SystemAuthority,
-        SystemMessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+        AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, ToolMessageBlock,
+        UserContentBlock, UserMessageBlock, UserSource,
     };
     use crate::message::content::TextBlock;
     use crate::runtime::identity::{AgentId, MessageId, ToolCallId, ToolId};
     use crate::tools::types::{ToolExecutionResult, ToolExecutionStatus};
 
-    /// All four canonical roles serialize with their stable discriminators.
+    /// All three canonical conversational roles serialize with stable discriminators.
     #[test]
-    fn four_roles_have_stable_discriminators() {
-        let system = MessageBlock::System(SystemMessageBlock {
-            id: MessageId::new("msg-sys-1"),
-            authority: SystemAuthority::Runtime,
-            content: vec![TextBlock {
-                text: "Be concise.".to_owned(),
-            }],
-        });
+    fn three_roles_have_stable_discriminators() {
         let user = MessageBlock::User(UserMessageBlock {
             id: MessageId::new("msg-user-1"),
             content: vec![UserContentBlock::Text(TextBlock {
@@ -346,12 +305,7 @@ mod tests {
                 managed_output: None,
             },
         });
-        for (block, role) in [
-            (system, "system"),
-            (user, "user"),
-            (assistant, "assistant"),
-            (tool, "tool"),
-        ] {
+        for (block, role) in [(user, "user"), (assistant, "assistant"), (tool, "tool")] {
             let value = serde_json::to_value(&block).expect("serialize block");
             assert_eq!(value["role"], role, "unexpected discriminator");
         }

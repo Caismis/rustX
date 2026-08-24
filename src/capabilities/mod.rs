@@ -57,7 +57,7 @@ pub use availability::{
 };
 pub use coordinator::{
     AttemptCapabilityLease, CapabilityCoordinator, CapabilityCoordinatorConfig, CapabilityObserver,
-    PreparedCapabilityCandidate,
+    CapabilityResourceInputs, PreparedCapabilityCandidate,
 };
 pub use error::{CapabilityCommitError, CapabilityPreparationError};
 pub use snapshot::CapabilitySnapshot;

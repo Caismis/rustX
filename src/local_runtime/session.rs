@@ -1117,13 +1117,6 @@ fn remap_message(
     };
 
     match message {
-        MessageBlock::System(system) => Ok(MessageBlock::System(
-            crate::message::types::SystemMessageBlock {
-                id: message_id(&system.id)?,
-                authority: system.authority,
-                content: system.content.clone(),
-            },
-        )),
         MessageBlock::User(user) => Ok(MessageBlock::User(UserMessageBlock {
             id: message_id(&user.id)?,
             content: user.content.clone(),
@@ -1533,8 +1526,8 @@ mod tests {
     use crate::local_runtime::CurrentRuntimeConfig;
     use crate::message::content::TextBlock;
     use crate::message::types::{
-        AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, SystemAuthority,
-        SystemMessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+        AssistantContentBlock, AssistantMessageBlock, ContextKind, InboundKind, MessageBlock,
+        ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
     use crate::runtime::identity::{ConversationId, MessageId, ToolCallId, ToolId};
     use crate::runtime::types::{TokenMeasurement, TokenMeasurementSource};
@@ -1574,15 +1567,18 @@ mod tests {
         })
     }
 
+    fn status(id: &str, value: &str) -> MessageBlock {
+        MessageBlock::User(UserMessageBlock {
+            id: MessageId::new(id),
+            content: vec![text(value)],
+            source: UserSource::Runtime,
+            kind: InboundKind::Context(ContextKind::AgentStatus),
+            timestamp: None,
+        })
+    }
+
     fn source_history() -> Vec<MessageBlock> {
         vec![
-            MessageBlock::System(SystemMessageBlock {
-                id: MessageId::new("source-system"),
-                authority: SystemAuthority::Runtime,
-                content: vec![TextBlock {
-                    text: "bootstrap".to_owned(),
-                }],
-            }),
             user("source-user-a", "A"),
             MessageBlock::Assistant(AssistantMessageBlock {
                 id: MessageId::new("source-assistant"),
@@ -2236,16 +2232,28 @@ mod tests {
                 .expect("historical source"),
         };
 
+        let mut current_session_intent = state();
+        current_session_intent.model.model =
+            serde_json::from_value(serde_json::json!("provider/current-session-intent"))
+                .expect("current model");
         let (prepared, editor_content) = catalog
-            .prepare_fork_session(&state(), &source, &MessageId::new("source-user-c"))
+            .prepare_fork_session(
+                &current_session_intent,
+                &source,
+                &MessageId::new("source-user-c"),
+            )
             .expect("prepare fork");
+        assert_eq!(
+            prepared.state, current_session_intent,
+            "lineage history selection cannot restore old node-local control state"
+        );
         assert_eq!(editor_content, vec![text("C")]);
         let destination_store =
             store_for(&catalog, &prepared.session_id, &prepared.conversation_id);
         let prefix = destination_store
             .load_canonical()
             .expect("fork canonical prefix");
-        assert_eq!(prefix.len(), 4);
+        assert_eq!(prefix.len(), 3);
         assert!(prefix.iter().all(|message| {
             !matches!(message, MessageBlock::User(user) if user.id == MessageId::new("source-user-c"))
         }));
@@ -2255,14 +2263,55 @@ mod tests {
             .iter()
             .map(super::message_id_of)
             .collect::<Vec<_>>();
-        assert_eq!(source_after_prepare.len(), 5);
+        assert_eq!(source_after_prepare.len(), 4);
         assert_eq!(
             source_store
                 .load_canonical()
                 .expect("source remains untouched")
                 .len(),
-            5
+            4
         );
+    }
+
+    #[test]
+    fn fork_preserves_earlier_status_and_excludes_selected_turn_status() {
+        let (_directory, catalog, _config) = open_catalog();
+        let history = vec![
+            user("source-user-a", "A"),
+            status("status-before", "Status1"),
+            user("source-user-c", "C"),
+            status("status-after", "Status2"),
+        ];
+        let (source_conversation, source_session, _source_node) =
+            append_history(&catalog, &history);
+        let source_store = store_for(&catalog, &source_session, &source_conversation);
+        let revision = source_store.load_head().expect("source head").revision;
+        let source = HistoricalConversationSnapshot {
+            conversation_id: source_conversation,
+            surface_revision: revision,
+            messages: source_store
+                .load_surface_snapshot(revision)
+                .expect("historical source"),
+        };
+
+        let (prepared, editor_content) = catalog
+            .prepare_fork_session(&state(), &source, &MessageId::new("source-user-c"))
+            .expect("prepare fork");
+        assert_eq!(editor_content, vec![text("C")]);
+        let prefix = store_for(&catalog, &prepared.session_id, &prepared.conversation_id)
+            .load_canonical()
+            .expect("fork prefix");
+        assert_eq!(prefix.len(), 2);
+        assert!(matches!(
+            &prefix[1],
+            MessageBlock::User(message)
+                if message.kind == InboundKind::Context(ContextKind::AgentStatus)
+                    && message.content == vec![text("Status1")]
+        ));
+        assert!(prefix.iter().all(|message| {
+            !matches!(message, MessageBlock::User(message)
+                if message.content == vec![text("C")] || message.content == vec![text("Status2")])
+        }));
     }
 
     #[test]

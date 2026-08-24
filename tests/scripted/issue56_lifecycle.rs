@@ -916,7 +916,6 @@ fn ledger_shape(result: &AgentExecutionResult) -> Vec<String> {
                 }
             }
             MessageBlock::Tool(tool) => format!("tool_result({})", tool.tool_call_id),
-            MessageBlock::System(_) => "system".to_owned(),
         })
         .collect()
 }

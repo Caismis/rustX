@@ -480,6 +480,38 @@ impl Default for CapabilityRevision {
     }
 }
 
+/// Identifies one immutable process-local runtime resource generation.
+///
+/// This is deliberately separate from `ContextGeneration` (one context
+/// assembly provenance set) and `CapabilityRevision` (one executable
+/// capability set). A resource-only change may advance this revision while
+/// retaining an identical capability revision.
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(transparent)]
+pub struct RuntimeResourceRevision(u64);
+
+impl RuntimeResourceRevision {
+    /// Creates a revision from a raw counter value.
+    #[must_use]
+    pub const fn new(revision: u64) -> Self {
+        Self(revision)
+    }
+
+    /// Returns the raw counter value.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+
+    /// The next monotonic process-local generation.
+    #[must_use]
+    pub const fn next(self) -> Self {
+        Self(self.0.saturating_add(1))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

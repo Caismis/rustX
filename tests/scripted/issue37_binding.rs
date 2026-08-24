@@ -110,6 +110,16 @@ fn try_config(
             status_composer: AgentStatusComposer::default(),
         },
         tool_runtime: runtime,
+        resources: Arc::new(rustx::runtime::RuntimeResourceSnapshot::new(
+            rustx::runtime::RuntimeResourceRevision::new(1),
+            Vec::new(),
+            None,
+            rustx::context::ContextAssembly::new(),
+            coordinator.current_snapshot(),
+        )),
+        resource_loader: Arc::new(rustx::runtime::FilesystemRuntimeResourceLoader::new(
+            coordinator.current_snapshot().workspace_root(),
+        )),
         capability: coordinator,
         clock: None,
         initial_messages: Vec::new(),

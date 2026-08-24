@@ -126,7 +126,7 @@ use crate::model::session::SessionModelConfig;
 use crate::model::{ModelRequest, RequestIdentity};
 use crate::runtime::conversation_runtime::{
     CancelAttemptError, ConversationRuntime, InboundAdmissionError, ManualCompactionError,
-    ModelUpdateError, RuntimeBootstrapError,
+    ModelUpdateError, RuntimeBootstrapError, RuntimeResourceReloadError,
 };
 use crate::runtime::identity::{ConversationId, InteractionId, ToolExecutionId};
 use crate::runtime::interaction::{InteractionError, InteractionResponse};
@@ -561,6 +561,35 @@ impl ClientInner {
             })?;
         let context = self.lock_state().projection.snapshot_ref().context.clone();
         Ok(RuntimeClientResult::ContextCompacted { context })
+    }
+
+    /// Atomically reloads one complete resource/capability generation.
+    pub(crate) async fn reload_resources(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.ensure_session_runtime_live()?;
+        let reloaded = self
+            .runtime
+            .reload_resources()
+            .await
+            .map_err(|error| match error {
+                RuntimeResourceReloadError::Inactive => RuntimeClientError::InvalidState {
+                    message: error.to_string(),
+                },
+                RuntimeResourceReloadError::Shutdown => RuntimeClientError::RuntimeShutdown,
+                RuntimeResourceReloadError::Busy { reason } => {
+                    RuntimeClientError::ResourceReloadBusy {
+                        reason: reason.as_str().to_owned(),
+                    }
+                }
+                RuntimeResourceReloadError::Failed { message } => {
+                    RuntimeClientError::RuntimeFailure {
+                        message: format!("runtime resource reload failed: {message}"),
+                    }
+                }
+            })?;
+        Ok(RuntimeClientResult::ResourcesReloaded {
+            resource_revision: reloaded.resource_revision.get(),
+            capability_revision: reloaded.capability_revision,
+        })
     }
 
     /// Accepts one typed native interaction response through the
@@ -1248,6 +1277,16 @@ impl RuntimeClientHost {
         self.inner.compact_context().await
     }
 
+    /// Reloads current runtime resources for future attempts only.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed busy result while an attempt, interaction, compaction,
+    /// or another reload owns the semantic boundary.
+    pub async fn reload_resources(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.inner.reload_resources().await
+    }
+
     /// Responds to one live native interaction through Runtime Client
     /// semantics. The response is finite and cannot replace tool arguments.
     ///
@@ -1691,6 +1730,26 @@ mod tests {
         ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolOrigin, ToolReplayPolicy,
     };
 
+    fn test_resources(
+        capability: &crate::capabilities::CapabilityCoordinator,
+    ) -> Arc<crate::runtime::RuntimeResourceSnapshot> {
+        Arc::new(crate::runtime::RuntimeResourceSnapshot::new(
+            crate::runtime::RuntimeResourceRevision::new(1),
+            Vec::new(),
+            None,
+            crate::context::ContextAssembly::new(),
+            capability.current_snapshot(),
+        ))
+    }
+
+    fn test_resource_loader(
+        capability: &crate::capabilities::CapabilityCoordinator,
+    ) -> Arc<dyn crate::runtime::RuntimeResourceLoader> {
+        Arc::new(crate::runtime::FilesystemRuntimeResourceLoader::new(
+            capability.current_snapshot().workspace_root(),
+        ))
+    }
+
     fn request_snapshots(history: &RequestHistory) -> Vec<crate::model::RequestSnapshot> {
         let mut snapshots = Vec::new();
         let mut cursor = None;
@@ -2062,6 +2121,8 @@ mod tests {
                 status_composer: composer,
             },
             tool_runtime,
+            resources: test_resources(&coordinator),
+            resource_loader: test_resource_loader(&coordinator),
             capability: coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
@@ -2139,6 +2200,8 @@ mod tests {
                     status_composer: composer(),
                 },
                 tool_runtime,
+                resources: test_resources(&coordinator),
+                resource_loader: test_resource_loader(&coordinator),
                 capability: coordinator.clone(),
                 clock: Some(Arc::new(FixedRuntimeClock)),
                 initial_messages: Vec::new(),
@@ -3377,7 +3440,6 @@ mod tests {
                 MessageBlock::User(_) => "user",
                 MessageBlock::Assistant(_) => "assistant",
                 MessageBlock::Tool(_) => "tool",
-                MessageBlock::System(_) => "system",
             })
             .collect();
         assert_eq!(
@@ -4412,6 +4474,37 @@ mod tests {
         );
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn resource_reload_dispatches_through_the_async_runtime_client_control() {
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
+        let (attachment, _) = fixture
+            .host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .expect("attach");
+
+        let response = attachment
+            .handle_request_async(RuntimeClientRequest::ReloadResources {
+                id: crate::runtime_client::RequestId::new(1),
+            })
+            .await;
+        assert!(response.error.is_none());
+        assert!(matches!(
+            response.result,
+            Some(RuntimeClientResult::ResourcesReloaded {
+                resource_revision: 2,
+                capability_revision,
+            }) if capability_revision == fixture.coordinator.current_snapshot().revision()
+        ));
+        assert!(
+            fixture
+                .runtime
+                .coordinator_ledger()
+                .expect("idle canonical history")
+                .is_empty(),
+            "reload creates no conversation history"
+        );
+    }
+
     /// Shutdown is distinct from detach: it drains the current attempt to
     /// quiescence, and detach remains available afterwards.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -5166,6 +5259,8 @@ mod tests {
                 status_composer: composer(),
             },
             tool_runtime,
+            resources: test_resources(&coordinator),
+            resource_loader: test_resource_loader(&coordinator),
             capability: coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
@@ -5247,6 +5342,8 @@ mod tests {
                     status_composer: composer(),
                 },
                 tool_runtime,
+                resources: test_resources(&coordinator),
+                resource_loader: test_resource_loader(&coordinator),
                 capability: coordinator.clone(),
                 clock: Some(Arc::new(FixedRuntimeClock)),
                 initial_messages: Vec::new(),
@@ -5354,6 +5451,8 @@ mod tests {
                 status_composer: composer(),
             },
             tool_runtime,
+            resources: test_resources(&coordinator),
+            resource_loader: test_resource_loader(&coordinator),
             capability: coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
@@ -6420,6 +6519,8 @@ mod tests {
                 status_composer: composer(),
             },
             tool_runtime: fixture.tool_runtime.clone(),
+            resources: test_resources(&fixture.coordinator),
+            resource_loader: test_resource_loader(&fixture.coordinator),
             capability: fixture.coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
@@ -6910,11 +7011,13 @@ mod tests {
         };
         await_background_started(&mut started, "the post-transition runner starts").await;
 
-        let committed = coordinator
-            .commit(coordinator.prepare_candidate().await.expect("prepare"))
-            .expect("a post-transition capability commit succeeds");
+        let reloaded = fixture
+            .runtime
+            .reload_resources()
+            .await
+            .expect("a post-transition resource/capability reload succeeds");
         assert_eq!(
-            committed.revision().get(),
+            reloaded.capability_revision.get(),
             1,
             "the first live capability revision"
         );

@@ -1235,7 +1235,7 @@ fn translate_inputs(
     continuation_variant: Option<&OpenAiResponsesContinuation>,
 ) -> Result<TranslatedInputs, ModelError> {
     let mut input_items: Vec<serde_json::Value> = Vec::new();
-    let mut instructions: Vec<String> = if request.effective_system_prompt.is_empty() {
+    let instructions: Vec<String> = if request.effective_system_prompt.is_empty() {
         Vec::new()
     } else {
         vec![request.effective_system_prompt.clone()]
@@ -1262,14 +1262,6 @@ fn translate_inputs(
     };
     for block in blocks {
         match block {
-            MessageBlock::System(system) => {
-                if !request.effective_system_prompt.is_empty() {
-                    continue;
-                }
-                for text in &system.content {
-                    instructions.push(text.text.clone());
-                }
-            }
             MessageBlock::User(user) => {
                 input_items.push(translate_user_input(user)?);
             }

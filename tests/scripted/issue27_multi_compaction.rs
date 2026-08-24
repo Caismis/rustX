@@ -313,7 +313,7 @@ fn assert_tool_units_complete(messages: &[MessageBlock], context: &str) {
                 );
                 results.push(id);
             }
-            _ => {}
+            MessageBlock::User(_) => {}
         }
     }
     for id in &calls {

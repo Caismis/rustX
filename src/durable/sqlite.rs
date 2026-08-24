@@ -41,12 +41,13 @@ use super::inbox::{
 /// The only schema accepted by this pre-production store. Incompatible
 /// databases fail explicitly; there is no migration or legacy reader.
 ///
-/// Version 2 freezes the M9b durable format change: `RequestSnapshot` JSON
-/// gained a required `request_context_ids` field, so a v1 database whose
-/// snapshots predate that field must fail at store open with an explicit
+/// Version 3 freezes the Issue #106 durable format change: canonical System
+/// messages were removed and `RequestSnapshot` gained exact ordered System
+/// Sections plus the process-local resource revision. An older development
+/// database must fail at store open with an explicit
 /// [`ConversationStoreError::SchemaVersionMismatch`] rather than a later
 /// accidental JSON decode failure.
-pub const SQLITE_SCHEMA_VERSION: i64 = 2;
+pub const SQLITE_SCHEMA_VERSION: i64 = 3;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -3830,6 +3831,8 @@ mod tests {
             },
             revision,
             "system frozen before restart".to_owned(),
+            Vec::new(),
+            crate::runtime::RuntimeResourceRevision::new(1),
             invocation,
             4096,
             None,
@@ -3858,6 +3861,8 @@ mod tests {
             },
             revision,
             "frozen".to_owned(),
+            Vec::new(),
+            crate::runtime::RuntimeResourceRevision::new(1),
             invocation(),
             1024,
             None,
@@ -3987,6 +3992,8 @@ mod tests {
             },
             base_revision.next(),
             "frozen".to_owned(),
+            Vec::new(),
+            crate::runtime::RuntimeResourceRevision::new(1),
             invocation(),
             1024,
             None,
@@ -4057,6 +4064,8 @@ mod tests {
             },
             base_revision.next().next(),
             "frozen".to_owned(),
+            Vec::new(),
+            crate::runtime::RuntimeResourceRevision::new(1),
             invocation(),
             1024,
             None,
@@ -4232,6 +4241,8 @@ mod tests {
                 },
                 base_revision.next(),
                 "frozen".to_owned(),
+                Vec::new(),
+                crate::runtime::RuntimeResourceRevision::new(1),
                 invocation(),
                 1024,
                 None,
@@ -4297,6 +4308,8 @@ mod tests {
                 },
                 revision,
                 "frozen".to_owned(),
+                Vec::new(),
+                crate::runtime::RuntimeResourceRevision::new(1),
                 invocation(),
                 1024,
                 None,
@@ -5125,6 +5138,8 @@ mod tests {
             },
             request_store.load_head().unwrap().revision,
             "frozen".to_owned(),
+            Vec::new(),
+            crate::runtime::RuntimeResourceRevision::new(1),
             invocation(),
             1024,
             None,
@@ -5178,6 +5193,8 @@ mod tests {
             },
             missing_message_store.load_head().unwrap().revision,
             "frozen".to_owned(),
+            Vec::new(),
+            crate::runtime::RuntimeResourceRevision::new(1),
             invocation(),
             1024,
             None,
@@ -5259,6 +5276,33 @@ mod tests {
             SqliteConversationStore::open(conversation_id, &path),
             Err(ConversationStoreError::SchemaVersionMismatch {
                 stored: 1,
+                expected: SQLITE_SCHEMA_VERSION
+            })
+        ));
+    }
+
+    /// Issue #106 intentionally removes canonical System messages and adds
+    /// exact System-section/resource fields to `RequestSnapshot`. A version-2
+    /// development database is rejected at open; there is no migration or
+    /// compatibility decoder for the obsolete representation.
+    #[test]
+    fn pre_issue_106_schema_version_is_rejected_explicitly() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("pre-issue-106.sqlite");
+        let conversation_id = ConversationId::new("conv-pre-issue-106");
+        {
+            let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
+            store
+                .conn
+                .lock()
+                .unwrap()
+                .execute("UPDATE rustx_store SET schema_version = 2 WHERE id = 1", [])
+                .unwrap();
+        }
+        assert!(matches!(
+            SqliteConversationStore::open(conversation_id, &path),
+            Err(ConversationStoreError::SchemaVersionMismatch {
+                stored: 2,
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));

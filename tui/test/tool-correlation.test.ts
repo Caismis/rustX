@@ -19,7 +19,6 @@ import {
   attemptView,
   foreground,
   snapshot,
-  systemMessage,
   toolCallBlock,
   toolMessage,
   toolResult,
@@ -289,7 +288,7 @@ describe("tool-result chronology", () => {
    * `StructuralIndex::build` rejects orphan results, duplicate calls, and
    * duplicate results — and nothing else. It never requires a tool result to
    * immediately follow the assistant message that requested it, so the
-   * canonical domain can hold a `User` or `System` message in between, and a
+   * canonical domain can hold a `User` or unrelated `Assistant` message in between, and a
    * fold rule that reads only the owning message's block tail would move the
    * result across it.
    */
@@ -315,28 +314,6 @@ describe("tool-result chronology", () => {
       "the result body may not appear in the earlier call fragment",
     );
     assert.match(rendered[1] ?? "", /wait, stop/);
-    assert.match(rendered[2] ?? "", /↳/);
-    assert.match(rendered[2] ?? "", /842 passed/);
-  });
-
-  it("does not fold a result across an intervening system message", () => {
-    const state = stateOf({
-      messages: [
-        assistantBlocks("m1", [
-          toolCallBlock("call-1", "tool-bash", "bash", { command: "cargo test" }),
-        ]),
-        systemMessage("m2", "runtime", "policy reloaded"),
-        toolMessage("m3", "call-1", "tool-bash", toolResult({
-          content: [{ type: "text", text: "842 passed" }],
-        })),
-      ],
-    });
-    const rendered = renderTranscript(state, prefs()).map(blockText);
-
-    assert.equal(rendered.length, 3);
-    assert.match(rendered[0] ?? "", /result below/);
-    assert.ok(!(rendered[0] ?? "").includes("842 passed"));
-    assert.match(rendered[1] ?? "", /policy reloaded/);
     assert.match(rendered[2] ?? "", /↳/);
     assert.match(rendered[2] ?? "", /842 passed/);
   });

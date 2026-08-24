@@ -1711,6 +1711,13 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
         timezone: None,
         model: support::attempt_model(model.clone(), "fake-model"),
     };
+    let resources = rustx::runtime::RuntimeResourceSnapshot::new(
+        rustx::runtime::RuntimeResourceRevision::new(1),
+        Vec::new(),
+        None,
+        rustx::context::ContextAssembly::new(),
+        Arc::new(snapshot.clone()),
+    );
     let runtime = rustx::context::ContextRuntime::for_attempt(
         rustx::context::SessionContextPolicy {
             reserve_tokens: 0,
@@ -1721,7 +1728,8 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
         rustx::context::AgentStatusComposer::default(),
         &request.model,
     )
-    .expect("context runtime");
+    .expect("context runtime")
+    .with_runtime_resources(&resources);
     let result = rustx::agent::AgentExecution::new(
         request,
         lease,

@@ -7,8 +7,8 @@ mod common;
 use common::{describe_events, simple_request, sse_fixture};
 use rustx::message::content::{ImageReference, TextBlock};
 use rustx::message::types::{
-    AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, SystemAuthority,
-    SystemMessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+    AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, ToolMessageBlock,
+    UserContentBlock, UserMessageBlock, UserSource,
 };
 use rustx::model::{
     AnthropicAdapterConfig, AnthropicMessagesAdapter, ChatReasoningReplay, ModelAdapter,
@@ -56,13 +56,6 @@ fn image_user_request(protocol: ModelProtocol, model: &str) -> ModelRequest {
 fn history_request(protocol: ModelProtocol, model: &str) -> ModelRequest {
     let mut request = simple_request(protocol, model, "Now continue");
     request.messages = vec![
-        MessageBlock::System(SystemMessageBlock {
-            id: MessageId::new("msg-sys"),
-            authority: SystemAuthority::Runtime,
-            content: vec![TextBlock {
-                text: "Be concise.".to_owned(),
-            }],
-        }),
         MessageBlock::User(UserMessageBlock {
             id: MessageId::new("msg-u1"),
             content: vec![UserContentBlock::Text(TextBlock {
@@ -112,6 +105,7 @@ fn history_request(protocol: ModelProtocol, model: &str) -> ModelRequest {
             timestamp: None,
         }),
     ];
+    "Be concise.".clone_into(&mut request.effective_system_prompt);
     request.tools = vec![common::model_tool("list_directory", "tool-list")];
     request
 }
@@ -238,8 +232,13 @@ async fn chat_reasoning_replay_dialects_are_explicit() {
     {
         let mut request = history_request(ModelProtocol::OpenAiChatCompletions, "gpt-test");
         request.invocation.compat.chat_reasoning_replay = Some(dialect);
+        let assistant_index = request
+            .messages
+            .iter()
+            .position(|message| matches!(message, MessageBlock::Assistant(_)))
+            .expect("assistant history");
         request.messages.insert(
-            2,
+            assistant_index,
             MessageBlock::Assistant(AssistantMessageBlock {
                 id: MessageId::new(format!("msg-r-{attempt}")),
                 content: vec![AssistantContentBlock::Reasoning(
@@ -451,9 +450,9 @@ async fn chat_replay_modes_reject_multiple_reasoning_blocks() {
     }
 }
 
-/// Chat Completions translates a full canonical history (system, user, Assistant
-/// with tool calls, tool result, user) into provider messages without
-/// changing any canonical role.
+/// Chat Completions prepends the effective System authority and translates a
+/// full canonical history (User, Assistant with tool calls, Tool, User) into
+/// provider messages without changing any conversational role.
 #[tokio::test]
 async fn chat_translates_full_history_roles() {
     let server = common::FixtureServer::start(|_attempt, _head| {
@@ -478,7 +477,7 @@ async fn chat_translates_full_history_roles() {
     assert_eq!(
         roles,
         vec!["system", "user", "assistant", "tool", "user"],
-        "provider roles follow canonical roles without a fifth role"
+        "effective System authority precedes the three canonical conversational roles"
     );
     let assistant = &messages[2];
     assert_eq!(
@@ -578,9 +577,14 @@ async fn file_tool_results_are_unsupported() {
     })
     .await;
     let mut request = history_request(ModelProtocol::OpenAiChatCompletions, "gpt-test");
-    let MessageBlock::Tool(tool_message) = &mut request.messages[3] else {
-        panic!("tool message expected");
-    };
+    let tool_message = request
+        .messages
+        .iter_mut()
+        .find_map(|message| match message {
+            MessageBlock::Tool(tool_message) => Some(tool_message),
+            MessageBlock::User(_) | MessageBlock::Assistant(_) => None,
+        })
+        .expect("tool message expected");
     tool_message.result.content = vec![ToolResultContent::File(
         rustx::message::content::FileReference {
             artifact_id: ArtifactId::new("artifact-file-1"),

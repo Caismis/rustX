@@ -232,7 +232,7 @@ pub fn pending_tool_call(messages: &[MessageBlock]) -> Option<ToolCallId> {
             MessageBlock::Tool(tool) => {
                 tool_results.insert(tool.tool_call_id.clone());
             }
-            MessageBlock::User(_) | MessageBlock::System(_) => {}
+            MessageBlock::User(_) => {}
         }
     }
     tool_calls
@@ -567,8 +567,8 @@ impl ConversationState {
     ///
     /// The span is validated for Surface membership (unknown, retired,
     /// reversed endpoints are rejected) and for structural integrity
-    /// (complete canonical messages only, no trusted `System` message, no
-    /// split tool-call/result relationship).
+    /// (complete canonical messages only and no split tool-call/result
+    /// relationship).
     ///
     /// # Errors
     ///
@@ -691,8 +691,7 @@ mod tests {
     use crate::message::content::TextBlock;
     use crate::message::types::{
         AssistantContentBlock, AssistantMessageBlock, ContextKind, InboundKind, MessageBlock,
-        SystemAuthority, SystemMessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock,
-        UserSource,
+        ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
     use crate::runtime::identity::{ConversationId, MessageId, ToolCallId, ToolId};
     use crate::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus};
@@ -710,16 +709,6 @@ mod tests {
             source: UserSource::Human,
             kind: InboundKind::Message,
             timestamp: None,
-        })
-    }
-
-    fn system(id: &str) -> MessageBlock {
-        MessageBlock::System(SystemMessageBlock {
-            id: MessageId::new(id),
-            authority: SystemAuthority::Platform,
-            content: vec![TextBlock {
-                text: "be concise".to_owned(),
-            }],
         })
     }
 
@@ -1015,12 +1004,12 @@ mod tests {
     /// remain distinct historical facts: identity is allocated at admission,
     /// never deduplicated by content.
     #[test]
-    fn identical_runtime_context_bytes_are_distinct_admitted_facts() {
-        let context = |id: MessageId| {
+    fn agent_status_is_append_oriented_and_never_suppressed_by_history() {
+        let context = |id: MessageId, text: &str| {
             MessageBlock::User(UserMessageBlock {
                 id,
                 content: vec![UserContentBlock::Text(TextBlock {
-                    text: "identical runtime snapshot".to_owned(),
+                    text: text.to_owned(),
                 })],
                 source: UserSource::Runtime,
                 kind: InboundKind::Context(ContextKind::AgentStatus),
@@ -1030,16 +1019,25 @@ mod tests {
         let mut state = ConversationState::new();
         let first_id = state.allocate_context_message_id("attempt-1-turn-1");
         state
-            .commit(context(first_id.clone()))
+            .commit(context(first_id.clone(), "Status1"))
             .expect("commit first");
         let second_id = state.allocate_context_message_id("attempt-1-turn-2");
         state
-            .commit(context(second_id.clone()))
+            .commit(context(second_id.clone(), "Status2"))
             .expect("commit second");
 
         assert_ne!(first_id, second_id);
         assert_eq!(state.ledger().len(), 2);
-        assert_eq!(state.active_ids(), &[first_id, second_id]);
+        assert_eq!(state.active_ids(), &[first_id.clone(), second_id.clone()]);
+        let status_text = |id: &MessageId| match state.ledger().get(id).expect("status fact") {
+            MessageBlock::User(message) => match &message.content[0] {
+                UserContentBlock::Text(text) => text.text.as_str(),
+                _ => panic!("status must be text"),
+            },
+            _ => panic!("status must be canonical User context"),
+        };
+        assert_eq!(status_text(&first_id), "Status1");
+        assert_eq!(status_text(&second_id), "Status2");
     }
 
     /// Invalid replacements are rejected at preparation and never mutate.
@@ -1182,24 +1180,6 @@ mod tests {
                 )
                 .is_ok(),
             "the complete turn is replaceable"
-        );
-    }
-
-    /// Trusted system content is never replaced by a runtime summary.
-    #[test]
-    fn a_replacement_never_covers_system_content() {
-        let state = ConversationState::from_messages([system("sys"), user("a"), user("b")])
-            .expect("bootstrap");
-        assert_eq!(
-            state
-                .prepare_compaction(
-                    summary("s", "x"),
-                    SurfaceSpan::new(MessageId::new("sys"), MessageId::new("b")),
-                )
-                .expect_err("system inside span"),
-            ConversationError::Structural(StructuralError::SystemMessageInSpan(MessageId::new(
-                "sys"
-            )))
         );
     }
 

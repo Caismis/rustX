@@ -73,6 +73,10 @@ export const COMMANDS: readonly CommandSpec[] = [
     description: "Manually compact canonical conversation context while the runtime is idle.",
   },
   {
+    name: "/reload",
+    description: "Atomically reload project, Skill, extension, and Tool resources for future attempts.",
+  },
+  {
     name: "/debug",
     description: "Show bounded presentation and protocol diagnostics.",
   },

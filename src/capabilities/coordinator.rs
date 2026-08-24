@@ -28,6 +28,9 @@ use crate::tools::mcp::{McpInvalidationState, McpServerBindings, McpServerRuntim
 use crate::tools::python::{PythonToolDiscovery, PythonToolExecutor, PythonToolStore};
 use crate::tools::workspace::Workspace;
 
+type McpRuntimePool =
+    BTreeMap<McpServerId, Vec<(crate::tools::mcp::McpServerBinding, Arc<McpServerRuntime>)>>;
+
 /// The coordinator configuration of one conversation/capability owner.
 #[derive(Clone)]
 pub struct CapabilityCoordinatorConfig {
@@ -84,11 +87,8 @@ struct CoordinatorState {
 struct CoordinatorInner {
     conversation_id: ConversationId,
     workspace: Workspace,
-    base_tool_registry: Arc<ToolRegistry>,
-    tool_activation: ToolActivationPolicy,
-    skill_discovery: SkillDiscoveryConfig,
-    mcp_servers: McpServerBindings,
-    mcp_runtimes: tokio::sync::Mutex<BTreeMap<McpServerId, Arc<McpServerRuntime>>>,
+    resource_inputs: Mutex<CapabilityResourceInputs>,
+    mcp_runtimes: tokio::sync::Mutex<McpRuntimePool>,
     /// The ownership cancellation root of every in-flight conversation-owned
     /// MCP connection (Issue #12, M9c).
     ///
@@ -136,7 +136,6 @@ struct CoordinatorInner {
     /// The mutex is held only across the synchronous store construction
     /// (a bounded `create_dir_all` sequence) — never across `.await`.
     python_store: Mutex<Option<PythonToolStore>>,
-    base_environment: ToolEnvironment,
     environment_store: EnvironmentStore,
     state: Mutex<CoordinatorState>,
     condvar: Condvar,
@@ -179,6 +178,23 @@ pub struct CapabilityCoordinator {
     inner: Arc<CoordinatorInner>,
 }
 
+/// Complete reloadable capability inputs owned by one runtime resource
+/// generation. The coordinator publishes these only with the prepared
+/// snapshot derived from them.
+#[derive(Debug, Clone)]
+pub struct CapabilityResourceInputs {
+    /// Native/extension Tool registrations.
+    pub base_tool_registry: Arc<ToolRegistry>,
+    /// Effective Tool activation policy.
+    pub tool_activation: ToolActivationPolicy,
+    /// Skill discovery roots and explicit sources.
+    pub skill_discovery: SkillDiscoveryConfig,
+    /// Configured MCP sources.
+    pub mcp_servers: McpServerBindings,
+    /// Base authorized environment before Skill overlays.
+    pub base_environment: ToolEnvironment,
+}
+
 /// The read-only observation seam of the capability coordinator.
 ///
 /// A state observer receives the authoritative active snapshot after every
@@ -216,6 +232,11 @@ pub struct PreparedCapabilityCandidate {
     /// #81). Only sources whose state is [`CapabilitySourceState::Ready`]
     /// contributed executors to `candidate_registry`.
     availability: CapabilityAvailability,
+    resource_inputs: CapabilityResourceInputs,
+    /// Explicit runtime-resource reload must publish the candidate registry
+    /// even when model-facing definitions are byte-identical: executor
+    /// configuration is not represented by those definitions.
+    force_publish: bool,
 }
 
 impl PreparedCapabilityCandidate {
@@ -341,10 +362,13 @@ impl CapabilityCoordinator {
             inner: Arc::new(CoordinatorInner {
                 conversation_id: config.conversation_id,
                 workspace: config.workspace,
-                base_tool_registry: config.base_tool_registry,
-                tool_activation,
-                skill_discovery,
-                mcp_servers,
+                resource_inputs: Mutex::new(CapabilityResourceInputs {
+                    base_tool_registry: config.base_tool_registry,
+                    tool_activation,
+                    skill_discovery,
+                    mcp_servers,
+                    base_environment: config.base_environment.clone(),
+                }),
                 mcp_runtimes: tokio::sync::Mutex::new(BTreeMap::new()),
                 mcp_preparation_cancellation: crate::runtime::cancellation::CancellationSignal::new(
                 ),
@@ -353,7 +377,6 @@ impl CapabilityCoordinator {
                 mcp_invalidation: Arc::new(McpInvalidationState::new()),
                 python_store_root,
                 python_store: Mutex::new(None),
-                base_environment: config.base_environment,
                 environment_store,
                 state: Mutex::new(CoordinatorState {
                     revision: CapabilityRevision::default(),
@@ -514,6 +537,29 @@ impl CapabilityCoordinator {
     pub async fn prepare_candidate(
         &self,
     ) -> Result<PreparedCapabilityCandidate, CapabilityPreparationError> {
+        let inputs = self
+            .inner
+            .resource_inputs
+            .lock()
+            .expect("capability resource-input lock poisoned")
+            .clone();
+        self.prepare_candidate_from_inputs(inputs, false).await
+    }
+
+    /// Prepares a complete candidate from explicit reload-time inputs.
+    pub(crate) async fn prepare_candidate_with_inputs(
+        &self,
+        inputs: CapabilityResourceInputs,
+    ) -> Result<PreparedCapabilityCandidate, CapabilityPreparationError> {
+        self.prepare_candidate_from_inputs(inputs, true).await
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn prepare_candidate_from_inputs(
+        &self,
+        inputs: CapabilityResourceInputs,
+        force_publish: bool,
+    ) -> Result<PreparedCapabilityCandidate, CapabilityPreparationError> {
         // Shared EnvironmentStore work is not cancelled by one conversation,
         // but a claimed conversation still counts the preparation owner
         // until it returns. This prevents an in-flight MCP/environment
@@ -543,7 +589,7 @@ impl CapabilityCoordinator {
             .expect("capability state lock poisoned")
             .revision;
         let packages =
-            SkillDiscovery::with_config(&self.inner.workspace, self.inner.skill_discovery.clone())
+            SkillDiscovery::with_config(&self.inner.workspace, inputs.skill_discovery.clone())
                 .discover()?;
         let merged = merge_dependency_manifests(&packages)?;
         let python = self
@@ -563,7 +609,7 @@ impl CapabilityCoordinator {
         if let Some(node) = &node {
             overlay = overlay.merge(ToolEnvironmentOverlay::node(&node.root));
         }
-        let effective_environment = self.inner.base_environment.with_overlay(&overlay);
+        let effective_environment = inputs.base_environment.with_overlay(&overlay);
         let skills = Arc::new(SkillSnapshot::new(
             packages.into_iter().map(Arc::new).collect(),
         ));
@@ -587,11 +633,11 @@ impl CapabilityCoordinator {
             }
         };
         let mut discovered_tools = Vec::<ToolRegistration>::new();
-        discovered_tools.extend(self.inner.base_tool_registry.registrations());
+        discovered_tools.extend(inputs.base_tool_registry.registrations());
         let mut mcp_tools = Vec::new();
         let mut mcp_epochs = BTreeMap::new();
         // `BTreeMap` iteration is the deterministic identity order.
-        for (server_id, binding) in &self.inner.mcp_servers {
+        for (server_id, binding) in &inputs.mcp_servers {
             match self.prepare_mcp_server(server_id, binding).await {
                 Ok((epoch, tools)) => {
                     mcp_epochs.insert(server_id.clone(), epoch);
@@ -616,7 +662,7 @@ impl CapabilityCoordinator {
                 .map(|(definition, executor)| ToolRegistration::plain(definition, executor)),
         );
         let (available_tools, candidate_registry) =
-            select_tools(&discovered_tools, &self.inner.tool_activation)
+            select_tools(&discovered_tools, &inputs.tool_activation)
                 .map_err(CapabilityPreparationError::ToolActivation)?;
         let candidate_registry = Arc::new(candidate_registry);
         Ok(PreparedCapabilityCandidate {
@@ -629,6 +675,8 @@ impl CapabilityCoordinator {
             available_tools: Arc::new(available_tools),
             mcp_epochs,
             availability,
+            resource_inputs: inputs,
+            force_publish,
         })
     }
 
@@ -733,7 +781,12 @@ impl CapabilityCoordinator {
         String,
     > {
         let runtimes = self.inner.mcp_runtimes.lock().await;
-        let retained = runtimes.get(server_id).cloned();
+        let retained = runtimes.get(server_id).and_then(|entries| {
+            entries
+                .iter()
+                .find(|(candidate, _)| candidate == binding)
+                .map(|(_, runtime)| runtime.clone())
+        });
         drop(runtimes);
         let runtime = match retained {
             Some(runtime) => runtime,
@@ -804,9 +857,15 @@ impl CapabilityCoordinator {
             .lock()
             .expect("capability state lock poisoned")
             .revision;
-        let base_registrations = self.inner.base_tool_registry.registrations();
+        let inputs = self
+            .inner
+            .resource_inputs
+            .lock()
+            .expect("capability resource-input lock poisoned")
+            .clone();
+        let base_registrations = inputs.base_tool_registry.registrations();
         let (available_tools, candidate_registry) =
-            select_tools(&base_registrations, &self.inner.tool_activation)
+            select_tools(&base_registrations, &inputs.tool_activation)
                 .map_err(CapabilityPreparationError::ToolActivation)?;
         let candidate_registry = Arc::new(candidate_registry);
         Ok(PreparedCapabilityCandidate {
@@ -814,11 +873,13 @@ impl CapabilityCoordinator {
             skills: Arc::new(SkillSnapshot::new(Vec::new())),
             python: None,
             node: None,
-            effective_environment: self.inner.base_environment.clone(),
+            effective_environment: inputs.base_environment.clone(),
             candidate_registry,
             available_tools: Arc::new(available_tools),
             mcp_epochs: BTreeMap::new(),
             availability: CapabilityAvailability::new(),
+            resource_inputs: inputs,
+            force_publish: false,
         })
     }
 
@@ -894,7 +955,12 @@ impl CapabilityCoordinator {
                     // identity. This connection is then *not* transferable, so
                     // this owner takes the cleanup path (phase B) instead of
                     // orphaning a live process outside the retained set.
-                    if let Some(retained) = runtimes.get(&server_id_owned).cloned() {
+                    if let Some(retained) = runtimes.get(&server_id_owned).and_then(|entries| {
+                        entries
+                            .iter()
+                            .find(|(candidate, _)| candidate == &binding_owned)
+                            .map(|(_, runtime)| runtime.clone())
+                    }) {
                         drop(runtimes);
                         match runtime.close().await {
                             Ok(()) => Ok(retained),
@@ -903,7 +969,10 @@ impl CapabilityCoordinator {
                             ))),
                         }
                     } else {
-                        runtimes.insert(server_id_owned.clone(), runtime.clone());
+                        runtimes
+                            .entry(server_id_owned.clone())
+                            .or_default()
+                            .push((binding_owned, runtime.clone()));
                         drop(runtimes);
                         Ok(runtime)
                     }
@@ -970,7 +1039,10 @@ impl CapabilityCoordinator {
         };
         let runtimes = {
             let runtimes = self.inner.mcp_runtimes.lock().await;
-            runtimes.values().cloned().collect::<Vec<_>>()
+            runtimes
+                .values()
+                .flat_map(|entries| entries.iter().map(|(_, runtime)| runtime.clone()))
+                .collect::<Vec<_>>()
         };
         let mut failures = Vec::new();
         for runtime in runtimes {
@@ -1106,6 +1178,7 @@ impl CapabilityCoordinator {
             hook.enter();
         }
         let lifecycle = state.conversation_lifecycle.clone();
+        let candidate_inputs = candidate.resource_inputs.clone();
         let commit = || {
             // The lifecycle commit boundary is held around the final
             // validation and revision swap. If drain won while the
@@ -1135,6 +1208,11 @@ impl CapabilityCoordinator {
                 }
             }
             if candidate_is_noop(&candidate, &state.snapshot) {
+                *self
+                    .inner
+                    .resource_inputs
+                    .lock()
+                    .expect("capability resource-input lock poisoned") = candidate_inputs.clone();
                 let availability_changed =
                     Self::install_availability(&mut state, &candidate.availability);
                 let snapshot = state.snapshot.clone();
@@ -1161,6 +1239,11 @@ impl CapabilityCoordinator {
             ));
             state.revision = revision;
             state.snapshot = snapshot.clone();
+            *self
+                .inner
+                .resource_inputs
+                .lock()
+                .expect("capability resource-input lock poisoned") = candidate_inputs.clone();
             let availability = state.availability.clone();
             drop(invalidation);
             Self::fire_observer(&self.inner.observer, &snapshot, &availability);
@@ -1249,7 +1332,27 @@ impl CapabilityCoordinator {
             .lock()
             .expect("capability state lock poisoned");
         state.active_attempts += 1;
-        let snapshot = state.snapshot.clone();
+        AttemptCapabilityLease {
+            inner: self.inner.clone(),
+            snapshot: state.snapshot.clone(),
+        }
+    }
+
+    /// Pins the capability snapshot already paired with an admitted runtime
+    /// resource generation. The runtime admission lock selects the pair;
+    /// this boundary only accounts the attempt lease.
+    pub(crate) fn acquire_attempt_lease_for(
+        &self,
+        snapshot: Arc<CapabilitySnapshot>,
+    ) -> AttemptCapabilityLease {
+        assert_eq!(snapshot.conversation_id(), &self.inner.conversation_id);
+        assert_eq!(snapshot.workspace_root(), self.inner.workspace.root());
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .expect("capability state lock poisoned");
+        state.active_attempts += 1;
         AttemptCapabilityLease {
             inner: self.inner.clone(),
             snapshot,
@@ -1411,7 +1514,8 @@ fn candidate_is_noop(
     candidate: &PreparedCapabilityCandidate,
     current: &CapabilitySnapshot,
 ) -> bool {
-    candidate.skills.semantically_equivalent(current.skills())
+    !candidate.force_publish
+        && candidate.skills.semantically_equivalent(current.skills())
         && candidate.candidate_registry.definitions() == current.tool_registry().definitions()
         && candidate.available_tools.as_ref() == current.available_tools()
         && candidate.python.as_ref().map(|env| env.digest.clone())
@@ -1590,7 +1694,11 @@ body
         // published host location moved, so rediscovery must not be treated
         // as an activation no-op.
         let inner = Arc::get_mut(&mut coordinator.inner).expect("unshared coordinator");
-        inner.skill_discovery = crate::skills::SkillDiscoveryConfig {
+        inner
+            .resource_inputs
+            .get_mut()
+            .expect("resource inputs")
+            .skill_discovery = crate::skills::SkillDiscoveryConfig {
             automatic_roots: vec![root_b.clone()],
             explicit_paths: Vec::new(),
         };
@@ -1994,10 +2102,16 @@ mod mcp_race_tests {
             runtimes
                 .get(&ids[0])
                 .expect("alpha runtime")
+                .first()
+                .expect("alpha binding")
+                .1
                 .install_close_probe(alpha.clone());
             runtimes
                 .get(&ids[1])
                 .expect("beta runtime")
+                .first()
+                .expect("beta binding")
+                .1
                 .install_close_probe(beta.clone());
         }
 
@@ -2167,6 +2281,9 @@ mod mcp_race_tests {
             .await
             .get(&server_id)
             .expect("runtime")
+            .first()
+            .expect("binding")
+            .1
             .close()
             .await
             .expect("the owned stdio unit must publish physical settlement");
@@ -2241,6 +2358,9 @@ mod mcp_race_tests {
             .await
             .get(&server_id)
             .expect("runtime")
+            .first()
+            .expect("binding")
+            .1
             .close()
             .await
             .expect("the owned stdio unit must publish physical settlement");
@@ -2275,8 +2395,10 @@ mod mcp_race_tests {
             .await
             .get(&server_id)
             .expect("runtime")
+            .first()
+            .expect("binding")
+            .1
             .clone();
-        drop(coordinator.inner.mcp_runtimes.lock().await);
         let initial_epoch = runtime.change_epoch();
         assert_eq!(initial_epoch, 0);
 
@@ -2398,6 +2520,9 @@ mod mcp_race_tests {
             .await
             .get(&server_id)
             .expect("runtime")
+            .first()
+            .expect("binding")
+            .1
             .close()
             .await
             .expect("the owned stdio unit must publish physical settlement");

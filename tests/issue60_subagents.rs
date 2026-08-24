@@ -488,6 +488,10 @@ async fn a_subagent_child_runs_end_to_end_through_the_real_process_stack() {
         !child_request.contains("\"name\":\"subagent\""),
         "the child has no subagent tool (no recursion): {child_request}"
     );
+    assert!(
+        child_request.contains("You are a read-only exploration subagent of the rustX runtime"),
+        "the child persona is request-time AgentProfile System authority: {child_request}"
+    );
 
     // shutdown and clean exit
     let response = process

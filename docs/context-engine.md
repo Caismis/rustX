@@ -113,20 +113,24 @@ frozen before admission.
 
 ### Proposals and trust boundaries
 
-The only proposal kinds are:
+The request-time contributor proposal kind is:
 
 - UserMessageProposal { content };
-- SystemPromptSectionProposal { content }.
+
+Certified-extension System Sections are registered as immutable resource
+values in the owning Runtime Resource Snapshot. They are not dynamically
+proposed by an extension on every request.
 
 Proposals contain no MessageId, UserSource, ContextKind, priority, surface
 operation, admission command, or provider data. A proposal is transient and
 cannot mutate committed history. RustX assigns the semantic kind/lane,
 trusted provenance, canonical identity, and commit operation.
 
-Native observations currently include workspace instructions, Skill
+Native inputs currently include project/workspace instructions, Skill
 capability guidance, Agent Status, core runtime identity, and agent profile.
-Skill capability guidance is a request-time system section, while Agent Status
-is a canonical User context fact. Native identities use
+Project instructions and Skill capability guidance are request-time System
+Sections, while Agent Status is a canonical User context fact. Native
+identities use
 ContextContributorIdentity::Native; extensions use
 CertifiedExtensionIdentity, which is canonicalized and validated by rustX.
 Native logical keys cannot be claimed by an extension.
@@ -146,9 +150,8 @@ The finite user lanes are ordered as:
 2. RuntimeToolObservation — the lane of the **native runtime observation
    owner** (`NativeContextContributor::RuntimeToolObservation`);
    native-reserved, never extension-owned;
-3. WorkspaceInstructions — one native semantic owner;
-4. ExtensionEnvironment — multiple certified extensions;
-5. AgentStatus — one native-reserved owner.
+3. ExtensionEnvironment — multiple certified extensions;
+4. AgentStatus — one native-reserved owner.
 
 The native observation lane sits directly after claimed inbound because that
 owner's facts describe what the environment just did for the *preceding* tool
@@ -171,7 +174,6 @@ proposals:
 | producer identity | lane | `UserSource` | `ContextKind` |
 | --- | --- | --- | --- |
 | `Native(RuntimeToolObservation)` | `RuntimeToolObservation` | `Runtime` | `RuntimeToolObservation` |
-| `Native(WorkspaceInstructions)` | `WorkspaceInstructions` | `Runtime` | `WorkspaceInstructions` |
 | `Native(AgentStatus)` | `AgentStatus` | `Runtime` | `AgentStatus` |
 | `CertifiedExtension(key)` | `ExtensionEnvironment` | `Extension { key }` | `ExtensionEnvironment` |
 
@@ -179,11 +181,13 @@ So a certified extension that produces deferred post-tool context keeps its
 extension identity, its extension provenance, and its own lane. There is no
 rule converting post-tool proposals into native runtime context.
 
-`Native(SkillGuidance)` is intentionally absent from this User-context table.
-It publishes only the `SystemSectionLane::NativeCapabilityGuidance` section;
-it has no `UserSource`, `ContextKind`, User message, Ledger entry, or Surface
-identity. The catalog text is rendered from the attempt's immutable
-`SkillSnapshot` and contains routing metadata only.
+`Native(WorkspaceInstructions)` and `Native(SkillGuidance)` are intentionally
+absent from this User-context table. They publish only the
+`SystemSectionLane::WorkspaceInstructions` and
+`SystemSectionLane::NativeCapabilityGuidance` sections respectively. Neither
+has a `UserSource`, `ContextKind`, User message, Ledger entry, or Surface
+identity. Their bytes come from the attempt's immutable Runtime Resource
+Snapshot; Skill catalog text contains routing metadata only.
 
 ### Registration is the only semantic admission authority
 
@@ -234,8 +238,9 @@ The finite system-section lanes are ordered as:
 
 1. CoreRuntimeIdentity — native-reserved, single owner;
 2. AgentProfile — native-reserved, single owner;
-3. CertifiedExtension — multiple extensions, sorted by logical identity;
-4. NativeCapabilityGuidance — native-reserved.
+3. WorkspaceInstructions — native-reserved, single owner;
+4. CertifiedExtension — multiple extensions, sorted by logical identity;
+5. NativeCapabilityGuidance — native-reserved.
 
 There is no arbitrary numeric priority. A second single-owner semantic owner
 is rejected; last-wins, first-wins, priority-wins, registration order, and
@@ -250,7 +255,6 @@ MessageBlock::User with InboundKind::Context(ContextKind):
 
 | semantic fact | trusted source | context kind |
 | --- | --- | --- |
-| workspace/project instructions | Runtime | WorkspaceInstructions |
 | certified extension context | Extension { contributor } | ExtensionEnvironment |
 | Agent Status | Runtime | AgentStatus |
 
@@ -290,15 +294,14 @@ no projection-only second transcript.
 
 ## 4. Effective System Prompt
 
-SystemMessageBlock remains a durable canonical system-authority fact.
-Effective System Prompt is a separate request-time provider-neutral value.
-RustX renders it with render_effective_system_prompt from:
+`ModelRequest.effective_system_prompt` is the one provider-neutral System
+authority. RustX renders it with `render_effective_system_prompt` from:
 
-1. active canonical System message content;
-2. native CoreRuntimeIdentity sections;
-3. native AgentProfile sections;
+1. native CoreRuntimeIdentity sections;
+2. native AgentProfile sections;
+3. frozen project/workspace instructions;
 4. certified-extension sections in canonical logical identity order;
-5. any native capability guidance section owned by rustX, including the
+5. native capability guidance owned by rustX, including the
    request-time Skill catalog when the immutable snapshot has visible Skills.
 
 The section family is the SystemSectionLane contract. Extensions can
@@ -308,12 +311,10 @@ section ordering, separators, and rendered string. The exact rendered string
 is frozen by value in every RequestSnapshot; reconstruction never reruns
 section contributors, rediscover Skills, or reads current configuration.
 Compaction rewrites only canonical conversation facts, so it cannot remove
-or suppress the Skill catalog section.
-
-The bounded Issue #54 Surface rule still applies: a SurfaceOp::Replace
-cannot contain a canonical System message. This is a history/compaction
-constraint, not a rule that pins all messages before the last System
-message.
+or suppress project instructions or the Skill catalog section. Provider
+adapters translate this value into their protocol's System/instructions field
+when non-empty and emit no System authority when it is empty; they never scan
+historical messages.
 
 ## 5. Request preparation and RequestSnapshot
 
@@ -322,9 +323,12 @@ one actual primary request. Its implemented fields are:
 
 ~~~rust
 struct RequestSnapshot {
+    request_id: RequestId,
     identity: RequestIdentity,
     surface_revision: SurfaceRevision,
     effective_system_prompt: String,
+    system_sections: Vec<AcceptedSystemSection>,
+    runtime_resource_revision: RuntimeResourceRevision,
     invocation: ModelInvocationConfig,
     context_window_tokens: u64,
     reasoning_profile: Option<ReasoningProfileId>,
@@ -333,6 +337,7 @@ struct RequestSnapshot {
     capability_revision: CapabilityRevision,
     context_generation: ContextGeneration,
     continuation: Option<ProviderContinuationState>,
+    request_context_ids: Vec<MessageId>,
 }
 ~~~
 
@@ -344,7 +349,11 @@ The value/reference decisions are deliberate:
   ConversationSurface operation history. It is exact and reconstructable;
   the request does not copy a second transcript.
 - effective_system_prompt is stored by value because it is request-time
-  rendered content.
+  rendered content. `system_sections` stores its exact ordered inputs by value;
+  reconstruction does not invoke contributors again.
+- runtime_resource_revision records which process-local immutable resource
+  generation the attempt observed. It is an audit identity, not a historical
+  lookup key or a durable resource registry.
 - invocation stores the effective ModelInvocationConfig by value. It
   includes the effective model identity/configuration and opaque request
   parameters, so current session settings and the model catalog are not
@@ -360,6 +369,8 @@ The value/reference decisions are deliberate:
   contributor to be invoked again.
 - continuation is the exact opaque provider continuation state used by that
   request, if any.
+- request_context_ids records the exact request-scoped canonical context facts
+  committed atomically with request start.
 
 RequestSnapshot::reconstruct(&ConversationState) resolves only the
 referenced historical Surface revision, hydrates its canonical messages,
@@ -596,8 +607,9 @@ hidden adapter injection.
 `ContextAssembly::compatibility_manifest()` returns
 ContextCompatibilityManifest with:
 
-- `abi_version` (currently `2`; the v2 contract removes Skill guidance from
-  User lanes and keeps it in request-time system sections);
+- `abi_version` (currently `3`; the v3 contract freezes certified-extension
+  System Sections in runtime resources and limits dynamic proposals to
+  conversational User facts);
 - canonical user_context_lanes;
 - canonical system_section_lanes;
 - native-reserved slots;

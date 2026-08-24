@@ -94,8 +94,8 @@ impl SubagentProfile {
     }
 
     /// The child persona/instruction text of this profile, composed as the
-    /// child's bootstrap system configuration (never a forged user
-    /// message).
+    /// child's request-time `AgentProfile` System section (never canonical
+    /// history or a forged user message).
     #[must_use]
     pub fn persona(self) -> String {
         match self {

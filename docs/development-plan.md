@@ -21,10 +21,10 @@ Exit criteria:
 
 Implement runtime-owned types for:
 
-- `SystemMessageBlock`
 - `UserMessageBlock`
 - `AssistantMessageBlock`
 - `ToolMessageBlock`
+- request-time Effective System Prompt sections
 - Content blocks
 - Tool definitions, calls, and results
 - `ModelRequest`

@@ -50,8 +50,8 @@ pub use assembly::{
     ContextGeneration, ContextProposal, ContextProposalKind, ContributorGeneration,
     ContributorInputSnapshot, DeferredContextProducer, DeferredContextProposal,
     MAX_DEFERRED_CONTEXT_PROPOSALS, MAX_PROPOSALS_PER_CONTRIBUTOR, NativeContextInput,
-    SystemPromptSectionProposal, SystemSectionLane, UserContextLane, UserMessageProposal,
-    render_effective_system_prompt, validate_user_message_proposal,
+    SystemSectionLane, UserContextLane, UserMessageProposal, render_effective_system_prompt,
+    validate_user_message_proposal,
 };
 pub use engine::{
     CompactionBudgets, CompactionConstraints, CompactionPlan, ContextConfig, ContextEngine,
@@ -94,6 +94,11 @@ pub struct ContextRuntime {
     /// The primary/summary output budgets and the summary input limit,
     /// frozen at attempt admission.
     pub(crate) compaction_budgets: CompactionBudgets,
+    /// Static request-time System inputs frozen from the admitted resource
+    /// generation. Agent Status is composed separately per primary request.
+    pub(crate) native_system: NativeContextInput,
+    /// Process-local resource generation that supplied `native_system`.
+    pub(crate) resource_revision: crate::runtime::RuntimeResourceRevision,
 }
 
 impl ContextRuntime {
@@ -184,7 +189,23 @@ impl ContextRuntime {
             status_composer,
             assembly,
             compaction_budgets,
+            native_system: NativeContextInput::default(),
+            resource_revision: crate::runtime::RuntimeResourceRevision::default(),
         })
+    }
+
+    /// Freezes one admitted resource generation into this attempt bundle.
+    #[must_use]
+    pub fn with_runtime_resources(
+        mut self,
+        resources: &crate::runtime::RuntimeResourceSnapshot,
+    ) -> Self {
+        self.native_system.workspace_instructions =
+            resources.project_instructions().map(str::to_owned);
+        self.native_system.skill_guidance = resources.skill_catalog().map(str::to_owned);
+        self.native_system.agent_profile = resources.agent_profile().map(str::to_owned);
+        self.resource_revision = resources.revision();
+        self
     }
 
     /// The in-crate deterministic summarizer seam.
@@ -224,6 +245,8 @@ impl ContextRuntime {
             status_composer,
             assembly,
             compaction_budgets,
+            native_system: NativeContextInput::default(),
+            resource_revision: crate::runtime::RuntimeResourceRevision::default(),
         }
     }
 }

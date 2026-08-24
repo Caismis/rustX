@@ -281,8 +281,7 @@ use crate::context::compaction::{
 use crate::context::tokens::TokenEstimator;
 use crate::context::{
     AgentStatusComposer, CompactionConstraints, ContextError, ContextErrorKind, ContextRuntime,
-    NativeContextInput, SessionContextPolicy, native_system_sections,
-    render_effective_system_prompt,
+    NativeContextInput, SessionContextPolicy, render_effective_system_prompt,
 };
 use crate::conversation::ConversationState;
 use crate::conversation::SurfaceRevision;
@@ -308,6 +307,7 @@ use crate::runtime::interaction::{
 };
 use crate::runtime::observation::{ConversationObservation, PendingObservations};
 use crate::runtime::request_history::RequestHistory;
+use crate::runtime::resources::{RuntimeResourceLoader, RuntimeResourceSnapshot};
 use crate::runtime::types::{
     ApprovalMode, ApprovalModeState, CancellationReason, ConversationLifecycle,
     ConversationLifecycleState, DurabilityFailureCommit, DurabilityGate, DurableOperation,
@@ -517,6 +517,11 @@ pub struct RuntimeConversationConfig {
     pub tool_runtime: ConversationToolRuntime,
     /// The capability coordinator (owns the active capability snapshot).
     pub capability: CapabilityCoordinator,
+    /// The complete immutable process-local resource generation initially
+    /// active for this runtime.
+    pub resources: Arc<RuntimeResourceSnapshot>,
+    /// The runtime-owned loader used only by explicit reload.
+    pub resource_loader: Arc<dyn RuntimeResourceLoader>,
     /// The runtime clock stamping submitted inbound messages; the system
     /// clock is used when omitted.
     pub clock: Option<Arc<dyn RuntimeClock>>,
@@ -663,6 +668,11 @@ struct CoordinatorState {
     /// model update and an attempt admission can never interleave
     /// ambiguously: whichever acquires the lock first linearizes first.
     model: SessionModelState,
+    /// The complete resource/capability generation future attempts acquire.
+    resources: Arc<RuntimeResourceSnapshot>,
+    /// A narrow gate held while an off-side reload candidate is prepared.
+    /// Attempt admission observes this under the same coordinator lock.
+    resource_reload_in_progress: bool,
     /// The effective mode frozen for the currently admitted attempt boundary.
     effective_approval_mode: ApprovalMode,
     /// The latest requested runtime control mode.
@@ -1048,6 +1058,7 @@ pub(crate) struct RuntimeInner {
     /// `AgentExecution`. Request/event history is read through this handle.
     store: Arc<dyn ConversationStore>,
     capability: CapabilityCoordinator,
+    resource_loader: Arc<dyn RuntimeResourceLoader>,
     /// The conversation-owned subagent registry (Issue #60), when this
     /// runtime may delegate to child runtimes.
     subagents: Option<crate::runtime::subagent::SubagentRegistry>,
@@ -1111,6 +1122,37 @@ pub(crate) struct RuntimeInner {
     /// configuration surface.
     #[cfg(test)]
     test_pre_tool_policy: Mutex<Option<Arc<dyn crate::agent::PreToolPolicy>>>,
+}
+
+/// Cancellation-safe ownership of the narrow resource-reload admission gate.
+/// If the async reload caller disappears while candidate preparation is
+/// parked, dropping this guard reopens admission without publishing anything.
+struct ResourceReloadGateGuard {
+    inner: Arc<RuntimeInner>,
+    armed: bool,
+}
+
+impl ResourceReloadGateGuard {
+    fn new(inner: Arc<RuntimeInner>) -> Self {
+        Self { inner, armed: true }
+    }
+
+    fn clear(&mut self, state: &mut CoordinatorState) {
+        state.resource_reload_in_progress = false;
+        self.armed = false;
+    }
+}
+
+impl Drop for ResourceReloadGateGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let mut state = self.inner.lock_state();
+        state.resource_reload_in_progress = false;
+        drop(state);
+        self.inner.wake.notify.notify_one();
+    }
 }
 
 /// Releasing the last semantic owner of a conversation runtime closes its
@@ -1420,24 +1462,16 @@ impl RuntimeInner {
             .map(|failure| failure.diagnostic)
     }
 
-    /// Builds the `ContextRuntime` of one admitted attempt.
-    ///
-    /// The engine window and the summary invocation both come from that
-    /// attempt's immutable model snapshot, so an attempt on a 32k model
-    /// never plans compaction with a previously selected 128k window.
-    ///
-    /// # Errors
-    ///
-    /// Returns the engine construction error when the session context policy
-    /// leaves no positive input budget under this attempt's window.
-    fn context_runtime(
+    fn context_runtime_with_assembly(
         &self,
         model: &AttemptModelSnapshot,
+        assembly: crate::context::ContextAssembly,
     ) -> Result<ContextRuntime, crate::context::ContextError> {
-        ContextRuntime::for_attempt(
+        ContextRuntime::for_attempt_with_assembly(
             self.context.policy,
             Arc::clone(&self.context.estimator),
             self.context.status_composer.clone(),
+            assembly,
             model,
         )
     }
@@ -1771,6 +1805,7 @@ impl RuntimeInner {
     /// Runs one attempt to settlement against the coordinator-owned
     /// cancellation trigger (the same handle `cancel_current_attempt`
     /// requests cancellation on).
+    #[allow(clippy::too_many_arguments)]
     async fn run_attempt(
         self: &Arc<Self>,
         attempt_id: AttemptId,
@@ -1779,15 +1814,17 @@ impl RuntimeInner {
         cancellation: &AgentCancellation,
         model: AttemptModelSnapshot,
         approval_mode: ApprovalMode,
+        resources: Arc<RuntimeResourceSnapshot>,
+        lease: crate::capabilities::AttemptCapabilityLease,
     ) -> crate::agent::AgentExecutionResult {
-        let lease = self.capability.acquire_attempt_lease();
         let observer = RuntimeObserver::new(self);
         // The context runtime is derived from the frozen snapshot, so the
         // attempt's window, output budget, and summary invocation all agree
         // with the model it was admitted with.
         let context_runtime = self
-            .context_runtime(&model)
+            .context_runtime_with_assembly(&model, resources.context_assembly().clone())
             .expect("admission validated this model against the session context policy");
+        let context_runtime = context_runtime.with_runtime_resources(&resources);
         let request = AgentExecutionRequest {
             agent_id: self.agent_id.clone(),
             conversation_id: self.conversation_id.clone(),
@@ -1866,18 +1903,7 @@ impl RuntimeInner {
         system_sections: Vec<crate::context::AcceptedSystemSection>,
         cancellation: &AgentCancellation,
     ) -> ManualCompactionTaskResult {
-        let effective_system_prompt = match conversation.active_messages() {
-            Ok(messages) => render_effective_system_prompt(&messages, &system_sections),
-            Err(error) => {
-                return ManualCompactionTaskResult {
-                    conversation,
-                    result: Err(ManualCompactionError::Context(ContextError::new(
-                        ContextErrorKind::MalformedHistory,
-                        error.to_string(),
-                    ))),
-                };
-            }
-        };
+        let effective_system_prompt = render_effective_system_prompt(&system_sections);
         let signal = cancellation.signal();
         let executed = execute_compaction(
             &mut conversation,
@@ -2123,6 +2149,7 @@ impl RuntimeInner {
         if !self.lifecycle.is_running()
             || state.current_attempt.is_some()
             || state.manual_compaction.is_some()
+            || state.resource_reload_in_progress
         {
             return;
         }
@@ -2358,6 +2385,10 @@ impl RuntimeInner {
         // rewritten to resemble the new configuration.
         let model = state.model.snapshot();
         let approval_mode = state.effective_approval_mode;
+        let resources = state.resources.clone();
+        let lease = self
+            .capability
+            .acquire_attempt_lease_for(resources.capability().clone());
         self.observe(ConversationObservation::AttemptModelFrozen {
             attempt_id: attempt_id.clone(),
             model: Box::new(model.view()),
@@ -2385,6 +2416,8 @@ impl RuntimeInner {
                     &cancellation,
                     model,
                     approval_mode,
+                    resources,
+                    lease,
                 )
                 .await;
             inner.finish_attempt(attempt_id, result);
@@ -2553,6 +2586,12 @@ impl ConversationRuntime {
         {
             return Err(ConversationRuntimeError::OwnershipMismatch {
                 capability_conversation: snapshot.conversation_id().clone(),
+                runtime_conversation: conversation_id,
+            });
+        }
+        if !Arc::ptr_eq(config.resources.capability(), &snapshot) {
+            return Err(ConversationRuntimeError::OwnershipMismatch {
+                capability_conversation: config.resources.capability().conversation_id().clone(),
                 runtime_conversation: conversation_id,
             });
         }
@@ -2778,6 +2817,7 @@ impl ConversationRuntime {
             mailbox,
             store,
             capability: config.capability,
+            resource_loader: config.resource_loader,
             subagents: config.subagents,
             interaction,
             lifecycle,
@@ -2787,6 +2827,8 @@ impl ConversationRuntime {
             executor,
             state: Mutex::new(CoordinatorState {
                 model: config.model,
+                resources: config.resources,
+                resource_reload_in_progress: false,
                 effective_approval_mode: config.approval_mode,
                 desired_approval_mode: config.approval_mode,
                 approval_mode_revision: 0,
@@ -3136,6 +3178,126 @@ impl ConversationRuntime {
         self.submit_sourced_inbound(UserSource::Human, content)
     }
 
+    /// Atomically reloads the complete process-local runtime resource and
+    /// capability generation for future attempts.
+    ///
+    /// The coordinator lock first establishes a narrow admission gate, then
+    /// candidate discovery and asynchronous capability preparation run
+    /// off-side. The same lock is reacquired for the capability commit and
+    /// resource-snapshot publication, so no attempt can be admitted between
+    /// those two writes. A failure clears the gate and retains the complete
+    /// previous pair.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed lifecycle or busy refusal when the runtime is not
+    /// quiescent, or a bounded preparation/publication failure while retaining
+    /// the complete previous generation.
+    pub async fn reload_resources(
+        &self,
+    ) -> Result<RuntimeResourceReloaded, RuntimeResourceReloadError> {
+        let _reload_admission = {
+            let mut state = self.inner.lock_state();
+            match self.inner.lifecycle.state() {
+                ConversationLifecycleState::Inactive => {
+                    return Err(RuntimeResourceReloadError::Inactive);
+                }
+                ConversationLifecycleState::Draining | ConversationLifecycleState::Quiescent => {
+                    return Err(RuntimeResourceReloadError::Shutdown);
+                }
+                ConversationLifecycleState::Running => {}
+            }
+            if state.resource_reload_in_progress {
+                return Err(RuntimeResourceReloadError::Busy {
+                    reason: RuntimeResourceReloadBusyReason::Reload,
+                });
+            }
+            if !self.inner.interaction.pending_snapshot().is_empty() {
+                return Err(RuntimeResourceReloadError::Busy {
+                    reason: RuntimeResourceReloadBusyReason::Interaction,
+                });
+            }
+            if state.current_attempt.is_some() {
+                return Err(RuntimeResourceReloadError::Busy {
+                    reason: RuntimeResourceReloadBusyReason::Attempt,
+                });
+            }
+            if state.manual_compaction.is_some() {
+                return Err(RuntimeResourceReloadError::Busy {
+                    reason: RuntimeResourceReloadBusyReason::Compaction,
+                });
+            }
+            state.resource_reload_in_progress = true;
+            let Ok(admission) = self.inner.lifecycle.try_enter_running() else {
+                state.resource_reload_in_progress = false;
+                return Err(RuntimeResourceReloadError::Shutdown);
+            };
+            admission
+        };
+        let mut reload_gate = ResourceReloadGateGuard::new(Arc::clone(&self.inner));
+
+        let prepared = self
+            .inner
+            .resource_loader
+            .prepare(&self.inner.capability)
+            .await;
+
+        let mut state = self.inner.lock_state();
+        if !self.inner.lifecycle.is_running() {
+            reload_gate.clear(&mut state);
+            drop(state);
+            self.inner.wake.notify.notify_one();
+            return Err(RuntimeResourceReloadError::Shutdown);
+        }
+        let prepared = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                reload_gate.clear(&mut state);
+                drop(state);
+                self.inner.wake.notify.notify_one();
+                return Err(RuntimeResourceReloadError::Failed {
+                    message: error.message,
+                });
+            }
+        };
+        let (capability_candidate, resource_data) = prepared.into_parts();
+        let capability = match self.inner.capability.commit(capability_candidate) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                reload_gate.clear(&mut state);
+                drop(state);
+                self.inner.wake.notify.notify_one();
+                return Err(RuntimeResourceReloadError::Failed {
+                    message: crate::runtime::resources::RuntimeResourceLoadError::new(format!(
+                        "cannot publish capability resources: {error}"
+                    ))
+                    .message,
+                });
+            }
+        };
+        let revision = state.resources.revision().next();
+        let resources = Arc::new(RuntimeResourceSnapshot::from_prepared(
+            revision,
+            resource_data,
+            capability,
+        ));
+        let capability_revision = resources.capability_revision();
+        state.resources = resources;
+        reload_gate.clear(&mut state);
+        drop(state);
+        self.inner.wake.notify.notify_one();
+        Ok(RuntimeResourceReloaded {
+            resource_revision: revision,
+            capability_revision,
+        })
+    }
+
+    /// The complete generation future attempts currently acquire.
+    #[must_use]
+    pub fn runtime_resources(&self) -> Arc<RuntimeResourceSnapshot> {
+        self.inner.lock_state().resources.clone()
+    }
+
     /// Manually compacts the current canonical Conversation Surface.
     ///
     /// This is an idle runtime-maintenance operation, not an Agent attempt:
@@ -3174,29 +3336,36 @@ impl ConversationRuntime {
                     message: failure.diagnostic,
                 });
             }
-            if state.current_attempt.is_some() || state.manual_compaction.is_some() {
+            if state.current_attempt.is_some()
+                || state.manual_compaction.is_some()
+                || state.resource_reload_in_progress
+            {
                 return Err(ManualCompactionError::Busy);
             }
             let model = state.model.snapshot();
+            let resources = state.resources.clone();
             let context_runtime = self
                 .inner
-                .context_runtime(&model)
+                .context_runtime_with_assembly(&model, resources.context_assembly().clone())
                 .map_err(ManualCompactionError::Context)?;
             // Manual maintenance has no attempt lease, but it still freezes
             // the exact capability definitions used for planning at the
             // same admission boundary as the model/context snapshot.
-            let capability = self.inner.capability.current_snapshot();
-            let tools = capability.tool_registry().model_definitions();
-            let system_sections = native_system_sections(&NativeContextInput {
-                skill_guidance: capability.skill_catalog(),
-                ..NativeContextInput::default()
-            })
-            .map_err(|error| {
-                ManualCompactionError::Context(ContextError::new(
-                    ContextErrorKind::Internal,
-                    format!("the frozen capability system guidance is invalid: {error}"),
-                ))
-            })?;
+            let tools = resources.capability().tool_registry().model_definitions();
+            let system_sections = resources
+                .context_assembly()
+                .system_sections(&NativeContextInput {
+                    workspace_instructions: resources.project_instructions().map(str::to_owned),
+                    skill_guidance: resources.skill_catalog().map(str::to_owned),
+                    agent_profile: resources.agent_profile().map(str::to_owned),
+                    ..NativeContextInput::default()
+                })
+                .map_err(|error| {
+                    ManualCompactionError::Context(ContextError::new(
+                        ContextErrorKind::Internal,
+                        format!("the frozen capability system guidance is invalid: {error}"),
+                    ))
+                })?;
             let conversation = state
                 .conversation
                 .take()
@@ -3943,6 +4112,87 @@ impl core::fmt::Display for InboundAdmissionError {
 
 impl std::error::Error for InboundAdmissionError {}
 
+/// A successful complete runtime resource/capability publication.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeResourceReloaded {
+    /// The newly published process-local resource revision.
+    pub resource_revision: crate::runtime::identity::RuntimeResourceRevision,
+    /// The compatible capability revision published with it.
+    pub capability_revision: crate::runtime::identity::CapabilityRevision,
+}
+
+/// The semantic owner preventing a quiescent reload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeResourceReloadBusyReason {
+    /// An admitted attempt owns the conversation.
+    Attempt,
+    /// A pending Question/Approval interaction owns the session.
+    Interaction,
+    /// Manual context compaction owns the conversation.
+    Compaction,
+    /// Another resource reload already owns the narrow admission gate.
+    Reload,
+}
+
+impl RuntimeResourceReloadBusyReason {
+    /// Stable Runtime Client diagnostic category.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Attempt => "attempt",
+            Self::Interaction => "interaction",
+            Self::Compaction => "compaction",
+            Self::Reload => "reload",
+        }
+    }
+}
+
+impl core::fmt::Display for RuntimeResourceReloadBusyReason {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::Attempt => "an attempt is active",
+            Self::Interaction => "a Question or Approval interaction is pending",
+            Self::Compaction => "manual context compaction is active",
+            Self::Reload => "another resource reload is active",
+        })
+    }
+}
+
+/// An explicit runtime resource reload refusal or failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeResourceReloadError {
+    /// The runtime is not activated.
+    Inactive,
+    /// Runtime drain has begun.
+    Shutdown,
+    /// The runtime is not semantically quiescent for reload.
+    Busy {
+        /// The live owner that made reload ineligible.
+        reason: RuntimeResourceReloadBusyReason,
+    },
+    /// Candidate preparation or publication failed. The old complete
+    /// generation remains active.
+    Failed {
+        /// Bounded diagnostic.
+        message: String,
+    },
+}
+
+impl core::fmt::Display for RuntimeResourceReloadError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Inactive => formatter.write_str("the runtime is inactive"),
+            Self::Shutdown => formatter.write_str("the runtime is shutting down"),
+            Self::Busy { reason } => write!(formatter, "runtime resources are busy: {reason}"),
+            Self::Failed { message } => {
+                write!(formatter, "runtime resource reload failed: {message}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for RuntimeResourceReloadError {}
+
 /// A cancellation request failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CancelAttemptError {
@@ -4442,6 +4692,137 @@ mod tests {
     };
     use futures_util::future::BoxFuture;
 
+    fn test_resources(
+        capability: &crate::capabilities::CapabilityCoordinator,
+    ) -> Arc<crate::runtime::RuntimeResourceSnapshot> {
+        Arc::new(crate::runtime::RuntimeResourceSnapshot::new(
+            crate::runtime::RuntimeResourceRevision::new(1),
+            Vec::new(),
+            None,
+            crate::context::ContextAssembly::new(),
+            capability.current_snapshot(),
+        ))
+    }
+
+    fn test_resource_loader(
+        capability: &crate::capabilities::CapabilityCoordinator,
+    ) -> Arc<dyn crate::runtime::RuntimeResourceLoader> {
+        Arc::new(crate::runtime::FilesystemRuntimeResourceLoader::new(
+            capability.current_snapshot().workspace_root(),
+        ))
+    }
+
+    struct MutableResourceLoader {
+        project_files: std::sync::Mutex<
+            Result<
+                Vec<crate::runtime::ProjectContextFile>,
+                crate::runtime::RuntimeResourceLoadError,
+            >,
+        >,
+        capability_inputs: std::sync::Mutex<Option<crate::capabilities::CapabilityResourceInputs>>,
+        context_assembly: std::sync::Mutex<crate::context::ContextAssembly>,
+        prepare_count: std::sync::atomic::AtomicU64,
+    }
+
+    impl MutableResourceLoader {
+        fn new(project_files: Vec<crate::runtime::ProjectContextFile>) -> Self {
+            Self {
+                project_files: std::sync::Mutex::new(Ok(project_files)),
+                capability_inputs: std::sync::Mutex::new(None),
+                context_assembly: std::sync::Mutex::new(crate::context::ContextAssembly::new()),
+                prepare_count: std::sync::atomic::AtomicU64::new(0),
+            }
+        }
+
+        fn fail(&self, message: &str) {
+            *self.project_files.lock().expect("project files") =
+                Err(crate::runtime::RuntimeResourceLoadError::new(message));
+        }
+
+        fn set_capability_inputs(&self, inputs: crate::capabilities::CapabilityResourceInputs) {
+            *self.capability_inputs.lock().expect("capability inputs") = Some(inputs);
+        }
+
+        fn set_context_assembly(&self, assembly: crate::context::ContextAssembly) {
+            *self.context_assembly.lock().expect("context assembly") = assembly;
+        }
+
+        fn prepare_count(&self) -> u64 {
+            self.prepare_count
+                .load(std::sync::atomic::Ordering::Acquire)
+        }
+    }
+
+    impl crate::runtime::RuntimeResourceLoader for MutableResourceLoader {
+        fn prepare<'a>(
+            &'a self,
+            capability: &'a crate::capabilities::CapabilityCoordinator,
+        ) -> BoxFuture<
+            'a,
+            Result<
+                crate::runtime::PreparedRuntimeResources,
+                crate::runtime::RuntimeResourceLoadError,
+            >,
+        > {
+            Box::pin(async move {
+                self.prepare_count
+                    .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                let project_files = self.project_files.lock().expect("project files").clone()?;
+                let inputs = self
+                    .capability_inputs
+                    .lock()
+                    .expect("capability inputs")
+                    .clone();
+                let context_assembly = self
+                    .context_assembly
+                    .lock()
+                    .expect("context assembly")
+                    .clone();
+                let candidate = match inputs {
+                    Some(inputs) => capability.prepare_candidate_with_inputs(inputs).await,
+                    None => capability.prepare_candidate().await,
+                }
+                .map_err(|error| {
+                    crate::runtime::RuntimeResourceLoadError::new(error.to_string())
+                })?;
+                Ok(crate::runtime::PreparedRuntimeResources::new(
+                    project_files,
+                    None,
+                    context_assembly,
+                    candidate,
+                ))
+            })
+        }
+    }
+
+    struct GatedResourceLoader {
+        inner: Arc<MutableResourceLoader>,
+        entered: tokio::sync::watch::Sender<bool>,
+        release: tokio::sync::watch::Receiver<bool>,
+    }
+
+    impl crate::runtime::RuntimeResourceLoader for GatedResourceLoader {
+        fn prepare<'a>(
+            &'a self,
+            capability: &'a crate::capabilities::CapabilityCoordinator,
+        ) -> BoxFuture<
+            'a,
+            Result<
+                crate::runtime::PreparedRuntimeResources,
+                crate::runtime::RuntimeResourceLoadError,
+            >,
+        > {
+            Box::pin(async move {
+                let _ = self.entered.send(true);
+                let mut release = self.release.clone();
+                release.wait_for(|released| *released).await.map_err(|_| {
+                    crate::runtime::RuntimeResourceLoadError::new("reload gate closed")
+                })?;
+                self.inner.prepare(capability).await
+            })
+        }
+    }
+
     fn request_snapshots(history: &RequestHistory) -> Vec<crate::model::RequestSnapshot> {
         let mut snapshots = Vec::new();
         let mut cursor = None;
@@ -4543,6 +4924,9 @@ mod tests {
         estimator: Arc<dyn TokenEstimator>,
         policy: crate::context::SessionContextPolicy,
         initial_messages: Vec<MessageBlock>,
+        project_context_files: Vec<crate::runtime::ProjectContextFile>,
+        agent_profile: Option<String>,
+        resource_loader: Option<Arc<dyn crate::runtime::RuntimeResourceLoader>>,
     }
 
     impl Default for HeadlessRuntimeOptions {
@@ -4556,6 +4940,9 @@ mod tests {
                     summary_output_cap: None,
                 },
                 initial_messages: Vec::new(),
+                project_context_files: Vec::new(),
+                agent_profile: None,
+                resource_loader: None,
             }
         }
     }
@@ -4595,6 +4982,16 @@ mod tests {
         coordinator.commit(candidate).expect("commit");
         let model = Arc::new(FakeModel::new(scripts));
         let adapter: Arc<dyn ModelAdapter> = model.clone();
+        let resources = Arc::new(crate::runtime::RuntimeResourceSnapshot::new(
+            crate::runtime::RuntimeResourceRevision::new(1),
+            options.project_context_files,
+            options.agent_profile,
+            crate::context::ContextAssembly::new(),
+            coordinator.current_snapshot(),
+        ));
+        let resource_loader = options
+            .resource_loader
+            .unwrap_or_else(|| test_resource_loader(&coordinator));
         let config = RuntimeConversationConfig {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter),
@@ -4606,6 +5003,8 @@ mod tests {
                 status_composer: AgentStatusComposer::default(),
             },
             tool_runtime,
+            resources,
+            resource_loader,
             capability: coordinator,
             clock: None,
             initial_messages: options.initial_messages,
@@ -4686,6 +5085,8 @@ mod tests {
                 status_composer: AgentStatusComposer::default(),
             },
             tool_runtime,
+            resources: test_resources(&coordinator),
+            resource_loader: test_resource_loader(&coordinator),
             capability: coordinator,
             clock: None,
             initial_messages: Vec::new(),
@@ -4782,6 +5183,8 @@ mod tests {
                 status_composer: AgentStatusComposer::default(),
             },
             tool_runtime,
+            resources: test_resources(&coordinator),
+            resource_loader: test_resource_loader(&coordinator),
             capability: coordinator,
             clock: None,
             initial_messages: Vec::new(),
@@ -4889,6 +5292,8 @@ mod tests {
                 status_composer: AgentStatusComposer::default(),
             },
             tool_runtime,
+            resources: test_resources(&coordinator),
+            resource_loader: test_resource_loader(&coordinator),
             capability: coordinator,
             clock: None,
             initial_messages: Vec::new(),
@@ -5390,7 +5795,6 @@ mod tests {
                 MessageBlock::User(_) => "user",
                 MessageBlock::Assistant(_) => "assistant",
                 MessageBlock::Tool(_) => "tool",
-                MessageBlock::System(_) => "system",
             })
             .collect();
         assert_eq!(
@@ -5596,6 +6000,7 @@ mod tests {
                     summary_output_cap: None,
                 },
                 initial_messages: history(),
+                ..HeadlessRuntimeOptions::default()
             },
         )
         .await;
@@ -6111,7 +6516,6 @@ mod tests {
                 MessageBlock::User(_) => "user",
                 MessageBlock::Assistant(_) => "assistant",
                 MessageBlock::Tool(_) => "tool",
-                MessageBlock::System(_) => "system",
             })
             .collect();
         assert_eq!(
@@ -6149,10 +6553,20 @@ mod tests {
         // the authoritative state again, with the request facts retained.
         assert!(!runtime.has_current_attempt());
         let history = runtime.request_history();
+        let snapshots = request_snapshots(&history);
+        assert_eq!(snapshots.len(), 2, "both requests retained");
         assert_eq!(
-            request_snapshots(&history).len(),
-            2,
-            "both requests retained"
+            snapshots[0].runtime_resource_revision, snapshots[1].runtime_resource_revision,
+            "tool continuation retains the attempt-admitted resource generation"
+        );
+        assert_eq!(
+            snapshots[0].capability_revision, snapshots[1].capability_revision,
+            "tool continuation retains the attempt capability revision"
+        );
+        assert_eq!(snapshots[0].tool_definitions, snapshots[1].tool_definitions);
+        assert_eq!(
+            snapshots[0].effective_system_prompt,
+            snapshots[1].effective_system_prompt
         );
         // The coordinator owns the one authoritative ConversationState
         // again: the runtime keeps no second derived read model to reset.
@@ -6379,6 +6793,485 @@ mod tests {
             .expect("the settlement handoff restored the conversation state")
     }
 
+    fn project_file(path: &std::path::Path, content: &str) -> crate::runtime::ProjectContextFile {
+        crate::runtime::ProjectContextFile {
+            path: path.to_path_buf(),
+            content: content.to_owned(),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn reload_changes_only_future_requests_and_preserves_historical_snapshots() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("workspace/AGENTS.md");
+        let old_files = vec![project_file(&path, "old project authority")];
+        let loader = Arc::new(MutableResourceLoader::new(vec![project_file(
+            &path,
+            "new project authority",
+        )]));
+        let loader_trait: Arc<dyn crate::runtime::RuntimeResourceLoader> = loader.clone();
+        let (runtime, model) = headless_runtime_with_options(
+            &dir,
+            vec![one_turn_script(), one_turn_script()],
+            None,
+            None,
+            HeadlessRuntimeOptions {
+                project_context_files: old_files,
+                resource_loader: Some(loader_trait),
+                ..HeadlessRuntimeOptions::default()
+            },
+        )
+        .await;
+        runtime.activate();
+
+        runtime
+            .submit_inbound(text_content("first"))
+            .expect("first inbound");
+        let _ = await_settled_ledger(&runtime).await;
+        assert!(
+            model.requests()[0]
+                .effective_system_prompt
+                .contains("old project authority")
+        );
+        let historical = request_snapshots(&runtime.request_history());
+        assert!(
+            historical[0]
+                .effective_system_prompt
+                .contains("old project authority")
+        );
+        assert_eq!(
+            loader.prepare_count(),
+            0,
+            "ordinary request admission never rediscovers runtime resources"
+        );
+
+        let reloaded = runtime.reload_resources().await.expect("reload");
+        assert_eq!(reloaded.resource_revision.get(), 2);
+        assert_eq!(loader.prepare_count(), 1);
+        runtime
+            .submit_inbound(text_content("second"))
+            .expect("second inbound");
+        let ledger = await_settled_ledger(&runtime).await;
+        assert!(
+            model.requests()[1]
+                .effective_system_prompt
+                .contains("new project authority")
+        );
+        assert!(
+            !ledger.iter().any(|message| serde_json::to_string(message)
+                .expect("message JSON")
+                .contains("project authority")),
+            "project instructions never enter canonical history"
+        );
+        let snapshots = request_snapshots(&runtime.request_history());
+        assert!(
+            snapshots[0]
+                .effective_system_prompt
+                .contains("old project authority")
+        );
+        assert!(
+            snapshots[1]
+                .effective_system_prompt
+                .contains("new project authority")
+        );
+        assert_eq!(snapshots[0].runtime_resource_revision.get(), 1);
+        assert_eq!(snapshots[1].runtime_resource_revision.get(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
+    async fn reload_publishes_project_skill_and_tool_authority_as_one_generation() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let workspace = dir.path().join("workspace");
+        let project_path = workspace.join("AGENTS.md");
+        let skill = workspace.join(".agents/skills/reload-proof");
+        std::fs::create_dir_all(&skill).expect("skill package");
+        let skill_markdown = skill.join("SKILL.md");
+        std::fs::write(
+            &skill_markdown,
+            "---\nname: reload-proof\ndescription: Candidate catalog metadata.\n---\n\nOriginal body.\n",
+        )
+        .expect("SKILL.md");
+
+        let loader = Arc::new(MutableResourceLoader::new(vec![project_file(
+            &project_path,
+            "candidate project authority",
+        )]));
+        let loader_trait: Arc<dyn crate::runtime::RuntimeResourceLoader> = loader.clone();
+        let (runtime, model) = headless_runtime_with_options(
+            &dir,
+            vec![one_turn_script(), one_turn_script(), one_turn_script()],
+            None,
+            None,
+            HeadlessRuntimeOptions {
+                project_context_files: vec![project_file(
+                    &project_path,
+                    "initial project authority",
+                )],
+                resource_loader: Some(loader_trait),
+                ..HeadlessRuntimeOptions::default()
+            },
+        )
+        .await;
+
+        let definition = ToolDefinition {
+            id: ToolId::new("tool-reload-proof"),
+            name: "reload_proof".to_owned(),
+            description: "Tool published with the candidate generation.".to_owned(),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+            execution_policy: ToolExecutionPolicy::ForegroundOnly,
+            concurrency_policy: ToolConcurrencyPolicy::default(),
+            approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
+            replay_policy: ToolReplayPolicy::Never,
+            origin: ToolOrigin::Builtin,
+        };
+        let tool = FakeTool::new(definition, success_result("unused"));
+        let mut registry = ToolRegistry::new();
+        tool.register(&mut registry);
+        loader.set_capability_inputs(crate::capabilities::CapabilityResourceInputs {
+            base_tool_registry: Arc::new(registry),
+            tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+            skill_discovery: crate::skills::SkillDiscoveryConfig {
+                automatic_roots: Vec::new(),
+                explicit_paths: vec![skill.clone()],
+            },
+            mcp_servers: std::collections::BTreeMap::new(),
+            base_environment: runtime.tool_runtime().environment().clone(),
+        });
+        let mut candidate_assembly = crate::context::ContextAssembly::new();
+        let extension = candidate_assembly
+            .register_extension(
+                "reload.extension",
+                Some("candidate-v1".to_owned()),
+                Arc::new(|_: &crate::context::ContributorInputSnapshot| {
+                    Ok(Vec::<crate::context::ContextProposal>::new())
+                }),
+            )
+            .expect("extension");
+        candidate_assembly
+            .register_extension_system_section(&extension, "candidate extension authority")
+            .expect("extension section");
+        loader.set_context_assembly(candidate_assembly);
+        runtime.activate();
+
+        runtime
+            .submit_inbound(text_content("before reload"))
+            .expect("first inbound");
+        let _ = await_settled_ledger(&runtime).await;
+        let before = &model.requests()[0];
+        assert!(
+            before
+                .effective_system_prompt
+                .contains("initial project authority")
+        );
+        assert!(!before.effective_system_prompt.contains("reload-proof"));
+        assert!(
+            !before
+                .effective_system_prompt
+                .contains("candidate extension authority")
+        );
+        assert!(before.tools.iter().all(|tool| tool.name != "reload_proof"));
+        assert_eq!(loader.prepare_count(), 0);
+
+        let reloaded = runtime.reload_resources().await.expect("reload");
+        assert_eq!(reloaded.resource_revision.get(), 2);
+        assert_eq!(loader.prepare_count(), 1);
+        runtime
+            .submit_inbound(text_content("after reload"))
+            .expect("second inbound");
+        let _ = await_settled_ledger(&runtime).await;
+        let after = &model.requests()[1];
+        assert!(
+            after
+                .effective_system_prompt
+                .contains("candidate project authority")
+        );
+        assert!(
+            after
+                .effective_system_prompt
+                .contains("Candidate catalog metadata.")
+        );
+        assert!(
+            after
+                .effective_system_prompt
+                .contains("candidate extension authority")
+        );
+        assert!(!after.effective_system_prompt.contains("Original body."));
+        assert!(after.tools.iter().any(|tool| tool.name == "reload_proof"));
+
+        std::fs::write(
+            &skill_markdown,
+            "---\nname: reload-proof\ndescription: Changed metadata before another reload.\n---\n\nCurrent body visible to Read.\n",
+        )
+        .expect("edit SKILL.md");
+        let mut next_assembly = crate::context::ContextAssembly::new();
+        let extension = next_assembly
+            .register_extension(
+                "reload.extension",
+                Some("candidate-v2".to_owned()),
+                Arc::new(|_: &crate::context::ContributorInputSnapshot| {
+                    Ok(Vec::<crate::context::ContextProposal>::new())
+                }),
+            )
+            .expect("next extension");
+        next_assembly
+            .register_extension_system_section(&extension, "unpublished extension authority")
+            .expect("next extension section");
+        loader.set_context_assembly(next_assembly);
+        runtime
+            .submit_inbound(text_content("after external edit"))
+            .expect("third inbound");
+        let ledger = await_settled_ledger(&runtime).await;
+        let after_external_edit = &model.requests()[2];
+        assert_eq!(
+            after.effective_system_prompt, after_external_edit.effective_system_prompt,
+            "Skill frontmatter and project authority remain frozen before reload"
+        );
+        assert_eq!(after.tools, after_external_edit.tools);
+        assert_eq!(loader.prepare_count(), 1);
+        assert!(ledger.iter().all(|message| {
+            let json = serde_json::to_string(message).expect("message JSON");
+            !json.contains("candidate project authority")
+                && !json.contains("Candidate catalog metadata.")
+        }));
+
+        let snapshots = request_snapshots(&runtime.request_history());
+        assert_eq!(snapshots.len(), 3);
+        assert_eq!(snapshots[0].runtime_resource_revision.get(), 1);
+        assert_eq!(snapshots[1].runtime_resource_revision.get(), 2);
+        assert_eq!(snapshots[2].runtime_resource_revision.get(), 2);
+        assert!(
+            snapshots[1]
+                .effective_system_prompt
+                .contains("Candidate catalog metadata.")
+        );
+        assert!(
+            snapshots[1]
+                .tool_definitions
+                .iter()
+                .any(|tool| tool.name == "reload_proof")
+        );
+        assert_eq!(snapshots[1].tool_definitions, snapshots[2].tool_definitions);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn reload_failure_retains_the_complete_old_generation() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("workspace/AGENTS.md");
+        let loader = Arc::new(MutableResourceLoader::new(Vec::new()));
+        loader.fail("candidate rejected");
+        let loader_trait: Arc<dyn crate::runtime::RuntimeResourceLoader> = loader.clone();
+        let (runtime, _) = headless_runtime_with_options(
+            &dir,
+            Vec::new(),
+            None,
+            None,
+            HeadlessRuntimeOptions {
+                project_context_files: vec![project_file(&path, "old authority")],
+                resource_loader: Some(loader_trait),
+                ..HeadlessRuntimeOptions::default()
+            },
+        )
+        .await;
+        runtime.activate();
+        let before = runtime.runtime_resources();
+        assert!(matches!(
+            runtime.reload_resources().await,
+            Err(super::RuntimeResourceReloadError::Failed { .. })
+        ));
+        let after = runtime.runtime_resources();
+        assert!(Arc::ptr_eq(&before, &after));
+        assert_eq!(after.revision().get(), 1);
+        assert_eq!(after.project_instructions(), Some("old authority"));
+        assert_eq!(loader.prepare_count(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn agent_profile_is_snapshot_system_authority_not_bootstrap_history() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let persona = "immutable child exploration persona";
+        let (runtime, model) = headless_runtime_with_options(
+            &dir,
+            vec![one_turn_script()],
+            None,
+            None,
+            HeadlessRuntimeOptions {
+                agent_profile: Some(persona.to_owned()),
+                ..HeadlessRuntimeOptions::default()
+            },
+        )
+        .await;
+        assert!(
+            runtime
+                .coordinator_ledger()
+                .expect("bootstrap history")
+                .is_empty(),
+            "agent profile creates no fake bootstrap conversation message"
+        );
+        runtime.activate();
+        runtime
+            .submit_inbound(text_content("delegated task"))
+            .expect("delegated inbound");
+        let _ = await_settled_ledger(&runtime).await;
+        assert!(
+            model.requests()[0]
+                .effective_system_prompt
+                .contains(persona)
+        );
+        let snapshots = request_snapshots(&runtime.request_history());
+        assert_eq!(snapshots.len(), 1);
+        assert!(snapshots[0].effective_system_prompt.contains(persona));
+        assert!(snapshots[0].system_sections.iter().any(|section| {
+            section.lane == crate::context::SystemSectionLane::AgentProfile
+                && section.content == persona
+        }));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn active_attempt_refuses_reload_without_changing_the_attempt() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (release, release_rx) = model_release();
+        let mut script = vec![FakeStep::ParkUntilReleased(release_rx)];
+        script.extend(one_turn_script());
+        let (runtime, model) = headless_runtime(&dir, vec![script], None, None).await;
+        runtime.activate();
+        let mut parked = model.parked();
+        runtime
+            .submit_inbound(text_content("busy"))
+            .expect("inbound");
+        parked.wait_for(|parked| *parked).await.expect("parked");
+        assert!(matches!(
+            runtime.reload_resources().await,
+            Err(super::RuntimeResourceReloadError::Busy {
+                reason: super::RuntimeResourceReloadBusyReason::Attempt
+            })
+        ));
+        release.send(true).expect("release");
+        let _ = await_settled_ledger(&runtime).await;
+        assert_eq!(model.requests().len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn reload_gate_linearizes_queued_admission_after_publication() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("workspace/AGENTS.md");
+        let mutable = Arc::new(MutableResourceLoader::new(vec![project_file(
+            &path,
+            "authority after gate",
+        )]));
+        let (entered, mut entered_rx) = tokio::sync::watch::channel(false);
+        let (release, release_rx) = tokio::sync::watch::channel(false);
+        let loader: Arc<dyn crate::runtime::RuntimeResourceLoader> =
+            Arc::new(GatedResourceLoader {
+                inner: mutable,
+                entered,
+                release: release_rx,
+            });
+        let (runtime, model) = headless_runtime_with_options(
+            &dir,
+            vec![one_turn_script()],
+            None,
+            None,
+            HeadlessRuntimeOptions {
+                project_context_files: vec![project_file(&path, "authority before gate")],
+                resource_loader: Some(loader),
+                ..HeadlessRuntimeOptions::default()
+            },
+        )
+        .await;
+        runtime.activate();
+        let reload_runtime = runtime.clone();
+        let reload = tokio::spawn(async move { reload_runtime.reload_resources().await });
+        entered_rx
+            .wait_for(|entered| *entered)
+            .await
+            .expect("reload entered");
+        runtime
+            .submit_inbound(text_content("queued at reload"))
+            .expect("queued inbound");
+        assert!(
+            model.requests().is_empty(),
+            "the closed gate admits no attempt"
+        );
+        release.send(true).expect("release reload");
+        assert_eq!(
+            reload
+                .await
+                .expect("reload task")
+                .expect("reload")
+                .resource_revision
+                .get(),
+            2
+        );
+        let _ = await_settled_ledger(&runtime).await;
+        assert!(
+            model.requests()[0]
+                .effective_system_prompt
+                .contains("authority after gate")
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cancelled_reload_reopens_admission_and_retains_the_old_generation() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("workspace/AGENTS.md");
+        let mutable = Arc::new(MutableResourceLoader::new(vec![project_file(
+            &path,
+            "unpublished authority",
+        )]));
+        let (entered, mut entered_rx) = tokio::sync::watch::channel(false);
+        let (_release, release_rx) = tokio::sync::watch::channel(false);
+        let loader: Arc<dyn crate::runtime::RuntimeResourceLoader> =
+            Arc::new(GatedResourceLoader {
+                inner: mutable,
+                entered,
+                release: release_rx,
+            });
+        let (runtime, model) = headless_runtime_with_options(
+            &dir,
+            vec![one_turn_script()],
+            None,
+            None,
+            HeadlessRuntimeOptions {
+                project_context_files: vec![project_file(&path, "retained authority")],
+                resource_loader: Some(loader),
+                ..HeadlessRuntimeOptions::default()
+            },
+        )
+        .await;
+        runtime.activate();
+        let reload_runtime = runtime.clone();
+        let reload = tokio::spawn(async move { reload_runtime.reload_resources().await });
+        entered_rx
+            .wait_for(|entered| *entered)
+            .await
+            .expect("reload entered");
+        runtime
+            .submit_inbound(text_content("queued before cancellation"))
+            .expect("queued inbound");
+        assert!(model.requests().is_empty());
+
+        reload.abort();
+        assert!(
+            reload
+                .await
+                .expect_err("reload task cancelled")
+                .is_cancelled()
+        );
+        let _ = await_settled_ledger(&runtime).await;
+        assert_eq!(runtime.runtime_resources().revision().get(), 1);
+        assert!(
+            model.requests()[0]
+                .effective_system_prompt
+                .contains("retained authority")
+        );
+        assert!(
+            !model.requests()[0]
+                .effective_system_prompt
+                .contains("unpublished authority")
+        );
+    }
+
     /// Whether an internal runtime event is one of the terminal settlement
     /// events of an attempt.
     fn is_terminal_event(event: &crate::events::types::RuntimeEvent) -> bool {
@@ -6455,6 +7348,8 @@ mod tests {
                 status_composer: AgentStatusComposer::default(),
             },
             tool_runtime,
+            resources: test_resources(&coordinator),
+            resource_loader: test_resource_loader(&coordinator),
             capability: coordinator,
             clock: None,
             initial_messages: Vec::new(),
@@ -6514,6 +7409,8 @@ mod tests {
                 status_composer: AgentStatusComposer::default(),
             },
             tool_runtime,
+            resources: test_resources(&coordinator),
+            resource_loader: test_resource_loader(&coordinator),
             capability: coordinator,
             clock: None,
             initial_messages: Vec::new(),
@@ -6663,6 +7560,12 @@ mod tests {
         };
         let (snapshot, _) = host.snapshot().expect("pending snapshot");
         assert_eq!(snapshot.pending_interactions, vec![pending.clone()]);
+        assert!(matches!(
+            runtime.reload_resources().await,
+            Err(super::RuntimeResourceReloadError::Busy {
+                reason: super::RuntimeResourceReloadBusyReason::Interaction
+            })
+        ));
 
         let runtime_for_shutdown = runtime.clone();
         let (shutdown_sender, mut shutdown_receiver) = tokio::sync::oneshot::channel();
@@ -10810,6 +11713,8 @@ mod tests {
                 status_composer: AgentStatusComposer::default(),
             },
             tool_runtime,
+            resources: test_resources(&coordinator),
+            resource_loader: test_resource_loader(&coordinator),
             capability: coordinator,
             clock: None,
             initial_messages,
@@ -11921,6 +12826,8 @@ mod tests {
                 },
                 store.load_head().expect("head").revision,
                 "frozen prompt".to_owned(),
+                Vec::new(),
+                crate::runtime::RuntimeResourceRevision::new(1),
                 crate::model::ModelInvocationConfig {
                     model: "model-before-restart".to_owned(),
                     protocol: crate::model::ModelProtocol::OpenAiChatCompletions,
@@ -12025,6 +12932,8 @@ mod tests {
                 },
                 store.load_head().expect("head").revision,
                 "frozen prompt".to_owned(),
+                Vec::new(),
+                crate::runtime::RuntimeResourceRevision::new(1),
                 crate::model::ModelInvocationConfig {
                     model: "model-before-restart".to_owned(),
                     protocol: crate::model::ModelProtocol::OpenAiChatCompletions,
