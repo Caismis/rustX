@@ -491,6 +491,34 @@ is the one terminal both share). Both facts carry a canonical event identity
 derived from the interaction identity, so the pair resolves through the unique
 `event_id` index rather than a Journal scan.
 
+The store enforces four further semantic invariants, because
+`InteractionSubject` and `InteractionSettlement` are ordinary deserializable
+payloads and a fact that bypassed the live coordinator must still be refused:
+
+- `InteractionRequested` and `InteractionSettled` belong to the exact same
+  conversation + attempt + turn envelope. The conversation comes free from the
+  store's envelope check; the attempt and turn are compared against the
+  committed requested fact, and an audit fact carrying neither is refused
+  because it cannot be pinned to its pair.
+- An Approval audit subject must match the canonical `ToolCall` it references.
+  The `call_id` must resolve to a durably committed canonical Assistant
+  `ToolCall` on the active Surface — the domain in which a
+  request/publication-scoped `ToolCallId` resolves unambiguously — and that
+  call's tool id, name, and argument digest must equal the subject's. A
+  well-typed approval naming a call that was never proposed, a different tool,
+  or a different argument value is a *semantically false* audit record and is
+  refused.
+- Interaction audit payload bounds are durable-store invariants. Prompt,
+  choice count/length/uniqueness, answer mode and length, approval request
+  reason, denial reason, tool-name length, and the canonical lowercase-hex
+  form of `arguments_digest` are all checked at the store. The limits live in
+  one place, `events::interaction`, which both the coordinator's live
+  validation and the store's durable validation call, so they cannot drift and
+  a future PostgreSQL backend reuses the same contract.
+- A Question settlement must satisfy the exact requested Question contract,
+  not merely carry the `Answered` variant: a `Choice` must be one the Question
+  offered, and `FreeText` requires a Question that accepted free text.
+
 Two ordering rules make the plane observable rather than merely intended:
 
 ```text
@@ -527,8 +555,9 @@ identity.
 Payloads stay bounded. A Question subject is stored by value because the
 Question contract already bounds its prompt and choices; an Approval subject
 names the call/tool identity and policy reason by value and pins the exact
-argument value by SHA-256 digest, because that value is already durable
-by-value in the canonical `ToolCall` the Message Ledger owns. Keypresses,
+model-issued argument value by SHA-256 digest, because that value is already
+durable by-value in the canonical `ToolCall` the Message Ledger owns — which
+is also what makes the pin verifiable rather than decorative. Keypresses,
 focus changes, editing state, and TUI presentation details are not interaction
 facts and never enter the Journal, so its size stays O(human decisions).
 

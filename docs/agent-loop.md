@@ -743,6 +743,16 @@ decision. The audit is still only evidence — the `Answered(Allow)` recheck
 above is what grants execution authority in this process, and a historical
 approval read back after a restart grants none.
 
+The approval subject the Loop hands the coordinator is derived from the exact
+canonical `ToolCall` of the committed Assistant message, not from the pending
+invocation alone: it carries the call/tool identity the `ToolCall` froze and
+the digest of the `ToolCall`'s own model-issued arguments. The client is still
+shown the normalized invocation that will actually run, but the durable
+subject pins the value the Message Ledger holds, and the durable authority
+refuses a subject that does not match it. This is why the canonical Assistant
+message is committed before `resolve_pre_tool_decisions` runs: at the pre-tool
+policy boundary the call the approval names is already durable.
+
 The coordinator does not arbitrate cancellation causes. Each runtime-owned
 pending interaction retains an `ExecutionCancellation` observation view, not
 the owning attempt's `AgentCancellation` handle. Generic ToolExecutors receive

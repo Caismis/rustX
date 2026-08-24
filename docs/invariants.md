@@ -354,6 +354,42 @@ duplicate request, a duplicate or contradictory settlement, a settlement
 without its request, and a settlement whose terminal its subject cannot
 produce; cancellation is the one terminal both subjects share.
 
+The durable authority enforces four further semantic invariants. Each is a
+store invariant, not a coordinator convention: the payload types are ordinary
+deserializable event payloads, so a fact that bypassed the live coordinator
+must still be refused.
+
+- **One envelope.** `InteractionRequested` and `InteractionSettled` belong to
+  the exact same conversation + attempt + turn envelope. The conversation is
+  guaranteed by the store's own envelope check; the attempt and the turn are
+  compared against the committed requested fact, and an audit fact that
+  carries no attempt or no turn is refused because it cannot be pinned to its
+  pair at all. The store does not rely on the coordinator happening to rebuild
+  the same turn identity.
+- **An Approval audit subject must match the canonical `ToolCall` it
+  references.** The subject's `call_id` must resolve to a canonical Assistant
+  `ToolCall` that is durably committed and active on the Surface — the domain
+  in which a `ToolCallId`, which is request/publication-scoped rather than
+  conversation-global, resolves unambiguously — and that call's `tool_id`,
+  name, and `interaction_arguments_digest(arguments)` must equal the subject's
+  three corresponding fields. An approval naming a call that was never
+  proposed, a different tool, or a different argument value is a structurally
+  valid but semantically false audit record and never enters the Journal.
+- **Interaction audit payload bounds are durable-store invariants.** The
+  prompt, choice count, choice length, choice uniqueness, answer mode, answer
+  length, approval request reason, denial reason, tool-name length, and the
+  canonical lowercase-hex form of `arguments_digest` are all checked by the
+  store. The bounds have exactly one semantic source, `events::interaction`,
+  which the live coordinator validates against before publishing and the store
+  validates against before committing, so a future non-SQLite backend enforces
+  the same contract by calling the same functions.
+- **A Question settlement must satisfy the exact requested Question contract,
+  not merely have the `Answered` variant.** A `Choice` must be one the
+  requested Question actually offered, and a `FreeText` answer requires a
+  Question that accepted free text. The audit claims to record the typed
+  answer that was accepted, so a settlement no live coordinator could have
+  produced is refused.
+
 Two ordering rules hold:
 
 - **Durable before prompt.** The requested fact commits before rustX releases
@@ -389,10 +425,13 @@ a new live approval under a new identity.
 
 Payloads are bounded. A Question subject is stored by value (the Question
 contract already bounds prompt and choices); an Approval subject names
-call/tool identity and the policy reason by value and pins the exact argument
-value by SHA-256 digest, which the canonical `ToolCall` already stores
-by value. Keypresses, focus changes, editing state, and TUI presentation
-details are never interaction facts.
+call/tool identity and the policy reason by value and pins the exact
+model-issued argument value by SHA-256 digest, which the canonical `ToolCall`
+already stores by value. The digest is taken over the canonical `ToolCall`
+arguments precisely so the pin is verifiable from durable state alone —
+otherwise the audit would name a value no durable record contains.
+Keypresses, focus changes, editing state, and TUI presentation details are
+never interaction facts.
 
 A pending interaction stays pinned to its admitted resource/capability
 generation. `reload_resources` returns `Busy { reason: Interaction }` while a

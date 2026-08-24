@@ -38,9 +38,10 @@ use rustx::context::{
 };
 use rustx::conversation::ConversationState;
 use rustx::durable::{ConversationStore, SqliteConversationStore};
-use rustx::events::types::{
-    InteractionSettlement, InteractionSubject, RuntimeEvent, RuntimeEventEnvelope,
+use rustx::events::interaction::{
+    InteractionSettlement, InteractionSubject, interaction_arguments_digest,
 };
+use rustx::events::types::{RuntimeEvent, RuntimeEventEnvelope};
 use rustx::message::content::TextBlock;
 use rustx::message::types::{InboundKind, MessageBlock, UserContentBlock, UserMessageBlock};
 use rustx::model::ModelFinishReason;
@@ -274,12 +275,19 @@ impl InteractionObserver for RespondingObserver {
     }
 }
 
+/// The arguments the scripted model issues for its approved call. They are
+/// deliberately non-empty so the approval subject's digest is a meaningful pin
+/// of *this* call rather than of a degenerate empty object.
+fn scripted_arguments() -> serde_json::Value {
+    serde_json::json!({"path": "notes.md", "limit": 20})
+}
+
 fn scripted_call(id: &'static str, tool_id: &'static str, name: &'static str) -> ScriptedCall {
     ScriptedCall {
         id,
         tool_id,
         name,
-        arguments: serde_json::json!({}),
+        arguments: scripted_arguments(),
     }
 }
 
@@ -503,6 +511,39 @@ async fn requested_fact_commits_before_the_prompt_reaches_a_client() {
             && tool_name == "alpha"
             && reason == "issue109 approval"
     ));
+
+    // End to end, through the real coordinator and the real store: the subject
+    // pins the exact arguments the canonical `ToolCall` in the Message Ledger
+    // holds by value. The durable authority enforces this correspondence, so
+    // a subject that drifted from the canonical call could not have committed
+    // at all.
+    let InteractionSubject::Approval {
+        arguments_digest, ..
+    } = &subject
+    else {
+        panic!("the approval subject is an approval");
+    };
+    let canonical = run
+        .store
+        .load_canonical()
+        .expect("canonical")
+        .into_iter()
+        .find_map(|message| match message {
+            MessageBlock::Assistant(assistant) => {
+                assistant.content.into_iter().find_map(|block| match block {
+                    rustx::message::types::AssistantContentBlock::ToolCall(call)
+                        if call.id == ToolCallId::new("call-approval") =>
+                    {
+                        Some(call.arguments)
+                    }
+                    _ => None,
+                })
+            }
+            _ => None,
+        })
+        .expect("the canonical Assistant proposed the approved call");
+    assert_eq!(canonical, scripted_arguments());
+    assert_eq!(*arguments_digest, interaction_arguments_digest(&canonical));
 }
 
 // ---------------------------------------------------------------------------

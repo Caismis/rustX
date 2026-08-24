@@ -75,11 +75,17 @@
 //! `InteractionSettled(Approved)` never authorizes a tool execution after a
 //! restart. Keypresses, focus changes, editing state, and TUI presentation
 //! details are not interaction facts and never enter the Journal.
+//!
+//! The audit vocabulary itself — [`InteractionSubject`],
+//! [`InteractionSettlement`], the argument digest, and the bounded-payload
+//! contract every backend enforces — lives in
+//! [`crate::events::interaction`].
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::conversation::SurfaceRevision;
+use crate::events::interaction::{InteractionSettlement, InteractionSubject};
 use crate::model::error::ModelError;
 use crate::model::finish::ModelFinishReason;
 use crate::model::types::ModelUsage;
@@ -87,7 +93,6 @@ use crate::runtime::identity::{
     AgentId, AttemptId, ConversationId, EventId, InteractionId, MessageId, RequestId, SubagentId,
     ToolCallId, ToolExecutionId, ToolId, TurnId,
 };
-use crate::runtime::interaction::QuestionAnswer;
 use crate::runtime::types::{CancellationReason, RuntimeError, TokenMeasurement};
 use crate::tools::types::{ToolExecutionResult, ToolProgress};
 
@@ -423,102 +428,6 @@ pub enum RuntimeEvent {
         interaction_id: InteractionId,
         /// The bounded terminal settlement.
         settlement: InteractionSettlement,
-    },
-}
-
-/// The bounded by-value audit subject of one interaction (Issue #109).
-///
-/// This is deliberately **not** the live
-/// [`InteractionKind`](crate::runtime::InteractionKind). The live request
-/// carries the complete validated tool arguments so a client can render the
-/// exact invocation; the durable audit keeps a bounded record instead. The
-/// approval subject names the exact call/tool identity by value and pins the
-/// argument value by digest, so the audit stays O(1) in size while remaining
-/// verifiable against the canonical `ToolCall` that the Message Ledger already
-/// owns. Nothing here is resolved through the current Tool registry or the
-/// current approval policy, so the subject stays readable after any resource
-/// reload or restart.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum InteractionSubject {
-    /// A tool invocation was held at the pre-tool policy boundary.
-    Approval {
-        /// The canonical model-issued call identity.
-        call_id: ToolCallId,
-        /// The registry-resolved tool identity, frozen at request time.
-        tool_id: ToolId,
-        /// The model-facing tool name, frozen at request time.
-        tool_name: String,
-        /// The lowercase hex SHA-256 of the exact validated business
-        /// arguments the approval subject was constructed from.
-        arguments_digest: String,
-        /// The bounded policy explanation shown to the client.
-        reason: String,
-    },
-    /// One bounded question was asked of the user. The prompt and choices are
-    /// already bounded by the Question contract, so they are stored by value.
-    Question {
-        /// The bounded human-facing prompt.
-        prompt: String,
-        /// The finite choice labels, when the Question offered any.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        choices: Option<Vec<String>>,
-        /// Whether a free-text answer was accepted.
-        allow_free_text: bool,
-    },
-}
-
-impl InteractionSubject {
-    /// Whether a settlement is a coherent terminal for this subject.
-    ///
-    /// Approval settles as allowed/denied, a Question settles with a typed
-    /// answer, and either may be settled by the owning attempt's cancellation
-    /// authority. Any other pairing is a malformed audit record and the
-    /// durable authority rejects it.
-    #[must_use]
-    pub fn accepts(&self, settlement: &InteractionSettlement) -> bool {
-        matches!(
-            (self, settlement),
-            (
-                Self::Approval { .. },
-                InteractionSettlement::Approved | InteractionSettlement::Denied { .. }
-            ) | (
-                Self::Question { .. },
-                InteractionSettlement::Answered { .. }
-            ) | (_, InteractionSettlement::Cancelled { .. })
-        )
-    }
-}
-
-/// The bounded terminal settlement of one interaction (Issue #109).
-///
-/// There is deliberately no "unavailable" settlement: an interaction that
-/// never found a capable client is refused before the requested fact commits,
-/// so no half-open audit record is created for a prompt no user ever saw.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum InteractionSettlement {
-    /// A client allowed the exact approval subject. This is audit evidence of
-    /// a decision that existed; it is never restart authorization.
-    Approved,
-    /// A client denied the exact approval subject. The canonical result slot
-    /// of the call carries the matching denied `ToolResult`.
-    Denied {
-        /// The bounded client-facing denial reason.
-        reason: String,
-    },
-    /// The user answered the exact Question subject. The answer is retained
-    /// by value: it is the audit evidence of what the user actually said,
-    /// independent of the canonical tool result that carries it to the model.
-    Answered {
-        /// The exact typed answer accepted by the coordinator.
-        answer: QuestionAnswer,
-    },
-    /// The owning attempt's cancellation authority won the rendezvous before
-    /// any user decision was accepted.
-    Cancelled {
-        /// The first-winner cancellation cause of the owning attempt.
-        reason: CancellationReason,
     },
 }
 

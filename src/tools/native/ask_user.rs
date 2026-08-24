@@ -719,7 +719,8 @@ mod tests {
     /// records the conversation.
     #[tokio::test]
     async fn question_settlement_is_durable_audit_and_exactly_one_answer() {
-        use crate::events::types::{InteractionSettlement, InteractionSubject, RuntimeEvent};
+        use crate::events::interaction::{InteractionSettlement, InteractionSubject};
+        use crate::events::types::RuntimeEvent;
 
         let run = execute_through_real_coordinator(
             serde_json::json!({

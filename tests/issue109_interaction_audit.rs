@@ -35,10 +35,12 @@ use rustx::durable::{
     ConversationStore, ConversationStoreError, SqliteConversationStore,
     interaction_audit_capability,
 };
-use rustx::events::types::{
-    EVENT_SCHEMA_VERSION, InteractionSettlement, InteractionSubject, RuntimeEvent,
-    RuntimeEventEnvelope,
+use rustx::events::interaction::{
+    InteractionSettlement, InteractionSubject, MAX_APPROVAL_DENIAL_REASON_CHARS,
+    MAX_APPROVAL_REQUEST_REASON_CHARS, MAX_QUESTION_ANSWER_CHARS, MAX_QUESTION_CHOICE_CHARS,
+    MAX_QUESTION_CHOICES, MAX_QUESTION_PROMPT_CHARS, interaction_arguments_digest,
 };
+use rustx::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use rustx::message::types::{
     AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, MessageBlock,
 };
@@ -153,12 +155,19 @@ fn settled_event_id(interaction_id: &InteractionId) -> String {
     format!("interaction-settled-event:{interaction_id}")
 }
 
+/// The exact model-issued arguments the canonical `ToolCall` of
+/// [`commit_turn_up_to_the_policy_boundary`] freezes.
+fn canonical_arguments() -> serde_json::Value {
+    serde_json::json!({"path": "notes.md", "limit": 20})
+}
+
+/// The one approval subject that truthfully describes that canonical call.
 fn approval_subject() -> InteractionSubject {
     InteractionSubject::Approval {
         call_id: call_id(),
         tool_id: ToolId::new("tool-alpha"),
         tool_name: "alpha".to_owned(),
-        arguments_digest: "0".repeat(64),
+        arguments_digest: interaction_arguments_digest(&canonical_arguments()),
         reason: "the policy asked".to_owned(),
     }
 }
@@ -286,7 +295,7 @@ fn commit_turn_up_to_the_policy_boundary(store: &SqliteConversationStore) {
                     id: call_id(),
                     tool_id: ToolId::new("tool-alpha"),
                     name: "alpha".to_owned(),
-                    arguments: serde_json::json!({}),
+                    arguments: canonical_arguments(),
                 },
             },
         )])
@@ -316,7 +325,7 @@ fn commit_turn_up_to_the_policy_boundary(store: &SqliteConversationStore) {
                     id: call_id(),
                     tool_id: ToolId::new("tool-alpha"),
                     name: "alpha".to_owned(),
-                    arguments: serde_json::json!({}),
+                    arguments: canonical_arguments(),
                 })],
             }),
             envelope(
@@ -325,6 +334,15 @@ fn commit_turn_up_to_the_policy_boundary(store: &SqliteConversationStore) {
             ),
         )
         .expect("canonical Assistant");
+}
+
+/// An in-memory conversation committed exactly up to the pre-tool policy
+/// boundary. The canonical Assistant `ToolCall` that an approval audit subject
+/// must match already exists, and nothing has been authorized to execute.
+fn policy_boundary_store() -> SqliteConversationStore {
+    let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
+    commit_turn_up_to_the_policy_boundary(&store);
+    store
 }
 
 fn journal(store: &SqliteConversationStore) -> Vec<RuntimeEvent> {
@@ -375,8 +393,7 @@ fn recover_reopened(durable: &Durable) -> (SqliteConversationStore, RecoveryRepo
 /// once, and a settlement without its requested fact is refused outright.
 #[test]
 fn the_durable_authority_owns_the_interaction_state_machine() {
-    let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
-    store.initialize(&[]).expect("initialize");
+    let store = policy_boundary_store();
     let id = interaction_id();
 
     // A settlement for an interaction that never durably existed asserts a
@@ -421,8 +438,7 @@ fn the_durable_authority_owns_the_interaction_state_machine() {
 /// Question cannot be approved.
 #[test]
 fn a_settlement_must_match_the_subject_it_settles() {
-    let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
-    store.initialize(&[]).expect("initialize");
+    let store = policy_boundary_store();
 
     let approval = InteractionId::for_attempt(&attempt(), 1);
     store
@@ -472,8 +488,7 @@ fn a_settlement_must_match_the_subject_it_settles() {
 /// malformed and is rejected rather than silently rewritten.
 #[test]
 fn interaction_audit_facts_carry_their_canonical_identity() {
-    let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
-    store.initialize(&[]).expect("initialize");
+    let store = policy_boundary_store();
     let id = interaction_id();
 
     let mut forged = requested(&id, approval_subject());
@@ -499,9 +514,7 @@ fn interaction_audit_facts_carry_their_canonical_identity() {
 /// including the very facts that would authorize a side effect.
 #[test]
 fn the_narrow_audit_capability_commits_interaction_facts_only() {
-    let store: Arc<dyn ConversationStore> =
-        Arc::new(SqliteConversationStore::in_memory(conversation_id()).expect("store"));
-    store.initialize(&[]).expect("initialize");
+    let store: Arc<dyn ConversationStore> = Arc::new(policy_boundary_store());
     let audit = interaction_audit_capability(Arc::clone(&store));
     assert_eq!(audit.conversation_id(), &conversation_id());
 
@@ -742,15 +755,17 @@ fn an_unanswered_interaction_is_evidence_and_is_never_resurrected() {
 // Bounded payloads
 // ---------------------------------------------------------------------------
 
-/// The audit payload is bounded and self-describing. The approval subject
-/// pins the exact argument value by digest instead of copying it into the
-/// low-frequency Journal, and the argument value itself remains durable
-/// by-value in the canonical `ToolCall` the Message Ledger owns.
+/// The approval subject stays O(1) by pinning the argument value with a digest
+/// instead of copying it — and the durable authority proves that pin is
+/// truthful rather than decorative.
+///
+/// The committed digest is asserted to be exactly the digest of the arguments
+/// the canonical `ToolCall` holds by value, computed independently from the
+/// Ledger, and a subject whose digest names any other argument value is
+/// refused by the store.
 #[test]
-fn the_approval_subject_is_bounded_and_still_pins_the_exact_arguments() {
-    let durable = Durable::new();
-    let store = durable.open();
-    commit_turn_up_to_the_policy_boundary(&store);
+fn the_approval_subject_pins_the_exact_canonical_arguments() {
+    let store = policy_boundary_store();
     let id = interaction_id();
     store
         .append_event(requested(&id, approval_subject()))
@@ -771,12 +786,55 @@ fn the_approval_subject_is_bounded_and_still_pins_the_exact_arguments() {
     else {
         panic!("the approval subject is an approval");
     };
-    assert_eq!(arguments_digest.len(), 64, "a fixed-size argument pin");
     assert_eq!(subject_call, call_id());
 
-    // The canonical Ledger still owns the exact argument value the digest
-    // pins, so the audit is complete without duplicating it.
-    let arguments = store
+    // The canonical Ledger owns the exact argument value, so the digest is
+    // recomputable from durable state alone. This is the property that makes
+    // the bounded subject a real pin rather than an opaque 64-character field.
+    let arguments = canonical_call_arguments(&store);
+    assert_eq!(arguments, canonical_arguments());
+    assert_eq!(
+        arguments_digest,
+        interaction_arguments_digest(&arguments),
+        "the committed digest is the digest of the canonical ToolCall arguments"
+    );
+
+    // A digest naming any other argument value is a semantically false audit
+    // record, and the durable authority refuses it outright.
+    let second = InteractionId::for_attempt(&attempt(), 2);
+    let InteractionSubject::Approval {
+        call_id: c,
+        tool_id: t,
+        tool_name: n,
+        reason: r,
+        ..
+    } = approval_subject()
+    else {
+        unreachable!()
+    };
+    assert!(
+        matches!(
+            store.append_event(requested(
+                &second,
+                InteractionSubject::Approval {
+                    call_id: c,
+                    tool_id: t,
+                    tool_name: n,
+                    arguments_digest: interaction_arguments_digest(
+                        &serde_json::json!({"path": "other.md", "limit": 20}),
+                    ),
+                    reason: r,
+                },
+            )),
+            Err(ConversationStoreError::InvalidReference(_))
+        ),
+        "a digest that pins arguments the canonical ToolCall never carried is refused"
+    );
+}
+
+/// The exact argument value the canonical Assistant `ToolCall` holds by value.
+fn canonical_call_arguments(store: &SqliteConversationStore) -> serde_json::Value {
+    store
         .load_canonical()
         .expect("canonical")
         .into_iter()
@@ -791,8 +849,353 @@ fn the_approval_subject_is_bounded_and_still_pins_the_exact_arguments() {
             }
             _ => None,
         })
-        .expect("the canonical Assistant proposed the approved call");
-    assert_eq!(arguments, serde_json::json!({}));
+        .expect("the canonical Assistant proposed the approved call")
+}
+
+/// An Approval audit subject must describe the canonical `ToolCall` it names.
+///
+/// Before this contract the store accepted a structurally valid but
+/// semantically false record: an approval naming a call that was never
+/// proposed, or naming the right call with the wrong tool identity. Both are
+/// now refused by the durable authority, not by the coordinator.
+#[test]
+fn an_approval_subject_must_match_the_canonical_tool_call_it_references() {
+    let store = policy_boundary_store();
+    let digest = interaction_arguments_digest(&canonical_arguments());
+
+    let missing = InteractionSubject::Approval {
+        call_id: ToolCallId::new("call-that-was-never-proposed"),
+        tool_id: ToolId::new("tool-alpha"),
+        tool_name: "alpha".to_owned(),
+        arguments_digest: digest.clone(),
+        reason: "the policy asked".to_owned(),
+    };
+    assert!(
+        matches!(
+            store.append_event(requested(
+                &InteractionId::for_attempt(&attempt(), 1),
+                missing
+            )),
+            Err(ConversationStoreError::InvalidReference(_))
+        ),
+        "an approval for a call no canonical Assistant proposed is refused"
+    );
+
+    let wrong_tool_id = InteractionSubject::Approval {
+        call_id: call_id(),
+        tool_id: ToolId::new("tool-beta"),
+        tool_name: "alpha".to_owned(),
+        arguments_digest: digest.clone(),
+        reason: "the policy asked".to_owned(),
+    };
+    assert!(
+        matches!(
+            store.append_event(requested(
+                &InteractionId::for_attempt(&attempt(), 2),
+                wrong_tool_id
+            )),
+            Err(ConversationStoreError::InvalidReference(_))
+        ),
+        "an approval naming a tool id the canonical ToolCall did not freeze is refused"
+    );
+
+    let wrong_tool_name = InteractionSubject::Approval {
+        call_id: call_id(),
+        tool_id: ToolId::new("tool-alpha"),
+        tool_name: "beta".to_owned(),
+        arguments_digest: digest,
+        reason: "the policy asked".to_owned(),
+    };
+    assert!(
+        matches!(
+            store.append_event(requested(
+                &InteractionId::for_attempt(&attempt(), 3),
+                wrong_tool_name
+            )),
+            Err(ConversationStoreError::InvalidReference(_))
+        ),
+        "an approval naming a tool name the canonical ToolCall did not freeze is refused"
+    );
+
+    // The truthful subject is the one the store accepts.
+    store
+        .append_event(requested(
+            &InteractionId::for_attempt(&attempt(), 4),
+            approval_subject(),
+        ))
+        .expect("a subject that exactly matches the canonical ToolCall commits");
+}
+
+/// Interaction audit payload bounds are durable-store invariants, not
+/// coordinator conventions. Each of these payloads is a well-typed value that
+/// deserializes cleanly and that the live coordinator would never build; the
+/// store refuses every one of them.
+#[test]
+fn interaction_audit_payload_bounds_are_durable_invariants() {
+    let store = policy_boundary_store();
+    let mut ordinal = 0;
+    let mut refused = |subject: InteractionSubject, what: &str| {
+        ordinal += 1;
+        let id = InteractionId::for_attempt(&attempt(), ordinal);
+        assert!(
+            matches!(
+                store.append_event(requested(&id, subject)),
+                Err(ConversationStoreError::InvalidReference(_))
+            ),
+            "the durable authority must refuse {what}"
+        );
+    };
+
+    refused(
+        InteractionSubject::Question {
+            prompt: "p".repeat(MAX_QUESTION_PROMPT_CHARS + 1),
+            choices: None,
+            allow_free_text: true,
+        },
+        "an oversized prompt",
+    );
+    refused(
+        InteractionSubject::Question {
+            prompt: "Which target?".to_owned(),
+            choices: Some(
+                (0..=MAX_QUESTION_CHOICES)
+                    .map(|index| format!("choice-{index}"))
+                    .collect(),
+            ),
+            allow_free_text: false,
+        },
+        "an oversized choice count",
+    );
+    refused(
+        InteractionSubject::Question {
+            prompt: "Which target?".to_owned(),
+            choices: Some(vec!["c".repeat(MAX_QUESTION_CHOICE_CHARS + 1)]),
+            allow_free_text: false,
+        },
+        "an oversized choice value",
+    );
+    refused(
+        InteractionSubject::Question {
+            prompt: "Which target?".to_owned(),
+            choices: Some(vec!["staging".to_owned(), "staging".to_owned()]),
+            allow_free_text: false,
+        },
+        "duplicate choices",
+    );
+    refused(
+        InteractionSubject::Question {
+            prompt: "Which target?".to_owned(),
+            choices: Some(Vec::new()),
+            allow_free_text: false,
+        },
+        "an empty choice list",
+    );
+    refused(
+        InteractionSubject::Question {
+            prompt: "Which target?".to_owned(),
+            choices: None,
+            allow_free_text: false,
+        },
+        "an unanswerable Question mode with neither choices nor free text",
+    );
+    refused(
+        InteractionSubject::Approval {
+            call_id: call_id(),
+            tool_id: ToolId::new("tool-alpha"),
+            tool_name: "alpha".to_owned(),
+            arguments_digest: "not-a-sha-256-digest".to_owned(),
+            reason: "the policy asked".to_owned(),
+        },
+        "a malformed arguments digest",
+    );
+    refused(
+        InteractionSubject::Approval {
+            call_id: call_id(),
+            tool_id: ToolId::new("tool-alpha"),
+            tool_name: "alpha".to_owned(),
+            arguments_digest: interaction_arguments_digest(&canonical_arguments()).to_uppercase(),
+            reason: "the policy asked".to_owned(),
+        },
+        "an uppercase-hex digest, which is not the canonical representation",
+    );
+    refused(
+        InteractionSubject::Approval {
+            call_id: call_id(),
+            tool_id: ToolId::new("tool-alpha"),
+            tool_name: "alpha".to_owned(),
+            arguments_digest: interaction_arguments_digest(&canonical_arguments()),
+            reason: "r".repeat(MAX_APPROVAL_REQUEST_REASON_CHARS + 1),
+        },
+        "an oversized approval request reason",
+    );
+}
+
+/// A Question settlement must satisfy the exact requested Question contract,
+/// not merely carry the `Answered` variant. A durable audit that claims a user
+/// picked a choice the Question never offered, or typed free text into a
+/// Question that refused it, is a record no live coordinator could produce.
+#[test]
+fn a_question_settlement_must_satisfy_the_exact_requested_question() {
+    let store = policy_boundary_store();
+
+    let choices_only = InteractionId::for_attempt(&attempt(), 1);
+    store
+        .append_event(requested(
+            &choices_only,
+            InteractionSubject::Question {
+                prompt: "Which target?".to_owned(),
+                choices: Some(vec!["staging".to_owned(), "production".to_owned()]),
+                allow_free_text: false,
+            },
+        ))
+        .expect("requested");
+    assert!(
+        matches!(
+            store.append_event(settled(
+                &choices_only,
+                InteractionSettlement::Answered {
+                    answer: QuestionAnswer::Choice {
+                        value: "canary".to_owned(),
+                    },
+                },
+            )),
+            Err(ConversationStoreError::InvalidReference(_))
+        ),
+        "a choice the requested Question never offered is refused"
+    );
+    assert!(
+        matches!(
+            store.append_event(settled(
+                &choices_only,
+                InteractionSettlement::Answered {
+                    answer: QuestionAnswer::FreeText {
+                        value: "canary".to_owned(),
+                    },
+                },
+            )),
+            Err(ConversationStoreError::InvalidReference(_))
+        ),
+        "free text is refused when the requested Question did not allow it"
+    );
+    store
+        .append_event(settled(
+            &choices_only,
+            InteractionSettlement::Answered {
+                answer: QuestionAnswer::Choice {
+                    value: "staging".to_owned(),
+                },
+            },
+        ))
+        .expect("an offered choice settles the exact Question");
+
+    let free_text = InteractionId::for_attempt(&attempt(), 2);
+    store
+        .append_event(requested(
+            &free_text,
+            InteractionSubject::Question {
+                prompt: "Which target?".to_owned(),
+                choices: None,
+                allow_free_text: true,
+            },
+        ))
+        .expect("requested");
+    assert!(
+        matches!(
+            store.append_event(settled(
+                &free_text,
+                InteractionSettlement::Answered {
+                    answer: QuestionAnswer::FreeText {
+                        value: "a".repeat(MAX_QUESTION_ANSWER_CHARS + 1),
+                    },
+                },
+            )),
+            Err(ConversationStoreError::InvalidReference(_))
+        ),
+        "an oversized free-text answer is refused"
+    );
+    assert!(
+        matches!(
+            store.append_event(settled(
+                &free_text,
+                InteractionSettlement::Answered {
+                    answer: QuestionAnswer::FreeText {
+                        value: String::new(),
+                    },
+                },
+            )),
+            Err(ConversationStoreError::InvalidReference(_))
+        ),
+        "an empty answer is not an answer"
+    );
+
+    let denied = InteractionId::for_attempt(&attempt(), 3);
+    store
+        .append_event(requested(&denied, approval_subject()))
+        .expect("requested");
+    assert!(
+        matches!(
+            store.append_event(settled(
+                &denied,
+                InteractionSettlement::Denied {
+                    reason: "d".repeat(MAX_APPROVAL_DENIAL_REASON_CHARS + 1),
+                },
+            )),
+            Err(ConversationStoreError::InvalidReference(_))
+        ),
+        "an oversized denial reason is refused"
+    );
+}
+
+/// Both facts of one interaction belong to the exact same conversation +
+/// attempt + turn envelope.
+///
+/// Before this contract the store checked only the attempt, so a settlement
+/// committed under a different turn of the same attempt was durably accepted.
+/// The durable authority now pins the turn too, rather than relying on the
+/// coordinator happening to rebuild the same turn identity.
+#[test]
+fn a_settlement_is_pinned_to_the_exact_attempt_and_turn_of_its_request() {
+    let store = policy_boundary_store();
+
+    let id = InteractionId::for_attempt(&attempt(), 1);
+    store
+        .append_event(requested(&id, approval_subject()))
+        .expect("requested under attempt-1 / turn 1");
+    assert!(
+        matches!(
+            store.append_event(RuntimeEventEnvelope {
+                turn_id: Some(TurnId::new("2")),
+                ..settled(&id, InteractionSettlement::Approved)
+            }),
+            Err(ConversationStoreError::InvalidReference(_))
+        ),
+        "a settlement under a later turn of the same attempt is not the pinned pair"
+    );
+    assert!(
+        matches!(
+            store.append_event(RuntimeEventEnvelope {
+                attempt_id: Some(AttemptId::new("attempt-2")),
+                ..settled(&id, InteractionSettlement::Approved)
+            }),
+            Err(ConversationStoreError::InvalidReference(_))
+        ),
+        "a settlement under a foreign attempt is not the pinned pair"
+    );
+    assert!(
+        matches!(
+            store.append_event(RuntimeEventEnvelope {
+                turn_id: None,
+                ..settled(&id, InteractionSettlement::Approved)
+            }),
+            Err(ConversationStoreError::InvalidReference(_))
+        ),
+        "an audit fact with no turn cannot be pinned to its pair at all"
+    );
+
+    // The exact same attempt and turn is the one settlement that commits.
+    store
+        .append_event(settled(&id, InteractionSettlement::Approved))
+        .expect("the settlement pinned to the requested envelope commits");
 }
 
 /// A denial settlement retains the exact client-facing reason, and a Question
@@ -800,8 +1203,7 @@ fn the_approval_subject_is_bounded_and_still_pins_the_exact_arguments() {
 /// the human actually decide" without consulting current policy.
 #[test]
 fn settlements_retain_the_exact_decision_by_value() {
-    let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
-    store.initialize(&[]).expect("initialize");
+    let store = policy_boundary_store();
 
     let denied = InteractionId::for_attempt(&attempt(), 1);
     store

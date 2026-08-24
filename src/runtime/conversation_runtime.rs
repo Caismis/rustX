@@ -9314,6 +9314,7 @@ mod tests {
                     origin: ToolOrigin::Builtin,
                     mode: crate::tools::types::ToolInvocationMode::Foreground,
                     arguments: serde_json::json!({}),
+                    canonical_arguments: serde_json::json!({}),
                     reason: "must not publish after drain".to_owned(),
                 },
                 AgentCancellation::new(CancellationReason::RuntimeShutdown)
@@ -9449,7 +9450,8 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn an_external_resource_edit_cannot_mutate_a_pending_interaction() {
-        use crate::events::types::{InteractionSettlement, RuntimeEvent};
+        use crate::events::interaction::InteractionSettlement;
+        use crate::events::types::RuntimeEvent;
         use crate::message::types::ContentBlockIndex;
         use crate::model::event::ModelEvent;
         use crate::model::finish::ModelFinishReason;

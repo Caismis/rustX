@@ -50,14 +50,14 @@ use chrono::{DateTime, Utc};
 #[cfg(test)]
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tokio::sync::oneshot;
 
 use crate::durable::ConversationInteractionAudit;
-use crate::events::types::{
-    EVENT_SCHEMA_VERSION, InteractionSettlement, InteractionSubject, RuntimeEvent,
-    RuntimeEventEnvelope,
+use crate::events::interaction::{
+    InteractionSettlement, InteractionSubject, interaction_arguments_digest,
+    validate_interaction_settlement, validate_interaction_subject, validate_question_contract,
 };
+use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use crate::runtime::cancellation::ExecutionCancellation;
 use crate::runtime::identity::{
     AttemptId, ConversationId, EventId, InteractionId, ToolCallId, ToolId, TurnId,
@@ -204,20 +204,41 @@ pub(crate) struct ApprovalFacts {
     pub(crate) origin: ToolOrigin,
     /// The registry-resolved execution mode.
     pub(crate) mode: ToolInvocationMode,
-    /// The schema-validated business arguments.
+    /// The schema-validated business arguments. These are what a client
+    /// renders: they are the exact invocation that will run.
     pub(crate) arguments: serde_json::Value,
+    /// The exact model-issued arguments of the canonical `ToolCall`, before
+    /// reserved-metadata stripping and normalization.
+    ///
+    /// The durable audit subject pins *this* value, because this is the value
+    /// the Message Ledger already owns by value and therefore the only one the
+    /// durable authority can verify the subject against.
+    pub(crate) canonical_arguments: serde_json::Value,
     /// The bounded policy explanation.
     pub(crate) reason: String,
 }
 
 impl ApprovalFacts {
-    fn into_request(
+    /// Splits the owned facts into the live client-facing request and its
+    /// bounded durable audit subject.
+    ///
+    /// The two are produced together, from one immutable set of facts, so the
+    /// prompt a client is shown and the audit fact the Journal commits can
+    /// never describe different calls.
+    fn into_published(
         self,
         conversation_id: ConversationId,
         attempt_id: AttemptId,
         id: InteractionId,
-    ) -> InteractionRequest {
-        InteractionRequest {
+    ) -> (InteractionRequest, InteractionSubject) {
+        let subject = InteractionSubject::Approval {
+            call_id: self.call_id.clone(),
+            tool_id: self.tool_id.clone(),
+            tool_name: self.tool_name.clone(),
+            arguments_digest: interaction_arguments_digest(&self.canonical_arguments),
+            reason: self.reason.clone(),
+        };
+        let request = InteractionRequest {
             id,
             conversation_id,
             attempt_id,
@@ -231,7 +252,8 @@ impl ApprovalFacts {
                 arguments: self.arguments,
                 reason: self.reason,
             },
-        }
+        };
+        (request, subject)
     }
 }
 
@@ -261,50 +283,24 @@ impl QuestionFacts {
     /// Returns a bounded argument diagnostic when the prompt, choice list, or
     /// answer mode cannot produce an answerable Question.
     pub(crate) fn validate(&self) -> Result<(), String> {
-        if self.prompt.is_empty() {
-            return Err("prompt must not be empty".to_owned());
-        }
-        if self.prompt.chars().count() > MAX_QUESTION_PROMPT_CHARS {
-            return Err(format!(
-                "prompt exceeds {MAX_QUESTION_PROMPT_CHARS} characters"
-            ));
-        }
-        let Some(choices) = self.choices.as_ref() else {
-            if self.allow_free_text {
-                return Ok(());
-            }
-            return Err("allow_free_text must be true when choices is omitted".to_owned());
-        };
-        if choices.is_empty() {
-            return Err("choices must contain at least one value when present".to_owned());
-        }
-        if choices.len() > MAX_QUESTION_CHOICES {
-            return Err(format!(
-                "choices must contain at most {MAX_QUESTION_CHOICES} values"
-            ));
-        }
-        if choices
-            .iter()
-            .any(|choice| choice.is_empty() || choice.chars().count() > MAX_QUESTION_CHOICE_CHARS)
-        {
-            return Err(format!(
-                "each choice must be non-empty and at most {MAX_QUESTION_CHOICE_CHARS} characters"
-            ));
-        }
-        let mut unique = std::collections::BTreeSet::new();
-        if choices.iter().any(|choice| !unique.insert(choice)) {
-            return Err("choices must not contain duplicates".to_owned());
-        }
-        Ok(())
+        validate_question_contract(&self.prompt, self.choices.as_deref(), self.allow_free_text)
     }
 
-    fn into_request(
+    /// Splits the owned facts into the live client-facing request and its
+    /// bounded durable audit subject. A Question subject is stored by value
+    /// because the Question contract already bounds it.
+    fn into_published(
         self,
         conversation_id: ConversationId,
         attempt_id: AttemptId,
         id: InteractionId,
-    ) -> InteractionRequest {
-        InteractionRequest {
+    ) -> (InteractionRequest, InteractionSubject) {
+        let subject = InteractionSubject::Question {
+            prompt: self.prompt.clone(),
+            choices: self.choices.clone(),
+            allow_free_text: self.allow_free_text,
+        };
+        let request = InteractionRequest {
             id,
             conversation_id,
             attempt_id,
@@ -314,7 +310,8 @@ impl QuestionFacts {
                 choices: self.choices,
                 allow_free_text: self.allow_free_text,
             },
-        }
+        };
+        (request, subject)
     }
 }
 
@@ -332,54 +329,6 @@ pub(crate) fn interaction_requested_event_id(interaction_id: &InteractionId) -> 
 #[must_use]
 pub(crate) fn interaction_settled_event_id(interaction_id: &InteractionId) -> EventId {
     EventId::new(format!("interaction-settled-event:{interaction_id}"))
-}
-
-/// The lowercase hex SHA-256 of one approval subject's exact arguments.
-///
-/// The audit pins the argument value rather than copying it: the Journal is
-/// the low-frequency plane, and the argument value itself is already durable
-/// by-value in the canonical `ToolCall` the Message Ledger owns.
-fn arguments_digest(arguments: &serde_json::Value) -> String {
-    use std::fmt::Write as _;
-    let mut hasher = Sha256::new();
-    hasher.update(b"rustx-interaction-arguments-v1\n");
-    // `serde_json::Value` serializes object keys in sorted order, so the same
-    // logical arguments always produce the same digest.
-    hasher.update(arguments.to_string().as_bytes());
-    let mut digest = String::new();
-    for byte in hasher.finalize() {
-        let _ = write!(digest, "{byte:02x}");
-    }
-    digest
-}
-
-/// Projects one live request onto its bounded durable audit subject.
-fn audit_subject(kind: &InteractionKind) -> InteractionSubject {
-    match kind {
-        InteractionKind::Approval {
-            call_id,
-            tool_id,
-            tool_name,
-            arguments,
-            reason,
-            ..
-        } => InteractionSubject::Approval {
-            call_id: call_id.clone(),
-            tool_id: tool_id.clone(),
-            tool_name: tool_name.clone(),
-            arguments_digest: arguments_digest(arguments),
-            reason: reason.clone(),
-        },
-        InteractionKind::Question {
-            prompt,
-            choices,
-            allow_free_text,
-        } => InteractionSubject::Question {
-            prompt: prompt.clone(),
-            choices: choices.clone(),
-            allow_free_text: *allow_free_text,
-        },
-    }
 }
 
 /// Projects one terminal outcome onto its bounded durable settlement.
@@ -410,6 +359,7 @@ fn audit_settlement(outcome: &InteractionOutcome) -> Option<InteractionSettlemen
 /// Builds the durable requested envelope of one live request.
 fn requested_envelope(
     request: &InteractionRequest,
+    subject: InteractionSubject,
     timestamp: DateTime<Utc>,
 ) -> RuntimeEventEnvelope {
     RuntimeEventEnvelope {
@@ -422,7 +372,7 @@ fn requested_envelope(
         timestamp,
         event: RuntimeEvent::InteractionRequested {
             interaction_id: request.id.clone(),
-            subject: audit_subject(&request.kind),
+            subject,
         },
     }
 }
@@ -659,6 +609,11 @@ impl Drop for WaiterPayload {
 
 struct PendingInteraction {
     request: InteractionRequest,
+    /// The exact durable audit subject that was committed before this prompt
+    /// was released. Response validation and the settled fact both resolve
+    /// against it, so the live acceptance rule and the durable settlement rule
+    /// are literally the same rule applied to the same value.
+    subject: InteractionSubject,
     /// An owner-observing cancellation view. This is the same live view used
     /// by the waiter and lets a response that arrives
     /// after cancellation became observable consume the already-selected
@@ -985,8 +940,9 @@ impl InteractionCoordinator {
         cancellation: &ExecutionCancellation,
     ) -> Result<InteractionTicket, InteractionOutcome> {
         let id = self.allocate_id(&attempt_id)?;
-        let request = facts.into_request(self.conversation_id.clone(), attempt_id, id.clone());
-        self.publish(request, cancellation)
+        let (request, subject) =
+            facts.into_published(self.conversation_id.clone(), attempt_id, id.clone());
+        self.publish(request, subject, cancellation)
     }
 
     /// Publishes one bounded Question request and returns the owner-owned
@@ -999,12 +955,10 @@ impl InteractionCoordinator {
         facts: QuestionFacts,
         cancellation: &ExecutionCancellation,
     ) -> Result<InteractionTicket, InteractionOutcome> {
-        if !validate_question_facts(&facts) {
-            return Err(InteractionOutcome::Unavailable);
-        }
         let id = self.allocate_id(&attempt_id)?;
-        let request = facts.into_request(self.conversation_id.clone(), attempt_id, id.clone());
-        self.publish(request, cancellation)
+        let (request, subject) =
+            facts.into_published(self.conversation_id.clone(), attempt_id, id.clone());
+        self.publish(request, subject, cancellation)
     }
 
     /// The one publication transition shared by Approval and Question.
@@ -1016,11 +970,20 @@ impl InteractionCoordinator {
     /// fails closed as [`InteractionOutcome::Unavailable`] — the same
     /// outcome as a missing provider — so no user is ever asked a question
     /// that durable state does not record.
+    ///
+    /// The bounded-payload contract is checked here through the same
+    /// [`validate_interaction_subject`] the durable authority uses, so a
+    /// payload the store would refuse never reaches a commit attempt and never
+    /// reaches a user. There is one set of limits, not two.
     fn publish(
         &self,
         request: InteractionRequest,
+        subject: InteractionSubject,
         cancellation: &ExecutionCancellation,
     ) -> Result<InteractionTicket, InteractionOutcome> {
+        if validate_interaction_subject(&subject).is_err() {
+            return Err(InteractionOutcome::Unavailable);
+        }
         let id = request.id.clone();
         let (sender, receiver) = oneshot::channel();
         self.lifecycle
@@ -1031,7 +994,11 @@ impl InteractionCoordinator {
                 }
                 if self
                     .audit
-                    .commit_interaction_requested(requested_envelope(&request, Utc::now()))
+                    .commit_interaction_requested(requested_envelope(
+                        &request,
+                        subject.clone(),
+                        Utc::now(),
+                    ))
                     .is_err()
                 {
                     return Err(InteractionOutcome::Unavailable);
@@ -1040,6 +1007,7 @@ impl InteractionCoordinator {
                     id.clone(),
                     PendingInteraction {
                         request,
+                        subject,
                         cancellation: cancellation.clone(),
                         sender,
                         admission,
@@ -1269,7 +1237,7 @@ impl InteractionCoordinator {
             };
         }
         if validate_response && let InteractionOutcome::Answered { response } = &outcome {
-            validate_response_for(&pending.request, response)?;
+            validate_response_for(&pending.subject, response)?;
         }
         // Removing the pending entry and selecting the terminal outcome are
         // one mutex-protected transition.  The losing response/cancellation
@@ -1382,82 +1350,40 @@ impl core::fmt::Display for InteractionError {
 
 impl std::error::Error for InteractionError {}
 
-const MAX_RESPONSE_REASON_CHARS: usize = 1024;
-const MAX_QUESTION_PROMPT_CHARS: usize = 4096;
-const MAX_QUESTION_CHOICES: usize = 32;
-const MAX_QUESTION_CHOICE_CHARS: usize = 256;
-const MAX_QUESTION_ANSWER_CHARS: usize = 4096;
-
-fn validate_question_facts(facts: &QuestionFacts) -> bool {
-    facts.validate().is_ok()
-}
-
+/// Validates one typed client response against the exact audit subject that
+/// was durably committed for the pending interaction.
+///
+/// The live acceptance rule and the durable settlement rule are deliberately
+/// the same function applied to the same value: a response the coordinator
+/// accepts is by construction a settlement the store will accept, and a
+/// response the store would refuse is refused here first with a typed
+/// diagnostic instead of failing at the commit.
 fn validate_response_for(
-    request: &InteractionRequest,
+    subject: &InteractionSubject,
     response: &InteractionResponse,
 ) -> Result<(), InteractionError> {
-    match (&request.kind, response) {
-        (InteractionKind::Approval { .. }, InteractionResponse::Approval { decision }) => {
-            if let ApprovalDecision::Deny { reason } = decision
-                && reason.chars().count() > MAX_RESPONSE_REASON_CHARS
-            {
-                return Err(InteractionError::InvalidResponse {
-                    message: format!(
-                        "approval denial reason exceeds {MAX_RESPONSE_REASON_CHARS} characters"
-                    ),
-                });
-            }
-            Ok(())
-        }
-        (
-            InteractionKind::Question {
-                choices,
-                allow_free_text,
-                ..
+    let settlement = match response {
+        InteractionResponse::Approval { decision } => match decision {
+            ApprovalDecision::Allow => InteractionSettlement::Approved,
+            ApprovalDecision::Deny { reason } => InteractionSettlement::Denied {
+                reason: reason.clone(),
             },
-            InteractionResponse::Question { answer },
-        ) => {
-            let (kind, value) = match answer {
-                QuestionAnswer::Choice { value } => ("choice", value),
-                QuestionAnswer::FreeText { value } => ("free text", value),
-            };
-            if value.is_empty() || value.chars().count() > MAX_QUESTION_ANSWER_CHARS {
-                return Err(InteractionError::InvalidResponse {
-                    message: format!(
-                        "{kind} answer is empty or exceeds {MAX_QUESTION_ANSWER_CHARS} characters"
-                    ),
-                });
-            }
-            match answer {
-                QuestionAnswer::Choice { .. } => {
-                    if choices
-                        .as_ref()
-                        .is_none_or(|choices| !choices.iter().any(|choice| choice == value))
-                    {
-                        return Err(InteractionError::InvalidResponse {
-                            message: "question choice is not one of the offered choices".to_owned(),
-                        });
-                    }
-                }
-                QuestionAnswer::FreeText { .. } if !allow_free_text => {
-                    return Err(InteractionError::InvalidResponse {
-                        message: "question does not accept free text".to_owned(),
-                    });
-                }
-                QuestionAnswer::FreeText { .. } => {}
-            }
-            Ok(())
-        }
-        _ => Err(InteractionError::InvalidResponse {
-            message: "interaction response type does not match the pending request".to_owned(),
-        }),
-    }
+        },
+        InteractionResponse::Question { answer } => InteractionSettlement::Answered {
+            answer: answer.clone(),
+        },
+    };
+    validate_interaction_settlement(subject, &settlement)
+        .map_err(|message| InteractionError::InvalidResponse { message })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::agent::cancellation::AgentCancellation;
+    use crate::events::interaction::{
+        MAX_APPROVAL_REQUEST_REASON_CHARS, MAX_QUESTION_PROMPT_CHARS,
+    };
     use crate::runtime::identity::ConversationId;
     use crate::runtime::types::ConversationLifecycleState;
     use tokio::sync::oneshot;
@@ -1471,6 +1397,7 @@ mod tests {
             origin: ToolOrigin::Builtin,
             mode: ToolInvocationMode::Foreground,
             arguments: serde_json::json!({"path":"a"}),
+            canonical_arguments: serde_json::json!({"path":"a"}),
             reason: "native test policy".to_owned(),
         }
     }
@@ -2265,10 +2192,132 @@ mod tests {
         assert_eq!(coordinator.pending_count(), 1);
     }
 
+    /// The coordinator refuses exactly the payloads the durable authority
+    /// refuses, because both call [`validate_interaction_subject`].
+    ///
+    /// The publication fails closed as `Unavailable` before any commit is
+    /// attempted, so an out-of-contract payload never reaches a user and never
+    /// reaches the Journal. There is one set of limits, not a coordinator set
+    /// and a store set that can drift apart.
+    #[test]
+    fn the_coordinator_refuses_every_subject_the_durable_authority_refuses() {
+        let (coordinator, audit) = audited_coordinator();
+        coordinator.set_provider_available(true);
+        let attempt = AttemptId::new("conversation-attempt-1");
+
+        let mut oversized_reason = facts("c1");
+        oversized_reason.reason = "r".repeat(MAX_APPROVAL_REQUEST_REASON_CHARS + 1);
+        assert!(matches!(
+            coordinator.publish_approval(attempt.clone(), oversized_reason),
+            Err(InteractionOutcome::Unavailable)
+        ));
+
+        let cancellation =
+            AgentCancellation::new(CancellationReason::UserRequested).execution_cancellation();
+        for facts in [
+            QuestionFacts {
+                turn: 4,
+                prompt: "p".repeat(MAX_QUESTION_PROMPT_CHARS + 1),
+                choices: None,
+                allow_free_text: true,
+            },
+            QuestionFacts {
+                turn: 4,
+                prompt: "Which target?".to_owned(),
+                choices: Some(vec!["staging".to_owned(), "staging".to_owned()]),
+                allow_free_text: false,
+            },
+            QuestionFacts {
+                turn: 4,
+                prompt: "Which target?".to_owned(),
+                choices: None,
+                allow_free_text: false,
+            },
+        ] {
+            assert!(matches!(
+                coordinator.publish_question_with_cancellation(
+                    attempt.clone(),
+                    facts,
+                    &cancellation
+                ),
+                Err(InteractionOutcome::Unavailable)
+            ));
+        }
+
+        assert!(
+            audit.events().is_empty(),
+            "no out-of-contract payload reached a durable commit attempt"
+        );
+        assert_eq!(coordinator.pending_count(), 0);
+    }
+
+    /// Every response the coordinator accepts is a settlement the durable
+    /// authority accepts against the very subject it committed, and every
+    /// response it rejects settles nothing at all.
+    #[tokio::test]
+    async fn an_accepted_response_is_always_a_settlement_the_store_accepts() {
+        let (coordinator, audit) = audited_coordinator();
+        coordinator.set_provider_available(true);
+        let ticket = publish_question(&coordinator, "conversation-attempt-1")
+            .expect("provider is available");
+        let id = ticket.id.clone();
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let wait = coordinator.wait(ticket, cancellation.execution_cancellation());
+
+        assert!(matches!(
+            coordinator.respond(
+                &id,
+                InteractionResponse::Question {
+                    answer: QuestionAnswer::Choice {
+                        value: "canary".to_owned(),
+                    },
+                },
+            ),
+            Err(InteractionError::InvalidResponse { .. })
+        ));
+        assert!(
+            matches!(
+                audit.events().as_slice(),
+                [RuntimeEvent::InteractionRequested { .. }]
+            ),
+            "a refused response settles nothing"
+        );
+
+        coordinator
+            .respond(
+                &id,
+                InteractionResponse::Question {
+                    answer: QuestionAnswer::Choice {
+                        value: "staging".to_owned(),
+                    },
+                },
+            )
+            .expect("an offered choice is accepted");
+        let _ = wait.await;
+
+        let events = audit.events();
+        let [
+            RuntimeEvent::InteractionRequested { subject, .. },
+            RuntimeEvent::InteractionSettled { settlement, .. },
+        ] = events.as_slice()
+        else {
+            panic!("one requested fact and one settled fact, got {events:?}");
+        };
+        validate_interaction_settlement(subject, settlement)
+            .expect("the committed pair satisfies the durable contract");
+    }
+
     /// The settled fact commits before the waiter is released. When that
     /// commit fails the waiter receives the fail-closed `Unavailable` outcome
-    /// — Approval maps it to a denial — and the responding client is told
-    /// rather than shown an acceptance the audit does not support.
+    /// and the responding client is told, rather than being shown an
+    /// acceptance the audit does not support.
+    ///
+    /// `Unavailable` is the same value a missing provider produces, and the
+    /// scripted suite's headless regression already proves that value maps to
+    /// a denied result slot with no executor call and no `ToolExecutionStarted`
+    /// — so a failed settled commit cannot authorize a side effect either. The
+    /// interaction stays durably open, and no second settlement is invented to
+    /// tidy the lifecycle.
     #[tokio::test]
     async fn a_failed_settled_commit_releases_the_waiter_fail_closed() {
         let (coordinator, audit) = audited_coordinator();

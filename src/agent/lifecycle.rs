@@ -311,6 +311,13 @@ pub struct PreToolView<'a> {
     pub mode: ToolInvocationMode,
     /// The schema-validated business arguments.
     pub arguments: &'a serde_json::Value,
+    /// The exact model-issued arguments of the canonical `ToolCall`, before
+    /// reserved-metadata stripping and normalization.
+    ///
+    /// This is the value the Message Ledger owns by value, so it is the one an
+    /// approval audit subject can pin verifiably. It is descriptive data only;
+    /// a policy never receives a channel to replace it.
+    pub canonical_arguments: &'a serde_json::Value,
     /// The tool-owned approval policy resolved by preflight.
     pub approval_policy: ToolApprovalPolicy,
 }
@@ -330,6 +337,7 @@ impl PreToolView<'_> {
             origin: self.origin.clone(),
             mode: self.mode,
             arguments: self.arguments.clone(),
+            canonical_arguments: self.canonical_arguments.clone(),
             reason: reason.into(),
         }
     }
@@ -888,6 +896,7 @@ mod tests {
             origin,
             mode: ToolInvocationMode::Foreground,
             arguments,
+            canonical_arguments: arguments,
             approval_policy,
         }
     }
