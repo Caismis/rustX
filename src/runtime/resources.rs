@@ -448,23 +448,21 @@ mod tests {
             files
                 .iter()
                 .filter_map(|file| {
-                    file.path
+                    let parent = file.path.parent()?;
+                    parent
                         .strip_prefix(&canonical_root)
                         .ok()
                         .map(|relative| (relative.to_path_buf(), file.content.clone()))
                 })
                 .collect::<Vec<_>>(),
             vec![
+                (std::path::PathBuf::new(), "root agents".to_owned()),
                 (
-                    std::path::PathBuf::from("AGENTS.md"),
-                    "root agents".to_owned(),
-                ),
-                (
-                    std::path::PathBuf::from("middle/AGENTS.MD"),
+                    std::path::PathBuf::from("middle"),
                     "middle agents".to_owned(),
                 ),
                 (
-                    std::path::PathBuf::from("middle/leaf/AGENTS.override.md"),
+                    std::path::PathBuf::from("middle/leaf"),
                     "child override".to_owned(),
                 ),
             ]
@@ -525,13 +523,14 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(selected.len(), 1, "variant {filename} was selected");
             assert_eq!(selected[0].content, content);
-            assert_eq!(
-                selected[0]
-                    .path
-                    .file_name()
-                    .expect("filename")
-                    .to_string_lossy(),
-                filename
+            let selected_filename = selected[0]
+                .path
+                .file_name()
+                .expect("filename")
+                .to_string_lossy();
+            assert!(
+                selected_filename.eq_ignore_ascii_case(filename),
+                "the selected spelling must be the requested variant modulo filesystem case: selected={selected_filename}, requested={filename}"
             );
         }
     }
