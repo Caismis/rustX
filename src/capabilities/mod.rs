@@ -67,3 +67,5 @@ pub use tools::{AvailableTool, AvailableToolCatalog, ToolActivationPolicy};
 /// lock-order tests to park a commit with the coordinator lock held.
 #[cfg(test)]
 pub(crate) use coordinator::test_sync;
+
+pub(crate) use coordinator::RuntimeCapabilityPublication;

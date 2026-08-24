@@ -169,7 +169,7 @@
 //!     |    no model mutation           (model_set: ModelUpdateError::Inactive)
 //!     |    no shutdown transition      (shutdown:  ShutdownError::Inactive)
 //!     |    no background dispatch commit (registry: BackgroundDispatchError::ConversationInactive)
-//!     |    no active capability commit (coordinator: CapabilityCommitError::ConversationInactive)
+//!     |    no ordinary capability commit (coordinator: CapabilityCommitError::RuntimePublicationRequired)
 //!     |    counted candidate preparation (composition only; no live commit)
 //!     |
 //! [optional RuntimeClientHost bootstrap]
@@ -246,8 +246,9 @@
 //!   no background record exists across `[T0, R]` and none can be created;
 //! - the mailbox refuses `enqueue` while its bound runtime is inactive, so
 //!   the pending queue is frozen across `[T0, R]`;
-//! - the capability coordinator refuses a runtime-owned `commit` before
-//!   activation, and the capability snapshot is captured *at* `R`.
+//! - the capability coordinator refuses a runtime-owned ordinary `commit`
+//!   before activation, and the capability snapshot is captured *at* `R`;
+//!   live publication is available only through the runtime resource owner.
 //!
 //! And because each authority's observer installation shares one lock
 //! section with its own seed capture, no transition can be both seeded and
@@ -1058,6 +1059,10 @@ pub(crate) struct RuntimeInner {
     /// `AgentExecution`. Request/event history is read through this handle.
     store: Arc<dyn ConversationStore>,
     capability: CapabilityCoordinator,
+    /// The sole live capability-publication authority. Ordinary clones of
+    /// `capability` cannot advance a claimed runtime; reload must present
+    /// this token so capability and resource snapshots share one boundary.
+    capability_publication: crate::capabilities::RuntimeCapabilityPublication,
     resource_loader: Arc<dyn RuntimeResourceLoader>,
     /// The conversation-owned subagent registry (Issue #60), when this
     /// runtime may delegate to child runtimes.
@@ -1168,6 +1173,16 @@ impl Drop for RuntimeInner {
 }
 
 impl RuntimeInner {
+    /// Fences ordinary runtime admission when a retired MCP generation proves
+    /// that its physical terminal state is unproven. The logical resource
+    /// publication already committed remains current; the existing drain
+    /// lifecycle carries the failure to final settlement reporting.
+    fn fence_mcp_settlement_failure(self: &Arc<Self>, _detail: String) {
+        if self.lifecycle.state() == ConversationLifecycleState::Running {
+            let _ = self.begin_drain();
+        }
+    }
+
     /// Acquires the one admission synchronization boundary.
     fn lock_state(&self) -> MutexGuard<'_, CoordinatorState> {
         self.state
@@ -2682,14 +2697,15 @@ impl ConversationRuntime {
         // same shared lifecycle under its own state lock, so its commit
         // gate observes exactly the activation decision the mailbox and
         // the background registry observe.
-        if !config.capability.claim_conversation_runtime(&lifecycle) {
+        let Some(capability_publication) = config.capability.claim_conversation_runtime(&lifecycle)
+        else {
             // Transactional construction: the tool-runtime ownership
             // transfer is rolled back to its exact previous standalone
             // state — mailbox unbound, coordinator claim released — so a
             // rejected construction leaves no trace.
             config.tool_runtime.release_conversation_runtime_claim();
             return Err(ConversationRuntimeError::RuntimeAlreadyBound { conversation_id });
-        }
+        };
 
         // ---- Final subagent ownership arbitration (Issue #60) ----
         //
@@ -2822,6 +2838,7 @@ impl ConversationRuntime {
             mailbox,
             store,
             capability: config.capability,
+            capability_publication,
             resource_loader: config.resource_loader,
             subagents: config.subagents,
             interaction,
@@ -2899,6 +2916,22 @@ impl ConversationRuntime {
             }));
             subagents.install_durability_gate(durability_gate.clone());
         }
+        // A retired MCP generation whose close reports PhysicalSettlement
+        // has not been reclaimed. The registry retains the evidence; this
+        // runtime-owned callback closes healthy admission immediately while
+        // preserving the newly published logical resource generation for
+        // final drain reporting.
+        let mcp_failure_callback: Arc<dyn Fn(String) + Send + Sync> = Arc::new({
+            let weak = Arc::downgrade(&inner);
+            move |detail| {
+                if let Some(inner) = weak.upgrade() {
+                    inner.fence_mcp_settlement_failure(detail);
+                }
+            }
+        });
+        inner
+            .capability
+            .install_mcp_retirement_failure_callback(&mcp_failure_callback);
         Ok(Self { inner })
     }
 
@@ -3198,6 +3231,7 @@ impl ConversationRuntime {
     /// Returns a typed lifecycle or busy refusal when the runtime is not
     /// quiescent, or a bounded preparation/publication failure while retaining
     /// the complete previous generation.
+    #[allow(clippy::too_many_lines)]
     pub async fn reload_resources(
         &self,
     ) -> Result<RuntimeResourceReloaded, RuntimeResourceReloadError> {
@@ -3259,7 +3293,10 @@ impl ConversationRuntime {
                     }
                     Ok(prepared) => {
                         let (capability_candidate, resource_data) = prepared.into_parts();
-                        match self.inner.capability.commit(capability_candidate) {
+                        match self.inner.capability.commit_runtime(
+                            &self.inner.capability_publication,
+                            capability_candidate,
+                        ) {
                             Err(error) => {
                                 reload_gate.clear(&mut state);
                                 Err(RuntimeResourceReloadError::Failed {
@@ -3294,8 +3331,16 @@ impl ConversationRuntime {
             }
         };
         self.inner.wake.notify.notify_one();
-        self.inner.capability.settle_ready_mcp_runtimes().await;
-        outcome
+        let settlement = self.inner.capability.settle_ready_mcp_runtimes().await;
+        match (outcome, settlement) {
+            (Ok(published), Err(failures)) => Err(
+                RuntimeResourceReloadError::PostPublicationSettlementFailed {
+                    published,
+                    message: failures.join("; "),
+                },
+            ),
+            (outcome, _) => outcome,
+        }
     }
 
     /// The complete generation future attempts currently acquire.
@@ -4182,6 +4227,16 @@ pub enum RuntimeResourceReloadError {
         /// Bounded diagnostic.
         message: String,
     },
+    /// The capability/resource publication committed, but a superseded MCP
+    /// generation could not prove physical settlement. The new generation is
+    /// still the logical authority; the runtime is fenced into drain and
+    /// this is not a pre-publication reload failure.
+    PostPublicationSettlementFailed {
+        /// The logically committed resource/capability pair.
+        published: RuntimeResourceReloaded,
+        /// Authoritative physical-settlement diagnostics.
+        message: String,
+    },
 }
 
 impl core::fmt::Display for RuntimeResourceReloadError {
@@ -4193,6 +4248,11 @@ impl core::fmt::Display for RuntimeResourceReloadError {
             Self::Failed { message } => {
                 write!(formatter, "runtime resource reload failed: {message}")
             }
+            Self::PostPublicationSettlementFailed { published, message } => write!(
+                formatter,
+                "runtime resource reload published resource revision {:?} and capability revision {:?}, but MCP retirement settlement is unproven: {message}",
+                published.resource_revision, published.capability_revision,
+            ),
         }
     }
 }
@@ -7249,6 +7309,131 @@ mod tests {
     #[cfg(feature = "mcp-fixture")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)]
+    async fn post_publication_mcp_retirement_failure_fences_runtime_and_survives_shutdown() {
+        use crate::tools::mcp::fixture::{
+            FIXTURE_MODE_ENV, FixtureServer, PAGE_SIZE_ENV, fixture_spawn_args,
+            serve_if_fixture_mode,
+        };
+        use crate::tools::mcp::test_sync::CloseProbe;
+
+        if serve_if_fixture_mode(FixtureServer::from_env()).await {
+            return;
+        }
+
+        let test_name = "runtime::conversation_runtime::tests::post_publication_mcp_retirement_failure_fences_runtime_and_survives_shutdown";
+        let fixture_binding = |page_size: Option<&str>| {
+            let mut environment =
+                std::collections::BTreeMap::from([(FIXTURE_MODE_ENV.to_owned(), "1".to_owned())]);
+            if let Some(page_size) = page_size {
+                environment.insert(PAGE_SIZE_ENV.to_owned(), page_size.to_owned());
+            }
+            crate::tools::mcp::McpServerBinding {
+                transport: crate::tools::mcp::McpTransportConfig::Stdio {
+                    program: std::env::current_exe()
+                        .expect("test executable")
+                        .display()
+                        .to_string(),
+                    args: fixture_spawn_args(test_name),
+                    cwd: None,
+                    environment,
+                },
+                policy: crate::tools::types::ToolInvocationPolicy::default(),
+            }
+        };
+        let server_id = crate::runtime::identity::McpServerId::new("failed-retirement");
+        let loader = Arc::new(MutableResourceLoader::new(Vec::new()));
+        loader.set_capability_inputs(crate::capabilities::CapabilityResourceInputs {
+            base_tool_registry: Arc::new(ToolRegistry::new()),
+            tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+            skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
+            mcp_servers: std::collections::BTreeMap::from([(
+                server_id.clone(),
+                fixture_binding(Some("2")),
+            )]),
+            base_environment: crate::tools::environment::ToolEnvironment::new(),
+        });
+        let loader_trait: Arc<dyn crate::runtime::RuntimeResourceLoader> = loader.clone();
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (runtime, _) = headless_runtime_with_options(
+            &dir,
+            Vec::new(),
+            None,
+            None,
+            HeadlessRuntimeOptions {
+                resource_loader: Some(loader_trait),
+                mcp_servers: std::collections::BTreeMap::from([(
+                    server_id.clone(),
+                    fixture_binding(None),
+                )]),
+                ..HeadlessRuntimeOptions::default()
+            },
+        )
+        .await;
+        runtime.activate();
+
+        let old_resources = runtime.runtime_resources();
+        let old_runtime = runtime
+            .inner
+            .capability
+            .current_mcp_runtime(&server_id)
+            .expect("generation A");
+        let old_close = Arc::new(CloseProbe::failing("retired A terminal state is unproven"));
+        old_runtime.install_close_probe(old_close.clone());
+
+        let result = runtime.reload_resources().await;
+        let Err(super::RuntimeResourceReloadError::PostPublicationSettlementFailed {
+            published,
+            message,
+        }) = result
+        else {
+            panic!("a post-publication MCP failure must be typed: {result:?}");
+        };
+        assert_eq!(published.resource_revision.get(), 2);
+        assert_eq!(published.capability_revision.get(), 2);
+        assert!(message.contains("retired A terminal state is unproven"));
+        assert_eq!(
+            runtime.runtime_resources().revision(),
+            published.resource_revision
+        );
+        assert!(!Arc::ptr_eq(&old_resources, &runtime.runtime_resources()));
+        assert!(!Arc::ptr_eq(
+            &old_runtime,
+            &runtime
+                .inner
+                .capability
+                .current_mcp_runtime(&server_id)
+                .expect("generation B remains current")
+        ));
+        assert!(
+            runtime.inner.capability.pending_mcp_retirements() >= 1,
+            "the failed retired generation remains authoritative"
+        );
+        assert_eq!(
+            runtime.inner.lifecycle.state(),
+            ConversationLifecycleState::Draining,
+            "unproven physical settlement fences healthy continuation"
+        );
+        assert_eq!(
+            runtime.submit_inbound(text_content("must be refused")),
+            Err(InboundAdmissionError::Shutdown)
+        );
+
+        let shutdown = runtime.shutdown().await;
+        let Err(super::ShutdownError::RuntimeOwnedSettlement { detail }) = shutdown else {
+            panic!("shutdown must retain the retired physical failure: {shutdown:?}");
+        };
+        assert!(detail.contains("retired A terminal state is unproven"));
+        assert!(old_close.was_entered(), "A close was actually attempted");
+        assert_eq!(
+            runtime.inner.capability.pending_mcp_retirements(),
+            1,
+            "unproven A remains authoritative rather than being reaped"
+        );
+    }
+
+    #[cfg(feature = "mcp-fixture")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
     async fn mcp_reload_generations_are_bounded_and_background_owners_keep_old_runtime_alive() {
         use crate::tools::mcp::fixture::{
             FIXTURE_MODE_ENV, FixtureServer, PAGE_SIZE_ENV, fixture_spawn_args,
@@ -7317,6 +7502,7 @@ mod tests {
             .capability
             .current_mcp_runtime(&server_id)
             .expect("generation A");
+        let old_capability_snapshot = runtime.inner.capability.current_snapshot();
         assert_eq!(old_runtime.list_tools().await.expect("A catalog").len(), 3);
         let old_close = Arc::new(CloseProbe::parking());
         old_runtime.install_close_probe(old_close.clone());
@@ -7375,6 +7561,57 @@ mod tests {
         assert_eq!(runtime_b.list_tools().await.expect("B catalog").len(), 5);
         assert!(!old_close.was_entered(), "background lease keeps A open");
         assert_eq!(runtime.inner.capability.pending_mcp_retirements(), 1);
+        let next_attempt = runtime.inner.capability.acquire_attempt_lease();
+        assert!(next_attempt.mcp_lease_uses_runtime(&runtime_b));
+        assert!(!next_attempt.mcp_lease_uses_runtime(&old_runtime));
+        drop(next_attempt);
+
+        // A clone of the claimed coordinator cannot replace the live
+        // resource/capability/MCP pair independently. The rejected candidate
+        // is dropped and settled, while every current authority remains the
+        // B generation.
+        let resources_b = runtime.runtime_resources();
+        let capability_b = runtime.inner.capability.current_snapshot();
+        let direct_candidate = runtime
+            .inner
+            .capability
+            .prepare_candidate()
+            .await
+            .expect("standalone preparation remains available for the rejection test");
+        assert_eq!(
+            runtime.inner.capability.commit(direct_candidate),
+            Err(crate::capabilities::CapabilityCommitError::RuntimePublicationRequired)
+        );
+        runtime
+            .inner
+            .capability
+            .settle_ready_mcp_runtimes()
+            .await
+            .expect("the rejected candidate has no settlement failure");
+        assert!(Arc::ptr_eq(&resources_b, &runtime.runtime_resources()));
+        assert!(Arc::ptr_eq(
+            &capability_b,
+            &runtime.inner.capability.current_snapshot()
+        ));
+        assert!(Arc::ptr_eq(
+            &runtime_b,
+            &runtime
+                .inner
+                .capability
+                .current_mcp_runtime(&server_id)
+                .expect("B remains current")
+        ));
+
+        // An attempt/resource snapshot captured from A carries A's physical
+        // lease authority even after B is current. It cannot consult the
+        // mutable coordinator generation and accidentally lease B.
+        let old_generation_attempt = runtime
+            .inner
+            .capability
+            .acquire_attempt_lease_for(old_capability_snapshot);
+        assert!(old_generation_attempt.mcp_lease_uses_runtime(&old_runtime));
+        assert!(!old_generation_attempt.mcp_lease_uses_runtime(&runtime_b));
+        drop(old_generation_attempt);
 
         let old_tools = old_runtime
             .list_tools()
@@ -7445,7 +7682,7 @@ mod tests {
             .await
             .expect("A closes after the background owner settles");
         old_close.release();
-        runtime.inner.capability.settle_ready_mcp_runtimes().await;
+        let _ = runtime.inner.capability.settle_ready_mcp_runtimes().await;
         assert_eq!(runtime.inner.capability.pending_mcp_retirements(), 0);
         runtime.shutdown().await.expect("shutdown");
     }

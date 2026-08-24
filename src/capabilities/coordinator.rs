@@ -25,8 +25,8 @@ use crate::skills::{
 use crate::tools::environment::{ToolEnvironment, ToolEnvironmentOverlay};
 use crate::tools::executor::{ToolRegistration, ToolRegistry};
 use crate::tools::mcp::{
-    McpInvalidationState, McpRuntimeGeneration, McpRuntimeLeaseSet, McpRuntimeRetirementRegistry,
-    McpServerBindings, McpServerRuntime,
+    McpInvalidationState, McpRuntimeGeneration, McpRuntimeLeaseAuthority, McpRuntimeLeaseSet,
+    McpRuntimeRetirementRegistry, McpServerBindings, McpServerRuntime,
 };
 use crate::tools::python::{PythonToolDiscovery, PythonToolExecutor, PythonToolStore};
 use crate::tools::workspace::Workspace;
@@ -185,6 +185,14 @@ struct CoordinatorInner {
 #[derive(Clone)]
 pub struct CapabilityCoordinator {
     inner: Arc<CoordinatorInner>,
+}
+
+/// The unforgeable capability-publication authority held by a live
+/// `ConversationRuntime`. A runtime resource reload must present this token
+/// to advance the capability generation; ordinary callers only retain the
+/// standalone coordinator commit API.
+pub(crate) struct RuntimeCapabilityPublication {
+    coordinator: Arc<CoordinatorInner>,
 }
 
 /// Complete reloadable capability inputs owned by one runtime resource
@@ -384,6 +392,7 @@ impl CapabilityCoordinator {
             None,
             None,
             config.base_environment.clone(),
+            Arc::new(McpRuntimeLeaseAuthority::empty()),
         ));
         Ok(Self {
             inner: Arc::new(CoordinatorInner {
@@ -460,16 +469,19 @@ impl CapabilityCoordinator {
     /// coordinator identity, together with the claiming runtime's shared
     /// activation lifecycle.
     ///
-    /// Returns `true` for the one claim that wins and `false` for every
-    /// later claim on any clone. Never reset by dropping the bound
-    /// coordinator.
+    /// Returns the one publication authority for the claim that wins and
+    /// `None` for every later claim on any clone. Never reset by dropping the
+    /// bound coordinator.
     ///
     /// The claim and the lifecycle attachment share the capability state
     /// lock — the same boundary `commit` reads them under — so a
     /// runtime-owned `commit` can never observe a claimed coordinator
     /// without its lifecycle. A standalone (unclaimed) coordinator keeps no
     /// lifecycle and commits unconditionally.
-    pub(crate) fn claim_conversation_runtime(&self, lifecycle: &ConversationLifecycle) -> bool {
+    pub(crate) fn claim_conversation_runtime(
+        &self,
+        lifecycle: &ConversationLifecycle,
+    ) -> Option<RuntimeCapabilityPublication> {
         let mut state = self
             .inner
             .state
@@ -481,11 +493,13 @@ impl CapabilityCoordinator {
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
-            return false;
+            return None;
         }
         state.conversation_lifecycle = Some(lifecycle.clone());
         drop(state);
-        true
+        Some(RuntimeCapabilityPublication {
+            coordinator: self.inner.clone(),
+        })
     }
 
     /// Reverts a conversation-runtime claim whose construction then failed.
@@ -1082,8 +1096,19 @@ impl CapabilityCoordinator {
     /// Reaps retired MCP generations that have no legitimate execution
     /// owners. A live detached background owner is intentionally left in the
     /// retirement registry until it settles.
-    pub(crate) async fn settle_ready_mcp_runtimes(&self) {
-        self.inner.mcp_retirements.settle_ready().await;
+    pub(crate) async fn settle_ready_mcp_runtimes(&self) -> Result<(), Vec<String>> {
+        self.inner.mcp_retirements.settle_ready().await
+    }
+
+    /// Installs the runtime-owned seam that fences healthy continuation when
+    /// a retired MCP generation cannot prove physical settlement.
+    pub(crate) fn install_mcp_retirement_failure_callback(
+        &self,
+        callback: &Arc<dyn Fn(String) + Send + Sync>,
+    ) {
+        self.inner
+            .mcp_retirements
+            .install_failure_callback(callback);
     }
 
     /// Installs the test-only MCP connect ownership pause.
@@ -1122,18 +1147,13 @@ impl CapabilityCoordinator {
     ///
     /// # Lifecycle (Issue #61)
     ///
-    /// Once a `ConversationRuntime` owns this coordinator, live capability
-    /// mutation follows the runtime lifecycle: a commit while the owning
-    /// runtime is inactive is refused with
-    /// [`CapabilityCommitError::ConversationInactive`] and changes nothing.
-    /// The startup commit performed *before* the conversation runtime is
-    /// constructed (the coordinator is unclaimed then) remains allowed, and
-    /// after `ConversationRuntime::activate` commits follow the normal
-    /// quiescence rules. The gate is observed under this same
-    /// synchronization boundary, so a commit linearizes cleanly against
-    /// activation: a commit that observes the pre-activation state is
-    /// refused, one that observes the post-activation state is a real
-    /// post-activation transition.
+    /// Once a `ConversationRuntime` owns this coordinator, this public
+    /// standalone commit path is closed permanently. Live capability
+    /// mutation must be presented by the runtime's private publication
+    /// authority so the matching `RuntimeResourceSnapshot` is published at
+    /// the same runtime boundary. A coordinator that has not been claimed by
+    /// a runtime retains this independent prepare/commit API for composition
+    /// and capability-layer use.
     ///
     /// # MCP invalidation linearization
     ///
@@ -1159,8 +1179,8 @@ impl CapabilityCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns [`CapabilityCommitError::ConversationInactive`] while the
-    /// owning conversation runtime is inactive,
+    /// Returns [`CapabilityCommitError::RuntimePublicationRequired`] after
+    /// the coordinator has been claimed by a conversation runtime,
     /// [`CapabilityCommitError::Busy`] while an attempt lease is active and
     /// [`CapabilityCommitError::StaleCandidate`] for an obsolete base
     /// revision.
@@ -1169,23 +1189,54 @@ impl CapabilityCoordinator {
     ///
     /// Panics only if the capability state lock is poisoned, which would
     /// mean a previous operation panicked while holding the lock.
-    #[allow(clippy::too_many_lines)]
     pub fn commit(
         &self,
+        candidate: PreparedCapabilityCandidate,
+    ) -> Result<Arc<CapabilitySnapshot>, CapabilityCommitError> {
+        self.commit_with_authority(candidate, None)
+    }
+
+    /// Publishes a prepared capability candidate for the claiming
+    /// `ConversationRuntime`. The token is created only by
+    /// [`Self::claim_conversation_runtime`] and is not exposed to ordinary
+    /// coordinator callers.
+    pub(crate) fn commit_runtime(
+        &self,
+        publication: &RuntimeCapabilityPublication,
+        candidate: PreparedCapabilityCandidate,
+    ) -> Result<Arc<CapabilitySnapshot>, CapabilityCommitError> {
+        self.commit_with_authority(candidate, Some(publication))
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn commit_with_authority(
+        &self,
         mut candidate: PreparedCapabilityCandidate,
+        publication: Option<&RuntimeCapabilityPublication>,
     ) -> Result<Arc<CapabilitySnapshot>, CapabilityCommitError> {
         let mut state = self
             .inner
             .state
             .lock()
             .expect("capability state lock poisoned");
+        match publication {
+            None if state.conversation_lifecycle.is_some() => {
+                return Err(CapabilityCommitError::RuntimePublicationRequired);
+            }
+            Some(publication)
+                if !Arc::ptr_eq(&self.inner, &publication.coordinator)
+                    || state.conversation_lifecycle.is_none() =>
+            {
+                return Err(CapabilityCommitError::RuntimePublicationRequired);
+            }
+            _ => {}
+        }
         // Hold the shared lifecycle admission guard across the capability
         // state lock, MCP validation, snapshot swap, and observer callback.
         // The final revision swap below also takes the lifecycle commit
-        // boundary, so drain and this non-coordinator commit have one exact
-        // order at the authoritative revision point. Standalone
-        // coordinators have no conversation lifecycle and retain their
-        // existing independent semantics.
+        // boundary, so drain and this publication have one exact order at
+        // the authoritative revision point. Standalone coordinators have no
+        // conversation lifecycle and retain their independent semantics.
         let _admission = if let Some(lifecycle) = &state.conversation_lifecycle {
             Some(
                 lifecycle
@@ -1256,6 +1307,9 @@ impl CapabilityCoordinator {
             }
             Self::install_availability(&mut state, &candidate.availability);
             let revision = CapabilityRevision::new(state.revision.get() + 1);
+            let mcp_lease_authority = Arc::new(McpRuntimeLeaseAuthority::from_generations(
+                &candidate.mcp_runtimes,
+            ));
             let snapshot = Arc::new(CapabilitySnapshot::new(
                 self.inner.conversation_id.clone(),
                 self.inner.workspace.root().to_path_buf(),
@@ -1266,6 +1320,7 @@ impl CapabilityCoordinator {
                 candidate.python,
                 candidate.node,
                 candidate.effective_environment,
+                mcp_lease_authority,
             ));
             let previous_mcp_runtimes = std::mem::replace(
                 &mut state.mcp_runtimes,
@@ -1368,11 +1423,14 @@ impl CapabilityCoordinator {
             .state
             .lock()
             .expect("capability state lock poisoned");
+        let snapshot = state.snapshot.clone();
         state.active_attempts += 1;
         AttemptCapabilityLease {
             inner: self.inner.clone(),
-            snapshot: state.snapshot.clone(),
-            mcp_leases: McpRuntimeLeaseSet::from_generations(&state.mcp_runtimes),
+            mcp_leases: snapshot
+                .acquire_mcp_leases()
+                .expect("a current MCP generation must accept an attempt lease"),
+            snapshot,
         }
     }
 
@@ -1391,10 +1449,13 @@ impl CapabilityCoordinator {
             .lock()
             .expect("capability state lock poisoned");
         state.active_attempts += 1;
+        let mcp_leases = snapshot
+            .acquire_mcp_leases()
+            .expect("an admitted MCP generation must accept an attempt lease");
         AttemptCapabilityLease {
             inner: self.inner.clone(),
             snapshot,
-            mcp_leases: McpRuntimeLeaseSet::from_generations(&state.mcp_runtimes),
+            mcp_leases,
         }
     }
 
@@ -1619,6 +1680,11 @@ impl AttemptCapabilityLease {
     /// before the attempt releases its capability lease.
     pub(crate) fn mcp_leases(&self) -> Option<McpRuntimeLeaseSet> {
         self.mcp_leases.try_clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mcp_lease_uses_runtime(&self, runtime: &Arc<McpServerRuntime>) -> bool {
+        self.mcp_leases.contains_runtime(runtime)
     }
 }
 
@@ -1854,6 +1920,39 @@ body
         drop(lease);
     }
 
+    /// A runtime claim closes the ordinary coordinator publication path, but
+    /// leaves standalone commit semantics intact for unclaimed coordinators
+    /// and gives the claiming runtime its private publication operation.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn claimed_coordinator_rejects_direct_commit_without_mutating_authority() {
+        let (_dir, coordinator) = coordinator();
+        let lifecycle = crate::runtime::types::ConversationLifecycle::new();
+        let publication = coordinator
+            .claim_conversation_runtime(&lifecycle)
+            .expect("runtime publication authority");
+        let before = coordinator.current_snapshot();
+        let direct = coordinator
+            .prepare_candidate()
+            .await
+            .expect("candidate preparation remains independent");
+        assert_eq!(
+            coordinator.commit(direct),
+            Err(CapabilityCommitError::RuntimePublicationRequired)
+        );
+        assert!(Arc::ptr_eq(&before, &coordinator.current_snapshot()));
+        assert_eq!(coordinator.active_attempts(), 0);
+
+        assert!(lifecycle.activate());
+        let runtime_candidate = coordinator
+            .prepare_candidate()
+            .await
+            .expect("runtime-owned preparation");
+        let published = coordinator
+            .commit_runtime(&publication, runtime_candidate)
+            .expect("the private runtime publication path remains available");
+        assert_eq!(published.revision(), CapabilityRevision::new(1));
+    }
+
     /// Runtime drain wins the capability commit boundary: a candidate may be
     /// prepared while the runtime is running, but the revision swap is
     /// refused when drain linearizes before the final lifecycle read.
@@ -1861,14 +1960,18 @@ body
     async fn runtime_drain_wins_capability_commit_boundary() {
         let (_dir, coordinator) = coordinator();
         let lifecycle = crate::runtime::types::ConversationLifecycle::new();
-        assert!(coordinator.claim_conversation_runtime(&lifecycle));
+        let publication = coordinator
+            .claim_conversation_runtime(&lifecycle)
+            .expect("runtime publication authority");
         assert!(lifecycle.activate());
         let candidate = prepare(&coordinator).await;
         let hook = Arc::new(CommitBoundaryHook::default());
         coordinator.install_commit_boundary_hook(hook.clone());
 
         let coordinator_for_task = coordinator.clone();
-        let commit_task = std::thread::spawn(move || coordinator_for_task.commit(candidate));
+        let commit_task = std::thread::spawn(move || {
+            coordinator_for_task.commit_runtime(&publication, candidate)
+        });
         hook.wait_entered();
         assert!(lifecycle.begin_drain());
         hook.proceed();
@@ -2126,7 +2229,7 @@ mod mcp_race_tests {
         })
         .expect("coordinator");
         let lifecycle = crate::runtime::types::ConversationLifecycle::new();
-        assert!(coordinator.claim_conversation_runtime(&lifecycle));
+        assert!(coordinator.claim_conversation_runtime(&lifecycle).is_some());
         assert!(lifecycle.activate());
         (coordinator, lifecycle, ids)
     }
@@ -2363,7 +2466,7 @@ mod mcp_race_tests {
             0,
             "the active snapshot is unchanged when the notification wins"
         );
-        coordinator.settle_ready_mcp_runtimes().await;
+        let _ = coordinator.settle_ready_mcp_runtimes().await;
         assert_eq!(coordinator.pending_mcp_retirements(), 0);
     }
 
@@ -2528,7 +2631,7 @@ mod mcp_race_tests {
             coordinator.commit(candidate),
             Err(CapabilityCommitError::StaleMcpCandidate { .. })
         ));
-        coordinator.settle_ready_mcp_runtimes().await;
+        let _ = coordinator.settle_ready_mcp_runtimes().await;
         assert_eq!(coordinator.pending_mcp_retirements(), 0);
     }
 

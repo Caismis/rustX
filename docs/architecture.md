@@ -1169,6 +1169,28 @@ Key contracts:
   away; when preserving it makes the projection impossible, planning fails
   with `CannotFit` rather than summarizing the unobserved instruction.
 
+#### Runtime resource publication and MCP ownership (Issue #106)
+
+`RuntimeResourceSnapshot` is the live product resource authority and is
+published only with its matching immutable `CapabilitySnapshot`. A
+standalone coordinator may prepare and commit during composition, but once a
+`ConversationRuntime` claims it, a private runtime publication authority is
+the only path that can advance capability state. The runtime reload holds the
+admission boundary across the capability publication and resource assignment,
+so an attempt cannot enter between them. The capability snapshot owns the
+MCP lease authority for that exact generation; it never reads physical leases
+from a later mutable coordinator-current generation.
+
+Prepared candidates own newly connected MCP runtimes until publication.
+Rejected or cancelled candidates retire and settle them. A superseded
+generation remains explicitly owned while attempt/background leases exist and
+is reclaimed only after physical settlement is proven. A
+`PhysicalSettlement` error is terminal evidence: the retirement registry
+keeps the failed generation, the runtime fences healthy continuation through
+the existing drain lifecycle, and a reload reports a post-publication
+settlement failure while preserving the new logical authority. It is not
+reported as though publication had failed.
+
 #### Native Skill capability guidance (Issue #55)
 
 The Skill catalog is rendered deterministically into the immutable
@@ -2749,8 +2771,9 @@ Runtime Client is a projection/control/attachment adapter over it.
   `ModelUpdateError::Inactive`, `shutdown` fails with the typed
   `ShutdownError::Inactive`, the background registry refuses
   `commit_dispatch` with `BackgroundDispatchError::ConversationInactive`,
-  and the capability coordinator refuses a runtime-owned `commit` with
-  `CapabilityCommitError::ConversationInactive`. No admission worker
+  and the capability coordinator refuses a runtime-owned ordinary `commit`
+  with `CapabilityCommitError::RuntimePublicationRequired`; live capability
+  mutation must use the resource reload publication owner. No admission worker
   exists, `admit_next_attempt` is a no-op, and an inactive runtime
   therefore publishes no observation at all.
 
@@ -2821,8 +2844,8 @@ Runtime Client is a projection/control/attachment adapter over it.
     can be created;
   - the mailbox refuses `enqueue` while its bound runtime is inactive,
     so the pending queue is frozen across `[T0, R]`;
-  - the capability coordinator refuses a runtime-owned `commit` before
-    activation, and the capability snapshot is captured *at* `R`.
+  - the capability coordinator refuses a runtime-owned ordinary `commit`
+    before activation, and the capability snapshot is captured *at* `R`.
 
   And because each authority installs its observer in the same lock
   section that captures its seed, no transition can be both seeded and

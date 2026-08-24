@@ -349,15 +349,19 @@ pub struct McpServerRuntime {
 ///
 /// A generation is registered only after its publication/candidate owner has
 /// retired. The registry contains no active pool: it is a bounded list of
-/// close tasks that have not yet been reaped, plus terminal close diagnostics
-/// retained until the owning runtime drains them.
+/// close tasks that have not yet been reaped, plus authoritative terminal
+/// failure evidence retained until the owning runtime drains it. A generation
+/// whose physical settlement is unproven is never reaped.
 pub(crate) struct McpRuntimeRetirementRegistry {
     inner: Arc<McpRuntimeRetirementRegistryInner>,
 }
 
+pub(crate) type McpRetirementFailureCallback = Arc<dyn Fn(String) + Send + Sync>;
+
 struct McpRuntimeRetirementRegistryInner {
     entries: Mutex<Vec<Arc<McpRuntimeGenerationInner>>>,
     failures: Mutex<Vec<(McpServerId, String)>>,
+    failure_callback: Mutex<Option<McpRetirementFailureCallback>>,
 }
 
 impl McpRuntimeRetirementRegistry {
@@ -367,8 +371,30 @@ impl McpRuntimeRetirementRegistry {
             inner: Arc::new(McpRuntimeRetirementRegistryInner {
                 entries: Mutex::new(Vec::new()),
                 failures: Mutex::new(Vec::new()),
+                failure_callback: Mutex::new(None),
             }),
         })
+    }
+
+    /// Installs the runtime-owned failure seam. The callback is invoked
+    /// outside every registry mutex and therefore may begin runtime drain.
+    pub(crate) fn install_failure_callback(&self, callback: &McpRetirementFailureCallback) {
+        let existing = {
+            let mut callback_slot = self
+                .inner
+                .failure_callback
+                .lock()
+                .expect("MCP retirement callback lock poisoned");
+            *callback_slot = Some(callback.clone());
+            self.inner
+                .failures
+                .lock()
+                .expect("MCP retirement failure lock poisoned")
+                .clone()
+        };
+        for (server_id, error) in existing {
+            callback(format!("MCP server {server_id}: {error}"));
+        }
     }
 
     fn register(&self, generation: Arc<McpRuntimeGenerationInner>) {
@@ -383,11 +409,42 @@ impl McpRuntimeRetirementRegistry {
     }
 
     fn record_failure(&self, server_id: &McpServerId, error: &str) {
-        self.inner
+        let callback = {
+            let callback_slot = self
+                .inner
+                .failure_callback
+                .lock()
+                .expect("MCP retirement callback lock poisoned");
+            let mut failures = self
+                .inner
+                .failures
+                .lock()
+                .expect("MCP retirement failure lock poisoned");
+            let failure = (server_id.clone(), error.to_owned());
+            if failures.contains(&failure) {
+                None
+            } else {
+                failures.push(failure);
+                callback_slot.clone()
+            }
+        };
+        if let Some(callback) = callback {
+            callback(format!("MCP server {server_id}: {error}"));
+        }
+    }
+
+    fn failure_diagnostics(&self) -> Vec<String> {
+        let mut failures = self
+            .inner
             .failures
             .lock()
             .expect("MCP retirement failure lock poisoned")
-            .push((server_id.clone(), error.to_owned()));
+            .clone();
+        failures.sort();
+        failures
+            .into_iter()
+            .map(|(server_id, error)| format!("MCP server {server_id}: {error}"))
+            .collect()
     }
 
     fn snapshot(&self) -> Vec<Arc<McpRuntimeGenerationInner>> {
@@ -413,49 +470,35 @@ impl McpRuntimeRetirementRegistry {
             .entries
             .lock()
             .expect("MCP retirement lock poisoned");
-        entries.retain(|entry| {
-            if entry.is_closed() {
-                if let Some(error) = entry.close_error() {
-                    self.record_failure(&entry.server_id, &error);
-                }
-                false
-            } else {
-                true
-            }
-        });
+        entries.retain(|entry| !entry.physical_settlement_proven());
     }
 
     /// Waits for retired generations that are already free of execution
     /// leases. This is used after successful reload to keep the retired list
     /// bounded without waiting for legitimate background owners.
-    pub(crate) async fn settle_ready(&self) {
+    pub(crate) async fn settle_ready(&self) -> Result<(), Vec<String>> {
         for generation in self.snapshot() {
             if generation.can_close() {
-                generation.wait_closed().await;
+                generation.wait_close_attempt().await;
             }
         }
         self.reap();
+        let failures = self.failure_diagnostics();
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(failures)
+        }
     }
 
     /// Waits for every retired generation to settle. Runtime drain calls this
     /// only after all attempt/background owners have settled.
     pub(crate) async fn settle_all(&self) -> Vec<String> {
         for generation in self.snapshot() {
-            generation.wait_closed().await;
+            generation.wait_close_attempt().await;
         }
         self.reap();
-        let mut failures = self
-            .inner
-            .failures
-            .lock()
-            .expect("MCP retirement failure lock poisoned")
-            .drain(..)
-            .collect::<Vec<_>>();
-        failures.sort();
-        failures
-            .into_iter()
-            .map(|(server_id, error)| format!("MCP server {server_id}: {error}"))
-            .collect()
+        self.failure_diagnostics()
     }
 }
 
@@ -476,15 +519,21 @@ struct McpRuntimeGenerationInner {
     handle: tokio::runtime::Handle,
     lifecycle_admission: Mutex<Option<LifecycleAdmission>>,
     state: Mutex<McpRuntimeGenerationState>,
-    closed: tokio::sync::Notify,
+    close_finished: tokio::sync::Notify,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 struct McpRuntimeGenerationState {
     retired: bool,
     execution_leases: usize,
     close_started: bool,
-    closed: bool,
-    close_error: Option<String>,
+    /// The close future returned, whether successfully or with a terminal
+    /// settlement error. This is not proof of physical settlement.
+    close_attempt_finished: bool,
+    /// True only when the owned physical MCP boundary was proven terminal.
+    physical_settlement_proven: bool,
+    /// Terminal evidence retained when physical settlement is unproven.
+    terminal_failure: Option<String>,
 }
 
 /// A non-owning binding used by an MCP executor. It does not keep a physical
@@ -506,6 +555,40 @@ pub(crate) struct McpRuntimeLease {
 pub(crate) struct McpRuntimeLeaseSet {
     #[allow(dead_code)]
     leases: Vec<McpRuntimeLease>,
+}
+
+/// The immutable physical-lease authority paired with one published
+/// capability generation. Holding this authority does not itself retain an
+/// execution lease; an admitted attempt or detached execution acquires one
+/// from this exact generation rather than consulting mutable coordinator
+/// state later.
+#[derive(Clone, Default)]
+pub(crate) struct McpRuntimeLeaseAuthority {
+    bindings: Arc<[McpRuntimeBinding]>,
+}
+
+impl McpRuntimeLeaseAuthority {
+    pub(crate) fn empty() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn from_generations(generations: &[McpRuntimeGeneration]) -> Self {
+        Self {
+            bindings: generations
+                .iter()
+                .map(McpRuntimeGeneration::binding)
+                .collect::<Vec<_>>()
+                .into(),
+        }
+    }
+
+    pub(crate) fn acquire(&self) -> Option<McpRuntimeLeaseSet> {
+        let mut leases = Vec::with_capacity(self.bindings.len());
+        for binding in self.bindings.iter() {
+            leases.push(binding.acquire_lease()?);
+        }
+        Some(McpRuntimeLeaseSet { leases })
+    }
 }
 
 impl std::fmt::Debug for McpRuntimeGeneration {
@@ -538,10 +621,11 @@ impl McpRuntimeGeneration {
                     retired: false,
                     execution_leases: 0,
                     close_started: false,
-                    closed: false,
-                    close_error: None,
+                    close_attempt_finished: false,
+                    physical_settlement_proven: false,
+                    terminal_failure: None,
                 }),
-                closed: tokio::sync::Notify::new(),
+                close_finished: tokio::sync::Notify::new(),
             }),
         }
     }
@@ -560,12 +644,6 @@ impl McpRuntimeGeneration {
         McpRuntimeBinding {
             inner: self.inner.clone(),
         }
-    }
-
-    pub(crate) fn lease(&self) -> McpRuntimeLease {
-        self.binding()
-            .acquire_lease()
-            .expect("a current MCP generation must accept an attempt lease")
     }
 
     pub(crate) fn retire(&self) {
@@ -590,8 +668,8 @@ impl McpRuntimeGeneration {
 
     pub(crate) async fn retire_and_close(self) -> Option<String> {
         self.retire();
-        self.inner.wait_closed().await;
-        self.inner.close_error()
+        self.inner.wait_close_attempt().await;
+        self.inner.terminal_failure()
     }
 
     fn is_retired(&self) -> bool {
@@ -620,7 +698,7 @@ impl McpRuntimeBinding {
             .state
             .lock()
             .expect("MCP generation lock poisoned");
-        if state.close_started || state.closed {
+        if state.close_started || state.close_attempt_finished {
             return None;
         }
         state.execution_leases += 1;
@@ -641,7 +719,7 @@ impl McpRuntimeLease {
             .state
             .lock()
             .expect("MCP generation lock poisoned");
-        if state.close_started || state.closed {
+        if state.close_started || state.close_attempt_finished {
             return None;
         }
         state.execution_leases += 1;
@@ -677,13 +755,11 @@ impl McpRuntimeLeaseSet {
         Some(Self { leases })
     }
 
-    pub(crate) fn from_generations(generations: &[McpRuntimeGeneration]) -> Self {
-        Self {
-            leases: generations
-                .iter()
-                .map(McpRuntimeGeneration::lease)
-                .collect(),
-        }
+    #[cfg(test)]
+    pub(crate) fn contains_runtime(&self, runtime: &Arc<McpServerRuntime>) -> bool {
+        self.leases
+            .iter()
+            .any(|lease| Arc::ptr_eq(&lease.inner.runtime, runtime))
     }
 }
 
@@ -700,18 +776,25 @@ impl McpRuntimeGenerationInner {
         state.retired && state.execution_leases == 0
     }
 
-    fn is_closed(&self) -> bool {
+    fn close_attempt_finished(&self) -> bool {
         self.state
             .lock()
             .expect("MCP generation lock poisoned")
-            .closed
+            .close_attempt_finished
     }
 
-    fn close_error(&self) -> Option<String> {
+    fn physical_settlement_proven(&self) -> bool {
         self.state
             .lock()
             .expect("MCP generation lock poisoned")
-            .close_error
+            .physical_settlement_proven
+    }
+
+    fn terminal_failure(&self) -> Option<String> {
+        self.state
+            .lock()
+            .expect("MCP generation lock poisoned")
+            .terminal_failure
             .clone()
     }
 
@@ -730,27 +813,33 @@ impl McpRuntimeGenerationInner {
         let inner = self.clone();
         self.handle.spawn(async move {
             let result = inner.runtime.close().await;
+            let failure = result.err().map(|error| error.to_string());
             {
                 let mut state = inner.state.lock().expect("MCP generation lock poisoned");
-                state.closed = true;
-                state.close_error = result.err().map(|error| error.to_string());
+                state.close_attempt_finished = true;
+                state.physical_settlement_proven = failure.is_none();
+                state.terminal_failure.clone_from(&failure);
             }
-            inner.closed.notify_waiters();
+            inner.close_finished.notify_waiters();
             drop(admission);
             if let Some(retirement) = inner.retirement.upgrade() {
-                McpRuntimeRetirementRegistry { inner: retirement }.reap();
+                let registry = McpRuntimeRetirementRegistry { inner: retirement };
+                if let Some(failure) = failure {
+                    registry.record_failure(&inner.server_id, &failure);
+                }
+                registry.reap();
             }
         });
     }
 
-    async fn wait_closed(&self) {
+    async fn wait_close_attempt(&self) {
         loop {
-            if self.is_closed() {
+            if self.close_attempt_finished() {
                 return;
             }
-            let notified = self.closed.notified();
+            let notified = self.close_finished.notified();
             tokio::pin!(notified);
-            if self.is_closed() {
+            if self.close_attempt_finished() {
                 return;
             }
             notified.await;

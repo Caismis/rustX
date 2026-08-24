@@ -618,8 +618,9 @@ Implemented in the current architecture:
   `ModelUpdateError::Inactive`, `shutdown` fails typed with
   `ShutdownError::Inactive`, the background registry refuses
   `commit_dispatch` with `BackgroundDispatchError::ConversationInactive`,
-  and the capability coordinator refuses a runtime-owned `commit` with
-  `CapabilityCommitError::ConversationInactive` — all consuming nothing.
+  and the capability coordinator refuses a runtime-owned ordinary `commit`
+  with `CapabilityCommitError::RuntimePublicationRequired` — all consuming
+  nothing. Live capability publication uses the resource reload owner.
   Activation has **one authoritative lifecycle state**: the shared
   `ConversationLifecycle` token composed by the runtime, read by the
   mailbox (runtime ownership is the handle itself), the background
@@ -677,7 +678,8 @@ Implemented in the current architecture:
   client-submit race, enqueue-vs-settlement race,
   enqueue-during-active-attempt, safe-boundary tool-batch structure,
   snapshot/cursor linearization races, model-update freeze at admission,
-  capability revision immutability, attachment independence, one
+  capability revision immutability, generation-paired MCP lease admission,
+  attachment independence, one
   human+runtime admission path, lifecycle regressions (interactive
   pre-activation bind, headless activation, typed rejection of a late host
   bind, attach/detach/reattach after activation), inactive-runtime
@@ -687,13 +689,14 @@ Implemented in the current architecture:
   belongs to a real post-activation transition), activation regressions
   (an activation-gate test parks `activate` before the lifecycle
   transition and proves both sides: while parked, background commit,
-  capability commit, and mailbox enqueue all observe `Inactive` and are
-  refused typed; after the transition the same operations follow the
-  normal running semantics; a real-time ordered cross-subsystem regression
-  parks a background commit after it has observed `Running` at the
-  registry ownership-commit boundary and proves a capability commit that
-  begins afterwards — and one that begins after the background completed —
-  cannot observe a stale `Inactive`; a host-bind-vs-activate race proves
+  ordinary capability commit, and mailbox enqueue are refused typed, while
+  live capability publication remains owned by resource reload; after the
+  transition the same operations follow the normal running semantics; a
+  real-time ordered cross-subsystem regression parks a background commit
+  after it has observed `Running` at the registry ownership-commit boundary
+  and proves a resource reload that begins afterwards — and one that begins
+  after the background completed — cannot create mixed authority; a
+  host-bind-vs-activate race proves
   the host binds with the bootstrap seed at cursor 0 while `activate` is
   parked before the transition; concurrent `activate` calls are
   idempotent — one CAS winner, one worker, exactly one attempt from one

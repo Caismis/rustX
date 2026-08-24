@@ -860,8 +860,21 @@ hold attempt leases and never block a capability commit.
   unchanged.
 - Skill, native-tool, MCP, and Python capability mutations in a live product
   runtime occur through its explicit resource reload and only while the
-  conversation runtime is quiescent in the M6 sense;
-  broader runtime-wide busy semantics (active tool calls, foreground or
+  conversation runtime is quiescent in the M6 sense. After the runtime claim,
+  the ordinary `CapabilityCoordinator::commit` API is rejected; only the
+  runtime's private resource-publication authority can advance live
+  capability state.
+- The immutable `CapabilitySnapshot` carries the physical MCP lease authority
+  for its paired generation. Attempt leases acquire from that snapshot, never
+  from a later mutable coordinator-current MCP vector.
+- MCP retirement is semantic ownership, not an `Arc`-counting accident:
+  candidate ownership transfers only at publication, superseded generations
+  remain owned while attempt/background leases exist, and only proven
+  physical settlement permits registry reclamation. A
+  `PhysicalSettlement` failure is retained as terminal evidence, fences
+  healthy runtime continuation, and is reported after the committed new
+  generation; it is not converted into a pre-publication reload failure.
+- The broader runtime-wide busy semantics (active tool calls, foreground or
   background processes, event-writer or drain transitions) remain the M9
   scheduler's concern, not part of the M6 commit guard.
 
@@ -2266,10 +2279,11 @@ The frozen invariants:
     `BackgroundDispatchError::ConversationInactive` while its mailbox is
     runtime-owned inactive: a new background ownership commit cannot begin
     before activation, and the prepared dispatch rolls back completely;
-  - the capability coordinator refuses a runtime-owned `commit` with
-    `CapabilityCommitError::ConversationInactive` before activation; the
-    startup commit performed *before* the conversation runtime is
-    constructed remains allowed.
+  - the capability coordinator refuses a runtime-owned ordinary `commit` with
+    `CapabilityCommitError::RuntimePublicationRequired` before and after
+    activation; the startup commit performed *before* the conversation
+    runtime is constructed remains allowed. Live publication uses the
+    runtime's resource reload owner.
 
   Capability candidate preparation is the one composition/readiness
   exception: it may run while inactive, but its counted owner prevents an
@@ -2500,8 +2514,10 @@ The frozen invariants:
   refuses `commit_dispatch` while its mailbox is bound inactive, so no
   background record exists across `[T0, R]` and none can be created; the
   mailbox refuses `enqueue` while its bound runtime is inactive; the
-  capability coordinator refuses a runtime-owned `commit` before
-  activation; and the capability snapshot is captured *at* `R`.
+  capability coordinator refuses a runtime-owned ordinary `commit` before
+  activation; and the capability snapshot is captured *at* `R`. Live
+  capability publication is only available through the runtime resource
+  owner.
   Each authority installs its observer in the same lock section that
   captures its seed, so no transition is both seeded and queued, and none
   is neither. The bootstrap cut `R` **precedes** the activation

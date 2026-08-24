@@ -99,6 +99,38 @@ without publishing its candidate. Explicit reload inputs republish their Tool
 registry even when schemas are unchanged, because executor configuration is
 not encoded in model-facing definitions.
 
+## Capability publication and MCP physical ownership
+
+`RuntimeResourceSnapshot` is the live product resource authority. Before a
+conversation runtime claims a `CapabilityCoordinator`, the coordinator may be
+used as a standalone prepare/commit owner during composition. The claim then
+transfers one private publication authority to `ConversationRuntime`; the
+ordinary coordinator `commit` API is rejected after that point. A live
+capability change must therefore come through `reload_resources()`.
+
+Reload holds the runtime admission lock while its runtime-owned publication
+operation commits the matching `CapabilitySnapshot` and assigns the new
+`RuntimeResourceSnapshot`, then clears the reload gate. Attempt admission
+uses that same lock, so no attempt can enter between the capability swap and
+resource assignment. The capability snapshot also carries the immutable MCP
+lease authority for its own physical generation. An attempt admitted with
+resource generation A can therefore acquire only A's MCP leases, even if B
+becomes coordinator-current later.
+
+Each prepared candidate owns every MCP runtime it connects. The capability
+commit linearization transfers those runtimes into the published generation;
+rejected, stale, cancelled, or dropped candidates retire and settle their own
+physical runtimes. A published generation becomes retired when superseded,
+but explicit attempt/background leases keep it alive until those owners
+settle. Successful close proves physical reclamation and removes the
+generation from the retirement registry. `McpError::PhysicalSettlement` means
+that proof was not established: the registry retains the generation and the
+failure as authoritative evidence, the runtime fences healthy admission via
+its existing drain lifecycle, and shutdown reports the failure. This
+post-publication settlement failure is distinct from a pre-publication reload
+failure: the new generation remains the logical current authority in the
+former case.
+
 ## Historical observations and lineage
 
 Agent Status is an append-oriented Context Observation Fact. Multiple status
