@@ -388,6 +388,16 @@ pub struct RecoveryEvidence {
     highest_subagent_ordinal: u64,
     /// Whether the Event Journal contains any attempt fact at all.
     saw_any_attempt: bool,
+    /// Whether the trailing message of the current Surface belongs to the
+    /// immutable bootstrap prefix this lineage was initialized with.
+    ///
+    /// Supplied history is not work rustX accepted: only a message this
+    /// conversation durably **adopted** through Pending Inbound is a turn the
+    /// runtime promised to answer. Class A's continuation permission is
+    /// therefore restricted to a trailing human message this flag denies.
+    /// Only the answer is retained, so the evidence stays O(1) even for a
+    /// lineage seeded with a large forked prefix.
+    trailing_active_is_bootstrap: bool,
     /// Publication streams that never settled (Issue #108).
     ///
     /// The records carry frozen identities and the durable P/U evidence only.
@@ -413,6 +423,16 @@ impl RecoveryEvidence {
         let head = store.load_head()?;
         let active = store.load_messages(&head.active_message_ids)?;
         let pending = store.load_pending()?;
+        // Only a trailing *human* message can carry a continuation
+        // obligation, so the bootstrap prefix is read only when one exists and
+        // nothing but the answer survives the statement.
+        let trailing_active_is_bootstrap = match active.last() {
+            Some(MessageBlock::User(user)) if user.kind == InboundKind::Message => store
+                .load_bootstrap_history()?
+                .iter()
+                .any(|message| crate::conversation::message_id_of(message) == user.id),
+            _ => false,
+        };
 
         let mut evidence = Self {
             conversation_id,
@@ -428,6 +448,7 @@ impl RecoveryEvidence {
             highest_background_ordinal: 0,
             highest_subagent_ordinal: 0,
             saw_any_attempt: false,
+            trailing_active_is_bootstrap,
             unsettled_publications: store.load_unsettled_publication_streams()?,
         };
         evidence.active_ids = evidence
@@ -874,6 +895,16 @@ pub enum AttemptRecoveryClass {
     /// **Class A.** No durable attempt evidence exists at all. Accepted
     /// Pending Inbound (if any) remains authoritative and is ordinary
     /// admissible work.
+    ///
+    /// Canonical adoption commits **before** the admitted attempt publishes
+    /// its `AttemptStarted` fact, so a process that dies in that window leaves
+    /// an adopted-but-unanswered canonical turn with zero attempt evidence.
+    /// That is Class B's situation with strictly less external history — no
+    /// attempt ever existed, so nothing external can have happened — and it
+    /// resumes the same way (see [`ResumeDisposition::ContinueAdoptedTurn`]).
+    /// A trailing human message that merely arrived as the lineage's immutable
+    /// bootstrap prefix is supplied history, not accepted work, and never
+    /// acquires that answer obligation.
     NotStarted,
     /// **Class B.** An attempt was admitted and its inbound was already
     /// canonicalized, but no external side effect ever crossed a start
@@ -977,8 +1008,16 @@ pub enum ResumeDisposition {
     /// Only ordinary Pending Inbound admission. Nothing else is outstanding.
     PendingInboundOnly,
     /// The adopted-but-unanswered canonical turn may continue through one new
-    /// attempt (Class B). The `UserMessage` is already canonical and is never
+    /// attempt. The `UserMessage` is already canonical and is never
     /// re-adopted.
+    ///
+    /// Two classes reach it, for the same reason — the adopted turn is
+    /// canonical and **no external side effect ever crossed a start commit**:
+    /// Class B, whose attempt existed but started nothing, and Class A, where
+    /// the process died between the adoption transaction and the attempt's own
+    /// `AttemptStarted` commit so no attempt exists at all. Refusing to
+    /// continue in the second case would durably strand a user turn that the
+    /// runtime had already accepted into canonical history.
     ContinueAdoptedTurn,
     /// Continuation is blocked because an external outcome is indeterminate
     /// (Class C). Pending Inbound remains admissible — that is new
@@ -1068,6 +1107,16 @@ impl RecoveryPlan {
             AttemptRecoveryClass::AdmittedWithoutExternalStart { .. }
                 if awaits_model_turn(&evidence.active) =>
             {
+                ResumeDisposition::ContinueAdoptedTurn
+            }
+            // Class A reaches the same permission only through the
+            // adoption/attempt-start window: an ordinary human turn this
+            // conversation durably **adopted** is canonical and unanswered
+            // while no attempt fact exists at all, which is strictly weaker
+            // external history than Class B, never stronger. A trailing human
+            // message that merely arrived as immutable bootstrap history is
+            // supplied context, not work rustX accepted, and is excluded.
+            AttemptRecoveryClass::NotStarted if awaits_adopted_model_turn(evidence) => {
                 ResumeDisposition::ContinueAdoptedTurn
             }
             AttemptRecoveryClass::IndeterminateExternalOutcome { .. } => {
@@ -1914,6 +1963,18 @@ fn awaits_model_turn(active: &[MessageBlock]) -> bool {
     )
 }
 
+/// Whether the current Surface ends in an *adopted* ordinary inbound turn that
+/// is still awaiting its model answer.
+///
+/// Adopted, not merely present: the immutable bootstrap prefix a lineage was
+/// initialized with is supplied history — a fork/clone seed, a subagent
+/// persona lineage, a test fixture — and answering it was never a promise this
+/// conversation made. Only inbound this conversation durably accepted and then
+/// adopted creates that obligation.
+fn awaits_adopted_model_turn(evidence: &RecoveryEvidence) -> bool {
+    awaits_model_turn(&evidence.active) && !evidence.trailing_active_is_bootstrap
+}
+
 /// The honest canonical result of a tool execution whose external outcome the
 /// runtime does not know.
 fn interrupted_result() -> ToolExecutionResult {
@@ -1975,6 +2036,7 @@ mod tests {
             highest_background_ordinal: 0,
             highest_subagent_ordinal: 0,
             saw_any_attempt: false,
+            trailing_active_is_bootstrap: false,
             unsettled_publications: Vec::new(),
         }
     }
@@ -1987,6 +2049,46 @@ mod tests {
         }
         evidence.unsettled_background = background.into_values().collect();
         evidence.unsettled_subagents = subagents.into_values().collect();
+    }
+
+    fn trailing_human(id: &str) -> MessageBlock {
+        MessageBlock::User(crate::message::types::UserMessageBlock {
+            id: MessageId::new(id),
+            content: vec![crate::message::types::UserContentBlock::Text(
+                crate::message::content::TextBlock {
+                    text: "unanswered".to_owned(),
+                },
+            )],
+            source: crate::message::types::UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+        })
+    }
+
+    /// Canonical adoption commits before the attempt publishes its start fact.
+    /// A process that dies in that window leaves an adopted human turn with no
+    /// attempt evidence, and refusing to continue it would durably strand work
+    /// rustX already accepted into canonical history.
+    #[test]
+    fn an_adopted_unanswered_turn_without_attempt_evidence_continues() {
+        let mut evidence = base_evidence();
+        evidence.active = vec![trailing_human("msg-adopted")];
+        let plan = RecoveryPlan::classify(&evidence);
+        assert_eq!(plan.attempt_class(), &AttemptRecoveryClass::NotStarted);
+        assert_eq!(plan.resume(), ResumeDisposition::ContinueAdoptedTurn);
+    }
+
+    /// The same trailing shape supplied as the lineage's immutable bootstrap
+    /// prefix is context, never accepted work: a fork/clone seed or a persona
+    /// lineage must not acquire an answer obligation it never made.
+    #[test]
+    fn a_bootstrap_trailing_human_message_is_not_an_adopted_turn() {
+        let mut evidence = base_evidence();
+        evidence.active = vec![trailing_human("msg-seed")];
+        evidence.trailing_active_is_bootstrap = true;
+        let plan = RecoveryPlan::classify(&evidence);
+        assert_eq!(plan.attempt_class(), &AttemptRecoveryClass::NotStarted);
+        assert_eq!(plan.resume(), ResumeDisposition::PendingInboundOnly);
     }
 
     fn started(attempt_id: AttemptId) -> RuntimeEventEnvelope {
