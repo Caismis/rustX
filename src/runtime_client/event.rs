@@ -24,7 +24,8 @@ use serde::{Deserialize, Serialize};
 
 use super::snapshot::{
     AgentStatusView, CapabilityView, RuntimeClientBackgroundExecution, RuntimeClientContextView,
-    RuntimeClientSubagent,
+    RuntimeClientSubagent, RuntimeClientTranscriptCursor,
+    RuntimeClientTranscriptInteractionRequested, RuntimeClientTranscriptInteractionSettled,
 };
 use crate::events::types::AttemptLimit;
 use crate::message::types::{ContentBlockIndex, MessageBlock, UserMessageBlock};
@@ -101,6 +102,23 @@ pub enum RuntimeClientEvent {
         interaction_id: crate::runtime::identity::InteractionId,
         /// The exact terminal rendezvous outcome.
         outcome: InteractionOutcome,
+    },
+    /// A durable interaction request audit became visible in the transcript.
+    ///
+    /// This is historical audit evidence, not a second pending waiter.
+    InteractionAuditRequested {
+        /// The bounded requested audit projection.
+        audit: Box<RuntimeClientTranscriptInteractionRequested>,
+        /// The durable transcript position of this audit.
+        transcript_cursor: RuntimeClientTranscriptCursor,
+    },
+    /// A durable interaction settlement audit became visible in the
+    /// transcript. It is never actionable after publication.
+    InteractionAuditSettled {
+        /// The bounded settled audit projection.
+        audit: Box<RuntimeClientTranscriptInteractionSettled>,
+        /// The durable transcript position of this audit.
+        transcript_cursor: RuntimeClientTranscriptCursor,
     },
     /// The authoritative runtime `ApprovalMode` control state changed.
     ApprovalModeChanged {
@@ -231,13 +249,16 @@ pub enum RuntimeClientEvent {
     /// entries are model proposals that were never authorized and never
     /// executed — a transcript consumer must present them differently from
     /// the [`ToolExecutionStarted`](Self::ToolExecutionStarted) /
-    /// [`ToolExecutionSettled`](Self::ToolExecutionSettled) Tool Plane facts,
-    /// and must never fold the audit into conversation history.
+    /// [`ToolExecutionSettled`](Self::ToolExecutionSettled) Tool Plane facts.
+    /// The audit is a noncanonical derived transcript item, not a Message
+    /// Ledger message or an execution fact.
     AssistantPublicationSettled {
         /// The attempt that streamed the publication.
         attempt_id: AttemptId,
         /// The bounded immutable audit of the settled stream.
         audit: Box<PublicationAudit>,
+        /// The durable transcript position of this noncanonical audit.
+        transcript_cursor: RuntimeClientTranscriptCursor,
     },
 
     /// A foreground tool execution started.
@@ -289,6 +310,9 @@ pub enum RuntimeClientEvent {
         attempt_id: Option<AttemptId>,
         /// The committed canonical message.
         message: MessageBlock,
+        /// The durable transcript position, absent for hidden Context facts.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        transcript_cursor: Option<RuntimeClientTranscriptCursor>,
     },
 
     /// The runtime composed an Agent Status for a fresh inbound turn.
@@ -317,6 +341,10 @@ pub enum RuntimeClientEvent {
         sequence: InboundSequence,
         /// The canonical inbound message.
         message: UserMessageBlock,
+        /// The durable transcript position allocated at acceptance, absent
+        /// for hidden Context-kind inbound.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        transcript_cursor: Option<RuntimeClientTranscriptCursor>,
     },
     /// The agent loop committed one finite mailbox drain.
     ///

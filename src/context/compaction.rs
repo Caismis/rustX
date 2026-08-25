@@ -13,7 +13,7 @@ use crate::context::engine::CompactionConstraints;
 use crate::context::error::{ContextError, ContextErrorKind};
 use crate::context::tokens::ProviderObservedInput;
 use crate::conversation::ConversationState;
-use crate::durable::{CompactionCommitInput, ConversationStore};
+use crate::durable::{CompactionCommitInput, ConversationStore, TranscriptCursor};
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
 use crate::message::types::MessageBlock;
 use crate::runtime::cancellation::CancellationSignal;
@@ -31,6 +31,7 @@ pub(crate) struct CompactionAttribution {
 pub(crate) struct ExecutedCompaction {
     pub(crate) summary_block: MessageBlock,
     pub(crate) persisted_event: RuntimeEventEnvelope,
+    pub(crate) transcript_cursor: TranscriptCursor,
 }
 
 /// A compaction pipeline failure, split at the durable commit boundary.
@@ -117,7 +118,7 @@ pub(crate) async fn execute_compaction(
     }
 
     let expected_revision = prepared.expected_revision();
-    let (durable_revision, durable_generation, persisted_event) = store
+    let (durable_revision, durable_generation, persisted_event, transcript_cursor) = store
         .commit_compaction(CompactionCommitInput {
             summary: prepared.summary().clone(),
             span: prepared.span().clone(),
@@ -143,6 +144,7 @@ pub(crate) async fn execute_compaction(
     Ok(ExecutedCompaction {
         summary_block,
         persisted_event,
+        transcript_cursor,
     })
 }
 

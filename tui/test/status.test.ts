@@ -42,6 +42,7 @@ import {
   userMessage,
   questionInteraction,
 } from "./support/fixtures.ts";
+import { runtimeCursor } from "./support/fixtures.ts";
 import { prefs, stateOf } from "./support/render.ts";
 
 const footer = (...args: Parameters<typeof renderFooter>) =>
@@ -119,7 +120,10 @@ describe("working status", () => {
   it("distinguishes thinking from streaming by the latest published block", () => {
     let state = stateOf();
     const push = (event: Parameters<typeof reduce>[1]["event"]) => {
-      state = reduce(state, { cursor: state.cursor + 1, event });
+      state = reduce(state, {
+        cursor: runtimeCursor(state.cursor + 1),
+        event,
+      });
     };
     push({
       type: "attempt_started",

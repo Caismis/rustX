@@ -35,8 +35,9 @@
 //! The publication plane is the newest and most easily confused of the six. It
 //! owns exactly one question — *what did rustX durably commit for release to a
 //! user-facing client, and how did that release settle* — and nothing else. It
-//! is not the Message Ledger (its content is never conversation history), not
-//! the Event Journal (it carries no execution fact), and not a display cache.
+//! is not the Message Ledger (its audit content is not canonical message
+//! history, although it can be rendered by the derived transcript), not the
+//! Event Journal (it carries no execution fact), and not a display cache.
 //! Its three linearization points are documented on
 //! [`crate::publication`].
 //!
@@ -71,6 +72,8 @@ pub use inbox::{
     ConversationInteractionAudit, ConversationStore, ConversationStoreBinding,
     ConversationStoreError, DurableConversationHead, EventPage, InboundDraft, PendingBatch,
     PendingInboundItem, RequestSnapshotPage, SurfaceUserMessageBoundary,
-    SurfaceUserMessageBoundaryPage, interaction_audit_capability,
+    SurfaceUserMessageBoundaryPage, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT, TRANSCRIPT_PAGE_LIMIT_MAX,
+    TranscriptCursor, TranscriptEntry, TranscriptItem, TranscriptPage,
+    interaction_audit_capability,
 };
 pub use sqlite::SqliteConversationStore;

@@ -3,7 +3,7 @@
 //! This module owns the domain vocabulary and the [`ConversationStore`] trait,
 //! which is the one durable authority boundary for Pending Inbound, the
 //! Message Ledger, Surface revisions, Request Snapshots, Event Journal facts,
-//! and checkpoint metadata.
+//! checkpoint metadata, and the derived transcript ordering spine.
 //! There is deliberately no generic repository, queue, CRUD, or storage
 //! strategy trait: the operations are the rustX semantic transitions a
 //! `PostgreSQL` backend must reproduce exactly.
@@ -11,6 +11,7 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 use crate::conversation::{SurfaceRevision, SurfaceSpan};
 use crate::events::types::RuntimeEventEnvelope;
@@ -25,6 +26,50 @@ use crate::publication::{
 use crate::runtime::identity::{ConversationId, MessageId, PublicationStreamId, RequestId};
 use crate::runtime::inbound::InboundSequence;
 use crate::runtime::types::TokenMeasurement;
+
+/// The default bounded page used when a Runtime Client first attaches.
+pub const TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT: usize = 64;
+
+/// The largest page a transcript reader may request in one response.
+pub const TRANSCRIPT_PAGE_LIMIT_MAX: usize = 256;
+
+/// A durable transcript cursor.
+///
+/// This cursor belongs to the transcript ordering spine. It is deliberately
+/// distinct from the Runtime Client observation cursor, the Event Journal
+/// sequence, and the inbound mailbox sequence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct TranscriptCursor(u64);
+
+impl TranscriptCursor {
+    /// Creates a cursor from its durable ordering position.
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    /// Returns the durable ordering position.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl core::fmt::Display for TranscriptCursor {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+/// The transcript position allocated by one durable canonical-message
+/// transition.  A `None` receipt is intentional for durable context messages,
+/// which remain model history but are hidden from the ordinary transcript.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TranscriptCommitReceipt {
+    /// The durable transcript position, when the committed fact is visible.
+    pub transcript_cursor: Option<TranscriptCursor>,
+}
 
 /// A producer-supplied draft of one inbound item, before acceptance.
 ///
@@ -61,6 +106,9 @@ pub struct AcceptedInbound {
     pub message_id: MessageId,
     /// The persisted canonical inbound message.
     pub message: UserMessageBlock,
+    /// The transcript position allocated at acceptance for visible inbound.
+    /// Adoption into the Ledger reuses this exact position.
+    pub transcript_cursor: Option<TranscriptCursor>,
     /// Whether this acceptance was an idempotent correlation retry of an
     /// already-committed acceptance (no new sequence was allocated).
     pub retried: bool,
@@ -75,6 +123,8 @@ pub struct PendingInboundItem {
     pub message_id: MessageId,
     /// The persisted canonical inbound message.
     pub message: UserMessageBlock,
+    /// The transcript position allocated at acceptance for visible inbound.
+    pub transcript_cursor: Option<TranscriptCursor>,
     /// The producer correlation, when one was supplied.
     pub correlation: Option<String>,
 }
@@ -176,6 +226,55 @@ pub struct RequestSnapshotPage {
     pub snapshots: Vec<RequestSnapshot>,
     /// The exclusive cursor for the next page, when this page is non-empty.
     pub next_sequence: Option<u64>,
+}
+
+/// One item in the derived durable transcript read model.
+///
+/// The item carries bodies only in the bounded read result. Durable storage
+/// keeps the body in its owning Message Ledger, publication-audit, or Event
+/// Journal domain and stores only a reference in the transcript ordering
+/// spine.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TranscriptItem {
+    /// A user, Assistant, or Tool message resolved from the canonical owner.
+    Message {
+        /// The canonical or durably accepted message body.
+        message: MessageBlock,
+    },
+    /// A noncanonical Assistant publication audit.
+    PublicationAudit {
+        /// The bounded audit body owned by the publication plane.
+        audit: PublicationAudit,
+    },
+    /// A historical requested interaction audit fact.
+    InteractionRequested {
+        /// The Event Journal envelope that owns the audit body.
+        event: RuntimeEventEnvelope,
+    },
+    /// A historical settled interaction audit fact.
+    InteractionSettled {
+        /// The Event Journal envelope that owns the audit body.
+        event: RuntimeEventEnvelope,
+    },
+}
+
+/// One ordered item in a bounded transcript page.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TranscriptEntry {
+    /// The stable exclusive cursor for this item.
+    pub cursor: TranscriptCursor,
+    /// The resolved read-model item.
+    pub item: TranscriptItem,
+}
+
+/// A bounded page of the derived durable transcript.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TranscriptPage {
+    /// Items in chronological order within this page.
+    pub entries: Vec<TranscriptEntry>,
+    /// The cursor to pass as `before` for the next older page.
+    pub next_cursor: Option<TranscriptCursor>,
 }
 
 /// The one composition-time binding of a conversation's durable authority.
@@ -381,7 +480,7 @@ fn commit_subagent_ownership_through(
 fn commit_interaction_audit_through(
     store: &(impl ConversationStore + ?Sized),
     event: RuntimeEventEnvelope,
-) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError> {
     if !matches!(
         event.event,
         crate::events::types::RuntimeEvent::InteractionRequested { .. }
@@ -391,7 +490,7 @@ fn commit_interaction_audit_through(
             "the interaction capability commits only interaction audit facts".to_owned(),
         ));
     }
-    store.append_event(event)
+    store.append_interaction_audit(event)
 }
 
 /// The narrow backend-independent audit capability of the native interaction
@@ -424,7 +523,7 @@ pub trait ConversationInteractionAudit: Send + Sync + 'static {
     fn commit_interaction_requested(
         &self,
         event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError>;
 
     /// Commits the durable settled fact of one interaction.
     ///
@@ -435,7 +534,7 @@ pub trait ConversationInteractionAudit: Send + Sync + 'static {
     fn commit_interaction_settled(
         &self,
         event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError>;
 }
 
 /// The narrow backend-independent capability used by the Pending Inbound
@@ -690,7 +789,10 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// Returns [`ConversationStoreError::DuplicateMessageId`] when the identity is
     /// already committed to the durable Ledger and
     /// [`ConversationStoreError::Storage`] on a backend failure.
-    fn append_canonical(&self, message: &MessageBlock) -> Result<(), ConversationStoreError>;
+    fn append_canonical(
+        &self,
+        message: &MessageBlock,
+    ) -> Result<TranscriptCommitReceipt, ConversationStoreError>;
 
     /// Appends a canonical [`MessageBlock`] batch atomically.
     ///
@@ -708,7 +810,7 @@ pub trait ConversationStore: Send + Sync + 'static {
     fn append_canonical_batch(
         &self,
         messages: &[MessageBlock],
-    ) -> Result<(), ConversationStoreError>;
+    ) -> Result<Vec<TranscriptCommitReceipt>, ConversationStoreError>;
 
     /// Commits a canonical message and its committed-message Event Journal
     /// fact in one `SQLite` transaction.
@@ -716,7 +818,7 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         message: &MessageBlock,
         event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCommitReceipt), ConversationStoreError>;
 
     /// Commits a structurally atomic canonical batch and all corresponding
     /// committed-message events in one `SQLite` transaction.
@@ -724,14 +826,17 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         messages: &[MessageBlock],
         events: &[RuntimeEventEnvelope],
-    ) -> Result<Vec<RuntimeEventEnvelope>, ConversationStoreError>;
+    ) -> Result<(Vec<RuntimeEventEnvelope>, Vec<TranscriptCommitReceipt>), ConversationStoreError>;
 
     /// Commits the summary Ledger row, immutable Surface Replace revision,
     /// checkpoint metadata, and `CompactionCompleted` fact atomically.
     fn commit_compaction(
         &self,
         input: CompactionCommitInput,
-    ) -> Result<(SurfaceRevision, u64, RuntimeEventEnvelope), ConversationStoreError>;
+    ) -> Result<
+        (SurfaceRevision, u64, RuntimeEventEnvelope, TranscriptCursor),
+        ConversationStoreError,
+    >;
 
     /// Loads the durable canonical Message Ledger in commit order (the
     /// complete crash-recoverable prefix of the Message Ledger).
@@ -748,6 +853,19 @@ pub trait ConversationStore: Send + Sync + 'static {
         after_position: Option<u64>,
         limit: usize,
     ) -> Result<CanonicalMessagePage, ConversationStoreError>;
+
+    /// Reads one bounded page of the derived durable transcript.
+    ///
+    /// With no `before` cursor, the newest page is returned. With a cursor,
+    /// only rows strictly older than that cursor are eligible. Rows are
+    /// returned in chronological order and the next cursor is exclusive, so
+    /// appends after a page has been read cannot create duplicates or gaps in
+    /// an older-page walk.
+    fn load_transcript_page(
+        &self,
+        before: Option<TranscriptCursor>,
+        limit: usize,
+    ) -> Result<TranscriptPage, ConversationStoreError>;
 
     /// Commits one model-turn start atomically (Issue #12, M9b): the
     /// request-scoped canonical context messages (Ledger append + Surface
@@ -806,6 +924,13 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+
+    /// Commits one interaction audit event and returns the transcript
+    /// position allocated in the same durable transaction.
+    fn append_interaction_audit(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError>;
 
     /// Reads a bounded Event Journal page in stable sequence order.
     fn read_events(
@@ -878,7 +1003,7 @@ pub trait ConversationStore: Send + Sync + 'static {
         stream_id: &PublicationStreamId,
         message: &MessageBlock,
         event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError>;
 
     /// Terminalizes one unsettled publication stream as an audit.
     ///
@@ -893,7 +1018,7 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         stream_id: &PublicationStreamId,
         timestamp: DateTime<Utc>,
-    ) -> Result<PublicationAudit, ConversationStoreError>;
+    ) -> Result<(PublicationAudit, TranscriptCursor), ConversationStoreError>;
 
     /// Loads every publication stream that has not settled, for recovery
     /// classification. The records carry frozen identities and the durable
@@ -968,7 +1093,7 @@ impl<T: ConversationStore + ?Sized> ConversationInteractionAudit for T {
     fn commit_interaction_requested(
         &self,
         event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError> {
         if !matches!(
             event.event,
             crate::events::types::RuntimeEvent::InteractionRequested { .. }
@@ -983,7 +1108,7 @@ impl<T: ConversationStore + ?Sized> ConversationInteractionAudit for T {
     fn commit_interaction_settled(
         &self,
         event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError> {
         if !matches!(
             event.event,
             crate::events::types::RuntimeEvent::InteractionSettled { .. }
@@ -1020,14 +1145,14 @@ impl ConversationInteractionAudit for StoreInteractionAudit {
     fn commit_interaction_requested(
         &self,
         event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError> {
         self.store.commit_interaction_requested(event)
     }
 
     fn commit_interaction_settled(
         &self,
         event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError> {
         self.store.commit_interaction_settled(event)
     }
 }

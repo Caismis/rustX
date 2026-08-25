@@ -218,6 +218,7 @@ impl RuntimeClientProjection {
                 approval_mode_revision: 0,
                 durability_failure: None,
                 messages: initial_messages,
+                transcript: super::snapshot::RuntimeClientTranscriptPage::default(),
                 attempt: None,
                 inbound: InboundDiagnostics {
                     pending: Vec::new(),
@@ -275,6 +276,8 @@ impl RuntimeClientProjection {
         &mut self,
         seed: &crate::runtime::conversation_runtime::RuntimeBootstrapSnapshot,
     ) {
+        self.snapshot.transcript = super::snapshot::transcript_page_view(seed.transcript.clone())
+            .expect("runtime bootstrap transcript is valid");
         self.snapshot.shutting_down = seed.shutting_down;
         self.snapshot.effective_approval_mode = seed.approval_mode.effective;
         self.snapshot.pending_approval_mode = (seed.approval_mode.effective
@@ -327,7 +330,11 @@ impl RuntimeClientProjection {
             ConversationObservation::ManualCompactionEvent { event } => {
                 self.fold_compaction_event(None, &event)
             }
-            ConversationObservation::Committed { attempt_id, block } => {
+            ConversationObservation::Committed {
+                attempt_id,
+                block,
+                transcript_cursor,
+            } => {
                 if matches!(block, MessageBlock::Assistant(_))
                     && let Some(attempt) = &mut self.snapshot.attempt
                 {
@@ -337,6 +344,7 @@ impl RuntimeClientProjection {
                 vec![RuntimeClientEvent::MessageCommitted {
                     attempt_id,
                     message: block,
+                    transcript_cursor: transcript_cursor.map(Into::into),
                 }]
             }
             // The three publication observations replace what used to be
@@ -362,17 +370,25 @@ impl RuntimeClientProjection {
             ConversationObservation::Publication { attempt_id, frame } => {
                 self.fold_publication_frame(&attempt_id, &frame)
             }
-            // An audit is not conversation history: it never enters the
-            // committed message list and never becomes an in-flight message.
-            // It only closes the in-flight read model of a stream that will
-            // never be canonically accepted.
-            ConversationObservation::PublicationSettled { attempt_id, audit } => {
+            // An audit is a derived transcript item, but it is not a
+            // canonical Message Ledger message and never becomes an
+            // in-flight message. It only closes the in-flight read model of a
+            // stream that will never be canonically accepted.
+            ConversationObservation::PublicationSettled {
+                attempt_id,
+                audit,
+                transcript_cursor,
+            } => {
                 if let Some(attempt) = &mut self.snapshot.attempt
                     && attempt.attempt_id == attempt_id
                 {
                     attempt.in_flight = None;
                 }
-                vec![RuntimeClientEvent::AssistantPublicationSettled { attempt_id, audit }]
+                vec![RuntimeClientEvent::AssistantPublicationSettled {
+                    attempt_id,
+                    audit,
+                    transcript_cursor: transcript_cursor.into(),
+                }]
             }
             ConversationObservation::Status(observation) => {
                 let view = status_view(&observation);
@@ -389,6 +405,7 @@ impl RuntimeClientProjection {
                 vec![RuntimeClientEvent::InboundEnqueued {
                     sequence: item.sequence(),
                     message: item.message().clone(),
+                    transcript_cursor: item.transcript_cursor().map(Into::into),
                 }]
             }
             ConversationObservation::InboundDrained(batch) => {
@@ -407,23 +424,46 @@ impl RuntimeClientProjection {
                         .collect(),
                 }]
             }
-            ConversationObservation::InteractionPending(request) => {
+            ConversationObservation::InteractionPending {
+                request,
+                audit,
+                transcript_cursor,
+            } => {
                 upsert_interaction(&mut self.snapshot.pending_interactions, request.clone());
-                vec![RuntimeClientEvent::InteractionPending {
-                    interaction: request,
-                }]
+                let audit_view = super::snapshot::interaction_requested_view(audit)
+                    .expect("runtime interaction requested audit is valid");
+                vec![
+                    RuntimeClientEvent::InteractionPending {
+                        interaction: request,
+                    },
+                    RuntimeClientEvent::InteractionAuditRequested {
+                        audit: Box::new(audit_view),
+                        transcript_cursor: transcript_cursor.into(),
+                    },
+                ]
             }
             ConversationObservation::InteractionSettled {
                 interaction_id,
                 outcome,
+                audit,
             } => {
                 self.snapshot
                     .pending_interactions
                     .retain(|request| request.id != interaction_id);
-                vec![RuntimeClientEvent::InteractionSettled {
+                let mut events = vec![RuntimeClientEvent::InteractionSettled {
                     interaction_id,
                     outcome,
-                }]
+                }];
+                if let Some(audit) = audit {
+                    let (audit, transcript_cursor) = audit;
+                    let audit_view = super::snapshot::interaction_settled_view(audit)
+                        .expect("runtime interaction settled audit is valid");
+                    events.push(RuntimeClientEvent::InteractionAuditSettled {
+                        audit: Box::new(audit_view),
+                        transcript_cursor: transcript_cursor.into(),
+                    });
+                }
+                events
             }
             ConversationObservation::Background(snapshot) => {
                 let view = background_view(&snapshot);
@@ -1119,6 +1159,17 @@ impl RuntimeClientProjection {
         Ok((self.snapshot.clone(), self.cursor))
     }
 
+    /// Replaces only the derived durable transcript page with a fresh
+    /// authoritative read. The Surface projection and Runtime Client cursor
+    /// remain untouched: transcript paging is a separate durable cursor
+    /// domain and is not a live observation event.
+    pub(crate) fn set_transcript_page(
+        &mut self,
+        page: super::snapshot::RuntimeClientTranscriptPage,
+    ) {
+        self.snapshot.transcript = page;
+    }
+
     /// The oldest cursor a subscription can still serve: one before the
     /// oldest retained replay entry, or the current cursor when the ring
     /// is empty.
@@ -1573,7 +1624,8 @@ mod tests {
         ContextRuntime,
     };
     use crate::conversation::ConversationState;
-    use crate::events::types::RuntimeEvent;
+    use crate::events::interaction::{InteractionSettlement, InteractionSubject};
+    use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
     use crate::message::content::TextBlock;
     use crate::message::types::{
         AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, InboundKind, MessageBlock,
@@ -1586,7 +1638,8 @@ mod tests {
     use crate::model::types::ModelUsage;
     use crate::publication::{PublicationFrame, PublicationPayload};
     use crate::runtime::identity::{
-        AgentId, AttemptId, ConversationId, InteractionId, MessageId, RequestId, ToolCallId, ToolId,
+        AgentId, AttemptId, ConversationId, EventId, InteractionId, MessageId, RequestId,
+        ToolCallId, ToolId, TurnId,
     };
     use crate::runtime::inbound::{ConversationInboundMailbox, InitialTurnTrigger};
     use crate::runtime::interaction::{
@@ -1598,6 +1651,7 @@ mod tests {
     use crate::runtime_client::event::{RuntimeClientEvent, RuntimeClientOutcome};
     use crate::runtime_client::snapshot::{
         ForegroundToolState, InFlightBlock, RuntimeClientAttemptPhase,
+        RuntimeClientTranscriptCursor,
     };
     use crate::runtime_client::types::RuntimeClientCursor;
     use crate::scripted_suites::support::context::{
@@ -1612,6 +1666,25 @@ mod tests {
 
     fn attempt() -> AttemptId {
         AttemptId::new("attempt-1")
+    }
+
+    fn interaction_audit(
+        request: &InteractionRequest,
+        event_id: &str,
+        event: RuntimeEvent,
+    ) -> RuntimeEventEnvelope {
+        RuntimeEventEnvelope {
+            schema_version: EVENT_SCHEMA_VERSION,
+            event_id: EventId::new(event_id),
+            sequence: 1,
+            conversation_id: request.conversation_id.clone(),
+            attempt_id: Some(request.attempt_id.clone()),
+            turn_id: Some(TurnId::new(request.turn.to_string())),
+            timestamp: chrono::DateTime::parse_from_rfc3339("2026-08-07T12:00:00Z")
+                .expect("timestamp")
+                .with_timezone(&chrono::Utc),
+            event,
+        }
     }
 
     /// A deterministic session model view for projection unit tests.
@@ -1785,7 +1858,12 @@ mod tests {
             self.drain_client_events(&mut projection);
         }
 
-        fn observe_committed(&self, attempt_id: &AttemptId, block: &MessageBlock) {
+        fn observe_committed(
+            &self,
+            attempt_id: &AttemptId,
+            block: &MessageBlock,
+            transcript_cursor: Option<crate::durable::TranscriptCursor>,
+        ) {
             if matches!(
                 block,
                 MessageBlock::User(user) if user.kind == InboundKind::CompactionSummary
@@ -1799,6 +1877,7 @@ mod tests {
             projection.apply(ConversationObservation::Committed {
                 attempt_id: Some(attempt_id.clone()),
                 block: block.clone(),
+                transcript_cursor,
             });
             self.drain_client_events(&mut projection);
         }
@@ -1839,11 +1918,13 @@ mod tests {
             &self,
             attempt_id: &AttemptId,
             audit: &crate::publication::PublicationAudit,
+            transcript_cursor: crate::durable::TranscriptCursor,
         ) {
             let mut projection = self.projection.lock().expect("projection lock");
             projection.apply(ConversationObservation::PublicationSettled {
                 attempt_id: attempt_id.clone(),
                 audit: Box::new(audit.clone()),
+                transcript_cursor,
             });
             self.drain_client_events(&mut projection);
         }
@@ -2565,6 +2646,7 @@ mod tests {
         projection.apply(ConversationObservation::Committed {
             attempt_id: Some(attempt()),
             block: committed.clone(),
+            transcript_cursor: Some(crate::durable::TranscriptCursor::new(1)),
         });
         let (snapshot, _) = projection.snapshot().expect("snapshot");
         assert_eq!(snapshot.messages, vec![committed]);
@@ -2574,6 +2656,51 @@ mod tests {
                 .as_ref()
                 .and_then(|attempt| attempt.in_flight.as_ref())
                 .is_none()
+        );
+    }
+
+    /// A durable commit cursor travels with the live observation even when
+    /// observations arrive in the opposite order. The Runtime Client event
+    /// cursor records that delivery order only; it is deliberately not the
+    /// transcript order input.
+    #[test]
+    fn live_committed_observations_carry_durable_cursors_across_reordering() {
+        let mut projection = projection();
+        let message_a = compactable_user("message-a");
+        let message_b = compactable_user("message-b");
+
+        projection.apply(ConversationObservation::Committed {
+            attempt_id: None,
+            block: message_b,
+            transcript_cursor: Some(crate::durable::TranscriptCursor::new(11)),
+        });
+        projection.apply(ConversationObservation::Committed {
+            attempt_id: None,
+            block: message_a,
+            transcript_cursor: Some(crate::durable::TranscriptCursor::new(10)),
+        });
+
+        let events = collect(&mut projection, RuntimeClientCursor::new(0));
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.cursor.get())
+                .collect::<Vec<_>>(),
+            vec![1, 2],
+            "Runtime Client cursors follow observation delivery"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter_map(|event| match &event.event {
+                    RuntimeClientEvent::MessageCommitted {
+                        transcript_cursor, ..
+                    } => transcript_cursor.map(RuntimeClientTranscriptCursor::get),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            vec![11, 10],
+            "each live fact carries its own durable transcript cursor"
         );
     }
 
@@ -2930,10 +3057,28 @@ mod tests {
                 reason: "native policy".to_owned(),
             },
         };
-        projection.apply(ConversationObservation::InteractionPending(request.clone()));
+        let requested_audit = interaction_audit(
+            &request,
+            "event-requested",
+            RuntimeEvent::InteractionRequested {
+                interaction_id: request.id.clone(),
+                subject: InteractionSubject::Approval {
+                    call_id: ToolCallId::new("call-1"),
+                    tool_id: ToolId::new("tool-alpha"),
+                    tool_name: "alpha".to_owned(),
+                    arguments_digest: "0".repeat(64),
+                    reason: "native policy".to_owned(),
+                },
+            },
+        );
+        projection.apply(ConversationObservation::InteractionPending {
+            request: request.clone(),
+            audit: requested_audit,
+            transcript_cursor: crate::durable::TranscriptCursor::new(1),
+        });
         let (snapshot, cursor) = projection.snapshot().expect("snapshot");
         assert_eq!(snapshot.pending_interactions, vec![request.clone()]);
-        assert_eq!(cursor, RuntimeClientCursor::new(1));
+        assert_eq!(cursor, RuntimeClientCursor::new(2));
         let events = collect(&mut projection, RuntimeClientCursor::new(0));
         assert!(matches!(
             events.first().map(|event| &event.event),
@@ -2946,14 +3091,23 @@ mod tests {
                 decision: ApprovalDecision::Allow,
             },
         };
+        let settled_audit = interaction_audit(
+            &request,
+            "event-settled",
+            RuntimeEvent::InteractionSettled {
+                interaction_id: request.id.clone(),
+                settlement: InteractionSettlement::Approved,
+            },
+        );
         projection.apply(ConversationObservation::InteractionSettled {
             interaction_id: request.id.clone(),
             outcome: outcome.clone(),
+            audit: Some((settled_audit, crate::durable::TranscriptCursor::new(2))),
         });
         let (snapshot, cursor) = projection.snapshot().expect("snapshot");
         assert!(snapshot.pending_interactions.is_empty());
-        assert_eq!(cursor, RuntimeClientCursor::new(2));
-        let events = collect(&mut projection, RuntimeClientCursor::new(1));
+        assert_eq!(cursor, RuntimeClientCursor::new(4));
+        let events = collect(&mut projection, RuntimeClientCursor::new(2));
         assert!(matches!(
             events.first().map(|event| &event.event),
             Some(RuntimeClientEvent::InteractionSettled {
@@ -2962,7 +3116,8 @@ mod tests {
             }) if interaction_id == &request.id && event_outcome == &outcome
         ));
 
-        // The projection never turns a live prompt into canonical history.
+        // The projection never turns a live prompt into a historical audit;
+        // only the durable requested/settled audit observations do that.
         assert!(
             projection
                 .snapshot()

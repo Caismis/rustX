@@ -19,6 +19,7 @@ import {
   attemptView,
   foreground,
   snapshot,
+  runtimeCursor,
   toolCallBlock,
   toolMessage,
   toolResult,
@@ -412,7 +413,7 @@ describe("tool-result chronology", () => {
       toolMessage("m4", "call-b", "tool-bash"),
     ];
     const left = stateOf({ messages });
-    const right = replaceFromSnapshot(snapshot({ messages }), 7);
+    const right = replaceFromSnapshot(snapshot({ messages }), runtimeCursor(7));
 
     assert.deepEqual(
       [...correlateTools(left).foldedResults].sort(),
@@ -496,7 +497,7 @@ describe("tool-result chronology", () => {
 describe("lifecycle progression", () => {
   /** Drives the reducer through one call's full event sequence. */
   function driveToRunning() {
-    let state = replaceFromSnapshot(snapshot(), 0);
+    let state = replaceFromSnapshot(snapshot(), runtimeCursor(0));
     const events = [
       {
         type: "attempt_started" as const,
@@ -551,15 +552,21 @@ describe("lifecycle progression", () => {
       },
     ];
     for (const event of events) {
-      state = reduce(state, { cursor: state.cursor + 1, event });
+      state = reduce(state, {
+        cursor: runtimeCursor(state.cursor + 1),
+        event,
+      });
     }
     return state;
   }
 
   it("moves assembled -> running -> settled as the same entity", () => {
-    let state = replaceFromSnapshot(snapshot(), 0);
+    let state = replaceFromSnapshot(snapshot(), runtimeCursor(0));
     const push = (event: Parameters<typeof reduce>[1]["event"]) => {
-      state = reduce(state, { cursor: state.cursor + 1, event });
+      state = reduce(state, {
+        cursor: runtimeCursor(state.cursor + 1),
+        event,
+      });
     };
 
     push({

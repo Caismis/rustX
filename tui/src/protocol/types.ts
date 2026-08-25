@@ -36,6 +36,7 @@ export const RUNTIME_CLIENT_PROTOCOL_VERSION_V1 = 1;
 export type ConversationId = string;
 export type AgentId = string;
 export type AttemptId = string;
+export type TurnId = string;
 export type MessageId = string;
 export type ToolCallId = string;
 export type ToolExecutionId = string;
@@ -51,7 +52,15 @@ export type SessionNodeId = string;
 /** A monotonic capability revision. */
 export type CapabilityRevision = number;
 /** A position in the Runtime Client observation stream. */
-export type RuntimeClientCursor = number;
+declare const runtimeClientCursorBrand: unique symbol;
+export type RuntimeClientCursor = number & {
+  readonly [runtimeClientCursorBrand]: "runtime-client-cursor";
+};
+/** A position in the durable derived transcript. Not a Runtime Client cursor. */
+declare const runtimeClientTranscriptCursorBrand: unique symbol;
+export type RuntimeClientTranscriptCursor = number & {
+  readonly [runtimeClientTranscriptCursorBrand]: "transcript-cursor";
+};
 /** An immutable Conversation Surface revision selected for a seed. */
 export type SurfaceRevision = number;
 /** A mailbox-assigned inbound sequence. Not a cursor. */
@@ -97,7 +106,15 @@ export type UserSource =
   | "runtime"
   | { agent: { agent_id: AgentId } };
 
-export type InboundKind = "message" | "compaction_summary";
+export type InboundKind =
+  | "message"
+  | "compaction_summary"
+  | {
+      context:
+        | "runtime_tool_observation"
+        | "extension_environment"
+        | "agent_status";
+    };
 
 export type UserContentBlock =
   | ({ type: "text" } & TextBlock)
@@ -310,6 +327,30 @@ export type InteractionOutcome =
   | { type: "answered"; response: InteractionResponse }
   | { type: "cancelled"; reason: CancellationReason }
   | { type: "unavailable" };
+
+/** The bounded by-value subject retained by the durable interaction audit. */
+export type InteractionSubject =
+  | {
+      type: "approval";
+      call_id: ToolCallId;
+      tool_id: ToolId;
+      tool_name: string;
+      arguments_digest: string;
+      reason: string;
+    }
+  | {
+      type: "question";
+      prompt: string;
+      choices?: string[];
+      allow_free_text: boolean;
+    };
+
+/** The terminal value retained by the durable interaction audit. */
+export type InteractionSettlement =
+  | { type: "approved" }
+  | { type: "denied"; reason: string }
+  | { type: "answered"; answer: QuestionAnswer }
+  | { type: "cancelled"; reason: CancellationReason };
 
 // ---------------------------------------------------------------------------
 // Model configuration (camelCase on the wire)
@@ -725,6 +766,8 @@ export interface RuntimeClientSnapshot {
   pending_approval_mode?: ApprovalMode;
   approval_mode_revision: number;
   messages: MessageBlock[];
+  /** The bounded newest page of durable transcript history. */
+  transcript: RuntimeClientTranscriptPage;
   attempt?: RuntimeClientAttempt;
   inbound: InboundDiagnostics;
   /** Live runtime-owned interactions; never client-owned approval truth. */
@@ -736,6 +779,38 @@ export interface RuntimeClientSnapshot {
   capabilities: CapabilityView;
   /** The session's *desired* model. Never the running attempt's model. */
   model: SessionModelView;
+}
+
+export type RuntimeClientTranscriptItem =
+  | { type: "message"; message: MessageBlock }
+  | { type: "publication_audit"; audit: PublicationAudit }
+  | {
+      type: "interaction_requested";
+      event_id: string;
+      timestamp: string;
+      attempt_id: AttemptId;
+      turn_id: TurnId;
+      interaction_id: InteractionId;
+      subject: InteractionSubject;
+    }
+  | {
+      type: "interaction_settled";
+      event_id: string;
+      timestamp: string;
+      attempt_id: AttemptId;
+      turn_id: TurnId;
+      interaction_id: InteractionId;
+      settlement: InteractionSettlement;
+    };
+
+export interface RuntimeClientTranscriptEntry {
+  cursor: RuntimeClientTranscriptCursor;
+  item: RuntimeClientTranscriptItem;
+}
+
+export interface RuntimeClientTranscriptPage {
+  entries: RuntimeClientTranscriptEntry[];
+  next_cursor?: RuntimeClientTranscriptCursor;
 }
 
 // ---------------------------------------------------------------------------
@@ -810,6 +885,30 @@ export type RuntimeClientEvent =
       type: "interaction_settled";
       interaction_id: InteractionId;
       outcome: InteractionOutcome;
+    }
+  | {
+      type: "interaction_audit_requested";
+      transcript_cursor: RuntimeClientTranscriptCursor;
+      audit: {
+        event_id: string;
+        timestamp: string;
+        attempt_id: AttemptId;
+        turn_id: TurnId;
+        interaction_id: InteractionId;
+        subject: InteractionSubject;
+      };
+    }
+  | {
+      type: "interaction_audit_settled";
+      transcript_cursor: RuntimeClientTranscriptCursor;
+      audit: {
+        event_id: string;
+        timestamp: string;
+        attempt_id: AttemptId;
+        turn_id: TurnId;
+        interaction_id: InteractionId;
+        settlement: InteractionSettlement;
+      };
     }
   | {
       type: "approval_mode_changed";
@@ -890,11 +989,13 @@ export type RuntimeClientEvent =
        * entries are model proposals that were never authorized and never
        * executed, so they must never be presented as the
        * `tool_execution_started` / `tool_execution_settled` Tool Plane facts,
-       * and the audit must never be folded into conversation history.
+       * or imply side effects. The audit is a noncanonical derived transcript
+       * item, not a Message Ledger message.
        */
       type: "assistant_publication_settled";
       attempt_id: AttemptId;
       audit: PublicationAudit;
+      transcript_cursor: RuntimeClientTranscriptCursor;
     }
   | {
       type: "tool_execution_started";
@@ -921,6 +1022,7 @@ export type RuntimeClientEvent =
       type: "message_committed";
       attempt_id?: AttemptId;
       message: MessageBlock;
+      transcript_cursor?: RuntimeClientTranscriptCursor;
     }
   | {
       type: "agent_status_composed";
@@ -933,6 +1035,7 @@ export type RuntimeClientEvent =
       type: "inbound_enqueued";
       sequence: InboundSequence;
       message: UserMessageBlock;
+      transcript_cursor?: RuntimeClientTranscriptCursor;
     }
   | {
       type: "inbound_drained";
@@ -951,6 +1054,69 @@ export type RuntimeClientEvent =
   | { type: "capability_updated"; capabilities: CapabilityView }
   | { type: "session_model_changed"; model: SessionModelView }
   | { type: "runtime_shutdown" };
+
+/** Whether a User message is a hidden Context fact rather than transcript content. */
+export function isHiddenContextMessage(message: {
+  role?: unknown;
+  kind?: unknown;
+}): boolean {
+  const isUserMessage = message.role === undefined || message.role === "user";
+  return (
+    isUserMessage &&
+    typeof message.kind === "object" &&
+    message.kind !== null &&
+    "context" in message.kind
+  );
+}
+
+function isWireTranscriptCursor(value: unknown): value is RuntimeClientTranscriptCursor {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0
+  );
+}
+
+/** Checks the one visible/hidden transcript-cursor contract at the wire boundary. */
+export function hasTranscriptCursorContract(
+  message: unknown,
+  transcriptCursor: unknown,
+): boolean {
+  if (typeof message !== "object" || message === null) {
+    return false;
+  }
+  if (isHiddenContextMessage(message as { role?: unknown; kind?: unknown })) {
+    return transcriptCursor === undefined;
+  }
+  return isWireTranscriptCursor(transcriptCursor);
+}
+
+/**
+ * Validates a transcript-visible message before presentation reduction.
+ *
+ * Hidden Context messages may omit the cursor and never enter the ordinary
+ * transcript. Every other message must carry the durable cursor allocated by
+ * `transcript_order`; contradictory hidden-with-cursor facts fail closed.
+ */
+export function validateTranscriptCursorContract(
+  message: { role?: unknown; kind?: unknown },
+  transcriptCursor: RuntimeClientTranscriptCursor | undefined,
+): RuntimeClientTranscriptCursor | undefined {
+  if (isHiddenContextMessage(message)) {
+    if (transcriptCursor !== undefined) {
+      throw new Error(
+        "hidden Context message must not carry a durable transcript cursor",
+      );
+    }
+    return undefined;
+  }
+  if (!isWireTranscriptCursor(transcriptCursor)) {
+    throw new Error(
+      "visible transcript message is missing a valid durable transcript cursor",
+    );
+  }
+  return transcriptCursor;
+}
 
 export interface RuntimeClientProtocolEvent {
   cursor: RuntimeClientCursor;
@@ -974,6 +1140,12 @@ export type RuntimeClientRequest =
       response: InteractionResponse;
     }
   | { method: "snapshot_get"; id: RequestId }
+  | {
+      method: "transcript_page_get";
+      id: RequestId;
+      before_cursor?: RuntimeClientTranscriptCursor;
+      limit: number;
+    }
   | {
       method: "subscribe_events";
       id: RequestId;
@@ -1060,6 +1232,7 @@ export type RuntimeClientRequestBody =
       "id"
     >
   | Omit<Extract<RuntimeClientRequest, { method: "snapshot_get" }>, "id">
+  | Omit<Extract<RuntimeClientRequest, { method: "transcript_page_get" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "subscribe_events" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "capability_get" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "model_catalog_get" }>, "id">
@@ -1109,6 +1282,7 @@ export type RuntimeClientResult =
       snapshot: RuntimeClientSnapshot;
       cursor: RuntimeClientCursor;
     }
+  | { type: "transcript_page"; page: RuntimeClientTranscriptPage }
   | { type: "subscribed"; after_cursor: RuntimeClientCursor }
   | { type: "capability"; capabilities: CapabilityView }
   | { type: "model_catalog"; catalog: ModelCatalogView }
@@ -1226,6 +1400,8 @@ export function isKnownRuntimeClientEvent(
     case "attempt_usage_updated":
     case "interaction_pending":
     case "interaction_settled":
+    case "interaction_audit_requested":
+    case "interaction_audit_settled":
     case "approval_mode_changed":
     case "context_compaction_started":
     case "context_compaction_failed":
@@ -1276,7 +1452,14 @@ export function isProtocolEvent(
   };
   return (
     typeof candidate.cursor === "number" &&
-    isKnownRuntimeClientEvent(candidate.event)
+    isKnownRuntimeClientEvent(candidate.event) &&
+    (candidate.event.type !== "message_committed" &&
+    candidate.event.type !== "inbound_enqueued"
+      ? true
+      : hasTranscriptCursorContract(
+          candidate.event.message,
+          candidate.event.transcript_cursor,
+        ))
   );
 }
 

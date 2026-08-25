@@ -30,17 +30,17 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 6. An incompatible database
+The SQLite schema is development schema version 8. An incompatible database
 fails explicitly; there is no migration chain, legacy reader, compatibility
 fallback, dual write, or old storage mode. File-backed stores use WAL,
 `synchronous=FULL`, foreign-key enforcement, and a busy timeout. A successful
 SQLite commit is the local durability linearization point documented here.
 
-The version-6 physical tables are deliberately semantic rather than generic:
+The version-8 physical tables are deliberately semantic rather than generic:
 
 | Table | Purpose and constraints |
 | --- | --- |
-| `rustx_store` | One-row conversation binding, schema version, and durable next `InboundSequence` / Event Journal sequence counters. |
+| `rustx_store` | One-row conversation binding, schema version, and durable next `InboundSequence` / Event Journal / transcript position counters. |
 | `pending_inbound` | Pending deliveries keyed by `InboundSequence`, with unique `MessageId`, serialized User body, and optional correlation. |
 | `inbound_correlation` | Exactly-once correlation mapping to the accepted sequence and unique `MessageId`. |
 | `message_ledger` | Append-only canonical bodies keyed by commit `position` and unique `MessageId`. |
@@ -55,6 +55,7 @@ The version-6 physical tables are deliberately semantic rather than generic:
 | `publication_frames` | Contiguous transient release staging for one publication stream. |
 | `publication_proposals` | Proposal ownership keyed by `(stream_id, ToolCallId)`, with frozen block/tool/name identity, explicit `started`/`completed` state, execution, and settlement state. Provider call IDs are publication-scoped. |
 | `publication_audits` | One bounded immutable audit for each non-canonical publication settlement. |
+| `transcript_order` | A narrow durable ordering spine of references to canonical Ledger messages, publication audits, and interaction audit events; it stores no message or audit body. |
 
 `MessageId`, `InboundSequence`, `SurfaceRevision`, `RequestId`, `EventId`,
 Event Journal sequence, `AttemptId`, `TurnId`, `ToolCallId`,
@@ -114,9 +115,18 @@ background-execution fact and rejects every later fact in that lifecycle. An
 attempt terminal is an attempt-level fact; it is not treated as a late event
 inside a turn that already emitted `TurnCompleted`.
 
+The generic `ConversationStore::append_event` transition is limited to facts
+whose durable owner does not need a purpose-specific receipt. It rejects
+`InteractionRequested` and `InteractionSettled` before opening a transaction;
+the dedicated `append_interaction_audit` transition commits the Event Journal
+fact and its `transcript_order` reference together and returns the exact
+`TranscriptCursor` to the live publication path.
+
 Runtime bootstrap loads only the current Surface head, active IDs, active
 message bodies, structural checkpoint metadata, pending items, and bounded
-projection state. Event pages, old requests, retired Ledger rows, and
+projection state. The Runtime Client also receives only the newest bounded
+page of the derived transcript; old transcript entries are read lazily from
+the ordering spine. Event pages, old requests, retired Ledger rows, and
 historical Surface revisions are read lazily. M8 stores the evidence; M9a
 (Issue #12) adds the startup recovery that classifies and reconciles it — see
 [Recovery model](#7-recovery-model). Model-turn cancellation redesign (M9b)
@@ -481,6 +491,14 @@ facts and rejects every other payload. It receives no Ledger, Surface,
 Request Snapshot, publication, or general Journal authority, so an audit seam
 can never become a second way to authorize a side effect.
 
+The Runtime Client/TUI boundary is fail-closed for cursor contradictions:
+cursor absence is legal only for a hidden Context-kind User message. A visible
+User, Assistant, or Tool message, and every visible inbound, must carry its
+durable `TranscriptCursor`; a hidden Context carrying one is also invalid.
+Protocol validation and the presentation reducer share this visibility rule,
+so a malformed event cannot silently advance or rewrite accepted presentation
+state.
+
 `InteractionRequested` opens the `interaction:{id}` durable lifecycle and
 `InteractionSettled` closes it exactly once, in the same shape the background
 and subagent ownership lifecycles already use. The store rejects a duplicate
@@ -602,6 +620,76 @@ regression: it observes the Runtime Client pending event, linearizes
 waiter handoff after pending-map removal. Only after the interaction waiter,
 AgentExecution, attempt task, and projection settlement release their counted
 authority may the lifecycle publish `Quiescent`.
+
+### 1.3.2 Durable transcript history and paging (FND-05 / Issue #110)
+
+The transcript is a derived read model, not a new conversation owner. The
+ownership boundary is:
+
+```text
+Message Ledger bodies       canonical User / Assistant / Tool message facts
+Publication audits          released non-canonical model output
+Event Journal interaction   requested/settled human-decision audits
+transcript_order            stable references and ordering only
+Conversation Surface        current active model-context working set
+Runtime Client / TUI        bounded projection and presentation only
+```
+
+`transcript_order` contains only a reference kind, reference identity, and a
+monotonic position. Its identity is the composite `(reference_kind,
+reference_id)` key: a MessageId, PublicationStreamId, and EventId may reuse
+the same opaque string without colliding. The store appends that reference in
+the same transaction as the owning durable fact. Reading a page resolves the body from its
+canonical owner on demand, so the transcript cannot become a second body
+store or an unbounded in-memory vector. Accepted inbound User content is not
+displayable until its acceptance transaction commits; adoption into the
+Ledger preserves the same durable identity and ordering reference.
+
+Surface and transcript intentionally diverge. Surface owns the finite active
+identity/order sent to the model and is replaced by compaction. Transcript
+retains the durable readable history of visible canonical messages and audits
+after those messages leave Surface. Normal transcript visibility includes
+User, Assistant, Tool, and compaction-summary messages. All Context-kind User
+messages, including Agent Status, runtime observations, and extension
+environment facts, are hidden from normal chat history. The durable position
+is allocated before the observation is released; every live visible message
+or audit carries that exact `TranscriptCursor`. The Runtime Client event
+cursor remains only an observation-stream position and is never a transcript
+ordering input.
+
+The Runtime Client snapshot contains a newest transcript page capped at 64
+entries. `transcript_page_get` accepts an exclusive `before_cursor` and a
+limit from 1 through 256; the response is chronological within the page and
+returns the exclusive cursor for the next older page. The caller passes that
+`next_cursor` unchanged on the next older-page request: it is the current
+page's oldest boundary, not a newest-entry cursor. This transcript cursor is
+independent from the live Runtime Client event cursor: snapshot plus
+subscribe-after-cursor repairs live projection state, while transcript page
+requests repair durable history and never move the live cursor. Every live
+transcript-visible observation carries the cursor allocated by the same
+durable transaction as its owning fact, so live, snapshot, reattach, headless,
+cold reopen, and paging folds have one order. A detached, reattached,
+headless, or cold reopened runtime reads the same durable pages and never
+enumerates the whole conversation at bootstrap.
+
+Publication audits render as explicitly non-canonical Assistant transcript
+items. They are derived from the publication-audit owner rather than the
+Message Ledger, and do not imply canonical acceptance or execution.
+Incomplete and Unaccepted audits remain distinct. A model-proposed tool call
+inside either audit is typed and rendered as proposed, unaccepted, and
+unexecuted; it is never a Tool Plane invocation and never implies execution,
+a result, or side effects. Historical interaction requested/settled audits
+are visible evidence only: recovery never recreates their waiters or grants
+authority. Resource discovery and reload likewise produce no transcript item;
+old RequestSnapshots retain their exact System/resource bytes, while a cold
+reopen loads a fresh resource generation for future requests.
+
+The TUI therefore sends user input through the Runtime Client and renders it
+only after durable acceptance. It does not maintain an optimistic semantic
+echo or a parallel transcript. Page-up reads older durable pages and merges
+live and historical entries by their durable transcript cursors without
+moving the live event cursor; identity only rejects the same fact twice.
+Historical audits are non-actionable presentation rows.
 
 ## 2. Layer model
 

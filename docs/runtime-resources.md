@@ -96,6 +96,24 @@ resources for a newly admitted attempt, while old summaries and old
 RequestSnapshots remain historical values and no synthetic resource-change
 message is added to canonical history.
 
+## Resource authority versus transcript history
+
+Resource generations and transcript history have separate owners. The
+process-local `RuntimeResourceSnapshot` supplies current System sections,
+Skill guidance, Tool definitions, and executors for a newly admitted request;
+the durable transcript resolves only visible message bodies and explicit
+publication/interaction audits from their canonical owners. Resource edits,
+explicit reload, the current `AGENTS.md`/Skill catalog, and the publication of
+a new resource revision therefore create no ordinary transcript item.
+
+An old `RequestSnapshot` retains its exact System bytes, ordered sections,
+Tool definitions, and resource revision by value. Reconstructing that request
+does not read the current resource generation. Conversely, cold reopen loads a
+fresh resource generation for the first new request while retaining the same
+durable transcript order. The transcript is bootstrapped and paged separately
+from current resources, and it never becomes a resource cache or a source of
+execution authority.
+
 ## Admission, pinning, and reload
 
 Attempt admission and reload share one synchronization boundary. Admission

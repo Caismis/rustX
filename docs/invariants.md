@@ -29,6 +29,7 @@ Event Journal                append-only execution facts and lifecycle state
 checkpoint/index metadata    current Surface head and structural checkpoint
 ConversationInboundMailbox   process-local coordination/wakeup only
 Runtime Client               projection/control adapter only
+Transcript order             derived reference spine; no message/audit bodies
 ```
 
 No ConversationRecord, full transcript, request-message copy, generic
@@ -40,7 +41,7 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 6 is the only accepted schema; incompatible files fail
+schema version 8 is the only accepted schema; incompatible files fail
 explicitly and are not migrated.
 
 The durable request-start invariant is strict: the provider adapter cannot be
@@ -104,6 +105,72 @@ A committed-message event must never precede the durable MessageBlock it
 references. In the SQLite backend, the canonical body and its committed
 message event share one transaction; the same applies to compaction summary /
 Surface revision and request snapshot / request-start fact.
+
+## Derived transcript history (FND-05 / Issue #110)
+
+The transcript is a read model over existing durable owners. It is not a
+second message/audit store, a replacement for Surface, or an unbounded client
+cache:
+
+```text
+Message Ledger       canonical User / Assistant / Tool bodies
+Publication audits   non-canonical released model output
+Event Journal        interaction requested/settled audit facts
+transcript_order     durable references and total ordering only
+Surface              current finite model-context working set
+Runtime Client/TUI   bounded projection and presentation
+```
+
+Every transcript reference is appended in the same SQLite transaction as its
+owning fact. Page reads resolve the referenced body on demand. A pending User
+delivery becomes transcript-visible only after durable acceptance; adopting it
+into the Ledger keeps its identity and ordering reference. Therefore a client
+cannot show semantic user input that may still be lost, and a client detach
+cannot lose accepted history.
+
+Surface owns the active identity/order sent to the model and compaction may
+replace it. Transcript visibility is independent: normal pages include User,
+Assistant, Tool, and compaction-summary messages even after Surface removes
+them. User messages whose `InboundKind` is any `Context` variant are excluded
+from normal chat transcript, including Agent Status, runtime observation, and
+extension-environment facts. They remain available only through their owning
+diagnostic/audit paths where explicitly requested.
+
+Transcript bootstrap is bounded to the newest 64 entries. The Runtime Client
+`transcript_page_get` operation accepts an exclusive `before_cursor` and a
+limit from 1 through 256. Entries are chronological within each page and the
+returned `next_cursor` is the exclusive boundary for the next older page.
+Transcript cursors are independent of Runtime Client event cursors, so page
+walking cannot invalidate snapshot-plus-subscribe resynchronization. A page
+walk must be stable, duplicate-free, and gap-free under the durable ordering
+spine; clients merge live and older pages by durable transcript cursor. Entry
+identity only detects the same durable fact, and page reads do not move the
+live event cursor.
+
+The generic Event Journal append cannot commit interaction transcript facts:
+`append_event` rejects `InteractionRequested` and `InteractionSettled` before
+the durable transition begins. Only the narrow
+`append_interaction_audit` transition commits those facts, allocates their
+ordering reference in the same transaction, and returns the allocated cursor
+to live publication. At the Runtime Client/TUI boundary, cursor absence is
+legal only for hidden Context-kind User messages. Visible User, Assistant,
+Tool, and inbound facts without a durable cursor fail closed; hidden Context
+facts carrying a cursor are rejected and cannot enter ordinary transcript.
+
+Publication audits are typed non-canonical Assistant items. Incomplete and
+Unaccepted settlements remain distinct. A model-proposed tool call in either
+audit is explicitly proposed, unaccepted, and unexecuted; it can never be
+classified as a Tool Plane invocation or imply `ToolExecutionStarted`, a
+`ToolResult`, or side effects. Interaction requested/settled items are
+historical audit evidence only: recovery never reconstructs a pending waiter
+or reuses an old approval as execution authority.
+
+Resource discovery, edits, and reloads do not append transcript items. A
+historical RequestSnapshot reproduces its exact System/resource bytes without
+consulting the current generation. A cold reopen may load current resources
+for the first new request while retaining the same durable transcript pages.
+Agent Status and current resource/Skill catalogs are not ordinary chat
+history.
 
 ## Attempt settlement
 
@@ -2754,9 +2821,45 @@ semantic normalization boundary. The frozen invariants:
   client streaming vocabulary it always published, but every one of them was
   committed for release before it arrived. A stream that settles without
   canonical acceptance publishes `AssistantPublicationSettled`, whose audit a
-  transcript consumer must present as committed-for-release output containing
-  model **proposals** — never as conversation history and never as Tool Plane
-  invocation facts.
+  transcript consumer must present as committed-for-release, **noncanonical**
+  transcript output containing model **proposals** — never as a Message Ledger
+  message and never as Tool Plane invocation facts.
+- **The snapshot transcript is a bounded durable read model.** It contains
+  the newest page of canonical visible messages, non-canonical publication
+  audits, and historical interaction audits. It is resolved from the Ledger,
+  publication-audit, and Event Journal owners through `transcript_order`; no
+  body is copied into a transcript database or retained as an unbounded
+  Runtime Client vector. Surface `messages` remains the current active model
+  working set and is not a substitute for transcript history after compaction.
+  `transcript_order` identifies each reference by the composite
+  `(reference_kind, reference_id)` key, so independent MessageId,
+  PublicationStreamId, and EventId domains may reuse an opaque string. The
+  same transaction that commits the owning fact allocates its
+  `TranscriptCursor` and supplies it to the live observation.
+- **`transcript_page_get` uses a separate stable cursor domain.** The snapshot
+  bootstrap page is capped at 64 entries. A page request accepts an exclusive
+  `before_cursor` and a limit of 1..=256, returns chronological entries and
+  an exclusive next-older cursor, and never changes `RuntimeClientCursor`.
+  The caller passes the previous response's `next_cursor` unchanged as the
+  next request's `before_cursor`; it is the oldest boundary, not the newest
+  entry cursor. Page walking is duplicate-free and gap-free; a reattached,
+  headless, or cold-reopened client reads the same durable order. The TUI
+  merges live and older pages by durable transcript cursor (identity only
+  rejects the same fact twice) and shows a transient failure if a page read
+  fails.
+- **Durable acceptance is the user-input visibility frontier.** The TUI never
+  adds an optimistic semantic user row. It sends input through the Runtime
+  Client and shows the row only after the runtime publishes durable
+  acceptance. Context-kind User messages, including Agent Status and runtime
+  resource observations, are not normal transcript items.
+- **Historical audit rows are never actionable.** Incomplete and Unaccepted
+  publication audits are distinct typed non-canonical Assistant output. Tool
+  proposals inside them render as proposed/unaccepted/unexecuted and can
+  never produce Tool Plane execution, a ToolResult, or side effects.
+  Interaction requested/settled rows are audit evidence only; recovery never
+  reconstructs their pending waiters. Resource reload produces no transcript
+  item, and a RequestSnapshot still reproduces its old System/resource bytes
+  after a cold reopen.
 - **Client detach never implies semantic cancellation.** Detaching an
   attachment changes only attachment state; the current attempt,
   conversation-owned background executions, mailbox contents, canonical

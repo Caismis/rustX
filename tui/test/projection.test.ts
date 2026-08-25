@@ -9,9 +9,9 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  mergeTranscriptPage,
   reduce,
   replaceFromSnapshot,
-  withPendingSubmission,
 } from "../src/presentation/projection.ts";
 import type { PresentationState, StreamingMessage } from "../src/presentation/state.ts";
 import type {
@@ -23,11 +23,15 @@ import {
   approvalInteraction,
   attemptModel,
   backgroundExecution,
+  contextUserMessage,
   capabilities,
   runtimeInbound,
   sessionModel,
   questionInteraction,
+  runtimeCursor,
   snapshot,
+  transcriptCursor,
+  toolMessage,
   toolResult,
   userMessage,
 } from "./support/fixtures.ts";
@@ -41,7 +45,7 @@ function fold(
   let current = state;
   let cursor = startCursor;
   for (const event of events) {
-    cursor += 1;
+    cursor = runtimeCursor(cursor + 1);
     const protocolEvent: RuntimeClientProtocolEvent = { cursor, event };
     current = reduce(current, protocolEvent);
   }
@@ -54,7 +58,7 @@ function streamingOf(state: PresentationState): StreamingMessage | undefined {
   );
 }
 
-const initial = () => replaceFromSnapshot(snapshot(), 0);
+const initial = () => replaceFromSnapshot(snapshot(), runtimeCursor(0));
 
 describe("presentation projection", () => {
   it("derives the initial state from an authoritative snapshot", () => {
@@ -64,7 +68,7 @@ describe("presentation projection", () => {
         messages: [userMessage("m1", "hello"), assistantMessage("m2", "hi")],
         capabilities: capabilities(4),
       }),
-      9,
+      runtimeCursor(9),
     );
 
     assert.equal(state.conversationId, "conv-1");
@@ -77,6 +81,278 @@ describe("presentation projection", () => {
     );
     assert.equal(state.sessionModel.configured.model, "alpha/model-a");
     assert.equal(state.attempt, undefined);
+  });
+
+  it("boots from the bounded transcript page, not the current Surface messages", () => {
+    const state = replaceFromSnapshot(
+      snapshot({
+        messages: [assistantMessage("surface-only", "current Surface")],
+        transcript: {
+          entries: [
+            {
+              cursor: transcriptCursor(4),
+              item: {
+                type: "message",
+                message: userMessage("historical", "retained history"),
+              },
+            },
+          ],
+          next_cursor: transcriptCursor(3),
+        },
+      }),
+      runtimeCursor(12),
+    );
+
+    assert.deepEqual(
+      state.transcript.map((entry) => entry.kind === "committed" && entry.messageId),
+      ["historical"],
+    );
+    assert.equal(state.transcriptNextCursor, 3);
+  });
+
+  it("prepends an older page once, without moving the live event cursor", () => {
+    const state = replaceFromSnapshot(
+      snapshot({
+        transcript: {
+          entries: [
+            {
+              cursor: transcriptCursor(3),
+              item: {
+                type: "message",
+                message: userMessage("middle", "middle"),
+              },
+            },
+            {
+              cursor: transcriptCursor(4),
+              item: {
+                type: "message",
+                message: assistantMessage("newest", "newest"),
+              },
+            },
+          ],
+          next_cursor: transcriptCursor(2),
+        },
+      }),
+      runtimeCursor(19),
+    );
+    const merged = mergeTranscriptPage(state, {
+      entries: [
+        {
+          cursor: transcriptCursor(2),
+          item: {
+            type: "message",
+            message: userMessage("oldest", "oldest"),
+          },
+        },
+        {
+          cursor: transcriptCursor(3),
+          item: {
+            type: "message",
+            message: userMessage("middle", "duplicate"),
+          },
+        },
+      ],
+      next_cursor: undefined,
+    });
+
+    assert.deepEqual(
+      merged.transcript.map((entry) => entry.kind === "committed" && entry.messageId),
+      ["oldest", "middle", "newest"],
+    );
+    assert.equal(merged.cursor, 19);
+    assert.equal(merged.transcriptNextCursor, undefined);
+  });
+
+  it("orders live and paged facts by durable cursor, not observation arrival", () => {
+    let state = initial();
+    state = reduce(state, {
+      cursor: runtimeCursor(40),
+      event: {
+        type: "message_committed",
+        message: assistantMessage("message-b", "B"),
+        transcript_cursor: transcriptCursor(11),
+      },
+    });
+    state = reduce(state, {
+      cursor: runtimeCursor(41),
+      event: {
+        type: "inbound_enqueued",
+        sequence: 1,
+        message: userMessage("message-a", "A"),
+        transcript_cursor: transcriptCursor(10),
+      },
+    });
+
+    assert.deepEqual(
+      state.transcript.map((entry) => entry.kind === "committed" && entry.messageId),
+      ["message-a", "message-b"],
+      "reverse observation order is repaired by the durable cursor",
+    );
+    assert.deepEqual(
+      state.transcript.map((entry) => entry.kind === "committed" && entry.cursor),
+      [10, 11],
+    );
+    assert.equal(state.cursor, 41, "live event cursor remains its own domain");
+
+    const merged = mergeTranscriptPage(state, {
+      entries: [
+        {
+          cursor: transcriptCursor(9),
+          item: { type: "message", message: userMessage("message-old", "old") },
+        },
+        {
+          cursor: transcriptCursor(11),
+          item: { type: "message", message: assistantMessage("message-b", "duplicate") },
+        },
+      ],
+      next_cursor: transcriptCursor(8),
+    });
+    assert.deepEqual(
+      merged.transcript.map((entry) => entry.kind === "committed" && entry.messageId),
+      ["message-old", "message-a", "message-b"],
+    );
+    assert.equal(merged.cursor, 41, "paging never advances the live cursor");
+
+    const resynced = replaceFromSnapshot(
+      snapshot({
+        transcript: {
+          entries: [
+            {
+              cursor: transcriptCursor(11),
+              item: {
+                type: "message",
+                message: assistantMessage("message-b", "B"),
+              },
+            },
+            {
+              cursor: transcriptCursor(10),
+              item: { type: "message", message: userMessage("message-a", "A") },
+            },
+            {
+              cursor: transcriptCursor(9),
+              item: { type: "message", message: userMessage("message-old", "old") },
+            },
+          ],
+          next_cursor: transcriptCursor(8),
+        },
+      }),
+      runtimeCursor(41),
+    );
+    assert.deepEqual(
+      resynced.transcript.map((entry) => entry.kind === "committed" && entry.messageId),
+      ["message-old", "message-a", "message-b"],
+      "snapshot/resync keeps the durable relative order",
+    );
+
+    state = reduce(merged, {
+      cursor: runtimeCursor(42),
+      event: {
+        type: "assistant_publication_settled",
+        attempt_id: "attempt-1",
+        transcript_cursor: transcriptCursor(12),
+        audit: {
+          stream_id: "stream-audit",
+          attempt_id: "attempt-1",
+          turn_id: "turn-1",
+          request_id: "request-1",
+          message_id: "message-provisional",
+          kind: "incomplete",
+          content: [
+            {
+              kind: "proposed_tool_call",
+              block_index: 0,
+              call_id: "call-proposed",
+              tool_id: "tool-read",
+              name: "Read",
+              arguments: "{}",
+              complete: true,
+            },
+          ],
+          settled_at: "2026-08-24T12:00:00Z",
+        },
+      },
+    });
+    const publication = state.transcript.at(-1);
+    assert.equal(publication?.kind, "publication_audit");
+    assert.equal(
+      publication?.kind === "publication_audit"
+        ? publication.cursor
+        : undefined,
+      12,
+    );
+    assert.equal(state.attempt?.foreground.length ?? 0, 0);
+
+    state = reduce(state, {
+      cursor: runtimeCursor(43),
+      event: {
+        type: "interaction_audit_requested",
+        transcript_cursor: transcriptCursor(13),
+        audit: {
+          event_id: "interaction-requested-event-1",
+          timestamp: "2026-08-24T12:00:00Z",
+          attempt_id: "attempt-1",
+          turn_id: "turn-1",
+          interaction_id: "interaction-1",
+          subject: {
+            type: "question",
+            prompt: "Which environment?",
+            choices: ["staging", "production"],
+            allow_free_text: false,
+          },
+        },
+      },
+    });
+    const requested = state.transcript.at(-1);
+    assert.equal(requested?.kind, "interaction_requested");
+    assert.equal(
+      requested?.kind === "interaction_requested"
+        ? requested.cursor
+        : undefined,
+      13,
+    );
+    assert.equal(state.pendingInteractions.length, 0, "historical audit is not a waiter");
+  });
+
+  it("adds a user transcript row only when the durable acceptance event arrives", () => {
+    const state = initial();
+    assert.equal(state.transcript.length, 0);
+    const accepted = reduce(state, {
+      cursor: runtimeCursor(1),
+      event: {
+        type: "inbound_enqueued",
+        sequence: 1,
+        message: {
+          id: "accepted-user",
+          content: [{ type: "text", text: "accepted" }],
+          source: "human",
+          kind: "message",
+        },
+        transcript_cursor: transcriptCursor(1),
+      },
+    });
+    assert.deepEqual(
+      accepted.transcript.map((entry) => entry.kind === "committed" && entry.messageId),
+      ["accepted-user"],
+    );
+  });
+
+  it("keeps Agent Status context out of the normal transcript", () => {
+    const state = reduce(initial(), {
+      cursor: runtimeCursor(1),
+      event: {
+        type: "inbound_enqueued",
+        sequence: 1,
+        message: {
+          id: "status",
+          content: [{ type: "text", text: "internal" }],
+          source: "runtime",
+          kind: { context: "agent_status" },
+        },
+        transcript_cursor: undefined,
+      },
+    });
+    assert.equal(state.transcript.length, 0);
+    assert.equal(state.inbound.pending?.length, 1);
   });
 
   it("folds live approvals and repairs them from snapshot/resync state", () => {
@@ -101,7 +377,7 @@ describe("presentation projection", () => {
 
     const repaired = replaceFromSnapshot(
       snapshot({ pending_interactions: [interaction] }),
-      8,
+      runtimeCursor(8),
     );
     assert.deepEqual(repaired.pendingInteractions, [interaction]);
     assert.equal(repaired.cursor, 8);
@@ -180,7 +456,7 @@ describe("presentation projection", () => {
           },
         },
       }),
-      5,
+      runtimeCursor(5),
     );
 
     const streaming = streamingOf(state);
@@ -317,6 +593,7 @@ describe("presentation projection", () => {
         type: "message_committed",
         attempt_id: "a1",
         message: assistantMessage("m1", "hi"),
+        transcript_cursor: transcriptCursor(1),
       },
     ]);
 
@@ -327,10 +604,15 @@ describe("presentation projection", () => {
 
   it("renders committed human and runtime-originated inbound distinctly", () => {
     const state = fold(initial(), [
-      { type: "message_committed", message: userMessage("m1", "from a human") },
+      {
+        type: "message_committed",
+        message: userMessage("m1", "from a human"),
+        transcript_cursor: transcriptCursor(1),
+      },
       {
         type: "message_committed",
         message: runtimeInbound("m2", "background work finished"),
+        transcript_cursor: transcriptCursor(2),
       },
     ]);
 
@@ -441,6 +723,7 @@ describe("presentation projection", () => {
       {
         type: "message_committed",
         message: runtimeInbound("m9", "background_task finished"),
+        transcript_cursor: transcriptCursor(1),
       },
     ]);
 
@@ -451,8 +734,18 @@ describe("presentation projection", () => {
 
   it("folds inbound enqueue and finite drain from runtime facts", () => {
     let state = fold(initial(), [
-      { type: "inbound_enqueued", sequence: 1, message: userMessage("m1", "first") },
-      { type: "inbound_enqueued", sequence: 2, message: userMessage("m2", "second") },
+      {
+        type: "inbound_enqueued",
+        sequence: 1,
+        message: userMessage("m1", "first"),
+        transcript_cursor: transcriptCursor(1),
+      },
+      {
+        type: "inbound_enqueued",
+        sequence: 2,
+        message: userMessage("m2", "second"),
+        transcript_cursor: transcriptCursor(2),
+      },
     ]);
     assert.equal(state.inbound.pending?.length, 2);
 
@@ -524,7 +817,10 @@ describe("presentation projection", () => {
   });
 
   it("derives the shutdown marker directly from an authoritative snapshot", () => {
-    const state = replaceFromSnapshot(snapshot({ shutting_down: true }), 8);
+    const state = replaceFromSnapshot(
+      snapshot({ shutting_down: true }),
+      runtimeCursor(8),
+    );
     assert.equal(state.runtimeShutdown, true);
   });
 
@@ -562,47 +858,162 @@ describe("presentation projection", () => {
     assert.throws(
       () =>
         reduce(initial(), {
-          cursor: 42,
+          cursor: runtimeCursor(42),
           event: { type: "future_variant" } as unknown as RuntimeClientEvent,
         }),
       /unreachable Runtime Client Protocol v1 event/,
     );
   });
 
-  it("keeps optimistic submissions as transient client state", () => {
-    let state = withPendingSubmission(initial(), "local-1", "hello");
-    assert.equal(state.pendingSubmissions.length, 1);
-    // No fake canonical message was appended to authoritative history.
-    assert.equal(state.transcript.length, 0);
-
-    state = fold(state, [
-      { type: "inbound_enqueued", sequence: 1, message: userMessage("m1", "hello") },
+  it("fails closed for a visible Assistant commit without a transcript cursor", () => {
+    const accepted = fold(initial(), [
+      {
+        type: "message_committed",
+        message: assistantMessage("accepted", "kept"),
+        transcript_cursor: transcriptCursor(1),
+      },
     ]);
+    const before = accepted.transcript.map((entry) => ({ ...entry }));
 
-    // The runtime's authoritative fact reconciles the local echo away.
-    assert.deepEqual(state.pendingSubmissions, []);
-    assert.equal(state.inbound.pending?.[0]?.message.id, "m1");
+    assert.throws(
+      () =>
+        reduce(accepted, {
+          cursor: runtimeCursor(42),
+          event: {
+            type: "message_committed",
+            message: assistantMessage("missing-assistant-cursor", "bad"),
+          },
+        }),
+      /visible transcript message is missing/,
+    );
+    assert.equal(accepted.cursor, 1, "the failed event never advances the cursor");
+    assert.deepEqual(accepted.transcript, before, "the accepted state is unchanged");
   });
 
-  it("does not carry TUI feedback through an authoritative repair", () => {
-    let state = withPendingSubmission(initial(), "local-1", "queued");
-    state = fold(state, [
-      { type: "attempt_started", attempt_id: "a1", model: attemptModel("beta/model-b") },
+  it("fails closed for a visible Tool commit without a transcript cursor", () => {
+    assert.throws(
+      () =>
+        reduce(initial(), {
+          cursor: runtimeCursor(42),
+          event: {
+            type: "message_committed",
+            message: toolMessage("missing-tool-cursor", "call-1", "tool-read"),
+          },
+        }),
+      /visible transcript message is missing/,
+    );
+  });
+
+  it("fails closed for an ordinary User commit without a transcript cursor", () => {
+    assert.throws(
+      () =>
+        reduce(initial(), {
+          cursor: runtimeCursor(42),
+          event: {
+            type: "message_committed",
+            message: userMessage("missing-user-cursor", "bad"),
+          },
+        }),
+      /visible transcript message is missing/,
+    );
+  });
+
+  it("keeps a hidden Context commit out of the transcript without a cursor", () => {
+    const state = reduce(initial(), {
+      cursor: runtimeCursor(7),
+      event: {
+        type: "message_committed",
+        message: contextUserMessage("hidden-context", "runtime status"),
+      },
+    });
+
+    assert.equal(state.cursor, 7);
+    assert.equal(state.transcript.length, 0);
+  });
+
+  it("rejects a hidden Context commit carrying a contradictory cursor", () => {
+    const state = initial();
+    assert.throws(
+      () =>
+        reduce(state, {
+          cursor: runtimeCursor(42),
+          event: {
+            type: "message_committed",
+            message: contextUserMessage("hidden-context", "runtime status"),
+            transcript_cursor: transcriptCursor(8),
+          },
+        }),
+      /hidden Context message must not carry/,
+    );
+    assert.equal(state.cursor, 0);
+    assert.equal(state.transcript.length, 0);
+  });
+
+  it("fails closed for visible inbound acceptance without a transcript cursor", () => {
+    assert.throws(
+      () =>
+        reduce(initial(), {
+          cursor: runtimeCursor(42),
+          event: {
+            type: "inbound_enqueued",
+            sequence: 1,
+            message: userMessage("missing-inbound-cursor", "bad"),
+          },
+        }),
+      /visible transcript message is missing/,
+    );
+  });
+
+  it("rejects hidden Context inbound with a contradictory cursor", () => {
+    const state = initial();
+    assert.throws(
+      () =>
+        reduce(state, {
+          cursor: runtimeCursor(42),
+          event: {
+            type: "inbound_enqueued",
+            sequence: 1,
+            message: contextUserMessage("hidden-inbound", "runtime status"),
+            transcript_cursor: transcriptCursor(8),
+          },
+        }),
+      /hidden Context message must not carry/,
+    );
+    assert.equal(state.cursor, 0);
+    assert.equal(state.transcript.length, 0);
+  });
+
+  it("displays inbound input only after durable acceptance", () => {
+    const state = initial();
+    // No client-side semantic echo exists before the runtime fact arrives.
+    assert.equal(state.transcript.length, 0);
+
+    const accepted = fold(state, [
+      {
+        type: "inbound_enqueued",
+        sequence: 1,
+        message: userMessage("m1", "hello"),
+        transcript_cursor: transcriptCursor(1),
+      },
     ]);
 
+    assert.equal(accepted.transcript.length, 1);
+    assert.equal(accepted.transcript[0]?.kind, "committed");
+    assert.equal(accepted.inbound.pending?.[0]?.message.id, "m1");
+  });
+
+  it("does not carry local semantic state through an authoritative repair", () => {
     const repaired = replaceFromSnapshot(
       snapshot({
         messages: [userMessage("m1", "queued")],
         model: sessionModel("beta/model-b"),
       }),
-      100,
-      { pendingSubmissions: state.pendingSubmissions },
+      runtimeCursor(100),
     );
 
     assert.equal(repaired.cursor, 100);
     assert.equal(repaired.transcript.length, 1);
     assert.equal(repaired.attempt, undefined, "the snapshot is authoritative");
-    assert.equal(repaired.pendingSubmissions.length, 1);
     assert.equal("notices" in repaired, false);
   });
 
@@ -613,7 +1024,12 @@ describe("presentation projection", () => {
       { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
       { type: "assistant_message_started", attempt_id: "a1", message_id: "m2" },
       { type: "assistant_text_delta", attempt_id: "a1", message_id: "m2", block_index: 0, delta: "hi" },
-      { type: "message_committed", attempt_id: "a1", message: assistantMessage("m2", "hi") },
+      {
+        type: "message_committed",
+        attempt_id: "a1",
+        message: assistantMessage("m2", "hi"),
+        transcript_cursor: transcriptCursor(1),
+      },
       {
         type: "attempt_settled",
         attempt_id: "a1",

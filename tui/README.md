@@ -135,8 +135,8 @@ Before the first real transcript turn, the screen includes a compact welcome
 block with the published effective model, protocol/provider display label,
 context window, reasoning state, active Session name/node when the native
 Session read is available, and the basic keyboard hints. Once a real turn or
-optimistic submission exists, that block is reclaimed and the compact footer
-carries the durable Session metadata and live status instead.
+durably accepted transcript content exists, that block is reclaimed and the
+compact footer carries the durable Session metadata and live status instead.
 
 ## Owners
 
@@ -146,7 +146,7 @@ carries the durable Session metadata and live status instead.
 | `protocol/jsonl.ts` | LF framing, CRLF, the 8 MiB bound in encoded bytes | protocol meaning |
 | `runtime/connection.ts` | request ids, the pending RPC map, correlation, event delivery, ordered writes, terminal settlement | conversation state |
 | `runtime/attachment.ts` | attach, snapshot install, subscribe, resync repair, shutdown | agent/session semantics |
-| `presentation/projection.ts` | the ephemeral render cache | canonical history, authority of any kind |
+| `presentation/projection.ts` | the ephemeral render cache and bounded transcript page | canonical history, authority of any kind |
 | `presentation/tools.ts` | the `ToolCallId` correlation used for display | tool lifecycle, which it only reads |
 | `commands/` | slash-command parsing, dispatch to canonical operations | parallel runtime semantics |
 | `ui/components/` | the semantic presentation grammar | every fact it displays |
@@ -198,9 +198,23 @@ command, search, pagination, and selector continuations capture that lease
 and may update local presentation only while the epoch and attachment still
 match. Binding a replacement attachment, accepting a Session restart, or
 installing an authoritative snapshot invalidates the old lease. The canonical
-transcript remains reconstructed only from runtime-published message facts;
-client output never becomes a `MessageBlock`, a model request payload, or a
-Runtime Client protocol event.
+transcript remains reconstructed only from runtime-published durable message
+and audit facts; client output never becomes a `MessageBlock`, a model request
+payload, or a Runtime Client protocol event. User input is rendered as
+transcript content only after durable acceptance. The snapshot contains only
+the newest bounded transcript page; PageUp requests older pages with
+`transcript_page_get` and merges them by durable transcript cursor. Entry
+identity only detects the same durable fact; it never supplies ordering. The
+transcript cursor is separate from the live event cursor, so loading older
+history cannot disturb event resynchronization.
+
+The wire validator and presentation reducer share one visibility contract:
+only a hidden Context-kind User message may omit `transcript_cursor`. Visible
+User, Assistant, Tool, and inbound facts require the durable cursor, while a
+hidden Context carrying one is contradictory protocol state. The connection
+closes on malformed wire input and the reducer fails closed when called
+directly; neither path fabricates a cursor or changes accepted presentation
+state.
 
 Command routing has a separate ownership boundary: rebinding the dispatcher
 changes admission only for future invocations. Each admitted command captures
@@ -395,6 +409,9 @@ refusal         explicitly a refusal, never an answer
 tool_call       one correlated tool card
 tool result     folded into that card when folding preserves canonical
                 order, otherwise that card's continuation in place
+publication audit  explicit non-canonical Assistant output; proposed tool
+                   calls are unaccepted and unexecuted
+interaction audit requested/settled historical evidence, never an active prompt
 ```
 
 Canonical block order is preserved exactly: `reasoning, text, tool_call, text`

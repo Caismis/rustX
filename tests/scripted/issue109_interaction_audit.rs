@@ -248,7 +248,12 @@ impl RespondingObserver {
 }
 
 impl InteractionObserver for RespondingObserver {
-    fn on_pending(&self, request: &InteractionRequest) {
+    fn on_pending(
+        &self,
+        request: &InteractionRequest,
+        _audit: &rustx::events::types::RuntimeEventEnvelope,
+        _transcript_cursor: rustx::durable::TranscriptCursor,
+    ) {
         // The durable read happens *inside* the prompt-release callback, so
         // what it sees is exactly what was committed before any client could
         // learn the prompt exists.
@@ -267,7 +272,15 @@ impl InteractionObserver for RespondingObserver {
         // instead. This callback stays a leaf publication.
     }
 
-    fn on_settled(&self, interaction_id: &InteractionId, outcome: &InteractionOutcome) {
+    fn on_settled(
+        &self,
+        interaction_id: &InteractionId,
+        outcome: &InteractionOutcome,
+        _audit: Option<&(
+            rustx::events::types::RuntimeEventEnvelope,
+            rustx::durable::TranscriptCursor,
+        )>,
+    ) {
         self.settled
             .lock()
             .expect("settled lock")
@@ -683,8 +696,10 @@ async fn interaction_settlement_is_exactly_once_for_one_identity() {
         "one requested fact and one settled fact"
     );
 
-    // The durable authority is the second, independent guard: replaying the
-    // exact settled envelope is a typed terminal violation, not a duplicate.
+    // The generic Event Journal seam cannot commit transcript-visible
+    // interaction facts at all. The specialized audit seam remains the second,
+    // independent guard: replaying the exact settled envelope is a typed
+    // terminal violation, not a duplicate.
     let settled = run
         .events
         .iter()
@@ -698,9 +713,28 @@ async fn interaction_settlement_is_exactly_once_for_one_identity() {
     assert!(
         matches!(
             rustx::durable::ConversationStore::append_event(run.store.as_ref(), replay),
+            Err(rustx::durable::ConversationStoreError::InvalidReference(_))
+        ),
+        "the generic durable seam refuses a transcript-visible settlement"
+    );
+    let settled = run
+        .events
+        .iter()
+        .find(|envelope| matches!(envelope.event, RuntimeEvent::InteractionSettled { .. }))
+        .cloned()
+        .expect("one settled envelope");
+    assert!(
+        matches!(
+            rustx::durable::ConversationStore::append_interaction_audit(
+                run.store.as_ref(),
+                RuntimeEventEnvelope {
+                    sequence: 0,
+                    ..settled
+                },
+            ),
             Err(rustx::durable::ConversationStoreError::TerminalViolation(_))
         ),
-        "the durable authority refuses a second settlement of {interaction_id}"
+        "the specialized durable authority refuses a second settlement of {interaction_id}"
     );
 }
 

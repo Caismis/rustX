@@ -60,7 +60,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::agent::observer::AgentStatusObservation;
 use crate::capabilities::{CapabilityAvailability, CapabilitySnapshot};
+use crate::durable::TranscriptCursor;
 use crate::events::types::RuntimeEvent;
+use crate::events::types::RuntimeEventEnvelope;
 use crate::message::types::MessageBlock;
 use crate::model::session::{AttemptModelView, SessionModelView};
 use crate::publication::{PublicationAudit, PublicationFrame, PublicationStreamStart};
@@ -105,6 +107,8 @@ pub(crate) enum ConversationObservation {
         attempt_id: Option<AttemptId>,
         /// The committed canonical message.
         block: MessageBlock,
+        /// The durable transcript position of this message, when visible.
+        transcript_cursor: Option<TranscriptCursor>,
     },
     /// One composed Agent Status observation.
     Status(AgentStatusObservation),
@@ -132,6 +136,8 @@ pub(crate) enum ConversationObservation {
         attempt_id: AttemptId,
         /// The bounded immutable audit.
         audit: Box<PublicationAudit>,
+        /// The durable transcript position allocated for this audit.
+        transcript_cursor: TranscriptCursor,
     },
     /// One mailbox enqueue (authoritative item + sequence).
     InboundEnqueued(InboundItem),
@@ -187,13 +193,23 @@ pub(crate) enum ConversationObservation {
     /// Runtime drain began and new semantic admission closed.
     Shutdown,
     /// One native interaction became pending.
-    InteractionPending(InteractionRequest),
+    InteractionPending {
+        /// The live pending request.
+        request: InteractionRequest,
+        /// The requested audit committed before the prompt was released.
+        audit: RuntimeEventEnvelope,
+        /// The durable transcript position allocated for this audit.
+        transcript_cursor: TranscriptCursor,
+    },
     /// One native interaction reached its terminal rendezvous outcome.
     InteractionSettled {
         /// The interaction identity.
         interaction_id: InteractionId,
         /// The terminal outcome delivered to its semantic owner.
         outcome: InteractionOutcome,
+        /// The durable settled audit, when its commit succeeded. `None` is
+        /// the fail-closed unavailable outcome and creates no historical item.
+        audit: Option<(RuntimeEventEnvelope, TranscriptCursor)>,
     },
     /// The durable authority (Pending Inbound Inbox / Message Ledger) failed
     /// a storage operation the coordinator must not silently swallow

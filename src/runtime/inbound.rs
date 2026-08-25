@@ -38,7 +38,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::durable::inbox::{
     AcceptedInbound, ConversationInboundCapability, ConversationStore, ConversationStoreError,
-    InboundDraft,
+    InboundDraft, TranscriptCursor,
 };
 use crate::events::types::RuntimeEventEnvelope;
 use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock};
@@ -109,6 +109,7 @@ impl fmt::Display for InboundSequence {
 pub struct InboundItem {
     sequence: InboundSequence,
     message: UserMessageBlock,
+    transcript_cursor: Option<TranscriptCursor>,
 }
 
 impl InboundItem {
@@ -122,6 +123,13 @@ impl InboundItem {
     #[must_use]
     pub fn message(&self) -> &UserMessageBlock {
         &self.message
+    }
+
+    /// The durable transcript position allocated at acceptance, when this
+    /// item is visible in the ordinary transcript.
+    #[must_use]
+    pub fn transcript_cursor(&self) -> Option<TranscriptCursor> {
+        self.transcript_cursor
     }
 
     /// Consumes the item and returns its canonical inbound message.
@@ -603,6 +611,7 @@ impl ConversationInboundMailbox {
             .map(|item| InboundItem {
                 sequence: item.sequence,
                 message: item.message,
+                transcript_cursor: item.transcript_cursor,
             })
             .collect();
         {
@@ -871,6 +880,7 @@ impl ConversationInboundMailbox {
                     let item = InboundItem {
                         sequence: accepted.sequence,
                         message: accepted.message.clone(),
+                        transcript_cursor: accepted.transcript_cursor,
                     };
                     if let Some(observer) = &state.observer {
                         observer.on_enqueued(&item);
@@ -905,6 +915,7 @@ impl ConversationInboundMailbox {
             let item = InboundItem {
                 sequence: accepted.sequence,
                 message: accepted.message.clone(),
+                transcript_cursor: accepted.transcript_cursor,
             };
             if let Some(observer) = &state.observer {
                 observer.on_enqueued(&item);
@@ -979,6 +990,7 @@ impl ConversationInboundMailbox {
                 .map(|item| InboundItem {
                     sequence: item.sequence,
                     message: item.message,
+                    transcript_cursor: item.transcript_cursor,
                 })
                 .collect(),
         }))

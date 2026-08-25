@@ -19,6 +19,8 @@ import {
   sessionModel,
   sessionView,
   snapshot,
+  runtimeCursor,
+  transcriptCursor,
   userMessage,
 } from "./support/fixtures.ts";
 import { ScriptedPeer, until } from "./support/scripted-peer.ts";
@@ -51,10 +53,10 @@ async function attach(
     conversation_id: initial.conversation_id,
     agent_id: "agent-1",
     snapshot: initial,
-    cursor,
+    cursor: runtimeCursor(cursor),
   });
   await peer.awaitRequests(2);
-  peer.respond(2, { type: "subscribed", after_cursor: cursor });
+  peer.respond(2, { type: "subscribed", after_cursor: runtimeCursor(cursor) });
   await attaching;
 }
 
@@ -80,6 +82,61 @@ describe("RuntimeClientAttachment", () => {
     assert.equal(session.state?.cursor, 12);
   });
 
+  it("loads an older durable transcript page without changing the live cursor", async () => {
+    const { peer, session } = connect();
+    await attach(
+      peer,
+      session,
+      snapshot({
+        transcript: {
+          entries: [
+            {
+              cursor: transcriptCursor(2),
+              item: {
+                type: "message",
+                message: userMessage("newer", "newer"),
+              },
+            },
+          ],
+          next_cursor: transcriptCursor(1),
+        },
+      }),
+      7,
+    );
+
+    const loading = session.loadOlderTranscript(8);
+    await peer.awaitRequests(3);
+    assert.deepEqual(peer.requests[2], {
+      method: "transcript_page_get",
+      before_cursor: 1,
+      limit: 8,
+      id: 3,
+    });
+    peer.respond(3, {
+      type: "transcript_page",
+      page: {
+        entries: [
+          {
+            cursor: transcriptCursor(1),
+            item: {
+              type: "message",
+              message: userMessage("older", "older"),
+            },
+          },
+        ],
+      },
+    });
+    assert.equal(await loading, true);
+    assert.deepEqual(
+      session.state?.transcript.map((entry) =>
+        entry.kind === "committed" ? entry.messageId : entry.kind,
+      ),
+      ["older", "newer"],
+    );
+    assert.equal(session.state?.cursor, 7);
+    assert.equal(session.state?.transcriptNextCursor, undefined);
+  });
+
   it("notifies local-surface owners for initial attach and authoritative resync replacement", async () => {
     const { peer, session } = connect();
     let replacements = 0;
@@ -95,10 +152,10 @@ describe("RuntimeClientAttachment", () => {
     peer.respond(3, {
       type: "snapshot",
       snapshot: snapshot({ messages: [userMessage("m1", "repaired")] }),
-      cursor: 9,
+      cursor: runtimeCursor(9),
     });
     await peer.awaitRequests(4);
-    peer.respond(4, { type: "subscribed", after_cursor: 9 });
+    peer.respond(4, { type: "subscribed", after_cursor: runtimeCursor(9) });
     await repairing;
 
     assert.equal(replacements, 2, "resync installs a replacement snapshot");
@@ -168,7 +225,7 @@ describe("RuntimeClientAttachment", () => {
       conversation_id: "conv-1",
       agent_id: "agent-1",
       snapshot: snapshot(),
-      cursor: 0,
+      cursor: runtimeCursor(0),
     });
     await peer.awaitRequests(2);
 
@@ -178,7 +235,7 @@ describe("RuntimeClientAttachment", () => {
       attempt_id: "a1",
       model: attemptModel("alpha/model-a"),
     });
-    peer.respond(2, { type: "subscribed", after_cursor: 0 });
+    peer.respond(2, { type: "subscribed", after_cursor: runtimeCursor(0) });
     await attaching;
 
     await until(
@@ -237,10 +294,10 @@ describe("RuntimeClientAttachment", () => {
           model: attemptModel("alpha/model-a"),
         },
       }),
-      cursor: 30,
+      cursor: runtimeCursor(30),
     });
     await peer.awaitRequests(4);
-    peer.respond(4, { type: "subscribed", after_cursor: 30 });
+    peer.respond(4, { type: "subscribed", after_cursor: runtimeCursor(30) });
     await repairing;
 
     assert.equal(session.state?.attempt?.turn, 2);
@@ -274,7 +331,7 @@ describe("RuntimeClientAttachment", () => {
         // The attempt the client thought was running is gone.
         attempt: undefined,
       }),
-      cursor: 50,
+      cursor: runtimeCursor(50),
     });
     const afterSubscribe = await peer.awaitRequests(4);
     assert.equal(afterSubscribe[3]?.method, "subscribe_events");
@@ -285,7 +342,7 @@ describe("RuntimeClientAttachment", () => {
       50,
       "the subscription resumes after the *new* cursor",
     );
-    peer.respond(4, { type: "subscribed", after_cursor: 50 });
+    peer.respond(4, { type: "subscribed", after_cursor: runtimeCursor(50) });
     await repairing;
 
     assert.equal(session.resyncCount, 1);
@@ -312,15 +369,15 @@ describe("RuntimeClientAttachment", () => {
       conversation_id: "conv-1",
       agent_id: "agent-1",
       snapshot: snapshot(),
-      cursor: 3,
+      cursor: runtimeCursor(3),
     });
     await peer.awaitRequests(2);
 
     // The cursor expired between the snapshot and the subscription.
     peer.respondError(2, {
       type: "resync_required",
-      after_cursor: 3,
-      earliest_serviceable: 40,
+      after_cursor: runtimeCursor(3),
+      earliest_serviceable: runtimeCursor(40),
     });
 
     const afterSnapshot = await peer.awaitRequests(3);
@@ -328,10 +385,10 @@ describe("RuntimeClientAttachment", () => {
     peer.respond(3, {
       type: "snapshot",
       snapshot: snapshot({ messages: [userMessage("m1", "recovered")] }),
-      cursor: 41,
+      cursor: runtimeCursor(41),
     });
     await peer.awaitRequests(4);
-    peer.respond(4, { type: "subscribed", after_cursor: 41 });
+    peer.respond(4, { type: "subscribed", after_cursor: runtimeCursor(41) });
     await attaching;
 
     assert.equal(session.resyncCount, 1);
@@ -354,10 +411,10 @@ describe("RuntimeClientAttachment", () => {
     peer.respond(3, {
       type: "snapshot",
       snapshot: snapshot({ shutting_down: false }),
-      cursor: 60,
+      cursor: runtimeCursor(60),
     });
     await peer.awaitRequests(4);
-    peer.respond(4, { type: "subscribed", after_cursor: 60 });
+    peer.respond(4, { type: "subscribed", after_cursor: runtimeCursor(60) });
     await repairing;
 
     assert.equal(

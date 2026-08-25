@@ -19,12 +19,24 @@ import type {
   ModelInvocationView,
   RuntimeClientBackgroundExecution,
   RuntimeClientSnapshot,
+  RuntimeClientTranscriptCursor,
+  RuntimeClientCursor,
+  RuntimeClientTranscriptPage,
   SessionNodeView,
   SessionView,
   SessionModelView,
   ToolExecutionResult,
   UserMessageBlock,
 } from "../../src/protocol/types.ts";
+
+/** Test-only constructors for the two numeric wire cursor domains. */
+export function runtimeCursor(value: number): RuntimeClientCursor {
+  return value as RuntimeClientCursor;
+}
+
+export function transcriptCursor(value: number): RuntimeClientTranscriptCursor {
+  return value as RuntimeClientTranscriptCursor;
+}
 
 export function approvalInteraction(
   id = "attempt-1-interaction-1",
@@ -154,12 +166,21 @@ export function capabilities(revision: number): CapabilityView {
 export function snapshot(
   overrides: Partial<RuntimeClientSnapshot> = {},
 ): RuntimeClientSnapshot {
+  const messages = overrides.messages ?? [];
+  const transcript: RuntimeClientTranscriptPage =
+    overrides.transcript ?? {
+      entries: messages.map((message, index) => ({
+        cursor: transcriptCursor(index + 1),
+        item: { type: "message" as const, message },
+      })),
+    };
   return {
     conversation_id: "conv-test",
     shutting_down: false,
     effective_approval_mode: "policy",
     approval_mode_revision: 0,
-    messages: [],
+    messages,
+    transcript,
     inbound: { pending: [] },
     pending_interactions: [],
     background: [],
@@ -212,6 +233,20 @@ export function runtimeInbound(id: string, text: string) {
     content: [{ type: "text" as const, text }],
     source: "runtime" as const,
     kind: "message" as const,
+  };
+}
+
+export function contextUserMessage(
+  id: string,
+  text: string,
+  context: "runtime_tool_observation" | "extension_environment" | "agent_status" = "agent_status",
+) {
+  return {
+    role: "user" as const,
+    id,
+    content: [{ type: "text" as const, text }],
+    source: "runtime" as const,
+    kind: { context } as const,
   };
 }
 

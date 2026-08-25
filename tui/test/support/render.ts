@@ -18,7 +18,7 @@ import {
   defaultPreferences,
 } from "../../src/ui/preferences.ts";
 import { plainText } from "../../src/ui/theme.ts";
-import { snapshot } from "./fixtures.ts";
+import { runtimeCursor, snapshot } from "./fixtures.ts";
 
 export { plainText as plain };
 
@@ -26,7 +26,7 @@ export { plainText as plain };
 export function stateOf(
   overrides: Partial<RuntimeClientSnapshot> = {},
 ): PresentationState {
-  return replaceFromSnapshot(snapshot(overrides), 0);
+  return replaceFromSnapshot(snapshot(overrides), runtimeCursor(0));
 }
 
 export function prefs(

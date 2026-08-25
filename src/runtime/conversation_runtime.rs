@@ -304,7 +304,7 @@ use crate::conversation::ConversationState;
 use crate::conversation::SurfaceRevision;
 use crate::durable::{
     ConversationStore, ConversationStoreError, InboundDraft, SurfaceUserMessageBoundary,
-    SurfaceUserMessageBoundaryPage,
+    SurfaceUserMessageBoundaryPage, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT, TranscriptPage,
 };
 use crate::events::types::RuntimeEvent;
 use crate::message::types::{InboundKind, MessageBlock, UserContentBlock, UserSource};
@@ -326,6 +326,7 @@ use crate::runtime::interaction::{
 use crate::runtime::observation::{ConversationObservation, PendingObservations};
 use crate::runtime::request_history::RequestHistory;
 use crate::runtime::resources::{RuntimeResourceLoader, RuntimeResourceSnapshot};
+use crate::runtime::transcript_history::TranscriptHistory;
 use crate::runtime::types::{
     ApprovalMode, ApprovalModeState, CancellationReason, ConversationLifecycle,
     ConversationLifecycleState, DurabilityFailureCommit, DurabilityGate, DurableOperation,
@@ -1792,6 +1793,10 @@ impl RuntimeInner {
             .store
             .load_messages(&head.active_message_ids)
             .map_err(|error| RuntimeBootstrapError::Durable(error.to_string()))?;
+        let transcript = self
+            .store
+            .load_transcript_page(None, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT)
+            .map_err(|error| RuntimeBootstrapError::Durable(error.to_string()))?;
         // ---- T0: the coordinator-owned facts ----
         //
         // An inactive runtime never moved its conversation state into an
@@ -1844,6 +1849,7 @@ impl RuntimeInner {
             conversation_id: self.conversation_id.clone(),
             shutting_down,
             messages,
+            transcript,
             model,
             approval_mode,
             inbound_pending,
@@ -2108,6 +2114,7 @@ impl RuntimeInner {
                     self.observe(ConversationObservation::Committed {
                         attempt_id: None,
                         block: success.completed.summary_block,
+                        transcript_cursor: Some(success.completed.transcript_cursor),
                     });
                     self.observe(ConversationObservation::ManualCompactionEvent {
                         event: success.completed.persisted_event.event,
@@ -2415,7 +2422,7 @@ impl RuntimeInner {
             .conversation
             .take()
             .expect("the coordinator owns the conversation state while idle");
-        for prepared in prepared_commits {
+        for (prepared, item) in prepared_commits.into_iter().zip(batch.items()) {
             // Infallible: every adopted identity was validated by
             // `prepare_commit` above under exclusive ownership.
             let block = prepared.message().clone();
@@ -2423,6 +2430,7 @@ impl RuntimeInner {
             self.observe(ConversationObservation::Committed {
                 attempt_id: None,
                 block,
+                transcript_cursor: item.transcript_cursor(),
             });
         }
         self.publish_attempt(state, conversation, Some(fresh));
@@ -3958,6 +3966,33 @@ impl ConversationRuntime {
         RequestHistory::new(self.inner.store.clone())
     }
 
+    /// Returns a durable read handle for the derived transcript.
+    ///
+    /// The handle retains no transcript rows. Each page resolves references
+    /// through Pending Inbound, the Message Ledger, the publication plane, or
+    /// the Event Journal at read time.
+    #[must_use]
+    pub fn transcript_history(&self) -> TranscriptHistory {
+        TranscriptHistory::new(self.inner.store.clone())
+    }
+
+    /// Reads one bounded page of the derived transcript.
+    ///
+    /// `before` is an exclusive durable transcript cursor. With no cursor the
+    /// newest page is returned; passing `next_cursor` walks older history.
+    ///
+    /// # Errors
+    ///
+    /// Returns the durable store error when the ordering spine or one of its
+    /// canonical owners cannot be read coherently.
+    pub fn transcript_page(
+        &self,
+        before: Option<crate::durable::TranscriptCursor>,
+        limit: usize,
+    ) -> Result<TranscriptPage, ConversationStoreError> {
+        self.inner.store.load_transcript_page(before, limit)
+    }
+
     /// Reads one exact historical canonical Surface revision through the
     /// durable `ConversationStore`. This is a materialization seam for the
     /// native Session layer: it returns evidence of the selected revision and
@@ -4211,6 +4246,10 @@ pub(crate) struct RuntimeBootstrapSnapshot {
     /// are deliberately not hydrated into the client projection; callers
     /// needing them use the durable store's paged read APIs.
     pub messages: Vec<MessageBlock>,
+    /// The bounded newest page of the derived transcript. Bodies remain
+    /// owned by their canonical durable domains; this seed is only a read
+    /// result for the Runtime Client bootstrap.
+    pub transcript: TranscriptPage,
     /// The authoritative session model view.
     pub model: SessionModelView,
     /// The authoritative effective/desired `ApprovalMode` state at the cut.
@@ -4642,10 +4681,16 @@ impl AgentExecutionObserver for RuntimeObserver {
         });
     }
 
-    fn observe_committed(&self, attempt_id: &AttemptId, block: &MessageBlock) {
+    fn observe_committed(
+        &self,
+        attempt_id: &AttemptId,
+        block: &MessageBlock,
+        transcript_cursor: Option<crate::durable::TranscriptCursor>,
+    ) {
         self.push(ConversationObservation::Committed {
             attempt_id: Some(attempt_id.clone()),
             block: block.clone(),
+            transcript_cursor,
         });
     }
 
@@ -4667,10 +4712,16 @@ impl AgentExecutionObserver for RuntimeObserver {
         });
     }
 
-    fn observe_publication_settled(&self, attempt_id: &AttemptId, audit: &PublicationAudit) {
+    fn observe_publication_settled(
+        &self,
+        attempt_id: &AttemptId,
+        audit: &PublicationAudit,
+        transcript_cursor: crate::durable::TranscriptCursor,
+    ) {
         self.push(ConversationObservation::PublicationSettled {
             attempt_id: attempt_id.clone(),
             audit: Box::new(audit.clone()),
+            transcript_cursor,
         });
     }
 }
@@ -4734,18 +4785,32 @@ impl CapabilityObserver for RuntimeObserver {
 // held. Both callbacks are leaves: push only into the queue, never into the
 // Runtime Client projection lock or conversation coordinator lock.
 impl InteractionObserver for RuntimeObserver {
-    fn on_pending(&self, request: &InteractionRequest) {
-        self.push(ConversationObservation::InteractionPending(request.clone()));
+    fn on_pending(
+        &self,
+        request: &InteractionRequest,
+        audit: &crate::events::types::RuntimeEventEnvelope,
+        transcript_cursor: crate::durable::TranscriptCursor,
+    ) {
+        self.push(ConversationObservation::InteractionPending {
+            request: request.clone(),
+            audit: audit.clone(),
+            transcript_cursor,
+        });
     }
 
     fn on_settled(
         &self,
         interaction_id: &crate::runtime::identity::InteractionId,
         outcome: &InteractionOutcome,
+        audit: Option<&(
+            crate::events::types::RuntimeEventEnvelope,
+            crate::durable::TranscriptCursor,
+        )>,
     ) {
         self.push(ConversationObservation::InteractionSettled {
             interaction_id: interaction_id.clone(),
             outcome: outcome.clone(),
+            audit: audit.cloned(),
         });
     }
 }
@@ -6162,6 +6227,7 @@ mod tests {
                 ConversationObservation::Committed {
                     attempt_id: None,
                     block: MessageBlock::User(user),
+                    ..
                 } if user.id == outcome.summary_message_id
             )
         }));

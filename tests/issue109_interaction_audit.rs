@@ -510,29 +510,29 @@ fn the_durable_authority_owns_the_interaction_state_machine() {
     // A settlement for an interaction that never durably existed asserts a
     // decision about a prompt no user was ever shown.
     assert!(matches!(
-        store.append_event(settled(&id, InteractionSettlement::Approved)),
+        store.append_interaction_audit(settled(&id, InteractionSettlement::Approved)),
         Err(ConversationStoreError::InvalidReference(_))
     ));
 
     store
-        .append_event(requested(&id, approval_subject()))
+        .append_interaction_audit(requested(&id, approval_subject()))
         .expect("requested");
     // The identity is spent: a second requested fact would fork the audit.
     assert!(matches!(
-        store.append_event(requested(&id, approval_subject())),
+        store.append_interaction_audit(requested(&id, approval_subject())),
         Err(ConversationStoreError::TerminalViolation(_))
     ));
 
     store
-        .append_event(settled(&id, InteractionSettlement::Approved))
+        .append_interaction_audit(settled(&id, InteractionSettlement::Approved))
         .expect("settled");
     assert!(matches!(
-        store.append_event(settled(&id, InteractionSettlement::Approved)),
+        store.append_interaction_audit(settled(&id, InteractionSettlement::Approved)),
         Err(ConversationStoreError::TerminalViolation(_))
     ));
     assert!(
         matches!(
-            store.append_event(settled(
+            store.append_interaction_audit(settled(
                 &id,
                 InteractionSettlement::Denied {
                     reason: "contradicting the first settlement".to_owned(),
@@ -553,10 +553,10 @@ fn a_settlement_must_match_the_subject_it_settles() {
 
     let approval = InteractionId::for_attempt(&attempt(), 1);
     store
-        .append_event(requested(&approval, approval_subject()))
+        .append_interaction_audit(requested(&approval, approval_subject()))
         .expect("approval requested");
     assert!(matches!(
-        store.append_event(settled(
+        store.append_interaction_audit(settled(
             &approval,
             InteractionSettlement::Answered {
                 answer: QuestionAnswer::FreeText {
@@ -569,7 +569,7 @@ fn a_settlement_must_match_the_subject_it_settles() {
 
     let question = InteractionId::for_attempt(&attempt(), 2);
     store
-        .append_event(requested(
+        .append_interaction_audit(requested(
             &question,
             InteractionSubject::Question {
                 prompt: "Which target?".to_owned(),
@@ -579,12 +579,12 @@ fn a_settlement_must_match_the_subject_it_settles() {
         ))
         .expect("question requested");
     assert!(matches!(
-        store.append_event(settled(&question, InteractionSettlement::Approved)),
+        store.append_interaction_audit(settled(&question, InteractionSettlement::Approved)),
         Err(ConversationStoreError::InvalidReference(_))
     ));
     // Cancellation is the one terminal both subjects share.
     store
-        .append_event(settled(
+        .append_interaction_audit(settled(
             &question,
             InteractionSettlement::Cancelled {
                 reason: CancellationReason::RuntimeShutdown,
@@ -605,17 +605,17 @@ fn interaction_audit_facts_carry_their_canonical_identity() {
     let mut forged = requested(&id, approval_subject());
     forged.event_id = EventId::new("interaction-requested-event:some-other-interaction");
     assert!(matches!(
-        store.append_event(forged),
+        store.append_interaction_audit(forged),
         Err(ConversationStoreError::InvalidReference(_))
     ));
 
     store
-        .append_event(requested(&id, approval_subject()))
+        .append_interaction_audit(requested(&id, approval_subject()))
         .expect("requested");
     let mut forged_settlement = settled(&id, InteractionSettlement::Approved);
     forged_settlement.event_id = EventId::new("interaction-settled-event:some-other-interaction");
     assert!(matches!(
-        store.append_event(forged_settlement),
+        store.append_interaction_audit(forged_settlement),
         Err(ConversationStoreError::InvalidReference(_))
     ));
 }
@@ -679,10 +679,10 @@ fn a_durable_approval_and_a_crash_before_tool_start_executes_nothing() {
         commit_turn_up_to_the_policy_boundary(&store);
         let id = interaction_id();
         store
-            .append_event(requested(&id, approval_subject()))
+            .append_interaction_audit(requested(&id, approval_subject()))
             .expect("requested");
         store
-            .append_event(settled(&id, InteractionSettlement::Approved))
+            .append_interaction_audit(settled(&id, InteractionSettlement::Approved))
             .expect("approved");
         assert!(
             !has_tool_start(&store),
@@ -753,10 +753,10 @@ fn a_historical_approval_cannot_be_replayed_as_current_authority() {
         let store = durable.open();
         commit_turn_up_to_the_policy_boundary(&store);
         store
-            .append_event(requested(&id, approval_subject()))
+            .append_interaction_audit(requested(&id, approval_subject()))
             .expect("requested");
         store
-            .append_event(settled(&id, InteractionSettlement::Approved))
+            .append_interaction_audit(settled(&id, InteractionSettlement::Approved))
             .expect("approved");
     }
 
@@ -771,11 +771,11 @@ fn a_historical_approval_cannot_be_replayed_as_current_authority() {
 
     // Re-asserting the historical decision is a typed durable violation.
     assert!(matches!(
-        store.append_event(settled(&id, InteractionSettlement::Approved)),
+        store.append_interaction_audit(settled(&id, InteractionSettlement::Approved)),
         Err(ConversationStoreError::TerminalViolation(_))
     ));
     assert!(matches!(
-        store.append_event(requested(&id, approval_subject())),
+        store.append_interaction_audit(requested(&id, approval_subject())),
         Err(ConversationStoreError::TerminalViolation(_))
     ));
 
@@ -789,7 +789,7 @@ fn a_historical_approval_cannot_be_replayed_as_current_authority() {
     assert_ne!(fresh, id);
     assert!(
         matches!(
-            store.append_event(fresh_generation.requested(&fresh, approval_subject())),
+            store.append_interaction_audit(fresh_generation.requested(&fresh, approval_subject())),
             Err(ConversationStoreError::InvalidReference(_))
         ),
         "the new attempt cannot re-use the historical call as its own subject"
@@ -801,7 +801,9 @@ fn a_historical_approval_cannot_be_replayed_as_current_authority() {
     start_attempt(&store, &fresh_generation.attempt);
     commit_generation(&store, &fresh_generation);
     store
-        .append_event(fresh_generation.requested(&fresh, fresh_generation.approval_subject()))
+        .append_interaction_audit(
+            fresh_generation.requested(&fresh, fresh_generation.approval_subject()),
+        )
         .expect("a new attempt asks its own new question about its own new call");
 
     assert_eq!(
@@ -830,7 +832,7 @@ fn an_unanswered_interaction_is_evidence_and_is_never_resurrected() {
         let store = durable.open();
         commit_turn_up_to_the_policy_boundary(&store);
         store
-            .append_event(requested(
+            .append_interaction_audit(requested(
                 &id,
                 InteractionSubject::Question {
                     prompt: "Which target?".to_owned(),
@@ -867,7 +869,7 @@ fn an_unanswered_interaction_is_evidence_and_is_never_resurrected() {
     // fact committed by a live decision, never by recovery. Nothing above did
     // so, and the lifecycle is still open, which is exactly the honest record.
     store
-        .append_event(settled(
+        .append_interaction_audit(settled(
             &id,
             InteractionSettlement::Cancelled {
                 reason: CancellationReason::RuntimeShutdown,
@@ -895,7 +897,7 @@ fn the_approval_subject_pins_the_exact_canonical_arguments() {
     let store = policy_boundary_store();
     let id = interaction_id();
     store
-        .append_event(requested(&id, approval_subject()))
+        .append_interaction_audit(requested(&id, approval_subject()))
         .expect("requested");
 
     let RuntimeEvent::InteractionRequested {
@@ -941,7 +943,7 @@ fn the_approval_subject_pins_the_exact_canonical_arguments() {
     };
     assert!(
         matches!(
-            store.append_event(requested(
+            store.append_interaction_audit(requested(
                 &second,
                 InteractionSubject::Approval {
                     call_id: c,
@@ -999,7 +1001,7 @@ fn an_approval_subject_must_match_the_canonical_tool_call_it_references() {
     };
     assert!(
         matches!(
-            store.append_event(requested(
+            store.append_interaction_audit(requested(
                 &InteractionId::for_attempt(&attempt(), 1),
                 missing
             )),
@@ -1017,7 +1019,7 @@ fn an_approval_subject_must_match_the_canonical_tool_call_it_references() {
     };
     assert!(
         matches!(
-            store.append_event(requested(
+            store.append_interaction_audit(requested(
                 &InteractionId::for_attempt(&attempt(), 2),
                 wrong_tool_id
             )),
@@ -1035,7 +1037,7 @@ fn an_approval_subject_must_match_the_canonical_tool_call_it_references() {
     };
     assert!(
         matches!(
-            store.append_event(requested(
+            store.append_interaction_audit(requested(
                 &InteractionId::for_attempt(&attempt(), 3),
                 wrong_tool_name
             )),
@@ -1046,7 +1048,7 @@ fn an_approval_subject_must_match_the_canonical_tool_call_it_references() {
 
     // The truthful subject is the one the store accepts.
     store
-        .append_event(requested(
+        .append_interaction_audit(requested(
             &InteractionId::for_attempt(&attempt(), 4),
             approval_subject(),
         ))
@@ -1098,7 +1100,7 @@ fn an_approval_cannot_reference_a_canonical_tool_call_from_another_turn() {
     let before = fingerprint(&store);
     let id = InteractionId::for_attempt(&second.attempt, 1);
     let error = store
-        .append_event(second.requested(&id, first.approval_subject()))
+        .append_interaction_audit(second.requested(&id, first.approval_subject()))
         .expect_err("turn 2 cannot approve turn 1's canonical ToolCall");
     assert!(
         matches!(error, ConversationStoreError::InvalidReference(_)),
@@ -1114,10 +1116,10 @@ fn an_approval_cannot_reference_a_canonical_tool_call_from_another_turn() {
     // exists, so the same interaction still commits once its subject names the
     // call its own generation actually proposed.
     store
-        .append_event(second.requested(&id, second.approval_subject()))
+        .append_interaction_audit(second.requested(&id, second.approval_subject()))
         .expect("the same identity commits for its own generation's call");
     store
-        .append_event(second.settled(&id, InteractionSettlement::Approved))
+        .append_interaction_audit(second.settled(&id, InteractionSettlement::Approved))
         .expect("and settles exactly once");
 }
 
@@ -1155,7 +1157,7 @@ fn an_approval_cannot_reference_a_canonical_tool_call_from_another_attempt() {
     let before = fingerprint(&store);
     let id = InteractionId::for_attempt(&second.attempt, 1);
     let error = store
-        .append_event(second.requested(&id, first.approval_subject()))
+        .append_interaction_audit(second.requested(&id, first.approval_subject()))
         .expect_err("attempt 2 cannot approve attempt 1's canonical ToolCall");
     assert!(
         matches!(error, ConversationStoreError::InvalidReference(_)),
@@ -1184,10 +1186,10 @@ fn an_approval_commits_in_the_exact_generation_that_proposed_its_call() {
             generation.turn.as_str().parse().expect("numeric turn"),
         );
         store
-            .append_event(generation.requested(&id, generation.approval_subject()))
+            .append_interaction_audit(generation.requested(&id, generation.approval_subject()))
             .expect("the owning generation approves its own call");
         store
-            .append_event(generation.settled(&id, InteractionSettlement::Approved))
+            .append_interaction_audit(generation.settled(&id, InteractionSettlement::Approved))
             .expect("and settles exactly once");
 
         let InteractionSubject::Approval {
@@ -1228,7 +1230,7 @@ fn interaction_audit_payload_bounds_are_durable_invariants() {
         let id = InteractionId::for_attempt(&attempt(), ordinal);
         assert!(
             matches!(
-                store.append_event(requested(&id, subject)),
+                store.append_interaction_audit(requested(&id, subject)),
                 Err(ConversationStoreError::InvalidReference(_))
             ),
             "the durable authority must refuse {what}"
@@ -1329,7 +1331,7 @@ fn a_question_settlement_must_satisfy_the_exact_requested_question() {
 
     let choices_only = InteractionId::for_attempt(&attempt(), 1);
     store
-        .append_event(requested(
+        .append_interaction_audit(requested(
             &choices_only,
             InteractionSubject::Question {
                 prompt: "Which target?".to_owned(),
@@ -1340,7 +1342,7 @@ fn a_question_settlement_must_satisfy_the_exact_requested_question() {
         .expect("requested");
     assert!(
         matches!(
-            store.append_event(settled(
+            store.append_interaction_audit(settled(
                 &choices_only,
                 InteractionSettlement::Answered {
                     answer: QuestionAnswer::Choice {
@@ -1354,7 +1356,7 @@ fn a_question_settlement_must_satisfy_the_exact_requested_question() {
     );
     assert!(
         matches!(
-            store.append_event(settled(
+            store.append_interaction_audit(settled(
                 &choices_only,
                 InteractionSettlement::Answered {
                     answer: QuestionAnswer::FreeText {
@@ -1367,7 +1369,7 @@ fn a_question_settlement_must_satisfy_the_exact_requested_question() {
         "free text is refused when the requested Question did not allow it"
     );
     store
-        .append_event(settled(
+        .append_interaction_audit(settled(
             &choices_only,
             InteractionSettlement::Answered {
                 answer: QuestionAnswer::Choice {
@@ -1379,7 +1381,7 @@ fn a_question_settlement_must_satisfy_the_exact_requested_question() {
 
     let free_text = InteractionId::for_attempt(&attempt(), 2);
     store
-        .append_event(requested(
+        .append_interaction_audit(requested(
             &free_text,
             InteractionSubject::Question {
                 prompt: "Which target?".to_owned(),
@@ -1390,7 +1392,7 @@ fn a_question_settlement_must_satisfy_the_exact_requested_question() {
         .expect("requested");
     assert!(
         matches!(
-            store.append_event(settled(
+            store.append_interaction_audit(settled(
                 &free_text,
                 InteractionSettlement::Answered {
                     answer: QuestionAnswer::FreeText {
@@ -1404,7 +1406,7 @@ fn a_question_settlement_must_satisfy_the_exact_requested_question() {
     );
     assert!(
         matches!(
-            store.append_event(settled(
+            store.append_interaction_audit(settled(
                 &free_text,
                 InteractionSettlement::Answered {
                     answer: QuestionAnswer::FreeText {
@@ -1419,11 +1421,11 @@ fn a_question_settlement_must_satisfy_the_exact_requested_question() {
 
     let denied = InteractionId::for_attempt(&attempt(), 3);
     store
-        .append_event(requested(&denied, approval_subject()))
+        .append_interaction_audit(requested(&denied, approval_subject()))
         .expect("requested");
     assert!(
         matches!(
-            store.append_event(settled(
+            store.append_interaction_audit(settled(
                 &denied,
                 InteractionSettlement::Denied {
                     reason: "d".repeat(MAX_APPROVAL_DENIAL_REASON_CHARS + 1),
@@ -1448,11 +1450,11 @@ fn a_settlement_is_pinned_to_the_exact_attempt_and_turn_of_its_request() {
 
     let id = InteractionId::for_attempt(&attempt(), 1);
     store
-        .append_event(requested(&id, approval_subject()))
+        .append_interaction_audit(requested(&id, approval_subject()))
         .expect("requested under attempt-1 / turn 1");
     assert!(
         matches!(
-            store.append_event(RuntimeEventEnvelope {
+            store.append_interaction_audit(RuntimeEventEnvelope {
                 turn_id: Some(TurnId::new("2")),
                 ..settled(&id, InteractionSettlement::Approved)
             }),
@@ -1462,7 +1464,7 @@ fn a_settlement_is_pinned_to_the_exact_attempt_and_turn_of_its_request() {
     );
     assert!(
         matches!(
-            store.append_event(RuntimeEventEnvelope {
+            store.append_interaction_audit(RuntimeEventEnvelope {
                 attempt_id: Some(AttemptId::new("attempt-2")),
                 ..settled(&id, InteractionSettlement::Approved)
             }),
@@ -1472,7 +1474,7 @@ fn a_settlement_is_pinned_to_the_exact_attempt_and_turn_of_its_request() {
     );
     assert!(
         matches!(
-            store.append_event(RuntimeEventEnvelope {
+            store.append_interaction_audit(RuntimeEventEnvelope {
                 turn_id: None,
                 ..settled(&id, InteractionSettlement::Approved)
             }),
@@ -1483,7 +1485,7 @@ fn a_settlement_is_pinned_to_the_exact_attempt_and_turn_of_its_request() {
 
     // The exact same attempt and turn is the one settlement that commits.
     store
-        .append_event(settled(&id, InteractionSettlement::Approved))
+        .append_interaction_audit(settled(&id, InteractionSettlement::Approved))
         .expect("the settlement pinned to the requested envelope commits");
 }
 
@@ -1496,10 +1498,10 @@ fn settlements_retain_the_exact_decision_by_value() {
 
     let denied = InteractionId::for_attempt(&attempt(), 1);
     store
-        .append_event(requested(&denied, approval_subject()))
+        .append_interaction_audit(requested(&denied, approval_subject()))
         .expect("requested");
     store
-        .append_event(settled(
+        .append_interaction_audit(settled(
             &denied,
             InteractionSettlement::Denied {
                 reason: "the operator refused".to_owned(),
@@ -1509,7 +1511,7 @@ fn settlements_retain_the_exact_decision_by_value() {
 
     let answered = InteractionId::for_attempt(&attempt(), 2);
     store
-        .append_event(requested(
+        .append_interaction_audit(requested(
             &answered,
             InteractionSubject::Question {
                 prompt: "Which target?".to_owned(),
@@ -1519,7 +1521,7 @@ fn settlements_retain_the_exact_decision_by_value() {
         ))
         .expect("requested");
     store
-        .append_event(settled(
+        .append_interaction_audit(settled(
             &answered,
             InteractionSettlement::Answered {
                 answer: QuestionAnswer::Choice {

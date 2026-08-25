@@ -32,7 +32,13 @@ import type {
   RuntimeClientCursor,
   RuntimeClientProtocolEvent,
   RuntimeClientSnapshot,
+  RuntimeClientTranscriptEntry,
+  RuntimeClientTranscriptPage,
   SessionModelView,
+} from "../protocol/types.ts";
+import {
+  isHiddenContextMessage,
+  validateTranscriptCursorContract,
 } from "../protocol/types.ts";
 import type {
   AttemptPresentation,
@@ -48,7 +54,7 @@ export function emptyPresentationState(
 ): PresentationState {
   return {
     conversationId: "",
-    cursor: 0,
+    cursor: 0 as RuntimeClientCursor,
     transcript: [],
     inbound: { pending: [], last_drain: undefined },
     pendingInteractions: [],
@@ -61,35 +67,24 @@ export function emptyPresentationState(
     effectiveApprovalMode: "policy",
     pendingApprovalMode: undefined,
     approvalModeRevision: 0,
-    pendingSubmissions: [],
   };
 }
 
 /**
  * Replaces the whole projection from an authoritative snapshot.
  *
- * This is the only repair path. It keeps the client's own not-yet-acknowledged
- * submissions and derives everything else. TUI inspection and transient
- * feedback surfaces live outside this runtime-derived projection, so an
- * authoritative repair cannot reconstruct or carry them accidentally.
+ * This is the only repair path. It derives the complete semantic projection
+ * from the authoritative snapshot; there is no client-owned submission row
+ * to preserve. TUI inspection and transient feedback surfaces live outside
+ * this runtime-derived projection, so an authoritative repair cannot
+ * reconstruct or carry them accidentally.
  */
 export function replaceFromSnapshot(
   snapshot: RuntimeClientSnapshot,
   cursor: RuntimeClientCursor,
-  carry?: Partial<
-    Pick<
-      PresentationState,
-      "pendingSubmissions"
-    >
-  >,
 ): PresentationState {
-  const transcript: TranscriptEntry[] = snapshot.messages.map(
-    (message, index) => ({
-      kind: "committed",
-      key: `committed:${messageIdOf(message)}:${index}`,
-      messageId: messageIdOf(message),
-      message,
-    }),
+  const transcript: TranscriptEntry[] = orderTranscript(
+    snapshot.transcript.entries.map(transcriptEntryFromWire),
   );
 
   const attempt = snapshot.attempt;
@@ -125,7 +120,8 @@ export function replaceFromSnapshot(
   return {
     conversationId: snapshot.conversation_id,
     cursor,
-    transcript,
+    transcript: orderTranscript(transcript),
+    transcriptNextCursor: snapshot.transcript.next_cursor,
     attempt:
       attempt === undefined
         ? undefined
@@ -152,7 +148,20 @@ export function replaceFromSnapshot(
     effectiveApprovalMode: snapshot.effective_approval_mode,
     pendingApprovalMode: snapshot.pending_approval_mode,
     approvalModeRevision: snapshot.approval_mode_revision,
-    pendingSubmissions: carry?.pendingSubmissions ?? [],
+  };
+}
+
+/** Merges an older durable page ahead of the currently loaded transcript. */
+export function mergeTranscriptPage(
+  state: PresentationState,
+  page: RuntimeClientTranscriptPage,
+): PresentationState {
+  const older = page.entries.map(transcriptEntryFromWire);
+  const merged = deduplicateTranscript([...state.transcript, ...older]);
+  return {
+    ...state,
+    transcript: orderTranscript(merged),
+    transcriptNextCursor: page.next_cursor,
   };
 }
 
@@ -166,8 +175,15 @@ export function reduce(
   state: PresentationState,
   protocolEvent: RuntimeClientProtocolEvent,
 ): PresentationState {
-  const next = { ...state, cursor: protocolEvent.cursor };
   const event = protocolEvent.event;
+  const transcriptCursor =
+    event.type === "message_committed" || event.type === "inbound_enqueued"
+      ? validateTranscriptCursorContract(
+          event.message,
+          event.transcript_cursor,
+        )
+      : undefined;
+  const next = { ...state, cursor: protocolEvent.cursor };
 
   switch (event.type) {
     case "attempt_started":
@@ -216,6 +232,34 @@ export function reduce(
       next.pendingInteractions = state.pendingInteractions.filter(
         (interaction) => interaction.id !== event.interaction_id,
       );
+      return next;
+
+    case "interaction_audit_requested":
+      next.transcript = appendTranscriptEntry(state.transcript, {
+        kind: "interaction_requested",
+        key: `interaction-requested:${event.audit.event_id}`,
+        cursor: event.transcript_cursor,
+        eventId: event.audit.event_id,
+        timestamp: event.audit.timestamp,
+        attemptId: event.audit.attempt_id,
+        turnId: event.audit.turn_id,
+        interactionId: event.audit.interaction_id,
+        subject: event.audit.subject,
+      });
+      return next;
+
+    case "interaction_audit_settled":
+      next.transcript = appendTranscriptEntry(state.transcript, {
+        kind: "interaction_settled",
+        key: `interaction-settled:${event.audit.event_id}`,
+        cursor: event.transcript_cursor,
+        eventId: event.audit.event_id,
+        timestamp: event.audit.timestamp,
+        attemptId: event.audit.attempt_id,
+        turnId: event.audit.turn_id,
+        interactionId: event.audit.interaction_id,
+        settlement: event.audit.settlement,
+      });
       return next;
 
     case "approval_mode_changed":
@@ -276,9 +320,18 @@ export function reduce(
       // The stream settled without ever becoming a canonical Assistant
       // message, so the in-flight card is dropped exactly as the Rust
       // projection drops it. The audit is committed-for-release output, not
-      // conversation history, so it never enters the transcript and its
-      // proposed tool calls never create a foreground execution slot.
-      next.transcript = dropStreaming(state.transcript, event.attempt_id);
+      // canonical conversation history, so it enters the transcript only as
+      // a typed non-canonical audit and its proposed tool calls never create
+      // a foreground execution slot.
+      next.transcript = appendTranscriptEntry(
+        dropStreaming(state.transcript, event.attempt_id),
+        {
+          kind: "publication_audit",
+          key: `publication:${event.audit.stream_id}`,
+          cursor: event.transcript_cursor,
+          audit: event.audit,
+        },
+      );
       return next;
 
     case "tool_call_started": {
@@ -403,21 +456,27 @@ export function reduce(
       );
 
     case "message_committed": {
+      if (isHiddenContextMessage(event.message)) {
+        return next;
+      }
+      if (transcriptCursor === undefined) {
+        throw new Error(
+          "visible message_committed event is missing its durable transcript cursor",
+        );
+      }
       const messageId = messageIdOf(event.message);
       const transcript =
         event.message.role === "assistant" && event.attempt_id !== undefined
           ? dropStreaming(state.transcript, event.attempt_id)
           : state.transcript;
-      next.transcript = [
-        ...transcript,
-        {
-          kind: "committed",
-          key: `committed:${messageId}:${transcript.length}`,
-          messageId,
-          attemptId: event.attempt_id,
-          message: event.message,
-        },
-      ];
+      next.transcript = appendTranscriptEntry(transcript, {
+        kind: "committed",
+        key: `committed:${messageId}`,
+        messageId,
+        cursor: transcriptCursor,
+        attemptId: event.attempt_id,
+        message: event.message,
+      });
       return next;
     }
 
@@ -433,12 +492,22 @@ export function reduce(
           { sequence: event.sequence, message: event.message },
         ],
       };
-      // The runtime's authoritative inbound fact supersedes the optimistic
-      // local echo of the same text, if one is outstanding.
-      next.pendingSubmissions = reconcileSubmission(
-        state.pendingSubmissions,
-        event.message,
-      );
+      // Durable acceptance is the display frontier. Context facts remain
+      // model-visible runtime input but are hidden from ordinary chat.
+      if (!isHiddenContextMessage(event.message)) {
+        if (transcriptCursor === undefined) {
+          throw new Error(
+            "visible inbound_enqueued event is missing its durable transcript cursor",
+          );
+        }
+        next.transcript = appendTranscriptEntry(state.transcript, {
+          kind: "committed",
+          key: `committed:${event.message.id}`,
+          messageId: event.message.id,
+          cursor: transcriptCursor,
+          message: { role: "user", ...event.message },
+        });
+      }
       return next;
 
     case "inbound_drained":
@@ -483,34 +552,116 @@ export function reduce(
   }
 }
 
-/** Records an optimistic local echo of a submission not yet acknowledged. */
-export function withPendingSubmission(
-  state: PresentationState,
-  key: string,
-  text: string,
-): PresentationState {
-  return {
-    ...state,
-    pendingSubmissions: [...state.pendingSubmissions, { key, text }],
-  };
-}
-
-/** Drops an optimistic echo whose submission the runtime rejected. */
-export function withoutPendingSubmission(
-  state: PresentationState,
-  key: string,
-): PresentationState {
-  return {
-    ...state,
-    pendingSubmissions: state.pendingSubmissions.filter(
-      (pending) => pending.key !== key,
-    ),
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Internals
 // ---------------------------------------------------------------------------
+
+function transcriptEntryFromWire(
+  entry: RuntimeClientTranscriptEntry,
+): TranscriptEntry {
+  switch (entry.item.type) {
+    case "message": {
+      const messageId = messageIdOf(entry.item.message);
+      return {
+        kind: "committed",
+        key: `committed:${messageId}`,
+        messageId,
+        cursor: entry.cursor,
+        message: entry.item.message,
+      };
+    }
+    case "publication_audit":
+      return {
+        kind: "publication_audit",
+        key: `publication:${entry.item.audit.stream_id}`,
+        cursor: entry.cursor,
+        audit: entry.item.audit,
+      };
+    case "interaction_requested":
+      return {
+        kind: "interaction_requested",
+        key: `interaction-requested:${entry.item.event_id}`,
+        cursor: entry.cursor,
+        eventId: entry.item.event_id,
+        timestamp: entry.item.timestamp,
+        attemptId: entry.item.attempt_id,
+        turnId: entry.item.turn_id,
+        interactionId: entry.item.interaction_id,
+        subject: entry.item.subject,
+      };
+    case "interaction_settled":
+      return {
+        kind: "interaction_settled",
+        key: `interaction-settled:${entry.item.event_id}`,
+        cursor: entry.cursor,
+        eventId: entry.item.event_id,
+        timestamp: entry.item.timestamp,
+        attemptId: entry.item.attempt_id,
+        turnId: entry.item.turn_id,
+        interactionId: entry.item.interaction_id,
+        settlement: entry.item.settlement,
+      };
+  }
+}
+
+function appendTranscriptEntry(
+  transcript: TranscriptEntry[],
+  entry: TranscriptEntry,
+): TranscriptEntry[] {
+  const existing = transcript.find((candidate) => candidate.key === entry.key);
+  if (existing !== undefined) {
+    if (
+      existing.kind !== "streaming" &&
+      entry.kind !== "streaming" &&
+      existing.cursor !== entry.cursor
+    ) {
+      throw new Error(
+        `transcript fact ${entry.key} changed durable cursor from ${existing.cursor} to ${entry.cursor}`,
+      );
+    }
+    return transcript;
+  }
+  return orderTranscript([...transcript, entry]);
+}
+
+type DurableTranscriptEntry = Exclude<TranscriptEntry, StreamingMessage>;
+
+function isDurableTranscriptEntry(
+  entry: TranscriptEntry,
+): entry is DurableTranscriptEntry {
+  return entry.kind !== "streaming";
+}
+
+/** Orders every durable item by the cursor allocated by `transcript_order`. */
+function orderTranscript(transcript: TranscriptEntry[]): TranscriptEntry[] {
+  const durable = transcript
+    .filter(isDurableTranscriptEntry)
+    .sort((left, right) => left.cursor - right.cursor);
+  const streaming = transcript.filter((entry) => entry.kind === "streaming");
+  return [...durable, ...streaming];
+}
+
+/** Deduplicates the same durable fact without using identity to infer order. */
+function deduplicateTranscript(transcript: TranscriptEntry[]): TranscriptEntry[] {
+  const seen = new Map<string, TranscriptEntry>();
+  for (const entry of transcript) {
+    const existing = seen.get(entry.key);
+    if (
+      existing !== undefined &&
+      isDurableTranscriptEntry(existing) &&
+      isDurableTranscriptEntry(entry) &&
+      existing.cursor !== entry.cursor
+    ) {
+      throw new Error(
+        `transcript fact ${entry.key} has conflicting durable cursors`,
+      );
+    }
+    if (existing === undefined) {
+      seen.set(entry.key, entry);
+    }
+  }
+  return [...seen.values()];
+}
 
 function startAttempt(
   attemptId: string,
@@ -719,19 +870,4 @@ function upsertInteraction(
   const updated = [...interactions];
   updated[index] = interaction;
   return updated;
-}
-
-function reconcileSubmission(
-  pending: PresentationState["pendingSubmissions"],
-  message: { content?: Array<{ type: string; text?: string }> },
-): PresentationState["pendingSubmissions"] {
-  const text = (message.content ?? [])
-    .filter((block) => block.type === "text")
-    .map((block) => block.text ?? "")
-    .join("");
-  const index = pending.findIndex((entry) => entry.text === text);
-  if (index === -1) {
-    return pending;
-  }
-  return [...pending.slice(0, index), ...pending.slice(index + 1)];
 }

@@ -48,7 +48,10 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use super::event::RuntimeClientEvent;
-use super::snapshot::{CapabilityView, RuntimeClientContextView, RuntimeClientSnapshot};
+use super::snapshot::{
+    CapabilityView, RuntimeClientContextView, RuntimeClientSnapshot, RuntimeClientTranscriptCursor,
+    RuntimeClientTranscriptPage,
+};
 use crate::conversation::SurfaceRevision;
 use crate::message::types::UserContentBlock;
 use crate::model::catalog::ModelCatalogView;
@@ -372,6 +375,21 @@ pub enum RuntimeClientRequest {
         /// Attachment-scoped request id.
         id: RequestId,
     },
+    /// Read one bounded durable transcript page. `before_cursor` is the
+    /// exclusive boundary for older history; omitting it returns the newest
+    /// page. To continue walking backward, pass the previous response's
+    /// `next_cursor` unchanged. This read does not advance the Runtime Client
+    /// observation cursor.
+    TranscriptPageGet {
+        /// Attachment-scoped request id.
+        id: RequestId,
+        /// The exclusive older-history boundary returned by the prior page's
+        /// `next_cursor`, when walking toward older history.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        before_cursor: Option<RuntimeClientTranscriptCursor>,
+        /// Requested page size.
+        limit: usize,
+    },
     /// Subscribe to Runtime Client events after a cursor.
     ///
     /// A successful subscription observes every subsequently published
@@ -560,6 +578,7 @@ impl RuntimeClientRequest {
             | Self::ReloadResources { id, .. }
             | Self::InteractionRespond { id, .. }
             | Self::SnapshotGet { id, .. }
+            | Self::TranscriptPageGet { id, .. }
             | Self::SubscribeEvents { id, .. }
             | Self::CapabilityGet { id, .. }
             | Self::ModelCatalogGet { id, .. }
@@ -595,6 +614,7 @@ impl RuntimeClientRequest {
             Self::ReloadResources { .. } => "reload_resources",
             Self::InteractionRespond { .. } => "interaction_respond",
             Self::SnapshotGet { .. } => "snapshot_get",
+            Self::TranscriptPageGet { .. } => "transcript_page_get",
             Self::SubscribeEvents { .. } => "subscribe_events",
             Self::CapabilityGet { .. } => "capability_get",
             Self::ModelCatalogGet { .. } => "model_catalog_get",
@@ -778,6 +798,11 @@ pub enum RuntimeClientResult {
         snapshot: RuntimeClientSnapshot,
         /// The cursor the snapshot is linearized at.
         cursor: RuntimeClientCursor,
+    },
+    /// `transcript_page_get` succeeded.
+    TranscriptPage {
+        /// The bounded durable transcript page.
+        page: RuntimeClientTranscriptPage,
     },
     /// `subscribe_events` succeeded.
     Subscribed {

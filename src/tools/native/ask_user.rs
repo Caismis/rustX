@@ -382,13 +382,27 @@ mod tests {
     }
 
     impl InteractionObserver for PendingProbe {
-        fn on_pending(&self, request: &InteractionRequest) {
+        fn on_pending(
+            &self,
+            request: &InteractionRequest,
+            _audit: &crate::events::types::RuntimeEventEnvelope,
+            _transcript_cursor: crate::durable::TranscriptCursor,
+        ) {
             if let Some(sender) = self.sender.lock().expect("pending probe lock").take() {
                 let _ = sender.send(request.clone());
             }
         }
 
-        fn on_settled(&self, _interaction_id: &InteractionId, _outcome: &InteractionOutcome) {}
+        fn on_settled(
+            &self,
+            _interaction_id: &InteractionId,
+            _outcome: &InteractionOutcome,
+            _audit: Option<&(
+                crate::events::types::RuntimeEventEnvelope,
+                crate::durable::TranscriptCursor,
+            )>,
+        ) {
+        }
     }
 
     /// The live coordinator and its durable audit capability, returned so a

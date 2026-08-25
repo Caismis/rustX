@@ -118,7 +118,10 @@ pub use snapshot::{
     InFlightBlock, InboundDiagnostics, InboundDrainView, InboundItemView, RuntimeClientAttempt,
     RuntimeClientAttemptPhase, RuntimeClientBackgroundExecution, RuntimeClientCompactionView,
     RuntimeClientContextView, RuntimeClientSkill, RuntimeClientSnapshot, RuntimeClientStatusFact,
-    RuntimeClientStatusSection, RuntimeClientTool, RuntimeDurabilityFailure,
+    RuntimeClientStatusSection, RuntimeClientTool, RuntimeClientTranscriptCursor,
+    RuntimeClientTranscriptEntry, RuntimeClientTranscriptInteractionRequested,
+    RuntimeClientTranscriptInteractionSettled, RuntimeClientTranscriptItem,
+    RuntimeClientTranscriptPage, RuntimeDurabilityFailure,
 };
 pub use types::{
     AttachmentId, RUNTIME_CLIENT_PROTOCOL_VERSION_V1, RequestId, RuntimeClientCursor,

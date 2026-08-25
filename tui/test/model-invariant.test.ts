@@ -33,6 +33,7 @@ import type {
   RuntimeClientEvent,
   RuntimeClientProtocolEvent,
 } from "../src/protocol/types.ts";
+import { runtimeCursor, transcriptCursor } from "./support/fixtures.ts";
 import {
   attemptModel,
   inboundBlock,
@@ -51,7 +52,7 @@ function fold(
   let current = state;
   let cursor = current.cursor;
   for (const event of events) {
-    cursor += 1;
+    cursor = runtimeCursor(cursor + 1);
     const protocolEvent: RuntimeClientProtocolEvent = { cursor, event };
     current = reduce(current, protocolEvent);
   }
@@ -62,7 +63,7 @@ describe("session model A -> B invariant", () => {
   it("keeps the running attempt on A while the session moves to B", () => {
     let state = replaceFromSnapshot(
       snapshot({ model: sessionModel(MODEL_A) }),
-      0,
+      runtimeCursor(0),
     );
 
     // The attempt is admitted while the session model is A.
@@ -119,7 +120,7 @@ describe("session model A -> B invariant", () => {
   it("never mutates the active attempt model on any interleaved event", () => {
     let state = replaceFromSnapshot(
       snapshot({ model: sessionModel(MODEL_A) }),
-      0,
+      runtimeCursor(0),
     );
     state = fold(state, [
       { type: "attempt_started", attempt_id: "a1", model: attemptModel(MODEL_A) },
@@ -148,6 +149,7 @@ describe("session model A -> B invariant", () => {
         type: "inbound_enqueued",
         sequence: 1,
         message: inboundBlock("m2", "queued"),
+        transcript_cursor: transcriptCursor(1),
       },
     ];
 
@@ -178,10 +180,10 @@ describe("session model A -> B invariant", () => {
       conversation_id: "conv-1",
       agent_id: "agent-1",
       snapshot: snapshot({ model: sessionModel(MODEL_A) }),
-      cursor: 0,
+      cursor: runtimeCursor(0),
     });
     await peer.awaitRequests(2); // subscribe_events
-    peer.respond(2, { type: "subscribed", after_cursor: 0 });
+    peer.respond(2, { type: "subscribed", after_cursor: runtimeCursor(0) });
     await attaching;
 
     assert.equal(session.state?.sessionModel.configured.model, MODEL_A);
@@ -267,7 +269,10 @@ describe("session model A -> B invariant", () => {
         reasoning: true,
       },
     });
-    const state = replaceFromSnapshot(snapshot({ model: alwaysOn }), 0);
+    const state = replaceFromSnapshot(
+      snapshot({ model: alwaysOn }),
+      runtimeCursor(0),
+    );
 
     assert.equal(state.sessionModel.effective.capabilities.reasoning, true);
     assert.equal(state.sessionModel.effective.reasoningEnabled, true);
@@ -294,7 +299,10 @@ describe("session model A -> B invariant", () => {
         reasoning: false,
       },
     });
-    const state = replaceFromSnapshot(snapshot({ model: narrowed }), 0);
+    const state = replaceFromSnapshot(
+      snapshot({ model: narrowed }),
+      runtimeCursor(0),
+    );
 
     assert.deepEqual(state.sessionModel.effective.capabilities.inputModalities, [
       "text",

@@ -316,7 +316,12 @@ impl NativePendingSignal {
 }
 
 impl InteractionObserver for NativePendingSignal {
-    fn on_pending(&self, request: &InteractionRequest) {
+    fn on_pending(
+        &self,
+        request: &InteractionRequest,
+        _audit: &rustx::events::types::RuntimeEventEnvelope,
+        _transcript_cursor: rustx::durable::TranscriptCursor,
+    ) {
         let count = {
             let mut requests = self.requests.lock().expect("native pending requests lock");
             requests.push(request.clone());
@@ -329,6 +334,10 @@ impl InteractionObserver for NativePendingSignal {
         &self,
         _interaction_id: &rustx::runtime::InteractionId,
         _outcome: &InteractionOutcome,
+        _audit: Option<&(
+            rustx::events::types::RuntimeEventEnvelope,
+            rustx::durable::TranscriptCursor,
+        )>,
     ) {
     }
 }

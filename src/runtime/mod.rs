@@ -111,6 +111,8 @@ pub mod subagent;
 /// process unit (M5 Bash and M7 interactive MCP stdio). Internal
 /// coordination only — it is not part of the public runtime API.
 pub(crate) mod supervised_unit;
+/// On-demand bounded derived transcript history over durable owners.
+pub mod transcript_history;
 pub mod types;
 
 pub use cancellation::{CancellationCause, CancellationSignal, ExecutionCancellation};
@@ -147,6 +149,7 @@ pub use resources::{
     RuntimeResourceLoadError, RuntimeResourceLoader, RuntimeResourceSnapshot,
     load_project_context_files,
 };
+pub use transcript_history::{TranscriptHistory, TranscriptHistoryError};
 pub use types::{
     ApprovalMode, ApprovalModeState, CancellationReason, ConversationLifecycle,
     ConversationLifecycleState, RuntimeClock, RuntimeError, SystemClock, TokenMeasurement,

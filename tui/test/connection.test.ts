@@ -17,7 +17,14 @@ import {
 import { reduce, replaceFromSnapshot } from "../src/presentation/projection.ts";
 import type { RuntimeClientProtocolEvent } from "../src/protocol/types.ts";
 import { ScriptedPeer, until } from "./support/scripted-peer.ts";
-import { snapshot } from "./support/fixtures.ts";
+import {
+  assistantMessage,
+  contextUserMessage,
+  runtimeCursor,
+  snapshot,
+  toolMessage,
+  userMessage,
+} from "./support/fixtures.ts";
 
 function connect(): { peer: ScriptedPeer; connection: RuntimeClientConnection } {
   const peer = new ScriptedPeer();
@@ -26,6 +33,31 @@ function connect(): { peer: ScriptedPeer; connection: RuntimeClientConnection } 
     output: peer.clientOutput,
   });
   return { peer, connection };
+}
+
+async function assertMalformedTranscriptEventCloses(
+  event: unknown,
+): Promise<void> {
+  const { peer, connection } = connect();
+  const delivered: RuntimeClientProtocolEvent[] = [];
+  let projection = replaceFromSnapshot(snapshot(), runtimeCursor(0));
+  connection.onEvent((next) => {
+    delivered.push(next);
+    projection = reduce(projection, next);
+  });
+
+  const pending = connection.request({ method: "snapshot_get" });
+  await peer.awaitRequests(1);
+  peer.writeRecord({ cursor: 17, event });
+
+  await assert.rejects(pending, (error: unknown) => {
+    assert.ok(error instanceof ConnectionClosedError);
+    assert.equal(error.reason, "protocol_error");
+    return true;
+  });
+  assert.deepEqual(delivered, []);
+  assert.equal(projection.cursor, 0, "rejected facts do not advance presentation state");
+  assert.ok(connection.closed instanceof ConnectionClosedError);
 }
 
 describe("RuntimeClientConnection", () => {
@@ -68,7 +100,7 @@ describe("RuntimeClientConnection", () => {
     await peer.awaitRequests(2);
 
     // Answer the second request first.
-    peer.respond(2, { type: "subscribed", after_cursor: 7 });
+    peer.respond(2, { type: "subscribed", after_cursor: runtimeCursor(7) });
     peer.respond(1, { type: "detached" });
 
     assert.deepEqual(await second, { type: "subscribed", after_cursor: 7 });
@@ -99,7 +131,7 @@ describe("RuntimeClientConnection", () => {
   it("closes on an unknown v1 event without advancing the projection", async () => {
     const { peer, connection } = connect();
     const events: RuntimeClientProtocolEvent[] = [];
-    let projection = replaceFromSnapshot(snapshot(), 0);
+    let projection = replaceFromSnapshot(snapshot(), runtimeCursor(0));
     connection.onEvent((event) => {
       events.push(event);
       projection = reduce(projection, event);
@@ -140,6 +172,50 @@ describe("RuntimeClientConnection", () => {
     );
     assert.equal(peer.requests.length, 1);
   });
+
+  for (const [label, event] of [
+    [
+      "Assistant message_committed",
+      {
+        type: "message_committed",
+        message: assistantMessage("missing-assistant-cursor", "bad"),
+      },
+    ],
+    [
+      "Tool message_committed",
+      {
+        type: "message_committed",
+        message: toolMessage("missing-tool-cursor", "call-1", "tool-read"),
+      },
+    ],
+    [
+      "ordinary User message_committed",
+      {
+        type: "message_committed",
+        message: userMessage("missing-user-cursor", "bad"),
+      },
+    ],
+    [
+      "visible inbound_enqueued",
+      {
+        type: "inbound_enqueued",
+        sequence: 1,
+        message: userMessage("missing-inbound-cursor", "bad"),
+      },
+    ],
+    [
+      "hidden Context with a cursor",
+      {
+        type: "message_committed",
+        message: contextUserMessage("hidden-context", "runtime status"),
+        transcript_cursor: 8,
+      },
+    ],
+    ] as const) {
+    it(`closes on ${label} before the malformed fact reaches the reducer`, async () => {
+      await assertMalformedTranscriptEventCloses(event);
+    });
+  }
 
   it("rejects a request with its typed protocol error and stays usable", async () => {
     const { peer, connection } = connect();

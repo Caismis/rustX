@@ -41,6 +41,7 @@ import {
   toolMessage,
   toolResult,
   userMessage,
+  runtimeCursor,
 } from "./support/fixtures.ts";
 import { blockText, prefs } from "./support/render.ts";
 
@@ -146,7 +147,7 @@ function visible(
 
 describe("snapshot reconstruction", () => {
   it("rebuilds every semantic region from one fresh snapshot", () => {
-    const screen = visible(replaceFromSnapshot(representative(), 42));
+    const screen = visible(replaceFromSnapshot(representative(), runtimeCursor(42)));
 
     // Conversation
     assert.match(screen, /run the tests/, "the user turn");
@@ -183,15 +184,15 @@ describe("snapshot reconstruction", () => {
   it("is identical whether the state is fresh or replaced in place", () => {
     // A resync replaces the projection wholesale. The second render must not
     // depend on anything the first render left behind.
-    const first = visible(replaceFromSnapshot(representative(), 42));
-    const second = visible(replaceFromSnapshot(representative(), 99));
+    const first = visible(replaceFromSnapshot(representative(), runtimeCursor(42)));
+    const second = visible(replaceFromSnapshot(representative(), runtimeCursor(99)));
     assert.equal(first, second);
   });
 
   it("reconstructs the same screen with every domain expanded", () => {
     // Expansion is client state, so it is not in the snapshot — but the facts
     // it reveals are, and two independent rebuilds must reveal the same ones.
-    const state = replaceFromSnapshot(representative(), 42);
+    const state = replaceFromSnapshot(representative(), runtimeCursor(42));
     const preferences = withExpandedInteractions(
       withExpandedBackgroundExecutions(
         withExpandedToolCalls(prefs(), ["call-1", "call-2"]),
@@ -200,7 +201,10 @@ describe("snapshot reconstruction", () => {
       ["attempt-1-interaction-1"],
     );
     const first = visible(state, preferences);
-    const second = visible(replaceFromSnapshot(representative(), 99), preferences);
+    const second = visible(
+      replaceFromSnapshot(representative(), runtimeCursor(99)),
+      preferences,
+    );
     assert.equal(first, second);
 
     // The expanded approval shows the complete published request, and nothing
@@ -209,13 +213,13 @@ describe("snapshot reconstruction", () => {
     assert.match(first, /printf original/);
     assert.deepEqual(
       state,
-      replaceFromSnapshot(representative(), 42),
+      replaceFromSnapshot(representative(), runtimeCursor(42)),
       "expanding never writes back into runtime state",
     );
   });
 
   it("carries no semantic state in a display preference", () => {
-    const state = replaceFromSnapshot(representative(), 42);
+    const state = replaceFromSnapshot(representative(), runtimeCursor(42));
     const collapsed = renderTranscript(state, prefs()).map(blockText);
     const expanded = renderTranscript(
       state,
@@ -236,7 +240,7 @@ describe("snapshot reconstruction", () => {
     // And the projection itself is untouched by either render.
     assert.deepEqual(
       state,
-      replaceFromSnapshot(representative(), 42),
+      replaceFromSnapshot(representative(), runtimeCursor(42)),
       "rendering never writes back into runtime state",
     );
   });

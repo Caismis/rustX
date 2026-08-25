@@ -35,6 +35,7 @@ import {
   RuntimeRequestError,
 } from "./connection.ts";
 import {
+  mergeTranscriptPage,
   reduce,
   replaceFromSnapshot,
 } from "../presentation/projection.ts";
@@ -52,6 +53,8 @@ import {
   type RuntimeClientProtocolEvent,
   type RuntimeClientResult,
   type RuntimeClientSnapshot,
+  type RuntimeClientTranscriptCursor,
+  type RuntimeClientTranscriptPage,
   type RuntimeClientOutcome,
   type SessionSummaryView,
   type SessionNodeView,
@@ -70,6 +73,7 @@ import {
 
 /** Native owner bound for one Session list/tree response. */
 export const SESSION_PROJECTION_PAGE_LIMIT = 32;
+export const TRANSCRIPT_PROJECTION_PAGE_LIMIT = 32;
 
 export interface RuntimeClientAttachmentOptions {
   connection: RuntimeClientConnection;
@@ -186,6 +190,41 @@ export class RuntimeClientAttachment {
       messageId: result.message_id,
       sequence: result.inbound_sequence,
     };
+  }
+
+  /**
+   * Reads one bounded durable transcript page by its exclusive older
+   * boundary. Callers pass the previous page's `next_cursor` unchanged.
+   */
+  async transcriptPage(
+    beforeCursor?: RuntimeClientTranscriptCursor,
+    limit = TRANSCRIPT_PROJECTION_PAGE_LIMIT,
+  ): Promise<RuntimeClientTranscriptPage> {
+    const result = await this.#connection.request({
+      method: "transcript_page_get",
+      before_cursor: beforeCursor,
+      limit,
+    });
+    if (result.type !== "transcript_page") {
+      throw new Error(`transcript_page_get returned ${result.type}`);
+    }
+    return result.page;
+  }
+
+  /** Loads the next older page without changing the live event cursor. */
+  async loadOlderTranscript(
+    limit = TRANSCRIPT_PROJECTION_PAGE_LIMIT,
+  ): Promise<boolean> {
+    const beforeCursor = this.#state?.transcriptNextCursor;
+    if (beforeCursor === undefined) {
+      return false;
+    }
+    const page = await this.transcriptPage(beforeCursor, limit);
+    if (this.#state !== undefined) {
+      this.#state = mergeTranscriptPage(this.#state, page);
+      this.#publish();
+    }
+    return page.entries.length > 0;
   }
 
   /** Requests cancellation of the current attempt. Acceptance, not settlement. */
@@ -630,15 +669,7 @@ export class RuntimeClientAttachment {
   }
 
   #install(snapshot: RuntimeClientSnapshot, cursor: RuntimeClientCursor): void {
-    this.#state = replaceFromSnapshot(
-      snapshot,
-      cursor,
-      this.#state === undefined
-        ? undefined
-        : {
-            pendingSubmissions: this.#state.pendingSubmissions,
-          },
-    );
+    this.#state = replaceFromSnapshot(snapshot, cursor);
     for (const listener of this.#snapshotListeners) {
       listener();
     }

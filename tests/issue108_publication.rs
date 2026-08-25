@@ -553,7 +553,8 @@ fn proposal_duplicate_and_post_completion_transitions_are_rejected() {
         .expect("U after rejected duplicate transitions");
     let audit = store
         .terminalize_publication_audit(&start.stream_id, fixed_time())
-        .expect("audit");
+        .expect("audit")
+        .0;
     assert_eq!(audit.proposed_call_ids(), vec![call_id]);
     assert!(matches!(
         audit.content[0],
@@ -750,7 +751,8 @@ fn terminal_staging_uses_the_proposal_state_machine_atomically() {
         .expect("valid terminal batch after rollback");
     let audit = store
         .terminalize_publication_audit(&start.stream_id, fixed_time())
-        .expect("valid audit");
+        .expect("valid audit")
+        .0;
     assert_eq!(audit.proposed_call_ids(), vec![valid_id]);
 }
 
@@ -778,7 +780,8 @@ fn orphan_completion_cannot_become_an_audited_tool_proposal() {
     commit_provider_outcome(&store, "proposal-orphan-exploit", &request_id);
     let audit = store
         .terminalize_publication_audit(&start.stream_id, fixed_time())
-        .expect("the empty stream can settle as Incomplete");
+        .expect("the empty stream can settle as Incomplete")
+        .0;
     assert!(audit.proposed_call_ids().is_empty());
     assert!(
         store
@@ -863,7 +866,8 @@ fn canonical_acceptance_rejects_an_omitted_completed_proposal_atomically() {
 
     let audit = store
         .terminalize_publication_audit(&start.stream_id, fixed_time())
-        .expect("failed C left the proposal settlement untouched");
+        .expect("failed C left the proposal settlement untouched")
+        .0;
     assert_eq!(audit.proposed_call_ids(), vec![call_id]);
 }
 
@@ -941,7 +945,8 @@ fn canonical_acceptance_rejects_a_strict_proposal_subset_atomically() {
 
     let audit = store
         .terminalize_publication_audit(&start.stream_id, fixed_time())
-        .expect("failed C left both proposal owners intact");
+        .expect("failed C left both proposal owners intact")
+        .0;
     assert_eq!(audit.proposed_call_ids(), vec![first, second]);
 }
 
@@ -993,7 +998,8 @@ fn canonical_acceptance_rejects_a_started_only_proposal_atomically() {
 
     let audit = store
         .terminalize_publication_audit(&start.stream_id, fixed_time())
-        .expect("failed C left the Started proposal auditable");
+        .expect("failed C left the Started proposal auditable")
+        .0;
     assert_eq!(audit.proposed_call_ids(), vec![call_id]);
     assert!(matches!(
         audit.content.as_slice(),
@@ -1065,7 +1071,8 @@ fn tool_execution_started_rejects_a_foreign_tool_id_atomically() {
 
     let audit = store
         .terminalize_publication_audit(&start.stream_id, fixed_time())
-        .expect("wrong ToolExecutionStarted left no executed fact");
+        .expect("wrong ToolExecutionStarted left no executed fact")
+        .0;
     assert_eq!(audit.proposed_call_ids(), vec![call_id]);
 }
 
@@ -1282,7 +1289,8 @@ fn publication_terminal_frame_and_marker_commit_together() {
         .expect("terminal-only U");
     let audit = store
         .terminalize_publication_audit(&start.stream_id, fixed_time())
-        .expect("audit");
+        .expect("audit")
+        .0;
     assert_eq!(audit.kind, PublicationAuditKind::Unaccepted);
     assert!(
         audit.content.is_empty(),
@@ -1380,7 +1388,8 @@ fn the_three_settlements_are_mutually_exclusive() {
         .expect("U");
     let audit = store
         .terminalize_publication_audit(&start.stream_id, fixed_time())
-        .expect("audit");
+        .expect("audit")
+        .0;
     assert_eq!(audit.kind, PublicationAuditKind::Unaccepted);
     let rejected = store.commit_canonical_publication(
         &start.stream_id,
@@ -1759,9 +1768,9 @@ fn a_complete_unaccepted_proposal_never_acquires_an_execution_fact() {
     let audit = store
         .terminalize_publication_audit(&start.stream_id, fixed_time())
         .expect("audit");
-    assert_eq!(audit.kind, PublicationAuditKind::Unaccepted);
+    assert_eq!(audit.0.kind, PublicationAuditKind::Unaccepted);
     assert!(matches!(
-        &audit.content[0],
+        &audit.0.content[0],
         PublicationAuditBlock::ProposedToolCall { complete, .. } if *complete
     ));
     assert!(
@@ -1810,7 +1819,8 @@ fn audited_proposals_reject_all_dependent_tool_transitions_atomically() {
         };
         let audit = store
             .terminalize_publication_audit(&start.stream_id, fixed_time())
-            .expect("audit");
+            .expect("audit")
+            .0;
         assert_eq!(audit.kind, expected_kind);
 
         let assert_unchanged = |before_head: &rustx::durable::DurableConversationHead,
