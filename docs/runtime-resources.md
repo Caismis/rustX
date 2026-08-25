@@ -122,7 +122,7 @@ snapshot's compatible `CapabilitySnapshot`; every model turn and tool
 continuation in the attempt uses that pair.
 
 Reload closes a narrow admission gate, verifies there is no active attempt,
-pending Question/Approval interaction, or manual compaction, and retains one
+pending Questionnaire/Approval interaction, or manual compaction, and retains one
 counted lifecycle admission while releasing the synchronous state lock before
 asynchronous discovery/preparation. On success it commits the complete
 capability candidate and publishes the complete resource generation before

@@ -351,7 +351,7 @@ The ownership table is:
 | Rendering and input | TUI projection |
 | Attempt cancellation | `AgentCancellation` |
 | Tool cancellation observation | owner-observing `ExecutionCancellation` with one-way child derivation |
-| Native Question capability | crate-private `QuestionRequester` bound by the Agent Loop attempt |
+| Native Questionnaire capability | crate-private `QuestionnaireRequester` bound by the Agent Loop attempt |
 | Runtime drain and quiescence | `ConversationRuntime` / `ConversationLifecycle` |
 | Crash recovery | existing M9 recovery owner |
 
@@ -360,7 +360,7 @@ The pre-tool seam is total and typed: every `AttemptLifecycle` carries one
 binding to its owning `InteractionCoordinator`. The binding is not a
 replaceable production rendezvous strategy, and no public generic interaction
 trait exists. The only Tool Plane consumer is native `ask_user`, which gets a
-crate-private `QuestionRequester` containing the attempt identity, the
+crate-private `QuestionnaireRequester` containing the attempt identity, the
 owner-observing `ExecutionCancellation` capability, and that coordinator. A standalone
 inert execution has no interaction provider and therefore fails an `Ask`
 closed. The configured
@@ -373,31 +373,70 @@ form framework.
 `PreToolPolicy` runs only after registry identity resolution, reserved metadata
 stripping, tool-owned semantic normalization, and business-argument
 validation, and after the Assistant `ToolCall` is canonical. For `ask_user`,
-preflight turns a bare prompt into canonical `allow_free_text: true`, derives
-choice-only mode as `false`, and rejects empty/duplicate/oversized choices
-before a `PreparedInvocation` can be returned. The executor consumes that
-canonical invocation; it cannot rediscover model-argument validity. The
-policy cannot resolve a tool, dispatch it, or alter the prepared invocation.
+preflight validates one ordinary typed questionnaire object and rejects
+malformed, unknown, duplicate, reserved, or out-of-bounds values before a
+`PreparedInvocation` can be returned. It never parses JSON stored in strings or
+coerces string booleans. The executor consumes that canonical invocation; it
+cannot rediscover model-argument validity. The policy cannot resolve a tool,
+dispatch it, or alter the prepared invocation.
 
-Question is a separate bounded interaction kind, not an approval variant. The
-native `ask_user` Tool uses the ordinary Tool Plane path and fixed
-foreground/sequential/approval-never policy:
+Questionnaire is a separate bounded interaction kind, not an approval
+variant. The native `ask_user` Tool uses the ordinary Tool Plane path and
+fixed foreground/sequential/approval-never policy. One invocation is one
+coordinator interaction, even when it contains several related questions:
 
 ```text
 Assistant ToolCall(ask_user)
-  -> ToolRegistry preflight
+  -> registry preflight and one immutable QuestionnaireSpecification
   -> ordinary executor
-  -> InteractionCoordinator Question(prompt, finite choices, free-text flag)
-  -> Runtime Client / TUI typed QuestionAnswer
+  -> one InteractionCoordinator Questionnaire publication
+  -> one pending Runtime Client questionnaire
+  -> one submitted or declined response
+  -> one durable settlement
   -> ordinary ToolResult
   -> model continuation
 ```
 
-It has no filesystem, network, process, or authorization authority and never
-creates a recursive approval request. With no interaction-capable client it
-returns an explicit failed ToolResult. Approval responses contain only
-`Allow`/`Deny`; Question answers contain only a validated choice or bounded
-free text. Neither response can replace the original Tool arguments.
+The model-facing contract is one ordinary root object with only the required
+`questions` array. It accepts 1–4 questions, each with a required non-empty
+`question` (at most 4096 Unicode scalar values), short `header` (at most 16),
+2–4 authored `{label, description, preview?}` options, and an optional
+`multi_select` boolean defaulting to false. Labels are bounded to 60 scalar
+values, descriptions to 1024, previews to 8192, and custom answers to 4096:
+
+```json
+{
+  "questions": [
+    {
+      "question": "Which visual direction should I use?",
+      "header": "Visual style",
+      "options": [
+        {
+          "label": "Swiss / Klein blue (Recommended)",
+          "description": "Information-first typography with strong hierarchy and blue highlights.",
+          "preview": "Optional Markdown preview"
+        },
+        {
+          "label": "Electronic magazine",
+          "description": "Serif typography, warmer colors, and a more editorial composition."
+        }
+      ],
+      "multi_select": false
+    }
+  ]
+}
+```
+
+Custom text is always available as a client-owned row; the model never sends
+`allow_free_text` and never authors an `Other` sentinel. Related blocking
+questions belong in one call. A client response carries only question indices
+and typed option/custom decisions. Submitted answers may be partial; accepted
+answers are normalized into question order and authored option order. Previews
+are rendered for single-select questions. With no interaction-capable client,
+`ask_user` returns an explicit failed ToolResult. A user decline is a successful
+result `{ "cancelled": true, "answers": [] }`, while attempt cancellation
+remains `ToolExecutionStatus::Cancelled`; neither response can replace the
+original Tool arguments.
 
 The runtime control plane exposes `effective_approval_mode` and a pending
 desired mode. A busy attempt freezes the effective mode it admitted; later
@@ -430,12 +469,12 @@ The asynchronous policy boundary has one cancellation rule: after
 consuming `Allow`, `Deny`, `Ask`, or a policy error. If cancellation is
 observable, the decision is not consumed and the call receives the normal
 cancelled result slot. An `Ask` response is subject to a second checkpoint;
-`Answered(Allow)` is a rendezvous outcome, never tool-start authority.
+`Responded(Allow)` is a rendezvous outcome, never tool-start authority.
 
 The coordinator's pending state has one mutex-protected terminal transition:
 
 ```text
-Pending --response--> Answered
+Pending --response--> Responded
 Pending --owner cancellation/runtime drain--> Cancelled
 ```
 
@@ -453,7 +492,7 @@ consume the already-selected first-winner reason at this boundary; it never
 receives the owner or performs cause arbitration of its own. The view cannot
 expose the owner's signal; its `child_signal()` can only derive a subordinate
 signal whose cancellation does not propagate upward. A response that arrives
-after cancellation is observable cannot publish `Answered`; it is rejected as
+after cancellation is observable cannot publish `Responded`; it is rejected as
 `not_pending` after the matching `Cancelled { reason }` transition. During
 drain,
 `ConversationRuntime` requests `RuntimeShutdown`, reads the active attempt's
@@ -511,8 +550,9 @@ state.
 and subagent ownership lifecycles already use. The store rejects a duplicate
 request, a duplicate or contradictory settlement, a settlement without its
 request, and a settlement whose terminal its subject cannot produce (an
-Approval cannot be "answered", a Question cannot be "approved"; cancellation
-is the one terminal both share). Both facts carry a canonical event identity
+Approval cannot be questionnaire-submitted, a Questionnaire cannot be
+approved; cancellation is the one terminal both share). Both facts carry a
+canonical event identity
 derived from the interaction identity, so the pair resolves through the unique
 `event_id` index rather than a Journal scan.
 
@@ -540,22 +580,26 @@ payloads and a fact that bypassed the live coordinator must still be refused:
   refuses to commit an Assistant message without an open publication stream, so
   every real approval has a frozen `(attempt, turn, message_id)` owner and no
   lenient branch is needed for a state the runtime cannot produce.
-- Interaction audit payload bounds are durable-store invariants. Prompt,
-  choice count/length/uniqueness, answer mode and length, approval request
+- Interaction audit payload bounds are durable-store invariants. Questionnaire
+  count, question/header text, option count/label/description/preview,
+  question and option uniqueness, answer mode/index/length, approval request
   reason, denial reason, tool-name length, and the canonical lowercase-hex
   form of `arguments_digest` are all checked at the store. The limits live in
   one place, `events::interaction`, which both the coordinator's live
   validation and the store's durable validation call, so they cannot drift and
   a future PostgreSQL backend reuses the same contract.
-- A Question settlement must satisfy the exact requested Question contract,
-  not merely carry the `Answered` variant: a `Choice` must be one the Question
-  offered, and `FreeText` requires a Question that accepted free text.
+- A Questionnaire settlement must satisfy the exact requested questionnaire
+  contract, not merely carry a response variant: indices are unique and in
+  range, single-select answers name one authored option or custom text, and
+  multi-select answers name a non-empty unique authored set. Empty submission
+  is the distinct decline settlement.
 
 Two ordering rules make the plane observable rather than merely intended:
 
 ```text
-InteractionRequested          -> the prompt is released to a client
-InteractionSettled(Approved)  -> ToolExecutionStarted -> external side effect
+InteractionRequested                   -> questionnaire is released to a client
+InteractionSettled(Submitted/Declined) -> semantic waiter resumes
+InteractionSettled(Approved)           -> ToolExecutionStarted -> external side effect
 ```
 
 The requested fact commits inside the same critical section that admits the
@@ -584,8 +628,9 @@ historical identity is durably spent in both directions, so a current runtime
 that wants the same tool must reach a **new** live approval under a new
 identity.
 
-Payloads stay bounded. A Question subject is stored by value because the
-Question contract already bounds its prompt and choices; an Approval subject
+Payloads stay bounded. A Questionnaire subject is stored by value because the
+questionnaire contract bounds every question, option description/preview, and
+answer string; an Approval subject
 names the call/tool identity and policy reason by value and pins the exact
 model-issued argument value by SHA-256 digest, because that value is already
 durable by-value in the canonical `ToolCall` the Message Ledger owns — which
@@ -724,7 +769,7 @@ runtime/identity.rs        strong IDs (ConversationId, MessageId, AgentId,
                            McpServerId, SkillId, SkillVersionId, ArtifactId)
                            and CapabilityRevision
 runtime/interaction.rs     provider-independent native Approval and bounded
-                           Question requests, typed responses/outcomes,
+                           Questionnaire requests, typed responses/outcomes,
                            coordinator pending registry, terminal rendezvous,
                            and Runtime Client observation
 runtime/cancellation.rs   CancellationSignal: the one runtime-owned
@@ -1689,7 +1734,7 @@ Tool-execution wrappers/middleware, post-tool result replacement, pre-tool
 argument or identity rewriting, generic question/form frameworks, generalized
 permission/risk policy, subagent lifecycle observation (#60), and
 turn-stopping/forced continuation are intentionally absent. The bounded
-native Approval and Question seams are implemented by M9.2/#100 above; they do
+native Approval and Questionnaire seams are implemented by M9.2/#100 above; they do
 not expand into those frameworks.
 `docs/agent-loop.md` section 4.3 carries the full authority matrix.
 
@@ -1821,9 +1866,9 @@ equivalence in both directions at once.
 
 None of the three rules applies under `ForegroundOnly`/`BackgroundOnly`,
 which receive no injected field: an arbitrary composed, reference-heavy root
-stays valid there, `execution_mode` included. That scoping is load-bearing — the `ask_user` intrinsic's canonical
-schema is a root `anyOf` with no root `properties` at all, and MCP servers
-ship arbitrary JSON Schema — so the policy-unaware
+stays valid there, `execution_mode` included. That scoping is load-bearing —
+the native `ask_user` questionnaire is a normal closed root object and MCP
+servers may ship arbitrary JSON Schema — so the policy-unaware
 `validate_canonical_schema` must stay permissive. The contract therefore lives
 in the bounded layer that owns both the effective policy and the compiled
 model-facing schema.

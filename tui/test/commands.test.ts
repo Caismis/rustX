@@ -22,7 +22,7 @@ import {
   approvalInteraction,
   catalogModel,
   capabilities,
-  questionInteraction,
+  questionnaireInteraction,
   runtimeCursor,
   sessionModel,
   sessionView,
@@ -102,7 +102,6 @@ describe("command registry", () => {
         "/expand",
         "/cancel",
         "/approve",
-        "/answer",
         "/approval",
         "/quit",
       ],
@@ -199,72 +198,55 @@ describe("CommandDispatcher", () => {
     assert.deepEqual(await submitting, { kind: "none" });
   });
 
-  it("routes ordinary text to a focused Question instead of submit_inbound", async () => {
+  it("keeps ordinary editor text as inbound while a questionnaire is pending", async () => {
     const { peer, dispatcher } = await harness(
-      snapshot({ pending_interactions: [questionInteraction()] }),
+      snapshot({ pending_interactions: [questionnaireInteraction()] }),
     );
     const responding = dispatcher.submit("production");
     await peer.awaitRequests(3);
 
-    assert.equal(peer.requests[2]?.method, "interaction_respond");
+    assert.equal(peer.requests[2]?.method, "submit_inbound");
     assert.deepEqual(
-      peer.requests[2]?.method === "interaction_respond"
-        ? peer.requests[2].response
+      peer.requests[2]?.method === "submit_inbound"
+        ? peer.requests[2].content
         : null,
-      {
-        type: "question",
-        answer: { type: "choice", value: "production" },
-      },
-    );
-    assert.equal(
-      peer.requests.some((request) => request.method === "submit_inbound"),
-      false,
+      [{ type: "text", text: "production" }],
     );
     peer.respond(3, {
-      type: "interaction_response_accepted",
-      interaction_id: "attempt-1-interaction-question-1",
+      type: "inbound_accepted",
+      message_id: "m-question-text",
+      inbound_sequence: 1,
     });
-    assert.equal((await responding).kind, "transient");
+    assert.deepEqual(await responding, { kind: "none" });
   });
 
-  it("routes focused free text and focused approval through typed responses", async () => {
-    const openQuestion = questionInteraction("attempt-1-interaction-question-open");
-    assert.equal(openQuestion.kind.type, "question");
-    if (openQuestion.kind.type !== "question") return;
+  it("keeps questionnaire answers out of shell parsing while /approve remains explicit", async () => {
+    const openQuestion = questionnaireInteraction("attempt-1-interaction-question-open");
     const { peer, dispatcher } = await harness(
       snapshot({
-        pending_interactions: [
-          {
-            ...openQuestion,
-            kind: {
-              type: "question",
-              prompt: "What name should I use?",
-              allow_free_text: true,
-            },
-          },
-        ],
+        pending_interactions: [openQuestion],
       }),
     );
     const responding = dispatcher.submit("a private environment");
     await peer.awaitRequests(3);
     assert.deepEqual(
-      peer.requests[2]?.method === "interaction_respond"
-        ? peer.requests[2].response
+      peer.requests[2]?.method === "submit_inbound"
+        ? peer.requests[2].content
         : null,
-      {
-        type: "question",
-        answer: { type: "free_text", value: "a private environment" },
-      },
+      [{ type: "text", text: "a private environment" }],
     );
     peer.respond(3, {
-      type: "interaction_response_accepted",
-      interaction_id: openQuestion.id,
+      type: "inbound_accepted",
+      message_id: "m-free-text",
+      inbound_sequence: 1,
     });
-    assert.equal((await responding).kind, "transient");
+    assert.deepEqual(await responding, { kind: "none" });
 
     const approval = approvalInteraction("attempt-1-interaction-approval-1");
     const second = await harness(snapshot({ pending_interactions: [approval] }));
-    const approving = second.dispatcher.submit("deny because it is unsafe");
+    const approving = second.dispatcher.submit(
+      `/approve ${approval.id} deny because it is unsafe`,
+    );
     await second.peer.awaitRequests(3);
     assert.deepEqual(
       second.peer.requests[2]?.method === "interaction_respond"
@@ -282,38 +264,39 @@ describe("CommandDispatcher", () => {
     assert.equal((await approving).kind, "transient");
   });
 
-  it("focuses the lexicographically smallest interaction when several are pending", async () => {
-    const first = questionInteraction("attempt-1-interaction-z");
-    const second = questionInteraction("attempt-1-interaction-a");
+  it("does not route ordinary text to any pending questionnaire", async () => {
+    const first = questionnaireInteraction("attempt-1-interaction-z");
+    const second = questionnaireInteraction("attempt-1-interaction-a");
     const { peer, dispatcher } = await harness(
       snapshot({ pending_interactions: [first, second] }),
     );
     const responding = dispatcher.submit("production");
     await peer.awaitRequests(3);
     assert.equal(
-      peer.requests[2]?.method === "interaction_respond"
-        ? peer.requests[2].interaction_id
-        : undefined,
-      second.id,
+      peer.requests[2]?.method,
+      "submit_inbound",
     );
     peer.respond(3, {
-      type: "interaction_response_accepted",
-      interaction_id: second.id,
+      type: "inbound_accepted",
+      message_id: "m-question-text",
+      inbound_sequence: 1,
     });
-    await responding;
+    assert.deepEqual(await responding, { kind: "none" });
   });
 
-  it("does not turn an invalid focused choice into an inbound message", async () => {
+  it("keeps questionnaire decisions inside the overlay protocol", async () => {
     const { peer, dispatcher } = await harness(
-      snapshot({ pending_interactions: [questionInteraction()] }),
+      snapshot({ pending_interactions: [questionnaireInteraction()] }),
     );
-    const outcome = await dispatcher.submit("custom environment");
-    assert.equal(outcome.kind, "transient");
-    if (outcome.kind === "transient") {
-      assert.equal(outcome.level, "error");
-      assert.match(outcome.text, /focused question requires one of/);
-    }
-    assert.equal(peer.requests.length, 2);
+    const submitting = dispatcher.submit("custom environment");
+    await peer.awaitRequests(3);
+    assert.equal(peer.requests[2]?.method, "submit_inbound");
+    peer.respond(3, {
+      type: "inbound_accepted",
+      message_id: "m-custom-text",
+      inbound_sequence: 1,
+    });
+    assert.deepEqual(await submitting, { kind: "none" });
   });
 
   it("renders /help from the command table", async () => {
@@ -1083,29 +1066,6 @@ describe("CommandDispatcher", () => {
     if (outcome.kind === "transient") {
       assert.match(outcome.text, /response accepted/);
     }
-  });
-
-  it("sends a typed Question answer through Runtime Client", async () => {
-    const { peer, dispatcher } = await harness();
-    const responding = dispatcher.submit(
-      "/answer attempt-1-interaction-1 choice alpha value",
-    );
-    await peer.awaitRequests(3);
-
-    assert.deepEqual(
-      peer.requests[2]?.method === "interaction_respond"
-        ? peer.requests[2].response
-        : null,
-      {
-        type: "question",
-        answer: { type: "choice", value: "alpha value" },
-      },
-    );
-    peer.respond(3, {
-      type: "interaction_response_accepted",
-      interaction_id: "attempt-1-interaction-1",
-    });
-    assert.equal((await responding).kind, "transient");
   });
 
   it("requests ApprovalMode through the runtime and reports pending reconciliation", async () => {

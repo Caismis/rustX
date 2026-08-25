@@ -140,8 +140,10 @@ pub use inbound::{
     ConversationInboundMailbox, InboundBatch, InboundItem, InboundSequence, MailboxError,
 };
 pub use interaction::{
-    ApprovalDecision, InteractionKind, InteractionOutcome, InteractionRequest, InteractionResponse,
-    QuestionAnswer,
+    ApprovalDecision, CustomAnswer, InteractionKind, InteractionOutcome, InteractionRequest,
+    InteractionResponse, MultipleOptionAnswer, OptionSpecification, QuestionSpecification,
+    QuestionnaireAnswer, QuestionnaireAnswerEntry, QuestionnaireDeclined, QuestionnaireResponse,
+    QuestionnaireSpecification, QuestionnaireSubmission, SingleOptionAnswer,
 };
 pub use recovery::{
     AttemptRecoveryClass, BackgroundEvidence, BackgroundRecoveryClass, KnownModelOutcome,

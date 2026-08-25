@@ -34,6 +34,7 @@ import { ChildRuntimeProcess } from "../src/runtime/child-process.ts";
 import { RuntimeClientConnection } from "../src/runtime/connection.ts";
 import { RuntimeClientAttachment } from "../src/runtime/attachment.ts";
 import { CommandDispatcher } from "../src/commands/dispatcher.ts";
+import { QuestionnaireOverlay } from "../src/ui/components/questionnaire.ts";
 import { ProviderEmulator } from "./support/provider-emulator.ts";
 import { TempFixture } from "./support/temp-fixture.ts";
 import { until } from "./support/scripted-peer.ts";
@@ -328,6 +329,164 @@ describe("real rustx child integration", { skip: SKIP }, () => {
 
     // After the process is gone, requests fail immediately rather than hang.
     await assert.rejects(session.modelGet());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Structured ask_user through the real provider/runtime/client/TUI path
+// ---------------------------------------------------------------------------
+
+describe("real rustx structured ask_user questionnaire", { skip: SKIP }, () => {
+  let harness: Harness | undefined;
+  let fixture: TempFixture | undefined;
+
+  before(async () => {
+    const provider = await ProviderEmulator.start("tui_ask_user_questionnaire");
+    fixture = TempFixture.create("rustx-tui-questionnaire-");
+    const workspace = fixture.path("workspace");
+    mkdirSync(workspace, { recursive: true });
+    writeFileSync(fixture.path("models.json"), modelsJson(provider.url("/v1")));
+    writeFileSync(fixture.path("rustx.json"), RUNTIME_CONFIG_JSON);
+
+    const child = ChildRuntimeProcess.spawn({
+      binary: BINARY,
+      paths: {
+        models: fixture.path("models.json"),
+        config: fixture.path("rustx.json"),
+        workspace,
+        runtimeRoot: fixture.path("private"),
+      },
+      env: { ...process.env, [CREDENTIAL_VARIABLE]: CREDENTIAL_VALUE },
+    });
+    const connection = new RuntimeClientConnection({
+      input: child.stdout,
+      output: child.stdin,
+    });
+    void child
+      .wait()
+      .then((exit) =>
+        connection.reportProcessExit(exit.code, exit.signal, exit.spawnError),
+      );
+    const session = new RuntimeClientAttachment({ connection });
+    harness = { child, connection, session, provider };
+  });
+
+  after(async () => {
+    if (harness !== undefined) {
+      harness.child.closeStdin();
+      await harness.child.waitOrTerminate(10_000);
+      await harness.provider.finish();
+    }
+    fixture?.cleanup();
+  });
+
+  it("publishes one questionnaire, resyncs it, and continues after submission", async () => {
+    assert.ok(harness);
+    const { child, session } = harness;
+    await session.attach();
+
+    await session.submitInbound([
+      { type: "text", text: "choose the visual direction" },
+    ]);
+    await until(
+      () =>
+        (session.state?.pendingInteractions ?? []).some(
+          (interaction) => interaction.kind.type === "questionnaire",
+        ),
+      "the structured questionnaire to become pending",
+    );
+
+    const pending = session.state?.pendingInteractions.find(
+      (interaction) => interaction.kind.type === "questionnaire",
+    );
+    assert.ok(pending);
+    assert.equal(pending.kind.type, "questionnaire");
+    if (pending.kind.type !== "questionnaire") throw new Error("not a questionnaire");
+    assert.equal(pending.kind.questionnaire.questions.length, 2);
+    assert.equal(pending.kind.questionnaire.questions[1]?.multi_select, true);
+    assert.equal(
+      pending.kind.questionnaire.questions[0]?.options[0]?.label,
+      "Swiss / Klein blue",
+    );
+
+    // The authoritative snapshot reconstructs the same request facts; no
+    // client-side draft or echoed prose is needed to restore the overlay.
+    await session.resync();
+    const reconstructed = session.state?.pendingInteractions.find(
+      (interaction) => interaction.id === pending.id,
+    );
+    assert.ok(reconstructed);
+    assert.deepEqual(reconstructed.kind, pending.kind);
+    if (reconstructed.kind.type !== "questionnaire") {
+      throw new Error("resynchronized interaction is not a questionnaire");
+    }
+
+    let submitted:
+      | import("../src/protocol/types.ts").QuestionnaireResponse
+      | undefined;
+    const overlay = new QuestionnaireOverlay({
+      interactionId: reconstructed.id,
+      questionnaire: reconstructed.kind.questionnaire,
+      onSubmit: (response) => {
+        submitted = response;
+      },
+      onDecline: () => assert.fail("the questionnaire should be submitted"),
+      onInterrupt: () => assert.fail("the questionnaire should not cancel the attempt"),
+    });
+    assert.match(overlay.render(56).join("\n"), /Swiss preview/);
+    assert.match(overlay.render(120).join("\n"), /Swiss preview/);
+
+    // Select the first authored option, leave the multi-select question
+    // unanswered, then submit the partial answer from the review tab.
+    overlay.handleInput("\r");
+    overlay.handleInput("\t");
+    overlay.handleInput("\t");
+    overlay.handleInput("\r");
+    assert.deepEqual(submitted, {
+      type: "submitted",
+      value: {
+        answers: [
+          {
+            question_index: 0,
+            answer: {
+              type: "single_option",
+              value: { label: "Swiss / Klein blue" },
+            },
+          },
+        ],
+      },
+    });
+
+    await session.respondInteraction(reconstructed.id, {
+      type: "questionnaire",
+      response: submitted!,
+    });
+    await until(
+      () =>
+        !(session.state?.pendingInteractions ?? []).some(
+          (interaction) => interaction.id === reconstructed.id,
+        ),
+      "the questionnaire to settle",
+    );
+    await until(
+      () =>
+        (session.state?.transcript ?? []).some(
+          (entry) =>
+            entry.kind === "committed" &&
+            entry.message.role === "assistant" &&
+            entry.message.content.some(
+              (block) =>
+                block.type === "text" && block.text === "Questionnaire continued",
+            ),
+        ),
+      "the model continuation after the questionnaire",
+    );
+
+    // The first provider call is the structured tool call and the second is
+    // the model's next turn with rustX's canonical structured result.
+    const requests = await harness.provider.requests();
+    assert.equal(requests.length, 2);
+    child.closeStdin();
   });
 });
 

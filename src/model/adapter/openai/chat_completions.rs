@@ -1429,3 +1429,60 @@ fn invalid_request(message: &str) -> ModelError {
         provider_code: None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::translate_tools;
+    use crate::tools::types::ModelToolDefinition;
+    use serde_json::json;
+
+    #[test]
+    fn chat_completions_preserves_the_nested_questionnaire_schema() {
+        let schema = json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["questions"],
+            "properties": {
+                "questions": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 4,
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["question", "header", "options"],
+                        "properties": {
+                            "question": {"type": "string", "maxLength": 4096},
+                            "header": {"type": "string", "maxLength": 16},
+                            "options": {
+                                "type": "array",
+                                "minItems": 2,
+                                "maxItems": 4,
+                                "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": ["label", "description"],
+                                    "properties": {
+                                        "label": {"type": "string", "maxLength": 60},
+                                        "description": {"type": "string", "maxLength": 1024},
+                                        "preview": {"type": "string", "maxLength": 8192}
+                                    }
+                                }
+                            },
+                            "multi_select": {"type": "boolean"}
+                        }
+                    }
+                }
+            }
+        });
+        let encoded = serde_json::to_value(translate_tools(&[ModelToolDefinition {
+            id: crate::runtime::identity::ToolId::new("tool-ask-user"),
+            name: "ask_user".to_owned(),
+            description: "structured questionnaire".to_owned(),
+            input_schema: schema.clone(),
+        }]))
+        .expect("Chat Completions tools serialize");
+        assert_eq!(encoded[0]["function"]["name"], "ask_user");
+        assert_eq!(encoded[0]["function"]["parameters"], schema);
+    }
+}

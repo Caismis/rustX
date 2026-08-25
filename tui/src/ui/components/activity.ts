@@ -44,6 +44,7 @@ import type { ToolCorrelation } from "../../presentation/tools.ts";
 import {
   activeBackground,
   focusedInteraction,
+  focusedQuestionnaire,
   isBackgroundTerminal,
   originLabel,
 } from "../../presentation/selectors.ts";
@@ -198,14 +199,18 @@ export function renderInteractionSection(
     commands.push("/approve <interaction-id> <allow|deny> [reason]");
   }
   if (questions > 0) {
-    commands.push("/answer <interaction-id> <choice|text> <value>");
+    commands.push("questionnaire overlay opens automatically");
   }
-  const focused = focusedInteraction(state);
+  // The questionnaire overlay and the activity marker must name the same
+  // pending request. Approvals have no implicit editor focus, so they are
+  // highlighted only when no questionnaire is waiting.
+  const focused = focusedQuestionnaire(state) ??
+    (questions === 0 ? focusedInteraction(state) : undefined);
   return [
     role.pending(header),
     ...(focused === undefined
       ? []
-      : [role.accent(`Focused interaction: ${focused.id} · ordinary input answers this request`)]),
+      : [role.accent(`Focused interaction: ${focused.id}`)]),
     ...state.pendingInteractions.map((interaction) =>
       renderInteraction(interaction, preferences, interaction.id === focused?.id),
     ),
@@ -235,16 +240,15 @@ function renderInteraction(
   preferences: PresentationPreferences,
   focused: boolean,
 ): string {
-  if (interaction.kind.type === "question") {
-    const choices =
-      interaction.kind.choices === undefined || interaction.kind.choices.length === 0
-        ? []
-        : interaction.kind.choices.map((choice, index) => `${index + 1}. ${choice}`);
+  if (interaction.kind.type === "questionnaire") {
+    const questions = interaction.kind.questionnaire.questions.flatMap((question, index) => [
+      `${index + 1}. ${question.header}: ${clipText(question.question, HEADER_BUDGET.maxChars)}`,
+      ...question.options.map((option) => `   • ${option.label}`),
+    ]);
     return [
-      `${focused ? role.accent("→") : role.pending("?")} ${role.toolTitle(style.bold("Question"))} ${role.meta(interaction.id)}`,
-      `  ${role.meta(clipText(interaction.kind.prompt, HEADER_BUDGET.maxChars))}`,
-      ...choices.map((choice) => `  ${role.accent(choice)}`),
-      `  ${role.meta(interaction.kind.allow_free_text ? "free text allowed" : "choose one listed value")}`,
+      `${focused ? role.accent("→") : role.pending("?")} ${role.toolTitle(style.bold("Questionnaire"))} ${role.meta(interaction.id)}`,
+      ...questions.map((question) => `  ${role.meta(question)}`),
+      `  ${role.meta("custom answer is always available in the questionnaire")}`,
     ].join("\n");
   }
   const kind = interaction.kind;

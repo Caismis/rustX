@@ -27,7 +27,7 @@
 //! ```
 //!
 //! Human interaction (Issue #109) deliberately adds **no** seventh domain. A
-//! pending Question/Approval waiter is process-owned workflow state and is
+//! pending Questionnaire/Approval waiter is process-owned workflow state and is
 //! never made durable; only its low-frequency requested/settled semantic facts
 //! are persisted, and those are ordinary Event Journal facts reached through
 //! the narrow [`inbox::ConversationInteractionAudit`] capability.

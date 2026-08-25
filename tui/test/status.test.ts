@@ -40,7 +40,7 @@ import {
   sessionModel,
   toolResult,
   userMessage,
-  questionInteraction,
+  questionnaireInteraction,
 } from "./support/fixtures.ts";
 import { runtimeCursor } from "./support/fixtures.ts";
 import { prefs, stateOf } from "./support/render.ts";
@@ -163,15 +163,15 @@ describe("working status", () => {
     );
   });
 
-  it("reports a pending Question as an answer request", () => {
+  it("reports a pending questionnaire as a structured answer request", () => {
     assert.equal(
       workingStatus(
         stateOf({
           attempt: attemptView({ attempt_id: "attempt-1" }),
-          pending_interactions: [questionInteraction()],
+          pending_interactions: [questionnaireInteraction()],
         }),
       ),
-      "Waiting for an answer…",
+      "Waiting for questionnaire…",
     );
   });
 
@@ -530,9 +530,9 @@ describe("activity area", () => {
     assert.match(rendered, /\/approve <interaction-id> <allow\|deny> \[reason\]/);
   });
 
-  it("marks the deterministic focused interaction for ordinary editor input", () => {
-    const later = questionInteraction("attempt-1-interaction-z");
-    const focused = questionInteraction("attempt-1-interaction-a");
+  it("marks the deterministic focused questionnaire for the overlay", () => {
+    const later = questionnaireInteraction("attempt-1-interaction-z");
+    const focused = questionnaireInteraction("attempt-1-interaction-a");
     const rendered = plainText(
       renderInteractionSection(
         stateOf({ pending_interactions: [later, focused] }),
@@ -540,7 +540,7 @@ describe("activity area", () => {
       ),
     );
     assert.match(rendered, /Focused interaction: attempt-1-interaction-a/);
-    assert.match(rendered, /ordinary input answers this request/);
+    assert.match(rendered, /questionnaire overlay opens automatically/);
   });
 
   it("surfaces an execution whose stream was dropped", () => {

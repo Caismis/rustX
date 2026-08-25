@@ -110,7 +110,7 @@ async fn run_with_control(
         artifacts: &artifacts,
         tool_output: &tool_output,
         environment: &ToolEnvironment::new(),
-        question_requester: None,
+        questionnaire_requester: None,
     };
     let invocation = match timeout_seconds {
         Some(seconds) => invocation_with_timeout(&command, seconds),

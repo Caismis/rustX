@@ -60,8 +60,16 @@ impl RuntimeEventSink for RecordingEventSink {
 }
 
 pub use interaction::{
-    InteractionSettlement, InteractionSubject, interaction_arguments_digest,
-    validate_interaction_settlement, validate_interaction_subject, validate_question_contract,
+    CustomAnswer, InteractionSettlement, InteractionSubject, MAX_APPROVAL_DENIAL_REASON_CHARS,
+    MAX_APPROVAL_REQUEST_REASON_CHARS, MAX_APPROVAL_TOOL_NAME_CHARS, MAX_CUSTOM_ANSWER_CHARS,
+    MAX_OPTION_DESCRIPTION_CHARS, MAX_OPTION_LABEL_CHARS, MAX_OPTION_PREVIEW_CHARS,
+    MAX_QUESTION_HEADER_CHARS, MAX_QUESTION_TEXT_CHARS, MAX_QUESTIONNAIRE_OPTIONS,
+    MAX_QUESTIONNAIRE_QUESTIONS, MIN_QUESTIONNAIRE_OPTIONS, MultipleOptionAnswer,
+    OptionSpecification, QuestionSpecification, QuestionnaireAnswer, QuestionnaireAnswerEntry,
+    QuestionnaireDeclined, QuestionnaireResponse, QuestionnaireSpecification,
+    QuestionnaireSubmission, SingleOptionAnswer, interaction_arguments_digest,
+    normalize_questionnaire_response, normalize_questionnaire_submission,
+    validate_interaction_settlement, validate_interaction_subject, validate_questionnaire,
 };
 pub use types::{
     AttemptFailure, AttemptLimit, AttemptOutcome, BackgroundTerminalState, EVENT_SCHEMA_VERSION,

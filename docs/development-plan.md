@@ -1082,7 +1082,7 @@ before any executor starts.
 
 After the asynchronous policy future settles, the Agent Loop checks
 cancellation before consuming any Allow, Deny, Ask, or policy error. An Ask
-response is checked again before the start frontier; Answered(Allow) is not a
+response is checked again before the start frontier; Responded(Allow) is not a
 tool-start capability. The real ConversationRuntime shutdown path proves that
 pending-map removal is not waiter or attempt settlement: Quiescent waits for
 the waiter handoff, projection callback, AgentExecution, and attempt task.
@@ -1091,7 +1091,7 @@ Runtime Client v1 carries `interaction_respond`, typed acceptance/errors,
 pending/settled events, and `snapshot.pending_interactions`. It also projects
 authoritative effective and pending ApprovalMode state and accepts mode
 changes through runtime control. The TUI remains a projection/client: it
-renders pending Approval and Question facts and sends only typed responses;
+renders pending Approval and Questionnaire facts and sends only typed responses;
 it never suppresses or auto-answers them. Snapshot/cursor/resubscribe remains
 the repair authority. A missing provider fails closed at Approval publication
 and makes `ask_user` return an explicit failed ToolResult; detach never
@@ -1099,16 +1099,22 @@ answers, denies, or cancels an already-published interaction.
 
 The native `ask_user` capability is an ordinary foreground, sequential,
 approval-never Tool. Its executor receives only a crate-private,
-attempt-bound `QuestionRequester`, whose cancellation input is the
+attempt-bound `QuestionnaireRequester`, whose cancellation input is the
 owner-observing `ExecutionCancellation` view. It requests one bounded
-Question (prompt,
-optional finite choices, optional free text) through this same coordinator and
-returns a normal ToolResult. Its semantic argument normalizer runs in
-`ToolRegistry::preflight`, so a successful `PreparedInvocation` is already an
-answerable Question. It has no filesystem/network/process authority, no
-attempt-cancellation authority, and no recursive approval path. Availability,
-activation, approval, ApprovalMode, execution, and concurrency remain
-separate facts.
+questionnaire through this same coordinator and returns a normal ToolResult.
+The model-facing input is a single closed root object with required
+`questions`: 1–4 questions, 2–4 authored options each, question text up to
+4096, headers up to 16, labels up to 60, descriptions up to 1024, previews up
+to 8192, custom answers up to 4096 Unicode scalar values, optional
+single-select previews, and optional `multi_select` defaulting to false.
+Custom text is always a client-owned row; `allow_free_text`, authored `Other`,
+and stringified arrays/booleans are not part of the contract. Related blocking
+questions are grouped into one invocation, which publishes one interaction.
+Its semantic argument normalizer runs in `ToolRegistry::preflight`, so a
+successful `PreparedInvocation` is already a validated questionnaire. It has
+no filesystem/network/process authority, no attempt-cancellation authority,
+and no recursive approval path. Availability, activation, approval,
+ApprovalMode, execution, and concurrency remain separate facts.
 
 Interaction IDs derive from the already non-reused `AttemptId` domain plus a
 per-attempt ordinal. Pending interactions are process-owned observations, not
@@ -1137,15 +1143,15 @@ non-durable, never recovered — and adds the missing durable *evidence* half of
 the same plane. Two low-frequency Event Journal facts,
 `InteractionRequested { interaction_id, subject }` and
 `InteractionSettled { interaction_id, settlement }`, cover Approval and
-Question/`ask_user`. The coordinator reaches them only through the narrow
+Questionnaire/`ask_user`. The coordinator reaches them only through the narrow
 `ConversationInteractionAudit` capability, which rejects every other payload
 so an audit seam can never become a second authorization path.
 `InteractionRequested` opens `interaction:{id}` and `InteractionSettled`
 closes it exactly once, reusing the background/subagent lifecycle shape.
 
 Two ordering rules are enforced where the decision is made, not merely
-documented: the requested fact commits before the prompt is released to a
-client (a failed commit publishes no prompt and fails closed as
+documented: the requested fact commits before the questionnaire is released
+to a client (a failed commit publishes no questionnaire and fails closed as
 `Unavailable`), and `InteractionSettled(Approved)` commits before the waiter
 is released, so it necessarily precedes `ToolExecutionStarted` and the
 external side effect. A failed settled commit releases the waiter fail-closed
@@ -1160,7 +1166,7 @@ reload returns `Busy { reason: Interaction }` while a waiter owns the attempt,
 and external resource edits cannot mutate the prompt, subject, policy, Tool
 schema, or authority underneath it.
 
-Payloads stay bounded: a Question subject is stored by value, an Approval
+Payloads stay bounded: a Questionnaire subject is stored by value, an Approval
 subject pins its exact model-issued arguments by digest because the canonical
 `ToolCall` already stores them by value, and no keypress, focus, editing, or
 TUI presentation state enters the Journal.
@@ -1173,9 +1179,9 @@ turn_id)` through the retained FND-03 canonical publication owner and then
 requiring that owning message to still be on the active Surface, because a
 `ToolCallId` is request/publication-scoped rather than conversation-global and
 equal content is not ownership; it enforces every interaction payload bound;
-and it requires a Question settlement to satisfy the exact requested Question,
-so a `Choice` the Question never offered or `FreeText` into a choices-only
-Question is refused. The limits and the digest definition live once in
+and it requires a Questionnaire settlement to satisfy the exact requested
+questionnaire, so unknown labels, duplicate selections, out-of-range indices,
+and mode mismatches are refused. The limits and the digest definition live once in
 `events::interaction`, which both the live coordinator and the store call, so
 the live path and the durable path cannot drift and a future PostgreSQL
 backend reuses the same contract.
@@ -1189,8 +1195,9 @@ callback; `requested < settled(approved) < ToolExecutionStarted` proved on
 durable sequences through the real Agent Loop; approval durable plus crash
 before tool start executes nothing after restart; a historical approval cannot
 be replayed as current authority; denial keeps its canonical denied
-`ToolResult` with matching audit; one Question produces one durable
-requested/settled pair and exactly one answer; exactly-once settlement at both
+`ToolResult` with matching audit; one Questionnaire produces one durable
+requested/settled pair and exactly one submitted or declined response;
+exactly-once settlement at both
 the coordinator and the store; audit unaffected by client detach/reattach and
 headless execution writing no audit at all; an external resource edit unable
 to mutate a pending interaction, with reload returning `Busy` and the old
@@ -1199,13 +1206,13 @@ store-level refusal of a settlement under a foreign attempt or turn, an
 Approval subject that does not match its canonical `ToolCall` (missing call,
 wrong tool id, wrong tool name, wrong argument digest) or that names a call
 belonging to another turn or another attempt, every out-of-bound interaction
-payload, and a Question settlement that the requested Question could not have
-produced. The store contract suite is `tests/issue109_interaction_audit.rs`
+payload, and a Questionnaire settlement that the requested questionnaire could
+not have produced. The store contract suite is `tests/issue109_interaction_audit.rs`
 (17 tests) and the Agent-Loop-facing half is
 `tests/scripted/issue109_interaction_audit.rs` (6 tests), with unit coverage in
 `src/events/interaction.rs`, `src/runtime/interaction.rs`,
 `src/tools/native/ask_user.rs`, and `src/runtime/conversation_runtime.rs`.
-No durable pending waiter, unanswered-Question replay, durable TUI state,
+No durable pending waiter, unanswered-Questionnaire replay, durable TUI state,
 human-task workflow engine, scheduler, or resource-watcher lifecycle change
 was added.
 

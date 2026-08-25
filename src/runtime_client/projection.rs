@@ -3090,7 +3090,7 @@ mod tests {
                 if interaction == &request
         ));
 
-        let outcome = InteractionOutcome::Answered {
+        let outcome = InteractionOutcome::Responded {
             response: InteractionResponse::Approval {
                 decision: ApprovalDecision::Allow,
             },

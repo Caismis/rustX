@@ -55,7 +55,7 @@ import {
   type ExpandTarget,
   type PreferenceChange,
 } from "../commands/dispatcher.ts";
-import { focusedInteraction } from "../presentation/selectors.ts";
+import { focusedInteraction, focusedQuestionnaire } from "../presentation/selectors.ts";
 import { correlateTools } from "../presentation/tools.ts";
 import type { PresentationState } from "../presentation/state.ts";
 import type { ChildRuntimeProcess } from "../runtime/child-process.ts";
@@ -102,6 +102,10 @@ import {
   withToggledToolCall,
 } from "./preferences.ts";
 import { editorTheme, markdownTheme, style } from "./theme.ts";
+import {
+  QuestionnaireOverlay,
+} from "./components/questionnaire.ts";
+import type { QuestionnaireResponse } from "../protocol/types.ts";
 
 export interface RustxTuiAppOptions {
   session: RuntimeClientAttachment;
@@ -150,6 +154,7 @@ export class RustxTuiApp {
 
   #preferences: PresentationPreferences = defaultPreferences();
   #overlay: OverlayHandle | undefined;
+  #questionnaireOverlay: QuestionnaireOverlay | undefined;
   #quitting = false;
   #exitCode = 0;
   #finished = false;
@@ -328,7 +333,8 @@ export class RustxTuiApp {
         if (matchesKey(data, "escape")) {
           const state = this.#session.state;
           const attempt = state?.attempt;
-          const acted = this.#overlay !== undefined || (
+          const questionnaireFocused = this.#questionnaireOverlay !== undefined;
+          const acted = questionnaireFocused || this.#overlay !== undefined || (
             !this.#restarting &&
             (focusedInteraction(state) !== undefined ||
               (attempt !== undefined && attempt.phase.type !== "settled"))
@@ -428,6 +434,10 @@ export class RustxTuiApp {
 
   async #onEscape(): Promise<void> {
     this.#acknowledgeTransient();
+    if (this.#questionnaireOverlay !== undefined) {
+      this.#declineQuestionnaire(this.#questionnaireOverlay);
+      return;
+    }
     if (this.#overlay !== undefined) {
       this.#closeOverlay();
       return;
@@ -812,6 +822,7 @@ export class RustxTuiApp {
     if (handle === undefined) return;
     handle.hide();
     this.#overlay = undefined;
+    this.#questionnaireOverlay = undefined;
     this.#tui.setFocus(this.#editor);
     this.#tui.requestRender();
   }
@@ -1222,7 +1233,77 @@ export class RustxTuiApp {
         this.#session.sessionInfo,
       ),
     );
+    this.#syncQuestionnaireOverlay(state);
     this.#tui.requestRender();
+  }
+
+  /** Presents the focused pending questionnaire from authoritative state. */
+  #syncQuestionnaireOverlay(state: PresentationState): void {
+    const interaction = focusedQuestionnaire(state);
+    if (interaction === undefined) {
+      if (this.#questionnaireOverlay !== undefined) this.#closeOverlay();
+      return;
+    }
+    if (
+      this.#questionnaireOverlay !== undefined &&
+      this.#questionnaireOverlay.interactionId === interaction.id
+    ) {
+      return;
+    }
+
+    this.#closeOverlay();
+    const lease = this.#presentationLease();
+    if (interaction.kind.type !== "questionnaire") return;
+    const questionnaire = interaction.kind.questionnaire;
+    const overlay = new QuestionnaireOverlay({
+      interactionId: interaction.id,
+      questionnaire,
+      onSubmit: (response) => this.#submitQuestionnaire(interaction.id, response, overlay, lease),
+      onDecline: () => this.#declineQuestionnaire(overlay, lease),
+      onInterrupt: () => void this.#onInterrupt(),
+      onChange: () => this.#tui.requestRender(),
+    });
+    const handle = this.#tui.showOverlay(overlay, {
+      width: "94%",
+      minWidth: 44,
+      maxHeight: "90%",
+      anchor: "center",
+    });
+    this.#overlay = handle;
+    this.#questionnaireOverlay = overlay;
+    handle.focus();
+  }
+
+  #submitQuestionnaire(
+    interactionId: string,
+    response: QuestionnaireResponse,
+    overlay: QuestionnaireOverlay,
+    lease: PresentationLease,
+  ): void {
+    void lease.session
+      .respondInteraction(interactionId, { type: "questionnaire", response })
+      .catch((error: unknown) => {
+        if (!this.#isCurrentPresentationLease(lease)) return;
+        overlay.submissionFailed();
+        this.#showTransient("error", `questionnaire response failed: ${compactDiagnostic(error)}`);
+      });
+  }
+
+  #declineQuestionnaire(
+    overlay: QuestionnaireOverlay,
+    lease: PresentationLease = this.#presentationLease(),
+  ): void {
+    overlay.beginSubmitting();
+    void lease.session
+      .respondInteraction(overlay.interactionId, {
+        type: "questionnaire",
+        response: { type: "declined" },
+      })
+      .catch((error: unknown) => {
+        if (!this.#isCurrentPresentationLease(lease)) return;
+        overlay.submissionFailed();
+        this.#showTransient("error", `questionnaire decline failed: ${compactDiagnostic(error)}`);
+      });
   }
 
   #connectionLabel(): string {

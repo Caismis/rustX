@@ -83,23 +83,34 @@ export function activeBackground(
 }
 
 /**
- * The one interaction that receives ordinary editor input.
+ * The deterministic questionnaire that the app should focus when several
+ * runtime interactions are pending.
  *
  * Runtime publication order is not a user-facing focus contract, so the TUI
  * deliberately selects the lexicographically smallest live InteractionId.
- * Explicit `/answer`, `/approve`, and `/cancel` commands remain able to target
- * any runtime-owned interaction or attempt.
+ * Approval remains command-driven; questionnaire responses are whole typed
+ * submissions from the questionnaire overlay.
  */
-export function focusedInteraction(
+export function focusedQuestionnaire(
   state: PresentationState | undefined,
 ): InteractionRequest | undefined {
   return state?.pendingInteractions
+    .filter((interaction) => interaction.kind.type === "questionnaire")
     .slice()
     .sort((left, right) => {
       if (left.id < right.id) return -1;
       if (left.id > right.id) return 1;
       return 0;
     })[0];
+}
+
+/** The focused pending interaction for generic status/card rendering. */
+export function focusedInteraction(
+  state: PresentationState | undefined,
+): InteractionRequest | undefined {
+  return state?.pendingInteractions
+    .slice()
+    .sort((left, right) => left.id.localeCompare(right.id))[0];
 }
 
 /** Whether a background lifecycle state is terminal, per the runtime. */

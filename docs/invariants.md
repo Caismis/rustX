@@ -290,7 +290,7 @@ The ownership contract is:
 | Rendering/input | TUI projection |
 | Attempt cancellation | `AgentCancellation` |
 | Tool cancellation observation | owner-observing `ExecutionCancellation` with one-way child derivation |
-| Native Question capability | crate-private runtime-bound `QuestionRequester` |
+| Native Questionnaire capability | crate-private runtime-bound `QuestionnaireRequester` |
 | Drain/quiescence | `ConversationRuntime` / `ConversationLifecycle` |
 | Crash recovery | M9 recovery authority |
 
@@ -313,11 +313,12 @@ The ownership contract is:
   Its `PreToolView` is read-only and contains no mutation handle, executor,
   cancellation owner, or dispatch capability.
 - `ToolRegistry::preflight` is the final `ask_user` argument contract. Its
-  tool-owned normalizer validates bounded Question facts and emits a
-  canonical explicit `allow_free_text` mode before schema validation. A
-  successful `PreparedInvocation` therefore cannot contain an empty,
-  duplicate, or oversized choice list, an invalid answer mode, or text outside
-  the Unicode-character bounds used by the Question response validator.
+  tool-owned normalizer validates one ordinary bounded questionnaire object
+  before canonical schema validation. A successful `PreparedInvocation`
+  therefore cannot contain malformed nesting, unknown fields, duplicate
+  questions or labels, reserved client labels, an invalid option/preview mode,
+  or text outside the shared Unicode-scalar bounds. Stringified arrays and
+  booleans remain invalid; no coercion or JSON-in-string parsing exists.
 - `Allow`, `Deny { reason }`, and `Ask { reason }` are the complete decision
   vocabulary. An approval request exposes only immutable decision facts. A
   response has no replacement argument field. Therefore `ToolCallId`,
@@ -340,7 +341,7 @@ The ownership contract is:
 For every interaction exactly one synchronized transition wins:
 
 ```text
-Pending --valid response--> Answered
+Pending --valid response--> Responded
 Pending --owner cancellation or runtime drain--> Cancelled
 ```
 
@@ -412,7 +413,7 @@ requested / settled semantic facts = durable audit evidence (Event Journal)
 The Event Journal carries exactly two low-frequency interaction facts,
 `InteractionRequested { interaction_id, subject }` and
 `InteractionSettled { interaction_id, settlement }`, covering Approval and
-Question/`ask_user` alike. The coordinator reaches them only through the
+Questionnaire/`ask_user` alike. The coordinator reaches them only through the
 narrow `ConversationInteractionAudit` capability, which rejects every other
 payload; it holds no Ledger, Surface, publication, or general Journal
 authority. `InteractionRequested` opens `interaction:{id}` and
@@ -459,24 +460,24 @@ must still be refused.
   sufficient. There is no conversation-global bare `call_id` lookup and no
   Event Journal scan.
 - **Interaction audit payload bounds are durable-store invariants.** The
-  prompt, choice count, choice length, choice uniqueness, answer mode, answer
-  length, approval request reason, denial reason, tool-name length, and the
-  canonical lowercase-hex form of `arguments_digest` are all checked by the
-  store. The bounds have exactly one semantic source, `events::interaction`,
-  which the live coordinator validates against before publishing and the store
-  validates against before committing, so a future non-SQLite backend enforces
-  the same contract by calling the same functions.
-- **A Question settlement must satisfy the exact requested Question contract,
-  not merely have the `Answered` variant.** A `Choice` must be one the
-  requested Question actually offered, and a `FreeText` answer requires a
-  Question that accepted free text. The audit claims to record the typed
-  answer that was accepted, so a settlement no live coordinator could have
-  produced is refused.
+  questionnaire count, question/header text, option count/label/
+  description/preview, uniqueness rules, answer mode/index/length, approval
+  request reason, denial reason, tool-name length, and canonical lowercase-hex
+  form of `arguments_digest` are all checked by the store. The bounds have one
+  semantic source, `events::interaction`, which the live coordinator validates
+  before publishing and the store validates before committing, so a future
+  non-SQLite backend enforces the same contract by calling the same functions.
+- **A Questionnaire settlement must satisfy the exact requested contract.**
+  Indices are unique and in range; single-select answers name one authored
+  option or bounded custom text; multi-select answers name a non-empty unique
+  authored set; and empty submission is the distinct decline settlement. A
+  settlement no live coordinator could have produced is refused.
 
 Two ordering rules hold:
 
-- **Durable before prompt.** The requested fact commits before rustX releases
-  the prompt to a user-facing client, in the same critical section that admits
+- **Durable before questionnaire.** The requested fact commits before rustX
+  releases the complete questionnaire to a user-facing client, in the same
+  critical section that admits
   the pending entry. A failed commit publishes no prompt and fails closed as
   `Unavailable`, exactly like a missing provider, so no audit record exists
   for a question no user saw.
@@ -490,11 +491,12 @@ Two ordering rules hold:
   `interaction_audit_failed`.
 
 Denial semantics are unchanged: a denial remains the canonical denied
-`ToolResult` and gains a matching `Denied { reason }` audit fact. A Question
-settlement retains the exact user answer as evidence while the canonical tool
-result carries that answer to the model; the interaction audit records the
-human decision and canonical history records the conversation, without
-duplicating each other.
+`ToolResult` and gains a matching `Denied { reason }` audit fact. A submitted
+questionnaire retains the canonical normalized answer set as evidence while
+the ordinary tool result carries the bounded answer projection to the model.
+A decline is a successful result with `cancelled: true` and an empty answer
+list; attempt cancellation is still `ToolExecutionStatus::Cancelled`, and
+provider unavailability remains a failed result.
 
 **A historical `Approved` interaction is audit evidence only. It never grants
 execution authority after recovery/restart.** Recovery has no interaction
@@ -506,8 +508,9 @@ cancelled/interrupted canonical result slot. After restart the historical
 identity is durably spent in both directions, so current semantics must reach
 a new live approval under a new identity.
 
-Payloads are bounded. A Question subject is stored by value (the Question
-contract already bounds prompt and choices); an Approval subject names
+Payloads are bounded. A Questionnaire subject is stored by value (the
+questionnaire contract bounds every question, option description/preview, and
+answer string); an Approval subject names
 call/tool identity and the policy reason by value and pins the exact
 model-issued argument value by SHA-256 digest, which the canonical `ToolCall`
 already stores by value. The digest is taken over the canonical `ToolCall`
@@ -536,23 +539,28 @@ Allow, Deny, or cancellation for an already-published request. A later
 attachment may answer still-live state, which it reconstructs from the
 authoritative snapshot and cursor projection.
 
-### Question and `ask_user`
+### Questionnaire and `ask_user`
 
-Question is a separate bounded interaction kind. It contains a prompt,
-optional finite choices, and an optional free-text flag; its response is a
-typed choice or bounded free-text value. For the native `ask_user` contract, a
-bare prompt is open-ended, a supplied non-empty choice list is choice-only
-unless `allow_free_text: true` is explicit, and invalid combinations are
-rejected during schema/preflight validation before provider lookup. The
-existing coordinator owns its identity, pending map, cancellation race, and
-exactly-once settlement just as it does for Approval.
+`ask_user` is one ordinary foreground, sequential, approval-never Tool. Its
+model-facing input is a single closed root object with required `questions`:
+1–4 questions; each has required `question` (1–4096 Unicode scalar values),
+`header` (1–16), 2–4 options, and optional `multi_select` (default false).
+Each option has a non-empty `label` (at most 60 scalar values) and
+`description` (at most 1024), plus an optional non-empty Markdown `preview`
+(at most 8192); custom answers are at most 4096. Previews are valid only for
+single-select questions. Related blocking questions are grouped into one
+invocation.
 
-`ask_user` is an ordinary native Tool, not an Agent Loop Question branch. Its
-fixed policy is foreground-only, sequential, and approval-never. Its executor
-receives only the crate-private bounded Question requester, requests a
-Question through the same coordinator, and returns a normal ToolResult, so the
-model continues through the existing Tool Plane. It has no
-filesystem/network/process authority and cannot recursively request Approval.
+The client always adds the custom-answer row `Type something.`. The model does
+not send `allow_free_text` and may not author `Other` or the `Next` sentinel.
+The client sends one typed whole-questionnaire response containing only question
+indices and authored labels or bounded custom text. Answers may be partial and
+are normalized into question order and authored option order. One invocation
+publishes exactly one `InteractionCoordinator` questionnaire interaction and
+one durable requested fact, followed by exactly one submitted, declined, or
+attempt-cancelled settlement. A decline succeeds as
+`{"cancelled":true,"answers":[]}`; attempt cancellation and provider
+unavailability remain distinct runtime/tool outcomes.
 
 ### Runtime Client and TUI projection
 
@@ -560,15 +568,16 @@ The Runtime Client carries native interaction facts through typed
 `interaction_respond`, `interaction_pending`, and `interaction_settled`
 messages plus `snapshot.pending_interactions`. Snapshot-at-cursor followed by
 subscribe-after-cursor remains the repair invariant. The TUI renders the
-runtime-owned pending approval and Question and sends typed responses; it owns
-no pending truth, tool execution, arguments, cancellation, or local outcome
-state. Approval responses contain only `Allow`/`Deny`; Question responses
-contain no Tool identity or argument replacement channel. When multiple
-interactions are pending, ordinary editor input targets the
-lexicographically-smallest `InteractionId`; explicit commands can address any
-id. The TUI renders both from authoritative projection state, sends typed
-responses through the Runtime Client, and never suppresses or auto-answers
-them locally.
+runtime-owned pending approval and Questionnaire and sends typed responses; it
+owns no pending truth, tool execution, arguments, cancellation, or local
+outcome state. Approval responses contain only `Allow`/`Deny`; Questionnaire
+responses contain only question indices and answer decisions, with no Tool
+identity or argument replacement channel. When multiple questionnaires are
+pending, the overlay focuses the lexicographically-smallest questionnaire
+`InteractionId`; ordinary editor input remains an inbound message, and
+explicit commands can address approval or attempt identities. The TUI renders
+both from authoritative projection state, sends typed responses through the
+Runtime Client, and never suppresses or auto-answers them locally.
 
 ### ApprovalMode control plane
 
@@ -1441,8 +1450,9 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
 - None of the three rules applies under `ForegroundOnly`/`BackgroundOnly`,
   which receive no synthetic field: an arbitrary composed, reference-heavy
   root schema is valid there, `execution_mode` included. The policy-unaware
-  canonical schema validation stays permissive so the `ask_user` intrinsic's
-  root `anyOf` and arbitrary MCP server schemas keep registering.
+  canonical schema validation stays permissive for fixed-policy tools, while
+  the native `ask_user` questionnaire remains a normal closed root object and
+  arbitrary MCP server schemas keep registering.
 - The `__rustx_` top-level namespace stays reserved for other runtime
   concerns under every policy: registration rejects canonical schemas
   claiming `__rustx_*` properties and preflight rejects invocations carrying
@@ -2362,7 +2372,7 @@ Core invariant:
 
 The load-bearing split of this seam:
 
-| Question | Answer | Owner |
+| Questionnaire | typed submission or explicit decline | Runtime Client / TUI |
 | --- | --- | --- |
 | *When* does a proposal become eligible? | after its owning tool batch reaches structural settlement, at the next primary step | Agent Loop |
 | *Who* owns the fact it states? | the trusted identity its observer was registered under | Context Assembly |
@@ -2438,7 +2448,7 @@ retroactive blocking, pre-tool argument or identity rewriting, question/form
 frameworks, generalized permission/risk policy, subagent lifecycle
 observation (Issue #60), and `TurnStoppingPolicy`/forced continuation are
 **absent by decision**, not TODO compatibility hooks. Native Approval plus the
-bounded Question/`ask_user` seam is now the concrete Issue #100 capability; it
+bounded Questionnaire/`ask_user` seam is now the concrete Issue #100 capability; it
 does not imply any of those broader frameworks.
 
 ## Conversation runtime coordinator (Issue #61)

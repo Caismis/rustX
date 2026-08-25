@@ -1564,3 +1564,60 @@ fn unsupported(message: impl Into<String>) -> ModelError {
         provider_code: None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::translate_tools;
+    use crate::tools::types::ModelToolDefinition;
+    use serde_json::json;
+
+    #[test]
+    fn responses_preserves_the_nested_questionnaire_schema() {
+        let schema = json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["questions"],
+            "properties": {
+                "questions": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 4,
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["question", "header", "options"],
+                        "properties": {
+                            "question": {"type": "string", "maxLength": 4096},
+                            "header": {"type": "string", "maxLength": 16},
+                            "options": {
+                                "type": "array",
+                                "minItems": 2,
+                                "maxItems": 4,
+                                "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": ["label", "description"],
+                                    "properties": {
+                                        "label": {"type": "string", "maxLength": 60},
+                                        "description": {"type": "string", "maxLength": 1024},
+                                        "preview": {"type": "string", "maxLength": 8192}
+                                    }
+                                }
+                            },
+                            "multi_select": {"type": "boolean"}
+                        }
+                    }
+                }
+            }
+        });
+        let encoded = translate_tools(&[ModelToolDefinition {
+            id: crate::runtime::identity::ToolId::new("tool-ask-user"),
+            name: "ask_user".to_owned(),
+            description: "structured questionnaire".to_owned(),
+            input_schema: schema.clone(),
+        }]);
+        assert_eq!(encoded[0]["type"], "function");
+        assert_eq!(encoded[0]["name"], "ask_user");
+        assert_eq!(encoded[0]["parameters"], schema);
+    }
+}

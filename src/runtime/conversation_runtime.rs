@@ -4366,7 +4366,7 @@ pub struct RuntimeResourceReloaded {
 pub enum RuntimeResourceReloadBusyReason {
     /// An admitted attempt owns the conversation.
     Attempt,
-    /// A pending Question/Approval interaction owns the session.
+    /// A pending Questionnaire/Approval interaction owns the session.
     Interaction,
     /// Manual context compaction owns the conversation.
     Compaction,
@@ -4391,7 +4391,7 @@ impl core::fmt::Display for RuntimeResourceReloadBusyReason {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(match self {
             Self::Attempt => "an attempt is active",
-            Self::Interaction => "a Question or Approval interaction is pending",
+            Self::Interaction => "a Questionnaire or Approval interaction is pending",
             Self::Compaction => "manual context compaction is active",
             Self::Reload => "another resource reload is active",
         })

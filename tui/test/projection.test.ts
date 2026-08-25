@@ -27,7 +27,7 @@ import {
   capabilities,
   runtimeInbound,
   sessionModel,
-  questionInteraction,
+  questionnaireInteraction,
   runtimeCursor,
   snapshot,
   transcriptCursor,
@@ -294,10 +294,20 @@ describe("presentation projection", () => {
           turn_id: "turn-1",
           interaction_id: "interaction-1",
           subject: {
-            type: "question",
-            prompt: "Which environment?",
-            choices: ["staging", "production"],
-            allow_free_text: false,
+            type: "questionnaire",
+            questionnaire: {
+              questions: [
+                {
+                  question: "Which environment?",
+                  header: "Environment",
+                  options: [
+                    { label: "staging", description: "A safe test environment." },
+                    { label: "production", description: "The live environment." },
+                  ],
+                  multi_select: false,
+                },
+              ],
+            },
           },
         },
       },
@@ -368,7 +378,7 @@ describe("presentation projection", () => {
         type: "interaction_settled",
         interaction_id: interaction.id,
         outcome: {
-          type: "answered",
+          type: "responded",
           response: { type: "approval", decision: { type: "allow" } },
         },
       },
@@ -383,8 +393,8 @@ describe("presentation projection", () => {
     assert.equal(repaired.cursor, 8);
   });
 
-  it("folds Questions and authoritative ApprovalMode changes", () => {
-    const question = questionInteraction();
+  it("folds Questionnaires and authoritative ApprovalMode changes", () => {
+    const question = questionnaireInteraction();
     const state = fold(initial(), [
       { type: "interaction_pending", interaction: question },
       {

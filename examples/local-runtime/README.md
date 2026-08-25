@@ -144,8 +144,12 @@ switching an MCP server's tools to `model_selectable`: their schemas come from
 the server verbatim, and a server that ships a composed root will be rejected
 until you pick a fixed policy for it. The runtime intrinsics `background_task` and
 `ask_user` are not configured in this table: both are fixed foreground,
-sequential, approval-never tools, with `ask_user` publishing one bounded
-Question through the runtime-owned `InteractionCoordinator`.
+sequential, approval-never tools. `ask_user` accepts one structured
+questionnaire object containing 1–4 related questions and publishes exactly one
+questionnaire interaction through the runtime-owned `InteractionCoordinator`.
+The client always offers bounded custom text; the model does not send
+`allow_free_text` or author an `Other` option. A decline is a successful tool
+result, while attempt cancellation and provider unavailability remain distinct.
 
 The harmless `RUSTX_EXAMPLE_MODE` entry demonstrates the authorized runtime
 environment. Keep provider credentials in `models.json`'s `apiKey` reference,

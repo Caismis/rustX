@@ -1827,7 +1827,7 @@ impl ConversationBackgroundRegistry {
                 artifacts: &resources.artifacts,
                 tool_output: &resources.tool_output,
                 environment: &environment,
-                question_requester: None,
+                questionnaire_requester: None,
             };
             let result = executor.execute(invocation, context).await;
             registry.settle_terminal(&execution_id, &result);
@@ -3624,7 +3624,7 @@ mod tests {
                     artifacts: &fixture.registry.resources().artifacts,
                     tool_output: &tool_output,
                     environment: &ToolEnvironment::new(),
-                    question_requester: None,
+                    questionnaire_requester: None,
                 },
             )
             .await;
@@ -3665,7 +3665,7 @@ mod tests {
                     artifacts: &fixture.registry.resources().artifacts,
                     tool_output: &tool_output,
                     environment: &ToolEnvironment::new(),
-                    question_requester: None,
+                    questionnaire_requester: None,
                 },
             )
             .await;

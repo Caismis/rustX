@@ -88,8 +88,8 @@ use super::inbox::{
 /// envelope names, resolved through the v5/v6 `(stream_id, call_id)` proposal
 /// ownership and the stream's frozen attempt/turn/message identity, and that
 /// owning message must still be on the active Surface; payload bounds are
-/// store invariants; and a Question settlement must satisfy the exact
-/// requested Question. No new table or column was needed — the generation
+/// store invariants; and a Questionnaire settlement must satisfy the exact
+/// requested Questionnaire. No new table or column was needed — the generation
 /// proof reuses the retained publication ownership v5 and v6 introduced.
 /// Version 8 froze the Issue #110 derived transcript ordering spine: accepted
 /// inbound, visible canonical messages, publication audits, and interaction
