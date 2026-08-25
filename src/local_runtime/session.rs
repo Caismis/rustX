@@ -565,6 +565,24 @@ impl SessionCatalog {
         Ok((node.clone(), session.state.clone()))
     }
 
+    /// Whether any Session or node in this catalog names `conversation`.
+    ///
+    /// The catalog is the sole reachability authority for a lineage: a
+    /// destination database that `prepare_*` seeded but whose publication
+    /// never committed exists on disk and is named by nothing, so it is
+    /// neither selectable nor resumable.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "conformance reachability probe")
+    )]
+    pub(crate) fn names_conversation(&self, conversation: &ConversationId) -> bool {
+        self.document
+            .sessions
+            .values()
+            .flat_map(|session| session.nodes.values())
+            .any(|node| node.conversation_id == *conversation)
+    }
+
     /// Returns the private database path for a known node.
     pub(crate) fn database_path(
         &self,
@@ -784,6 +802,14 @@ impl SessionCatalog {
     }
 
     /// Publishes a prepared independent Session and makes it active.
+    ///
+    /// The `publish_session` process-death boundaries bracket the **catalog
+    /// visibility commit** — the atomic rename inside [`Self::commit`] — and
+    /// nothing else. The destination database was already seeded by
+    /// `prepare_*`, so the two sides are exactly the two durable worlds a
+    /// crash can leave: a seeded destination the catalog does not name (the
+    /// source lineage is still active and the seed is an inert orphan), or a
+    /// catalog that names the complete new lineage. There is no third state.
     pub(crate) fn publish_session(
         &mut self,
         prepared: &PreparedLineage,
@@ -792,7 +818,9 @@ impl SessionCatalog {
     ) -> Result<SessionSnapshot, SessionError> {
         let session_id = prepared.session_id.clone();
         let next = self.build_session_document(prepared, name, origin)?;
+        crate::runtime::process_death::reach("before:publish_session");
         self.commit(next)?;
+        crate::runtime::process_death::reach("after:publish_session");
         self.snapshot(&session_id)
     }
 
@@ -808,6 +836,12 @@ impl SessionCatalog {
 
     /// Publishes a prepared branch node inside an existing Session and makes
     /// it the active node.
+    ///
+    /// The `publish_node` boundaries bracket the same visibility commit for a
+    /// branch node. They are separate from the `publish_session` ones on
+    /// purpose: a node publication is a different catalog transaction, with a
+    /// different parent linkage and a different active-selection rule, so
+    /// proving one atomic says nothing about the other.
     pub(crate) fn publish_node(
         &mut self,
         session_id: &SessionId,
@@ -816,7 +850,9 @@ impl SessionCatalog {
         origin: SessionNodeOrigin,
     ) -> Result<SessionSnapshot, SessionError> {
         let next = self.build_node_document(session_id, prepared, parent, origin)?;
+        crate::runtime::process_death::reach("before:publish_node");
         self.commit(next)?;
+        crate::runtime::process_death::reach("after:publish_node");
         self.snapshot(session_id)
     }
 

@@ -1268,7 +1268,6 @@ async fn scenario_body(root: &Path, scenario: &str) {
             let (child, supervisor) = compose_session_child(
                 root,
                 vec![
-                    wide_text_turn(),
                     calling_turn(&bash),
                     vec![
                         started(),
@@ -1277,56 +1276,79 @@ async fn scenario_body(root: &Path, scenario: &str) {
                     ],
                     calling_turn(&delegate),
                     vec![started(), text("delegated"), done(ModelFinishReason::Stop)],
+                    vec![
+                        started(),
+                        text("the background task is still running"),
+                        done(ModelFinishReason::Stop),
+                    ],
+                    vec![
+                        started(),
+                        text("acknowledged"),
+                        done(ModelFinishReason::Stop),
+                    ],
+                    // Exactly six scripts for exactly four attempts: the two
+                    // owning turns take two model turns each, the subagent
+                    // terminal notice and the final human turn one each.
                 ],
             )
             .await;
-            // Turn 1 is a plain answered turn. Everything the cut must leave
-            // behind is committed by turns 2 and 3.
-            child.submit("first");
-            child.log.wait_settled(1).await;
-            child.submit("own the work");
-            child.log.wait_settled(2).await;
+
+            // The ownership facts and their identities are committed **first**,
+            // so everything they wrote into canonical history lands inside the
+            // prefix the cut will copy rather than behind it. That is the whole
+            // point of the row: the destination inherits the *words* naming a
+            // live execution and a real subagent child, and must inherit none
+            // of the ownership.
             let mut peer = child.stage_live_subagent_child(root, "exit 0");
+            child.submit("own the work");
+            child.log.wait_settled(1).await;
+
+            // The `subagent` tool returns as soon as the child is running, so
+            // this attempt settles without the child having answered anything.
             child.submit("delegate the task");
+            child.log.wait_settled(2).await;
+            // Only now is the delegation answered. The terminal notice is
+            // therefore published into an idle conversation and can only be
+            // adopted as a turn of its own — there is no running attempt for it
+            // to be drained into at a safe boundary, so the attempt count below
+            // is exact rather than racing the publication.
             answer_subagent_delegation(&mut peer).await;
             child.log.wait_settled(3).await;
 
-            // The cut boundary is the **second** human message, so the exact
-            // prefix that survives is turn 1 — its human message, its admitted
-            // Agent Status, and its Assistant answer — and everything the
-            // owning turns committed is on the far side of the cut.
-            let (revision, boundary) = human_boundary(&child, 2);
+            // This turn's Agent Status is composed while `exec_1` is live. It
+            // is also the cut boundary, so what the destination copies is
+            // everything strictly before it: both tool results naming the
+            // source's execution and subagent identities, the `UserSource::Agent`
+            // message the child itself produced, and two Agent Status messages
+            // naming the running execution.
+            child.submit("what is running");
+            child.log.wait_settled(4).await;
+
+            let (revision, boundary) = human_boundary(&child, 3);
             let outcome = if scenario == SESSION_FORK {
                 supervisor.fork_active(revision, boundary).await
             } else {
                 supervisor.tree_branch(revision, boundary).await
             };
             note(&format!("cut:{}", describe(&outcome)));
-            // The supervisor quiesced the old runtime and published the new
-            // node; the process now waits for its death still owning the whole
-            // composition, so nothing can settle from this side.
+            // Only reached when no publication boundary was armed. The process
+            // now waits for its death still owning the whole composition, so
+            // nothing can settle from this side.
             park_owning((child, peer, supervisor)).await;
         }
         SESSION_RESUME => {
-            let bash = ScriptedCall {
-                id: "call-bash-resumed",
-                tool_id: "tool-bash",
-                name: "bash",
-                arguments: serde_json::json!({
-                    "command": "sleep 300",
-                    "execution_mode": "background"
-                }),
-            };
+            // Deliberately a plain turn that starts **nothing**. The copied
+            // history names a live background execution and a real subagent
+            // child; the only honest way to show those words were never
+            // resolved into ownership is for this lineage to own nothing at
+            // all while answering normally.
             let (child, supervisor) = compose_session_child(
                 root,
-                vec![
-                    calling_turn(&bash),
-                    vec![
-                        started(),
-                        text("resumed on the cut lineage"),
-                        done(ModelFinishReason::Stop),
-                    ],
-                ],
+                vec![vec![
+                    started(),
+                    text("resumed on the cut lineage"),
+                    done(ModelFinishReason::Stop),
+                ]],
             )
             .await;
             note(&format!(

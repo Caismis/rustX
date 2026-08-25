@@ -5,7 +5,7 @@ their proof against **real process death**: a real child process running the
 real runtime stack over a real durable file, frozen at a named durable
 boundary, ended with an uncatchable `SIGKILL`, then reopened and recovered.
 
-The suite is `tests/scripted/issue111_process_death/` (56 conformance tests
+The suite is `tests/scripted/issue111_process_death/` (60 conformance tests
 plus the child entry point). Every row of the tables below names the test that
 proves it.
 
@@ -43,6 +43,15 @@ after:<transition>    the durable transaction committed
 Both variants park while the store's connection mutex is held, so a parked
 child cannot commit anything durable from any other thread. "Killed before P"
 therefore means the durable authority provably contains no P.
+
+Two durable planes outside the conversation store use the same seam with their
+own exclusion, because the fact they linearize is not a SQLite transaction:
+`reload:prepared` / `reload:published` sit under the runtime's own
+one-reload-at-a-time gate, and `before/after:publish_session` /
+`before/after:publish_node` bracket the Session catalog's visibility rename
+under the supervisor state mutex the whole publish operation holds. In each
+case the parked thread owns the only path that can advance that plane, so the
+durable world is frozen for the same reason.
 
 The second rendezvous kind is a **control rendezvous**: the child announces a
 fact and blocks reading its next command, so it is executing nothing at all.
@@ -171,23 +180,82 @@ quiescence, the new lineage's own runtime and recovery — is the real path.
 A cut is not a copy. The new lineage is seeded through `initialize` with the
 exact canonical prefix *before* the selected human message, and `initialize` is
 not an adoption: it commits no answer obligation, no attempt, and none of the
-source's durable ownership. The source lineage owns a live detached background
-execution and a subagent child at the moment of the cut, so "inherit the words
-but not the work" is what the rows actually test.
+source's durable ownership.
+
+What makes that non-vacuous is **where the cut is taken**. The source lineage
+first starts a detached background execution and delegates to a real subagent
+child, and only then is the boundary chosen — so the copied prefix genuinely
+carries the source's ownership identities as canonical text:
+
+```text
+tool result      execution_id "exec_1", plus the source lineage's own private
+                 output path .../conversations/conversation-1/...
+tool result      subagent_id "conversation-1-subagent-1",
+                 child_agent_id "agent-conversation-1-subagent-1"
+user message     source = Agent { agent-conversation-1-subagent-1 }
+Agent Status ×2  "Background executions:\n- exec_1 | bash | running"
+```
+
+The supervisor quiesces the old runtime *before* the publication, so the
+source's own terminals are published in the source lineage; what the
+destination inherits is the words, and the rows below are what it must not do
+with them.
 
 | Case | Durable before kill | Allowed after reopen | Forbidden | Test |
 | --- | --- | --- | --- | --- |
-| `/fork` at the second human message | three answered turns; one background ownership; one subagent ownership | the new lineage holds exactly `user, context(Agent Status), assistant` by value; its Journal is **empty**; recovery reports `NotStarted` / `PendingInboundOnly` with zero background and subagent ordinals | inheriting any ownership, ordinal watermark, attempt, or obligation; changing the source lineage | `a_forked_lineage_cuts_the_history_and_inherits_no_durable_ownership` |
+| `/fork` at a boundary after both ownership turns | four answered turns; one background ownership; one subagent ownership | the new lineage holds the exact prefix — both tool results, the child's own `UserSource::Agent` message, and both Agent Status footers — by value; its Journal is **empty**; recovery reports `NotStarted` / `PendingInboundOnly` with zero background and subagent ordinals | inheriting any ownership, ordinal watermark, attempt, or obligation; changing the source lineage | `a_forked_lineage_cuts_the_history_and_inherits_no_durable_ownership` |
 | `/branch` at the same boundary | the same | the same — a new node inside the active Session is a different catalog transaction with a different parent linkage, so it is proven separately | the same | `a_branched_lineage_cuts_the_history_and_inherits_no_durable_ownership` |
-| the cut lineage then answers a turn of its own | the source's ownership and identities | every `MessageId` is reissued under the destination conversation; the attempt and subagent domains start at that lineage's own ordinal zero; each lineage terminalizes exactly its own ownership once | re-adopting a source `MessageId`, `SubagentId`, or execution ownership; reaching the source's still-owned work | `a_cut_lineage_never_readopts_the_source_lineage_identities` |
-| historical Agent Status naming a live execution | a status message literally containing `Background executions: exec_1 \| bash \| …` | the historical status is retained **by value**; the status composed after the reopen contains no background section at all | reconstructing ownership from what history *says*; a second ownership commit; a second terminal | `historical_status_and_history_never_revive_background_ownership` |
+| the cut lineage then answers a turn that starts **nothing** | a destination context naming `exec_1`, `conversation-1-subagent-1`, `agent-conversation-1-subagent-1`, the source's private output path, and two live-execution status footers | every copied `MessageId` is reissued; the attempt domain starts at that lineage's own ordinal zero; the newly composed Agent Status carries **no** background section while the copied ones still name `exec_1` | resolving, adopting, reattaching, or relaunching any copied identity; publishing a terminal — that is, spuriously cancelling — for work this lineage never owned | `a_cut_lineage_never_resolves_the_copied_source_identities` |
+| historical Agent Status naming a live execution, in the **same** lineage | a status message literally containing `Background executions: exec_1 \| bash \| …` | the historical status is retained **by value**; the status composed after the reopen contains no background section at all | reconstructing ownership from what history *says*; a second ownership commit; a second terminal | `historical_status_and_history_never_revive_background_ownership` |
 
-The last row is the sharpest one. Agent Status is a canonical message, so the
-text naming a live execution stays in the Ledger forever and a reopened runtime
-reads it back as ordinary history. Ownership authority is the durable ownership
-facts plus the process-local registry, never the message text — so the same
-rendered section is the evidence on both sides: history keeps it, and the
-reopened runtime's own new status does not.
+The last two rows are the sharpest. Agent Status is a canonical message, so the
+text naming a live execution stays in the Ledger forever, survives a cut into a
+different lineage, and is read back by a reopened runtime as ordinary history.
+Ownership authority is the durable ownership facts plus the process-local
+registry, never the message text — so the same rendered section is the evidence
+on both sides: history keeps it, and the runtime's own newly composed status
+does not.
+
+### Lineage publication atomicity
+
+The rows above describe what a *completed* publication leaves behind. That the
+publication is atomic at all is a separate claim, and it needs its own
+boundary: `prepare_*` seeds the destination database on disk **before** the
+catalog transaction opens, so there is a real window in which a fully formed
+conversation exists that nothing names.
+
+The `before:`/`after:publish_session` and `before:`/`after:publish_node`
+boundaries bracket the catalog **visibility commit** — the single atomic rename
+inside `SessionCatalog::commit` — and nothing else. The two sides are therefore
+the only two durable worlds a crash can leave:
+
+```text
+before  a seeded destination the catalog does not name
+        -> the source lineage is still active; the seed is an inert orphan:
+           complete on disk, named by no Session and no node, so it is neither
+           selectable nor resumable
+after   a catalog naming the complete new lineage
+        -> the destination is active and holds the whole cut prefix, owes
+           nothing, and is immediately resumable
+```
+
+There is no third state — in particular no catalog entry pointing at a missing
+or partial database, which would be unrecoverable. `/fork` and `/branch` are
+proven separately because they are different catalog transactions that allocate
+from different identity domains (`session-2` / `conversation-2` versus a new
+node under `session-1` with `conversation-node-2`).
+
+| Boundary | Durable before kill | Allowed after reopen | Forbidden | Test |
+| --- | --- | --- | --- | --- |
+| `before:publish_session` | destination database seeded, catalog unchanged | the source lineage is still active and fully recoverable; the orphan seed is named by nothing | a catalog naming the destination; a changed active selection | `death_before_the_fork_visibility_commit_keeps_the_source_active` |
+| `after:publish_session` | the visibility rename committed | the new Session is active and holds the complete cut prefix with an empty Journal | a partial prefix; a missing destination database | `death_after_the_fork_visibility_commit_publishes_the_whole_lineage` |
+| `before:publish_node` | the same, for a branch node | the same | the same | `death_before_the_branch_visibility_commit_keeps_the_source_active` |
+| `after:publish_node` | the same | the same | the same | `death_after_the_branch_visibility_commit_publishes_the_whole_lineage` |
+
+In every one of the four, the source lineage keeps both owning turns, still
+owns exactly its own background execution, and terminalizes it exactly once in
+its own lineage: a lineage publication is not a conversation-store transition
+and never leaves the source half-written.
 
 ## 8. Background / subagent recovery
 

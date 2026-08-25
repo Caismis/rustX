@@ -273,6 +273,15 @@ impl Lab {
         Self::durable_at(conversation, &path)
     }
 
+    /// Whether any Session or node in the catalog names `conversation`.
+    ///
+    /// An uncommitted destination has a complete database on disk, so "does
+    /// the file exist" proves nothing. The catalog is the only authority for
+    /// whether a lineage is reachable at all.
+    pub(crate) fn catalog_names(&self, conversation: &ConversationId) -> bool {
+        self.catalog().names_conversation(conversation)
+    }
+
     /// The catalog's currently active `(Session, node)` pair.
     pub(crate) fn active_lineage(&self) -> (SessionId, SessionNode) {
         let (session_id, node, _) = self

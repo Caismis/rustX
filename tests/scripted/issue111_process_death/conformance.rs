@@ -110,6 +110,20 @@ fn audit_text(entries: &[TranscriptEntry]) -> String {
         .collect()
 }
 
+/// The whole canonical history of one lineage, rendered for identity search.
+///
+/// Deliberately a debug rendering of every block: what the cut rows need to
+/// see is that a *source* identity survives as text anywhere in the copied
+/// prefix — in a tool result payload, in an Agent Status footer, in a message
+/// source — without caring which shape carried it.
+fn canonical_text(messages: &[MessageBlock]) -> String {
+    messages
+        .iter()
+        .map(|message| format!("{message:?}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// The rendered text of every canonical Agent Status message, in canonical
 /// order.
 fn status_texts(messages: &[MessageBlock]) -> Vec<String> {
@@ -1746,21 +1760,12 @@ fn assert_cut_lineage(scenario: &str) {
     // ---- The source lineage is untouched by the cut. ----
     let source_shapes = shapes(&source.canonical());
     assert_eq!(
-        &source_shapes[..3],
-        &["user", "context", "assistant"],
-        "the source lineage still opens with the turn the cut kept"
-    );
-    assert_eq!(
         source_shapes
             .iter()
             .filter(|shape| **shape == "assistant-call")
             .count(),
         2,
         "both owning turns stay canonical in the source lineage"
-    );
-    assert!(
-        source_shapes.len() > 3,
-        "the source keeps everything on the far side of the cut: {source_shapes:?}"
     );
     assert_eq!(
         source.count_events(|event| matches!(
@@ -1777,16 +1782,51 @@ fn assert_cut_lineage(scenario: &str) {
         "the source lineage owns its subagent child"
     );
 
-    // ---- The cut lineage holds the prefix and nothing else. ----
+    // ---- The cut lineage holds the prefix, ownership words included. ----
     assert_eq!(
         shapes(&cut_lineage.canonical()),
-        vec!["user", "context", "assistant"],
+        vec![
+            "user",
+            "context",
+            "assistant-call",
+            "tool",
+            "assistant",
+            "user",
+            "context",
+            "assistant-call",
+            "tool",
+            "assistant",
+            "user",
+            "context",
+            "assistant",
+        ],
         "the seed is the exact prefix before the selected human message"
     );
+
+    // This is what makes the row non-vacuous: the copied prefix genuinely
+    // carries the source's live ownership *identities*, as canonical text.
+    let copied = canonical_text(&cut_lineage.canonical());
     assert!(
-        status_texts(&cut_lineage.canonical())[0].contains("<system-reminder>"),
-        "the historical Agent Status crossed the cut by value"
+        copied.contains("exec_1"),
+        "the copied tool result names the source's background execution: {copied}"
     );
+    assert!(
+        copied.contains("Background executions:") && copied.contains("exec_1 | bash | running"),
+        "a copied Agent Status names the source's live execution: {copied}"
+    );
+    assert!(
+        copied.contains("conversation-1-subagent-1")
+            && copied.contains("agent-conversation-1-subagent-1"),
+        "the copied tool result names the source's subagent child and its agent identity: {copied}"
+    );
+    assert!(
+        copied.contains("conversations/conversation-1/"),
+        "the copied result even names the source lineage's private output path: {copied}"
+    );
+
+    // …and every one of those identities is inert. The destination Journal is
+    // empty, so nothing was resolved, adopted, reattached, relaunched, or
+    // cancelled on the strength of what the text says.
     assert!(
         cut_lineage.journal().is_empty(),
         "a seeded lineage inherits no durable runtime fact at all: {:?}",
@@ -1845,17 +1885,197 @@ fn assert_cut_lineage(scenario: &str) {
     );
 }
 
-/// The identity half of the cut: a lineage that answers a turn of its own
-/// never re-adopts the identities its source history was written under.
+/// Death **inside** the lineage publication, on both sides of its visibility
+/// commit.
 ///
-/// The seeded prefix is remapped on the way in — every `MessageId` and
-/// `ToolCallId` is reissued under the destination conversation — and the
-/// runtime's own conversation-scoped domains (attempt, subagent) start from
-/// that lineage's own ordinal zero because the cut inherited no ordinal
-/// watermark. A live execution of the source can therefore never be addressed,
-/// cancelled, or reattached by the cut lineage: no identity is shared.
+/// The cut rows above prove what a completed publication leaves behind. This
+/// one proves the publication is atomic in the first place, which is a
+/// different claim: `prepare_*` seeds the destination database on disk
+/// **before** the catalog transaction, so between the two there is a real
+/// window in which a fully-formed conversation exists that nothing names.
+///
+/// The catalog visibility commit is a single atomic rename, so exactly two
+/// durable worlds are reachable:
+///
+/// ```text
+/// before  a seeded destination the catalog does not name
+///         -> the source lineage is still active, and the seed is an inert
+///            orphan: not selectable, not resumable, not recoverable
+/// after   a catalog naming the complete new lineage
+///         -> the destination is active and holds the whole cut prefix
+/// ```
+///
+/// There is no third state, and in particular no half-published one — a
+/// catalog naming a lineage whose database is missing or partial would be
+/// unrecoverable, and that is what the ordering forbids.
 #[test]
-fn a_cut_lineage_never_readopts_the_source_lineage_identities() {
+fn death_before_the_fork_visibility_commit_keeps_the_source_active() {
+    assert_publication_is_atomic(
+        child::SESSION_FORK,
+        "before:publish_session",
+        false,
+        ("session-2", "conversation-2"),
+    );
+}
+
+#[test]
+fn death_after_the_fork_visibility_commit_publishes_the_whole_lineage() {
+    assert_publication_is_atomic(
+        child::SESSION_FORK,
+        "after:publish_session",
+        true,
+        ("session-2", "conversation-2"),
+    );
+}
+
+/// The branch-node publication is a **separate** catalog transaction with its
+/// own parent linkage and its own active-selection rule, so its atomicity does
+/// not follow from the Session one.
+#[test]
+fn death_before_the_branch_visibility_commit_keeps_the_source_active() {
+    assert_publication_is_atomic(
+        child::SESSION_BRANCH,
+        "before:publish_node",
+        false,
+        ("session-1", "conversation-node-2"),
+    );
+}
+
+#[test]
+fn death_after_the_branch_visibility_commit_publishes_the_whole_lineage() {
+    assert_publication_is_atomic(
+        child::SESSION_BRANCH,
+        "after:publish_node",
+        true,
+        ("session-1", "conversation-node-2"),
+    );
+}
+
+/// The shared body of the four publication-boundary rows.
+///
+/// `committed` is the durable world the boundary is on the far side of.
+/// `destination` is the `(Session, conversation)` the operation seeds: `/fork`
+/// creates a new Session, `/branch` adds a node under the active one, and the
+/// two allocate their identities from different domains.
+fn assert_publication_is_atomic(
+    scenario: &str,
+    boundary: &str,
+    committed: bool,
+    destination: (&str, &str),
+) {
+    let lab = Lab::new();
+    let mut process = lab.spawn(scenario, Some(boundary));
+    process.wait_reached(boundary);
+    process.sigkill();
+
+    let source_session = SessionId::new("session-1");
+    let source_conversation = ConversationId::new("conversation-1");
+    let destination_session = SessionId::new(destination.0);
+    let destination_conversation = ConversationId::new(destination.1);
+    let (active_session, active_node) = lab.active_lineage();
+
+    // The destination database exists on **both** sides of the boundary:
+    // `prepare_*` seeds it before the catalog transaction opens. What the
+    // visibility commit decides is only whether the catalog names it.
+    let seeded = lab.lineage(&destination_session, &destination_conversation);
+    assert_eq!(
+        shapes(&seeded.canonical()),
+        vec![
+            "user",
+            "context",
+            "assistant-call",
+            "tool",
+            "assistant",
+            "user",
+            "context",
+            "assistant-call",
+            "tool",
+            "assistant",
+            "user",
+            "context",
+            "assistant",
+        ],
+        "the seed is written whole before the catalog transaction, never partially"
+    );
+    assert!(
+        seeded.journal().is_empty(),
+        "the seeded lineage inherits no durable runtime fact"
+    );
+
+    if committed {
+        assert_eq!(
+            (active_session, active_node.conversation_id),
+            (destination_session, destination_conversation),
+            "the visibility commit made the whole new lineage active"
+        );
+        assert_eq!(
+            seeded.recover().resume(),
+            ResumeDisposition::PendingInboundOnly,
+            "the published lineage owes nothing and is immediately resumable"
+        );
+    } else {
+        assert_eq!(
+            (active_session, active_node.conversation_id),
+            (source_session.clone(), source_conversation.clone()),
+            "the catalog never named the destination, so the source is still active"
+        );
+        // The seed is a complete conversation that nothing points at: an inert
+        // orphan, not a half-published lineage. The reopened world is exactly
+        // the pre-cut world.
+        assert!(
+            !lab.catalog_names(&destination_conversation),
+            "an uncommitted destination is named by no Session and no node"
+        );
+    }
+
+    // The source lineage is intact and independently recoverable either way.
+    // The publication boundary is not a conversation-store boundary, and it
+    // never leaves the source half-written.
+    let source = lab.lineage(&source_session, &source_conversation);
+    assert_eq!(
+        shapes(&source.canonical())
+            .iter()
+            .filter(|shape| **shape == "assistant-call")
+            .count(),
+        2,
+        "the source keeps both owning turns whichever side of the commit died"
+    );
+    assert_eq!(
+        source.count_events(|event| matches!(
+            event,
+            RuntimeEvent::BackgroundExecutionCommitted { .. }
+        )),
+        1,
+        "the source still owns exactly its own execution"
+    );
+    source.recover();
+    assert_eq!(
+        source.count_events(|event| matches!(
+            event,
+            RuntimeEvent::BackgroundTerminalPublished { .. }
+        )),
+        1,
+        "the source's own execution terminalizes exactly once, in the source lineage"
+    );
+}
+
+/// The identity half of the cut: the historical identities the destination
+/// *copied* are text, and are never resolved into anything live.
+///
+/// This is the row the seed makes dangerous rather than safe. The destination
+/// context genuinely contains `exec_1`, `conversation-1-subagent-1`,
+/// `agent-conversation-1-subagent-1`, the source's private tool-output path,
+/// and three Agent Status footers reading `exec_1 | bash | running` — all
+/// copied verbatim from a lineage whose execution is still owned elsewhere. A
+/// runtime that resolved ownership from history would find every one of them.
+///
+/// So the resumed lineage answers a turn that starts **nothing**, and the
+/// proof is what it does not do: no registry ownership, no resolve, no
+/// reattach, no relaunch, and no cancellation of a child it never owned. Its
+/// own newly composed Agent Status carries no background section at all, and
+/// its conversation-scoped domains start from its own ordinal zero.
+#[test]
+fn a_cut_lineage_never_resolves_the_copied_source_identities() {
     let lab = Lab::new();
     let mut process = lab.spawn(child::SESSION_FORK, None);
     assert_eq!(process.wait_note_prefixed("cut:"), "cut:ok");
@@ -1865,10 +2085,29 @@ fn a_cut_lineage_never_readopts_the_source_lineage_identities() {
     let source = lab.lineage(&SessionId::new("session-1"), &source_conversation);
     let source_subagents = owned_subagents(&source);
     assert_eq!(source_subagents.len(), 1);
+    assert!(
+        source_subagents[0].starts_with(source_conversation.as_str()),
+        "the source's subagent identity is scoped to the source conversation: {}",
+        source_subagents[0]
+    );
 
-    // The cut lineage answers one turn of its own, starting a background
-    // execution and dying with it owned.
+    // The copied prefix really does name the source's live work.
     let (active_session, active_node) = lab.active_lineage();
+    let seeded = lab.lineage(&active_session, &active_node.conversation_id);
+    let copied = canonical_text(&seeded.canonical());
+    for identity in [
+        "exec_1",
+        "exec_1 | bash | running",
+        source_subagents[0].as_str(),
+        "agent-conversation-1-subagent-1",
+    ] {
+        assert!(
+            copied.contains(identity),
+            "the destination context copied {identity}, which is the point of this row"
+        );
+    }
+
+    // Now let that lineage run a turn of its own.
     let mut resumed = lab.spawn(child::SESSION_RESUME, None);
     assert_eq!(
         resumed.wait_note_prefixed("recovery:"),
@@ -1880,63 +2119,74 @@ fn a_cut_lineage_never_readopts_the_source_lineage_identities() {
 
     let cut_lineage = lab.lineage(&active_session, &active_node.conversation_id);
 
-    // Canonical identity: the seed was reissued under the destination
-    // conversation, so no message of the cut lineage shares an id with the
-    // source.
+    // Nothing in the copied history became live state. Every one of these is a
+    // distinct way a runtime could have resurrected the source's work.
+    assert!(
+        !cut_lineage
+            .has_event(|event| matches!(event, RuntimeEvent::BackgroundExecutionCommitted { .. })),
+        "no background ownership was adopted or relaunched from copied text"
+    );
+    assert!(
+        !cut_lineage
+            .has_event(|event| matches!(event, RuntimeEvent::SubagentOwnershipCommitted { .. })),
+        "no subagent ownership was adopted or relaunched from copied text"
+    );
+    assert!(
+        !cut_lineage.has_event(|event| matches!(
+            event,
+            RuntimeEvent::BackgroundTerminalPublished { .. }
+                | RuntimeEvent::SubagentTerminalPublished { .. }
+        )),
+        "no terminal was published for work this lineage never owned — a copied \
+         identity must not produce a spurious cancellation either"
+    );
+    assert!(
+        cut_lineage.recover().background_classes().is_empty()
+            && cut_lineage.recover().subagent_classes().is_empty(),
+        "recovery finds no ownership to reconcile in the cut lineage"
+    );
+
+    // The Agent Status the cut lineage composed for its own turn is the
+    // sharpest evidence: the same renderer that filled three copied footers
+    // with `exec_1` produces no background section here, because the registry
+    // — not the history — is the ownership authority.
+    let statuses = status_texts(&cut_lineage.canonical());
+    let fresh = statuses
+        .last()
+        .expect("the resumed turn admitted its own Agent Status");
+    assert!(
+        !fresh.contains("Background executions:") && !fresh.contains("exec_1"),
+        "the newly composed status resolves nothing from copied history: {fresh}"
+    );
+    assert!(
+        statuses.iter().any(|status| status.contains("exec_1")),
+        "…while the copied historical statuses still name it, by value"
+    );
+
+    // Identity domains: every copied `MessageId` was reissued, and the
+    // lineage's own attempt domain starts at its own ordinal zero.
     let source_ids = message_ids(&source.canonical());
     let cut_ids = message_ids(&cut_lineage.canonical());
     assert!(
         cut_ids.iter().all(|id| !source_ids.contains(id)),
         "a cut lineage never reuses a source MessageId: {cut_ids:?} vs {source_ids:?}"
     );
-
-    // Attempt identity: the cut lineage's first attempt is its own ordinal 0.
     assert_eq!(
         cut_lineage.recover().next_attempt_ordinal(),
         1,
         "exactly one attempt ran on the cut lineage, in its own ordinal domain"
     );
 
-    // Subagent identity: conversation-scoped by construction, so the source's
-    // child can never be named — let alone reattached — by the cut lineage.
-    assert!(
-        source_subagents[0].starts_with(source_conversation.as_str()),
-        "the source's subagent identity is scoped to the source conversation: {}",
-        source_subagents[0]
-    );
-    assert!(
-        owned_subagents(&cut_lineage).is_empty(),
-        "the cut lineage owns no subagent child"
-    );
-
-    // Background ownership: each lineage terminalizes exactly its own.
-    assert_eq!(
-        cut_lineage.count_events(|event| matches!(
-            event,
-            RuntimeEvent::BackgroundExecutionCommitted { .. }
-        )),
-        1,
-        "the cut lineage owns the execution it started, and only that one"
-    );
-    // The first `recover()` above already reconciled this lineage; recovery is
-    // absorbing, so what is asserted here is the durable outcome rather than a
-    // second reconciliation's report.
-    assert_eq!(
-        cut_lineage.count_events(|event| matches!(
-            event,
-            RuntimeEvent::BackgroundTerminalPublished { .. }
-        )),
-        1,
-        "the cut lineage terminalizes its own execution exactly once"
-    );
+    // And the source is untouched by everything the cut lineage did.
     assert_eq!(
         source.count_events(|event| matches!(
             event,
             RuntimeEvent::BackgroundExecutionCommitted { .. }
         )),
         1,
-        "the source lineage is untouched by everything the cut lineage did"
+        "the source lineage still owns exactly its own execution"
     );
+    assert_eq!(owned_subagents(&source).len(), 1);
 }
 
 /// The durably owned subagent identities of one lineage.
