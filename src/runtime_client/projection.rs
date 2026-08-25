@@ -87,7 +87,7 @@
 //! mechanics stay internal unless they express a client-relevant semantic
 //! fact. The mapping is defined here, in one place, so internal
 //! `RuntimeEvent` evolution cannot silently break Runtime Client Protocol
-//! v1.
+//! v2.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -671,7 +671,7 @@ impl RuntimeClientProjection {
     }
 
     /// The explicit `RuntimeEvent` mapping policy of Runtime Client Protocol
-    /// v1.
+    /// v2.
     ///
     /// Classification (see the module documentation):
     ///

@@ -1263,11 +1263,19 @@ export class RustxTuiApp {
       onInterrupt: () => void this.#onInterrupt(),
       onChange: () => this.#tui.requestRender(),
     });
+    // The component owns the scroll viewport because Pi's overlay maxHeight
+    // only clips already-rendered lines. Keep it in sync with the actual
+    // terminal height, including resize cycles handled inside Pi-TUI.
+    overlay.setViewportHeight(Math.max(1, Math.floor(this.#tui.terminal.rows * 0.9)));
     const handle = this.#tui.showOverlay(overlay, {
       width: "94%",
       minWidth: 44,
       maxHeight: "90%",
       anchor: "center",
+      visible: (_width, height) => {
+        overlay.setViewportHeight(Math.max(1, Math.floor(height * 0.9)));
+        return true;
+      },
     });
     this.#overlay = handle;
     this.#questionnaireOverlay = overlay;

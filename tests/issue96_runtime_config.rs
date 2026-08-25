@@ -10,7 +10,7 @@ use rustx::local_runtime::composition::{
 use rustx::model::catalog::{MapCredentialEnvironment, ModelRef};
 use rustx::model::session::SessionModelConfig;
 use rustx::runtime::identity::McpServerId;
-use rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1;
+use rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION;
 use rustx::runtime_client::types::{RequestId, RuntimeClientRequest, RuntimeClientResult};
 
 const MODELS: &str = r#"{
@@ -164,7 +164,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
     let endpoint = product.endpoint();
     let initialized = endpoint.handle_request(RuntimeClientRequest::Initialize {
         id: RequestId::new(1),
-        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
     });
     assert!(matches!(
         initialized.result,
@@ -242,7 +242,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
     let resumed_endpoint = resumed.endpoint();
     let resumed_initialized = resumed_endpoint.handle_request(RuntimeClientRequest::Initialize {
         id: RequestId::new(3),
-        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
     });
     let initialized_snapshot = match resumed_initialized.result {
         Some(RuntimeClientResult::Initialized { snapshot, .. }) => snapshot,

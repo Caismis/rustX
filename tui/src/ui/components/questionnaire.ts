@@ -1,19 +1,25 @@
 import {
+  Input,
+  Key,
   Markdown,
   matchesKey,
-  parseKey,
+  truncateToWidth,
+  visibleWidth,
+  wrapTextWithAnsi,
   type Component,
 } from "@earendil-works/pi-tui";
 
 import type {
+  QuestionSpecification,
   QuestionnaireAnswer,
   QuestionnaireAnswerEntry,
   QuestionnaireResponse,
   QuestionnaireSpecification,
 } from "../../protocol/types.ts";
-import { markdownTheme, role, style, plainWidth } from "../theme.ts";
+import { markdownTheme, role } from "../theme.ts";
 
 const MAX_CUSTOM_ANSWER_CHARS = 4096;
+const PREVIEW_VIEWPORT_LINES = 12;
 
 export interface QuestionnaireOverlayOptions {
   interactionId: string;
@@ -24,12 +30,19 @@ export interface QuestionnaireOverlayOptions {
   onChange?: () => void;
 }
 
+type RenderedBody = {
+  lines: string[];
+  focusLine: number;
+};
+
 /**
  * One ephemeral questionnaire surface.
  *
  * The overlay owns only focus, selections, and unsubmitted custom-answer
- * drafts. The runtime remains authoritative: the surface sends a response
- * once, and disappears when the pending interaction leaves the projection.
+ * drafts. Pi's single-line Input owns editing semantics, including bracketed
+ * paste, Kitty printable input, grapheme-aware cursor movement, and deletion.
+ * The runtime remains authoritative: the surface sends a response once, and
+ * disappears when the pending interaction leaves the projection.
  */
 export class QuestionnaireOverlay implements Component {
   readonly interactionId: string;
@@ -40,9 +53,14 @@ export class QuestionnaireOverlay implements Component {
   readonly #onChange: (() => void) | undefined;
   readonly #selected: Array<Set<string>>;
   readonly #custom: Array<string | undefined>;
+  readonly #customInputs: Input[];
   #tab = 0;
   #row = 0;
   #submitting = false;
+  #viewportHeight = 24;
+  #previewOffset = 0;
+  #previewLineCount = 0;
+  #bodyScrollOffset: number | undefined;
 
   constructor(options: QuestionnaireOverlayOptions) {
     this.interactionId = options.interactionId;
@@ -53,11 +71,18 @@ export class QuestionnaireOverlay implements Component {
     this.#onChange = options.onChange;
     this.#selected = options.questionnaire.questions.map(() => new Set<string>());
     this.#custom = options.questionnaire.questions.map(() => undefined);
+    this.#customInputs = options.questionnaire.questions.map(() => new Input());
   }
 
   invalidate(): void {
     // The overlay state is intentionally retained across redraws. Attachment
     // replacement creates a new instance and therefore discards only drafts.
+  }
+
+  /** Sets the self-managed viewport supplied by the owning app/overlay host. */
+  setViewportHeight(height: number): void {
+    const next = Math.max(1, Math.floor(height));
+    if (next !== this.#viewportHeight) this.#viewportHeight = next;
   }
 
   /** Marks an explicit submission/decline as in flight. */
@@ -74,83 +99,77 @@ export class QuestionnaireOverlay implements Component {
 
   handleInput(data: string): void {
     if (this.#submitting) return;
-    if (matchesKey(data, "ctrl+c")) {
+    if (matchesKey(data, Key.ctrl("c"))) {
       this.#onInterrupt();
       return;
     }
-    if (matchesKey(data, "escape")) {
+    if (matchesKey(data, Key.escape)) {
       this.beginSubmitting();
       this.#onDecline();
       return;
     }
-    if (matchesKey(data, "shift+tab")) {
+    if (matchesKey(data, Key.shift("tab"))) {
       this.#moveTab(-1);
       return;
     }
-    if (matchesKey(data, "tab")) {
+    if (matchesKey(data, Key.tab)) {
       this.#moveTab(1);
       return;
     }
-    if (matchesKey(data, "up")) {
+    if (matchesKey(data, Key.pageUp)) {
+      this.#scrollPreview(-1);
+      return;
+    }
+    if (matchesKey(data, Key.pageDown)) {
+      this.#scrollPreview(1);
+      return;
+    }
+    if (matchesKey(data, Key.up)) {
       this.#moveRow(-1);
       return;
     }
-    if (matchesKey(data, "down")) {
+    if (matchesKey(data, Key.down)) {
       this.#moveRow(1);
       return;
     }
+
     if (this.#tab < this.questionnaire.questions.length) {
       const question = this.questionnaire.questions[this.#tab]!;
       const customRow = question.options.length;
       if (this.#row === customRow) {
-        if (matchesKey(data, "backspace") || matchesKey(data, "delete")) {
-          const draft = this.#custom[this.#tab] ?? "";
-          this.#custom[this.#tab] = [...draft].slice(0, -1).join("") || undefined;
-          this.#changed();
-          return;
-        }
-        // `parseKey` names a literal space as `space`, but a space is still a
-        // valid character while the client-owned custom answer is focused.
-        const printable = data === " " ? " " : parseKey(data);
-        if (
-          printable !== undefined &&
-          printable !== "tab" &&
-          printable !== "enter" &&
-          printable !== "backspace" &&
-          printable !== "delete" &&
-          [...printable].length === 1
-        ) {
-          const draft = `${this.#custom[this.#tab] ?? ""}${printable}`;
-          if ([...draft].length <= MAX_CUSTOM_ANSWER_CHARS) {
-            this.#custom[this.#tab] = draft;
+        if (matchesKey(data, Key.enter)) {
+          if ((this.#custom[this.#tab] ?? "").length > 0) {
             this.#selected[this.#tab]!.clear();
             this.#changed();
           }
           return;
         }
+        // Delegate every editing path to Pi's established primitive. This
+        // includes raw bracketed-paste markers, multi-character batches,
+        // Kitty printable sequences, Unicode graphemes, cursor movement, and
+        // backspace/delete. Only the questionnaire's focus/cancellation keys
+        // are intercepted above.
+        this.#handleCustomInput(data);
+        return;
       }
-      if (matchesKey(data, "space") && question.multi_select && this.#row < customRow) {
+      if (matchesKey(data, Key.space) && question.multi_select) {
         this.#toggleOption(question.options[this.#row]!.label);
         return;
       }
-      if (matchesKey(data, "enter")) {
-        if (this.#row < customRow) {
-          if (question.multi_select) {
-            this.#toggleOption(question.options[this.#row]!.label);
-          } else {
-            this.#selected[this.#tab]!.clear();
-            this.#selected[this.#tab]!.add(question.options[this.#row]!.label);
-            this.#custom[this.#tab] = undefined;
-            this.#changed();
-          }
-        } else if ((this.#custom[this.#tab] ?? "").length > 0) {
+      if (matchesKey(data, Key.enter)) {
+        if (question.multi_select) {
+          this.#toggleOption(question.options[this.#row]!.label);
+        } else {
           this.#selected[this.#tab]!.clear();
+          this.#selected[this.#tab]!.add(question.options[this.#row]!.label);
+          this.#clearCustom(this.#tab);
           this.#changed();
         }
       }
       return;
     }
-    if (matchesKey(data, "enter") && this.#row === 0) {
+
+    if (matchesKey(data, Key.enter) && this.#row === 0) {
       this.#submitting = true;
       this.#onSubmit(this.#submission());
       this.#changed();
@@ -158,100 +177,213 @@ export class QuestionnaireOverlay implements Component {
   }
 
   render(width: number): string[] {
-    const safeWidth = Math.max(36, width);
-    const lines: string[] = [
-      role.strong("Ask user · questionnaire"),
-      role.meta(`interaction ${this.interactionId}`),
-      this.#renderTabs(safeWidth),
+    const safeWidth = Math.max(1, Math.floor(width));
+    const header = [
+      fitLine(role.strong("Ask user · questionnaire"), safeWidth),
+      fitLine(role.meta(`interaction ${this.interactionId}`), safeWidth),
+      ...this.#renderTabs(safeWidth),
     ];
-    if (this.#submitting) {
-      lines.push("", role.pending("Submitting response…"));
-      return lines;
-    }
-    if (this.#tab === this.questionnaire.questions.length) {
-      lines.push(...this.#renderReview(safeWidth));
-    } else {
-      lines.push(...this.#renderQuestion(safeWidth));
-    }
-    lines.push(
-      "",
-      role.meta("Tab/Shift+Tab tabs · arrows rows · Enter choose/submit · Space toggle · Esc decline · Ctrl+C cancel attempt"),
+    const footer = [
+      fitLine(
+        role.meta(
+          "Tab/Shift+Tab tabs · arrows rows · Enter choose/submit · Space toggle · PageUp/PageDown preview · Esc decline · Ctrl+C cancel attempt",
+        ),
+        safeWidth,
+      ),
+    ];
+    const body = this.#submitting
+      ? { lines: [role.pending("Submitting response…")], focusLine: 0 }
+      : this.#tab === this.questionnaire.questions.length
+        ? this.#renderReview(safeWidth)
+        : this.#renderQuestion(safeWidth);
+
+    const available = Math.max(1, this.#viewportHeight - header.length - footer.length);
+    const maxOffset = Math.max(0, body.lines.length - available);
+    const focusLine = Math.max(0, Math.min(body.focusLine, body.lines.length - 1));
+    const focusOffset = Math.max(
+      0,
+      Math.min(maxOffset, focusLine - Math.floor(available / 2)),
     );
-    return lines;
+    const offset = Math.max(
+      0,
+      Math.min(maxOffset, this.#bodyScrollOffset ?? focusOffset),
+    );
+    const bodyLines = body.lines.slice(offset, offset + available);
+    const lines = [...header, ...bodyLines, ...footer];
+
+    // Tiny test terminals cannot display the full frame. Keep the contract
+    // explicit even there: no line escapes the component's requested height
+    // or width. Normal overlays have enough room for header, body, and help.
+    return lines.slice(0, this.#viewportHeight).map((line) => fitLine(line, safeWidth));
   }
 
-  #renderTabs(width: number): string {
-    const tabs = this.questionnaire.questions.map((question, index) =>
+  #renderTabs(width: number): string[] {
+    const labels = this.questionnaire.questions.map((question, index) =>
       index === this.#tab ? role.accent(`[${question.header}]`) : role.meta(question.header),
     );
-    tabs.push(
+    labels.push(
       this.#tab === this.questionnaire.questions.length
         ? role.accent("[Review / submit]")
         : role.meta("Review / submit"),
     );
-    return clip(`${tabs.join("  ")}  `, width);
+
+    const lines: string[] = [];
+    let current = "";
+    for (const label of labels) {
+      const next = current.length === 0 ? label : `${current}  ${label}`;
+      if (current.length > 0 && visibleWidth(next) > width) {
+        lines.push(fitLine(current, width));
+        current = label;
+      } else {
+        current = next;
+      }
+    }
+    if (current.length > 0) lines.push(fitLine(current, width));
+    return lines.length > 0 ? lines : [""];
   }
 
-  #renderQuestion(width: number): string[] {
+  #renderQuestion(width: number): RenderedBody {
     const question = this.questionnaire.questions[this.#tab]!;
-    const lines: string[] = ["", role.strong(question.question)];
-    for (const [index, option] of question.options.entries()) {
-      const focused = index === this.#row;
-      const selected = this.#selected[this.#tab]!.has(option.label);
-      const marker = question.multi_select ? (selected ? "[x]" : "[ ]") : selected ? "●" : "○";
-      lines.push(
-        `${focused ? role.accent("›") : " "} ${marker} ${role.strong(option.label)}`,
-        ...wrap(`   ${option.description}`, Math.max(20, width - 8)).map((line) => role.meta(line)),
-      );
+    const questionLines = wrapStyled(role.strong(question.question), width);
+    const intro = ["", ...questionLines.map((line) => fitLine(line, width))];
+    const preview = this.#focusedPreview(question);
+
+    if (preview !== undefined && width >= 100) {
+      const gutter = 1;
+      const leftWidth = Math.max(1, Math.floor((width - gutter) * 0.52));
+      const rightWidth = Math.max(1, width - gutter - leftWidth);
+      const left = this.#renderQuestionRows(question, leftWidth);
+      const right = this.#renderPreview(preview, rightWidth);
+      const count = Math.max(left.lines.length, right.length);
+      const combined = Array.from({ length: count }, (_, index) => {
+        const leftLine = padLine(left.lines[index] ?? "", leftWidth);
+        const rightLine = fitLine(right[index] ?? "", rightWidth);
+        return `${leftLine} ${rightLine}`;
+      });
+      return {
+        lines: [...intro, ...combined],
+        focusLine: intro.length + left.focusLine,
+      };
     }
-    const customFocused = this.#row === question.options.length;
-    const draft = this.#custom[this.#tab];
+
+    const rows = this.#renderQuestionRows(question, width);
+    const lines = [...intro, ...rows.lines];
+    if (preview !== undefined) {
+      lines.push("", ...this.#renderPreview(preview, width));
+    } else {
+      this.#previewLineCount = 0;
+      this.#previewOffset = 0;
+      this.#bodyScrollOffset = undefined;
+    }
+    return {
+      lines,
+      focusLine: intro.length + rows.focusLine,
+    };
+  }
+
+  #renderQuestionRows(question: QuestionSpecification, width: number): RenderedBody {
+    const lines: string[] = [];
+    let focusLine = 0;
+    for (const [index, option] of question.options.entries()) {
+      if (index === this.#row) focusLine = lines.length;
+      const selected = this.#selected[this.#tab]!.has(option.label);
+      const marker = question.multi_select
+        ? selected ? "[x]" : "[ ]"
+        : selected ? "●" : "○";
+      lines.push(
+        fitLine(
+          `${index === this.#row ? role.accent("›") : " "} ${marker} ${role.strong(option.label)}`,
+          width,
+        ),
+      );
+      const descriptionWidth = Math.max(1, width - 2);
+      for (const line of wrapStyled(role.meta(option.description), descriptionWidth)) {
+        lines.push(fitLine(`  ${line}`, width));
+      }
+    }
+
+    const customRow = question.options.length;
+    if (this.#row === customRow) focusLine = lines.length;
     lines.push(
-      `${customFocused ? role.accent("›") : " "} ${role.accent("Type something.")}`,
-      ...wrap(`   ${draft ?? "Enter a custom answer"}`, Math.max(20, width - 8)).map((line) =>
-        draft === undefined ? role.meta(line) : line,
+      fitLine(
+        `${this.#row === customRow ? role.accent("›") : " "} ${role.accent("Type something.")}`,
+        width,
       ),
     );
-
-    const preview = this.#focusedPreview(question);
-    if (preview !== undefined) {
-      const previewLines = new Markdown(preview, 0, 0, markdownTheme).render(
-        Math.max(20, Math.floor(width * 0.46)),
-      );
-      if (width >= 100) {
-        const optionLines = lines.slice(0);
-        const leftWidth = Math.max(24, Math.floor(width * 0.5));
-        const count = Math.max(optionLines.length, previewLines.length);
-        return [
-          ...Array.from({ length: count }, (_, index) =>
-            `${pad(optionLines[index] ?? "", leftWidth)} ${previewLines[index] ?? ""}`.trimEnd(),
-          ),
-        ];
-      }
-      lines.push("", role.strong("Preview"), ...previewLines);
+    const draft = this.#custom[this.#tab];
+    const input = this.#customInputs[this.#tab]!;
+    input.focused = this.#row === customRow;
+    const inputLine = input.render(Math.max(1, width - 2))[0] ?? "";
+    input.focused = false;
+    if (draft !== undefined || this.#row === customRow) {
+      lines.push(fitLine(`  ${inputLine}`, width));
+    } else {
+      lines.push(fitLine(`  ${role.meta("Enter a custom answer")}`, width));
     }
-    return lines;
+
+    return { lines, focusLine };
   }
 
-  #renderReview(width: number): string[] {
-    const lines: string[] = ["", role.strong("Review your answers")];
+  #renderPreview(preview: string, width: number): string[] {
+    const markdown = new Markdown(preview, 0, 0, markdownTheme);
+    const allLines = markdown.render(Math.max(1, width));
+    const lines = allLines.length > 0 ? allLines : ["(empty preview)"];
+    this.#previewLineCount = lines.length;
+    this.#previewOffset = Math.max(
+      0,
+      Math.min(this.#previewOffset, Math.max(0, lines.length - 1)),
+    );
+    const visible = lines.slice(
+      this.#previewOffset,
+      this.#previewOffset + PREVIEW_VIEWPORT_LINES,
+    );
+    const first = this.#previewOffset + 1;
+    const last = Math.min(
+      this.#previewOffset + visible.length,
+      this.#previewLineCount,
+    );
+    return [
+      fitLine(role.strong("Preview"), width),
+      fitLine(
+        role.meta(
+          `lines ${first}-${last} of ${this.#previewLineCount} · PageUp/PageDown scroll`,
+        ),
+        width,
+      ),
+      ...visible.map((line) => fitLine(line, width)),
+    ];
+  }
+
+  #renderReview(width: number): RenderedBody {
+    const lines: string[] = ["", fitLine(role.strong("Review your answers"), width)];
     for (const [index, question] of this.questionnaire.questions.entries()) {
       const answer = this.#answerFor(index);
       lines.push(
-        answer === undefined
-          ? role.warning(`${question.header}: unanswered`)
-          : role.success(`${question.header}: ${answer}`),
+        fitLine(
+          answer === undefined
+            ? role.warning(`${question.header}: unanswered`)
+            : role.success(`${question.header}: ${answer}`),
+          width,
+        ),
       );
     }
     lines.push(
       "",
-      `${this.#row === 0 ? role.accent("›") : " "} ${role.strong(this.#hasAnswers() ? "Submit answers" : "Submit (decline)")}`,
-      role.meta(`  ${width < 60 ? "Esc declines" : "Esc explicitly declines this questionnaire"}`),
+      fitLine(
+        `${this.#row === 0 ? role.accent("›") : " "} ${role.strong(this.#hasAnswers() ? "Submit answers" : "Submit (decline)")}`,
+        width,
+      ),
+      fitLine(
+        role.meta(
+          width < 60 ? "Esc declines" : "Esc explicitly declines this questionnaire",
+        ),
+        width,
+      ),
     );
-    return lines;
+    return { lines, focusLine: lines.length - 2 };
   }
 
-  #focusedPreview(question: QuestionnaireSpecification["questions"][number]): string | undefined {
+  #focusedPreview(question: QuestionSpecification): string | undefined {
     if (this.#row >= question.options.length) return undefined;
     return question.options[this.#row]?.preview;
   }
@@ -292,11 +424,33 @@ export class QuestionnaireOverlay implements Component {
     return { type: "submitted", value: { answers } };
   }
 
+  #handleCustomInput(data: string): void {
+    const index = this.#tab;
+    const input = this.#customInputs[index]!;
+    const before = input.getValue();
+    input.handleInput(data);
+    const value = input.getValue();
+    const bounded = scalarPrefix(value, MAX_CUSTOM_ANSWER_CHARS);
+    if (bounded !== value) input.setValue(bounded);
+    const next = bounded.length > 0 ? bounded : undefined;
+    if (next !== this.#custom[index]) {
+      this.#custom[index] = next;
+      if (next !== undefined) this.#selected[index]!.clear();
+    }
+    // Cursor-only edits do not change the draft but still need a redraw.
+    if (before !== input.getValue() || data.length > 0) this.#changed();
+  }
+
+  #clearCustom(index: number): void {
+    this.#custom[index] = undefined;
+    this.#customInputs[index]!.setValue("");
+  }
+
   #toggleOption(label: string): void {
     const selected = this.#selected[this.#tab]!;
     if (selected.has(label)) selected.delete(label);
     else selected.add(label);
-    this.#custom[this.#tab] = undefined;
+    this.#clearCustom(this.#tab);
     this.#changed();
   }
 
@@ -304,6 +458,9 @@ export class QuestionnaireOverlay implements Component {
     const count = this.questionnaire.questions.length + 1;
     this.#tab = (this.#tab + delta + count) % count;
     this.#row = 0;
+    this.#previewOffset = 0;
+    this.#previewLineCount = 0;
+    this.#bodyScrollOffset = undefined;
     this.#changed();
   }
 
@@ -311,7 +468,33 @@ export class QuestionnaireOverlay implements Component {
     const max = this.#tab === this.questionnaire.questions.length
       ? 0
       : this.questionnaire.questions[this.#tab]!.options.length;
-    this.#row = Math.max(0, Math.min(max, this.#row + delta));
+    const next = Math.max(0, Math.min(max, this.#row + delta));
+    if (next === this.#row) return;
+    this.#row = next;
+    this.#previewOffset = 0;
+    this.#previewLineCount = 0;
+    this.#bodyScrollOffset = undefined;
+    this.#changed();
+  }
+
+  #scrollPreview(direction: number): void {
+    if (this.#tab >= this.questionnaire.questions.length || this.#previewLineCount <= 0) {
+      return;
+    }
+    const page = Math.max(1, PREVIEW_VIEWPORT_LINES - 2);
+    const next = Math.max(
+      0,
+      Math.min(
+        Math.max(0, this.#previewLineCount - 1),
+        this.#previewOffset + direction * page,
+      ),
+    );
+    if (next === this.#previewOffset) return;
+    this.#previewOffset = next;
+    this.#bodyScrollOffset = Math.max(
+      0,
+      (this.#bodyScrollOffset ?? 0) + direction * page,
+    );
     this.#changed();
   }
 
@@ -320,28 +503,27 @@ export class QuestionnaireOverlay implements Component {
   }
 }
 
-function wrap(text: string, width: number): string[] {
-  const words = text.split(/\s+/).filter((word) => word.length > 0);
-  if (words.length === 0) return [""];
-  const lines: string[] = [];
-  let line = "";
-  for (const word of words) {
-    if (line.length > 0 && [...line, " ", ...word].length > width) {
-      lines.push(line);
-      line = word;
-    } else {
-      line = line.length === 0 ? word : `${line} ${word}`;
-    }
+function scalarPrefix(value: string, maximum: number): string {
+  if ([...value].length <= maximum) return value;
+  let result = "";
+  let count = 0;
+  for (const scalar of value) {
+    if (count >= maximum) break;
+    result += scalar;
+    count += 1;
   }
-  if (line.length > 0) lines.push(line);
-  return lines;
+  return result;
 }
 
-function pad(value: string, width: number): string {
-  return `${value}${" ".repeat(Math.max(0, width - plainWidth(value)))}`;
+function wrapStyled(value: string, width: number): string[] {
+  return wrapTextWithAnsi(value, Math.max(1, width));
 }
 
-function clip(value: string, width: number): string {
-  if (plainWidth(value) <= width) return value;
-  return [...value].slice(0, Math.max(0, width - 1)).join("") + style.dim("…");
+function fitLine(value: string, width: number): string {
+  return truncateToWidth(value, Math.max(1, width), "…");
+}
+
+function padLine(value: string, width: number): string {
+  const fitted = fitLine(value, width);
+  return `${fitted}${" ".repeat(Math.max(0, width - visibleWidth(fitted)))}`;
 }

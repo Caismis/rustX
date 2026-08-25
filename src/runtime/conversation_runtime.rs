@@ -3191,7 +3191,7 @@ impl ConversationRuntime {
     /// Claims the one-time Runtime Client binding of the tool runtime and of
     /// the capability coordinator.
     ///
-    /// Protocol v1 binds one runtime identity to at most one Runtime Client
+    /// Protocol v2 binds one runtime identity to at most one Runtime Client
     /// adapter for that identity's lifetime, so cloning a runtime never
     /// yields a second bindable identity and dropping the bound adapter
     /// never makes it bindable again. Reconnect replaces the attachment,
@@ -4980,8 +4980,8 @@ mod tests {
     use crate::runtime_client::event::RuntimeClientEvent;
     use crate::runtime_client::host::{EventDelivery, RuntimeClientHost, RuntimeClientHostConfig};
     use crate::runtime_client::types::{
-        RUNTIME_CLIENT_PROTOCOL_VERSION_V1, RequestId, RuntimeClientError,
-        RuntimeClientProtocolEvent, RuntimeClientRequest, RuntimeClientResult,
+        RUNTIME_CLIENT_PROTOCOL_VERSION, RequestId, RuntimeClientError, RuntimeClientProtocolEvent,
+        RuntimeClientRequest, RuntimeClientResult,
     };
     use crate::scripted_suites::support::fake::{
         FakeModel, FakeStep, FakeTool, model_release, success_result,
@@ -9340,7 +9340,7 @@ mod tests {
         })
         .expect("Runtime Client host");
         let (attachment, initialized) = host
-            .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("Runtime Client attachment");
         let cursor = match initialized {
             RuntimeClientResult::Initialized { cursor, .. } => cursor,
@@ -9628,7 +9628,7 @@ mod tests {
         })
         .expect("Runtime Client host");
         let (attachment, initialized) = host
-            .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("Runtime Client attachment");
         let cursor = match initialized {
             RuntimeClientResult::Initialized { cursor, .. } => cursor,
@@ -9923,7 +9923,7 @@ mod tests {
         })
         .expect("Runtime Client host");
         let (attachment, initialized) = host
-            .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("Runtime Client attachment");
         let cursor = match initialized {
             RuntimeClientResult::Initialized { cursor, .. } => cursor,
@@ -10693,7 +10693,7 @@ mod tests {
         )
         .expect("runtime client host");
         let (attachment, _) = host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach runtime client");
         let subscription = attachment
             .subscribe_events(crate::runtime_client::RuntimeClientCursor::new(0))

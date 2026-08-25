@@ -187,7 +187,7 @@ async fn the_process_serves_a_real_conversation_runtime() {
     let response = process
         .request(|id| RuntimeClientRequest::Initialize {
             id: rustx::runtime_client::RequestId::new(id),
-            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
         })
         .await;
     let Some(RuntimeClientResult::Initialized {

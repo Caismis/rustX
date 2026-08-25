@@ -1,5 +1,5 @@
 //! Issue #37: capability/tool/Skill inspection of Runtime Client Protocol
-//! v1.
+//! v2.
 //!
 //! The active capability projection must carry the revision, the
 //! deterministic tool catalog with origin metadata for native, MCP, and
@@ -83,7 +83,7 @@ async fn capability_projection_covers_native_python_and_skills() {
         .await;
     let host = fixture.host.clone();
     let (attachment, _) = host
-        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     let response = attachment.handle_request(RuntimeClientRequest::CapabilityGet {
         id: rustx::runtime_client::RequestId::new(1),
@@ -188,7 +188,7 @@ async fn capability_projection_covers_mcp_origins() {
         .await;
     let host = fixture.host.clone();
     let (attachment, _) = host
-        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     let response = attachment.handle_request(RuntimeClientRequest::CapabilityGet {
         id: rustx::runtime_client::RequestId::new(1),

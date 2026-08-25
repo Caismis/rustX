@@ -1,5 +1,5 @@
 /**
- * Runtime Client Protocol v1 — the TypeScript mirror of the wire contract.
+ * Runtime Client Protocol v2 — the TypeScript mirror of the wire contract.
  *
  * These declarations describe the JSON rustX already speaks. They are a
  * *transcription* of the Rust types in `src/runtime_client/`, never a second
@@ -11,7 +11,7 @@
  * - nothing in this file interprets a value. `requestParams` stays opaque
  *   provider-owned JSON, capability sets are read as published, and tool
  *   arguments/results are carried, not parsed for meaning;
- * - Runtime Client Protocol v1 event discriminators are a closed vocabulary at
+ * - Runtime Client Protocol v2 event discriminators are a closed vocabulary at
  *   the connection boundary: an unknown event is a protocol error, not a
  *   presentation fact; other open values remain opaque or are checked at
  *   their owning boundary.
@@ -23,7 +23,7 @@
  * camelCase.
  */
 
-export const RUNTIME_CLIENT_PROTOCOL_VERSION_V1 = 1;
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 2;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -1412,11 +1412,11 @@ export type RuntimeClientOutboundRecord =
   | RuntimeClientProtocolEvent;
 
 /**
- * Checks only the discriminator of one Runtime Client Protocol v1 event.
+ * Checks only the discriminator of one Runtime Client Protocol v2 event.
  *
  * The connection owns structural protocol validation, so this deliberately
  * does not validate the event payload. Once this returns true, the reducer
- * may receive the event as a known v1 fact.
+ * may receive the event as a known v2 fact.
  */
 export function isKnownRuntimeClientEvent(
   value: unknown,
@@ -1467,7 +1467,7 @@ export function isKnownRuntimeClientEvent(
 /**
  * Classifies one decoded outbound record.
  *
- * A known notification carries a cursor and a known v1 event discriminator.
+ * A known notification carries a cursor and a known v2 event discriminator.
  * Malformed or future event-shaped records are handled separately by the
  * connection so they cannot fall through as responses.
  */

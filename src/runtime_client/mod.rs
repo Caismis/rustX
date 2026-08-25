@@ -13,7 +13,7 @@
 //!  RuntimeClientEvent / RuntimeClientSnapshot
 //!                 |
 //!                 v
-//!       Runtime Client Protocol v1
+//!       Runtime Client Protocol v2
 //! ```
 //!
 //! The governing invariant:
@@ -44,13 +44,13 @@
 //! # Ownership summary
 //!
 //! - [`RuntimeClientEndpoint`](endpoint::RuntimeClientEndpoint) is the
-//!   semantic protocol entry point: it dispatches every v1 request,
+//!   semantic protocol entry point: it dispatches every v2 request,
 //!   `initialize` included, so a transport stays a framing adapter and
 //!   never owns negotiation or attachment admission.
 //! - [`RuntimeClientHost`](host::RuntimeClientHost) is the projection +
 //!   control + attachment adapter over the conversation runtime: it owns
 //!   the projection (snapshot read model, cursor allocation, bounded
-//!   replay, subscribers), the one-active-attachment v1 policy, and
+//!   replay, subscribers), the one-active-attachment v2 policy, and
 //!   protocol adaptation. `AgentExecution` remains the attempt settlement
 //!   authority and the conversation runtime remains the admission owner.
 //! - [`RuntimeClientProjection`](projection::RuntimeClientProjection) is
@@ -69,7 +69,7 @@
 //!   model path and the client projection consume the same composed
 //!   observation.
 //!
-//! # Protocol v1 scope
+//! # Protocol v2 scope
 //!
 //! - one active attachment per runtime instance;
 //! - detach is never cancellation;
@@ -124,7 +124,7 @@ pub use snapshot::{
     RuntimeClientTranscriptPage, RuntimeDurabilityFailure,
 };
 pub use types::{
-    AttachmentId, RUNTIME_CLIENT_PROTOCOL_VERSION_V1, RequestId, RuntimeClientCursor,
+    AttachmentId, RUNTIME_CLIENT_PROTOCOL_VERSION, RequestId, RuntimeClientCursor,
     RuntimeClientError, RuntimeClientProtocolEvent, RuntimeClientRequest, RuntimeClientResponse,
     RuntimeClientResult,
 };

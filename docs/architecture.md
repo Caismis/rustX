@@ -30,11 +30,14 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 9. An incompatible database
+The SQLite schema is development schema version 10. An incompatible database
 fails explicitly; there is no migration chain, legacy reader, compatibility
-fallback, dual write, or old storage mode. File-backed stores use WAL,
-`synchronous=FULL`, foreign-key enforcement, and a busy timeout. A successful
-SQLite commit is the local durability linearization point documented here.
+fallback, dual write, or old storage mode. Version 10 freezes the structured
+Questionnaire interaction audit vocabulary introduced by Issue #126. Version
+9 and every older development schema are rejected at open. File-backed stores
+use WAL, `synchronous=FULL`, foreign-key enforcement, and a busy timeout. A
+successful SQLite commit is the local durability linearization point
+documented here.
 
 Version 9 froze the durable **answer obligation** (Issue #111): adoption
 commits an `InboundTurnAdopted` fact naming the exact adopted batch, and
@@ -43,7 +46,14 @@ which is exactly why the version gate matters. A v8 journal predates the
 vocabulary, so a current reader would read its silence as "no answer is owed"
 and strand precisely the crash states the obligation rescues.
 
-The version-9 physical tables are deliberately semantic rather than generic:
+Version 10 freezes the structured Questionnaire interaction audit vocabulary
+(Issue #126): one requested fact stores the complete bounded questionnaire by
+value, and one terminal settlement stores either the canonical submitted
+answers, an explicit decline, or owning-attempt cancellation. A v9 journal may
+contain the obsolete Question/Answered payloads and is rejected rather than
+decoded or migrated.
+
+The version-10 physical tables are deliberately semantic rather than generic:
 
 | Table | Purpose and constraints |
 | --- | --- |
@@ -648,7 +658,7 @@ underneath the waiter. Only after settlement and attempt completion may a
 reload publish a new generation, and that generation affects a later admitted
 attempt only.
 
-Runtime Client v1 carries the same semantic plane through
+Runtime Client v2 carries the same semantic plane through
 `interaction_respond`, typed acceptance/errors, `interaction_pending` and
 `interaction_settled` events, and `snapshot.pending_interactions`. Snapshot
 plus cursor and subscribe-after-cursor retain the existing repair invariant.
@@ -2885,7 +2895,7 @@ environment, finite timeout, bounded diagnostics, and no generic
 
 The outermost layer exposes the runtime to humans and other systems:
 
-- Runtime Client Protocol v1 (semantic client boundary)
+- Runtime Client Protocol v2 (semantic client boundary)
 - Local interactive CLI
 - Runtime command interface
 - HTTP control interface
@@ -2894,7 +2904,7 @@ The outermost layer exposes the runtime to humans and other systems:
 
 AG-UI is an output projection, not the internal durable event model.
 
-#### Runtime Client Protocol v1 implementation (Issue #37)
+#### Runtime Client Protocol v2 implementation (Issue #37)
 
 Issue #37 implements the one external semantic normalization boundary in
 `src/runtime_client`:
@@ -2909,7 +2919,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-      Runtime Client Protocol v1
+      Runtime Client Protocol v2
 ```
 
 The governing invariant is that all authoritative execution and
@@ -2918,7 +2928,7 @@ deterministic projections and never become a second authority. The
 internal `RuntimeEvent` vocabulary is an execution-fact vocabulary, **not**
 the wire contract: `RuntimeClientEvent` and `RuntimeClientSnapshot` are
 explicit runtime-owned projection types with their own versioning
-(`RUNTIME_CLIENT_PROTOCOL_VERSION_V1`, independent from
+(`RUNTIME_CLIENT_PROTOCOL_VERSION`, independent from
 `EVENT_SCHEMA_VERSION`, the manifest schema version, and the crate
 version), lifecycle semantics, and cursor domain
 (`RuntimeClientCursor`). Later transports (Issue #38 stdio JSONL,
@@ -2979,7 +2989,7 @@ runtime_client/attachment.rs   RuntimeAttachment: at-most-one attachment,
                                event subscription delivery
 runtime_client/endpoint.rs     RuntimeClientEndpoint: the transport-neutral
                                semantic entry point that dispatches every
-                               v1 request, `initialize` included
+                               v2 request, `initialize` included
 runtime_client/transport/      byte-stream adapters beneath the semantic
                                layer (Issue #38); `stdio.rs` is the strict
                                stdio/JSONL transport
@@ -3017,7 +3027,7 @@ Runtime Client is a projection/control/attachment adapter over it.
 
 - **The semantic endpoint owns `initialize`.** `RuntimeClientEndpoint` is
   the boundary a transport wraps. It starts unattached and accepts every
-  v1 request; `initialize` performs version negotiation, single-attachment
+  v2 request; `initialize` performs version negotiation, single-attachment
   admission, `AttachmentId` allocation, and the linearized initial
   snapshot, storing the resulting attachment. Non-`initialize` requests
   before that are `not_attached`; a successful `detach` (or dropping the
@@ -3281,7 +3291,7 @@ Runtime Client is a projection/control/attachment adapter over it.
   dropped: rebinding a surviving runtime bundle would require a recovery
   model for canonical history, pending mailbox projection, and cursor
   continuity that the Runtime Client projection does not own. Recreating a host over the same
-  runtime bundle is **not** supported v1 recovery — a new host requires a
+  runtime bundle is **not** supported by the current recovery contract — a new host requires a
   new `ConversationToolRuntime` identity. Observer installation on the
   mailbox, background registry, and capability coordinator is crate-private
   for the same reason: it is a runtime coordination seam, not a public
@@ -3404,7 +3414,7 @@ Runtime Client is a projection/control/attachment adapter over it.
   compaction start, failure, and committed completion project with optional
   attempt attribution and update the shared context read model. Internal
   `RuntimeEvent` evolution therefore cannot silently break Runtime Client
-  Protocol v1.
+  Protocol v2.
 - **Streaming repair.** The snapshot carries an in-flight Assistant output
   view (accumulated blocks) and foreground tool views keyed by the
   logical tool-call identity, so a client repairing after `resync`
@@ -3439,7 +3449,7 @@ Runtime Client is a projection/control/attachment adapter over it.
   subscribe, and subscription polls) then fails with
   `projection_exhausted`. A read never hands back a model that silently
   stopped folding authoritative transitions.
-- **Attachment lifecycle.** Protocol v1 admits at most one active
+- **Attachment lifecycle.** Protocol v2 admits at most one active
   attachment: the first attach succeeds, a second fails with
   `attachment_in_use` and never evicts the first, detach (explicit or
   RAII drop) releases ownership, reconnects receive a fresh attachment
@@ -3533,7 +3543,7 @@ Runtime Client is a projection/control/attachment adapter over it.
 - **Protocol envelope.** A transport-neutral JSON-RPC-style envelope:
   `request(id, method + typed params)`, `response(id, result | error)`,
   and `event(cursor + typed payload)` with no request ids on
-  notifications. Every v1 method is client-initiated
+  notifications. Every v2 method is client-initiated
   (`initialize`, `submit_inbound`, `cancel_current_attempt`,
   `snapshot_get`, `subscribe_events`, `capability_get`,
   `background_status`, `background_cancel`, `detach`, `shutdown`).
@@ -3559,7 +3569,7 @@ rustX Runtime
 Runtime Client projection
       |
       v
-Runtime Client Protocol v1        semantic; Issue #37
+Runtime Client Protocol v2        semantic; Issue #37
       |
       v
 transport adapters                framing only; src/runtime_client/transport
@@ -3605,10 +3615,10 @@ means adding a sibling module there; no semantic module moves.
   string stays in one record and multiline pretty-printed JSON is not
   supported. CRLF input is accepted by removing exactly one `\r` before
   the terminating LF; no other whitespace is touched.
-- **Malformed and oversized input is transport-fatal.** Protocol v1 has
+- **Malformed and oversized input is transport-fatal.** Protocol v2 has
   no uncorrelated error envelope, and a malformed frame may not even
   carry a request id, so the transport invents none. Any complete
-  in-bound-size record that does not deserialize to the exact v1 request
+  in-bound-size record that does not deserialize to the exact v2 request
   type — malformed JSON, unknown method, unknown field, wrong parameter
   type, empty or whitespace-only record — ends the session with a
   framing error, applies nothing, and writes no protocol record. An
@@ -3626,7 +3636,7 @@ means adding a sibling module there; no semantic module moves.
   background execution, and capability state continue under their own
   owners, and no projection lock is held across any transport await.
 - **Active-subscription lag closes the transport.** After a stall the
-  subscription may fall behind the bounded replay ring. Protocol v1 has
+  subscription may fall behind the bounded replay ring. Protocol v2 has
   no uncorrelated stream-error record, so the session ends with a typed
   local `SubscriptionLagged` error carrying the cursor information and
   the client repairs from an authoritative snapshot after reconnecting.
@@ -4316,7 +4326,7 @@ beside it:
 rustX Runtime semantics
         |
         v
-Runtime Client Protocol v1
+Runtime Client Protocol v2
         |
         v
 rustX TypeScript projection

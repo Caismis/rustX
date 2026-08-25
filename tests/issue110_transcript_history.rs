@@ -49,7 +49,7 @@ use rustx::runtime::identity::{
 };
 use rustx::runtime::types::{TokenMeasurement, TokenMeasurementSource};
 use rustx::runtime::{InteractionResponse, RuntimeResourceRevision};
-use rustx::runtime_client::{RUNTIME_CLIENT_PROTOCOL_VERSION_V1, RuntimeClientResult};
+use rustx::runtime_client::{RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientResult};
 use rustx::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus, ToolResultContent};
 
 const CONVERSATION: &str = "conv-fnd05";
@@ -615,13 +615,13 @@ async fn requirement_05_detach_and_reattach_reads_the_same_durable_transcript() 
 
     let (first, first_result) = runtime
         .host()
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("first attach");
     let first_snapshot = initialized_snapshot(first_result);
     runtime.host().detach(first.attachment_id());
     let (_second, second_result) = runtime
         .host()
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("reattach");
     let second_snapshot = initialized_snapshot(second_result);
     assert_eq!(first_snapshot.transcript, second_snapshot.transcript);
@@ -666,7 +666,7 @@ async fn requirement_06_headless_history_is_available_to_a_later_client() {
         .expect("interactive reopen");
     let (_, result) = interactive
         .host()
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("later attach");
     assert_eq!(
         client_page_message_ids(&initialized_snapshot(result).transcript),
@@ -880,7 +880,7 @@ async fn requirement_11_interaction_audits_page_without_recovering_a_waiter() {
         .expect("cold reopen");
     let (attachment, result) = runtime
         .host()
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach after audit recovery");
     let snapshot = initialized_snapshot(result);
     assert!(snapshot.pending_interactions.is_empty());
@@ -1040,7 +1040,7 @@ async fn requirement_12_transcript_paging_preserves_runtime_client_cursor_invari
         .expect("interactive composition");
     let (attachment, _result) = runtime
         .host()
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     let live_before = runtime.host().snapshot().expect("snapshot").1;
     let newest_page = runtime

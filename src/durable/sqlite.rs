@@ -110,9 +110,17 @@ use super::inbox::{
 /// killed in the attempt-start window) that the obligation exists to rescue.
 /// Refusing the file states that honestly instead.
 ///
-/// A v3/v4/v5/v6/v7/v8 database must fail at store open; there is no
+/// Version 10 freezes the structured Questionnaire interaction audit
+/// vocabulary introduced by Issue #126: the requested subject stores one
+/// bounded questionnaire by value, and terminal settlements distinguish a
+/// submitted answer set from an explicit decline or owning-attempt
+/// cancellation. A v9 journal can contain the obsolete Question payloads,
+/// so it must fail at store open rather than being interpreted by a v10
+/// reader.
+///
+/// A v3/v4/v5/v6/v7/v8/v9 database must fail at store open; there is no
 /// migration or compatibility path.
-pub const SQLITE_SCHEMA_VERSION: i64 = 9;
+pub const SQLITE_SCHEMA_VERSION: i64 = 10;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -7845,6 +7853,33 @@ mod tests {
             Err(ConversationStoreError::SchemaVersionMismatch {
                 stored: 8,
                 expected: SQLITE_SCHEMA_VERSION
+            })
+        ));
+    }
+
+    /// Issue #126 changes the durable interaction payload vocabulary from the
+    /// old Question/Answered contract to the structured Questionnaire
+    /// contract. A version-9 database therefore cannot be opened by the
+    /// current store, even though its physical tables are unchanged.
+    #[test]
+    fn pre_structured_questionnaire_schema_is_rejected_explicitly() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("pre-structured-questionnaire.sqlite");
+        let conversation_id = ConversationId::new("conv-pre-structured-questionnaire");
+        {
+            let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
+            store
+                .conn
+                .lock()
+                .unwrap()
+                .execute("UPDATE rustx_store SET schema_version = 9 WHERE id = 1", [])
+                .unwrap();
+        }
+        assert!(matches!(
+            SqliteConversationStore::open(conversation_id, &path),
+            Err(ConversationStoreError::SchemaVersionMismatch {
+                stored: 9,
+                expected: 10
             })
         ));
     }

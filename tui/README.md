@@ -1,7 +1,7 @@
 # `rustx-tui`
 
 The rustX reference terminal client: a Pi-TUI presentation layer over Runtime
-Client Protocol v1.
+Client Protocol v2.
 
 ## The one architectural rule
 
@@ -114,7 +114,7 @@ active even when these controls disable optional tools.
 
 ```text
 spawn rustx
-  -> initialize(v1)
+        -> initialize(v2)
   -> authoritative snapshot + cursor
   -> install the presentation projection
   -> subscribe_events(after cursor)
@@ -352,6 +352,15 @@ questionnaire and `Ctrl+C` keeps its existing meaning of cancelling the owning
 attempt. A local draft is never converted into a response by detach, EOF, or
 attachment replacement; a settled interaction closes the overlay and restores
 editor focus.
+
+Custom-answer editing delegates raw input to Pi-TUI 0.82.1's native `Input`,
+so bracketed paste, multi-character batches, Kitty printable input,
+grapheme-aware cursor movement, deletion, and the 4096-scalar bound share one
+input path. The questionnaire component owns an explicit height-aware
+viewport: every visible line is display-width bounded, the focused row and
+Review/Submit remain reachable, and long Markdown previews can be inspected
+with PageUp/PageDown without allowing preview content to displace the option
+list.
 
 The footer displays authoritative `approval policy` or `approval FULL ACCESS`
 and shows a pending arrow when the runtime has accepted a busy-time mode

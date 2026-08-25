@@ -307,7 +307,7 @@ async fn a_subagent_child_runs_end_to_end_through_the_real_process_stack() {
     let response = process
         .request(|id| RuntimeClientRequest::Initialize {
             id: rustx::runtime_client::RequestId::new(id),
-            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
         })
         .await;
     let Some(RuntimeClientResult::Initialized { snapshot, .. }) = response.result else {
@@ -539,7 +539,7 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
     let response = parent
         .request(|id| RuntimeClientRequest::Initialize {
             id: rustx::runtime_client::RequestId::new(id),
-            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
         })
         .await;
     assert!(
@@ -602,7 +602,7 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
     let response = recovered
         .request(|id| RuntimeClientRequest::Initialize {
             id: rustx::runtime_client::RequestId::new(id),
-            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
         })
         .await;
     assert!(
@@ -684,7 +684,7 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
     let response = repeated
         .request(|id| RuntimeClientRequest::Initialize {
             id: rustx::runtime_client::RequestId::new(id),
-            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
         })
         .await;
     assert!(

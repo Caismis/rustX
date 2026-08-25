@@ -773,8 +773,9 @@ The mailbox is process-local coordination/wakeup, and Runtime Client state is
 projection/control only. There is no full transcript, `ConversationRecord`,
 request-message copy, generic repository, or client recovery cache.
 
-The schema is development version 1. Incompatible files fail explicitly;
-there is no migration framework, legacy reader, fallback, or dual write.
+M8 introduced development schema version 1. The current store gate is schema
+version 10; incompatible files fail explicitly at open. There is no migration
+framework, legacy reader, fallback, or dual write.
 File-backed SQLite uses WAL, `synchronous=FULL`, foreign keys, and a busy
 timeout. Commit is the local durability linearization point.
 
@@ -1087,7 +1088,7 @@ tool-start capability. The real ConversationRuntime shutdown path proves that
 pending-map removal is not waiter or attempt settlement: Quiescent waits for
 the waiter handoff, projection callback, AgentExecution, and attempt task.
 
-Runtime Client v1 carries `interaction_respond`, typed acceptance/errors,
+Runtime Client v2 carries `interaction_respond`, typed acceptance/errors,
 pending/settled events, and `snapshot.pending_interactions`. It also projects
 authoritative effective and pending ApprovalMode state and accepts mode
 changes through runtime control. The TUI remains a projection/client: it
@@ -1187,8 +1188,10 @@ the live path and the durable path cannot drift and a future PostgreSQL
 backend reuses the same contract.
 
 The durable event vocabulary changed incompatibly, so `SQLITE_SCHEMA_VERSION`
-moved 6 → 7 and older development databases are rejected at open. There is no
-migration and no compatibility layer.
+is now 10. Version 10 freezes the structured Questionnaire interaction audit
+vocabulary introduced by Issue #126; version 9 and every older development
+database are rejected at open. There is no migration and no compatibility
+layer.
 
 Exit criteria (met): durable-before-prompt proved inside the publication
 callback; `requested < settled(approved) < ToolExecutionStarted` proved on
@@ -1308,7 +1311,7 @@ the repeated terminal payload.
 
 Capabilities are deny-by-construction: the child composes the base tool
 plane only (v1 profile `explore`: Read/Glob/Grep) and has no `subagent`
-tool, so recursion is impossible by construction. Runtime Client v1 carries
+tool, so recursion is impossible by construction. Runtime Client v2 carries
 `subagent_status`, `subagent_cancel`, the `SubagentUpdated` event, and
 `snapshot.subagents`; the TUI renders the same projection.
 

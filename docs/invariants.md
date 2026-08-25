@@ -41,8 +41,10 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 9 is the only accepted schema; incompatible files fail
-explicitly and are not migrated.
+schema version 10 is the only accepted schema; version 9 and every older
+development schema fail explicitly at open and are not migrated. Version 10
+freezes the structured Questionnaire interaction audit vocabulary introduced
+by Issue #126.
 
 The durable request-start invariant is strict: the provider adapter cannot be
 called until the Request Snapshot and exact `ModelRequestStarted` Event
@@ -2922,8 +2924,8 @@ semantic normalization boundary. The frozen invariants:
   a model that silently stopped folding transitions.
 - **Runtime Client protocol versioning is independent from internal
   RuntimeEvent/Event Journal schema versioning.** Version negotiation is
-  explicit at attachment admission; v1 rejects unsupported versions
-  explicitly and supports no parallel protocol versions.
+  explicit at attachment admission; Protocol v2 is the sole supported
+  version, and Protocol v1 is rejected explicitly.
 - **The semantic layer owns protocol negotiation and attachment
   admission; transports are framing only.** `initialize` is dispatched by
   `RuntimeClientEndpoint` and is by itself sufficient to establish the
@@ -2974,7 +2976,7 @@ semantic normalization boundary. The frozen invariants:
   the durable ConversationStore already owns canonical history, pending
   inbound, Surface revisions, requests, and events, but M8 does not broaden
   the one-host binding contract. Host recreation over the same runtime bundle
-  is therefore not supported v1. A new host requires a new
+  is therefore not supported by the current host-lifecycle contract. A new
   `ConversationToolRuntime` identity.
 - **Observation edges are non-owning with respect to the conversation
   runtime and the Runtime Client host.** No observer and no worker may
@@ -3012,7 +3014,7 @@ semantic normalization boundary. The frozen invariants:
   no derived message mirror of its own, and deterministic regressions
   verify the projection mirror against the authoritative ledger rather
   than coordinating two histories.
-- **One active attachment.** Protocol v1 admits at most one attachment
+- **One active attachment.** Protocol v2 admits at most one attachment
   per runtime instance; a second attach fails deterministically without
   evicting the first; reconnect receives a fresh attachment identity;
   request ids are attachment-scoped; cursor/replay state belongs to the
@@ -3053,7 +3055,7 @@ endpoint. It frames; it never becomes a second authority.
   until one complete, in-bound-size framed record has successfully
   deserialized to the exact Runtime Client request type. A record that
   violates framing, exceeds the record limit, or fails exact
-  deserialization ends the transport having applied nothing; Protocol v1
+  deserialization ends the transport having applied nothing; Protocol v2
   has no uncorrelated error envelope, so no transport fabricates a
   protocol record for it.
 - **Transport loss is not semantic cancellation.** Runtime Client

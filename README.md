@@ -27,7 +27,7 @@ rustX currently supports:
   execution;
 - runtime-owned model selection and switching;
 - native Sessions with resume, rename, clone, fork, and tree workflows;
-- Runtime Client Protocol v1 over stdio/JSONL and the `rustx-tui` reference
+- Runtime Client Protocol v2 over stdio/JSONL and the `rustx-tui` reference
   terminal client.
 
 These are current capabilities of the pre-alpha repository, not a promise of
@@ -89,7 +89,7 @@ Tools separately from active model-visible Tools. The current roadmap is
 `rustx` is the runtime. `rustx-tui` is a reference client and presentation
 layer.
 
-The TUI spawns `rustx`, communicates with it through Runtime Client Protocol v1
+The TUI spawns `rustx`, communicates with it through Runtime Client Protocol v2
 over stdio/JSONL, and projects runtime snapshots and events into a terminal
 interface. Model, Session, tool, capability, context, and execution semantics
 remain owned by the Rust runtime; the TUI does not implement a parallel

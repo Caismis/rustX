@@ -1239,7 +1239,7 @@ async fn answered_allow_is_rechecked_against_cancellation_before_tool_start() {
         answered_rx
             .wait_for(|entered| *entered)
             .await
-            .expect("Answered(Allow) terminal outcome");
+            .expect("Allow terminal outcome");
         assert!(controller_cancellation.request_cancel(CancellationReason::RuntimeShutdown));
         release.send_replace(true);
     });
@@ -1284,7 +1284,7 @@ async fn answered_allow_is_rechecked_against_cancellation_before_tool_start() {
     assert_eq!(
         *interaction_count.borrow_and_update(),
         1,
-        "Answered(Allow) came from one published Ask"
+        "Allow came from one published Ask"
     );
     assert_cancelled_tool_slot_without_start(
         &result,

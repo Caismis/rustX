@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { visibleWidth } from "@earendil-works/pi-tui";
+
 import { QuestionnaireOverlay } from "../src/ui/components/questionnaire.ts";
 import type { QuestionnaireResponse, QuestionnaireSpecification } from "../src/protocol/types.ts";
+import { plainText } from "../src/ui/theme.ts";
 
 function questionnaire(): QuestionnaireSpecification {
   return {
@@ -48,6 +51,44 @@ function overlay(
     onDecline,
     onInterrupt,
   });
+}
+
+function singleQuestionnaire(
+  question: QuestionnaireSpecification["questions"][number] = questionnaire().questions[0]!,
+): QuestionnaireSpecification {
+  return { questions: [question] };
+}
+
+function singleOverlay(
+  specification: QuestionnaireSpecification,
+  onSubmit: (response: QuestionnaireResponse) => void,
+): QuestionnaireOverlay {
+  return new QuestionnaireOverlay({
+    interactionId: "interaction-single",
+    questionnaire: specification,
+    onSubmit,
+    onDecline: () => {},
+    onInterrupt: () => {},
+  });
+}
+
+function focusCustom(view: QuestionnaireOverlay, optionCount: number): void {
+  for (let index = 0; index < optionCount; index += 1) {
+    view.handleInput("\u001b[B");
+  }
+}
+
+function submitSingle(view: QuestionnaireOverlay): void {
+  view.handleInput("\t");
+  view.handleInput("\r");
+}
+
+function assertBounded(lines: string[], width: number, height: number): void {
+  assert.ok(lines.length <= height, `expected at most ${height} lines, got ${lines.length}`);
+  assert.ok(
+    lines.every((line) => visibleWidth(line) <= width),
+    "every rendered line must fit the requested display width",
+  );
 }
 
 describe("QuestionnaireOverlay", () => {
@@ -173,5 +214,168 @@ describe("QuestionnaireOverlay", () => {
     );
     second.handleInput("\u0003");
     assert.equal(cancelled, 1);
+  });
+
+  it("preserves complete and chunked bracketed paste through tab switches", () => {
+    let submitted: QuestionnaireResponse | undefined;
+    const view = overlay((response) => {
+      submitted = response;
+    });
+
+    focusCustom(view, 2);
+    view.handleInput("\u001b[200~pasted text\u001b[201~");
+    view.handleInput("\t");
+    view.handleInput("\u001b[Z");
+    view.handleInput("\t");
+    view.handleInput("\t");
+    view.handleInput("\r");
+
+    assert.deepEqual(submitted, {
+      type: "submitted",
+      value: {
+        answers: [{
+          question_index: 0,
+          answer: { type: "custom", value: { answer: "pasted text" } },
+        }],
+      },
+    });
+
+    let chunkedSubmitted: QuestionnaireResponse | undefined;
+    const chunked = overlay((response) => {
+      chunkedSubmitted = response;
+    });
+    focusCustom(chunked, 2);
+    chunked.handleInput("\u001b[200~pasted ");
+    chunked.handleInput("text");
+    chunked.handleInput("\u001b[201~");
+    chunked.handleInput("\t");
+    chunked.handleInput("\t");
+    chunked.handleInput("\r");
+    assert.deepEqual(chunkedSubmitted, submitted);
+  });
+
+  it("accepts ordinary multi-character, CJK, emoji, and Kitty printable input", () => {
+    let submitted: QuestionnaireResponse | undefined;
+    const view = singleOverlay(singleQuestionnaire(), (response) => {
+      submitted = response;
+    });
+
+    focusCustom(view, 2);
+    view.handleInput("你好😀");
+    view.handleInput("\u001b[D");
+    view.handleInput("🌟");
+    view.handleInput("\u001b[97u");
+    submitSingle(view);
+
+    assert.deepEqual(submitted, {
+      type: "submitted",
+      value: {
+        answers: [{
+          question_index: 0,
+          answer: { type: "custom", value: { answer: "你好🌟a😀" } },
+        }],
+      },
+    });
+  });
+
+  it("bounds pasted custom answers by Unicode scalar count", () => {
+    let exact: QuestionnaireResponse | undefined;
+    const exactView = singleOverlay(singleQuestionnaire(), (response) => {
+      exact = response;
+    });
+    focusCustom(exactView, 2);
+    const exactText = "😀".repeat(4096);
+    exactView.handleInput(`\u001b[200~${exactText}\u001b[201~`);
+    submitSingle(exactView);
+
+    assert.equal(exact?.type, "submitted");
+    if (exact?.type === "submitted") {
+      const answer = exact.value.answers[0]?.answer;
+      assert.equal(answer?.type, "custom");
+      if (answer?.type === "custom") assert.equal([...answer.value.answer].length, 4096);
+    }
+
+    let overflow: QuestionnaireResponse | undefined;
+    const overflowView = singleOverlay(singleQuestionnaire(), (response) => {
+      overflow = response;
+    });
+    focusCustom(overflowView, 2);
+    overflowView.handleInput(`\u001b[200~${"x".repeat(4097)}\u001b[201~`);
+    submitSingle(overflowView);
+
+    assert.equal(overflow?.type, "submitted");
+    if (overflow?.type === "submitted") {
+      const answer = overflow.value.answers[0]?.answer;
+      assert.equal(answer?.type, "custom");
+      if (answer?.type === "custom") {
+        assert.equal(answer.value.answer, "x".repeat(4096));
+        assert.notDeepEqual(overflow.value.answers, []);
+      }
+    }
+  });
+
+  it("keeps maximum questionnaire content bounded and keeps the focused row visible", () => {
+    const labels = ["A", "B", "C", "D"].map((prefix) => `${prefix}${"l".repeat(59)}`);
+    const specification = singleQuestionnaire({
+      question: "q".repeat(4096),
+      header: "Maximum",
+      options: labels.map((label, index) => ({
+        label,
+        description: `${index}${"d".repeat(1023)}`,
+        ...(index === 0 ? { preview: "preview-000 " + "p".repeat(8192) } : {}),
+      })),
+      multi_select: false,
+    });
+    const view = singleOverlay(specification, () => {});
+    view.setViewportHeight(16);
+
+    for (let row = 0; row <= labels.length; row += 1) {
+      const lines = view.render(56);
+      assertBounded(lines, 56, 16);
+      const focusedLines = lines.filter((line) => plainText(line).includes("›"));
+      assert.equal(focusedLines.length, 1, "exactly one focused row is visible");
+      if (row < labels.length) {
+        assert.ok(plainText(focusedLines[0]!).includes(`${labels[row]![0]}lll`));
+      }
+      else assert.match(plainText(focusedLines[0]!), /Type something\./);
+      if (row < labels.length) view.handleInput("\u001b[B");
+    }
+
+    view.handleInput("\t");
+    const review = view.render(56);
+    assertBounded(review, 56, 16);
+    assert.match(plainText(review.join("\n")), /Review \/ submit/);
+    assert.match(plainText(review.join("\n")), /Submit/);
+  });
+
+  it("supports bounded previews in both layouts and exposes later preview lines", () => {
+    const preview = Array.from(
+      { length: 400 },
+      (_, index) => `preview-${String(index).padStart(3, "0")} ${"x".repeat(20)}`,
+    ).join("\n").slice(0, 8192);
+    const specification = singleQuestionnaire({
+      question: "Which preview?",
+      header: "Preview",
+      options: [
+        { label: "First", description: "First option.", preview },
+        { label: "Second", description: "Second option." },
+      ],
+      multi_select: false,
+    });
+    const view = singleOverlay(specification, () => {});
+    view.setViewportHeight(14);
+
+    const narrow = view.render(56);
+    assertBounded(narrow, 56, 14);
+    assert.match(plainText(narrow.join("\n")), /Preview/);
+    const wide = view.render(120);
+    assertBounded(wide, 120, 14);
+    assert.match(plainText(wide.join("\n")), /preview-000/);
+
+    view.handleInput("\u001b[6~");
+    const later = view.render(120);
+    assertBounded(later, 120, 14);
+    assert.notEqual(plainText(later.join("\n")), plainText(wide.join("\n")));
+    assert.match(plainText(later.join("\n")), /preview-01[0-9]/);
   });
 });

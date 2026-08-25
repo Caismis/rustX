@@ -21,7 +21,7 @@ use rustx::model::session::{SessionModelConfig, SessionModelState, SummaryModelV
 use rustx::model::{ModelAdapter, ModelEvent, ModelFinishReason, ModelProtocol};
 use rustx::runtime_client::types::{RequestId, RuntimeClientRequest, RuntimeClientResult};
 use rustx::runtime_client::{
-    EventDelivery, EventSubscription, RUNTIME_CLIENT_PROTOCOL_VERSION_V1, RuntimeClientCursor,
+    EventDelivery, EventSubscription, RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientCursor,
     RuntimeClientError, RuntimeClientEvent, RuntimeClientHost, RuntimeClientProtocolEvent,
 };
 use support::fake::{FakeModel, FakeStep};
@@ -158,7 +158,7 @@ fn text(value: &str) -> Vec<UserContentBlock> {
 async fn the_initialize_snapshot_carries_the_redacted_session_model() {
     let (_model, host) = runtime(vec![one_turn_stop()]).await;
     let (_attachment, result) = host
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     let RuntimeClientResult::Initialized { snapshot, .. } = result else {
         panic!("initialize returns the initial snapshot");
@@ -223,7 +223,7 @@ async fn the_initialize_snapshot_carries_the_redacted_session_model() {
 async fn the_catalog_query_exposes_safe_selectable_models() {
     let (_model, host) = runtime(vec![one_turn_stop()]).await;
     let (attachment, _) = host
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     let response = attachment.handle_request(RuntimeClientRequest::ModelCatalogGet {
         id: RequestId::new(1),
@@ -298,7 +298,7 @@ async fn the_catalog_query_exposes_safe_selectable_models() {
 async fn a_valid_update_publishes_exactly_one_coherent_change() {
     let (_model, host) = runtime(vec![one_turn_stop()]).await;
     let (attachment, _) = host
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     let subscription = attachment
         .subscribe_events(RuntimeClientCursor::new(0))
@@ -365,7 +365,7 @@ async fn a_valid_update_publishes_exactly_one_coherent_change() {
 async fn model_get_returns_the_authoritative_session_state() {
     let (_model, host) = runtime(vec![one_turn_stop()]).await;
     let (attachment, _) = host
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
 
     let read = |id: u64| {
@@ -409,7 +409,7 @@ async fn model_get_returns_the_authoritative_session_state() {
 async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_policy() {
     let (_model, host) = runtime(vec![one_turn_stop()]).await;
     let (attachment, _) = host
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
 
     let summary_policy = rustx::model::session::SummaryModelPolicy::Explicit {
@@ -472,7 +472,7 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
 async fn runtime_client_reports_always_on_reasoning_without_a_profile() {
     let (_model, host) = runtime(vec![one_turn_stop()]).await;
     let (attachment, _) = host
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
         id: RequestId::new(1),
@@ -506,7 +506,7 @@ async fn runtime_client_reports_always_on_reasoning_without_a_profile() {
 async fn a_reconnecting_client_recovers_model_state_from_the_snapshot() {
     let (_model, host) = runtime(vec![one_turn_stop()]).await;
     let (first, _) = host
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     let desired = SessionModelConfig {
         max_output_tokens: Some(777),
@@ -525,7 +525,7 @@ async fn a_reconnecting_client_recovers_model_state_from_the_snapshot() {
     drop(first);
 
     let (_second, result) = host
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("re-attach");
     let RuntimeClientResult::Initialized { snapshot, .. } = result else {
         panic!("initialize returns the snapshot");
@@ -541,7 +541,7 @@ async fn a_reconnecting_client_recovers_model_state_from_the_snapshot() {
 async fn the_attempt_view_reports_the_model_it_was_admitted_with() {
     let (_model, host) = runtime(vec![one_turn_stop()]).await;
     let (attachment, _) = host
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     let subscription = attachment
         .subscribe_events(RuntimeClientCursor::new(0))
@@ -615,7 +615,7 @@ async fn attempt_started_freezes_the_model_across_a_mid_attempt_switch() {
     ])
     .await;
     let (attachment, _) = host
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     let subscription = attachment
         .subscribe_events(RuntimeClientCursor::new(0))

@@ -150,6 +150,9 @@ questionnaire interaction through the runtime-owned `InteractionCoordinator`.
 The client always offers bounded custom text; the model does not send
 `allow_free_text` or author an `Other` option. A decline is a successful tool
 result, while attempt cancellation and provider unavailability remain distinct.
+The local process speaks Runtime Client Protocol v2 only, and its SQLite
+conversation store accepts schema version 10 only; Protocol v1 and durable
+schema v9 (and older development schemas) are rejected rather than migrated.
 
 The harmless `RUSTX_EXAMPLE_MODE` entry demonstrates the authorized runtime
 environment. Keep provider credentials in `models.json`'s `apiKey` reference,
@@ -303,8 +306,12 @@ configuration guide.
 
 ## Run it from the repository root
 
-The Rust binary speaks Runtime Client JSONL on stdout, so a human normally
-uses it through `rustx-tui`.
+The Rust binary speaks Runtime Client Protocol v2 JSONL on stdout, so a human
+normally uses it through `rustx-tui`. The reference TUI reconstructs pending
+questionnaires from the authoritative snapshot, delegates custom-answer
+editing (including bracketed paste and Unicode cursor behavior) to Pi-TUI's
+native input component, and keeps the questionnaire's width- and
+height-bounded viewport navigable on narrow and wide terminals.
 
 ```sh
 export RUSTX_EXAMPLE_API_KEY='replace-me'

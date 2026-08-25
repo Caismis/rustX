@@ -1,4 +1,4 @@
-//! Transport-independent Runtime Client Protocol v1 conformance fixtures
+//! Transport-independent Runtime Client Protocol v2 conformance fixtures
 //! (Issue #38).
 //!
 //! # Why this layer exists
@@ -220,7 +220,7 @@ impl StdioJsonlDriver {
 
     /// Writes one request record: JSON payload plus exactly one LF.
     async fn send(&mut self, request: &RuntimeClientRequest) {
-        let mut record = serde_json::to_vec(request).expect("a v1 request serializes");
+        let mut record = serde_json::to_vec(request).expect("a v2 request serializes");
         record.push(b'\n');
         let stream = self.to_session.as_mut().expect("the session is open");
         stream.write_all(&record).await.expect("write the record");
@@ -429,7 +429,7 @@ pub async fn initialize(
     let response = driver
         .request(RuntimeClientRequest::Initialize {
             id: RequestId::new(id),
-            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
         })
         .await;
     assert_eq!(response.id, RequestId::new(id));
@@ -568,7 +568,7 @@ pub async fn initialize_admits_the_attachment(factory: &dyn DriverFactory) {
     let response = driver
         .request(RuntimeClientRequest::Initialize {
             id: RequestId::new(2),
-            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
         })
         .await;
     assert_eq!(response.id, RequestId::new(2));
@@ -613,7 +613,7 @@ pub async fn unsupported_protocol_version_is_typed(factory: &dyn DriverFactory) 
     assert_eq!(
         error(response),
         RuntimeClientError::UnsupportedProtocolVersion {
-            supported: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+            supported: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
             requested: 9,
         }
     );
@@ -665,7 +665,7 @@ pub async fn a_second_attachment_is_rejected(factory: &dyn DriverFactory) {
     let response = first
         .request(RuntimeClientRequest::Initialize {
             id: RequestId::new(1),
-            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
         })
         .await;
     let RuntimeClientResult::Initialized {
@@ -679,7 +679,7 @@ pub async fn a_second_attachment_is_rejected(factory: &dyn DriverFactory) {
     let response = second
         .request(RuntimeClientRequest::Initialize {
             id: RequestId::new(1),
-            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
         })
         .await;
     assert_eq!(
@@ -729,7 +729,7 @@ pub async fn detach_then_reinitialize(factory: &dyn DriverFactory) {
     let response = driver
         .request(RuntimeClientRequest::Initialize {
             id: RequestId::new(6),
-            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
         })
         .await;
     let RuntimeClientResult::Initialized {
