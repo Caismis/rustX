@@ -151,6 +151,11 @@ pub(crate) enum ConversationObservation {
     /// authoritative per-source availability state at that commit (Issue
     /// #81). The availability may change without a revision swap (a
     /// diagnostic-only change); the snapshot never changes without one.
+    ///
+    /// A runtime resource reload does **not** publish this variant: it
+    /// commits a capability generation and a resource generation together
+    /// and publishes both as one [`ConversationObservation::Resources`], so
+    /// no consumer can fold half a generation.
     Capability {
         /// The activated immutable capability snapshot.
         snapshot: Arc<CapabilitySnapshot>,
@@ -158,16 +163,31 @@ pub(crate) enum ConversationObservation {
         /// capability source.
         availability: CapabilityAvailability,
     },
-    /// One published immutable runtime resource generation.
+    /// One published immutable runtime resource generation, **including the
+    /// capability generation it was built against**.
     ///
-    /// A resource reload publishes this after the new generation becomes
-    /// the one future attempts acquire. It is deliberately separate from
-    /// `Capability`: a reload that changes only project instruction files
-    /// advances the resource revision while the capability revision — and
-    /// therefore the `Capability` observation's view — stays identical.
+    /// This is the complete result of one resource reload and the only
+    /// observation a reload emits. The capability half is deliberately not
+    /// published separately: the two writes are ordered inside the runtime,
+    /// but the consumer folding this queue runs on its own task under its
+    /// own lock, so two observations would be two folds and a subscriber
+    /// could observe the new capability beside the retired resource
+    /// generation — a pairing that never existed. One observation makes the
+    /// generation atomic for every consumer by construction rather than by
+    /// timing.
+    ///
+    /// Both halves are still carried explicitly, because the resource
+    /// revision and the capability revision move independently: a reload
+    /// that only rewrites project instruction files advances the resource
+    /// revision and leaves the capability revision exactly where it was.
     Resources {
-        /// The published immutable resource generation.
+        /// The published immutable resource generation. Its
+        /// `capability()` is the capability snapshot committed by the same
+        /// reload.
         snapshot: Arc<crate::runtime::resources::RuntimeResourceSnapshot>,
+        /// The authoritative availability of every evaluated optional
+        /// capability source at that same commit.
+        availability: CapabilityAvailability,
     },
 
     /// The coordinator admitted an attempt (before the loop started).
@@ -328,6 +348,26 @@ impl PendingObservations {
             .expect("pending observation queue lock poisoned")
             .clear();
         self.notify.notify_one();
+    }
+
+    /// Test-only: removes and returns the single oldest queued
+    /// observation, so a test can stop between two enqueues and inspect the
+    /// consumer's state at exactly that cut.
+    #[cfg(test)]
+    pub(crate) fn pop_one(&self) -> Option<ConversationObservation> {
+        self.queue
+            .lock()
+            .expect("pending observation queue lock poisoned")
+            .pop_front()
+    }
+
+    /// Test-only: the number of observations waiting to be folded.
+    #[cfg(test)]
+    pub(crate) fn queued(&self) -> usize {
+        self.queue
+            .lock()
+            .expect("pending observation queue lock poisoned")
+            .len()
     }
 
     /// Installs the test-only worker-exit signal.

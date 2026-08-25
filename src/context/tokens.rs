@@ -149,6 +149,45 @@ pub fn non_conversation_fingerprint(
     hash
 }
 
+/// The deterministic identity of the non-conversation, non-prompt part of
+/// one provider request: its resolved invocation configuration and the
+/// opaque provider continuation state it carries.
+///
+/// A provider-reported input measurement is a measurement of *that* request,
+/// and both of these change what the provider counted without changing a
+/// single canonical message. A continuation is the sharp case: under a
+/// stored-continuation protocol the provider bills the whole referenced
+/// prior generation as input, so a request whose visible message list is a
+/// prefix of another can still have been measured against a completely
+/// different body of context. Reusing the earlier number as a prefix anchor
+/// would then under-count by exactly the amount that matters.
+///
+/// Binding every measurement to this identity is what keeps the anchor
+/// honest: when the identity changes the measurement is dropped, never
+/// scaled or patched with a guessed delta.
+///
+/// # Panics
+///
+/// Panics only if the runtime-owned invocation configuration or
+/// continuation state fails to serialize, which is unreachable for these
+/// types.
+#[must_use]
+pub fn request_identity_fingerprint(
+    invocation: &crate::model::ModelInvocationConfig,
+    continuation: Option<&crate::runtime::continuation::ProviderContinuationState>,
+) -> u64 {
+    let invocation =
+        serde_json::to_vec(invocation).expect("the resolved invocation configuration serializes");
+    let continuation =
+        serde_json::to_vec(&continuation).expect("the provider continuation state serializes");
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in invocation.into_iter().chain(continuation) {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
 /// The deterministic input-token estimator boundary.
 ///
 /// The engine never hard-codes a per-model token catalog; estimation is a

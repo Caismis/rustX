@@ -815,7 +815,39 @@ impl LocalConversationCore {
         self.into_interactive_with_control(Some(control))
     }
 
+    /// Binds the native Session supervisor as the Runtime Client control
+    /// seam and leaves the runtime **inert**, for a caller that must commit
+    /// durable state between binding and activation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LocalRuntimeError`] when the Runtime Client host cannot be
+    /// bound over the inactive runtime.
+    pub(crate) fn into_bound_with_session_control(
+        self,
+        control: Arc<dyn RuntimeClientSessionControl>,
+    ) -> Result<LocalConversationRuntime, LocalRuntimeError> {
+        self.into_bound_with_control(Some(control))
+    }
+
     fn into_interactive_with_control(
+        self,
+        control: Option<Arc<dyn RuntimeClientSessionControl>>,
+    ) -> Result<LocalConversationRuntime, LocalRuntimeError> {
+        let runtime = self.into_bound_with_control(control)?;
+        runtime.activate();
+        Ok(runtime)
+    }
+
+    /// Binds the Runtime Client host over the composed runtime and stops
+    /// there: the returned runtime is **inert**.
+    ///
+    /// Binding and activation are separated so a caller with a durable
+    /// commit of its own — the local product composition and its startup
+    /// catalog transaction — can place that commit between them. Every
+    /// fallible composition step is then on the pre-commit side, and the
+    /// activation that follows the commit cannot fail.
+    fn into_bound_with_control(
         self,
         control: Option<Arc<dyn RuntimeClientSessionControl>>,
     ) -> Result<LocalConversationRuntime, LocalRuntimeError> {
@@ -837,11 +869,6 @@ impl LocalConversationCore {
                 replay_limit: None,
             })?,
         };
-
-        // 15. Activation: the one shared Inactive -> Running lifecycle
-        // transition. The client host-binding decision is now frozen, the
-        // admission worker starts, and semantic execution may begin.
-        self.runtime.activate();
 
         Ok(LocalConversationRuntime { core: self, host })
     }
@@ -903,8 +930,7 @@ impl LocalSessionProduct {
         let state = SessionPersistentState {
             model: runtime_config.model.clone(),
         };
-        let mut catalog = if let Some(catalog) = SessionCatalog::open_existing(&paths.runtime_root)?
-        {
+        let catalog = if let Some(catalog) = SessionCatalog::open_existing(&paths.runtime_root)? {
             catalog
         } else {
             SessionCatalog::create(&paths.runtime_root, &state)?
@@ -917,40 +943,49 @@ impl LocalSessionProduct {
         // rows.
         //
         // A named Session takes the catalog transition `/resume` takes,
-        // moved ahead of composition: the selection is committed first, so
-        // the destination is authoritative durable state rather than a
-        // command-line argument this process would have to keep re-reading.
+        // moved ahead of composition. It is *planned* here and committed at
+        // the end: composing the destination is what can still fail — a
+        // Session whose recorded model no longer exists in `models.jsonc`,
+        // a database that will not open — and a launch that fails must not
+        // leave the active selection somewhere the user never asked for.
         // A replacement spawn that continues the active selection therefore
         // lands on it without naming it, and an unknown identity fails the
         // launch instead of quietly opening something else.
-        match &paths.startup_session {
+        //
+        // `prepare_session` still seeds its destination database here. That
+        // is not a published fact: a seeded conversation the catalog does
+        // not name is unreachable — neither selectable nor resumable — so
+        // an abandoned plan leaves an inert orphan and nothing else.
+        let planned = match &paths.startup_session {
             StartupSession::Empty => {
-                if !catalog.active_is_unused()? {
+                if catalog.active_is_unused()? {
+                    catalog.plan_unchanged()
+                } else {
                     let prepared = catalog.prepare_session(&state, &[])?;
-                    catalog.publish_session(&prepared, SessionNodeOrigin::New)?;
+                    catalog.plan_session(&prepared, SessionNodeOrigin::New)?
                 }
             }
-            StartupSession::ContinueActive => {}
+            StartupSession::ContinueActive => catalog.plan_unchanged(),
             StartupSession::Select { session, node } => {
-                catalog.select(session, node.as_ref())?;
+                catalog.plan_select(session, node.as_ref())?
             }
-        }
+        };
         // `--name` names the Session this launch bound, whichever one that
         // is. It is the startup form of `/name` and nothing more: naming is
         // metadata, so it can only follow a decision about where the launch
         // starts and can never be part of making it. A launch that names a
         // Session it also asked to continue therefore renames that Session,
-        // exactly as typing `/name` in it would.
-        if let Some(name) = &paths.session_name {
-            let session_id = catalog
-                .active_snapshot()
-                .map_err(LocalRuntimeError::SessionCatalog)?
-                .id;
-            catalog
-                .rename(&session_id, name)
-                .map_err(LocalRuntimeError::SessionCatalog)?;
-        }
-        let (session_id, node, session_state) = catalog
+        // exactly as typing `/name` in it would — and, like the selection
+        // itself, only if the launch actually starts.
+        let planned = match &paths.session_name {
+            Some(name) => planned
+                .with_name(name)
+                .map_err(LocalRuntimeError::SessionCatalog)?,
+            None => planned,
+        };
+        // The destination is read from the plan, not from the catalog on
+        // disk: this is where the launch is about to compose.
+        let (session_id, node, session_state) = planned
             .active_lineage()
             .map_err(LocalRuntimeError::SessionCatalog)?;
         let database_path = catalog.database_path(&session_id, &node.conversation_id);
@@ -963,10 +998,10 @@ impl LocalSessionProduct {
             })?
             .to_path_buf();
 
-        let supervisor = Arc::new(LocalSessionSupervisor::new(
-            catalog,
-            runtime_config.model.clone(),
-        ));
+        // Everything fallible happens against the planned destination and
+        // before the catalog changes: composition, recovery, and the
+        // Runtime Client host binding. The runtime is left inert.
+        let default_model = runtime_config.model.clone();
         let core = LocalConversationCore::compose_from_config(
             paths,
             dependencies,
@@ -977,11 +1012,26 @@ impl LocalSessionProduct {
             artifacts_root,
         )
         .await?;
-        let runtime = core.into_interactive_with_session_control(supervisor.clone())?;
+        let supervisor = Arc::new(LocalSessionSupervisor::new(catalog, default_model));
+        let runtime = core.into_bound_with_session_control(supervisor.clone())?;
+
+        // The one catalog transaction of startup. Before this line the
+        // catalog is byte-for-byte what the launch found; after it, the
+        // published selection and the composed runtime describe the same
+        // lineage.
+        supervisor
+            .commit_startup(planned)
+            .await
+            .map_err(LocalRuntimeError::SessionCatalog)?;
+
+        // Past the commit, nothing may fail on its own terms: the lineage
+        // check below compares the committed selection with the runtime
+        // composed from that same plan, and activation is infallible.
         supervisor
             .install_runtime(runtime.runtime().clone())
             .await
             .map_err(LocalRuntimeError::SessionSupervisor)?;
+        runtime.activate();
         Ok(Self {
             runtime,
             supervisor,
@@ -1045,6 +1095,16 @@ impl LocalConversationRuntime {
         LocalConversationCore::compose(paths, dependencies)
             .await?
             .into_interactive()
+    }
+
+    /// Performs the one shared Inactive -> Running lifecycle transition.
+    ///
+    /// The client host-binding decision is frozen by the time this runs,
+    /// the admission worker starts, and semantic execution may begin. This
+    /// is infallible by construction, which is what lets a caller place its
+    /// own durable commit immediately before it.
+    pub(crate) fn activate(&self) {
+        self.core.runtime.activate();
     }
 
     /// The one conversation runtime coordinator of this process.

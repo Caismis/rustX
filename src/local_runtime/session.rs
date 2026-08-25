@@ -286,6 +286,84 @@ struct PersistedSession {
     state: SessionPersistentState,
 }
 
+/// One complete catalog document a caller intends to commit, held before
+/// anything durable has changed.
+///
+/// Startup is the reason this type exists. A launch decides where it begins
+/// — continue the active Session, start an empty one, bind a named one —
+/// and then has to compose a runtime for that destination, which is the
+/// step that can still fail: a Session whose recorded model no longer
+/// exists in `models.jsonc`, a database that will not open, a capability
+/// composition that cannot be built. Publishing the decision first and
+/// composing afterwards leaves a process that failed to start having
+/// silently moved the active selection, so the next launch begins somewhere
+/// the user never asked for.
+///
+/// Holding the decision here inverts that: every fallible step runs against
+/// the planned destination, and the catalog changes once, at the end, in a
+/// single transaction. A failure before that transaction leaves the catalog
+/// byte-for-byte as it was.
+#[derive(Debug, Clone)]
+pub(crate) struct PlannedCatalog {
+    /// The complete document to persist.
+    document: CatalogDocument,
+    /// Whether the plan differs from the catalog it was planned against.
+    /// An unchanged plan commits nothing.
+    changed: bool,
+}
+
+impl PlannedCatalog {
+    /// The Session node this plan makes active, and its Session-local state.
+    ///
+    /// Read from the planned document, not from the catalog on disk: this is
+    /// the destination the caller must compose for.
+    pub(crate) fn active_lineage(
+        &self,
+    ) -> Result<(SessionId, SessionNode, SessionPersistentState), SessionError> {
+        active_lineage_of(&self.document)
+    }
+
+    /// Names the Session this plan makes active.
+    ///
+    /// Naming is metadata and can only follow the decision about where the
+    /// launch starts, so it applies to the plan rather than to the catalog:
+    /// a launch that fails to compose renames nothing.
+    pub(crate) fn with_name(mut self, name: &str) -> Result<Self, SessionError> {
+        let name = normalize_name(name)?;
+        let active = self.document.active_session.clone();
+        let session = self
+            .document
+            .sessions
+            .get_mut(&active)
+            .ok_or(SessionError::UnknownSession { session_id: active })?;
+        session.name = Some(name);
+        session.updated_at = Utc::now();
+        self.changed = true;
+        Ok(self)
+    }
+}
+
+/// The active lineage of one catalog document.
+fn active_lineage_of(
+    document: &CatalogDocument,
+) -> Result<(SessionId, SessionNode, SessionPersistentState), SessionError> {
+    let session = document
+        .sessions
+        .get(&document.active_session)
+        .ok_or_else(|| SessionError::UnknownSession {
+            session_id: document.active_session.clone(),
+        })?;
+    let node =
+        session
+            .nodes
+            .get(&session.active_node)
+            .ok_or_else(|| SessionError::UnknownNode {
+                session_id: session.id.clone(),
+                node_id: session.active_node.clone(),
+            })?;
+    Ok((session.id.clone(), node.clone(), session.state.clone()))
+}
+
 /// The native durable `SessionCatalog` and graph authority.
 #[derive(Debug, Clone)]
 pub struct SessionCatalog {
@@ -600,22 +678,7 @@ impl SessionCatalog {
     pub(crate) fn active_lineage(
         &self,
     ) -> Result<(SessionId, SessionNode, SessionPersistentState), SessionError> {
-        let session = self
-            .document
-            .sessions
-            .get(&self.document.active_session)
-            .ok_or_else(|| SessionError::UnknownSession {
-                session_id: self.document.active_session.clone(),
-            })?;
-        let node =
-            session
-                .nodes
-                .get(&session.active_node)
-                .ok_or_else(|| SessionError::UnknownNode {
-                    session_id: session.id.clone(),
-                    node_id: session.active_node.clone(),
-                })?;
-        Ok((session.id.clone(), node.clone(), session.state.clone()))
+        active_lineage_of(&self.document)
     }
 
     /// Returns one named lineage and its Session-local state.
@@ -1024,6 +1087,55 @@ impl SessionCatalog {
             session_ordinal = session_ordinal.saturating_add(1);
             node_ordinal = node_ordinal.saturating_add(1);
         }
+    }
+
+    /// A planned catalog transition that changes nothing.
+    #[must_use]
+    pub(crate) fn plan_unchanged(&self) -> PlannedCatalog {
+        PlannedCatalog {
+            document: self.document.clone(),
+            changed: false,
+        }
+    }
+
+    /// Plans the active selection of an existing Session/node without
+    /// publishing it.
+    ///
+    /// This is [`Self::select`] with the commit removed: the same
+    /// validation, the same resulting document, no durable write.
+    pub(crate) fn plan_select(
+        &self,
+        session_id: &SessionId,
+        node_id: Option<&SessionNodeId>,
+    ) -> Result<PlannedCatalog, SessionError> {
+        Ok(PlannedCatalog {
+            document: self.build_select_document(session_id, node_id)?,
+            changed: true,
+        })
+    }
+
+    /// Plans the publication of a prepared independent Session without
+    /// publishing it.
+    pub(crate) fn plan_session(
+        &self,
+        prepared: &PreparedLineage,
+        origin: SessionNodeOrigin,
+    ) -> Result<PlannedCatalog, SessionError> {
+        Ok(PlannedCatalog {
+            document: self.build_session_document(prepared, origin)?,
+            changed: true,
+        })
+    }
+
+    /// Commits one planned transition as a single catalog transaction.
+    ///
+    /// A plan that changes nothing writes nothing: an unchanged document is
+    /// not rewritten just because a launch looked at it.
+    pub(crate) fn commit_planned(&mut self, planned: PlannedCatalog) -> Result<(), SessionError> {
+        if !planned.changed {
+            return Ok(());
+        }
+        self.commit(planned.document)
     }
 
     fn build_select_document(

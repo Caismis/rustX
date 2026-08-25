@@ -110,6 +110,28 @@ impl LocalSessionSupervisor {
         }
     }
 
+    /// Commits the startup catalog transition this launch planned.
+    ///
+    /// This is the one durable catalog write of composition, and it is
+    /// deliberately the *last* fallible step: the runtime for the planned
+    /// destination is already composed and bound by the time it runs, so a
+    /// composition failure can never leave a launch that did not start
+    /// having moved the active selection, published an empty Session, or
+    /// renamed one. Everything after this commit — installing the runtime,
+    /// activating it — is structurally infallible for a freshly composed
+    /// supervisor.
+    ///
+    /// # Errors
+    ///
+    /// Returns the catalog commit failure, including the distinct
+    /// committed-but-durability-uncertain outcome, unchanged.
+    pub(crate) async fn commit_startup(
+        &self,
+        planned: super::session::PlannedCatalog,
+    ) -> Result<(), SessionError> {
+        self.state.lock().await.catalog.commit_planned(planned)
+    }
+
     /// Arms a deterministic pre-visibility catalog fault for unit tests.
     #[cfg(test)]
     pub(crate) async fn arm_catalog_write_fault_before_rename(&self) {

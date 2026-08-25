@@ -166,6 +166,7 @@ mod tests {
                         message: "timed out".to_owned(),
                         retry_after_ms: None,
                         provider_code: None,
+                        context_overflow: None,
                     },
                 },
                 "failed",

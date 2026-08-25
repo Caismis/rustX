@@ -387,6 +387,7 @@ async fn cancellation_while_headers_delayed_anthropic() {
                 message: "model invocation cancelled".to_owned(),
                 retry_after_ms: None,
                 provider_code: None,
+                context_overflow: None,
             },
         }],
         "lifecycle is Started then Failed(Cancelled), nothing after"
@@ -439,6 +440,7 @@ async fn cancellation_while_headers_delayed_openai_chat() {
                 message: "model invocation cancelled".to_owned(),
                 retry_after_ms: None,
                 provider_code: None,
+                context_overflow: None,
             },
         }],
         "lifecycle is Started then Failed(Cancelled), nothing after"
@@ -491,6 +493,7 @@ async fn cancellation_while_headers_delayed_openai_responses() {
                 message: "model invocation cancelled".to_owned(),
                 retry_after_ms: None,
                 provider_code: None,
+                context_overflow: None,
             },
         }],
         "lifecycle is Started then Failed(Cancelled), nothing after"

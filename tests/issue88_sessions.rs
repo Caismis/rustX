@@ -702,6 +702,158 @@ fn use_session(
         .expect("append canonical history");
 }
 
+/// A launch that cannot compose its destination changes no durable catalog
+/// state at all.
+///
+/// The failure is the realistic one: a persisted Session records a
+/// Session-local model, and that model is later removed from
+/// `models.jsonc`. Selecting that Session is metadata-valid — the catalog
+/// knows the Session and the node — and only composition discovers the
+/// model is gone. Publishing the selection before composing would leave a
+/// process that never started having moved the active selection, so the
+/// *next* launch would open a Session the user never chose and would fail
+/// the same way again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_launch_leaves_the_catalog_and_the_active_selection_untouched() {
+    let root = tempfile::tempdir().expect("temp root");
+    let paths = paths(root.path());
+    let dependencies = dependencies();
+    let runtime_root = root.path().join("runtime");
+    let catalog_path = runtime_root.join("sessions").join("catalog.json");
+
+    // A used Session, so a later launch treats it as history.
+    let first = LocalSessionProduct::compose(&paths, &dependencies)
+        .await
+        .expect("first launch");
+    let doomed_conversation = first.runtime().conversation_id().clone();
+    drop(first);
+    let doomed_session = active_session_id(&runtime_root);
+    use_session(
+        &runtime_root,
+        &doomed_session,
+        &doomed_conversation,
+        "issue88-doomed-user",
+    );
+
+    // A second Session becomes the active one; the first is history.
+    let second = LocalSessionProduct::compose(&paths, &dependencies)
+        .await
+        .expect("second launch");
+    drop(second);
+    let active_before = active_session_id(&runtime_root);
+    assert_ne!(active_before, doomed_session);
+
+    // The history Session records a model that `models.jsonc` no longer
+    // offers. Nothing about the catalog is invalid; only composition can
+    // discover this.
+    let mut document: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&catalog_path).expect("read catalog"))
+            .expect("catalog json");
+    document["sessions"][doomed_session.as_str()]["state"]["model"]["model"] =
+        serde_json::Value::String("local/retired-model".to_owned());
+    std::fs::write(
+        &catalog_path,
+        serde_json::to_vec_pretty(&document).expect("encode catalog"),
+    )
+    .expect("write catalog");
+    let catalog_before = std::fs::read(&catalog_path).expect("read catalog");
+
+    // Selecting it, and naming it in the same launch, must both be undone
+    // by the composition failure — because neither was ever done.
+    let doomed = LocalRuntimePaths {
+        startup_session: StartupSession::Select {
+            session: doomed_session.clone(),
+            node: None,
+        },
+        session_name: Some("a name this launch never earned".to_owned()),
+        ..paths.clone()
+    };
+    let _failure = LocalSessionProduct::compose(&doomed, &dependencies)
+        .await
+        .expect_err("a Session whose model no longer exists cannot be composed");
+
+    assert_eq!(
+        std::fs::read(&catalog_path).expect("read catalog"),
+        catalog_before,
+        "a failed launch rewrote the catalog"
+    );
+    assert_eq!(
+        active_session_id(&runtime_root),
+        active_before,
+        "a failed launch moved the active selection"
+    );
+    assert_eq!(
+        SessionCatalog::open_existing(&runtime_root)
+            .expect("open catalog")
+            .expect("catalog exists")
+            .snapshot(&doomed_session)
+            .expect("the history Session is still there")
+            .name,
+        None,
+        "a failed launch named a Session it never bound"
+    );
+
+    // The launch the user can still make is unaffected: the catalog is
+    // exactly what it was, so continuing works.
+    let recovered = LocalSessionProduct::compose(&continuing(&paths), &dependencies)
+        .await
+        .expect("the untouched active selection still composes");
+    assert_eq!(active_session_id(&runtime_root), active_before);
+    drop(recovered);
+}
+
+/// A launch that begins on a fresh empty Session and then fails to compose
+/// publishes no Session at all: the seeded destination database is named by
+/// nothing, so `/resume` never grows a row for a launch that did not start.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_empty_launch_publishes_no_session() {
+    let root = tempfile::tempdir().expect("temp root");
+    let paths = paths(root.path());
+    let dependencies = dependencies();
+    let runtime_root = root.path().join("runtime");
+
+    let first = LocalSessionProduct::compose(&paths, &dependencies)
+        .await
+        .expect("first launch");
+    let used_conversation = first.runtime().conversation_id().clone();
+    drop(first);
+    let used_session = active_session_id(&runtime_root);
+    use_session(
+        &runtime_root,
+        &used_session,
+        &used_conversation,
+        "issue88-empty-user",
+    );
+    let sessions_before = session_ids(&runtime_root);
+    let catalog_before =
+        std::fs::read(runtime_root.join("sessions").join("catalog.json")).expect("read catalog");
+
+    // The active Session has history, so this launch must publish a new
+    // empty one. It plans that publication, seeds its destination database,
+    // and then fails to compose: the Workspace it was pointed at is a
+    // regular file, which only the conversation tool runtime discovers.
+    let broken_workspace = root.path().join("workspace-is-a-file");
+    std::fs::write(&broken_workspace, b"not a directory").expect("workspace file");
+    let doomed = LocalRuntimePaths {
+        workspace: broken_workspace,
+        ..paths.clone()
+    };
+    let _failure = LocalSessionProduct::compose(&doomed, &dependencies)
+        .await
+        .expect_err("a Workspace that is not a directory cannot be composed");
+
+    assert_eq!(
+        session_ids(&runtime_root),
+        sessions_before,
+        "a failed launch published a Session"
+    );
+    assert_eq!(
+        std::fs::read(runtime_root.join("sessions").join("catalog.json")).expect("read catalog"),
+        catalog_before,
+        "a failed launch rewrote the catalog"
+    );
+}
+
 /// The active node of the catalog's published active Session.
 fn active_node_id(runtime_root: &std::path::Path) -> rustx::local_runtime::SessionNodeId {
     SessionCatalog::open_existing(runtime_root)

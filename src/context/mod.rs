@@ -66,7 +66,7 @@ pub use status::{
 pub use summarizer::{ContextSummarizer, ModelBackedSummarizer, SummaryModelInput, SummaryRequest};
 pub use tokens::{
     ClosureTokenEstimator, DefaultTokenEstimator, ObservedAnchor, ProviderObservedInput,
-    TokenEstimator, bytes_to_tokens, non_conversation_fingerprint,
+    TokenEstimator, bytes_to_tokens, non_conversation_fingerprint, request_identity_fingerprint,
 };
 
 /// The context runtime bundle handed to an `AgentExecution`.
@@ -184,10 +184,16 @@ impl ContextRuntime {
                     ),
                 )
             })?;
+        // Whether one measurement of the primary request is evidence about
+        // the summary request: same provider, same model identity, same
+        // protocol means one tokenizer and one window behind both.
+        let summary_shares_primary_tokenizer = summary.model_ref() == model.primary().model_ref()
+            && summary.protocol() == model.primary().protocol();
         let compaction_budgets = CompactionBudgets::new(
             model.primary().max_output_tokens(),
             summary.max_output_tokens(),
             summary_input_limit,
+            summary_shares_primary_tokenizer,
         );
         Ok(Self {
             engine,

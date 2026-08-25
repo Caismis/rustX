@@ -27,6 +27,7 @@ use crate::model::invocation::{
 };
 use crate::model::session::{SessionModelConfig, SessionModelState};
 use crate::model::types::ModelProtocol;
+use crate::runtime::continuation::{OpenAiResponsesContinuation, ProviderContinuationState};
 
 /// An adapter factory that returns one scripted adapter for every provider
 /// and protocol.
@@ -344,6 +345,21 @@ pub fn scripted_session_model(adapter: Arc<dyn ModelAdapter>) -> SessionModelSta
         "scripted/scripted",
         &ScriptedAdapterFactory::new(adapter),
     )
+}
+
+/// One opaque provider continuation value, for tests that must vary the
+/// continuation without the code under test naming a provider.
+///
+/// The agent kernel treats continuation state as opaque and is forbidden
+/// from naming any provider protocol, so a kernel test that needs a
+/// continuation gets one from here instead of constructing a
+/// provider-specific variant itself. Distinct `tag`s produce distinct
+/// continuations.
+#[must_use]
+pub fn scripted_continuation(tag: &str) -> ProviderContinuationState {
+    ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stored {
+        previous_response_id: tag.to_owned(),
+    })
 }
 
 /// A `requestParams` object literal.

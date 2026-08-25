@@ -134,7 +134,9 @@ pub(crate) fn normalize_http_error(
         message,
         retry_after_ms,
         provider_code,
+        context_overflow: None,
     }
+    .normalized()
 }
 
 fn parse_error_body(body: &[u8]) -> (Option<String>, Option<String>) {
@@ -230,6 +232,7 @@ pub(crate) fn translate_request(
                 .to_owned(),
             retry_after_ms: None,
             provider_code: None,
+            context_overflow: None,
         });
     }
     let tools: Vec<WireTool> = request
@@ -255,6 +258,7 @@ pub(crate) fn translate_request(
         message: format!("failed to serialize the Anthropic request: {error}"),
         retry_after_ms: None,
         provider_code: None,
+        context_overflow: None,
     })?;
     finalize_provider_request(
         value,
@@ -335,6 +339,7 @@ fn translate_messages(
             message: "an Anthropic Messages request requires at least one message".to_owned(),
             retry_after_ms: None,
             provider_code: None,
+            context_overflow: None,
         });
     }
     Ok((system, messages))
@@ -500,6 +505,7 @@ fn invalid_request(message: &str) -> ModelError {
         message: message.to_owned(),
         retry_after_ms: None,
         provider_code: None,
+        context_overflow: None,
     }
 }
 
@@ -509,6 +515,7 @@ fn unsupported(message: &str) -> ModelError {
         message: message.to_owned(),
         retry_after_ms: None,
         provider_code: None,
+        context_overflow: None,
     }
 }
 
@@ -522,8 +529,40 @@ pub(crate) fn resolve_tool(tools: &ValidatedTools, name: &str) -> Result<ToolId,
 
 #[cfg(test)]
 mod tests {
-    use super::map_finish_reason;
+    use super::{map_finish_reason, normalize_http_error};
+    use crate::model::error::ModelErrorKind;
     use crate::model::finish::ModelFinishReason;
+
+    /// The adapter — not the agent loop — recovers the provider's own
+    /// measurement of a rejected oversized request, and it crosses the
+    /// model boundary as typed data.
+    #[test]
+    fn http_context_overflow_carries_the_typed_provider_measurement() {
+        let body = br#"{"error":{"type":"invalid_request_error","message":"prompt is too long: 213462 tokens > 200000 maximum"}}"#;
+        let error = normalize_http_error(
+            reqwest::StatusCode::BAD_REQUEST,
+            &reqwest::header::HeaderMap::new(),
+            body,
+        );
+        assert_eq!(error.kind, ModelErrorKind::ContextWindowExceeded);
+        let report = error.context_overflow.expect("typed overflow report");
+        assert_eq!(report.reported_input_tokens, Some(213_462));
+    }
+
+    /// An error that is not a context overflow carries no overflow report,
+    /// so no consumer can mistake an unrelated diagnostic for a budget.
+    #[test]
+    fn other_http_errors_carry_no_overflow_report() {
+        let body =
+            br#"{"error":{"type":"rate_limit_error","message":"slow down, 429000 requests"}}"#;
+        let error = normalize_http_error(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            &reqwest::header::HeaderMap::new(),
+            body,
+        );
+        assert_eq!(error.kind, ModelErrorKind::RateLimit);
+        assert_eq!(error.context_overflow, None);
+    }
 
     #[test]
     fn finish_reason_mapping_is_exhaustive() {

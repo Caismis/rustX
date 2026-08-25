@@ -32,6 +32,11 @@ pub(crate) fn normalize_error(error: OpenAIError) -> ModelError {
             _ => provider_error(failure),
         };
     }
+    normalize_sdk_error(error)
+}
+
+/// Normalizes one SDK-variant error that carried no HTTP failure of its own.
+fn normalize_sdk_error(error: OpenAIError) -> ModelError {
     match error {
         OpenAIError::Reqwest(reqwest_error) => {
             let message = reqwest_error.to_string();
@@ -45,6 +50,7 @@ pub(crate) fn normalize_error(error: OpenAIError) -> ModelError {
                 message,
                 retry_after_ms: None,
                 provider_code: None,
+                context_overflow: None,
             }
         }
         OpenAIError::ApiError(api_error) => {
@@ -69,25 +75,30 @@ pub(crate) fn normalize_error(error: OpenAIError) -> ModelError {
                 message,
                 retry_after_ms: None,
                 provider_code,
+                context_overflow: None,
             }
+            .normalized()
         }
         OpenAIError::InvalidArgument(message) => ModelError {
             kind: ModelErrorKind::InvalidRequest,
             message,
             retry_after_ms: None,
             provider_code: None,
+            context_overflow: None,
         },
         OpenAIError::StreamError(stream_error) => ModelError {
             kind: ModelErrorKind::ProviderError,
             message: stream_error.to_string(),
             retry_after_ms: None,
             provider_code: None,
+            context_overflow: None,
         },
         OpenAIError::Boxed(boxed) => ModelError {
             kind: ModelErrorKind::ProviderError,
             message: boxed.to_string(),
             retry_after_ms: None,
             provider_code: None,
+            context_overflow: None,
         },
         OpenAIError::JSONDeserialize(_, content) => {
             if content == "[DONE]" {
@@ -96,6 +107,7 @@ pub(crate) fn normalize_error(error: OpenAIError) -> ModelError {
                     message: "stream terminated by [DONE]".to_owned(),
                     retry_after_ms: None,
                     provider_code: None,
+                    context_overflow: None,
                 }
             } else {
                 ModelError {
@@ -103,6 +115,7 @@ pub(crate) fn normalize_error(error: OpenAIError) -> ModelError {
                     message: format!("malformed provider stream payload: {content}"),
                     retry_after_ms: None,
                     provider_code: None,
+                    context_overflow: None,
                 }
             }
         }
@@ -111,6 +124,7 @@ pub(crate) fn normalize_error(error: OpenAIError) -> ModelError {
             message,
             retry_after_ms: None,
             provider_code: None,
+            context_overflow: None,
         },
     }
 }
@@ -125,7 +139,9 @@ fn context_or_invalid(message: &str, provider_code: Option<&str>) -> ModelError 
         message: message.to_owned(),
         retry_after_ms: None,
         provider_code: provider_code.map(str::to_owned),
+        context_overflow: None,
     }
+    .normalized()
 }
 
 fn context_or_invalid_kind(message: &str, provider_code: Option<&str>) -> ModelErrorKind {
@@ -142,7 +158,9 @@ fn context_window(failure: &super::client::HttpFailure) -> ModelError {
         message: failure.message.clone(),
         retry_after_ms: failure.retry_after_ms,
         provider_code: failure.provider_code.clone(),
+        context_overflow: None,
     }
+    .normalized()
 }
 
 fn auth(failure: &super::client::HttpFailure) -> ModelError {
@@ -151,6 +169,7 @@ fn auth(failure: &super::client::HttpFailure) -> ModelError {
         message: failure.message.clone(),
         retry_after_ms: failure.retry_after_ms,
         provider_code: failure.provider_code.clone(),
+        context_overflow: None,
     }
 }
 
@@ -160,6 +179,7 @@ fn invalid_or_unsupported(failure: &super::client::HttpFailure) -> ModelError {
         message: failure.message.clone(),
         retry_after_ms: failure.retry_after_ms,
         provider_code: failure.provider_code.clone(),
+        context_overflow: None,
     }
 }
 
@@ -169,6 +189,7 @@ fn timeout(failure: &super::client::HttpFailure) -> ModelError {
         message: failure.message.clone(),
         retry_after_ms: failure.retry_after_ms,
         provider_code: failure.provider_code.clone(),
+        context_overflow: None,
     }
 }
 
@@ -178,6 +199,7 @@ fn rate_limit(failure: &super::client::HttpFailure) -> ModelError {
         message: failure.message.clone(),
         retry_after_ms: failure.retry_after_ms,
         provider_code: failure.provider_code.clone(),
+        context_overflow: None,
     }
 }
 
@@ -187,6 +209,7 @@ fn provider_error(failure: &super::client::HttpFailure) -> ModelError {
         message: failure.message.clone(),
         retry_after_ms: failure.retry_after_ms,
         provider_code: failure.provider_code.clone(),
+        context_overflow: None,
     }
 }
 
@@ -271,6 +294,7 @@ pub(crate) fn resolve_tool(
             message: format!("model called unknown tool name {name:?}"),
             retry_after_ms: None,
             provider_code: None,
+            context_overflow: None,
         }),
     }
 }

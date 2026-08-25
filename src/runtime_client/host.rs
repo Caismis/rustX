@@ -263,6 +263,35 @@ impl ClientState {
     }
 }
 
+#[cfg(test)]
+impl ClientInner {
+    /// Test-only: folds exactly one queued observation and returns the
+    /// snapshot as it stands at that cut, or `None` when nothing is queued.
+    ///
+    /// The ordinary [`Self::lock_state`] path drains the whole queue before
+    /// anything reads the projection, which is what makes a request path
+    /// safe — and what makes it useless for proving that no *intermediate*
+    /// state is observable. Stepping one observation at a time reproduces
+    /// exactly what the projection worker can expose to a subscriber it
+    /// wakes between two enqueues.
+    pub(crate) fn fold_one_observation(
+        &self,
+    ) -> Option<(super::snapshot::RuntimeClientSnapshot, RuntimeClientCursor)> {
+        let observation = self.pending.pop_one()?;
+        let mut guard = self
+            .state
+            .lock()
+            .expect("runtime client host lock poisoned");
+        guard.projection.apply(observation);
+        Some(guard.projection.snapshot().expect("projection is live"))
+    }
+
+    /// Test-only: how many observations are waiting to be folded.
+    pub(crate) fn queued_observations(&self) -> usize {
+        self.pending.queued()
+    }
+}
+
 /// The shared Runtime Client host state.
 pub(crate) struct ClientInner {
     conversation_id: ConversationId,
@@ -1927,6 +1956,7 @@ mod tests {
                                                 message: "cancelled while parked".to_owned(),
                                                 retry_after_ms: None,
                                                 provider_code: None,
+                                                context_overflow: None,
                                             },
                                         }, (VecDeque::new(), cancellation)));
                                     }
@@ -2638,6 +2668,7 @@ mod tests {
                         message: "context window exceeded".to_owned(),
                         retry_after_ms: None,
                         provider_code: None,
+                        context_overflow: None,
                     },
                 })],
                 vec![
@@ -3568,6 +3599,112 @@ mod tests {
             format!("---\nname: {name}\ndescription: \"a probe skill\"\n---\nbody\n"),
         )
         .expect("SKILL.md");
+    }
+
+    /// A resource reload is one generation or nothing. Every cut of the
+    /// observation stream is checked, so a consumer can never see the new
+    /// capability generation beside the retired resource generation.
+    ///
+    /// The window this closes is real and not a lock-ordering detail: the
+    /// projection worker folds on its own task, takes only the projection
+    /// lock, and is woken by *every* enqueue. Two enqueues under the runtime
+    /// state lock are still two folds, and the worker can be scheduled
+    /// between them — so a subscriber can be handed a snapshot whose new
+    /// tools sit beside project instruction files the same reload retired.
+    /// The reload therefore publishes exactly one observation carrying the
+    /// whole generation, and this test steps the queue one observation at a
+    /// time to prove there is no cut in between.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_resource_reload_never_exposes_a_half_published_generation() {
+        let (_adapter, fixture) =
+            host_fixture_with_native_tools(Vec::new(), ToolRegistry::new(), composer(), true).await;
+        let HostFixture {
+            _dir: dir,
+            host,
+            runtime,
+            coordinator,
+        } = fixture;
+
+        // Fold everything the composition produced, so the queue holds the
+        // reload's observations and nothing else.
+        let (baseline, baseline_cursor) = host.snapshot().expect("snapshot");
+        let inner = host.weak_inner().upgrade().expect("host is live");
+        assert_eq!(
+            inner.queued_observations(),
+            0,
+            "the baseline snapshot drained the queue"
+        );
+
+        // A reload that genuinely moves both halves of the generation.
+        write_probe_skill(&dir.path().join("workspace"), "generation-skill");
+        let reloaded = runtime.reload_resources().await.expect("resource reload");
+        assert!(
+            reloaded.capability_revision > baseline.capabilities.revision,
+            "the reload advanced the capability generation"
+        );
+        assert!(
+            reloaded.resource_revision > baseline.resources.revision,
+            "the reload advanced the resource generation"
+        );
+
+        // The whole generation is one enqueue. On a publication that
+        // committed the capability half separately this is 2, and the cut
+        // below is reachable.
+        assert_eq!(
+            inner.queued_observations(),
+            1,
+            "a reload publishes its complete generation as one observation"
+        );
+
+        // Nothing is visible before that one fold: the runtime committed
+        // the capability generation already, and the projection still shows
+        // the previous pair — not a mixture of the two.
+        let (before, before_cursor) = host_projection_snapshot(&inner);
+        assert_eq!(before.capabilities.revision, baseline.capabilities.revision);
+        assert_eq!(before.resources.revision, baseline.resources.revision);
+        assert_eq!(before_cursor, baseline_cursor, "no event was published yet");
+
+        // Step the queue one observation at a time and check every cut.
+        let mut cuts = 0;
+        while let Some((snapshot, _)) = inner.fold_one_observation() {
+            cuts += 1;
+            assert_eq!(
+                (snapshot.capabilities.revision, snapshot.resources.revision),
+                (reloaded.capability_revision, reloaded.resource_revision),
+                "cut {cuts} exposed a generation pairing that never existed"
+            );
+            assert!(
+                snapshot
+                    .capabilities
+                    .skills
+                    .iter()
+                    .any(|skill| skill.name == "generation-skill"),
+                "cut {cuts} advanced the revision without the generation's skills"
+            );
+        }
+        assert_eq!(cuts, 1, "there is exactly one cut to check");
+
+        drop(host);
+        drop(runtime);
+        drop(coordinator);
+        drop(dir);
+    }
+
+    /// Reads the projection without draining the pending queue, so a test
+    /// can look at the state a consumer would see at an exact cut.
+    fn host_projection_snapshot(
+        inner: &Arc<super::ClientInner>,
+    ) -> (
+        crate::runtime_client::snapshot::RuntimeClientSnapshot,
+        RuntimeClientCursor,
+    ) {
+        inner
+            .state
+            .lock()
+            .expect("runtime client host lock poisoned")
+            .projection
+            .snapshot()
+            .expect("projection is live")
     }
 
     /// Releasing the last semantic owner destroys the host adapter and the

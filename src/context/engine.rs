@@ -123,6 +123,21 @@ pub struct CompactionBudgets {
     /// The frozen summary invocation's effective input limit: the largest
     /// selected span estimate one summary request may carry.
     pub summary_input_limit: u64,
+    /// Whether the summary request is tokenized by the same model as the
+    /// primary request, so a measurement of one is a measurement of the
+    /// other.
+    ///
+    /// This is what decides whether an [`EstimateCorrection`] measured on a
+    /// rejected *primary* request may also scale
+    /// [`Self::summary_input_limit`]. An explicit summary model is a
+    /// different model, frequently on a different provider, with its own
+    /// tokenizer and its own window: the primary's estimation error says
+    /// nothing about it, and applying that ratio would shrink a budget that
+    /// was never proven wrong. When the summary model *is* the primary
+    /// model, the ratio is a property of the one tokenizer both requests
+    /// pass through, and refusing to reuse it would knowingly aim the
+    /// summary request at a budget already measured as too optimistic.
+    pub summary_shares_primary_tokenizer: bool,
 }
 
 impl CompactionBudgets {
@@ -132,11 +147,13 @@ impl CompactionBudgets {
         primary_output_budget: u32,
         summary_output_budget: u32,
         summary_input_limit: u64,
+        summary_shares_primary_tokenizer: bool,
     ) -> Self {
         Self {
             primary_output_budget,
             summary_output_budget,
             summary_input_limit,
+            summary_shares_primary_tokenizer,
         }
     }
 }
@@ -538,7 +555,17 @@ impl ContextEngine {
         let mut summary_input_limit = budgets.summary_input_limit;
         if let Some(correction) = constraints.estimate_correction {
             soft_limit = correction.apply(soft_limit);
-            summary_input_limit = correction.apply(summary_input_limit);
+            // The correction is a measurement of one model's tokenizer
+            // taken on one rejected request. It travels only as far as that
+            // measurement is evidence: the primary request always, and the
+            // summary request only when the summary goes to the same model.
+            // A distinct summary model has its own window and its own
+            // estimation error; when that request is itself too large the
+            // summary model says so, and the shrink loop around this plan
+            // replans against *that* measurement.
+            if budgets.summary_shares_primary_tokenizer {
+                summary_input_limit = correction.apply(summary_input_limit);
+            }
         }
         let (active, index) = state
             .structure()

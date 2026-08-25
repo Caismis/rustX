@@ -490,13 +490,32 @@ impl RuntimeClientProjection {
                 self.snapshot.capabilities = capabilities.clone();
                 vec![RuntimeClientEvent::CapabilityUpdated { capabilities }]
             }
-            ConversationObservation::Resources { snapshot } => {
-                // The resource generation is a projection fact of its own.
-                // Folding it here keeps one owner for the translation, in
-                // the same layer that owns the capability translation.
+            ConversationObservation::Resources {
+                snapshot,
+                availability,
+            } => {
+                // One reload, one fold. The runtime publishes the resource
+                // generation and the capability generation it was built
+                // against as a single observation precisely so both views
+                // move together: this arm updates the snapshot completely
+                // before returning, so no subscriber and no `snapshot()`
+                // call can land between the two halves and read a pairing
+                // that never existed.
+                //
+                // Two events still leave here, in generation order, because
+                // the two revisions are independent facts — a reload that
+                // only rewrote project instruction files emits an unchanged
+                // capability view beside a new resource view. Both are
+                // appended under this one fold, so a cursor sees them
+                // adjacent or not at all.
+                let capabilities = capability_view(snapshot.capability(), &availability);
                 let resources = resources_view(&snapshot);
+                self.snapshot.capabilities = capabilities.clone();
                 self.snapshot.resources = resources.clone();
-                vec![RuntimeClientEvent::ResourcesUpdated { resources }]
+                vec![
+                    RuntimeClientEvent::CapabilityUpdated { capabilities },
+                    RuntimeClientEvent::ResourcesUpdated { resources },
+                ]
             }
             ConversationObservation::AttemptAdmitted { attempt_id } => {
                 // The model is folded by the `AttemptModelFrozen`
@@ -2028,7 +2047,7 @@ mod tests {
             engine,
             Arc::new(FakeContextSummarizer::new(vec![summary_step])),
             AgentStatusComposer::default(),
-            CompactionBudgets::new(1, 1, 1_000_000),
+            CompactionBudgets::new(1, 1, 1_000_000, true),
         );
         let tool_runtime = crate::scripted_suites::common::tool_runtime("projection-order");
         let store = tool_runtime.durable_store();
@@ -2398,6 +2417,7 @@ mod tests {
                     message: "retry".to_owned(),
                     retry_after_ms: Some(10),
                     provider_code: Some("rate_limit_exceeded".to_owned()),
+                    context_overflow: None,
                 },
             },
             RuntimeEvent::ModelRetryScheduled {
@@ -2615,6 +2635,7 @@ mod tests {
                         message: "retries exhausted".to_owned(),
                         retry_after_ms: Some(5_000),
                         provider_code: Some("rate_limit_exceeded".to_owned()),
+                        context_overflow: None,
                     },
                 },
             },

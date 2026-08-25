@@ -29,7 +29,7 @@ pub use catalog::{
     ModelCatalogView, ModelCompat, ModelDefinition, ModelId, ModelRef, ProviderId,
     ReasoningProfile, ReasoningProfileId, ResolvedModelCatalog, ResponsesStorageMode,
 };
-pub use error::{ModelError, ModelErrorKind};
+pub use error::{ContextOverflowReport, ModelError, ModelErrorKind};
 pub use event::ModelEvent;
 pub use finish::ModelFinishReason;
 pub use invocation::{

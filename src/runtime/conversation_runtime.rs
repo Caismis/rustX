@@ -3442,6 +3442,10 @@ impl ConversationRuntime {
                                 })
                             }
                             Ok(capability) => {
+                                let crate::capabilities::CommittedCapability {
+                                    snapshot: capability,
+                                    availability,
+                                } = capability;
                                 let revision = state.resources.revision().next();
                                 let resources = Arc::new(RuntimeResourceSnapshot::from_prepared(
                                     revision,
@@ -3450,18 +3454,33 @@ impl ConversationRuntime {
                                 ));
                                 let capability_revision = resources.capability_revision();
                                 state.resources = Arc::clone(&resources);
-                                // The resource generation is a client-visible
-                                // fact in its own right: a reload that changes
-                                // only project instruction files never moves
-                                // the capability revision, so the capability
-                                // observation alone would leave a client
-                                // believing the retired files are still
-                                // loaded. Published under the same lock
-                                // acquisition that made this generation
-                                // current, so no observer can see the new
-                                // capability with the old resources.
+                                // One observation carries the whole
+                                // generation: the resource snapshot and the
+                                // capability generation it was built
+                                // against. `commit_runtime` fired no
+                                // capability observation of its own,
+                                // precisely so this is the only one.
+                                //
+                                // Ordering the two writes under this lock
+                                // is not enough on its own. The consumer of
+                                // this queue folds on its own task under
+                                // its own lock and never takes this one, so
+                                // two enqueued observations are two folds
+                                // and a subscriber can be woken between
+                                // them — long enough to publish new tools
+                                // beside project instruction files the same
+                                // reload retired. A single observation
+                                // removes the window rather than narrowing
+                                // it.
+                                //
+                                // Both halves are still needed: a reload
+                                // that only rewrites project instruction
+                                // files advances the resource revision and
+                                // leaves the capability revision untouched,
+                                // so neither half implies the other.
                                 self.inner.observe(ConversationObservation::Resources {
                                     snapshot: resources,
+                                    availability,
                                 });
                                 // FND-06: the complete new generation is
                                 // published and the admission gate is about
@@ -7480,6 +7499,7 @@ mod tests {
                     message: "context window exceeded".to_owned(),
                     retry_after_ms: None,
                     provider_code: None,
+                    context_overflow: None,
                 },
             }),
         ];
@@ -12777,6 +12797,7 @@ mod tests {
                     message: "provider settled cancellation".to_owned(),
                     retry_after_ms: None,
                     provider_code: None,
+                    context_overflow: None,
                 },
             }),
         ];
@@ -14823,6 +14844,7 @@ mod tests {
                     message: "provider settled cancellation".to_owned(),
                     retry_after_ms: None,
                     provider_code: None,
+                    context_overflow: None,
                 },
             }),
         ];

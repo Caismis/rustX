@@ -255,6 +255,7 @@ fn cancelled_error() -> ModelError {
         message: "model invocation cancelled".to_owned(),
         retry_after_ms: None,
         provider_code: None,
+        context_overflow: None,
     }
 }
 
@@ -987,6 +988,7 @@ impl ResponsesNormalizer {
                     message: format!("provider reported incomplete response reason {reason:?}"),
                     retry_after_ms: None,
                     provider_code: Some(reason.to_owned()),
+                    context_overflow: None,
                 });
             }
             match reason {
@@ -1490,6 +1492,7 @@ fn provider_error(message: String) -> ModelError {
         message,
         retry_after_ms: None,
         provider_code: None,
+        context_overflow: None,
     }
 }
 
@@ -1543,7 +1546,9 @@ fn responses_stream_error(event: &serde_json::Value) -> ModelError {
         message: message.to_owned(),
         retry_after_ms: None,
         provider_code: provider_code.map(str::to_owned),
+        context_overflow: None,
     }
+    .normalized()
 }
 
 fn invalid_request(message: &str) -> ModelError {
@@ -1552,6 +1557,7 @@ fn invalid_request(message: &str) -> ModelError {
         message: message.to_owned(),
         retry_after_ms: None,
         provider_code: None,
+        context_overflow: None,
     }
 }
 
@@ -1562,5 +1568,6 @@ fn unsupported(message: impl Into<String>) -> ModelError {
         message,
         retry_after_ms: None,
         provider_code: None,
+        context_overflow: None,
     }
 }

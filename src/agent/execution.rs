@@ -92,7 +92,7 @@ use crate::events::types::{
 };
 use crate::message::types::{AssistantMessageBlock, MessageBlock, ToolMessageBlock};
 use crate::model::adapter::ModelEventStream;
-use crate::model::error::{ModelError, ModelErrorKind, reported_input_tokens};
+use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
 use crate::model::session::AttemptModelSnapshot;
@@ -339,7 +339,19 @@ pub struct AgentExecution<'a> {
     /// Per-attempt context-generation allocator owned by the Agent Loop.
     context_generation_serial: u64,
     observed: Option<ProviderObservedInput>,
+    /// The request identity [`Self::observed`] was measured under.
+    ///
+    /// A provider counted the input of one concrete request. That count is
+    /// evidence about a later request only while the parts of the request
+    /// the conversation projection does not describe — the resolved
+    /// invocation and the opaque provider continuation — are still the
+    /// same. When they are not, the measurement is dropped rather than
+    /// stretched over a request the provider never measured.
+    observed_request_identity: Option<u64>,
     last_request_fingerprint: Option<u64>,
+    /// The request identity of the last started request, promoted alongside
+    /// its measurement when the provider reports one.
+    last_request_identity: Option<u64>,
     /// The structural anchor of the last started request, kept so its
     /// provider-reported input measurement can be reused for every later
     /// request context that extends it.
@@ -466,6 +478,10 @@ struct PreparedModelTurn {
     /// provider-observed measurement for every request context this one is a
     /// prefix of.
     anchor: ObservedAnchor,
+    /// The identity of the non-conversation request state this request
+    /// carries: its resolved invocation configuration and its provider
+    /// continuation. A measurement is only reusable while this is unchanged.
+    request_identity: u64,
     /// The runtime's deterministic input estimate for exactly this request.
     ///
     /// When the provider rejects the request as oversized, this is the
@@ -689,7 +705,9 @@ impl<'a> AgentExecution<'a> {
             deferred_context: Vec::new(),
             context_generation_serial: 0,
             observed: None,
+            observed_request_identity: None,
             last_request_fingerprint: None,
+            last_request_identity: None,
             last_request_anchor: None,
             last_request_estimated_input: None,
             last_request_id: None,
@@ -1046,6 +1064,10 @@ impl<'a> AgentExecution<'a> {
                 input_tokens: usage.input_tokens,
                 anchor: self.last_request_anchor.take(),
             });
+            // The measurement travels with the request identity it was
+            // taken under, so a later request that changed the invocation
+            // or the provider continuation cannot inherit it.
+            self.observed_request_identity = self.last_request_identity;
         }
         self.pending_continuation = turn_assembly.continuation;
         if self.pending_continuation.is_some() {
@@ -1624,7 +1646,7 @@ impl<'a> AgentExecution<'a> {
             .build_projection(
                 &scratch,
                 &self.tool_registry().model_definitions(),
-                self.observed.as_ref(),
+                self.reusable_observation(),
                 &effective_system_prompt,
             )
             .map_err(|error| Self::context_failure_terminal(&error))?;
@@ -1693,12 +1715,17 @@ impl<'a> AgentExecution<'a> {
             &staged.projection.effective_system_prompt,
             &staged.request.tools,
         );
+        let request_identity = crate::context::request_identity_fingerprint(
+            &staged.request.invocation,
+            staged.request.continuation.as_ref(),
+        );
         Ok(PreparedModelTurn {
             context,
             snapshot: staged.snapshot,
             request: staged.request,
             fingerprint: staged.projection.fingerprint(),
             anchor,
+            request_identity,
             estimated_input: staged.projection.estimated_input.input_tokens,
         })
     }
@@ -1799,6 +1826,7 @@ impl<'a> AgentExecution<'a> {
         }
         self.record_persisted_event(started);
         self.last_request_fingerprint = Some(prepared.fingerprint);
+        self.last_request_identity = Some(prepared.request_identity);
         self.last_request_anchor = Some(prepared.anchor.clone());
         self.last_request_estimated_input = Some(prepared.estimated_input);
         self.last_request_id = Some(prepared.snapshot.request_id.clone());
@@ -1839,6 +1867,32 @@ impl<'a> AgentExecution<'a> {
         Ok(prepared.request)
     }
 
+    /// The provider measurement that is still evidence about the request
+    /// this attempt is about to make, or `None`.
+    ///
+    /// A provider counted the input of one concrete request. The context
+    /// engine decides whether the measured *conversation* is this request's
+    /// conversation or a prefix of it — but the engine only ever sees the
+    /// projection, the Effective System Prompt, and the tool definitions. It
+    /// cannot see the rest of the request. This gate supplies what it cannot
+    /// see: the resolved invocation and the opaque provider continuation.
+    ///
+    /// The continuation is why this matters in practice. Under a stored
+    /// continuation the provider bills the entire referenced prior
+    /// generation as input, so two requests with the same visible messages
+    /// can have been measured against completely different context. Handing
+    /// the engine a measurement from a different continuation would produce
+    /// a confident, provider-attributed number for a request no provider
+    /// ever measured — and that number decides compaction.
+    fn reusable_observation(&self) -> Option<&ProviderObservedInput> {
+        let observed = self.observed.as_ref()?;
+        let identity = crate::context::request_identity_fingerprint(
+            &self.request.model.primary().invocation_config(),
+            self.pending_continuation.as_ref(),
+        );
+        (self.observed_request_identity == Some(identity)).then_some(observed)
+    }
+
     /// The current finite projection of the Conversation Surface, or the
     /// terminal the attempt must settle with when the context plane failed.
     fn current_projection(
@@ -1850,7 +1904,7 @@ impl<'a> AgentExecution<'a> {
             .build_projection(
                 &self.conversation,
                 &self.tool_registry().model_definitions(),
-                self.observed.as_ref(),
+                self.reusable_observation(),
                 effective_system_prompt,
             )
             .map_err(|error| Self::context_failure_terminal(&error))
@@ -2134,6 +2188,7 @@ impl<'a> AgentExecution<'a> {
                 self.pending_continuation = None;
                 self.continuation_owner = None;
                 self.observed = None;
+                self.observed_request_identity = None;
                 // `commit_compaction` persisted and returned the exact
                 // completion fact before this branch became observable.
             }
@@ -2178,13 +2233,17 @@ impl<'a> AgentExecution<'a> {
     ) -> Result<CompletedCompaction, ContextError> {
         let tools = self.tool_registry().model_definitions();
         let cancellation = self.cancellation.signal();
+        // Resolved before the exclusive borrow of the conversation: the
+        // gate reads the attempt's request identity, which the compaction
+        // is about to be handed mutable access to.
+        let observed = self.reusable_observation().cloned();
         let result = execute_compaction(
             &mut self.conversation,
             &self.context_runtime,
             &self.request.conversation_id,
             self.store.as_ref(),
             &tools,
-            self.observed.as_ref(),
+            observed.as_ref(),
             effective_system_prompt,
             &CompactionConstraints {
                 must_cover_through,
@@ -2344,11 +2403,21 @@ impl<'a> AgentExecution<'a> {
         // against the estimate the provider rejected: without this the
         // retry aims at exactly the budget that already failed, and a
         // conversation whose content this estimator under-counts overflows
-        // again — including on the summary request itself.
+        // again.
+        //
+        // The measurement is read from the typed report the model adapter
+        // attached when it classified the rejection. The agent loop never
+        // reads the provider's prose: an unstructured diagnostic carries
+        // unrelated large integers, and one of those mistaken for an input
+        // count would produce a correction ratio that shrinks every budget
+        // below usefulness. No report means the conservative unquantified
+        // correction, which is exactly the honest answer.
         let estimate_correction = self
             .last_request_estimated_input
             .and_then(|estimated| {
-                reported_input_tokens(&overflow_error.message)
+                overflow_error
+                    .context_overflow
+                    .and_then(|report| report.reported_input_tokens)
                     .and_then(|observed| EstimateCorrection::new(estimated, observed))
             })
             .unwrap_or(EstimateCorrection::UNQUANTIFIED);
@@ -4674,6 +4743,70 @@ mod tests {
         (dir, coordinator, lease)
     }
 
+    /// A provider-reported measurement is evidence about the exact request
+    /// the provider measured. The opaque provider continuation is part of
+    /// that request and is invisible to the conversation projection, so a
+    /// changed continuation withdraws the evidence instead of letting the
+    /// context engine anchor a confident, provider-attributed number onto a
+    /// request no provider ever measured.
+    #[tokio::test]
+    async fn a_measurement_does_not_survive_a_changed_provider_continuation() {
+        use crate::context::ProviderObservedInput;
+        // The continuation value comes from a scripted helper: this kernel
+        // treats continuation state as opaque and must never name a
+        // provider protocol, not even in a test.
+        use crate::scripted_suites::support::model::scripted_continuation;
+
+        let adapter = Arc::new(ScriptedAdapter::new(Vec::new()));
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let tool_runtime = tool_runtime("conv-1");
+        let (_dir, _coordinator, lease) =
+            capability_lease(ToolRegistry::new(), &tool_runtime).await;
+        let mut execution = AgentExecution::new(
+            request(&adapter),
+            lease,
+            &cancellation,
+            runtime(&adapter),
+            &tool_runtime,
+            crate::agent::AttemptLifecycle::inert(),
+        )
+        .expect("execution construction");
+
+        // A request measured with no continuation at all.
+        let measured_identity = crate::context::request_identity_fingerprint(
+            &execution.request.model.primary().invocation_config(),
+            None,
+        );
+        execution.observed = Some(ProviderObservedInput {
+            fingerprint: 7,
+            input_tokens: 1_234,
+            anchor: None,
+        });
+        execution.observed_request_identity = Some(measured_identity);
+        assert!(
+            execution.reusable_observation().is_some(),
+            "the measurement applies to the request it was taken under"
+        );
+
+        // The next request continues a stored provider generation. Its
+        // visible messages may still extend the measured ones, but the
+        // provider now bills the referenced generation as input too.
+        execution.pending_continuation = Some(scripted_continuation("generation-1"));
+        assert!(
+            execution.reusable_observation().is_none(),
+            "a measurement from a different continuation is not evidence about this request"
+        );
+
+        // A different continued generation is just as foreign as the first.
+        execution.pending_continuation = Some(scripted_continuation("generation-2"));
+        assert!(execution.reusable_observation().is_none());
+
+        // Returning to the measured identity returns the evidence: the gate
+        // withholds a measurement, it does not destroy one.
+        execution.pending_continuation = None;
+        assert!(execution.reusable_observation().is_some());
+    }
+
     #[tokio::test]
     async fn capability_lease_owner_matches_runtime_before_execution() {
         let adapter = Arc::new(ScriptedAdapter::new(Vec::new()));
@@ -4765,6 +4898,7 @@ mod tests {
                 message: "Request exceeds the maximum size of 32 MB".to_owned(),
                 retry_after_ms: None,
                 provider_code: Some("request_too_large".to_owned()),
+                context_overflow: None,
             },
         }]]));
         let tool_runtime = tool_runtime("conv-1");
@@ -5709,6 +5843,7 @@ mod tests {
                         message: "cancelled".to_owned(),
                         retry_after_ms: None,
                         provider_code: None,
+                        context_overflow: None,
                     },
                 }
             }))
@@ -5880,6 +6015,7 @@ mod tests {
                 message: "provider failed after start".to_owned(),
                 retry_after_ms: None,
                 provider_code: None,
+                context_overflow: None,
             },
         }]]));
         let mut request = request(&adapter);

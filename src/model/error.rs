@@ -30,6 +30,41 @@ pub enum ModelErrorKind {
     Unsupported,
 }
 
+/// The typed provider measurements of one rejected oversized request.
+///
+/// A provider states how large the request actually was, and how large it
+/// was allowed to be, in its own prose. Recovering those two numbers is a
+/// provider concern, so it happens exactly once — in the adapter that owns
+/// the provider's error shape — and the result crosses the model boundary
+/// as data. No layer above the adapter parses a provider message.
+///
+/// Both numbers are optional because not every provider reports either one.
+/// An absent number is reported as absent; it is never guessed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextOverflowReport {
+    /// The provider-counted input size of the rejected request, in tokens.
+    ///
+    /// This is the only authoritative measurement of how far this runtime's
+    /// deterministic token estimate was off for a concrete request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reported_input_tokens: Option<u64>,
+    /// The provider-stated context limit the request exceeded, in tokens.
+    ///
+    /// Carried for diagnostics: it explains a rejection without implying
+    /// anything about this runtime's estimate, so no budget is derived from
+    /// it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_limit: Option<u64>,
+}
+
+impl ContextOverflowReport {
+    /// Whether the report carries no measurement at all.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.reported_input_tokens.is_none() && self.context_limit.is_none()
+    }
+}
+
 /// A normalized model error.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelError {
@@ -44,6 +79,34 @@ pub struct ModelError {
     /// diagnostics only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_code: Option<String>,
+    /// The typed measurements of a [`ModelErrorKind::ContextWindowExceeded`]
+    /// rejection, when the provider reported any.
+    ///
+    /// Absent for every other error class, and absent for an overflow whose
+    /// message carried no recognizable count. Consumers read this field;
+    /// they never re-read [`Self::message`] looking for numbers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_overflow: Option<ContextOverflowReport>,
+}
+
+impl ModelError {
+    /// Completes one adapter-produced error at the model boundary.
+    ///
+    /// A [`ModelErrorKind::ContextWindowExceeded`] error gains the typed
+    /// measurements recovered from the provider's own diagnostic; every
+    /// other class is returned unchanged. This is the last point at which a
+    /// provider message is read for numbers — every consumer above the
+    /// model layer reads [`Self::context_overflow`].
+    #[must_use]
+    pub(crate) fn normalized(mut self) -> Self {
+        if matches!(self.kind, ModelErrorKind::ContextWindowExceeded)
+            && self.context_overflow.is_none()
+        {
+            let report = context_overflow_report(&self.message);
+            self.context_overflow = (!report.is_empty()).then_some(report);
+        }
+        self
+    }
 }
 
 /// Whether provider-owned error data describes an exhausted context window.
@@ -120,39 +183,61 @@ pub(crate) fn is_context_window_error(message: &str, provider_code: Option<&str>
         || (message.contains("input token count") && message.contains("exceeds the maximum"))
 }
 
-/// The provider-reported input size of a rejected oversized request, in
-/// tokens, when the diagnostic message carries one.
+/// The typed measurements a provider-owned context-overflow message
+/// carries, recovered for the adapter that owns that provider's error
+/// shape.
 ///
-/// This is the only authoritative measurement of how far this runtime's
-/// deterministic token estimate was off for a concrete request, so it is
-/// worth recovering even though it lives in an unstructured message: without
-/// it, the compaction that recovers from an overflow replans against exactly
-/// the estimate the provider just rejected.
+/// This is deliberately the *only* place a provider diagnostic is read for
+/// numbers, and it is called from adapter normalization — never from the
+/// agent loop or the context engine, which see
+/// [`ModelError::context_overflow`] and nothing else.
 ///
-/// Providers spell the number differently, so an explicit input/prompt
-/// marker is preferred and the largest plausible token count in the message
-/// is the fallback. The fallback is deliberately conservative: in every
-/// known spelling it is at least the real input size (it may be the window
-/// or input-plus-output), and over-reporting only makes the derived budget
-/// correction stricter, never looser.
+/// Recovery is marker-driven and nothing else. Providers spell the counts
+/// differently, so each known spelling is named explicitly; a message with
+/// no known marker reports no measurement. There is deliberately no
+/// "largest number in the message" fallback: an unstructured diagnostic
+/// routinely carries unrelated large integers — a request id, a byte size,
+/// an epoch timestamp — and one of those parsed as an input-token count
+/// produces a correction ratio that silently shrinks the compaction budget
+/// toward nothing. An absent measurement costs one conservative
+/// unquantified correction; a wrong one corrupts every budget derived from
+/// it.
 #[must_use]
-pub(crate) fn reported_input_tokens(message: &str) -> Option<u64> {
+pub(crate) fn context_overflow_report(message: &str) -> ContextOverflowReport {
     let lowered = message.to_ascii_lowercase();
-    for marker in [
-        "prompt contains at least ",
-        "prompt contains ",
-        "in the messages",
-        "input token count (",
-        "input length (",
-        "prompt has ",
-        "prompt is too long: ",
-        "the request contains ",
-    ] {
-        if let Some(found) = number_near(&lowered, marker) {
-            return Some(found);
-        }
+    ContextOverflowReport {
+        reported_input_tokens: marked_number(
+            &lowered,
+            &[
+                "prompt contains at least ",
+                "prompt contains ",
+                "in the messages",
+                "input token count (",
+                "input length (",
+                "prompt has ",
+                "prompt is too long: ",
+                "the request contains ",
+            ],
+        ),
+        context_limit: marked_number(
+            &lowered,
+            &[
+                "maximum context length is ",
+                "maximum context length (",
+                "maximum prompt length is ",
+                "configured context size is ",
+                "maximum number of tokens allowed (",
+                "context window of ",
+            ],
+        ),
     }
-    largest_number(&lowered).filter(|value| *value >= 1_000)
+}
+
+/// The first number recoverable from any of `markers`, in order.
+fn marked_number(lowered: &str, markers: &[&str]) -> Option<u64> {
+    markers
+        .iter()
+        .find_map(|marker| number_near(lowered, marker))
 }
 
 /// The number adjacent to `marker`: the first number after it, or — for a
@@ -205,32 +290,9 @@ fn last_number(text: &str) -> Option<u64> {
     }
 }
 
-/// The largest decimal number appearing in `text`.
-fn largest_number(text: &str) -> Option<u64> {
-    let mut best: Option<u64> = None;
-    let mut digits = String::new();
-    let flush = |digits: &mut String, best: &mut Option<u64>| {
-        if let Ok(value) = digits.parse::<u64>()
-            && best.is_none_or(|current| value > current)
-        {
-            *best = Some(value);
-        }
-        digits.clear();
-    };
-    for character in text.chars() {
-        if character.is_ascii_digit() {
-            digits.push(character);
-        } else if character != ',' {
-            flush(&mut digits, &mut best);
-        }
-    }
-    flush(&mut digits, &mut best);
-    best
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{ModelError, ModelErrorKind, is_context_window_error, reported_input_tokens};
+    use super::{ModelError, ModelErrorKind, context_overflow_report, is_context_window_error};
 
     /// Model errors round-trip with stable kind discriminators.
     #[test]
@@ -240,6 +302,7 @@ mod tests {
             message: "requests per minute exceeded".to_owned(),
             retry_after_ms: Some(1_500),
             provider_code: Some("rate_limit_exceeded".to_owned()),
+            context_overflow: None,
         };
         let json = serde_json::to_string(&error).expect("serialize error");
         assert!(json.contains("\"rate_limit\""));
@@ -325,7 +388,7 @@ mod tests {
     /// The provider-reported input size is recovered from every spelling
     /// this runtime knows, and is never below the real input count.
     #[test]
-    fn reported_input_tokens_recovers_the_provider_count() {
+    fn context_overflow_report_recovers_the_provider_count() {
         for (message, expected) in [
             (
                 "prompt is too long: 213462 tokens > 200000 maximum",
@@ -353,16 +416,53 @@ mod tests {
                 537_812,
             ),
         ] {
-            assert_eq!(reported_input_tokens(message), Some(expected), "{message}");
+            assert_eq!(
+                context_overflow_report(message).reported_input_tokens,
+                Some(expected),
+                "{message}"
+            );
         }
+    }
+
+    /// The stated limit is recovered alongside the input count, and stays a
+    /// separate number: it is never mistaken for what the request measured.
+    #[test]
+    fn context_overflow_report_separates_the_stated_limit() {
+        let report = context_overflow_report(
+            "Input length (265330) exceeds model's maximum context length (262144)",
+        );
+        assert_eq!(report.reported_input_tokens, Some(265_330));
+        assert_eq!(report.context_limit, Some(262_144));
     }
 
     /// A message with no usable count reports nothing rather than a
     /// fabricated one.
     #[test]
-    fn reported_input_tokens_declines_a_countless_message() {
-        assert_eq!(reported_input_tokens("context length exceeded"), None);
-        assert_eq!(reported_input_tokens("400 status code (no body)"), None);
+    fn context_overflow_report_declines_a_countless_message() {
+        assert!(context_overflow_report("context length exceeded").is_empty());
+        assert_eq!(
+            context_overflow_report("400 status code (no body)").reported_input_tokens,
+            None
+        );
+    }
+
+    /// An unrelated large integer in a provider diagnostic is never read as
+    /// an input-token count. The removed "largest number wins" fallback
+    /// turned a request id into a measurement, and the correction derived
+    /// from that ratio collapsed the compaction budget.
+    #[test]
+    fn unrelated_large_numbers_are_never_read_as_a_token_count() {
+        for message in [
+            "context window exceeded (request_id=999999999)",
+            "maximum context length is 128000 tokens; trace 20260826123000",
+            "context length exceeded after 4294967295 bytes were buffered",
+        ] {
+            assert_eq!(
+                context_overflow_report(message).reported_input_tokens,
+                None,
+                "{message}"
+            );
+        }
     }
 
     #[test]

@@ -2488,6 +2488,7 @@ fn publication_generation_rejections_are_side_effect_free() {
                 message: "contradictory".to_owned(),
                 retry_after_ms: None,
                 provider_code: None,
+                context_overflow: None,
             },
         },
     ));
