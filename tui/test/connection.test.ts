@@ -17,7 +17,7 @@ import {
 import { reduce, replaceFromSnapshot } from "../src/presentation/projection.ts";
 import type { RuntimeClientProtocolEvent } from "../src/protocol/types.ts";
 import { ScriptedPeer, until } from "./support/scripted-peer.ts";
-import { snapshot } from "./support/fixtures.ts";
+import { runtimeCursor, snapshot } from "./support/fixtures.ts";
 
 function connect(): { peer: ScriptedPeer; connection: RuntimeClientConnection } {
   const peer = new ScriptedPeer();
@@ -68,7 +68,7 @@ describe("RuntimeClientConnection", () => {
     await peer.awaitRequests(2);
 
     // Answer the second request first.
-    peer.respond(2, { type: "subscribed", after_cursor: 7 });
+    peer.respond(2, { type: "subscribed", after_cursor: runtimeCursor(7) });
     peer.respond(1, { type: "detached" });
 
     assert.deepEqual(await second, { type: "subscribed", after_cursor: 7 });
@@ -99,7 +99,7 @@ describe("RuntimeClientConnection", () => {
   it("closes on an unknown v1 event without advancing the projection", async () => {
     const { peer, connection } = connect();
     const events: RuntimeClientProtocolEvent[] = [];
-    let projection = replaceFromSnapshot(snapshot(), 0);
+    let projection = replaceFromSnapshot(snapshot(), runtimeCursor(0));
     connection.onEvent((event) => {
       events.push(event);
       projection = reduce(projection, event);

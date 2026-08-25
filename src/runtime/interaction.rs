@@ -52,7 +52,7 @@ use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
-use crate::durable::ConversationInteractionAudit;
+use crate::durable::{ConversationInteractionAudit, TranscriptCursor};
 use crate::events::interaction::{
     InteractionSettlement, InteractionSubject, interaction_arguments_digest,
     validate_interaction_settlement, validate_interaction_subject, validate_question_contract,
@@ -470,7 +470,8 @@ impl RecordingInteractionAudit {
         &self,
         event: RuntimeEventEnvelope,
         fail: bool,
-    ) -> Result<RuntimeEventEnvelope, crate::durable::ConversationStoreError> {
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), crate::durable::ConversationStoreError>
+    {
         let mut state = self.state.lock().expect("recording interaction audit lock");
         if fail {
             return Err(crate::durable::ConversationStoreError::Storage(
@@ -478,7 +479,7 @@ impl RecordingInteractionAudit {
             ));
         }
         state.committed.push(event.clone());
-        Ok(event)
+        Ok((event, TranscriptCursor::new(state.committed.len() as u64)))
     }
 }
 
@@ -491,7 +492,8 @@ impl ConversationInteractionAudit for RecordingInteractionAudit {
     fn commit_interaction_requested(
         &self,
         event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, crate::durable::ConversationStoreError> {
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), crate::durable::ConversationStoreError>
+    {
         let fail = std::mem::take(
             &mut self
                 .state
@@ -505,7 +507,8 @@ impl ConversationInteractionAudit for RecordingInteractionAudit {
     fn commit_interaction_settled(
         &self,
         event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, crate::durable::ConversationStoreError> {
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), crate::durable::ConversationStoreError>
+    {
         let fail = std::mem::take(
             &mut self
                 .state
@@ -526,14 +529,19 @@ impl ConversationInteractionAudit for RecordingInteractionAudit {
 /// settlement admission.
 pub(crate) trait InteractionObserver: Send + Sync {
     /// Publishes one newly pending request.
-    fn on_pending(&self, request: &InteractionRequest, audit: &RuntimeEventEnvelope);
+    fn on_pending(
+        &self,
+        request: &InteractionRequest,
+        audit: &RuntimeEventEnvelope,
+        transcript_cursor: TranscriptCursor,
+    );
     /// Publishes the one terminal transition for a request after the owning
     /// waiter has released its callback authority.
     fn on_settled(
         &self,
         interaction_id: &InteractionId,
         outcome: &InteractionOutcome,
-        audit: Option<&RuntimeEventEnvelope>,
+        audit: Option<&(RuntimeEventEnvelope, TranscriptCursor)>,
     );
 }
 
@@ -586,7 +594,7 @@ struct SettlementNotification {
     observer: Option<Arc<dyn InteractionObserver>>,
     interaction_id: InteractionId,
     outcome: InteractionOutcome,
-    audit: Option<RuntimeEventEnvelope>,
+    audit: Option<(RuntimeEventEnvelope, TranscriptCursor)>,
 }
 
 impl SettlementNotification {
@@ -998,7 +1006,7 @@ impl InteractionCoordinator {
                 if !state.provider_available {
                     return Err(InteractionOutcome::Unavailable);
                 }
-                let requested_audit = self
+                let (requested_audit, requested_cursor) = self
                     .audit
                     .commit_interaction_requested(requested_envelope(
                         &request,
@@ -1020,7 +1028,11 @@ impl InteractionCoordinator {
                 // The prompt is released from the admitted entry itself, so a
                 // client can never be shown a request the pending map does not
                 // already own.
-                self.notify_pending(&state.pending[&id].request, &requested_audit);
+                self.notify_pending(
+                    &state.pending[&id].request,
+                    &requested_audit,
+                    requested_cursor,
+                );
                 drop(state);
                 Ok(InteractionTicket { id, receiver })
             })
@@ -1300,14 +1312,19 @@ impl InteractionCoordinator {
         })
     }
 
-    fn notify_pending(&self, request: &InteractionRequest, audit: &RuntimeEventEnvelope) {
+    fn notify_pending(
+        &self,
+        request: &InteractionRequest,
+        audit: &RuntimeEventEnvelope,
+        transcript_cursor: TranscriptCursor,
+    ) {
         if let Some(observer) = self
             .observer
             .lock()
             .expect("interaction observer poisoned")
             .as_ref()
         {
-            observer.on_pending(request, audit);
+            observer.on_pending(request, audit, transcript_cursor);
         }
     }
 }
@@ -1444,7 +1461,12 @@ mod tests {
     }
 
     impl InteractionObserver for RecordingObserver {
-        fn on_pending(&self, request: &InteractionRequest, _audit: &RuntimeEventEnvelope) {
+        fn on_pending(
+            &self,
+            request: &InteractionRequest,
+            _audit: &RuntimeEventEnvelope,
+            _transcript_cursor: TranscriptCursor,
+        ) {
             self.pending.lock().unwrap().push(request.clone());
         }
 
@@ -1452,7 +1474,7 @@ mod tests {
             &self,
             id: &InteractionId,
             outcome: &InteractionOutcome,
-            _audit: Option<&RuntimeEventEnvelope>,
+            _audit: Option<&(RuntimeEventEnvelope, TranscriptCursor)>,
         ) {
             self.settled
                 .lock()
@@ -1466,7 +1488,12 @@ mod tests {
     }
 
     impl InteractionObserver for PendingIdObserver {
-        fn on_pending(&self, request: &InteractionRequest, _audit: &RuntimeEventEnvelope) {
+        fn on_pending(
+            &self,
+            request: &InteractionRequest,
+            _audit: &RuntimeEventEnvelope,
+            _transcript_cursor: TranscriptCursor,
+        ) {
             if let Some(sender) = self.sender.lock().unwrap().take() {
                 let _ = sender.send(request.id.clone());
             }
@@ -1476,7 +1503,7 @@ mod tests {
             &self,
             _id: &InteractionId,
             _outcome: &InteractionOutcome,
-            _audit: Option<&RuntimeEventEnvelope>,
+            _audit: Option<&(RuntimeEventEnvelope, TranscriptCursor)>,
         ) {
         }
     }
@@ -2006,13 +2033,19 @@ mod tests {
         }
 
         impl InteractionObserver for StateObserver {
-            fn on_pending(&self, _request: &InteractionRequest, _audit: &RuntimeEventEnvelope) {}
+            fn on_pending(
+                &self,
+                _request: &InteractionRequest,
+                _audit: &RuntimeEventEnvelope,
+                _transcript_cursor: TranscriptCursor,
+            ) {
+            }
 
             fn on_settled(
                 &self,
                 _interaction_id: &InteractionId,
                 _outcome: &InteractionOutcome,
-                _audit: Option<&RuntimeEventEnvelope>,
+                _audit: Option<&(RuntimeEventEnvelope, TranscriptCursor)>,
             ) {
                 self.settled
                     .lock()
@@ -2145,14 +2178,19 @@ mod tests {
         }
 
         impl InteractionObserver for AuditAtPrompt {
-            fn on_pending(&self, _request: &InteractionRequest, _audit: &RuntimeEventEnvelope) {
+            fn on_pending(
+                &self,
+                _request: &InteractionRequest,
+                _audit: &RuntimeEventEnvelope,
+                _transcript_cursor: TranscriptCursor,
+            ) {
                 *self.seen.lock().unwrap() = self.audit.events();
             }
             fn on_settled(
                 &self,
                 _id: &InteractionId,
                 _outcome: &InteractionOutcome,
-                _audit: Option<&RuntimeEventEnvelope>,
+                _audit: Option<&(RuntimeEventEnvelope, TranscriptCursor)>,
             ) {
             }
         }

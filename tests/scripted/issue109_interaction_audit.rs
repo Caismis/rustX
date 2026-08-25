@@ -252,6 +252,7 @@ impl InteractionObserver for RespondingObserver {
         &self,
         request: &InteractionRequest,
         _audit: &rustx::events::types::RuntimeEventEnvelope,
+        _transcript_cursor: rustx::durable::TranscriptCursor,
     ) {
         // The durable read happens *inside* the prompt-release callback, so
         // what it sees is exactly what was committed before any client could
@@ -275,7 +276,10 @@ impl InteractionObserver for RespondingObserver {
         &self,
         interaction_id: &InteractionId,
         outcome: &InteractionOutcome,
-        _audit: Option<&rustx::events::types::RuntimeEventEnvelope>,
+        _audit: Option<&(
+            rustx::events::types::RuntimeEventEnvelope,
+            rustx::durable::TranscriptCursor,
+        )>,
     ) {
         self.settled
             .lock()

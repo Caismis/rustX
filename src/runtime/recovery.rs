@@ -1430,7 +1430,7 @@ impl RecoveryPlan {
         committed: &mut RecoveryReconciliation,
     ) -> Result<(), RecoveryError> {
         for class in &self.publications {
-            let audit = store.terminalize_publication_audit(&class.stream_id, clock.now())?;
+            let (audit, _) = store.terminalize_publication_audit(&class.stream_id, clock.now())?;
             committed
                 .publication_audits
                 .push((audit.stream_id.clone(), audit.kind));
@@ -1473,7 +1473,7 @@ impl RecoveryPlan {
                     clock.now(),
                 ));
             }
-            store.append_canonical_batch_with_events(&blocks, &events)?;
+            let _ = store.append_canonical_batch_with_events(&blocks, &events)?;
             committed
                 .repaired_tool_results
                 .extend(repair.missing.iter().map(|missing| missing.call_id.clone()));

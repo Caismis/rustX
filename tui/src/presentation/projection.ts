@@ -50,7 +50,7 @@ export function emptyPresentationState(
 ): PresentationState {
   return {
     conversationId: "",
-    cursor: 0,
+    cursor: 0 as RuntimeClientCursor,
     transcript: [],
     inbound: { pending: [], last_drain: undefined },
     pendingInteractions: [],
@@ -79,8 +79,8 @@ export function replaceFromSnapshot(
   snapshot: RuntimeClientSnapshot,
   cursor: RuntimeClientCursor,
 ): PresentationState {
-  const transcript: TranscriptEntry[] = snapshot.transcript.entries.map(
-    transcriptEntryFromWire,
+  const transcript: TranscriptEntry[] = orderTranscript(
+    snapshot.transcript.entries.map(transcriptEntryFromWire),
   );
 
   const attempt = snapshot.attempt;
@@ -116,7 +116,7 @@ export function replaceFromSnapshot(
   return {
     conversationId: snapshot.conversation_id,
     cursor,
-    transcript,
+    transcript: orderTranscript(transcript),
     transcriptNextCursor: snapshot.transcript.next_cursor,
     attempt:
       attempt === undefined
@@ -153,11 +153,10 @@ export function mergeTranscriptPage(
   page: RuntimeClientTranscriptPage,
 ): PresentationState {
   const older = page.entries.map(transcriptEntryFromWire);
-  const existingKeys = new Set(state.transcript.map((entry) => entry.key));
-  const uniqueOlder = older.filter((entry) => !existingKeys.has(entry.key));
+  const merged = deduplicateTranscript([...state.transcript, ...older]);
   return {
     ...state,
-    transcript: [...uniqueOlder, ...state.transcript],
+    transcript: orderTranscript(merged),
     transcriptNextCursor: page.next_cursor,
   };
 }
@@ -228,7 +227,7 @@ export function reduce(
       next.transcript = appendTranscriptEntry(state.transcript, {
         kind: "interaction_requested",
         key: `interaction-requested:${event.audit.event_id}`,
-        cursor: protocolEvent.cursor,
+        cursor: event.transcript_cursor,
         eventId: event.audit.event_id,
         timestamp: event.audit.timestamp,
         attemptId: event.audit.attempt_id,
@@ -242,7 +241,7 @@ export function reduce(
       next.transcript = appendTranscriptEntry(state.transcript, {
         kind: "interaction_settled",
         key: `interaction-settled:${event.audit.event_id}`,
-        cursor: protocolEvent.cursor,
+        cursor: event.transcript_cursor,
         eventId: event.audit.event_id,
         timestamp: event.audit.timestamp,
         attemptId: event.audit.attempt_id,
@@ -318,7 +317,7 @@ export function reduce(
         {
           kind: "publication_audit",
           key: `publication:${event.audit.stream_id}`,
-          cursor: protocolEvent.cursor,
+          cursor: event.transcript_cursor,
           audit: event.audit,
         },
       );
@@ -451,10 +450,15 @@ export function reduce(
         event.message.role === "assistant" && event.attempt_id !== undefined
           ? dropStreaming(state.transcript, event.attempt_id)
           : state.transcript;
+      if (event.transcript_cursor === undefined) {
+        next.transcript = transcript;
+        return next;
+      }
       next.transcript = appendTranscriptEntry(transcript, {
         kind: "committed",
         key: `committed:${messageId}`,
         messageId,
+        cursor: event.transcript_cursor,
         attemptId: event.attempt_id,
         message: event.message,
       });
@@ -476,10 +480,16 @@ export function reduce(
       // Durable acceptance is the display frontier. Context facts remain
       // model-visible runtime input but are hidden from ordinary chat.
       if (!isHiddenContextMessage(event.message)) {
+        if (event.transcript_cursor === undefined) {
+          throw new Error(
+            "visible inbound_enqueued event is missing its durable transcript cursor",
+          );
+        }
         next.transcript = appendTranscriptEntry(state.transcript, {
           kind: "committed",
           key: `committed:${event.message.id}`,
           messageId: event.message.id,
+          cursor: event.transcript_cursor,
           message: { role: "user", ...event.message },
         });
       }
@@ -541,6 +551,7 @@ function transcriptEntryFromWire(
         kind: "committed",
         key: `committed:${messageId}`,
         messageId,
+        cursor: entry.cursor,
         message: entry.item.message,
       };
     }
@@ -582,10 +593,59 @@ function appendTranscriptEntry(
   transcript: TranscriptEntry[],
   entry: TranscriptEntry,
 ): TranscriptEntry[] {
-  if (transcript.some((existing) => existing.key === entry.key)) {
+  const existing = transcript.find((candidate) => candidate.key === entry.key);
+  if (existing !== undefined) {
+    if (
+      existing.kind !== "streaming" &&
+      entry.kind !== "streaming" &&
+      existing.cursor !== entry.cursor
+    ) {
+      throw new Error(
+        `transcript fact ${entry.key} changed durable cursor from ${existing.cursor} to ${entry.cursor}`,
+      );
+    }
     return transcript;
   }
-  return [...transcript, entry];
+  return orderTranscript([...transcript, entry]);
+}
+
+type DurableTranscriptEntry = Exclude<TranscriptEntry, StreamingMessage>;
+
+function isDurableTranscriptEntry(
+  entry: TranscriptEntry,
+): entry is DurableTranscriptEntry {
+  return entry.kind !== "streaming";
+}
+
+/** Orders every durable item by the cursor allocated by `transcript_order`. */
+function orderTranscript(transcript: TranscriptEntry[]): TranscriptEntry[] {
+  const durable = transcript
+    .filter(isDurableTranscriptEntry)
+    .sort((left, right) => left.cursor - right.cursor);
+  const streaming = transcript.filter((entry) => entry.kind === "streaming");
+  return [...durable, ...streaming];
+}
+
+/** Deduplicates the same durable fact without using identity to infer order. */
+function deduplicateTranscript(transcript: TranscriptEntry[]): TranscriptEntry[] {
+  const seen = new Map<string, TranscriptEntry>();
+  for (const entry of transcript) {
+    const existing = seen.get(entry.key);
+    if (
+      existing !== undefined &&
+      isDurableTranscriptEntry(existing) &&
+      isDurableTranscriptEntry(entry) &&
+      existing.cursor !== entry.cursor
+    ) {
+      throw new Error(
+        `transcript fact ${entry.key} has conflicting durable cursors`,
+      );
+    }
+    if (existing === undefined) {
+      seen.set(entry.key, entry);
+    }
+  }
+  return [...seen.values()];
 }
 
 function isHiddenContextMessage(message: { kind?: unknown }): boolean {

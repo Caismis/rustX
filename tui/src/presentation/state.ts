@@ -53,6 +53,8 @@ export interface TranscriptCommitted {
   messageId: MessageId;
   /** The committing attempt, absent for runtime-admitted commits. */
   attemptId?: AttemptId;
+  /** The durable transcript position; never the Runtime Client event cursor. */
+  cursor: RuntimeClientTranscriptCursor;
   message: MessageBlock;
 }
 

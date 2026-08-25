@@ -386,6 +386,7 @@ mod tests {
             &self,
             request: &InteractionRequest,
             _audit: &crate::events::types::RuntimeEventEnvelope,
+            _transcript_cursor: crate::durable::TranscriptCursor,
         ) {
             if let Some(sender) = self.sender.lock().expect("pending probe lock").take() {
                 let _ = sender.send(request.clone());
@@ -396,7 +397,10 @@ mod tests {
             &self,
             _interaction_id: &InteractionId,
             _outcome: &InteractionOutcome,
-            _audit: Option<&crate::events::types::RuntimeEventEnvelope>,
+            _audit: Option<&(
+                crate::events::types::RuntimeEventEnvelope,
+                crate::durable::TranscriptCursor,
+            )>,
         ) {
         }
     }

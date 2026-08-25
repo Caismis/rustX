@@ -21,6 +21,8 @@ import {
   attemptModel,
   attemptView,
   runtimeInbound,
+  runtimeCursor,
+  transcriptCursor,
   toolCallBlock,
   userMessage,
 } from "./support/fixtures.ts";
@@ -69,7 +71,10 @@ describe("assistant text", () => {
         delta: "final answer",
       },
     ]) {
-      streaming = reduce(streaming, { cursor: streaming.cursor + 1, event });
+      streaming = reduce(streaming, {
+        cursor: runtimeCursor(streaming.cursor + 1),
+        event,
+      });
     }
     const committed = stateOf({
       messages: [assistantMessage("m1", "final answer")],
@@ -394,11 +399,11 @@ describe("durable transcript audits", () => {
       transcript: {
         entries: [
           {
-            cursor: 1,
+            cursor: transcriptCursor(1),
             item: { type: "publication_audit", audit: publicationAudit },
           },
           {
-            cursor: 2,
+            cursor: transcriptCursor(2),
             item: {
               type: "publication_audit",
               audit: { ...publicationAudit, stream_id: "stream-unaccepted", kind: "unaccepted" },
@@ -427,7 +432,7 @@ describe("durable transcript audits", () => {
       transcript: {
         entries: [
           {
-            cursor: 3,
+            cursor: transcriptCursor(3),
             item: {
               type: "interaction_requested",
               event_id: "interaction-requested-event",
@@ -444,7 +449,7 @@ describe("durable transcript audits", () => {
             },
           },
           {
-            cursor: 4,
+            cursor: transcriptCursor(4),
             item: {
               type: "interaction_settled",
               event_id: "interaction-settled-event",

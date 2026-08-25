@@ -52,9 +52,15 @@ export type SessionNodeId = string;
 /** A monotonic capability revision. */
 export type CapabilityRevision = number;
 /** A position in the Runtime Client observation stream. */
-export type RuntimeClientCursor = number;
+declare const runtimeClientCursorBrand: unique symbol;
+export type RuntimeClientCursor = number & {
+  readonly [runtimeClientCursorBrand]: "runtime-client-cursor";
+};
 /** A position in the durable derived transcript. Not a Runtime Client cursor. */
-export type RuntimeClientTranscriptCursor = number;
+declare const runtimeClientTranscriptCursorBrand: unique symbol;
+export type RuntimeClientTranscriptCursor = number & {
+  readonly [runtimeClientTranscriptCursorBrand]: "transcript-cursor";
+};
 /** An immutable Conversation Surface revision selected for a seed. */
 export type SurfaceRevision = number;
 /** A mailbox-assigned inbound sequence. Not a cursor. */
@@ -882,6 +888,7 @@ export type RuntimeClientEvent =
     }
   | {
       type: "interaction_audit_requested";
+      transcript_cursor: RuntimeClientTranscriptCursor;
       audit: {
         event_id: string;
         timestamp: string;
@@ -893,6 +900,7 @@ export type RuntimeClientEvent =
     }
   | {
       type: "interaction_audit_settled";
+      transcript_cursor: RuntimeClientTranscriptCursor;
       audit: {
         event_id: string;
         timestamp: string;
@@ -981,11 +989,13 @@ export type RuntimeClientEvent =
        * entries are model proposals that were never authorized and never
        * executed, so they must never be presented as the
        * `tool_execution_started` / `tool_execution_settled` Tool Plane facts,
-       * and the audit must never be folded into conversation history.
+       * or imply side effects. The audit is a noncanonical derived transcript
+       * item, not a Message Ledger message.
        */
       type: "assistant_publication_settled";
       attempt_id: AttemptId;
       audit: PublicationAudit;
+      transcript_cursor: RuntimeClientTranscriptCursor;
     }
   | {
       type: "tool_execution_started";
@@ -1012,6 +1022,7 @@ export type RuntimeClientEvent =
       type: "message_committed";
       attempt_id?: AttemptId;
       message: MessageBlock;
+      transcript_cursor?: RuntimeClientTranscriptCursor;
     }
   | {
       type: "agent_status_composed";
@@ -1024,6 +1035,7 @@ export type RuntimeClientEvent =
       type: "inbound_enqueued";
       sequence: InboundSequence;
       message: UserMessageBlock;
+      transcript_cursor?: RuntimeClientTranscriptCursor;
     }
   | {
       type: "inbound_drained";

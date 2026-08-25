@@ -44,7 +44,7 @@ use rustx::runtime::identity::{
     PublicationStreamId, RequestId, ToolCallId, ToolId, TurnId,
 };
 use rustx::runtime::types::{TokenMeasurement, TokenMeasurementSource};
-use rustx::runtime::{QuestionAnswer, RuntimeResourceRevision};
+use rustx::runtime::{InteractionResponse, QuestionAnswer, RuntimeResourceRevision};
 use rustx::runtime_client::{RUNTIME_CLIENT_PROTOCOL_VERSION_V1, RuntimeClientResult};
 use rustx::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus, ToolResultContent};
 
@@ -617,17 +617,23 @@ async fn requirement_05_detach_and_reattach_reads_the_same_durable_transcript() 
 async fn requirement_06_headless_history_is_available_to_a_later_client() {
     let root = tempfile::tempdir().expect("root");
     let paths = startup(root.path());
-    seed_composed_store(&paths, &[user_message("headless-user", "headless")]);
+    seed_composed_store(&paths, &[]);
     {
         let headless = HeadlessConversationRuntime::compose(&paths, &dependencies())
             .await
             .expect("headless composition");
+        assert!(!headless.tool_runtime().is_runtime_client_bound());
+        let accepted = headless
+            .runtime()
+            .submit_inbound(vec![UserContentBlock::Text(TextBlock {
+                text: "accepted while headless".to_owned(),
+            })])
+            .expect("headless inbound acceptance");
         let page = headless
             .runtime()
             .transcript_page(None, 64)
             .expect("headless page");
-        assert_eq!(page_message_ids(&page), vec!["headless-user"]);
-        assert!(!headless.tool_runtime().is_runtime_client_bound());
+        assert_eq!(page_message_ids(&page), vec![accepted.message_id.as_str()]);
     }
 
     let interactive = LocalConversationRuntime::compose(&paths, &dependencies())
@@ -639,7 +645,7 @@ async fn requirement_06_headless_history_is_available_to_a_later_client() {
         .expect("later attach");
     assert_eq!(
         client_page_message_ids(&initialized_snapshot(result).transcript),
-        vec!["headless-user"]
+        vec!["conversation-standalone-inbound-1"]
     );
 }
 
@@ -699,7 +705,7 @@ fn requirement_08_incomplete_publication_is_distinct_from_canonical_assistant() 
     let audit = store
         .terminalize_publication_audit(&start.stream_id, fixed_time())
         .expect("incomplete audit");
-    assert_eq!(audit.kind, PublicationAuditKind::Incomplete);
+    assert_eq!(audit.0.kind, PublicationAuditKind::Incomplete);
     store
         .append_canonical(&assistant_message("canonical-assistant", "canonical"))
         .expect("canonical Assistant");
@@ -799,9 +805,9 @@ fn requirement_10_audited_tool_proposal_is_unaccepted_and_unexecuted() {
     let audit = store
         .terminalize_publication_audit(&start.stream_id, fixed_time())
         .expect("incomplete proposal audit");
-    assert_eq!(audit.kind, PublicationAuditKind::Incomplete);
+    assert_eq!(audit.0.kind, PublicationAuditKind::Incomplete);
     assert!(matches!(
-        audit.content.as_slice(),
+        audit.0.content.as_slice(),
         [PublicationAuditBlock::ProposedToolCall { complete: true, .. }]
     ));
     assert!(
@@ -817,28 +823,64 @@ fn requirement_10_audited_tool_proposal_is_unaccepted_and_unexecuted() {
 
 /// Requirement 11: requested and settled interaction facts are historical
 /// transcript entries, while no pending waiter is reconstructed.
-#[test]
-fn requirement_11_interaction_audits_page_without_recovering_a_waiter() {
-    let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
-    store.initialize(&[]).expect("initialize");
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn requirement_11_interaction_audits_page_without_recovering_a_waiter() {
+    let root = tempfile::tempdir().expect("root");
+    let paths = startup(root.path());
+    seed_composed_store(&paths, &[]);
+    let store = SqliteConversationStore::open(
+        ConversationId::new("conversation-standalone"),
+        &paths.artifacts_root().join("conversation.sqlite"),
+    )
+    .expect("reopen seeded store");
     let interaction_id = InteractionId::for_attempt(&attempt(), 1);
+    let mut requested = requested_interaction(&interaction_id);
+    requested.conversation_id = ConversationId::new("conversation-standalone");
     store
-        .append_event(requested_interaction(&interaction_id))
+        .append_interaction_audit(requested)
         .expect("requested audit");
+    let mut settled = settled_interaction(&interaction_id);
+    settled.conversation_id = ConversationId::new("conversation-standalone");
     store
-        .append_event(settled_interaction(&interaction_id))
+        .append_interaction_audit(settled)
         .expect("settled audit");
 
-    let entries = all_entries(&store, 10);
+    drop(store);
+
+    let runtime = LocalConversationRuntime::compose(&paths, &dependencies())
+        .await
+        .expect("cold reopen");
+    let (attachment, result) = runtime
+        .host()
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .expect("attach after audit recovery");
+    let snapshot = initialized_snapshot(result);
+    assert!(snapshot.pending_interactions.is_empty());
+    assert!(snapshot.inbound.pending.is_empty());
+    let page = runtime
+        .host()
+        .transcript_page(None, 10)
+        .expect("historical audit page");
     assert!(matches!(
-        entries[0].item,
-        TranscriptItem::InteractionRequested { .. }
+        page.entries[0].item,
+        rustx::runtime_client::RuntimeClientTranscriptItem::InteractionRequested { .. }
     ));
     assert!(matches!(
-        entries[1].item,
-        TranscriptItem::InteractionSettled { .. }
+        page.entries[1].item,
+        rustx::runtime_client::RuntimeClientTranscriptItem::InteractionSettled { .. }
     ));
-    assert!(store.load_pending().expect("pending").is_empty());
+    assert!(matches!(
+        runtime.host().respond_interaction(
+            &interaction_id,
+            InteractionResponse::Question {
+                answer: QuestionAnswer::Choice {
+                    value: "staging".to_owned(),
+                },
+            },
+        ),
+        Err(rustx::runtime_client::RuntimeClientError::InteractionNotPending { .. })
+    ));
+    drop(attachment);
 }
 
 /// Requirement 12: transcript cursors are independent from the live Runtime
@@ -858,26 +900,132 @@ async fn requirement_12_transcript_paging_preserves_runtime_client_cursor_invari
     let runtime = LocalConversationRuntime::compose(&paths, &dependencies())
         .await
         .expect("interactive composition");
-    let (attachment, result) = runtime
+    let (attachment, _result) = runtime
         .host()
         .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
         .expect("attach");
-    let snapshot = initialized_snapshot(result);
     let live_before = runtime.host().snapshot().expect("snapshot").1;
-    let oldest_cursor = snapshot
-        .transcript
-        .entries
-        .first()
-        .expect("transcript entry")
-        .cursor;
+    let newest_page = runtime
+        .host()
+        .transcript_page(None, 2)
+        .expect("bounded newest transcript page");
+    assert_eq!(
+        client_page_message_ids(&newest_page),
+        vec!["cursor-2", "cursor-3"]
+    );
+    let oldest_cursor = newest_page.next_cursor.expect("older page cursor");
     let older = runtime
         .host()
-        .transcript_page(Some(oldest_cursor), 10)
+        .transcript_page(Some(oldest_cursor), 2)
         .expect("older transcript page");
-    assert!(older.entries.is_empty());
+    assert_eq!(client_page_message_ids(&older), vec!["cursor-1"]);
     let live_after = runtime.host().snapshot().expect("snapshot").1;
     assert_eq!(live_before, live_after);
     attachment.detach();
+}
+
+/// The ordering spine uses an explicit `(kind, id)` identity. The same
+/// opaque string is therefore legal in the independent `MessageId`, `EventId`,
+/// and `PublicationStreamId` domains, while Pending -> Ledger adoption keeps
+/// one message reference and one cursor.
+#[test]
+fn transcript_reference_identity_is_typed_and_collision_free() {
+    let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
+    store.initialize(&[]).expect("initialize");
+
+    let shared_id = "interaction-requested-event:collision";
+    let accepted = store
+        .accept_inbound(inbound_draft(shared_id, "same opaque id"))
+        .expect("accepted message");
+    let accepted_cursor = accepted.transcript_cursor.expect("accepted cursor");
+    let batch = store
+        .select_pending_batch()
+        .expect("select pending")
+        .expect("pending batch");
+    store
+        .adopt_pending_batch(batch.watermark)
+        .expect("adopt message");
+
+    let interaction = requested_interaction(&InteractionId::new("collision"));
+    store
+        .append_interaction_audit(interaction)
+        .expect("EventId collision is scoped");
+
+    let publication_turn = "typed-collision";
+    let publication_message_id = MessageId::new(format!("{}-agent-{publication_turn}", attempt()));
+    let publication_stream_id =
+        PublicationStreamId::for_request(&attempt(), &publication_message_id);
+    let publication_message = store
+        .accept_inbound(inbound_draft(
+            publication_stream_id.as_str(),
+            "PublicationStreamId shares this opaque string",
+        ))
+        .expect("MessageId and PublicationStreamId collision is scoped");
+
+    let request_id = start_request(&store, publication_turn);
+    let start = PublicationStreamStart {
+        stream_id: publication_stream_id.clone(),
+        attempt_id: attempt(),
+        turn_id: TurnId::new(publication_turn),
+        request_id,
+        message_id: publication_message_id,
+    };
+    store
+        .open_publication_stream(&start)
+        .expect("PublicationStreamId collision is scoped");
+    let (_, publication_cursor) = store
+        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .expect("publication audit");
+
+    let entries = all_entries(&store, 10);
+    let cursors = entries
+        .iter()
+        .map(|entry| entry.cursor.get())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        cursors,
+        vec![
+            accepted_cursor.get(),
+            2,
+            publication_message
+                .transcript_cursor
+                .expect("publication collision message cursor")
+                .get(),
+            publication_cursor.get(),
+        ]
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| matches!(entry.item, TranscriptItem::Message { .. }))
+            .count(),
+        2
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|entry| matches!(entry.item, TranscriptItem::InteractionRequested { .. }))
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|entry| matches!(entry.item, TranscriptItem::PublicationAudit { .. }))
+    );
+    assert_eq!(
+        store
+            .load_transcript_page(None, 10)
+            .expect("typed collision page")
+            .entries
+            .iter()
+            .filter(|entry| entry.cursor == accepted_cursor)
+            .count(),
+        1,
+        "Pending -> Ledger adoption reuses the acceptance reference"
+    );
+    assert!(matches!(
+        store.append_canonical(&user_message(shared_id, "duplicate")),
+        Err(ConversationStoreError::DuplicateMessageId(_))
+    ));
 }
 
 /// Requirement 13: resource reload changes future resource state only; it

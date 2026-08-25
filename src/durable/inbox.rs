@@ -62,6 +62,15 @@ impl core::fmt::Display for TranscriptCursor {
     }
 }
 
+/// The transcript position allocated by one durable canonical-message
+/// transition.  A `None` receipt is intentional for durable context messages,
+/// which remain model history but are hidden from the ordinary transcript.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TranscriptCommitReceipt {
+    /// The durable transcript position, when the committed fact is visible.
+    pub transcript_cursor: Option<TranscriptCursor>,
+}
+
 /// A producer-supplied draft of one inbound item, before acceptance.
 ///
 /// The producer supplies destination content/provenance/correlation and, for
@@ -97,6 +106,9 @@ pub struct AcceptedInbound {
     pub message_id: MessageId,
     /// The persisted canonical inbound message.
     pub message: UserMessageBlock,
+    /// The transcript position allocated at acceptance for visible inbound.
+    /// Adoption into the Ledger reuses this exact position.
+    pub transcript_cursor: Option<TranscriptCursor>,
     /// Whether this acceptance was an idempotent correlation retry of an
     /// already-committed acceptance (no new sequence was allocated).
     pub retried: bool,
@@ -111,6 +123,8 @@ pub struct PendingInboundItem {
     pub message_id: MessageId,
     /// The persisted canonical inbound message.
     pub message: UserMessageBlock,
+    /// The transcript position allocated at acceptance for visible inbound.
+    pub transcript_cursor: Option<TranscriptCursor>,
     /// The producer correlation, when one was supplied.
     pub correlation: Option<String>,
 }
@@ -466,7 +480,7 @@ fn commit_subagent_ownership_through(
 fn commit_interaction_audit_through(
     store: &(impl ConversationStore + ?Sized),
     event: RuntimeEventEnvelope,
-) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError> {
     if !matches!(
         event.event,
         crate::events::types::RuntimeEvent::InteractionRequested { .. }
@@ -476,7 +490,7 @@ fn commit_interaction_audit_through(
             "the interaction capability commits only interaction audit facts".to_owned(),
         ));
     }
-    store.append_event(event)
+    store.append_interaction_audit(event)
 }
 
 /// The narrow backend-independent audit capability of the native interaction
@@ -509,7 +523,7 @@ pub trait ConversationInteractionAudit: Send + Sync + 'static {
     fn commit_interaction_requested(
         &self,
         event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError>;
 
     /// Commits the durable settled fact of one interaction.
     ///
@@ -520,7 +534,7 @@ pub trait ConversationInteractionAudit: Send + Sync + 'static {
     fn commit_interaction_settled(
         &self,
         event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError>;
 }
 
 /// The narrow backend-independent capability used by the Pending Inbound
@@ -775,7 +789,10 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// Returns [`ConversationStoreError::DuplicateMessageId`] when the identity is
     /// already committed to the durable Ledger and
     /// [`ConversationStoreError::Storage`] on a backend failure.
-    fn append_canonical(&self, message: &MessageBlock) -> Result<(), ConversationStoreError>;
+    fn append_canonical(
+        &self,
+        message: &MessageBlock,
+    ) -> Result<TranscriptCommitReceipt, ConversationStoreError>;
 
     /// Appends a canonical [`MessageBlock`] batch atomically.
     ///
@@ -793,7 +810,7 @@ pub trait ConversationStore: Send + Sync + 'static {
     fn append_canonical_batch(
         &self,
         messages: &[MessageBlock],
-    ) -> Result<(), ConversationStoreError>;
+    ) -> Result<Vec<TranscriptCommitReceipt>, ConversationStoreError>;
 
     /// Commits a canonical message and its committed-message Event Journal
     /// fact in one `SQLite` transaction.
@@ -801,7 +818,7 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         message: &MessageBlock,
         event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCommitReceipt), ConversationStoreError>;
 
     /// Commits a structurally atomic canonical batch and all corresponding
     /// committed-message events in one `SQLite` transaction.
@@ -809,14 +826,17 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         messages: &[MessageBlock],
         events: &[RuntimeEventEnvelope],
-    ) -> Result<Vec<RuntimeEventEnvelope>, ConversationStoreError>;
+    ) -> Result<(Vec<RuntimeEventEnvelope>, Vec<TranscriptCommitReceipt>), ConversationStoreError>;
 
     /// Commits the summary Ledger row, immutable Surface Replace revision,
     /// checkpoint metadata, and `CompactionCompleted` fact atomically.
     fn commit_compaction(
         &self,
         input: CompactionCommitInput,
-    ) -> Result<(SurfaceRevision, u64, RuntimeEventEnvelope), ConversationStoreError>;
+    ) -> Result<
+        (SurfaceRevision, u64, RuntimeEventEnvelope, TranscriptCursor),
+        ConversationStoreError,
+    >;
 
     /// Loads the durable canonical Message Ledger in commit order (the
     /// complete crash-recoverable prefix of the Message Ledger).
@@ -905,6 +925,13 @@ pub trait ConversationStore: Send + Sync + 'static {
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
 
+    /// Commits one interaction audit event and returns the transcript
+    /// position allocated in the same durable transaction.
+    fn append_interaction_audit(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError>;
+
     /// Reads a bounded Event Journal page in stable sequence order.
     fn read_events(
         &self,
@@ -976,7 +1003,7 @@ pub trait ConversationStore: Send + Sync + 'static {
         stream_id: &PublicationStreamId,
         message: &MessageBlock,
         event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError>;
 
     /// Terminalizes one unsettled publication stream as an audit.
     ///
@@ -991,7 +1018,7 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         stream_id: &PublicationStreamId,
         timestamp: DateTime<Utc>,
-    ) -> Result<PublicationAudit, ConversationStoreError>;
+    ) -> Result<(PublicationAudit, TranscriptCursor), ConversationStoreError>;
 
     /// Loads every publication stream that has not settled, for recovery
     /// classification. The records carry frozen identities and the durable
@@ -1066,7 +1093,7 @@ impl<T: ConversationStore + ?Sized> ConversationInteractionAudit for T {
     fn commit_interaction_requested(
         &self,
         event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError> {
         if !matches!(
             event.event,
             crate::events::types::RuntimeEvent::InteractionRequested { .. }
@@ -1081,7 +1108,7 @@ impl<T: ConversationStore + ?Sized> ConversationInteractionAudit for T {
     fn commit_interaction_settled(
         &self,
         event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError> {
         if !matches!(
             event.event,
             crate::events::types::RuntimeEvent::InteractionSettled { .. }
@@ -1118,14 +1145,14 @@ impl ConversationInteractionAudit for StoreInteractionAudit {
     fn commit_interaction_requested(
         &self,
         event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError> {
         self.store.commit_interaction_requested(event)
     }
 
     fn commit_interaction_settled(
         &self,
         event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError> {
         self.store.commit_interaction_settled(event)
     }
 }

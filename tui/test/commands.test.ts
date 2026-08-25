@@ -23,6 +23,7 @@ import {
   catalogModel,
   capabilities,
   questionInteraction,
+  runtimeCursor,
   sessionModel,
   sessionView,
   snapshot,
@@ -64,10 +65,10 @@ async function harness(initial = snapshot()) {
     conversation_id: initial.conversation_id,
     agent_id: "agent-1",
     snapshot: initial,
-    cursor: 0,
+    cursor: runtimeCursor(0),
   });
   await peer.awaitRequests(2);
-  peer.respond(2, { type: "subscribed", after_cursor: 0 });
+  peer.respond(2, { type: "subscribed", after_cursor: runtimeCursor(0) });
   await attaching;
 
   const dispatcher = new CommandDispatcher({
@@ -1009,7 +1010,7 @@ describe("CommandDispatcher", () => {
         attachmentId: "att-1",
         conversationId: "conv-test",
         agentId: "agent-1",
-        cursor: 0,
+        cursor: runtimeCursor(0),
         connectionState: "connected",
         childStatus: "running (pid 42)",
         stderrTail: "rustx: warning: something bounded",

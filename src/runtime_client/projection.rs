@@ -330,7 +330,11 @@ impl RuntimeClientProjection {
             ConversationObservation::ManualCompactionEvent { event } => {
                 self.fold_compaction_event(None, &event)
             }
-            ConversationObservation::Committed { attempt_id, block } => {
+            ConversationObservation::Committed {
+                attempt_id,
+                block,
+                transcript_cursor,
+            } => {
                 if matches!(block, MessageBlock::Assistant(_))
                     && let Some(attempt) = &mut self.snapshot.attempt
                 {
@@ -340,6 +344,7 @@ impl RuntimeClientProjection {
                 vec![RuntimeClientEvent::MessageCommitted {
                     attempt_id,
                     message: block,
+                    transcript_cursor: transcript_cursor.map(Into::into),
                 }]
             }
             // The three publication observations replace what used to be
@@ -365,17 +370,25 @@ impl RuntimeClientProjection {
             ConversationObservation::Publication { attempt_id, frame } => {
                 self.fold_publication_frame(&attempt_id, &frame)
             }
-            // An audit is not conversation history: it never enters the
-            // committed message list and never becomes an in-flight message.
-            // It only closes the in-flight read model of a stream that will
-            // never be canonically accepted.
-            ConversationObservation::PublicationSettled { attempt_id, audit } => {
+            // An audit is a derived transcript item, but it is not a
+            // canonical Message Ledger message and never becomes an
+            // in-flight message. It only closes the in-flight read model of a
+            // stream that will never be canonically accepted.
+            ConversationObservation::PublicationSettled {
+                attempt_id,
+                audit,
+                transcript_cursor,
+            } => {
                 if let Some(attempt) = &mut self.snapshot.attempt
                     && attempt.attempt_id == attempt_id
                 {
                     attempt.in_flight = None;
                 }
-                vec![RuntimeClientEvent::AssistantPublicationSettled { attempt_id, audit }]
+                vec![RuntimeClientEvent::AssistantPublicationSettled {
+                    attempt_id,
+                    audit,
+                    transcript_cursor: transcript_cursor.into(),
+                }]
             }
             ConversationObservation::Status(observation) => {
                 let view = status_view(&observation);
@@ -392,6 +405,7 @@ impl RuntimeClientProjection {
                 vec![RuntimeClientEvent::InboundEnqueued {
                     sequence: item.sequence(),
                     message: item.message().clone(),
+                    transcript_cursor: item.transcript_cursor().map(Into::into),
                 }]
             }
             ConversationObservation::InboundDrained(batch) => {
@@ -410,7 +424,11 @@ impl RuntimeClientProjection {
                         .collect(),
                 }]
             }
-            ConversationObservation::InteractionPending { request, audit } => {
+            ConversationObservation::InteractionPending {
+                request,
+                audit,
+                transcript_cursor,
+            } => {
                 upsert_interaction(&mut self.snapshot.pending_interactions, request.clone());
                 let audit_view = super::snapshot::interaction_requested_view(audit)
                     .expect("runtime interaction requested audit is valid");
@@ -420,6 +438,7 @@ impl RuntimeClientProjection {
                     },
                     RuntimeClientEvent::InteractionAuditRequested {
                         audit: Box::new(audit_view),
+                        transcript_cursor: transcript_cursor.into(),
                     },
                 ]
             }
@@ -436,10 +455,12 @@ impl RuntimeClientProjection {
                     outcome,
                 }];
                 if let Some(audit) = audit {
+                    let (audit, transcript_cursor) = audit;
                     let audit_view = super::snapshot::interaction_settled_view(audit)
                         .expect("runtime interaction settled audit is valid");
                     events.push(RuntimeClientEvent::InteractionAuditSettled {
                         audit: Box::new(audit_view),
+                        transcript_cursor: transcript_cursor.into(),
                     });
                 }
                 events
@@ -1630,6 +1651,7 @@ mod tests {
     use crate::runtime_client::event::{RuntimeClientEvent, RuntimeClientOutcome};
     use crate::runtime_client::snapshot::{
         ForegroundToolState, InFlightBlock, RuntimeClientAttemptPhase,
+        RuntimeClientTranscriptCursor,
     };
     use crate::runtime_client::types::RuntimeClientCursor;
     use crate::scripted_suites::support::context::{
@@ -1836,7 +1858,12 @@ mod tests {
             self.drain_client_events(&mut projection);
         }
 
-        fn observe_committed(&self, attempt_id: &AttemptId, block: &MessageBlock) {
+        fn observe_committed(
+            &self,
+            attempt_id: &AttemptId,
+            block: &MessageBlock,
+            transcript_cursor: Option<crate::durable::TranscriptCursor>,
+        ) {
             if matches!(
                 block,
                 MessageBlock::User(user) if user.kind == InboundKind::CompactionSummary
@@ -1850,6 +1877,7 @@ mod tests {
             projection.apply(ConversationObservation::Committed {
                 attempt_id: Some(attempt_id.clone()),
                 block: block.clone(),
+                transcript_cursor,
             });
             self.drain_client_events(&mut projection);
         }
@@ -1890,11 +1918,13 @@ mod tests {
             &self,
             attempt_id: &AttemptId,
             audit: &crate::publication::PublicationAudit,
+            transcript_cursor: crate::durable::TranscriptCursor,
         ) {
             let mut projection = self.projection.lock().expect("projection lock");
             projection.apply(ConversationObservation::PublicationSettled {
                 attempt_id: attempt_id.clone(),
                 audit: Box::new(audit.clone()),
+                transcript_cursor,
             });
             self.drain_client_events(&mut projection);
         }
@@ -2616,6 +2646,7 @@ mod tests {
         projection.apply(ConversationObservation::Committed {
             attempt_id: Some(attempt()),
             block: committed.clone(),
+            transcript_cursor: Some(crate::durable::TranscriptCursor::new(1)),
         });
         let (snapshot, _) = projection.snapshot().expect("snapshot");
         assert_eq!(snapshot.messages, vec![committed]);
@@ -2625,6 +2656,51 @@ mod tests {
                 .as_ref()
                 .and_then(|attempt| attempt.in_flight.as_ref())
                 .is_none()
+        );
+    }
+
+    /// A durable commit cursor travels with the live observation even when
+    /// observations arrive in the opposite order. The Runtime Client event
+    /// cursor records that delivery order only; it is deliberately not the
+    /// transcript order input.
+    #[test]
+    fn live_committed_observations_carry_durable_cursors_across_reordering() {
+        let mut projection = projection();
+        let message_a = compactable_user("message-a");
+        let message_b = compactable_user("message-b");
+
+        projection.apply(ConversationObservation::Committed {
+            attempt_id: None,
+            block: message_b,
+            transcript_cursor: Some(crate::durable::TranscriptCursor::new(11)),
+        });
+        projection.apply(ConversationObservation::Committed {
+            attempt_id: None,
+            block: message_a,
+            transcript_cursor: Some(crate::durable::TranscriptCursor::new(10)),
+        });
+
+        let events = collect(&mut projection, RuntimeClientCursor::new(0));
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.cursor.get())
+                .collect::<Vec<_>>(),
+            vec![1, 2],
+            "Runtime Client cursors follow observation delivery"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter_map(|event| match &event.event {
+                    RuntimeClientEvent::MessageCommitted {
+                        transcript_cursor, ..
+                    } => transcript_cursor.map(RuntimeClientTranscriptCursor::get),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            vec![11, 10],
+            "each live fact carries its own durable transcript cursor"
         );
     }
 
@@ -2998,6 +3074,7 @@ mod tests {
         projection.apply(ConversationObservation::InteractionPending {
             request: request.clone(),
             audit: requested_audit,
+            transcript_cursor: crate::durable::TranscriptCursor::new(1),
         });
         let (snapshot, cursor) = projection.snapshot().expect("snapshot");
         assert_eq!(snapshot.pending_interactions, vec![request.clone()]);
@@ -3025,7 +3102,7 @@ mod tests {
         projection.apply(ConversationObservation::InteractionSettled {
             interaction_id: request.id.clone(),
             outcome: outcome.clone(),
-            audit: Some(settled_audit),
+            audit: Some((settled_audit, crate::durable::TranscriptCursor::new(2))),
         });
         let (snapshot, cursor) = projection.snapshot().expect("snapshot");
         assert!(snapshot.pending_interactions.is_empty());
@@ -3039,7 +3116,8 @@ mod tests {
             }) if interaction_id == &request.id && event_outcome == &outcome
         ));
 
-        // The projection never turns a live prompt into canonical history.
+        // The projection never turns a live prompt into a historical audit;
+        // only the durable requested/settled audit observations do that.
         assert!(
             projection
                 .snapshot()

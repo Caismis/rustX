@@ -700,7 +700,13 @@ impl RecordingPublicationObserver {
 impl AgentExecutionObserver for RecordingPublicationObserver {
     fn observe_event(&self, _attempt_id: &AttemptId, _event: &RuntimeEvent) {}
 
-    fn observe_committed(&self, _attempt_id: &AttemptId, _block: &MessageBlock) {}
+    fn observe_committed(
+        &self,
+        _attempt_id: &AttemptId,
+        _block: &MessageBlock,
+        _transcript_cursor: Option<rustx::durable::TranscriptCursor>,
+    ) {
+    }
 
     fn observe_status(&self, _observation: &AgentStatusObservation) {}
 
@@ -723,7 +729,12 @@ impl AgentExecutionObserver for RecordingPublicationObserver {
         self.frame_count.send_modify(|count| *count += 1);
     }
 
-    fn observe_publication_settled(&self, _attempt_id: &AttemptId, audit: &PublicationAudit) {
+    fn observe_publication_settled(
+        &self,
+        _attempt_id: &AttemptId,
+        audit: &PublicationAudit,
+        _transcript_cursor: rustx::durable::TranscriptCursor,
+    ) {
         self.audits
             .lock()
             .expect("publication audit lock")

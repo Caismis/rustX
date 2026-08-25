@@ -2114,6 +2114,7 @@ impl RuntimeInner {
                     self.observe(ConversationObservation::Committed {
                         attempt_id: None,
                         block: success.completed.summary_block,
+                        transcript_cursor: Some(success.completed.transcript_cursor),
                     });
                     self.observe(ConversationObservation::ManualCompactionEvent {
                         event: success.completed.persisted_event.event,
@@ -2421,7 +2422,7 @@ impl RuntimeInner {
             .conversation
             .take()
             .expect("the coordinator owns the conversation state while idle");
-        for prepared in prepared_commits {
+        for (prepared, item) in prepared_commits.into_iter().zip(batch.items()) {
             // Infallible: every adopted identity was validated by
             // `prepare_commit` above under exclusive ownership.
             let block = prepared.message().clone();
@@ -2429,6 +2430,7 @@ impl RuntimeInner {
             self.observe(ConversationObservation::Committed {
                 attempt_id: None,
                 block,
+                transcript_cursor: item.transcript_cursor(),
             });
         }
         self.publish_attempt(state, conversation, Some(fresh));
@@ -4679,10 +4681,16 @@ impl AgentExecutionObserver for RuntimeObserver {
         });
     }
 
-    fn observe_committed(&self, attempt_id: &AttemptId, block: &MessageBlock) {
+    fn observe_committed(
+        &self,
+        attempt_id: &AttemptId,
+        block: &MessageBlock,
+        transcript_cursor: Option<crate::durable::TranscriptCursor>,
+    ) {
         self.push(ConversationObservation::Committed {
             attempt_id: Some(attempt_id.clone()),
             block: block.clone(),
+            transcript_cursor,
         });
     }
 
@@ -4704,10 +4712,16 @@ impl AgentExecutionObserver for RuntimeObserver {
         });
     }
 
-    fn observe_publication_settled(&self, attempt_id: &AttemptId, audit: &PublicationAudit) {
+    fn observe_publication_settled(
+        &self,
+        attempt_id: &AttemptId,
+        audit: &PublicationAudit,
+        transcript_cursor: crate::durable::TranscriptCursor,
+    ) {
         self.push(ConversationObservation::PublicationSettled {
             attempt_id: attempt_id.clone(),
             audit: Box::new(audit.clone()),
+            transcript_cursor,
         });
     }
 }
@@ -4775,10 +4789,12 @@ impl InteractionObserver for RuntimeObserver {
         &self,
         request: &InteractionRequest,
         audit: &crate::events::types::RuntimeEventEnvelope,
+        transcript_cursor: crate::durable::TranscriptCursor,
     ) {
         self.push(ConversationObservation::InteractionPending {
             request: request.clone(),
             audit: audit.clone(),
+            transcript_cursor,
         });
     }
 
@@ -4786,7 +4802,10 @@ impl InteractionObserver for RuntimeObserver {
         &self,
         interaction_id: &crate::runtime::identity::InteractionId,
         outcome: &InteractionOutcome,
-        audit: Option<&crate::events::types::RuntimeEventEnvelope>,
+        audit: Option<&(
+            crate::events::types::RuntimeEventEnvelope,
+            crate::durable::TranscriptCursor,
+        )>,
     ) {
         self.push(ConversationObservation::InteractionSettled {
             interaction_id: interaction_id.clone(),
@@ -6208,6 +6227,7 @@ mod tests {
                 ConversationObservation::Committed {
                     attempt_id: None,
                     block: MessageBlock::User(user),
+                    ..
                 } if user.id == outcome.summary_message_id
             )
         }));

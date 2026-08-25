@@ -621,8 +621,10 @@ Runtime Client / TUI        bounded projection and presentation only
 ```
 
 `transcript_order` contains only a reference kind, reference identity, and a
-monotonic position. The store appends that reference in the same transaction
-as the owning durable fact. Reading a page resolves the body from its
+monotonic position. Its identity is the composite `(reference_kind,
+reference_id)` key: a MessageId, PublicationStreamId, and EventId may reuse
+the same opaque string without colliding. The store appends that reference in
+the same transaction as the owning durable fact. Reading a page resolves the body from its
 canonical owner on demand, so the transcript cannot become a second body
 store or an unbounded in-memory vector. Accepted inbound User content is not
 displayable until its acceptance transaction commits; adoption into the
@@ -634,19 +636,30 @@ retains the durable readable history of visible canonical messages and audits
 after those messages leave Surface. Normal transcript visibility includes
 User, Assistant, Tool, and compaction-summary messages. All Context-kind User
 messages, including Agent Status, runtime observations, and extension
-environment facts, are hidden from normal chat history.
+environment facts, are hidden from normal chat history. The durable position
+is allocated before the observation is released; every live visible message
+or audit carries that exact `TranscriptCursor`. The Runtime Client event
+cursor remains only an observation-stream position and is never a transcript
+ordering input.
 
 The Runtime Client snapshot contains a newest transcript page capped at 64
 entries. `transcript_page_get` accepts an exclusive `before_cursor` and a
 limit from 1 through 256; the response is chronological within the page and
-returns the exclusive cursor for the next older page. This transcript cursor
-is independent from the live Runtime Client event cursor: snapshot plus
+returns the exclusive cursor for the next older page. The caller passes that
+`next_cursor` unchanged on the next older-page request: it is the current
+page's oldest boundary, not a newest-entry cursor. This transcript cursor is
+independent from the live Runtime Client event cursor: snapshot plus
 subscribe-after-cursor repairs live projection state, while transcript page
-requests repair durable history. A detached, reattached, headless, or cold
-reopened runtime reads the same durable pages and never enumerates the whole
-conversation at bootstrap.
+requests repair durable history and never move the live cursor. Every live
+transcript-visible observation carries the cursor allocated by the same
+durable transaction as its owning fact, so live, snapshot, reattach, headless,
+cold reopen, and paging folds have one order. A detached, reattached,
+headless, or cold reopened runtime reads the same durable pages and never
+enumerates the whole conversation at bootstrap.
 
-Publication audits render as explicitly non-canonical Assistant output.
+Publication audits render as explicitly non-canonical Assistant transcript
+items. They are derived from the publication-audit owner rather than the
+Message Ledger, and do not imply canonical acceptance or execution.
 Incomplete and Unaccepted audits remain distinct. A model-proposed tool call
 inside either audit is typed and rendered as proposed, unaccepted, and
 unexecuted; it is never a Tool Plane invocation and never implies execution,
@@ -659,8 +672,9 @@ reopen loads a fresh resource generation for future requests.
 The TUI therefore sends user input through the Runtime Client and renders it
 only after durable acceptance. It does not maintain an optimistic semantic
 echo or a parallel transcript. Page-up reads older durable pages and merges
-by stable entry identity without moving the live event cursor; historical
-audits are non-actionable presentation rows.
+live and historical entries by their durable transcript cursors without
+moving the live event cursor; identity only rejects the same fact twice.
+Historical audits are non-actionable presentation rows.
 
 ## 2. Layer model
 

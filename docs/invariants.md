@@ -143,7 +143,8 @@ returned `next_cursor` is the exclusive boundary for the next older page.
 Transcript cursors are independent of Runtime Client event cursors, so page
 walking cannot invalidate snapshot-plus-subscribe resynchronization. A page
 walk must be stable, duplicate-free, and gap-free under the durable ordering
-spine; clients merge older pages by stable entry identity and do not move the
+spine; clients merge live and older pages by durable transcript cursor. Entry
+identity only detects the same durable fact, and page reads do not move the
 live event cursor.
 
 Publication audits are typed non-canonical Assistant items. Incomplete and
@@ -2810,9 +2811,9 @@ semantic normalization boundary. The frozen invariants:
   client streaming vocabulary it always published, but every one of them was
   committed for release before it arrived. A stream that settles without
   canonical acceptance publishes `AssistantPublicationSettled`, whose audit a
-  transcript consumer must present as committed-for-release output containing
-  model **proposals** — never as conversation history and never as Tool Plane
-  invocation facts.
+  transcript consumer must present as committed-for-release, **noncanonical**
+  transcript output containing model **proposals** — never as a Message Ledger
+  message and never as Tool Plane invocation facts.
 - **The snapshot transcript is a bounded durable read model.** It contains
   the newest page of canonical visible messages, non-canonical publication
   audits, and historical interaction audits. It is resolved from the Ledger,
@@ -2820,13 +2821,21 @@ semantic normalization boundary. The frozen invariants:
   body is copied into a transcript database or retained as an unbounded
   Runtime Client vector. Surface `messages` remains the current active model
   working set and is not a substitute for transcript history after compaction.
+  `transcript_order` identifies each reference by the composite
+  `(reference_kind, reference_id)` key, so independent MessageId,
+  PublicationStreamId, and EventId domains may reuse an opaque string. The
+  same transaction that commits the owning fact allocates its
+  `TranscriptCursor` and supplies it to the live observation.
 - **`transcript_page_get` uses a separate stable cursor domain.** The snapshot
   bootstrap page is capped at 64 entries. A page request accepts an exclusive
   `before_cursor` and a limit of 1..=256, returns chronological entries and
   an exclusive next-older cursor, and never changes `RuntimeClientCursor`.
-  Page walking is duplicate-free and gap-free; a reattached, headless, or
-  cold-reopened client reads the same durable order. The TUI merges older
-  pages by stable entry identity and shows a transient failure if a page read
+  The caller passes the previous response's `next_cursor` unchanged as the
+  next request's `before_cursor`; it is the oldest boundary, not the newest
+  entry cursor. Page walking is duplicate-free and gap-free; a reattached,
+  headless, or cold-reopened client reads the same durable order. The TUI
+  merges live and older pages by durable transcript cursor (identity only
+  rejects the same fact twice) and shows a transient failure if a page read
   fails.
 - **Durable acceptance is the user-input visibility frontier.** The TUI never
   adds an optimistic semantic user row. It sends input through the Runtime

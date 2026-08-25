@@ -203,9 +203,10 @@ and audit facts; client output never becomes a `MessageBlock`, a model request
 payload, or a Runtime Client protocol event. User input is rendered as
 transcript content only after durable acceptance. The snapshot contains only
 the newest bounded transcript page; PageUp requests older pages with
-`transcript_page_get` and merges them by stable entry identity. The transcript
-cursor is separate from the live event cursor, so loading older history cannot
-disturb event resynchronization.
+`transcript_page_get` and merges them by durable transcript cursor. Entry
+identity only detects the same durable fact; it never supplies ordering. The
+transcript cursor is separate from the live event cursor, so loading older
+history cannot disturb event resynchronization.
 
 Command routing has a separate ownership boundary: rebinding the dispatcher
 changes admission only for future invocations. Each admitted command captures

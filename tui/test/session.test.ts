@@ -19,6 +19,8 @@ import {
   sessionModel,
   sessionView,
   snapshot,
+  runtimeCursor,
+  transcriptCursor,
   userMessage,
 } from "./support/fixtures.ts";
 import { ScriptedPeer, until } from "./support/scripted-peer.ts";
@@ -51,10 +53,10 @@ async function attach(
     conversation_id: initial.conversation_id,
     agent_id: "agent-1",
     snapshot: initial,
-    cursor,
+    cursor: runtimeCursor(cursor),
   });
   await peer.awaitRequests(2);
-  peer.respond(2, { type: "subscribed", after_cursor: cursor });
+  peer.respond(2, { type: "subscribed", after_cursor: runtimeCursor(cursor) });
   await attaching;
 }
 
@@ -89,14 +91,14 @@ describe("RuntimeClientAttachment", () => {
         transcript: {
           entries: [
             {
-              cursor: 2,
+              cursor: transcriptCursor(2),
               item: {
                 type: "message",
                 message: userMessage("newer", "newer"),
               },
             },
           ],
-          next_cursor: 1,
+          next_cursor: transcriptCursor(1),
         },
       }),
       7,
@@ -115,7 +117,7 @@ describe("RuntimeClientAttachment", () => {
       page: {
         entries: [
           {
-            cursor: 1,
+            cursor: transcriptCursor(1),
             item: {
               type: "message",
               message: userMessage("older", "older"),
@@ -150,10 +152,10 @@ describe("RuntimeClientAttachment", () => {
     peer.respond(3, {
       type: "snapshot",
       snapshot: snapshot({ messages: [userMessage("m1", "repaired")] }),
-      cursor: 9,
+      cursor: runtimeCursor(9),
     });
     await peer.awaitRequests(4);
-    peer.respond(4, { type: "subscribed", after_cursor: 9 });
+    peer.respond(4, { type: "subscribed", after_cursor: runtimeCursor(9) });
     await repairing;
 
     assert.equal(replacements, 2, "resync installs a replacement snapshot");
@@ -223,7 +225,7 @@ describe("RuntimeClientAttachment", () => {
       conversation_id: "conv-1",
       agent_id: "agent-1",
       snapshot: snapshot(),
-      cursor: 0,
+      cursor: runtimeCursor(0),
     });
     await peer.awaitRequests(2);
 
@@ -233,7 +235,7 @@ describe("RuntimeClientAttachment", () => {
       attempt_id: "a1",
       model: attemptModel("alpha/model-a"),
     });
-    peer.respond(2, { type: "subscribed", after_cursor: 0 });
+    peer.respond(2, { type: "subscribed", after_cursor: runtimeCursor(0) });
     await attaching;
 
     await until(
@@ -292,10 +294,10 @@ describe("RuntimeClientAttachment", () => {
           model: attemptModel("alpha/model-a"),
         },
       }),
-      cursor: 30,
+      cursor: runtimeCursor(30),
     });
     await peer.awaitRequests(4);
-    peer.respond(4, { type: "subscribed", after_cursor: 30 });
+    peer.respond(4, { type: "subscribed", after_cursor: runtimeCursor(30) });
     await repairing;
 
     assert.equal(session.state?.attempt?.turn, 2);
@@ -329,7 +331,7 @@ describe("RuntimeClientAttachment", () => {
         // The attempt the client thought was running is gone.
         attempt: undefined,
       }),
-      cursor: 50,
+      cursor: runtimeCursor(50),
     });
     const afterSubscribe = await peer.awaitRequests(4);
     assert.equal(afterSubscribe[3]?.method, "subscribe_events");
@@ -340,7 +342,7 @@ describe("RuntimeClientAttachment", () => {
       50,
       "the subscription resumes after the *new* cursor",
     );
-    peer.respond(4, { type: "subscribed", after_cursor: 50 });
+    peer.respond(4, { type: "subscribed", after_cursor: runtimeCursor(50) });
     await repairing;
 
     assert.equal(session.resyncCount, 1);
@@ -367,15 +369,15 @@ describe("RuntimeClientAttachment", () => {
       conversation_id: "conv-1",
       agent_id: "agent-1",
       snapshot: snapshot(),
-      cursor: 3,
+      cursor: runtimeCursor(3),
     });
     await peer.awaitRequests(2);
 
     // The cursor expired between the snapshot and the subscription.
     peer.respondError(2, {
       type: "resync_required",
-      after_cursor: 3,
-      earliest_serviceable: 40,
+      after_cursor: runtimeCursor(3),
+      earliest_serviceable: runtimeCursor(40),
     });
 
     const afterSnapshot = await peer.awaitRequests(3);
@@ -383,10 +385,10 @@ describe("RuntimeClientAttachment", () => {
     peer.respond(3, {
       type: "snapshot",
       snapshot: snapshot({ messages: [userMessage("m1", "recovered")] }),
-      cursor: 41,
+      cursor: runtimeCursor(41),
     });
     await peer.awaitRequests(4);
-    peer.respond(4, { type: "subscribed", after_cursor: 41 });
+    peer.respond(4, { type: "subscribed", after_cursor: runtimeCursor(41) });
     await attaching;
 
     assert.equal(session.resyncCount, 1);
@@ -409,10 +411,10 @@ describe("RuntimeClientAttachment", () => {
     peer.respond(3, {
       type: "snapshot",
       snapshot: snapshot({ shutting_down: false }),
-      cursor: 60,
+      cursor: runtimeCursor(60),
     });
     await peer.awaitRequests(4);
-    peer.respond(4, { type: "subscribed", after_cursor: 60 });
+    peer.respond(4, { type: "subscribed", after_cursor: runtimeCursor(60) });
     await repairing;
 
     assert.equal(

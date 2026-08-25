@@ -1250,13 +1250,17 @@ impl<'a> AgentExecution<'a> {
                 self.durable_failure_terminal("a selected inbound batch cannot be adopted", &error)
             );
         }
-        for commit in prepared {
+        for (commit, item) in prepared.into_iter().zip(batch.items()) {
             // Infallible: every adopted identity was validated above under
             // exclusive ownership of the conversation state.
             let block = commit.message().clone();
             self.conversation.install_prepared(commit);
             if let Some(observer) = self.observer {
-                observer.observe_committed(&self.request.attempt_id, &block);
+                observer.observe_committed(
+                    &self.request.attempt_id,
+                    &block,
+                    item.transcript_cursor(),
+                );
             }
         }
         self.pending_fresh_inbound = Some(fresh);
@@ -1747,7 +1751,10 @@ impl<'a> AgentExecution<'a> {
             let block = commit.message().clone();
             self.conversation.install_prepared(commit);
             if let Some(observer) = self.observer {
-                observer.observe_committed(&self.request.attempt_id, &block);
+                // Request-scoped Context-kind messages are model history, not
+                // ordinary transcript items, so they carry no transcript
+                // cursor and never create a semantic user echo.
+                observer.observe_committed(&self.request.attempt_id, &block, None);
             }
         }
         self.record_persisted_event(started);
@@ -2160,7 +2167,11 @@ impl<'a> AgentExecution<'a> {
         // The committed runtime summary is a canonical Ledger fact, observed
         // at exactly the commit linearization point like every other commit.
         if let Some(observer) = self.observer {
-            observer.observe_committed(&self.request.attempt_id, &completed.summary_block);
+            observer.observe_committed(
+                &self.request.attempt_id,
+                &completed.summary_block,
+                Some(completed.transcript_cursor),
+            );
         }
         self.record_persisted_event(completed.persisted_event);
         Ok(CompletedCompaction)
@@ -3186,7 +3197,7 @@ impl<'a> AgentExecution<'a> {
         let stream_id = publication.start.stream_id.clone();
         let prepared = self.conversation.prepare_commit(&block)?;
         let event = Self::canonical_event(&block).expect("an Assistant commit has its event");
-        let persisted = self
+        let (persisted, transcript_cursor) = self
             .store
             .commit_canonical_publication(
                 &stream_id,
@@ -3199,7 +3210,7 @@ impl<'a> AgentExecution<'a> {
         self.publication = None;
         self.conversation.install_prepared(prepared);
         if let Some(observer) = self.observer {
-            observer.observe_committed(&self.request.attempt_id, &block);
+            observer.observe_committed(&self.request.attempt_id, &block, Some(transcript_cursor));
         }
         self.record_persisted_event(persisted);
         Ok(())
@@ -3236,14 +3247,18 @@ impl<'a> AgentExecution<'a> {
             .into_iter()
             .map(|event| self.event_envelope(event))
             .collect::<Vec<_>>();
-        let persisted_events = self
+        let (persisted_events, receipts) = self
             .store
             .append_canonical_batch_with_events(blocks, &envelopes)
             .map_err(CanonicalCommitError::Durable)?;
-        for (prepared, block) in prepared.into_iter().zip(blocks) {
+        for ((prepared, block), receipt) in prepared.into_iter().zip(blocks).zip(receipts) {
             self.conversation.install_prepared(prepared);
             if let Some(observer) = self.observer {
-                observer.observe_committed(&self.request.attempt_id, block);
+                observer.observe_committed(
+                    &self.request.attempt_id,
+                    block,
+                    receipt.transcript_cursor,
+                );
             }
         }
         for event in persisted_events {
@@ -3444,13 +3459,17 @@ impl<'a> AgentExecution<'a> {
             .store
             .terminalize_publication_audit(&stream_id, Utc::now())
         {
-            Ok(audit) => {
+            Ok((audit, transcript_cursor)) => {
                 // Only remove the in-memory owner after the durable
                 // settlement committed. On failure it remains the one
                 // recoverable unsettled stream.
                 self.publication.take();
                 if let Some(observer) = self.observer {
-                    observer.observe_publication_settled(&self.request.attempt_id, &audit);
+                    observer.observe_publication_settled(
+                        &self.request.attempt_id,
+                        &audit,
+                        transcript_cursor,
+                    );
                 }
                 Ok(())
             }
@@ -4250,7 +4269,13 @@ mod tests {
                 .push(event.clone());
         }
 
-        fn observe_committed(&self, _attempt_id: &AttemptId, _block: &MessageBlock) {}
+        fn observe_committed(
+            &self,
+            _attempt_id: &AttemptId,
+            _block: &MessageBlock,
+            _transcript_cursor: Option<crate::durable::TranscriptCursor>,
+        ) {
+        }
 
         fn observe_status(&self, _observation: &AgentStatusObservation) {}
 
@@ -4272,6 +4297,7 @@ mod tests {
             &self,
             _attempt_id: &AttemptId,
             audit: &crate::publication::PublicationAudit,
+            _transcript_cursor: crate::durable::TranscriptCursor,
         ) {
             self.audits
                 .lock()

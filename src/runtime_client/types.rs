@@ -375,13 +375,16 @@ pub enum RuntimeClientRequest {
         /// Attachment-scoped request id.
         id: RequestId,
     },
-    /// Read one bounded durable transcript page. `before_cursor` is
-    /// exclusive; omitting it returns the newest page.
+    /// Read one bounded durable transcript page. `before_cursor` is the
+    /// exclusive boundary for older history; omitting it returns the newest
+    /// page. To continue walking backward, pass the previous response's
+    /// `next_cursor` unchanged. This read does not advance the Runtime Client
+    /// observation cursor.
     TranscriptPageGet {
         /// Attachment-scoped request id.
         id: RequestId,
-        /// The exclusive cursor of the newest entry already held by the
-        /// client, when walking toward older history.
+        /// The exclusive older-history boundary returned by the prior page's
+        /// `next_cursor`, when walking toward older history.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         before_cursor: Option<RuntimeClientTranscriptCursor>,
         /// Requested page size.

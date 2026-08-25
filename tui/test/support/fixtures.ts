@@ -19,6 +19,8 @@ import type {
   ModelInvocationView,
   RuntimeClientBackgroundExecution,
   RuntimeClientSnapshot,
+  RuntimeClientTranscriptCursor,
+  RuntimeClientCursor,
   RuntimeClientTranscriptPage,
   SessionNodeView,
   SessionView,
@@ -26,6 +28,15 @@ import type {
   ToolExecutionResult,
   UserMessageBlock,
 } from "../../src/protocol/types.ts";
+
+/** Test-only constructors for the two numeric wire cursor domains. */
+export function runtimeCursor(value: number): RuntimeClientCursor {
+  return value as RuntimeClientCursor;
+}
+
+export function transcriptCursor(value: number): RuntimeClientTranscriptCursor {
+  return value as RuntimeClientTranscriptCursor;
+}
 
 export function approvalInteraction(
   id = "attempt-1-interaction-1",
@@ -159,7 +170,7 @@ export function snapshot(
   const transcript: RuntimeClientTranscriptPage =
     overrides.transcript ?? {
       entries: messages.map((message, index) => ({
-        cursor: index + 1,
+        cursor: transcriptCursor(index + 1),
         item: { type: "message" as const, message },
       })),
     };

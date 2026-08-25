@@ -27,6 +27,7 @@
 //! This module defines the seam only; it owns no state and no consumer.
 
 use crate::context::status::AgentStatus;
+use crate::durable::TranscriptCursor;
 use crate::events::types::RuntimeEvent;
 use crate::message::types::MessageBlock;
 use crate::publication::{PublicationAudit, PublicationFrame, PublicationStreamStart};
@@ -74,7 +75,12 @@ pub trait AgentExecutionObserver: Sync {
     /// committed tool messages) immediately after the message joined
     /// canonical history. The content observed here is the authoritative
     /// committed content; observers must treat it as read-only.
-    fn observe_committed(&self, attempt_id: &AttemptId, block: &MessageBlock);
+    fn observe_committed(
+        &self,
+        attempt_id: &AttemptId,
+        block: &MessageBlock,
+        transcript_cursor: Option<TranscriptCursor>,
+    );
 
     /// Observes the one composed Agent Status of a request preparation.
     fn observe_status(&self, observation: &AgentStatusObservation);
@@ -99,7 +105,12 @@ pub trait AgentExecutionObserver: Sync {
     /// The audit is an upper bound on what may have been displayed, never
     /// proof of perception, and its tool-call entries are model proposals
     /// that were never authorized or executed. A projection must be able to
-    /// present them as such and must never treat them as canonical
-    /// conversation history.
-    fn observe_publication_settled(&self, attempt_id: &AttemptId, audit: &PublicationAudit);
+    /// present them as such and must never treat them as canonical Message
+    /// Ledger history or execution facts.
+    fn observe_publication_settled(
+        &self,
+        attempt_id: &AttemptId,
+        audit: &PublicationAudit,
+        transcript_cursor: TranscriptCursor,
+    );
 }

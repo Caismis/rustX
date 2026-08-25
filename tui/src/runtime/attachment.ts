@@ -192,7 +192,10 @@ export class RuntimeClientAttachment {
     };
   }
 
-  /** Reads one bounded durable transcript page by its exclusive cursor. */
+  /**
+   * Reads one bounded durable transcript page by its exclusive older
+   * boundary. Callers pass the previous page's `next_cursor` unchanged.
+   */
   async transcriptPage(
     beforeCursor?: RuntimeClientTranscriptCursor,
     limit = TRANSCRIPT_PROJECTION_PAGE_LIMIT,
