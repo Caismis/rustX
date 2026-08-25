@@ -97,6 +97,14 @@ use crate::runtime::types::{CancellationReason, RuntimeError, TokenMeasurement};
 use crate::tools::types::{ToolExecutionResult, ToolProgress};
 
 /// The current schema version of [`RuntimeEventEnvelope`].
+///
+/// This version stamps the *envelope*, and it is deliberately independent of
+/// [`SQLITE_SCHEMA_VERSION`](crate::durable::SQLITE_SCHEMA_VERSION). Adding a
+/// new [`RuntimeEvent`] variant — Issue #111's `InboundTurnAdopted` is the
+/// latest — changes what a journal may *contain*, not how an envelope is
+/// framed, and a store whose journal predates a variant is refused wholesale
+/// by the database version gate rather than decoded under a compatibility
+/// rule. Bump this only when the envelope's own shape changes.
 pub const EVENT_SCHEMA_VERSION: u16 = 1;
 
 /// The envelope around every durable runtime event.

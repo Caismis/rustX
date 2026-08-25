@@ -30,13 +30,20 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 8. An incompatible database
+The SQLite schema is development schema version 9. An incompatible database
 fails explicitly; there is no migration chain, legacy reader, compatibility
 fallback, dual write, or old storage mode. File-backed stores use WAL,
 `synchronous=FULL`, foreign-key enforcement, and a busy timeout. A successful
 SQLite commit is the local durability linearization point documented here.
 
-The version-8 physical tables are deliberately semantic rather than generic:
+Version 9 froze the durable **answer obligation** (Issue #111): adoption
+commits an `InboundTurnAdopted` fact naming the exact adopted batch, and
+startup recovery decides continuation from that fact alone. No table changed —
+which is exactly why the version gate matters. A v8 journal predates the
+vocabulary, so a current reader would read its silence as "no answer is owed"
+and strand precisely the crash states the obligation rescues.
+
+The version-9 physical tables are deliberately semantic rather than generic:
 
 | Table | Purpose and constraints |
 | --- | --- |

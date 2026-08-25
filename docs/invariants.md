@@ -41,7 +41,7 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 8 is the only accepted schema; incompatible files fail
+schema version 9 is the only accepted schema; incompatible files fail
 explicitly and are not migrated.
 
 The durable request-start invariant is strict: the provider adapter cannot be
@@ -3310,12 +3310,19 @@ runtime supervision/quiescence contract.
   inside the canonical adoption transaction and names exactly the messages that
   transaction adopts, so an adopted `UserMessage` and the obligation to answer
   it can never disagree. The obligation is *consumed* by the first
-  `ModelRequestStarted` that carries the turn to the provider, or by the
-  attempt terminal that concludes it — whichever commits first — so recovery
-  continues exactly the turns a live runtime would still owe an answer for: a
-  turn adopted before its attempt started, a turn drained into a live attempt
-  at a safe boundary, and a later turn of an ordinary multi-turn conversation
-  are all continued; an answered turn and a cancelled turn are not. Supplied
+  `ModelRequestStarted` that carries the turn to the provider, or by the first
+  attempt terminal that **decides** the turn — whichever commits first — so
+  recovery continues exactly the turns a live runtime would still owe an answer
+  for: a turn adopted before its attempt started, a turn drained into a live
+  attempt at a safe boundary, and a later turn of an ordinary multi-turn
+  conversation are all continued; an answered turn and a cancelled turn are
+  not. Every terminal a live runtime commits decides the turn;
+  `RuntimeError::RestartInterrupted` — the one terminal only recovery writes —
+  does not. The obligation survives it and transfers to the attempt that
+  continues the turn, because the recovery that writes that terminal is the
+  same recovery still permitting the continuation: consuming it there would
+  durably erase recovery's own permission and strand the turn on the next death
+  in the attempt-start window. Supplied
   bootstrap history (a fork or clone seed, a tree node, a persona lineage)
   enters through `initialize`, never through adoption, and therefore never
   acquires an obligation. Continuation follows from the obligation and the
