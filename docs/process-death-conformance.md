@@ -5,7 +5,7 @@ their proof against **real process death**: a real child process running the
 real runtime stack over a real durable file, frozen at a named durable
 boundary, ended with an uncatchable `SIGKILL`, then reopened and recovered.
 
-The suite is `tests/scripted/issue111_process_death/` (50 conformance tests
+The suite is `tests/scripted/issue111_process_death/` (56 conformance tests
 plus the child entry point). Every row of the tables below names the test that
 proves it.
 
@@ -18,7 +18,9 @@ exist in the published API:
 
 - the scripted provider adapter (`ScriptedProviderAdapterFactory`), so a model
   turn is a fixed sequence of canonical events rather than a network call;
-- the process-death boundaries in `crate::runtime::process_death`.
+- the process-death boundaries in `crate::runtime::process_death`;
+- `SubagentRegistry::push_staged_override`, for the subagent rows only (see
+  §8), which replaces the spawn and startup handshake and nothing else.
 
 `tests/scripted/mod.rs` already explains why such suites compile into the
 crate's own test build. FND-06 follows the same rule and the same
@@ -146,6 +148,7 @@ a child is live.
 | reload while an attempt owns the session | R1 | — | `reload_resources()` returns `Busy { Attempt }` | no mixed generation; one R1 request only | `reload_while_an_attempt_owns_the_session_is_busy` |
 | reload while a **compaction** owns the session | R1 | — | `reload_resources()` returns `Busy { Compaction }` | no mixed generation; the answered turn *and* the compaction summary side request are both R1 | `reload_while_a_compaction_owns_the_session_is_busy` |
 | reload while a pending **interaction** owns the session | R1 | — | `reload_resources()` returns `Busy { Interaction }` | no request admitted under a new generation; the pending approval authorizes nothing | `reload_while_an_interaction_owns_the_session_is_busy` |
+| reload while a **running foreground Tool execution** owns the session | R1 | — | `reload_resources()` returns `Busy { Attempt }`, strictly after the durable `ToolExecutionStarted` | no continuation admitted under a new generation; the running execution's outcome stays unknown and Class C blocks continuation | `reload_while_a_running_tool_execution_owns_the_session_is_busy` |
 | `SIGKILL` at `reload:prepared` / `reload:published` | R1 (+ an unpublished/just-published R2) | before the reload | the reload build/publish boundary | no request was admitted under a half-published generation; the reopened process performs a normal fresh load and sends pure R2 | `death_around_the_reload_publish_boundary_reloads_from_scratch` |
 | cold resume after external edits | R1 → R2 | while the process is dead | reopen | the first new request is R2; the historical Ledger, transcript order, and old `RequestSnapshot` (prompt + Tool definitions) are unchanged; no replacement message is appended | `cold_resume_uses_current_resources_and_preserves_history` |
 | deleted already-discovered Skill | R1 → R2 | between two processes | reopen | the historical `ToolResult` keeps the old body by value; a new `Read` returns the normal read error | `a_deleted_skill_leaves_history_by_value_and_reads_as_an_error` |
@@ -155,6 +158,36 @@ a child is live.
 The current `RuntimeResourceSnapshot` is process-local, not durable recovery
 authority. That is what makes the reload-boundary row provable: there is no
 durable half-generation to recover, only a fresh load.
+
+### Lineage authority: the cut, and what history may not resurrect
+
+These rows compose the **real** native `SessionCatalog` and
+`LocalSessionSupervisor` over the lab's runtime-private root, so `/fork` and
+`/branch` are the production supervisor operations rather than a harness
+re-implementation. The child scripts its provider and answers no protocol
+input; everything else — the catalog transaction, the seed `initialize`, the
+quiescence, the new lineage's own runtime and recovery — is the real path.
+
+A cut is not a copy. The new lineage is seeded through `initialize` with the
+exact canonical prefix *before* the selected human message, and `initialize` is
+not an adoption: it commits no answer obligation, no attempt, and none of the
+source's durable ownership. The source lineage owns a live detached background
+execution and a subagent child at the moment of the cut, so "inherit the words
+but not the work" is what the rows actually test.
+
+| Case | Durable before kill | Allowed after reopen | Forbidden | Test |
+| --- | --- | --- | --- | --- |
+| `/fork` at the second human message | three answered turns; one background ownership; one subagent ownership | the new lineage holds exactly `user, context(Agent Status), assistant` by value; its Journal is **empty**; recovery reports `NotStarted` / `PendingInboundOnly` with zero background and subagent ordinals | inheriting any ownership, ordinal watermark, attempt, or obligation; changing the source lineage | `a_forked_lineage_cuts_the_history_and_inherits_no_durable_ownership` |
+| `/branch` at the same boundary | the same | the same — a new node inside the active Session is a different catalog transaction with a different parent linkage, so it is proven separately | the same | `a_branched_lineage_cuts_the_history_and_inherits_no_durable_ownership` |
+| the cut lineage then answers a turn of its own | the source's ownership and identities | every `MessageId` is reissued under the destination conversation; the attempt and subagent domains start at that lineage's own ordinal zero; each lineage terminalizes exactly its own ownership once | re-adopting a source `MessageId`, `SubagentId`, or execution ownership; reaching the source's still-owned work | `a_cut_lineage_never_readopts_the_source_lineage_identities` |
+| historical Agent Status naming a live execution | a status message literally containing `Background executions: exec_1 \| bash \| …` | the historical status is retained **by value**; the status composed after the reopen contains no background section at all | reconstructing ownership from what history *says*; a second ownership commit; a second terminal | `historical_status_and_history_never_revive_background_ownership` |
+
+The last row is the sharpest one. Agent Status is a canonical message, so the
+text naming a live execution stays in the Ledger forever and a reopened runtime
+reads it back as ordinary history. Ownership authority is the durable ownership
+facts plus the process-local registry, never the message text — so the same
+rendered section is the evidence on both sides: history keeps it, and the
+reopened runtime's own new status does not.
 
 ## 8. Background / subagent recovery
 
@@ -252,9 +285,9 @@ creates it. `RuntimeEvent::InboundTurnAdopted` is committed inside the
 canonical adoption transaction, naming exactly the messages it adopts, and the
 store rejects any adoption whose obligation names anything else. It is consumed
 by the first `ModelRequestStarted` that carries the turn to the provider, or by
-the attempt terminal that concludes it — whichever commits first. That is the
-explicit persistent ownership chain across adoption, request start, and attempt
-terminal, and it makes the rule uniform:
+the first attempt terminal that **decides** the turn — whichever commits first.
+That is the explicit persistent ownership chain across adoption, request start,
+and attempt terminal, and it makes the rule uniform:
 
 ```text
 an external outcome is indeterminate  -> BlockedIndeterminate
@@ -262,10 +295,36 @@ otherwise, an obligation is open      -> ContinueAdoptedTurn
 otherwise                             -> PendingInboundOnly
 ```
 
+### Which terminals decide the turn
+
+Every terminal a *live* runtime commits decides the turn: completion,
+cancellation, timeout, limit exhaustion, and an ordinary runtime or model
+failure all mean the runtime finished with it, answered or not.
+
+`RuntimeError::RestartInterrupted` is the one terminal no live runtime ever
+commits — recovery writes it, about an attempt whose process-local execution
+state is gone. Counting it as a decision would make recovery destroy its own
+permission, and the destruction is durable:
+
+```text
+adopt turn 2, AttemptStarted, SIGKILL
+  recovery #1 -> ContinueAdoptedTurn, and commits AttemptFailed(RestartInterrupted)
+  the continuation starts a new attempt and dies before ModelRequestStarted
+  recovery #2 -> the journal holds an adopted canonical turn, a terminal
+                 attempt, and no obligation; nothing is pending, so nothing
+                 ever re-admits the message
+```
+
+The obligation therefore **survives** a `RestartInterrupted` terminal and
+transfers to whichever attempt continues the turn next. Recovery stays
+absorbing in every other respect — no second terminal, no re-adoption, nothing
+resent — and an arbitrarily long chain of deaths in the
+adoption/request-start window never strands an accepted message.
+
 Recovery therefore continues exactly the turns a live runtime would still owe
 an answer for. A turn the user cancelled before any request stays unanswered
-across the restart, because the attempt terminal consumed its obligation —
-exactly as it does live. Supplied bootstrap history enters through
+across the restart, because that terminal *did* decide it — exactly as it does
+live. Supplied bootstrap history enters through
 `initialize`, which is not an adoption and commits no obligation, so the
 bootstrap-prefix probe (and its `load_bootstrap_history()` read, which
 deserialized a whole forked prefix to compute one boolean) is deleted rather
@@ -279,9 +338,26 @@ The rows that prove it, all under a real `SIGKILL`:
 | a later turn of a multi-turn conversation (Class D) | `a_turn_adopted_after_a_settled_attempt_continues` |
 | a turn drained into a live attempt (Class E) | `a_turn_drained_into_a_live_attempt_continues` |
 | an answered conversation is never re-answered | `an_answered_turn_is_not_continued_after_reopen` |
+| the obligation survives recovery's own terminal, across a second real death | `an_adopted_turn_survives_the_recovery_terminal_of_a_second_death` |
 
 with the consumption rules, the cancelled-turn case, and indeterminacy
 dominance proven beside the abstraction in `src/runtime/recovery.rs`, and the
 seeded-lineage case (a fork/clone/tree seed owes nothing, but the same lineage's
 own adopted turn does) in
-`tests/issue12_recovery.rs::a_seeded_lineage_owes_no_answer_for_its_bootstrap_prefix`.
+`tests/issue12_recovery.rs::a_seeded_lineage_owes_no_answer_for_its_bootstrap_prefix`
+— and its real-process-death counterpart in §7 below.
+
+The obligation's survival rule is proven twice more in
+`tests/issue12_recovery.rs`, at the durable-fact level:
+`the_answer_obligation_survives_a_chain_of_recovery_terminals`,
+`a_decided_terminal_still_consumes_the_answer_obligation`, and
+`a_known_outcome_terminal_transfers_the_obligation_of_a_later_adopted_turn`.
+
+Because the obligation is now a durable fact recovery depends on, a database
+written before it existed can no longer be read: its adoptions committed no
+obligation, and reading that silence as "no answer is owed" would strand
+exactly the crash states above. `SQLITE_SCHEMA_VERSION` therefore moved 8 → 9
+and a v8 file is refused at open — `pre_answer_obligation_schema_is_rejected_explicitly`.
+The envelope's own `EVENT_SCHEMA_VERSION` is unchanged: adding a
+`RuntimeEvent` variant changes what a journal may contain, not how an envelope
+is framed.

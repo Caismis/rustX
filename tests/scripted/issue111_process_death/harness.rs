@@ -34,6 +34,7 @@ use crate::durable::{
     ConversationStore, SqliteConversationStore, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT, TranscriptEntry,
 };
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
+use crate::local_runtime::session::{SessionCatalog, SessionId, SessionNode};
 use crate::message::types::MessageBlock;
 use crate::model::RequestSnapshot;
 use crate::runtime::identity::ConversationId;
@@ -243,12 +244,42 @@ impl Lab {
 
     /// Reopens the durable authority the dead child owned.
     pub(crate) fn durable(&self) -> Durable {
-        let store =
-            SqliteConversationStore::open(ConversationId::new(CONVERSATION), &self.database())
-                .expect("reopen the durable conversation");
+        Self::durable_at(&ConversationId::new(CONVERSATION), &self.database())
+    }
+
+    /// Reopens one explicitly named durable conversation.
+    pub(crate) fn durable_at(conversation: &ConversationId, path: &Path) -> Durable {
+        let store = SqliteConversationStore::open(conversation.clone(), path)
+            .expect("reopen the durable conversation");
         Durable {
             store: Arc::new(store),
         }
+    }
+
+    /// The durable native Session catalog the dead child published.
+    ///
+    /// This is the product's own reader over the product's own file, so the
+    /// parent reads the same authority the next process would: no harness
+    /// re-implementation of the catalog format sits in between.
+    pub(crate) fn catalog(&self) -> SessionCatalog {
+        SessionCatalog::open_existing(&self.root().join("private"))
+            .expect("read the native Session catalog")
+            .expect("a native Session catalog was published")
+    }
+
+    /// The durable authority of one catalog lineage.
+    pub(crate) fn lineage(&self, session: &SessionId, conversation: &ConversationId) -> Durable {
+        let path = self.catalog().database_path(session, conversation);
+        Self::durable_at(conversation, &path)
+    }
+
+    /// The catalog's currently active `(Session, node)` pair.
+    pub(crate) fn active_lineage(&self) -> (SessionId, SessionNode) {
+        let (session_id, node, _) = self
+            .catalog()
+            .active_lineage()
+            .expect("the catalog names an active lineage");
+        (session_id, node)
     }
 }
 

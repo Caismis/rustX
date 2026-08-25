@@ -13,13 +13,15 @@
 
 use crate::durable::{TranscriptEntry, TranscriptItem};
 use crate::events::types::RuntimeEvent;
-use crate::message::types::{AssistantContentBlock, InboundKind, MessageBlock};
+use crate::message::types::{AssistantContentBlock, InboundKind, MessageBlock, UserContentBlock};
 use crate::publication::PublicationAuditKind;
 use crate::runtime::recovery::{AttemptRecoveryClass, ResumeDisposition};
 use crate::tools::types::ToolExecutionStatus;
 
 use super::child;
 use super::harness::{Durable, Lab};
+use crate::local_runtime::session::SessionId;
+use crate::runtime::identity::ConversationId;
 
 // ---------------------------------------------------------------------------
 // Shared assertions
@@ -103,6 +105,26 @@ fn audit_text(entries: &[TranscriptEntry]) -> String {
         .iter()
         .filter_map(|entry| match &entry.item {
             TranscriptItem::PublicationAudit { audit } => Some(format!("{:?}", audit.content)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The rendered text of every canonical Agent Status message, in canonical
+/// order.
+fn status_texts(messages: &[MessageBlock]) -> Vec<String> {
+    messages
+        .iter()
+        .filter_map(|message| match message {
+            MessageBlock::User(user) if matches!(user.kind, InboundKind::Context(_)) => Some(
+                user.content
+                    .iter()
+                    .map(|block| match block {
+                        UserContentBlock::Text(text) => text.text.clone(),
+                        other => format!("{other:?}"),
+                    })
+                    .collect::<String>(),
+            ),
             _ => None,
         })
         .collect()
@@ -334,6 +356,110 @@ fn a_turn_drained_into_a_live_attempt_continues() {
         report.resume(),
         ResumeDisposition::ContinueAdoptedTurn,
         "the turn drained into the dead attempt is still owed an answer"
+    );
+}
+
+/// The obligation must survive the recovery terminal that recovery itself
+/// writes — otherwise recovery destroys its own permission.
+///
+/// This is the only row where the *reconciliation* is part of the boundary.
+/// Recovery classifies the interrupted attempt, reports `ContinueAdoptedTurn`,
+/// and in the same pass durably terminalizes the dead attempt with
+/// `RestartInterrupted`. That terminal commits **before** the continuation it
+/// permitted can reach a `ModelRequestStarted`, so a process that dies in the
+/// new attempt-start window reopens onto a journal holding an adopted
+/// canonical turn, a terminal attempt, and — if a recovery terminal counted as
+/// a decision about the turn — no obligation. Nothing is pending, so nothing
+/// would ever re-admit the message: it would be accepted, canonical, and
+/// permanently unanswered.
+///
+/// A `RestartInterrupted` terminal is a statement about a dead attempt, not a
+/// decision about the turn, so the obligation transfers to the attempt that
+/// continues it. The chain is proven, not argued: kill, recover, reopen, kill
+/// again in the same window, recover again.
+#[test]
+fn an_adopted_turn_survives_the_recovery_terminal_of_a_second_death() {
+    let lab = Lab::new();
+    // Occurrence 2 is the second turn's own attempt start: adopted, admitted,
+    // and provably before any external start commit.
+    let mut process = lab.spawn_nth(child::SECOND_TURN, Some("after:event:attempt_started"), 2);
+    process.wait_note("first-attempt-settled");
+    process.resume();
+    process.wait_reached("after:event:attempt_started");
+    process.sigkill();
+
+    let durable = lab.durable();
+    assert_eq!(
+        shapes(&durable.canonical()),
+        vec!["user", "context", "assistant", "user"]
+    );
+
+    // Recovery #1 permits the continuation and terminalizes the dead attempt
+    // in the same pass.
+    let first = durable.recover();
+    assert!(
+        matches!(
+            first.attempt_class(),
+            AttemptRecoveryClass::AdmittedWithoutExternalStart { .. }
+        ),
+        "the second turn's attempt started nothing: {:?}",
+        first.attempt_class()
+    );
+    assert_eq!(first.resume(), ResumeDisposition::ContinueAdoptedTurn);
+    assert!(first.reconciliation().attempt_terminal.is_some());
+
+    // Reopening that same durable authority must reach the same verdict.
+    let repeated = durable.recover();
+    assert_eq!(
+        repeated.attempt_class(),
+        &AttemptRecoveryClass::AlreadyTerminal
+    );
+    assert_eq!(
+        repeated.resume(),
+        ResumeDisposition::ContinueAdoptedTurn,
+        "the recovery terminal transferred the obligation instead of consuming it"
+    );
+    assert!(repeated.reconciliation().is_empty());
+
+    // The real second death: a reopened process that submits nothing, so the
+    // attempt it starts is the recovered continuation and nothing else. It
+    // dies in exactly the same window.
+    let mut resumed = lab.spawn(child::RESUME_IDLE, Some("after:event:attempt_started"));
+    resumed.wait_reached("after:event:attempt_started");
+    resumed.sigkill();
+
+    let durable = lab.durable();
+    let second = durable.recover();
+    assert!(
+        matches!(
+            second.attempt_class(),
+            AttemptRecoveryClass::AdmittedWithoutExternalStart { .. }
+        ),
+        "the continuation attempt started nothing either: {:?}",
+        second.attempt_class()
+    );
+    assert_eq!(
+        second.resume(),
+        ResumeDisposition::ContinueAdoptedTurn,
+        "the turn is still owed an answer after a chain of deaths"
+    );
+
+    // Nothing was re-adopted, duplicated, or sent along the way.
+    assert_eq!(
+        shapes(&durable.canonical()),
+        vec!["user", "context", "assistant", "user"],
+        "the adopted turn is canonical exactly once"
+    );
+    assert!(durable.store().load_pending().expect("pending").is_empty());
+    assert_eq!(
+        durable.count_events(|event| matches!(event, RuntimeEvent::InboundTurnAdopted { .. })),
+        2,
+        "one adoption per turn, however many restarts"
+    );
+    assert_eq!(
+        durable.count_events(|event| matches!(event, RuntimeEvent::ModelRequestStarted { .. })),
+        1,
+        "only the first turn was ever carried to the provider"
     );
 }
 
@@ -1292,6 +1418,60 @@ fn reload_while_an_interaction_owns_the_session_is_busy() {
     );
 }
 
+/// The owner the attempt row cannot reach on its own: a **running foreground
+/// Tool execution**.
+///
+/// The other reload-busy rows park the *model*, so the session is owned by an
+/// attempt that is waiting on a provider. This one parks nothing: a real
+/// `sleep 300` is executing inside the Tool Plane when the reload is
+/// attempted, which is the state a live agent spends most of its time in and
+/// the only one where a mid-generation Tool-definition swap could reach a
+/// call that is already running.
+///
+/// The reload is refused, the execution's external outcome is left untouched
+/// and unknown, and the reopened process finds a Class C conversation that
+/// continues nothing.
+#[test]
+fn reload_while_a_running_tool_execution_owns_the_session_is_busy() {
+    let lab = Lab::new();
+    let mut process = lab.spawn(child::RELOAD_BUSY_TOOL, None);
+    let reload = process.wait_note_prefixed("reload:");
+    assert!(
+        reload.contains("Busy") && reload.contains("Attempt"),
+        "a running Tool execution owns the session and refuses reload: {reload}"
+    );
+    process.sigkill();
+
+    let durable = lab.durable();
+    assert!(
+        has_tool_start(&durable),
+        "the execution had provably started before the reload was attempted"
+    );
+    assert_eq!(
+        durable.request_snapshots().len(),
+        1,
+        "the refused reload admitted no continuation under a new generation"
+    );
+    assert!(system_prompt(&durable, 0).contains("R1 project instructions."));
+    assert!(
+        tool_names(&durable, 0).contains(&"bash".to_owned()),
+        "the one request carries the R1 Tool definitions"
+    );
+
+    // The killed execution's external outcome is unknown, so recovery starts
+    // nothing at all — the refused reload changed none of that.
+    let report = durable.recover();
+    assert!(
+        matches!(
+            report.attempt_class(),
+            AttemptRecoveryClass::IndeterminateExternalOutcome { .. }
+        ),
+        "the running execution's outcome is indeterminate: {:?}",
+        report.attempt_class()
+    );
+    assert_eq!(report.resume(), ResumeDisposition::BlockedIndeterminate);
+}
+
 /// The current Runtime Resource Snapshot is process-local, not durable
 /// recovery authority: dying around the reload build/publish boundary can never
 /// be recovered as a half-published mixed generation. The reopened process
@@ -1511,6 +1691,276 @@ fn death_before_the_first_request_leaves_no_resource_record() {
     assert!(system_prompt(&lab.durable(), 0).contains("R2 project instructions."));
 }
 
+/// The `/fork` cut, proven across a real process death.
+///
+/// A cut is not a copy. The new lineage is seeded through `initialize` with
+/// the exact canonical prefix *before* the selected human message, and
+/// `initialize` is not an adoption: it commits no answer obligation, no
+/// attempt, and none of the source's durable ownership. So the one thing a
+/// naive implementation would get wrong — inheriting the source's live work
+/// along with its words — is exactly what this row forbids.
+///
+/// The source lineage owns a detached background execution and a subagent
+/// child when the cut is taken, and both are on the far side of the boundary.
+#[test]
+fn a_forked_lineage_cuts_the_history_and_inherits_no_durable_ownership() {
+    assert_cut_lineage(child::SESSION_FORK);
+}
+
+/// The `/branch` cut of the same rule.
+///
+/// `/branch` publishes a new **node inside the active Session** rather than a
+/// new Session, and it is a different catalog transaction with a different
+/// parent linkage. It shares only `prepare`'s seed computation, so proving one
+/// does not prove the other: a cut that inherited ownership through the node
+/// path would be invisible to the fork row.
+#[test]
+fn a_branched_lineage_cuts_the_history_and_inherits_no_durable_ownership() {
+    assert_cut_lineage(child::SESSION_BRANCH);
+}
+
+/// The shared body of the two cut rows.
+///
+/// Both operations must leave exactly the same durable world: the source
+/// lineage untouched and still solely responsible for its own ownership, and
+/// a new lineage holding the cut prefix by value and owning nothing at all.
+fn assert_cut_lineage(scenario: &str) {
+    let lab = Lab::new();
+    let mut process = lab.spawn(scenario, None);
+    let cut = process.wait_note_prefixed("cut:");
+    assert_eq!(cut, "cut:ok", "the cut published: {cut}");
+    process.sigkill();
+
+    // The catalog is the durable authority for *which* lineage is active. The
+    // cut made the new one active, and the source keeps its own identity.
+    let (active_session, active_node) = lab.active_lineage();
+    let source_conversation = ConversationId::new("conversation-1");
+    assert_ne!(
+        active_node.conversation_id, source_conversation,
+        "the cut published a new lineage and made it active"
+    );
+
+    let source = lab.lineage(&SessionId::new("session-1"), &source_conversation);
+    let cut_lineage = lab.lineage(&active_session, &active_node.conversation_id);
+
+    // ---- The source lineage is untouched by the cut. ----
+    let source_shapes = shapes(&source.canonical());
+    assert_eq!(
+        &source_shapes[..3],
+        &["user", "context", "assistant"],
+        "the source lineage still opens with the turn the cut kept"
+    );
+    assert_eq!(
+        source_shapes
+            .iter()
+            .filter(|shape| **shape == "assistant-call")
+            .count(),
+        2,
+        "both owning turns stay canonical in the source lineage"
+    );
+    assert!(
+        source_shapes.len() > 3,
+        "the source keeps everything on the far side of the cut: {source_shapes:?}"
+    );
+    assert_eq!(
+        source.count_events(|event| matches!(
+            event,
+            RuntimeEvent::BackgroundExecutionCommitted { .. }
+        )),
+        1,
+        "the source lineage owns its background execution"
+    );
+    assert_eq!(
+        source
+            .count_events(|event| matches!(event, RuntimeEvent::SubagentOwnershipCommitted { .. })),
+        1,
+        "the source lineage owns its subagent child"
+    );
+
+    // ---- The cut lineage holds the prefix and nothing else. ----
+    assert_eq!(
+        shapes(&cut_lineage.canonical()),
+        vec!["user", "context", "assistant"],
+        "the seed is the exact prefix before the selected human message"
+    );
+    assert!(
+        status_texts(&cut_lineage.canonical())[0].contains("<system-reminder>"),
+        "the historical Agent Status crossed the cut by value"
+    );
+    assert!(
+        cut_lineage.journal().is_empty(),
+        "a seeded lineage inherits no durable runtime fact at all: {:?}",
+        cut_lineage
+            .journal()
+            .iter()
+            .map(|envelope| &envelope.event)
+            .collect::<Vec<_>>()
+    );
+
+    // ---- The cut lineage owes nothing and owns nothing. ----
+    let report = cut_lineage.recover();
+    assert_eq!(
+        report.attempt_class(),
+        &AttemptRecoveryClass::NotStarted,
+        "a seed is history, never an attempt this lineage ran"
+    );
+    assert_eq!(
+        report.resume(),
+        ResumeDisposition::PendingInboundOnly,
+        "supplied history is context, never work this lineage accepted"
+    );
+    assert!(
+        report.background_classes().is_empty() && report.subagent_classes().is_empty(),
+        "the cut lineage has no ownership to reconcile"
+    );
+    assert_eq!(report.highest_background_ordinal(), 0);
+    assert_eq!(report.highest_subagent_ordinal(), 0);
+    assert_eq!(report.next_attempt_ordinal(), 0);
+    assert!(
+        report.reconciliation().is_empty(),
+        "recovering a freshly cut lineage commits nothing"
+    );
+
+    // The source's own ownership settles in the source lineage and nowhere
+    // else — whether the cut's quiescence published the terminal or the
+    // source's own recovery did, it happens once, there.
+    source.recover();
+    assert_eq!(
+        source.count_events(|event| matches!(
+            event,
+            RuntimeEvent::BackgroundTerminalPublished { .. }
+        )),
+        1,
+        "the source lineage terminalizes its own execution exactly once"
+    );
+    assert_eq!(
+        source
+            .count_events(|event| matches!(event, RuntimeEvent::SubagentTerminalPublished { .. })),
+        1,
+        "the source lineage terminalizes its own subagent child exactly once"
+    );
+    assert!(
+        cut_lineage.journal().is_empty(),
+        "recovering the source never writes a fact into the cut lineage"
+    );
+}
+
+/// The identity half of the cut: a lineage that answers a turn of its own
+/// never re-adopts the identities its source history was written under.
+///
+/// The seeded prefix is remapped on the way in — every `MessageId` and
+/// `ToolCallId` is reissued under the destination conversation — and the
+/// runtime's own conversation-scoped domains (attempt, subagent) start from
+/// that lineage's own ordinal zero because the cut inherited no ordinal
+/// watermark. A live execution of the source can therefore never be addressed,
+/// cancelled, or reattached by the cut lineage: no identity is shared.
+#[test]
+fn a_cut_lineage_never_readopts_the_source_lineage_identities() {
+    let lab = Lab::new();
+    let mut process = lab.spawn(child::SESSION_FORK, None);
+    assert_eq!(process.wait_note_prefixed("cut:"), "cut:ok");
+    process.sigkill();
+
+    let source_conversation = ConversationId::new("conversation-1");
+    let source = lab.lineage(&SessionId::new("session-1"), &source_conversation);
+    let source_subagents = owned_subagents(&source);
+    assert_eq!(source_subagents.len(), 1);
+
+    // The cut lineage answers one turn of its own, starting a background
+    // execution and dying with it owned.
+    let (active_session, active_node) = lab.active_lineage();
+    let mut resumed = lab.spawn(child::SESSION_RESUME, None);
+    assert_eq!(
+        resumed.wait_note_prefixed("recovery:"),
+        "recovery:PendingInboundOnly",
+        "the reopened cut lineage starts nothing on its own"
+    );
+    resumed.wait_note("settled");
+    resumed.sigkill();
+
+    let cut_lineage = lab.lineage(&active_session, &active_node.conversation_id);
+
+    // Canonical identity: the seed was reissued under the destination
+    // conversation, so no message of the cut lineage shares an id with the
+    // source.
+    let source_ids = message_ids(&source.canonical());
+    let cut_ids = message_ids(&cut_lineage.canonical());
+    assert!(
+        cut_ids.iter().all(|id| !source_ids.contains(id)),
+        "a cut lineage never reuses a source MessageId: {cut_ids:?} vs {source_ids:?}"
+    );
+
+    // Attempt identity: the cut lineage's first attempt is its own ordinal 0.
+    assert_eq!(
+        cut_lineage.recover().next_attempt_ordinal(),
+        1,
+        "exactly one attempt ran on the cut lineage, in its own ordinal domain"
+    );
+
+    // Subagent identity: conversation-scoped by construction, so the source's
+    // child can never be named — let alone reattached — by the cut lineage.
+    assert!(
+        source_subagents[0].starts_with(source_conversation.as_str()),
+        "the source's subagent identity is scoped to the source conversation: {}",
+        source_subagents[0]
+    );
+    assert!(
+        owned_subagents(&cut_lineage).is_empty(),
+        "the cut lineage owns no subagent child"
+    );
+
+    // Background ownership: each lineage terminalizes exactly its own.
+    assert_eq!(
+        cut_lineage.count_events(|event| matches!(
+            event,
+            RuntimeEvent::BackgroundExecutionCommitted { .. }
+        )),
+        1,
+        "the cut lineage owns the execution it started, and only that one"
+    );
+    // The first `recover()` above already reconciled this lineage; recovery is
+    // absorbing, so what is asserted here is the durable outcome rather than a
+    // second reconciliation's report.
+    assert_eq!(
+        cut_lineage.count_events(|event| matches!(
+            event,
+            RuntimeEvent::BackgroundTerminalPublished { .. }
+        )),
+        1,
+        "the cut lineage terminalizes its own execution exactly once"
+    );
+    assert_eq!(
+        source.count_events(|event| matches!(
+            event,
+            RuntimeEvent::BackgroundExecutionCommitted { .. }
+        )),
+        1,
+        "the source lineage is untouched by everything the cut lineage did"
+    );
+}
+
+/// The durably owned subagent identities of one lineage.
+fn owned_subagents(durable: &Durable) -> Vec<String> {
+    durable
+        .journal()
+        .into_iter()
+        .filter_map(|envelope| match envelope.event {
+            RuntimeEvent::SubagentOwnershipCommitted { subagent_id, .. } => {
+                Some(subagent_id.to_string())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The canonical message identities of one lineage.
+fn message_ids(messages: &[MessageBlock]) -> Vec<String> {
+    messages
+        .iter()
+        .map(|message| crate::conversation::message_id_of(message).to_string())
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // 8. Background / subagent recovery
 // ---------------------------------------------------------------------------
@@ -1584,6 +2034,116 @@ fn a_reopened_runtime_never_relaunches_a_dead_background_execution() {
         )),
         1,
         "the unresolved ownership publishes exactly one terminal"
+    );
+}
+
+/// Neither the historical Agent Status text nor the canonical history ever
+/// revives background ownership across a process death.
+///
+/// The trap this row closes is specific. Agent Status is a **canonical
+/// message**: the status admitted for the second turn was composed while a
+/// real detached execution was live, so it literally says
+/// `Background executions: exec_1 | bash | …`, and it stays in the Ledger
+/// forever. A reopened runtime reads that message back as ordinary history.
+/// If ownership were ever reconstructed from what history *says* — instead of
+/// from the durable ownership facts and the process-local registry — the
+/// reopened conversation would believe it still owns a process that died with
+/// its owner.
+///
+/// So the same rendered section is the evidence on both sides: the historical
+/// status keeps it by value, and the status composed after the reopen must not
+/// contain it at all.
+#[test]
+fn historical_status_and_history_never_revive_background_ownership() {
+    let lab = Lab::new();
+    let mut process = lab.spawn(child::BACKGROUND_STATUS, None);
+    process.wait_note("settled");
+    process.sigkill();
+
+    let durable = lab.durable();
+    assert_eq!(
+        shapes(&durable.canonical()),
+        vec![
+            "user",
+            "context",
+            "assistant-call",
+            "tool",
+            "assistant",
+            "user",
+            "context",
+            "assistant",
+        ],
+        "two answered turns, each with its own admitted Agent Status"
+    );
+    let before = status_texts(&durable.canonical());
+    assert_eq!(before.len(), 2);
+    assert!(
+        !before[0].contains("Background executions:"),
+        "the first turn's status predates the execution: {}",
+        before[0]
+    );
+    assert!(
+        before[1].contains("Background executions:"),
+        "the second turn's status was composed while the execution was live: {}",
+        before[1]
+    );
+    let execution_id = durable
+        .journal()
+        .into_iter()
+        .find_map(|envelope| match envelope.event {
+            RuntimeEvent::BackgroundExecutionCommitted { execution_id, .. } => Some(execution_id),
+            _ => None,
+        })
+        .expect("one durably owned execution");
+    assert!(
+        before[1].contains(execution_id.as_str()),
+        "the historical status names the owned execution {execution_id}: {}",
+        before[1]
+    );
+
+    // Reopen and answer one more turn. The dead process's `sleep 300` went
+    // with its process group; the reopened runtime owns nothing.
+    let mut resumed = lab.spawn(child::COLD_RESUME, None);
+    resumed.resume_until("settled");
+    resumed.sigkill();
+
+    let durable = lab.durable();
+    let after = status_texts(&durable.canonical());
+    assert!(
+        after.len() > 2,
+        "the reopened process admitted at least one new status fact"
+    );
+    assert_eq!(
+        &after[..2],
+        &before[..],
+        "the historical status messages are retained by value and never refreshed"
+    );
+    for (index, status) in after[2..].iter().enumerate() {
+        assert!(
+            !status.contains("Background executions:"),
+            "status {index} after the reopen owns no execution, whatever history says: {status}"
+        );
+        assert!(
+            !status.contains(execution_id.as_str()),
+            "the historical execution identity is never re-adopted: {status}"
+        );
+    }
+
+    assert_eq!(
+        durable.count_events(|event| matches!(
+            event,
+            RuntimeEvent::BackgroundExecutionCommitted { .. }
+        )),
+        1,
+        "no second ownership is committed"
+    );
+    assert_eq!(
+        durable.count_events(|event| matches!(
+            event,
+            RuntimeEvent::BackgroundTerminalPublished { .. }
+        )),
+        1,
+        "the dead ownership terminalizes exactly once"
     );
 }
 

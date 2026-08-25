@@ -17,12 +17,14 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use crate::conversation::SurfaceRevision;
 use crate::events::types::RuntimeEvent;
 use crate::local_runtime::composition::{
     HeadlessConversationRuntime, LocalConversationCore, LocalRuntimeDependencies, LocalRuntimePaths,
 };
 use crate::local_runtime::config::CurrentRuntimeConfig;
-use crate::local_runtime::session::SessionPersistentState;
+use crate::local_runtime::session::{SessionCatalog, SessionPersistentState};
+use crate::local_runtime::supervisor::LocalSessionSupervisor;
 use crate::message::content::TextBlock;
 use crate::message::types::{ContentBlockIndex, UserContentBlock};
 use crate::model::event::ModelEvent;
@@ -30,7 +32,7 @@ use crate::model::finish::ModelFinishReason;
 use crate::model::types::ModelProtocol;
 use crate::runtime::ApprovalDecision;
 use crate::runtime::conversation_runtime::ConversationRuntime;
-use crate::runtime::identity::{ConversationId, ToolCallId, ToolId};
+use crate::runtime::identity::{ConversationId, MessageId, ToolCallId, ToolId};
 use crate::runtime::interaction::InteractionResponse;
 use crate::runtime::observation::{ConversationObservation, PendingObservations};
 use crate::runtime::process_death;
@@ -109,6 +111,24 @@ pub(crate) const INBOUND_ONLY: &str = "inbound_only";
 pub(crate) const SECOND_TURN: &str = "second_turn";
 /// A streaming turn that is still open while a second inbound is accepted.
 pub(crate) const STREAMING_INBOUND: &str = "streaming_inbound";
+/// A reload attempted while a **foreground Tool execution** is running.
+pub(crate) const RELOAD_BUSY_TOOL: &str = "reload_busy_tool";
+/// A catalog-owning child that answers two turns, durably owns a background
+/// execution and a subagent child, and then cuts a new lineage at the second
+/// user message with `/fork`.
+pub(crate) const SESSION_FORK: &str = "session_fork";
+/// [`SESSION_FORK`] cut with `/branch` — a new node inside the same Session
+/// rather than a new Session — so the cut rule is proven for both operations.
+pub(crate) const SESSION_BRANCH: &str = "session_branch";
+/// A catalog-owning child that reopens whatever lineage the catalog says is
+/// active and answers one turn on it.
+pub(crate) const SESSION_RESUME: &str = "session_resume";
+/// One turn that starts a detached background execution, then a **second**
+/// inbound turn whose Agent Status is composed while that execution is live.
+pub(crate) const BACKGROUND_STATUS: &str = "background_status";
+/// A reopened conversation that submits **nothing**, so the only work it can
+/// start is the continuation recovery permitted.
+pub(crate) const RESUME_IDLE: &str = "resume_idle";
 
 /// A text payload larger than the coalescer's default byte threshold, so the
 /// publication plane provably stages and releases frames *before* the stream
@@ -296,6 +316,22 @@ impl Child {
         approve: bool,
         client: bool,
     ) -> Result<Self, String> {
+        Self::compose_lineage(root, scripts, approve, client, None).await
+    }
+
+    /// Composes over an explicit lineage instead of this lab's fixed one.
+    ///
+    /// `lineage` is `Some((conversation, artifacts_root))` for the
+    /// catalog-owning scenarios, whose active conversation identity and
+    /// private database directory are allocated by the Session catalog rather
+    /// than fixed by the harness.
+    async fn compose_lineage(
+        root: &Path,
+        scripts: Vec<Vec<FakeStep>>,
+        approve: bool,
+        client: bool,
+        lineage: Option<(ConversationId, PathBuf)>,
+    ) -> Result<Self, String> {
         let paths = lab_paths(root);
         let config_bytes = std::fs::read(&paths.config).map_err(|error| error.to_string())?;
         let runtime_config = CurrentRuntimeConfig::from_json_slice(&config_bytes)
@@ -310,7 +346,8 @@ impl Child {
             ],
             &ScriptedAdapterFactory::new(adapter),
         );
-        let artifacts_root = paths.artifacts_root();
+        let (conversation_id, artifacts_root) =
+            lineage.unwrap_or_else(|| (ConversationId::new(CONVERSATION), paths.artifacts_root()));
         let core = LocalConversationCore::compose_from_config(
             &paths,
             &LocalRuntimeDependencies::default(),
@@ -319,7 +356,7 @@ impl Child {
             SessionPersistentState {
                 model: runtime_config.model.clone(),
             },
-            ConversationId::new(CONVERSATION),
+            conversation_id,
             artifacts_root,
         )
         .await
@@ -449,6 +486,89 @@ fn spawn_observer(
             }
         }
     });
+}
+
+/// Composes one **catalog-owning** child.
+///
+/// This is the same composition the `rustx` binary performs for a native
+/// Session, minus the model registry (a conformance child scripts its
+/// provider) and the Runtime Client host (this child answers no protocol
+/// input): the real `SessionCatalog` on the lab's runtime-private root, the
+/// real conversation runtime of whatever node the catalog says is active, and
+/// the real `LocalSessionSupervisor` with that runtime installed. `/fork` and
+/// `/branch` are then the production supervisor operations, not a harness
+/// re-implementation of them.
+async fn compose_session_child(
+    root: &Path,
+    scripts: Vec<Vec<FakeStep>>,
+) -> (Child, Arc<LocalSessionSupervisor>) {
+    let paths = lab_paths(root);
+    let config_bytes = std::fs::read(&paths.config).expect("read the lab runtime config");
+    let runtime_config =
+        CurrentRuntimeConfig::from_json_slice(&config_bytes).expect("valid runtime config");
+    let template = SessionPersistentState {
+        model: runtime_config.model.clone(),
+    };
+    let catalog = match SessionCatalog::open_existing(&paths.runtime_root)
+        .expect("open the native Session catalog")
+    {
+        Some(catalog) => catalog,
+        None => SessionCatalog::create(&paths.runtime_root, &template)
+            .expect("publish the first native Session"),
+    };
+    let (session_id, node, session_state) =
+        catalog.active_lineage().expect("an active Session lineage");
+    let database_path = catalog.database_path(&session_id, &node.conversation_id);
+    let artifacts_root = database_path
+        .parent()
+        .expect("the active conversation database has a parent")
+        .to_path_buf();
+    let supervisor = Arc::new(LocalSessionSupervisor::new(
+        catalog,
+        session_state.model.clone(),
+    ));
+    let child = Child::compose_lineage(
+        root,
+        scripts,
+        false,
+        true,
+        Some((node.conversation_id.clone(), artifacts_root)),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("the FND-06 session child could not compose: {error}"));
+    supervisor
+        .install_runtime(child.runtime().clone())
+        .await
+        .expect("install the active runtime into its supervisor");
+    (child, supervisor)
+}
+
+/// The `MessageId` of the `nth` (1-based) ordinary human message of the
+/// current canonical head, with the head's Surface revision.
+///
+/// This is exactly the boundary a `/fork` or `/branch` user picks. Runtime
+/// messages are skipped explicitly: a detached terminal notice is also an
+/// `InboundKind::Message`, so filtering on the kind alone would let a
+/// publication the runtime authored become a cut boundary.
+fn human_boundary(child: &Child, nth: usize) -> (SurfaceRevision, MessageId) {
+    let (revision, messages) = child
+        .runtime()
+        .historical_head_snapshot()
+        .expect("the canonical head snapshot");
+    let id = messages
+        .iter()
+        .filter_map(|message| match message {
+            crate::message::types::MessageBlock::User(user)
+                if user.kind == crate::message::types::InboundKind::Message
+                    && user.source == crate::message::types::UserSource::Human =>
+            {
+                Some(user.id.clone())
+            }
+            _ => None,
+        })
+        .nth(nth - 1)
+        .unwrap_or_else(|| panic!("the canonical head holds a {nth}th human message"));
+    (revision, id)
 }
 
 // ---------------------------------------------------------------------------
@@ -1046,6 +1166,198 @@ async fn scenario_body(root: &Path, scenario: &str) {
             // boundary, so this stays one attempt with two model turns.
             child.log.wait_settled(1).await;
             note("settled");
+        }
+        RELOAD_BUSY_TOOL => {
+            // A **foreground** tool execution owns the session for as long as
+            // the command runs. `sleep 300` outlives the parent's liveness
+            // bound by construction, so the reload boundary below is reached
+            // while the execution is provably still running rather than in a
+            // race with its completion.
+            let call = ScriptedCall {
+                id: "call-bash-foreground",
+                tool_id: "tool-bash",
+                name: "bash",
+                arguments: serde_json::json!({
+                    "command": "sleep 300",
+                    "execution_mode": "foreground"
+                }),
+            };
+            let child = Child::require(
+                root,
+                vec![
+                    calling_turn(&call),
+                    vec![started(), text("continued"), done(ModelFinishReason::Stop)],
+                ],
+                false,
+                true,
+            )
+            .await;
+            child.submit("run the command");
+            // The durable `ToolExecutionStarted` fact is the happens-after
+            // proof that the execution is running: the reload below is
+            // attempted strictly after it.
+            child
+                .log
+                .wait_for(|seen| {
+                    seen.iter().any(|entry| {
+                        matches!(entry, Seen::Event(event)
+                            if matches!(**event, RuntimeEvent::ToolExecutionStarted { .. }))
+                    })
+                })
+                .await;
+            let reloaded = child.runtime().reload_resources().await;
+            note(&format!("reload:{}", describe(&reloaded)));
+            park_owning(child).await;
+        }
+        BACKGROUND_STATUS => {
+            let call = ScriptedCall {
+                id: "call-bash-status",
+                tool_id: "tool-bash",
+                name: "bash",
+                arguments: serde_json::json!({
+                    "command": "sleep 300",
+                    "execution_mode": "background"
+                }),
+            };
+            let child = Child::require(
+                root,
+                vec![
+                    calling_turn(&call),
+                    vec![started(), text("started"), done(ModelFinishReason::Stop)],
+                    vec![
+                        started(),
+                        text("second answer"),
+                        done(ModelFinishReason::Stop),
+                    ],
+                ],
+                false,
+                true,
+            )
+            .await;
+            child.submit("start the background command");
+            child.log.wait_settled(1).await;
+            // The second turn's Agent Status is composed while the execution
+            // is durably owned and live, so the historical status fact names
+            // it. That is what makes the reopened lineage's status a real
+            // proof: the same runtime that would list a live execution lists
+            // none.
+            child.submit("what is running");
+            child.log.wait_settled(2).await;
+            note("settled");
+            park_owning(child).await;
+        }
+        SESSION_FORK | SESSION_BRANCH => {
+            let bash = ScriptedCall {
+                id: "call-bash-lineage",
+                tool_id: "tool-bash",
+                name: "bash",
+                arguments: serde_json::json!({
+                    "command": "sleep 300",
+                    "execution_mode": "background"
+                }),
+            };
+            let delegate = ScriptedCall {
+                id: "call-subagent-lineage",
+                tool_id: "tool-subagent",
+                name: "subagent",
+                arguments: serde_json::json!({
+                    "profile": "explore",
+                    "task": "inspect the workspace note"
+                }),
+            };
+            let (child, supervisor) = compose_session_child(
+                root,
+                vec![
+                    wide_text_turn(),
+                    calling_turn(&bash),
+                    vec![
+                        started(),
+                        text("background started"),
+                        done(ModelFinishReason::Stop),
+                    ],
+                    calling_turn(&delegate),
+                    vec![started(), text("delegated"), done(ModelFinishReason::Stop)],
+                ],
+            )
+            .await;
+            // Turn 1 is a plain answered turn. Everything the cut must leave
+            // behind is committed by turns 2 and 3.
+            child.submit("first");
+            child.log.wait_settled(1).await;
+            child.submit("own the work");
+            child.log.wait_settled(2).await;
+            let mut peer = child.stage_live_subagent_child(root, "exit 0");
+            child.submit("delegate the task");
+            answer_subagent_delegation(&mut peer).await;
+            child.log.wait_settled(3).await;
+
+            // The cut boundary is the **second** human message, so the exact
+            // prefix that survives is turn 1 — its human message, its admitted
+            // Agent Status, and its Assistant answer — and everything the
+            // owning turns committed is on the far side of the cut.
+            let (revision, boundary) = human_boundary(&child, 2);
+            let outcome = if scenario == SESSION_FORK {
+                supervisor.fork_active(revision, boundary).await
+            } else {
+                supervisor.tree_branch(revision, boundary).await
+            };
+            note(&format!("cut:{}", describe(&outcome)));
+            // The supervisor quiesced the old runtime and published the new
+            // node; the process now waits for its death still owning the whole
+            // composition, so nothing can settle from this side.
+            park_owning((child, peer, supervisor)).await;
+        }
+        SESSION_RESUME => {
+            let bash = ScriptedCall {
+                id: "call-bash-resumed",
+                tool_id: "tool-bash",
+                name: "bash",
+                arguments: serde_json::json!({
+                    "command": "sleep 300",
+                    "execution_mode": "background"
+                }),
+            };
+            let (child, supervisor) = compose_session_child(
+                root,
+                vec![
+                    calling_turn(&bash),
+                    vec![
+                        started(),
+                        text("resumed on the cut lineage"),
+                        done(ModelFinishReason::Stop),
+                    ],
+                ],
+            )
+            .await;
+            note(&format!(
+                "recovery:{:?}",
+                child.runtime().recovery().resume()
+            ));
+            child.submit("continue on the cut lineage");
+            child.log.wait_settled(1).await;
+            note("settled");
+            park_owning((child, supervisor)).await;
+        }
+        RESUME_IDLE => {
+            // Nothing is submitted here. Whatever attempt this process starts
+            // is the recovered continuation of an already-canonical turn, and
+            // nothing else can be confused for it.
+            let child = Child::require(
+                root,
+                vec![vec![
+                    started(),
+                    text("continued"),
+                    done(ModelFinishReason::Stop),
+                ]],
+                false,
+                true,
+            )
+            .await;
+            note(&format!(
+                "recovery:{:?}",
+                child.runtime().recovery().resume()
+            ));
+            park_owning(child).await;
         }
         other => panic!("unknown FND-06 scenario {other}"),
     }
