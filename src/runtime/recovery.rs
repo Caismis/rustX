@@ -394,12 +394,18 @@ pub struct RecoveryEvidence {
     /// This is the durable **answer obligation** of
     /// [`RuntimeEvent::InboundTurnAdopted`], never an inference from canonical
     /// shape: the obligation is opened by the adoption transaction itself and
-    /// consumed by the first `ModelRequestStarted` or attempt terminal that
-    /// follows it. Recovery therefore continues exactly the turns a live
-    /// runtime would still owe an answer for — including a turn adopted at a
-    /// mid-attempt safe boundary, and a turn adopted while no attempt existed
-    /// yet — and never answers supplied bootstrap history, which no adoption
-    /// ever accepted.
+    /// consumed by the first `ModelRequestStarted` or *decided* attempt
+    /// terminal that follows it. Recovery therefore continues exactly the
+    /// turns a live runtime would still owe an answer for — including a turn
+    /// adopted at a mid-attempt safe boundary, and a turn adopted while no
+    /// attempt existed yet — and never answers supplied bootstrap history,
+    /// which no adoption ever accepted.
+    ///
+    /// The recovery-generated `RestartInterrupted` terminal is deliberately
+    /// **not** such a decision (see [`Self::decides_the_turn`]): the
+    /// obligation survives it and transfers to the attempt that continues the
+    /// turn, so an arbitrarily long chain of deaths in the
+    /// adoption/request-start window never strands an accepted message.
     ///
     /// Only the trailing identity of the adopted batch is retained, so the
     /// evidence stays O(1) however large the adopted batch or the lineage is.
@@ -507,11 +513,21 @@ impl RecoveryEvidence {
             | RuntimeEvent::AttemptLimitExceeded { attempt_id, .. }
             | RuntimeEvent::AttemptFailed { attempt_id, .. } => {
                 self.note_attempt(attempt_id);
-                // The attempt concluded the turn it owned. A live runtime
-                // starts nothing further for it — a cancelled turn stays
-                // unanswered — so the obligation is consumed here exactly as
-                // it is live.
-                self.unanswered_adopted_turn = None;
+                // A **decided** terminal concluded the turn the attempt
+                // owned. A live runtime starts nothing further for it — a
+                // cancelled turn stays unanswered — so the obligation is
+                // consumed here exactly as it is live.
+                //
+                // A recovery-generated terminal is not such a decision (see
+                // [`Self::decides_the_turn`]): it records that a process
+                // died, and the very recovery that writes it is the one still
+                // permitting the turn to continue. Consuming the obligation
+                // there would let recovery destroy its own permission, and a
+                // second death before the successor attempt reached its
+                // request start would strand the turn forever.
+                if Self::decides_the_turn(&envelope.event) {
+                    self.unanswered_adopted_turn = None;
+                }
                 // A durable terminal is absorbing: the attempt leaves the
                 // unresolved working set and never returns to it. Its tool
                 // repair evidence survives independently: an incomplete
@@ -792,6 +808,39 @@ impl RecoveryEvidence {
         }
     }
 
+    /// Whether this attempt terminal was a **decision about the turn**, and
+    /// therefore consumes the durable answer obligation.
+    ///
+    /// Every terminal a live runtime commits is one: completion, cancellation,
+    /// timeout, limit exhaustion, and an ordinary runtime or model failure all
+    /// mean the runtime finished with the turn, answered or not.
+    ///
+    /// [`RuntimeError::RestartInterrupted`] is the one terminal no live
+    /// runtime ever commits. Recovery writes it, about an attempt whose
+    /// process-local execution state is gone, and it is a statement about the
+    /// *attempt* rather than about the *turn*: the turn's canonical
+    /// `UserMessage` is untouched and nothing was ever sent for it. The
+    /// obligation therefore survives it and transfers to whichever attempt
+    /// continues the turn next, until a `ModelRequestStarted` finally carries
+    /// it to the provider or a decided terminal concludes it.
+    ///
+    /// Without this, the recovery reconciliation that terminalizes the
+    /// interrupted attempt would durably erase the very obligation the same
+    /// recovery reported as continuable, and the turn would be stranded by the
+    /// next process death before its successor attempt reached a request
+    /// start.
+    fn decides_the_turn(event: &RuntimeEvent) -> bool {
+        !matches!(
+            event,
+            RuntimeEvent::AttemptFailed {
+                error: AttemptFailure::Runtime {
+                    error: RuntimeError::RestartInterrupted { .. }
+                },
+                ..
+            }
+        )
+    }
+
     /// Records that this attempt identity entered durable authority.
     fn note_attempt(&mut self, attempt_id: &AttemptId) {
         self.saw_any_attempt = true;
@@ -1025,10 +1074,14 @@ pub enum ResumeDisposition {
     /// The permission is the durable **answer obligation** of
     /// [`RuntimeEvent::InboundTurnAdopted`](crate::events::types::RuntimeEvent::InboundTurnAdopted):
     /// an adoption transaction committed the turn and neither a
-    /// `ModelRequestStarted` nor an attempt terminal has consumed it since. It
-    /// is therefore reached from every attempt class except the indeterminate
-    /// one — no attempt at all (death inside the adoption/attempt-start
-    /// window), an attempt that started nothing, a durably terminal attempt
+    /// `ModelRequestStarted` nor a *decided* attempt terminal has consumed it
+    /// since — a recovery's own `RestartInterrupted` terminal transfers the
+    /// obligation onward instead of consuming it, so repeating this recovery
+    /// yields the same permission.
+    ///
+    /// It is therefore reached from every attempt class except the
+    /// indeterminate one — no attempt at all (death inside the
+    /// adoption/attempt-start window), an attempt that started nothing, a durably terminal attempt
     /// whose successor turn was adopted after it, and a live attempt that
     /// drained new inbound at a safe boundary and died before its next request
     /// start. Deciding it from canonical shape instead would strand every one
