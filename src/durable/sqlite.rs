@@ -47,6 +47,7 @@ use crate::runtime::identity::{
     RequestId, ToolCallId, ToolId, TurnId,
 };
 use crate::runtime::inbound::InboundSequence;
+use crate::runtime::process_death;
 
 use super::inbox::{
     AcceptedInbound, CanonicalMessagePage, CompactionCommitInput, ConversationStore,
@@ -556,9 +557,11 @@ impl ConversationStore for SqliteConversationStore {
         if Self::consume(&self.fail_accept_remaining) {
             return Err(storage("fault injected: accept commit"));
         }
+        process_death::reach("before:accept_inbound");
         transaction
             .commit()
             .map_err(|error| storage(format!("accept commit: {error}")))?;
+        process_death::reach("after:accept_inbound");
         Ok(accepted)
     }
 
@@ -624,10 +627,12 @@ impl ConversationStore for SqliteConversationStore {
         if Self::consume(&self.fail_event_remaining) {
             return Err(storage("fault injected: accept/event journal commit"));
         }
+        process_death::reach_event("before:event", &event.event);
         let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
         transaction
             .commit()
             .map_err(|error| storage(format!("accept/event commit: {error}")))?;
+        process_death::reach_event("after:event", &persisted.event.event);
         Ok((accepted, persisted.event))
     }
 
@@ -687,9 +692,11 @@ impl ConversationStore for SqliteConversationStore {
         {
             return Err(storage("fault injected: adopt commit"));
         }
+        process_death::reach("before:adopt_pending_batch");
         transaction
             .commit()
             .map_err(|error| storage(format!("adopt commit: {error}")))?;
+        process_death::reach("after:adopt_pending_batch");
         Ok(adopted)
     }
 
@@ -856,10 +863,12 @@ impl ConversationStore for SqliteConversationStore {
         if Self::consume(&self.fail_event_remaining) {
             return Err(storage("fault injected: canonical event journal commit"));
         }
+        process_death::reach_event("before:canonical", &event.event);
         let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
         transaction
             .commit()
             .map_err(|error| storage(format!("canonical event commit: {error}")))?;
+        process_death::reach_event("after:canonical", &persisted.event.event);
         Ok((
             persisted.event,
             TranscriptCommitReceipt { transcript_cursor },
@@ -900,12 +909,15 @@ impl ConversationStore for SqliteConversationStore {
             persisted
                 .push(persist_event_tx(&transaction, &self.conversation_id, event.clone())?.event);
         }
+        process_death::reach("before:append_canonical_batch");
         transaction
             .commit()
             .map_err(|error| storage(format!("canonical event batch commit: {error}")))?;
+        process_death::reach("after:append_canonical_batch");
         Ok((persisted, receipts))
     }
 
+    #[allow(clippy::too_many_lines)]
     fn commit_compaction(
         &self,
         input: CompactionCommitInput,
@@ -1008,9 +1020,11 @@ impl ConversationStore for SqliteConversationStore {
         if Self::consume(&self.fail_event_remaining) {
             return Err(storage("fault injected: compaction event journal commit"));
         }
+        process_death::reach("before:commit_compaction");
         transaction
             .commit()
             .map_err(|error| storage(format!("compaction commit: {error}")))?;
+        process_death::reach("after:commit_compaction");
         Ok((revision, generation, persisted.event, summary_cursor))
     }
 
@@ -1119,9 +1133,11 @@ impl ConversationStore for SqliteConversationStore {
         // anywhere below rolls all of it back, so request-scoped context
         // can never become canonical without its request starting.
         let persisted = self.insert_fresh_start_tx(&transaction, context, snapshot, timestamp)?;
+        process_death::reach("before:commit_model_turn_start");
         transaction
             .commit()
             .map_err(|error| storage(format!("request start commit: {error}")))?;
+        process_death::reach("after:commit_model_turn_start");
         Ok(persisted)
     }
 
@@ -1281,10 +1297,12 @@ impl ConversationStore for SqliteConversationStore {
         if Self::consume(&self.fail_event_remaining) {
             return Err(storage("fault injected: event commit"));
         }
+        process_death::reach_event("before:event", &event.event);
         let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
         transaction
             .commit()
             .map_err(|error| storage(format!("event commit: {error}")))?;
+        process_death::reach_event("after:event", &persisted.event.event);
         Ok(persisted.event)
     }
 
@@ -1310,9 +1328,11 @@ impl ConversationStore for SqliteConversationStore {
                 "interaction audit did not receive a transcript cursor".to_owned(),
             )
         })?;
+        process_death::reach_event("before:interaction", &persisted.event.event);
         transaction
             .commit()
             .map_err(|error| storage(format!("interaction audit commit: {error}")))?;
+        process_death::reach_event("after:interaction", &persisted.event.event);
         Ok((persisted.event, transcript_cursor))
     }
 
@@ -1435,9 +1455,11 @@ impl ConversationStore for SqliteConversationStore {
                 ],
             )
             .map_err(|error| storage(format!("open publication stream: {error}")))?;
+        process_death::reach("before:open_publication_stream");
         transaction
             .commit()
             .map_err(|error| storage(format!("publication open commit: {error}")))?;
+        process_death::reach("after:open_publication_stream");
         Ok(())
     }
 
@@ -1465,9 +1487,11 @@ impl ConversationStore for SqliteConversationStore {
                 stream.start.stream_id
             )));
         }
+        process_death::reach("before:stage_publication_frames");
         transaction
             .commit()
             .map_err(|error| storage(format!("publication staging commit: {error}")))?;
+        process_death::reach("after:stage_publication_frames");
         Ok(())
     }
 
@@ -1531,9 +1555,11 @@ impl ConversationStore for SqliteConversationStore {
                 params![seq_to_i64(terminal_sequence)?, stream_id.as_str()],
             )
             .map_err(|error| storage(format!("commit publication terminal: {error}")))?;
+        process_death::reach("before:commit_publication_terminal");
         transaction
             .commit()
             .map_err(|error| storage(format!("publication terminal commit: {error}")))?;
+        process_death::reach("after:commit_publication_terminal");
         Ok(())
     }
 
@@ -1626,9 +1652,11 @@ impl ConversationStore for SqliteConversationStore {
                 ],
             )
             .map_err(|error| storage(format!("settle canonical publication: {error}")))?;
+        process_death::reach("before:commit_canonical_publication");
         transaction
             .commit()
             .map_err(|error| storage(format!("canonical publication commit: {error}")))?;
+        process_death::reach("after:commit_canonical_publication");
         Ok((persisted.event, transcript_cursor))
     }
 
@@ -1723,9 +1751,11 @@ impl ConversationStore for SqliteConversationStore {
                 params![settlement.as_str(), stream_id.as_str()],
             )
             .map_err(|error| storage(format!("settle publication audit: {error}")))?;
+        process_death::reach("before:terminalize_publication_audit");
         transaction
             .commit()
             .map_err(|error| storage(format!("publication audit commit: {error}")))?;
+        process_death::reach("after:terminalize_publication_audit");
         Ok((audit, transcript_cursor))
     }
 

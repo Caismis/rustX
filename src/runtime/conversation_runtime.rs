@@ -3403,6 +3403,9 @@ impl ConversationRuntime {
             .resource_loader
             .prepare(&self.inner.capability)
             .await;
+        // FND-06: the reload build/publish boundary. A candidate generation
+        // is fully built here and nothing of it is published yet.
+        crate::runtime::process_death::reach("reload:prepared");
 
         let outcome = {
             let mut state = self.inner.lock_state();
@@ -3439,6 +3442,10 @@ impl ConversationRuntime {
                                 ));
                                 let capability_revision = resources.capability_revision();
                                 state.resources = resources;
+                                // FND-06: the complete new generation is
+                                // published and the admission gate is about
+                                // to reopen.
+                                crate::runtime::process_death::reach("reload:published");
                                 reload_gate.clear(&mut state);
                                 Ok(RuntimeResourceReloaded {
                                     resource_revision: revision,
