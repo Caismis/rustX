@@ -236,6 +236,20 @@ export function runtimeInbound(id: string, text: string) {
   };
 }
 
+export function contextUserMessage(
+  id: string,
+  text: string,
+  context: "runtime_tool_observation" | "extension_environment" | "agent_status" = "agent_status",
+) {
+  return {
+    role: "user" as const,
+    id,
+    content: [{ type: "text" as const, text }],
+    source: "runtime" as const,
+    kind: { context } as const,
+  };
+}
+
 export function assistantMessage(id: string, text: string) {
   return {
     role: "assistant" as const,

@@ -23,6 +23,7 @@ import {
   approvalInteraction,
   attemptModel,
   backgroundExecution,
+  contextUserMessage,
   capabilities,
   runtimeInbound,
   sessionModel,
@@ -30,6 +31,7 @@ import {
   runtimeCursor,
   snapshot,
   transcriptCursor,
+  toolMessage,
   toolResult,
   userMessage,
 } from "./support/fixtures.ts";
@@ -861,6 +863,124 @@ describe("presentation projection", () => {
         }),
       /unreachable Runtime Client Protocol v1 event/,
     );
+  });
+
+  it("fails closed for a visible Assistant commit without a transcript cursor", () => {
+    const accepted = fold(initial(), [
+      {
+        type: "message_committed",
+        message: assistantMessage("accepted", "kept"),
+        transcript_cursor: transcriptCursor(1),
+      },
+    ]);
+    const before = accepted.transcript.map((entry) => ({ ...entry }));
+
+    assert.throws(
+      () =>
+        reduce(accepted, {
+          cursor: runtimeCursor(42),
+          event: {
+            type: "message_committed",
+            message: assistantMessage("missing-assistant-cursor", "bad"),
+          },
+        }),
+      /visible transcript message is missing/,
+    );
+    assert.equal(accepted.cursor, 1, "the failed event never advances the cursor");
+    assert.deepEqual(accepted.transcript, before, "the accepted state is unchanged");
+  });
+
+  it("fails closed for a visible Tool commit without a transcript cursor", () => {
+    assert.throws(
+      () =>
+        reduce(initial(), {
+          cursor: runtimeCursor(42),
+          event: {
+            type: "message_committed",
+            message: toolMessage("missing-tool-cursor", "call-1", "tool-read"),
+          },
+        }),
+      /visible transcript message is missing/,
+    );
+  });
+
+  it("fails closed for an ordinary User commit without a transcript cursor", () => {
+    assert.throws(
+      () =>
+        reduce(initial(), {
+          cursor: runtimeCursor(42),
+          event: {
+            type: "message_committed",
+            message: userMessage("missing-user-cursor", "bad"),
+          },
+        }),
+      /visible transcript message is missing/,
+    );
+  });
+
+  it("keeps a hidden Context commit out of the transcript without a cursor", () => {
+    const state = reduce(initial(), {
+      cursor: runtimeCursor(7),
+      event: {
+        type: "message_committed",
+        message: contextUserMessage("hidden-context", "runtime status"),
+      },
+    });
+
+    assert.equal(state.cursor, 7);
+    assert.equal(state.transcript.length, 0);
+  });
+
+  it("rejects a hidden Context commit carrying a contradictory cursor", () => {
+    const state = initial();
+    assert.throws(
+      () =>
+        reduce(state, {
+          cursor: runtimeCursor(42),
+          event: {
+            type: "message_committed",
+            message: contextUserMessage("hidden-context", "runtime status"),
+            transcript_cursor: transcriptCursor(8),
+          },
+        }),
+      /hidden Context message must not carry/,
+    );
+    assert.equal(state.cursor, 0);
+    assert.equal(state.transcript.length, 0);
+  });
+
+  it("fails closed for visible inbound acceptance without a transcript cursor", () => {
+    assert.throws(
+      () =>
+        reduce(initial(), {
+          cursor: runtimeCursor(42),
+          event: {
+            type: "inbound_enqueued",
+            sequence: 1,
+            message: userMessage("missing-inbound-cursor", "bad"),
+          },
+        }),
+      /visible transcript message is missing/,
+    );
+  });
+
+  it("rejects hidden Context inbound with a contradictory cursor", () => {
+    const state = initial();
+    assert.throws(
+      () =>
+        reduce(state, {
+          cursor: runtimeCursor(42),
+          event: {
+            type: "inbound_enqueued",
+            sequence: 1,
+            message: contextUserMessage("hidden-inbound", "runtime status"),
+            transcript_cursor: transcriptCursor(8),
+          },
+        }),
+      /hidden Context message must not carry/,
+    );
+    assert.equal(state.cursor, 0);
+    assert.equal(state.transcript.length, 0);
   });
 
   it("displays inbound input only after durable acceptance", () => {

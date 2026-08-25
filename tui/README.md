@@ -208,6 +208,14 @@ identity only detects the same durable fact; it never supplies ordering. The
 transcript cursor is separate from the live event cursor, so loading older
 history cannot disturb event resynchronization.
 
+The wire validator and presentation reducer share one visibility contract:
+only a hidden Context-kind User message may omit `transcript_cursor`. Visible
+User, Assistant, Tool, and inbound facts require the durable cursor, while a
+hidden Context carrying one is contradictory protocol state. The connection
+closes on malformed wire input and the reducer fails closed when called
+directly; neither path fabricates a cursor or changes accepted presentation
+state.
+
 Command routing has a separate ownership boundary: rebinding the dispatcher
 changes admission only for future invocations. Each admitted command captures
 its `RuntimeClientAttachment` before its first await and passes that exact

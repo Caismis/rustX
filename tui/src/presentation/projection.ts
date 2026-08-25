@@ -36,6 +36,10 @@ import type {
   RuntimeClientTranscriptPage,
   SessionModelView,
 } from "../protocol/types.ts";
+import {
+  isHiddenContextMessage,
+  validateTranscriptCursorContract,
+} from "../protocol/types.ts";
 import type {
   AttemptPresentation,
   PresentationState,
@@ -171,8 +175,15 @@ export function reduce(
   state: PresentationState,
   protocolEvent: RuntimeClientProtocolEvent,
 ): PresentationState {
-  const next = { ...state, cursor: protocolEvent.cursor };
   const event = protocolEvent.event;
+  const transcriptCursor =
+    event.type === "message_committed" || event.type === "inbound_enqueued"
+      ? validateTranscriptCursorContract(
+          event.message,
+          event.transcript_cursor,
+        )
+      : undefined;
+  const next = { ...state, cursor: protocolEvent.cursor };
 
   switch (event.type) {
     case "attempt_started":
@@ -445,20 +456,24 @@ export function reduce(
       );
 
     case "message_committed": {
+      if (isHiddenContextMessage(event.message)) {
+        return next;
+      }
+      if (transcriptCursor === undefined) {
+        throw new Error(
+          "visible message_committed event is missing its durable transcript cursor",
+        );
+      }
       const messageId = messageIdOf(event.message);
       const transcript =
         event.message.role === "assistant" && event.attempt_id !== undefined
           ? dropStreaming(state.transcript, event.attempt_id)
           : state.transcript;
-      if (event.transcript_cursor === undefined) {
-        next.transcript = transcript;
-        return next;
-      }
       next.transcript = appendTranscriptEntry(transcript, {
         kind: "committed",
         key: `committed:${messageId}`,
         messageId,
-        cursor: event.transcript_cursor,
+        cursor: transcriptCursor,
         attemptId: event.attempt_id,
         message: event.message,
       });
@@ -480,7 +495,7 @@ export function reduce(
       // Durable acceptance is the display frontier. Context facts remain
       // model-visible runtime input but are hidden from ordinary chat.
       if (!isHiddenContextMessage(event.message)) {
-        if (event.transcript_cursor === undefined) {
+        if (transcriptCursor === undefined) {
           throw new Error(
             "visible inbound_enqueued event is missing its durable transcript cursor",
           );
@@ -489,7 +504,7 @@ export function reduce(
           kind: "committed",
           key: `committed:${event.message.id}`,
           messageId: event.message.id,
-          cursor: event.transcript_cursor,
+          cursor: transcriptCursor,
           message: { role: "user", ...event.message },
         });
       }
@@ -646,14 +661,6 @@ function deduplicateTranscript(transcript: TranscriptEntry[]): TranscriptEntry[]
     }
   }
   return [...seen.values()];
-}
-
-function isHiddenContextMessage(message: { kind?: unknown }): boolean {
-  return (
-    typeof message.kind === "object" &&
-    message.kind !== null &&
-    "context" in message.kind
-  );
 }
 
 function startAttempt(

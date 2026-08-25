@@ -147,6 +147,16 @@ spine; clients merge live and older pages by durable transcript cursor. Entry
 identity only detects the same durable fact, and page reads do not move the
 live event cursor.
 
+The generic Event Journal append cannot commit interaction transcript facts:
+`append_event` rejects `InteractionRequested` and `InteractionSettled` before
+the durable transition begins. Only the narrow
+`append_interaction_audit` transition commits those facts, allocates their
+ordering reference in the same transaction, and returns the allocated cursor
+to live publication. At the Runtime Client/TUI boundary, cursor absence is
+legal only for hidden Context-kind User messages. Visible User, Assistant,
+Tool, and inbound facts without a durable cursor fail closed; hidden Context
+facts carrying a cursor are rejected and cannot enter ordinary transcript.
+
 Publication audits are typed non-canonical Assistant items. Incomplete and
 Unaccepted settlements remain distinct. A model-proposed tool call in either
 audit is explicitly proposed, unaccepted, and unexecuted; it can never be

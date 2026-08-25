@@ -883,6 +883,111 @@ async fn requirement_11_interaction_audits_page_without_recovering_a_waiter() {
     drop(attachment);
 }
 
+/// The generic Event Journal append is not allowed to create an interaction
+/// transcript fact without returning its durable cursor. The dedicated audit
+/// transition owns both the Journal write and the transcript-order allocation.
+#[test]
+fn interaction_audit_transition_is_the_only_cursor_returning_interaction_path() {
+    let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
+    store.initialize(&[]).expect("initialize");
+    let interaction_id = InteractionId::for_attempt(&attempt(), 1);
+    let requested = requested_interaction(&interaction_id);
+    let requested_event_id = requested.event_id.clone();
+
+    assert!(matches!(
+        store.append_event(requested.clone()),
+        Err(ConversationStoreError::InvalidReference(_))
+    ));
+    assert!(
+        store
+            .read_events(None, 10)
+            .expect("Journal after rejected request")
+            .events
+            .is_empty()
+    );
+    assert!(
+        store
+            .load_transcript_page(None, 10)
+            .expect("transcript after rejected request")
+            .entries
+            .is_empty()
+    );
+
+    let (persisted_requested, requested_cursor) = store
+        .append_interaction_audit(requested)
+        .expect("specialized request transition");
+    assert_eq!(persisted_requested.event_id, requested_event_id);
+    let requested_page = store
+        .load_transcript_page(None, 10)
+        .expect("requested transcript page");
+    assert_eq!(requested_page.entries.len(), 1);
+    assert_eq!(requested_page.entries[0].cursor, requested_cursor);
+    assert!(matches!(
+        requested_page.entries[0].item,
+        TranscriptItem::InteractionRequested { .. }
+    ));
+
+    let settled = settled_interaction(&interaction_id);
+    assert!(matches!(
+        store.append_event(settled.clone()),
+        Err(ConversationStoreError::InvalidReference(_))
+    ));
+    assert_eq!(
+        store
+            .read_events(None, 10)
+            .expect("Journal after rejected settlement")
+            .events
+            .len(),
+        1
+    );
+    assert_eq!(
+        store
+            .load_transcript_page(None, 10)
+            .expect("transcript after rejected settlement")
+            .entries
+            .len(),
+        1
+    );
+
+    let (persisted_settled, settled_cursor) = store
+        .append_interaction_audit(settled)
+        .expect("specialized settlement transition");
+    assert!(persisted_settled.event_id.as_str().contains("settled"));
+    assert!(requested_cursor < settled_cursor);
+    let page = store
+        .load_transcript_page(None, 10)
+        .expect("settled transcript page");
+    assert_eq!(
+        page.entries
+            .iter()
+            .map(|entry| entry.cursor)
+            .collect::<Vec<_>>(),
+        vec![requested_cursor, settled_cursor]
+    );
+    assert!(matches!(
+        page.entries[1].item,
+        TranscriptItem::InteractionSettled { .. }
+    ));
+
+    assert!(matches!(
+        store.append_interaction_audit(requested_interaction(&interaction_id)),
+        Err(ConversationStoreError::TerminalViolation(_))
+    ));
+    assert!(matches!(
+        store.append_interaction_audit(settled_interaction(&interaction_id)),
+        Err(ConversationStoreError::TerminalViolation(_))
+    ));
+    assert_eq!(
+        store
+            .read_events(None, 10)
+            .expect("final Journal")
+            .events
+            .len(),
+        2,
+        "the specialized lifecycle remains exactly once"
+    );
+}
+
 /// Requirement 12: transcript cursors are independent from the live Runtime
 /// Client event cursor, and paging does not move the event cursor.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

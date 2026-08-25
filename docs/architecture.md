@@ -115,6 +115,13 @@ background-execution fact and rejects every later fact in that lifecycle. An
 attempt terminal is an attempt-level fact; it is not treated as a late event
 inside a turn that already emitted `TurnCompleted`.
 
+The generic `ConversationStore::append_event` transition is limited to facts
+whose durable owner does not need a purpose-specific receipt. It rejects
+`InteractionRequested` and `InteractionSettled` before opening a transaction;
+the dedicated `append_interaction_audit` transition commits the Event Journal
+fact and its `transcript_order` reference together and returns the exact
+`TranscriptCursor` to the live publication path.
+
 Runtime bootstrap loads only the current Surface head, active IDs, active
 message bodies, structural checkpoint metadata, pending items, and bounded
 projection state. The Runtime Client also receives only the newest bounded
@@ -483,6 +490,14 @@ The coordinator reaches durability through the narrow
 facts and rejects every other payload. It receives no Ledger, Surface,
 Request Snapshot, publication, or general Journal authority, so an audit seam
 can never become a second way to authorize a side effect.
+
+The Runtime Client/TUI boundary is fail-closed for cursor contradictions:
+cursor absence is legal only for a hidden Context-kind User message. A visible
+User, Assistant, or Tool message, and every visible inbound, must carry its
+durable `TranscriptCursor`; a hidden Context carrying one is also invalid.
+Protocol validation and the presentation reducer share this visibility rule,
+so a malformed event cannot silently advance or rewrite accepted presentation
+state.
 
 `InteractionRequested` opens the `interaction:{id}` durable lifecycle and
 `InteractionSettled` closes it exactly once, in the same shape the background

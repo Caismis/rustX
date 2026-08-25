@@ -1055,6 +1055,69 @@ export type RuntimeClientEvent =
   | { type: "session_model_changed"; model: SessionModelView }
   | { type: "runtime_shutdown" };
 
+/** Whether a User message is a hidden Context fact rather than transcript content. */
+export function isHiddenContextMessage(message: {
+  role?: unknown;
+  kind?: unknown;
+}): boolean {
+  const isUserMessage = message.role === undefined || message.role === "user";
+  return (
+    isUserMessage &&
+    typeof message.kind === "object" &&
+    message.kind !== null &&
+    "context" in message.kind
+  );
+}
+
+function isWireTranscriptCursor(value: unknown): value is RuntimeClientTranscriptCursor {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0
+  );
+}
+
+/** Checks the one visible/hidden transcript-cursor contract at the wire boundary. */
+export function hasTranscriptCursorContract(
+  message: unknown,
+  transcriptCursor: unknown,
+): boolean {
+  if (typeof message !== "object" || message === null) {
+    return false;
+  }
+  if (isHiddenContextMessage(message as { role?: unknown; kind?: unknown })) {
+    return transcriptCursor === undefined;
+  }
+  return isWireTranscriptCursor(transcriptCursor);
+}
+
+/**
+ * Validates a transcript-visible message before presentation reduction.
+ *
+ * Hidden Context messages may omit the cursor and never enter the ordinary
+ * transcript. Every other message must carry the durable cursor allocated by
+ * `transcript_order`; contradictory hidden-with-cursor facts fail closed.
+ */
+export function validateTranscriptCursorContract(
+  message: { role?: unknown; kind?: unknown },
+  transcriptCursor: RuntimeClientTranscriptCursor | undefined,
+): RuntimeClientTranscriptCursor | undefined {
+  if (isHiddenContextMessage(message)) {
+    if (transcriptCursor !== undefined) {
+      throw new Error(
+        "hidden Context message must not carry a durable transcript cursor",
+      );
+    }
+    return undefined;
+  }
+  if (!isWireTranscriptCursor(transcriptCursor)) {
+    throw new Error(
+      "visible transcript message is missing a valid durable transcript cursor",
+    );
+  }
+  return transcriptCursor;
+}
+
 export interface RuntimeClientProtocolEvent {
   cursor: RuntimeClientCursor;
   event: RuntimeClientEvent;
@@ -1389,7 +1452,14 @@ export function isProtocolEvent(
   };
   return (
     typeof candidate.cursor === "number" &&
-    isKnownRuntimeClientEvent(candidate.event)
+    isKnownRuntimeClientEvent(candidate.event) &&
+    (candidate.event.type !== "message_committed" &&
+    candidate.event.type !== "inbound_enqueued"
+      ? true
+      : hasTranscriptCursorContract(
+          candidate.event.message,
+          candidate.event.transcript_cursor,
+        ))
   );
 }
 

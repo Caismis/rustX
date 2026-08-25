@@ -1254,9 +1254,9 @@ impl ConversationStore for SqliteConversationStore {
         &self,
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
-        if requires_compound_transaction(&event.event) {
+        if requires_specialized_transition(&event.event) {
             return Err(ConversationStoreError::InvalidReference(
-                "this event kind must use its canonical fact transaction".to_owned(),
+                "this event kind must use its specialized durable transition".to_owned(),
             ));
         }
         let mut connection = self.lock()?;
@@ -5488,7 +5488,9 @@ fn load_user_notification_tx(
     Ok(notification)
 }
 
-fn requires_compound_transaction(event: &RuntimeEvent) -> bool {
+/// Whether an event has a transcript-visible or otherwise compound durable
+/// owner that must return through a purpose-specific transition.
+fn requires_specialized_transition(event: &RuntimeEvent) -> bool {
     matches!(
         event,
         RuntimeEvent::AssistantMessageCommitted { .. }
@@ -5497,6 +5499,8 @@ fn requires_compound_transaction(event: &RuntimeEvent) -> bool {
             | RuntimeEvent::ModelRequestStarted { .. }
             | RuntimeEvent::BackgroundTerminalPublished { .. }
             | RuntimeEvent::SubagentTerminalPublished { .. }
+            | RuntimeEvent::InteractionRequested { .. }
+            | RuntimeEvent::InteractionSettled { .. }
     )
 }
 
