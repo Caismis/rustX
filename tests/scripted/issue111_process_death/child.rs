@@ -74,6 +74,11 @@ pub(crate) const TOOL_APPROVAL_PENDING: &str = "tool_approval_pending";
 pub(crate) const TOOL_CONTINUATION_INBOUND: &str = "tool_continuation_inbound";
 /// One turn that starts a real detached background Bash execution.
 pub(crate) const BACKGROUND_TOOL: &str = "background_tool";
+/// One turn that durably owns a real subagent child process (Issue #60).
+pub(crate) const SUBAGENT_TOOL: &str = "subagent_tool";
+/// [`SUBAGENT_TOOL`] whose owned child answers with its terminal result, so
+/// the terminal candidate is known and the publication transaction runs.
+pub(crate) const SUBAGENT_SETTLED: &str = "subagent_settled";
 /// One settled turn, an explicit manual compaction with a parked summary
 /// request, and one more settled turn afterwards.
 pub(crate) const COMPACTION: &str = "compaction";
@@ -85,6 +90,10 @@ pub(crate) const LIVE_RESOURCE_EDIT: &str = "live_resource_edit";
 pub(crate) const RELOAD: &str = "reload";
 /// A reload attempted while an attempt owns the session.
 pub(crate) const RELOAD_BUSY: &str = "reload_busy";
+/// A reload attempted while a **compaction** owns the session.
+pub(crate) const RELOAD_BUSY_COMPACTION: &str = "reload_busy_compaction";
+/// A reload attempted while a pending **interaction** owns the session.
+pub(crate) const RELOAD_BUSY_INTERACTION: &str = "reload_busy_interaction";
 /// A reopened conversation that admits one new request.
 pub(crate) const COLD_RESUME: &str = "cold_resume";
 /// A reopened conversation whose new attempt reads the Skill file again.
@@ -94,6 +103,10 @@ pub(crate) const COLD_RESUME_READ: &str = "cold_resume_read";
 pub(crate) const COMPOSE_ONLY: &str = "compose_only";
 /// Inbound accepted durably with no adoption.
 pub(crate) const INBOUND_ONLY: &str = "inbound_only";
+/// One settled attempt, then a **second** ordinary inbound message, so a kill
+/// can land inside the adoption/attempt-start window of a later turn of an
+/// ordinary multi-turn conversation.
+pub(crate) const SECOND_TURN: &str = "second_turn";
 /// A streaming turn that is still open while a second inbound is accepted.
 pub(crate) const STREAMING_INBOUND: &str = "streaming_inbound";
 
@@ -135,6 +148,30 @@ fn rendezvous(text: &str) {
 fn idle() -> ! {
     note("idle");
     process_death::orphan_watchdog()
+}
+
+/// Blocks forever while still **owning** everything the scenario composed.
+///
+/// Taking the owner by value is the whole point. A scenario that ends without
+/// waiting on runtime work — the no-client child, the composed-but-never-
+/// activated child — would otherwise release the last semantic owner of its
+/// `ConversationRuntime` on the way out. That closes the admission wake gate,
+/// the admission worker reaches its terminal condition and exits, and the
+/// armed durable boundary is never reached: the parent would then fail on its
+/// outer liveness bound rather than on a conformance verdict, and whether it
+/// failed at all would depend on which of the two won the race. Owning the
+/// runtime here makes "the child is alive and idle at the moment of death" a
+/// property of the type system instead of the scheduler.
+///
+/// Parking asynchronously (rather than blocking this thread) keeps every
+/// runtime worker thread free, so the admission worker still reaches its
+/// boundary on a single-core machine.
+async fn park_owning<T>(_owner: T) -> ! {
+    note("idle");
+    std::thread::spawn(process_death::orphan_watchdog);
+    loop {
+        std::future::pending::<()>().await;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -330,6 +367,39 @@ impl Child {
             .expect("accept the inbound message");
     }
 
+    /// Stages one **real** OS process as this conversation's next subagent
+    /// child and returns the control peer the registry's driver talks to.
+    ///
+    /// The process runs `command` in *this* child's process group, exactly
+    /// like the background row's real `sleep 300`: the parent's `killpg`
+    /// reaps it with everything else, and until then a long-running one is a
+    /// genuine orphan candidate. A child whose peer is never answered stays
+    /// durably owned and unsettled at the moment of death; one that answers
+    /// (and whose process exits, so the driver can observe a physical
+    /// terminal) drives the publication transaction instead.
+    fn stage_live_subagent_child(&self, root: &Path, command: &str) -> tokio::net::UnixStream {
+        let (driver_end, peer) = tokio::net::UnixStream::pair().expect("subagent control pair");
+        let process = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("the staged subagent child process");
+        let runtime_root = root.join("private/artifacts/subagents/staged");
+        std::fs::create_dir_all(&runtime_root).expect("staged child runtime root");
+        self.runtime()
+            .subagents()
+            .expect("the composed runtime owns a subagent registry")
+            .push_staged_override(crate::runtime::subagent::process::StagedChild::for_test(
+                process,
+                driver_end,
+                runtime_root,
+            ));
+        peer
+    }
+
     /// Blocks until the scripted model parked mid-stream.
     async fn wait_model_parked(&self) {
         let mut parked = self.model.parked();
@@ -467,6 +537,33 @@ fn calling_turn(call: &ScriptedCall) -> Vec<FakeStep> {
     steps
 }
 
+/// Plays the owned child's side of the delegation exactly once: await the
+/// `Delegate` frame, answer with one succeeded terminal result.
+///
+/// This is the real IPC contract of a v1 child, spoken over the real control
+/// channel the registry's driver owns.
+async fn answer_subagent_delegation(peer: &mut tokio::net::UnixStream) {
+    use crate::runtime::subagent::ipc::{
+        ChildFrame, ChildResultStatus, ParentFrame, ResultFrame, read_parent_frame,
+        write_child_frame,
+    };
+    let frame = read_parent_frame(peer).await.expect("a delegation frame");
+    assert!(
+        matches!(frame, Some(ParentFrame::Delegate(_))),
+        "the durably owned child is delegated first"
+    );
+    write_child_frame(
+        peer,
+        &ChildFrame::Result(ResultFrame {
+            status: ChildResultStatus::Succeeded,
+            content: Some("the note says R1".to_owned()),
+            diagnostic: None,
+        }),
+    )
+    .await
+    .expect("the terminal result frame");
+}
+
 fn user_text(body: &str) -> Vec<UserContentBlock> {
     vec![UserContentBlock::Text(TextBlock {
         text: body.to_owned(),
@@ -492,7 +589,9 @@ pub(crate) fn run(scenario: &str) -> ! {
         .enable_all()
         .build()
         .expect("the child tokio runtime");
-    runtime.block_on(async move { scenario_body(&root, scenario).await });
+    // One linear script per scenario makes this future large by construction;
+    // boxing it keeps the child's entry frame small.
+    runtime.block_on(Box::pin(scenario_body(&root, scenario)));
     idle()
 }
 
@@ -514,8 +613,11 @@ async fn scenario_body(root: &Path, scenario: &str) {
             } else {
                 // With no observation bridge there is no client-facing consumer
                 // to wait on: this child is always killed at an armed durable
-                // boundary instead.
+                // boundary instead. It parks here still owning its runtime, so
+                // the admission worker provably survives to reach that
+                // boundary.
                 note("submitted");
+                park_owning(child).await;
             }
         }
         TOOL_TURN | TOOL_APPROVAL | TOOL_APPROVAL_PENDING => {
@@ -598,6 +700,58 @@ async fn scenario_body(root: &Path, scenario: &str) {
             child.submit("start the background command");
             child.log.wait_settled(1).await;
             note("settled");
+        }
+        SUBAGENT_TOOL | SUBAGENT_SETTLED => {
+            let call = ScriptedCall {
+                id: "call-subagent-1",
+                tool_id: "tool-subagent",
+                name: "subagent",
+                arguments: serde_json::json!({
+                    "profile": "explore",
+                    "task": "inspect the workspace note"
+                }),
+            };
+            let child = Child::require(
+                root,
+                vec![
+                    calling_turn(&call),
+                    vec![started(), text("delegated"), done(ModelFinishReason::Stop)],
+                ],
+                false,
+                true,
+            )
+            .await;
+            // The staged child is a **real** OS process that never answers, so
+            // the conversation durably owns a live child at the moment of
+            // death. Staging is the registry's own `cfg(test)` seam: the spawn
+            // and startup handshake are replaced, and everything the row
+            // proves — the ownership commit, the durable lifecycle, recovery
+            // reconciliation, and the terminal publication — is the real path.
+            // A settling child must also *exit*, because a terminal candidate
+            // becomes physical only when the driver reaps the process; an
+            // unsettled one must stay alive to be the durably owned child the
+            // kill lands on.
+            let mut peer = child.stage_live_subagent_child(
+                root,
+                if scenario == SUBAGENT_SETTLED {
+                    "exit 0"
+                } else {
+                    "exec sleep 300"
+                },
+            );
+            child.submit("delegate the task");
+            if scenario == SUBAGENT_SETTLED {
+                // Answering the delegation makes the terminal *candidate*
+                // durably known while the terminal *publication* is still an
+                // uncommitted transaction — the state the publication
+                // atomicity row kills in.
+                answer_subagent_delegation(&mut peer).await;
+            }
+            child.log.wait_settled(1).await;
+            // Only reached when no boundary was armed. The control peer stays
+            // owned so nothing can settle the child from this side.
+            note("settled");
+            park_owning((child, peer)).await;
         }
         COMPACTION => {
             let (release, receiver) = model_release();
@@ -707,6 +861,63 @@ async fn scenario_body(root: &Path, scenario: &str) {
             child.log.wait_settled(1).await;
             note("settled");
         }
+        RELOAD_BUSY_COMPACTION => {
+            let (release, receiver) = model_release();
+            let child = Child::require(
+                root,
+                vec![
+                    wide_text_turn(),
+                    vec![
+                        FakeStep::ParkUntilReleased(receiver),
+                        started(),
+                        text("compact summary"),
+                        done(ModelFinishReason::Stop),
+                    ],
+                ],
+                false,
+                true,
+            )
+            .await;
+            child.submit("go");
+            child.log.wait_settled(1).await;
+            // No attempt owns the session here: the only owner is the manual
+            // compaction, whose summary side request is provably in flight.
+            let runtime = child.runtime().clone();
+            let compaction = tokio::spawn(async move { runtime.compact_context().await });
+            child.wait_model_parked().await;
+            let reloaded = child.runtime().reload_resources().await;
+            note(&format!("reload:{}", describe(&reloaded)));
+            release.send_replace(true);
+            let outcome = compaction.await.expect("the compaction task joins");
+            note(&format!("compaction:{}", describe(&outcome)));
+            park_owning(child).await;
+        }
+        RELOAD_BUSY_INTERACTION => {
+            let call = read_call("call-read-busy", "note.txt");
+            let child = Child::require(
+                root,
+                vec![
+                    calling_turn(&call),
+                    vec![started(), text("continued"), done(ModelFinishReason::Stop)],
+                ],
+                // A non-approving child leaves the waiter pending forever, so
+                // the interaction owns the session at the reload boundary.
+                false,
+                true,
+            )
+            .await;
+            child.submit("read the note");
+            child
+                .log
+                .wait_for(|seen| {
+                    seen.iter()
+                        .any(|entry| matches!(entry, Seen::InteractionPending))
+                })
+                .await;
+            let reloaded = child.runtime().reload_resources().await;
+            note(&format!("reload:{}", describe(&reloaded)));
+            park_owning(child).await;
+        }
         COLD_RESUME | COLD_RESUME_READ => {
             let first = if scenario == COLD_RESUME_READ {
                 calling_turn(&read_call("call-read-cold", SKILL_FILE))
@@ -780,6 +991,31 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 })
                 .expect("accept the inbound message");
             note(&format!("accepted:{}", accepted.message_id));
+            // The claim is that a *live* process which never activated its
+            // runtime never adopts. Holding the composed core proves exactly
+            // that; releasing it would only prove that a torn-down runtime
+            // adopts nothing.
+            park_owning(core).await;
+        }
+        SECOND_TURN => {
+            let child = Child::require(
+                root,
+                vec![
+                    wide_text_turn(),
+                    vec![started(), text("second"), done(ModelFinishReason::Stop)],
+                ],
+                false,
+                true,
+            )
+            .await;
+            child.submit("first");
+            child.log.wait_settled(1).await;
+            // The first turn is durably answered and its attempt is durably
+            // terminal. The second message is submitted from a quiescent
+            // runtime, so the only durable transitions left are its own.
+            rendezvous("first-attempt-settled");
+            child.submit("second");
+            park_owning(child).await;
         }
         STREAMING_INBOUND => {
             let (release, receiver) = model_release();

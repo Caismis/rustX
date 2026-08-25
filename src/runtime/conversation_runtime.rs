@@ -4088,6 +4088,19 @@ impl ConversationRuntime {
         RequestHistory::new(self.inner.store.clone()).reconstruct(identity)
     }
 
+    /// The conversation-owned subagent registry (tests only).
+    ///
+    /// The FND-06 process-death suite needs the registry the *real*
+    /// composition built so it can stage one child through
+    /// [`SubagentRegistry::push_staged_override`](crate::runtime::subagent::SubagentRegistry)
+    /// — the same seam the in-crate registry tests use — and then drive the
+    /// ownership commit through the real Agent Loop and the real `subagent`
+    /// intrinsic. It is never part of the published API.
+    #[cfg(test)]
+    pub(crate) fn subagents(&self) -> Option<&crate::runtime::subagent::SubagentRegistry> {
+        self.inner.subagents.as_ref()
+    }
+
     /// Inspects one subagent child through the authoritative registry
     /// (Issue #60).
     #[must_use]

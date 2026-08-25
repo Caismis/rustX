@@ -243,6 +243,122 @@ fn adopted_inbound_is_canonical_and_no_longer_pending() {
     assert_eq!(report.resume(), ResumeDisposition::ContinueAdoptedTurn);
 }
 
+/// The same window one turn later, in an ordinary multi-turn conversation.
+///
+/// Nothing about the canonical Surface distinguishes this trailing human
+/// message from the first turn's already-answered one, and the Event Journal
+/// now holds a complete settled attempt, so canonical shape plus "did any
+/// attempt ever exist" cannot tell the two apart. Only the durable answer
+/// obligation the adoption transaction committed can.
+#[test]
+fn a_turn_adopted_after_a_settled_attempt_continues() {
+    let lab = Lab::new();
+    // The second occurrence of the boundary is the second turn's adoption.
+    let mut process = lab.spawn_nth(child::SECOND_TURN, Some("after:adopt_pending_batch"), 2);
+    process.wait_note("first-attempt-settled");
+    process.resume();
+    process.wait_reached("after:adopt_pending_batch");
+    process.sigkill();
+
+    let durable = lab.durable();
+    assert!(
+        durable.store().load_pending().expect("pending").is_empty(),
+        "the second message is adopted, not pending"
+    );
+    assert_eq!(
+        shapes(&durable.canonical()),
+        vec!["user", "context", "assistant", "user"],
+        "the first turn is answered and the second turn is canonical"
+    );
+    let report = durable.recover();
+    // Every attempt in durable authority is terminal: the class carries no
+    // information about the unanswered turn at all.
+    assert_eq!(
+        report.attempt_class(),
+        &AttemptRecoveryClass::AlreadyTerminal
+    );
+    assert_eq!(
+        report.resume(),
+        ResumeDisposition::ContinueAdoptedTurn,
+        "the turn adopted after the settled attempt is still owed an answer"
+    );
+}
+
+/// A turn drained into a **live** attempt at a safe boundary, killed before
+/// the model request that would carry it.
+///
+/// The attempt is still durably non-terminal and its request plane reports the
+/// *previous* request's known outcome, so the attempt classification alone
+/// answers "an external outcome is known, nothing to continue". The obligation
+/// the drain's adoption transaction committed is what keeps the newly adopted
+/// message answerable.
+#[test]
+fn a_turn_drained_into_a_live_attempt_continues() {
+    let lab = Lab::new();
+    // Occurrence 1 is the admission adoption of the first message; occurrence
+    // 2 is the running attempt's safe-boundary drain of the second.
+    let mut process = lab.spawn_nth(
+        child::STREAMING_INBOUND,
+        Some("after:adopt_pending_batch"),
+        2,
+    );
+    process.wait_note("second-inbound-accepted");
+    process.resume();
+    process.wait_reached("after:adopt_pending_batch");
+    process.sigkill();
+
+    let durable = lab.durable();
+    assert!(
+        durable.store().load_pending().expect("pending").is_empty(),
+        "the drained message left the Pending Inbound Inbox"
+    );
+    assert_eq!(
+        shapes(&durable.canonical()),
+        vec!["user", "context", "assistant", "user"],
+        "the drained message is canonical behind the answered first turn"
+    );
+    assert!(
+        has_p(&durable),
+        "the previous request's provider outcome is durably known"
+    );
+    let report = durable.recover();
+    assert!(
+        matches!(
+            report.attempt_class(),
+            AttemptRecoveryClass::ExternalOutcomeKnown { .. }
+        ),
+        "the interrupted attempt carries a known external outcome, not a fresh one: {:?}",
+        report.attempt_class()
+    );
+    assert_eq!(
+        report.resume(),
+        ResumeDisposition::ContinueAdoptedTurn,
+        "the turn drained into the dead attempt is still owed an answer"
+    );
+}
+
+/// The obligation is consumed by the request start that carries the turn to
+/// the provider, so an answered conversation is never re-answered on reopen.
+#[test]
+fn an_answered_turn_is_not_continued_after_reopen() {
+    let lab = Lab::new();
+    let mut process = lab.spawn(child::SECOND_TURN, None);
+    process.wait_note("first-attempt-settled");
+    process.sigkill();
+
+    let durable = lab.durable();
+    let report = durable.recover();
+    assert_eq!(
+        report.attempt_class(),
+        &AttemptRecoveryClass::AlreadyTerminal
+    );
+    assert_eq!(
+        report.resume(),
+        ResumeDisposition::PendingInboundOnly,
+        "a settled conversation owes nothing and starts nothing"
+    );
+}
+
 /// Death immediately before the canonical Assistant transaction leaves no
 /// Assistant message at all; death immediately after leaves exactly one.
 #[test]
@@ -1119,6 +1235,63 @@ fn reload_while_an_attempt_owns_the_session_is_busy() {
     assert!(system_prompt(&durable, 0).contains("R1 project instructions."));
 }
 
+/// Reload ownership is per-owner, not "an attempt is running".
+///
+/// A compaction and a pending interaction each own the session in their own
+/// right, and each refuses the reload with its own reason. Proving them
+/// separately is what makes the ownership rule a rule rather than a property
+/// of the attempt plane: a mixed generation must be impossible under *every*
+/// owner, not only the one the attempt row happens to exercise.
+#[test]
+fn reload_while_a_compaction_owns_the_session_is_busy() {
+    let lab = Lab::new();
+    let mut process = lab.spawn(child::RELOAD_BUSY_COMPACTION, None);
+    let reload = process.wait_note_prefixed("reload:");
+    assert!(
+        reload.contains("Busy") && reload.contains("Compaction"),
+        "a compaction owns the session and refuses reload: {reload}"
+    );
+    process.wait_note_prefixed("compaction:");
+    process.sigkill();
+
+    let durable = lab.durable();
+    // The refused reload published no generation, so every historical request
+    // — the answered turn and the compaction's own summary side request —
+    // still carries R1.
+    for index in 0..durable.request_snapshots().len() {
+        assert!(
+            system_prompt(&durable, index).contains("R1 project instructions."),
+            "request {index} was assembled under a mixed generation"
+        );
+    }
+}
+
+/// The interaction owner of the same rule.
+#[test]
+fn reload_while_an_interaction_owns_the_session_is_busy() {
+    let lab = Lab::new();
+    lab.write_runtime_config("always");
+    let mut process = lab.spawn(child::RELOAD_BUSY_INTERACTION, None);
+    let reload = process.wait_note_prefixed("reload:");
+    assert!(
+        reload.contains("Busy") && reload.contains("Interaction"),
+        "a pending interaction owns the session and refuses reload: {reload}"
+    );
+    process.sigkill();
+
+    let durable = lab.durable();
+    assert_eq!(
+        durable.request_snapshots().len(),
+        1,
+        "the refused reload admitted no request under a new generation"
+    );
+    assert!(system_prompt(&durable, 0).contains("R1 project instructions."));
+    assert!(
+        !has_tool_start(&durable),
+        "the pending approval authorized nothing"
+    );
+}
+
 /// The current Runtime Resource Snapshot is process-local, not durable
 /// recovery authority: dying around the reload build/publish boundary can never
 /// be recovered as a half-published mixed generation. The reopened process
@@ -1414,6 +1587,168 @@ fn a_reopened_runtime_never_relaunches_a_dead_background_execution() {
     );
 }
 
+/// A durably owned subagent child, alive at the moment of process death.
+///
+/// The subagent plane has its own durable lifecycle — its own ownership and
+/// terminal facts, its own recovery evidence, its own ordinal domain, and its
+/// own reconciliation — so it is proven directly rather than by analogy with
+/// the background rows. The child process is real, in this test's process
+/// group, and never answers: it is durably owned and unsettled exactly when
+/// the `SIGKILL` lands.
+#[test]
+fn committed_subagent_ownership_terminalizes_exactly_once() {
+    let lab = Lab::new();
+    let mut process = lab.spawn(
+        child::SUBAGENT_TOOL,
+        Some("after:event:subagent_ownership_committed"),
+    );
+    process.wait_reached("after:event:subagent_ownership_committed");
+    process.sigkill();
+
+    let durable = lab.durable();
+    assert_eq!(
+        durable
+            .count_events(|event| matches!(event, RuntimeEvent::SubagentOwnershipCommitted { .. })),
+        1,
+        "exactly one ownership fact crossed the durable boundary"
+    );
+    assert_eq!(
+        durable
+            .count_events(|event| matches!(event, RuntimeEvent::SubagentTerminalPublished { .. })),
+        0,
+        "the owned child never settled before the kill"
+    );
+
+    let report = durable.recover();
+    assert_eq!(
+        report.subagent_classes().len(),
+        1,
+        "the owned-but-unsettled child is recovery evidence in its own right"
+    );
+    assert_eq!(
+        report.reconciliation().subagent_terminals.len(),
+        1,
+        "recovery terminalizes the interrupted child exactly once"
+    );
+    assert!(
+        report.highest_subagent_ordinal() >= 1,
+        "the durable subagent ordinal domain is recovered for reseeding"
+    );
+
+    // Recovery is absorbing: repeating it adds no second terminal, and the
+    // published terminal count stays at exactly one.
+    let repeated = durable.recover();
+    assert!(
+        repeated.reconciliation().subagent_terminals.is_empty(),
+        "a repeated recovery re-terminalizes nothing"
+    );
+    assert!(
+        repeated.subagent_classes().is_empty(),
+        "the settled child leaves the unresolved working set"
+    );
+    assert_eq!(
+        durable
+            .count_events(|event| matches!(event, RuntimeEvent::SubagentTerminalPublished { .. })),
+        1,
+        "exactly one terminal publication exists after any number of restarts"
+    );
+}
+
+/// Death immediately before the subagent terminal publication transaction.
+///
+/// The terminal candidate is durably known to the dead process only as
+/// process-local driver state; the durable authority still holds an owned,
+/// unpublished child. Recovery must publish exactly one terminal — never a
+/// half-published lineage terminal, and never a second one.
+#[test]
+fn subagent_terminal_publication_is_atomic() {
+    let lab = Lab::new();
+    let mut process = lab.spawn(
+        child::SUBAGENT_SETTLED,
+        Some("before:event:subagent_terminal_published"),
+    );
+    process.wait_reached("before:event:subagent_terminal_published");
+    process.sigkill();
+
+    let durable = lab.durable();
+    assert_eq!(
+        durable
+            .count_events(|event| matches!(event, RuntimeEvent::SubagentOwnershipCommitted { .. })),
+        1
+    );
+    assert_eq!(
+        durable
+            .count_events(|event| matches!(event, RuntimeEvent::SubagentTerminalPublished { .. })),
+        0,
+        "the publication transaction committed nothing"
+    );
+
+    let report = durable.recover();
+    assert_eq!(
+        report.subagent_classes().len(),
+        1,
+        "the unpublished child is still durably owned"
+    );
+    assert_eq!(report.reconciliation().subagent_terminals.len(), 1);
+    assert_eq!(
+        durable
+            .count_events(|event| matches!(event, RuntimeEvent::SubagentTerminalPublished { .. })),
+        1,
+        "recovery publishes the terminal exactly once"
+    );
+    assert!(
+        durable
+            .recover()
+            .reconciliation()
+            .subagent_terminals
+            .is_empty(),
+        "and never a second time"
+    );
+}
+
+/// A reopened runtime never reattaches or relaunches the dead process's child,
+/// and never re-adopts its historical identity.
+///
+/// A v1 child is one-shot and process-local: there is no reattach by
+/// construction, and the durable proof is that a live reopened runtime commits
+/// no second ownership, starts no second child, and reseeds its ordinal
+/// allocator above every identity already in durable authority.
+#[test]
+fn a_reopened_runtime_never_readopts_a_dead_subagent() {
+    let lab = Lab::new();
+    let mut process = lab.spawn(
+        child::SUBAGENT_TOOL,
+        Some("after:event:subagent_ownership_committed"),
+    );
+    process.wait_reached("after:event:subagent_ownership_committed");
+    process.sigkill();
+
+    let historical = lab.durable().recover().highest_subagent_ordinal();
+
+    let mut resumed = lab.spawn(child::COLD_RESUME, None);
+    resumed.resume_until("settled");
+    resumed.sigkill();
+
+    let durable = lab.durable();
+    assert_eq!(
+        durable
+            .count_events(|event| matches!(event, RuntimeEvent::SubagentOwnershipCommitted { .. })),
+        1,
+        "no second ownership is committed for the dead child"
+    );
+    assert_eq!(
+        durable
+            .count_events(|event| matches!(event, RuntimeEvent::SubagentTerminalPublished { .. })),
+        1,
+        "the interrupted child publishes exactly one terminal, once"
+    );
+    assert_eq!(
+        durable.recover().highest_subagent_ordinal(),
+        historical,
+        "the reopened runtime allocates above the historical ordinal instead          of re-adopting it"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // 9. Transcript recovery
 // ---------------------------------------------------------------------------
@@ -1514,7 +1849,11 @@ fn client_presence_at_crash_time_changes_no_durable_result() {
 
     let without_client = Lab::new();
     let mut process = without_client.spawn(child::TEXT_TURN_NO_CLIENT, Some(gate));
-    process.wait_note("submitted");
+    // The only rendezvous is the durable boundary itself. Waiting on the
+    // child's own "submitted" note first would race the boundary the admission
+    // worker reaches concurrently, and prove nothing extra: the child parks
+    // owning its runtime, so reaching the boundary is what says the submit
+    // travelled the whole real admission path.
     process.wait_reached(gate);
     process.sigkill();
     let durable = without_client.durable();
