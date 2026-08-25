@@ -4897,15 +4897,21 @@ registry contents. Current configuration configures **future** work only.
 
 | Class | Durable evidence | Recovery action | Resume |
 | --- | --- | --- | --- |
-| **A — not started** | no attempt fact at all; accepted Pending Inbound may exist | none | ordinary Pending Inbound admission |
+| **A — not started** | no attempt fact at all; accepted Pending Inbound and/or an adopted-but-unanswered canonical turn may exist | none | ordinary Pending Inbound admission; an *adopted* unanswered turn (never a bootstrap-supplied one) continues through a **new** attempt |
 | **B — admitted, no external start** | `AttemptStarted`, **no `ModelRequestStarted` ever**, **no `ToolExecutionStarted` ever** | one interrupted attempt terminal | the already-canonical turn may continue through a **new** attempt |
 | **C — external start committed, outcome unknown** | `ModelRequestStarted` with no durable outcome, and/or `ToolExecutionStarted` with no durable outcome | canonical tool-turn repair, then one interrupted attempt terminal | blocked: recovery starts nothing |
 | **D — durable terminal exists** | one terminal attempt fact | none (absorbing) | ordinary Pending Inbound admission |
 | **E — external start committed, outcome durably known, settlement incomplete** | a `ModelRequestStarted` followed by `ModelRequestCompleted`/`ModelRequestFailed`, and/or `ToolExecutionStarted` followed by a durable outcome — with no attempt terminal | canonical tool-turn repair (exact durable result), then one interrupted attempt terminal | ordinary Pending Inbound admission; **no** automatic continuation, resend, or replay |
 
-Class B is the **only** state whose meaning is "no external work started": it
-requires durable proof that **zero** external-start commits ever occurred for
-this attempt. A resolved outcome is not "never started" — the two facts live
+Class B is the **only** state whose meaning is "no external work started" *for
+an attempt that exists*: it requires durable proof that **zero** external-start
+commits ever occurred for this attempt. Class A is the strictly weaker case in
+which no attempt exists at all, so it shares Class B's continuation permission
+whenever an **adopted** human turn is still unanswered — canonical adoption
+commits before `AttemptStarted`, and a process that dies in that window must not
+durably strand a turn rustX already accepted (FND-06 / Issue #111). A lineage
+whose immutable bootstrap prefix ends in a human message is excluded: supplied
+history is context, never an answer obligation. A resolved outcome is not "never started" — the two facts live
 on separate axes and never collapse:
 
 ```text
@@ -5044,6 +5050,33 @@ succeeded, and an unresolved durable inconsistency is never silently converted
 into a healthy state: it fails construction instead. Recovery failure and the
 bounded live admission retry are distinct concepts; neither is overloaded into
 the other.
+
+### 7.9.1 Real process-death conformance (FND-06 / Issue #111)
+
+The recovery contract above is proved against an actual `SIGKILL` of an actual
+process running the actual runtime stack, not against a dropped store handle:
+
+```text
+parent test process
+  -> spawns a child running the real runtime stack over a real durable file
+  -> child reaches one named durable boundary and freezes there
+  -> parent SIGKILLs the child's whole process group
+  -> parent reopens the durable authority and runs real recovery
+```
+
+A boundary is a durable linearization point, never a wall-clock moment. The
+`cfg(test)`-only seam `crate::runtime::process_death` parks a child before or
+after one durable transition *while it holds the store's connection mutex*, so
+a parked process is incapable of committing anything else from any thread. The
+second rendezvous kind is a control socket the parent uses to edit resources
+underneath a live runtime, or to kill a process while a compaction summary side
+request is in flight. Ordering claims are read from the Event Journal by
+sequence; nothing sleeps or polls to reach a state.
+
+The complete boundary matrix — durable facts before the kill, allowed and
+forbidden post-reopen state, recovery action, and, for the resource cases, the
+loaded generation and the exact old/new model API context — is
+`docs/process-death-conformance.md`.
 
 ### 7.10 Bounded working set
 

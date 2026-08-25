@@ -129,6 +129,7 @@ Normative detail remains in the owning documents:
 
 - [Architecture](docs/architecture.md)
 - [Runtime Invariants](docs/invariants.md)
+- [Process-death conformance](docs/process-death-conformance.md)
 - [Development Plan](docs/development-plan.md)
 - [Repository Policy](docs/repository-policy.md)
 

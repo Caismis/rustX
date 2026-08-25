@@ -3294,6 +3294,17 @@ runtime supervision/quiescence contract.
   Tool registry, or the workspace to decide a settlement, and it never
   produces a canonical Assistant message from an audit;
 
+- **process-death conformance (FND-06 / Issue #111)**: the durable contracts of
+  FND-01 through FND-05 are proved against an actual `SIGKILL` of an actual
+  process running the actual runtime stack, not against a dropped store handle.
+  A conformance child is frozen at one named durable boundary while it holds
+  the store's connection mutex — so "killed before P" means the durable
+  authority provably contains no P — or in a control rendezvous where it
+  executes nothing. No conformance assertion uses a sleep, a poll, or a log
+  ordering: ordering claims are read from the Event Journal by sequence. The
+  boundary matrix, its allowed/forbidden durable states, and its resource
+  generations are `docs/process-death-conformance.md`;
+
 - recovery policy is owned by `ConversationRuntime` and consumes
   `ConversationStore` evidence. It is never located in the SQLite backend, the
   Runtime Client, a provider adapter, the mailbox, DSH/plugin layers, the TUI,
@@ -3314,8 +3325,17 @@ runtime supervision/quiescence contract.
   SQLite work runs under the coordinator lock;
 
 - the classification is exhaustive and typed:
-  **A (not started)** — accepted Pending Inbound stays authoritative and is
-  ordinary admissible work;
+  **A (not started)** — no durable attempt evidence exists at all; accepted
+  Pending Inbound stays authoritative and is ordinary admissible work. Because
+  canonical adoption commits *before* the admitted attempt publishes its
+  `AttemptStarted` fact, Class A also covers an adopted-but-unanswered
+  canonical human turn with zero attempt evidence; that state carries strictly
+  weaker external history than Class B and resumes the same way
+  (`ContinueAdoptedTurn`), so a turn rustX already accepted into canonical
+  history is never durably stranded (FND-06 / Issue #111). The permission is
+  restricted to a turn this conversation durably **adopted**: a lineage whose
+  immutable bootstrap prefix ends in a human message is supplied history, not
+  work rustX accepted, and never acquires an answer obligation;
   **B (admitted, no external start)** — the interrupted attempt receives an
   explicit recovery terminal and the already-canonical turn may continue
   through a *new* attempt without re-adopting or duplicating the
