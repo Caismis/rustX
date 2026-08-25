@@ -3305,6 +3305,24 @@ runtime supervision/quiescence contract.
   boundary matrix, its allowed/forbidden durable states, and its resource
   generations are `docs/process-death-conformance.md`;
 
+- **the answer obligation of an adopted turn is durable, and is never inferred
+  from canonical shape**: `RuntimeEvent::InboundTurnAdopted` is committed
+  inside the canonical adoption transaction and names exactly the messages that
+  transaction adopts, so an adopted `UserMessage` and the obligation to answer
+  it can never disagree. The obligation is *consumed* by the first
+  `ModelRequestStarted` that carries the turn to the provider, or by the
+  attempt terminal that concludes it — whichever commits first — so recovery
+  continues exactly the turns a live runtime would still owe an answer for: a
+  turn adopted before its attempt started, a turn drained into a live attempt
+  at a safe boundary, and a later turn of an ordinary multi-turn conversation
+  are all continued; an answered turn and a cancelled turn are not. Supplied
+  bootstrap history (a fork or clone seed, a tree node, a persona lineage)
+  enters through `initialize`, never through adoption, and therefore never
+  acquires an obligation. Continuation follows from the obligation and the
+  indeterminacy of the external plane alone — never from the attempt class,
+  the trailing message's role, or a bootstrap-prefix probe — and indeterminacy
+  dominates (FND-06 / Issue #111);
+
 - recovery policy is owned by `ConversationRuntime` and consumes
   `ConversationStore` evidence. It is never located in the SQLite backend, the
   Runtime Client, a provider adapter, the mailbox, DSH/plugin layers, the TUI,
@@ -3326,16 +3344,7 @@ runtime supervision/quiescence contract.
 
 - the classification is exhaustive and typed:
   **A (not started)** — no durable attempt evidence exists at all; accepted
-  Pending Inbound stays authoritative and is ordinary admissible work. Because
-  canonical adoption commits *before* the admitted attempt publishes its
-  `AttemptStarted` fact, Class A also covers an adopted-but-unanswered
-  canonical human turn with zero attempt evidence; that state carries strictly
-  weaker external history than Class B and resumes the same way
-  (`ContinueAdoptedTurn`), so a turn rustX already accepted into canonical
-  history is never durably stranded (FND-06 / Issue #111). The permission is
-  restricted to a turn this conversation durably **adopted**: a lineage whose
-  immutable bootstrap prefix ends in a human message is supplied history, not
-  work rustX accepted, and never acquires an answer obligation;
+  Pending Inbound stays authoritative and is ordinary admissible work;
   **B (admitted, no external start)** — the interrupted attempt receives an
   explicit recovery terminal and the already-canonical turn may continue
   through a *new* attempt without re-adopting or duplicating the
