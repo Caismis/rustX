@@ -777,6 +777,10 @@ impl RuntimeClientProjection {
             // observation and never copies body content into the Journal.
             RuntimeEvent::AssistantMessageCommitted { .. }
             | RuntimeEvent::ToolMessageCommitted { .. } => Vec::new(),
+            // The adopted turn reaches a client as the committed `UserMessage`
+            // it names. The obligation itself is durable recovery authority,
+            // never a client-facing execution fact.
+            RuntimeEvent::InboundTurnAdopted { .. } => Vec::new(),
             RuntimeEvent::ToolExecutionStarted {
                 tool_call_id,
                 tool_id,

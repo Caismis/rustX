@@ -424,7 +424,10 @@ async fn natural_completion_wins_over_later_cancel() {
         "background-exec_1-terminal",
         "deterministic terminal message identity"
     );
-    let _ = fixture.mailbox.adopt_pending_batch(&batch).expect("adopt");
+    let _ = fixture
+        .mailbox
+        .adopt_pending_batch(&batch, None)
+        .expect("adopt");
     // A later cancel is an idempotent no-op returning the terminal snapshot.
     let after_cancel = fixture
         .registry
@@ -554,7 +557,10 @@ async fn one_terminal_transition_and_one_publication_only() {
         batch.items()[0].message().id.as_str(),
         "background-exec_1-terminal"
     );
-    let _ = fixture.mailbox.adopt_pending_batch(&batch).expect("adopt");
+    let _ = fixture
+        .mailbox
+        .adopt_pending_batch(&batch, None)
+        .expect("adopt");
     assert!(
         fixture
             .mailbox

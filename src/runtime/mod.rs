@@ -73,6 +73,11 @@ pub mod interactive_supervisor {
 /// Client projection types never appear here; the Runtime Client adapter
 /// translates these shapes, and it owns the only fold of the stream.
 pub(crate) mod observation;
+/// The `cfg(test)`-only real-process-death seam (Issue #111, FND-06): the
+/// named durable boundaries a conformance child parks at, and the control
+/// channel back to the owning parent test. Outside this crate's test build
+/// its two entry points are empty `const fn`s.
+pub(crate) mod process_death;
 /// The internal owned supervised command runner shared by native Bash and
 /// Skill environment materialization: the M5 Bash process-group lifecycle
 /// extracted so package-manager work reuses the same rustX-owned

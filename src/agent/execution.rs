@@ -1245,7 +1245,13 @@ impl<'a> AgentExecution<'a> {
         // removal commit in one transaction. A durable adoption failure is
         // a durable-authority failure (Issue #63): the settled result
         // carries it to the coordinator.
-        if let Err(error) = mailbox.adopt_pending_batch(&batch) {
+        // The adoption fact is owned by the attempt that drains at this safe
+        // boundary: the obligation it opens is discharged by this attempt's
+        // next model request start, or by its own terminal — never by the
+        // model request that already answered the *previous* turn.
+        if let Err(error) =
+            mailbox.adopt_pending_batch(&batch, Some(self.request.attempt_id.clone()))
+        {
             return Err(
                 self.durable_failure_terminal("a selected inbound batch cannot be adopted", &error)
             );
@@ -4463,9 +4469,16 @@ mod tests {
     /// The exact expected trace: one completed tool turn, then the generic
     /// pre-next-turn cancellation checkpoint settles the attempt cancelled
     /// before any second model turn.
-    fn expected_trace() -> Vec<crate::events::types::RuntimeEvent> {
+    /// The exact durable trace of the boundary-cancellation attempts.
+    ///
+    /// `adopted` names the inbound message a safe-boundary drain adopted, when
+    /// the scenario has one: canonical adoption commits its durable answer
+    /// obligation in the same transaction, so the fact belongs in the exact
+    /// trace between the completed turn and the attempt terminal that consumes
+    /// it.
+    fn expected_trace(adopted: Option<&str>) -> Vec<crate::events::types::RuntimeEvent> {
         use crate::events::types::RuntimeEvent;
-        vec![
+        let mut events = vec![
             RuntimeEvent::AttemptStarted {
                 attempt_id: AttemptId::new("attempt-1"),
             },
@@ -4506,11 +4519,17 @@ mod tests {
                 tool_call_id: ToolCallId::new("call-1"),
             },
             RuntimeEvent::TurnCompleted,
-            RuntimeEvent::AttemptCancelled {
-                attempt_id: AttemptId::new("attempt-1"),
-                reason: CancellationReason::UserRequested,
-            },
-        ]
+        ];
+        if let Some(message_id) = adopted {
+            events.push(RuntimeEvent::InboundTurnAdopted {
+                message_ids: vec![MessageId::new(message_id)],
+            });
+        }
+        events.push(RuntimeEvent::AttemptCancelled {
+            attempt_id: AttemptId::new("attempt-1"),
+            reason: CancellationReason::UserRequested,
+        });
+        events
     }
 
     /// Reads committed Event Journal facts through bounded pages for tests
@@ -5928,7 +5947,7 @@ mod tests {
         );
         assert_eq!(
             events,
-            expected_trace(),
+            expected_trace(None),
             "the exact trace ends with the single AttemptCancelled terminal event"
         );
         assert_eq!(
@@ -6001,7 +6020,7 @@ mod tests {
         );
         assert_eq!(
             events,
-            expected_trace(),
+            expected_trace(Some("msg-a")),
             "the exact trace ends with the single AttemptCancelled terminal event"
         );
         assert_eq!(

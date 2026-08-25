@@ -41,7 +41,7 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 8 is the only accepted schema; incompatible files fail
+schema version 9 is the only accepted schema; incompatible files fail
 explicitly and are not migrated.
 
 The durable request-start invariant is strict: the provider adapter cannot be
@@ -3294,6 +3294,42 @@ runtime supervision/quiescence contract.
   Tool registry, or the workspace to decide a settlement, and it never
   produces a canonical Assistant message from an audit;
 
+- **process-death conformance (FND-06 / Issue #111)**: the durable contracts of
+  FND-01 through FND-05 are proved against an actual `SIGKILL` of an actual
+  process running the actual runtime stack, not against a dropped store handle.
+  A conformance child is frozen at one named durable boundary while it holds
+  the store's connection mutex — so "killed before P" means the durable
+  authority provably contains no P — or in a control rendezvous where it
+  executes nothing. No conformance assertion uses a sleep, a poll, or a log
+  ordering: ordering claims are read from the Event Journal by sequence. The
+  boundary matrix, its allowed/forbidden durable states, and its resource
+  generations are `docs/process-death-conformance.md`;
+
+- **the answer obligation of an adopted turn is durable, and is never inferred
+  from canonical shape**: `RuntimeEvent::InboundTurnAdopted` is committed
+  inside the canonical adoption transaction and names exactly the messages that
+  transaction adopts, so an adopted `UserMessage` and the obligation to answer
+  it can never disagree. The obligation is *consumed* by the first
+  `ModelRequestStarted` that carries the turn to the provider, or by the first
+  attempt terminal that **decides** the turn — whichever commits first — so
+  recovery continues exactly the turns a live runtime would still owe an answer
+  for: a turn adopted before its attempt started, a turn drained into a live
+  attempt at a safe boundary, and a later turn of an ordinary multi-turn
+  conversation are all continued; an answered turn and a cancelled turn are
+  not. Every terminal a live runtime commits decides the turn;
+  `RuntimeError::RestartInterrupted` — the one terminal only recovery writes —
+  does not. The obligation survives it and transfers to the attempt that
+  continues the turn, because the recovery that writes that terminal is the
+  same recovery still permitting the continuation: consuming it there would
+  durably erase recovery's own permission and strand the turn on the next death
+  in the attempt-start window. Supplied
+  bootstrap history (a fork or clone seed, a tree node, a persona lineage)
+  enters through `initialize`, never through adoption, and therefore never
+  acquires an obligation. Continuation follows from the obligation and the
+  indeterminacy of the external plane alone — never from the attempt class,
+  the trailing message's role, or a bootstrap-prefix probe — and indeterminacy
+  dominates (FND-06 / Issue #111);
+
 - recovery policy is owned by `ConversationRuntime` and consumes
   `ConversationStore` evidence. It is never located in the SQLite backend, the
   Runtime Client, a provider adapter, the mailbox, DSH/plugin layers, the TUI,
@@ -3314,8 +3350,8 @@ runtime supervision/quiescence contract.
   SQLite work runs under the coordinator lock;
 
 - the classification is exhaustive and typed:
-  **A (not started)** — accepted Pending Inbound stays authoritative and is
-  ordinary admissible work;
+  **A (not started)** — no durable attempt evidence exists at all; accepted
+  Pending Inbound stays authoritative and is ordinary admissible work;
   **B (admitted, no external start)** — the interrupted attempt receives an
   explicit recovery terminal and the already-canonical turn may continue
   through a *new* attempt without re-adopting or duplicating the

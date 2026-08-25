@@ -675,7 +675,10 @@ fn requirement_07_agent_status_is_excluded_from_normal_transcript() {
             .is_empty()
     );
     store
-        .adopt_pending_batch(accepted_context.sequence)
+        .adopt_pending_batch(
+            accepted_context.sequence,
+            adoption_of(&store, accepted_context.sequence),
+        )
         .expect("status context adoption");
     store
         .append_canonical(&user_message("visible-1", "visible"))
@@ -1048,7 +1051,7 @@ fn transcript_reference_identity_is_typed_and_collision_free() {
         .expect("select pending")
         .expect("pending batch");
     store
-        .adopt_pending_batch(batch.watermark)
+        .adopt_pending_batch(batch.watermark, adoption_of(&store, batch.watermark))
         .expect("adopt message");
 
     let interaction = requested_interaction(&InteractionId::new("collision"));
@@ -1323,4 +1326,23 @@ fn transcript_cursor_is_a_stable_exclusive_position() {
     let cursor = TranscriptCursor::new(42);
     assert_eq!(cursor.get(), 42);
     assert_eq!(cursor.to_string(), "42");
+}
+
+/// The durable answer obligation of one adoption, built from exactly the
+/// pending items the adoption transaction will consume.
+fn adoption_of(
+    store: &SqliteConversationStore,
+    watermark: rustx::runtime::inbound::InboundSequence,
+) -> rustx::events::types::RuntimeEventEnvelope {
+    rustx::durable::inbox::inbound_adoption_event(
+        store.conversation_id(),
+        None,
+        store
+            .load_pending()
+            .expect("pending")
+            .into_iter()
+            .filter(|item| item.sequence <= watermark)
+            .map(|item| item.message_id)
+            .collect(),
+    )
 }

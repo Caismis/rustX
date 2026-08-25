@@ -43,7 +43,8 @@ use rustx::message::types::{
 };
 use rustx::model::catalog::{ModelCapabilities, ModelCompat};
 use rustx::model::{
-    ModelInvocationConfig, ModelProtocol, RequestIdentity, RequestParams, RequestSnapshot,
+    ModelFinishReason, ModelInvocationConfig, ModelProtocol, RequestIdentity, RequestParams,
+    RequestSnapshot,
 };
 use rustx::runtime::identity::{
     AgentId, AttemptId, CapabilityRevision, ConversationId, EventId, MessageId, SubagentId,
@@ -362,6 +363,61 @@ fn accepted_pending_inbound_survives_a_crash_unchanged() {
     );
 }
 
+/// A lineage seeded from supplied history — a fork, a clone, a tree node, a
+/// persona seed — owes no answer for its own bootstrap prefix.
+///
+/// The prefix ends in an ordinary human message, exactly like an adopted turn
+/// this conversation accepted, so no canonical *shape* can tell the two apart.
+/// The difference is durable and structural: supplied history enters through
+/// `initialize`, which is not an adoption and commits no answer obligation, so
+/// a reopened forked lineage starts nothing until its own first inbound
+/// arrives.
+#[test]
+fn a_seeded_lineage_owes_no_answer_for_its_bootstrap_prefix() {
+    let durable = Durable::new();
+    {
+        let store = durable.open();
+        // The exact `/fork` seed shape: the canonical prefix up to and
+        // including the selected user message.
+        store
+            .initialize(&[
+                user_block("seed-user-1", "the forked question"),
+                assistant_with_calls("seed-assistant-1", &[]),
+                user_block("seed-user-2", "the trailing forked question"),
+            ])
+            .expect("bootstrap the forked lineage");
+    }
+
+    let report = recover_reopened(&durable);
+    assert_eq!(
+        report.resume(),
+        ResumeDisposition::PendingInboundOnly,
+        "supplied history is context, never work this conversation accepted"
+    );
+    assert!(report.reconciliation().is_empty());
+
+    // The same lineage after it accepts and adopts one message of its own does
+    // owe an answer, so the rule is about adoption rather than about seeds.
+    {
+        let store = durable.open();
+        let batch = {
+            store
+                .accept_inbound(human("my own first turn"))
+                .expect("accept");
+            store
+                .select_pending_batch()
+                .expect("select")
+                .expect("batch")
+        };
+        adopt_through(&store, batch.watermark);
+    }
+    assert_eq!(
+        recover_reopened(&durable).resume(),
+        ResumeDisposition::ContinueAdoptedTurn,
+        "the lineage's own adopted turn is owed an answer"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Test B — crash after the canonical adoption commit
 // ---------------------------------------------------------------------------
@@ -382,7 +438,7 @@ fn crash_after_adoption_keeps_the_user_message_canonical_exactly_once() {
             .select_pending_batch()
             .expect("select")
             .expect("batch");
-        store.adopt_pending_batch(batch.watermark).expect("adopt");
+        adopt_through(&store, batch.watermark);
         accepted
     };
 
@@ -409,10 +465,7 @@ fn crash_after_adoption_keeps_the_user_message_canonical_exactly_once() {
     // Re-adopting the same watermark finds nothing: the durable transition
     // consumed the pending record in the same transaction.
     assert!(
-        store
-            .adopt_pending_batch(accepted.sequence)
-            .expect("adopt again")
-            .is_empty(),
+        adopt_through(&store, accepted.sequence).is_empty(),
         "an adopted item can never re-enter adoption"
     );
 }
@@ -435,7 +488,7 @@ fn crash_before_request_start_is_class_b_and_permits_continuation() {
         let store = durable.open();
         store.initialize(&[]).expect("bootstrap");
         let accepted = store.accept_inbound(human("answer me")).expect("accept");
-        store.adopt_pending_batch(accepted.sequence).expect("adopt");
+        adopt_through(&store, accepted.sequence);
         store
             .append_event(envelope(
                 "attempt-started",
@@ -488,6 +541,251 @@ fn crash_before_request_start_is_class_b_and_permits_continuation() {
     assert!(store.load_pending().expect("pending").is_empty());
 }
 
+/// The answer obligation survives the recovery terminal that recovery itself
+/// writes, and keeps surviving an unbounded chain of deaths in the
+/// adoption/request-start window.
+///
+/// This is the durability half of the Class-B permission. Reconciliation
+/// terminalizes the interrupted attempt with `RestartInterrupted` **before**
+/// the continuation it just permitted can reach a `ModelRequestStarted`. If
+/// that terminal consumed the obligation like a decided one, the very next
+/// process death would reopen a conversation whose journal holds an adopted
+/// canonical turn, a terminal attempt, and no obligation — and the accepted
+/// message would be stranded forever with nothing pending to re-admit it.
+///
+/// A `RestartInterrupted` terminal is a statement about a dead *attempt*, not
+/// a decision about the *turn*, so the obligation transfers to whichever
+/// attempt continues the turn next.
+#[test]
+fn the_answer_obligation_survives_a_chain_of_recovery_terminals() {
+    let durable = Durable::new();
+    let attempt_one = AttemptId::for_conversation(&conversation_id(), 0);
+    let attempt_two = AttemptId::for_conversation(&conversation_id(), 1);
+    {
+        let store = durable.open();
+        store.initialize(&[]).expect("bootstrap");
+        let accepted = store.accept_inbound(human("answer me")).expect("accept");
+        adopt_through(&store, accepted.sequence);
+        store
+            .append_event(envelope(
+                "attempt-started-1",
+                Some(attempt_one.clone()),
+                None,
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: attempt_one.clone(),
+                },
+            ))
+            .expect("attempt started");
+        // CRASH #1, inside the attempt-start window.
+    }
+
+    // Recovery #1 permits the continuation *and* durably terminalizes the
+    // dead attempt in the same pass.
+    let first = recover_reopened(&durable);
+    assert_eq!(first.resume(), ResumeDisposition::ContinueAdoptedTurn);
+    assert_eq!(
+        first.reconciliation().attempt_terminal.as_ref(),
+        Some(&attempt_one)
+    );
+
+    // Reopening that durable authority with no further work must reach the
+    // same verdict: recovery never destroys its own permission.
+    let repeated = recover_reopened(&durable);
+    assert_eq!(
+        repeated.attempt_class(),
+        &AttemptRecoveryClass::AlreadyTerminal,
+        "the interrupted attempt is absorbing"
+    );
+    assert_eq!(
+        repeated.resume(),
+        ResumeDisposition::ContinueAdoptedTurn,
+        "the recovery terminal transferred the obligation instead of consuming it"
+    );
+    assert!(
+        repeated.reconciliation().is_empty(),
+        "a repeated recovery commits no second terminal"
+    );
+
+    {
+        // The permitted continuation starts its new attempt and dies again in
+        // exactly the same window.
+        let store = durable.open();
+        store
+            .append_event(envelope(
+                "attempt-started-2",
+                Some(attempt_two.clone()),
+                None,
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: attempt_two.clone(),
+                },
+            ))
+            .expect("attempt started");
+        // CRASH #2, before any request start.
+    }
+
+    let second = recover_reopened(&durable);
+    assert_eq!(
+        second.attempt_class(),
+        &AttemptRecoveryClass::AdmittedWithoutExternalStart {
+            attempt_id: attempt_two.clone(),
+        }
+    );
+    assert_eq!(
+        second.resume(),
+        ResumeDisposition::ContinueAdoptedTurn,
+        "the turn is still owed an answer after a second death"
+    );
+    assert_eq!(
+        second.reconciliation().attempt_terminal.as_ref(),
+        Some(&attempt_two)
+    );
+
+    // The turn was never re-adopted, never duplicated, and never answered.
+    let store = durable.open();
+    assert_eq!(store.load_canonical().expect("canonical").len(), 1);
+    assert!(store.load_pending().expect("pending").is_empty());
+    let events = all_events(&store);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::ModelRequestStarted { .. })),
+        "no chain of restarts ever sends anything"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, RuntimeEvent::InboundTurnAdopted { .. }))
+            .count(),
+        1,
+        "one adoption, one obligation, however many restarts"
+    );
+}
+
+/// A *decided* terminal still consumes the obligation, so the survival rule
+/// above is about `RestartInterrupted` alone and not about attempt terminals
+/// in general.
+///
+/// A cancelled turn is the sharpest case: it is adopted, canonical, and
+/// permanently unanswered, and a reopened runtime must still start nothing
+/// for it.
+#[test]
+fn a_decided_terminal_still_consumes_the_answer_obligation() {
+    let durable = Durable::new();
+    let attempt = AttemptId::for_conversation(&conversation_id(), 0);
+    {
+        let store = durable.open();
+        store.initialize(&[]).expect("bootstrap");
+        let accepted = store.accept_inbound(human("answer me")).expect("accept");
+        adopt_through(&store, accepted.sequence);
+        store
+            .append_event(envelope(
+                "attempt-started",
+                Some(attempt.clone()),
+                None,
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: attempt.clone(),
+                },
+            ))
+            .expect("attempt started");
+        store
+            .append_event(envelope(
+                "attempt-cancelled",
+                Some(attempt.clone()),
+                None,
+                RuntimeEvent::AttemptCancelled {
+                    attempt_id: attempt.clone(),
+                    reason: CancellationReason::UserRequested,
+                },
+            ))
+            .expect("attempt cancelled");
+    }
+
+    let report = recover_reopened(&durable);
+    assert_eq!(
+        report.attempt_class(),
+        &AttemptRecoveryClass::AlreadyTerminal
+    );
+    assert_eq!(
+        report.resume(),
+        ResumeDisposition::PendingInboundOnly,
+        "the runtime decided this turn was over; recovery does not reopen it"
+    );
+    assert!(report.reconciliation().is_empty());
+}
+
+/// The same survival rule under Class E: an attempt whose *previous* request
+/// outcome is durably known, carrying a turn adopted after it at a safe
+/// boundary.
+///
+/// Recovery terminalizes that attempt honestly — nothing is resent — and the
+/// newly adopted turn, which never reached a request start, is still owed an
+/// answer after the terminal commits.
+#[test]
+fn a_known_outcome_terminal_transfers_the_obligation_of_a_later_adopted_turn() {
+    let durable = Durable::new();
+    let attempt = AttemptId::for_conversation(&conversation_id(), 0);
+    {
+        let store = durable.open();
+        store.initialize(&[]).expect("bootstrap");
+        let first = store.accept_inbound(human("first")).expect("accept");
+        adopt_through(&store, first.sequence);
+        store
+            .append_event(envelope(
+                "attempt-started",
+                Some(attempt.clone()),
+                None,
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: attempt.clone(),
+                },
+            ))
+            .expect("attempt started");
+        let snapshot = snapshot_at(&store, &attempt, "0", "model-a");
+        let request_id = snapshot.request_id.clone();
+        store
+            .commit_model_turn_start(&[], &snapshot, fixed_time())
+            .expect("request start");
+        store
+            .append_event(envelope(
+                "request-completed",
+                Some(attempt.clone()),
+                Some(TurnId::new("0")),
+                RuntimeEvent::ModelRequestCompleted {
+                    request_id,
+                    finish_reason: ModelFinishReason::Stop,
+                    usage: None,
+                },
+            ))
+            .expect("request completed");
+        // The live attempt drains a second message at a safe boundary and
+        // dies before the request that would carry it.
+        let second = store.accept_inbound(human("second")).expect("accept");
+        adopt_through(&store, second.sequence);
+    }
+
+    let first = recover_reopened(&durable);
+    assert!(
+        matches!(
+            first.attempt_class(),
+            AttemptRecoveryClass::ExternalOutcomeKnown { .. }
+        ),
+        "the interrupted attempt carries a known external outcome: {:?}",
+        first.attempt_class()
+    );
+    assert_eq!(first.resume(), ResumeDisposition::ContinueAdoptedTurn);
+    assert_eq!(
+        first.reconciliation().attempt_terminal.as_ref(),
+        Some(&attempt)
+    );
+
+    let repeated = recover_reopened(&durable);
+    assert_eq!(
+        repeated.resume(),
+        ResumeDisposition::ContinueAdoptedTurn,
+        "the drained turn is still owed an answer after its attempt's recovery terminal"
+    );
+    assert!(repeated.reconciliation().is_empty());
+}
+
 // ---------------------------------------------------------------------------
 // Test D — request start committed, provider outcome unknown
 // ---------------------------------------------------------------------------
@@ -511,7 +809,7 @@ fn started_request_with_unknown_outcome_is_indeterminate_and_never_resent() {
         let accepted = store
             .accept_inbound(human("ask the model"))
             .expect("accept");
-        store.adopt_pending_batch(accepted.sequence).expect("adopt");
+        adopt_through(&store, accepted.sequence);
         store
             .append_event(envelope(
                 "attempt-started",
@@ -637,7 +935,7 @@ fn completed_model_request_before_assistant_commit_is_not_class_b() {
         let accepted = store
             .accept_inbound(human("the model answered"))
             .expect("accept");
-        store.adopt_pending_batch(accepted.sequence).expect("adopt");
+        adopt_through(&store, accepted.sequence);
         store
             .append_event(envelope(
                 "attempt-started",
@@ -762,7 +1060,7 @@ fn failed_model_request_before_terminal_is_not_retried() {
         let store = durable.open();
         store.initialize(&[]).expect("bootstrap");
         let accepted = store.accept_inbound(human("ask")).expect("accept");
-        store.adopt_pending_batch(accepted.sequence).expect("adopt");
+        adopt_through(&store, accepted.sequence);
         store
             .append_event(envelope(
                 "attempt-started",
@@ -1850,7 +2148,7 @@ fn historical_attempt_tool_evidence_never_aliases_the_unsettled_attempt() {
         // Attempt 2: the provider reuses the same call id in its next
         // response, but the process crashes before anything starts.
         let accepted = store.accept_inbound(human("turn two")).expect("accept");
-        store.adopt_pending_batch(accepted.sequence).expect("adopt");
+        adopt_through(&store, accepted.sequence);
         store
             .append_event(envelope(
                 "attempt-2-started",
@@ -2108,7 +2406,7 @@ fn repeated_restarts_settle_once_and_then_change_nothing() {
         let store = durable.open();
         store.initialize(&[]).expect("bootstrap");
         let accepted = store.accept_inbound(human("ask")).expect("accept");
-        store.adopt_pending_batch(accepted.sequence).expect("adopt");
+        adopt_through(&store, accepted.sequence);
         store
             .append_event(envelope(
                 "attempt-started",
@@ -2686,7 +2984,7 @@ fn recovery_is_a_pure_function_of_durable_authority() {
         let store = durable.open();
         store.initialize(&[]).expect("bootstrap");
         let accepted = store.accept_inbound(human("hello")).expect("accept");
-        store.adopt_pending_batch(accepted.sequence).expect("adopt");
+        adopt_through(&store, accepted.sequence);
         store
             .append_event(envelope(
                 "attempt-started",
@@ -2901,4 +3199,34 @@ fn a_durably_settled_subagent_needs_no_recovery() {
         1,
         "the watermark still reseeds from settled evidence"
     );
+}
+
+/// The durable answer obligation of one adoption, built from exactly the
+/// pending items the adoption transaction will consume.
+fn adoption_of(
+    store: &SqliteConversationStore,
+    watermark: rustx::runtime::inbound::InboundSequence,
+) -> rustx::events::types::RuntimeEventEnvelope {
+    rustx::durable::inbox::inbound_adoption_event(
+        store.conversation_id(),
+        None,
+        store
+            .load_pending()
+            .expect("pending")
+            .into_iter()
+            .filter(|item| item.sequence <= watermark)
+            .map(|item| item.message_id)
+            .collect(),
+    )
+}
+
+/// Adopts everything through `watermark`, together with the durable answer
+/// obligation the adoption transaction requires.
+fn adopt_through(
+    store: &SqliteConversationStore,
+    watermark: rustx::runtime::inbound::InboundSequence,
+) -> Vec<MessageBlock> {
+    store
+        .adopt_pending_batch(watermark, adoption_of(store, watermark))
+        .expect("adopt")
 }

@@ -47,6 +47,7 @@ use crate::runtime::identity::{
     RequestId, ToolCallId, ToolId, TurnId,
 };
 use crate::runtime::inbound::InboundSequence;
+use crate::runtime::process_death;
 
 use super::inbox::{
     AcceptedInbound, CanonicalMessagePage, CompactionCommitInput, ConversationStore,
@@ -94,9 +95,24 @@ use super::inbox::{
 /// inbound, visible canonical messages, publication audits, and interaction
 /// audit facts receive one durable reference position. Bodies remain owned by
 /// Pending Inbound, the Message Ledger, the publication plane, or the Event
-/// Journal. A v3/v4/v5/v6/v7 database must fail at store open; there is no
+/// Journal.
+///
+/// Version 9 froze the Issue #111 durable **answer obligation**: the adoption
+/// transaction now commits a [`RuntimeEvent::InboundTurnAdopted`] fact naming
+/// the exact adopted batch, and startup recovery decides continuation from
+/// that fact alone rather than from canonical shape.
+///
+/// This is a *semantic* format change with no table change, and it is exactly
+/// the kind that must gate open. A v8 database recorded no such fact, so a v9
+/// reader would read "this conversation was never adopted anything it still
+/// owes an answer for" from a journal that simply predates the vocabulary —
+/// and would silently strand precisely the crash states (an adopted turn
+/// killed in the attempt-start window) that the obligation exists to rescue.
+/// Refusing the file states that honestly instead.
+///
+/// A v3/v4/v5/v6/v7/v8 database must fail at store open; there is no
 /// migration or compatibility path.
-pub const SQLITE_SCHEMA_VERSION: i64 = 8;
+pub const SQLITE_SCHEMA_VERSION: i64 = 9;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -556,9 +572,11 @@ impl ConversationStore for SqliteConversationStore {
         if Self::consume(&self.fail_accept_remaining) {
             return Err(storage("fault injected: accept commit"));
         }
+        process_death::reach("before:accept_inbound");
         transaction
             .commit()
             .map_err(|error| storage(format!("accept commit: {error}")))?;
+        process_death::reach("after:accept_inbound");
         Ok(accepted)
     }
 
@@ -624,10 +642,12 @@ impl ConversationStore for SqliteConversationStore {
         if Self::consume(&self.fail_event_remaining) {
             return Err(storage("fault injected: accept/event journal commit"));
         }
+        process_death::reach_event("before:event", &event.event);
         let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
         transaction
             .commit()
             .map_err(|error| storage(format!("accept/event commit: {error}")))?;
+        process_death::reach_event("after:event", &persisted.event.event);
         Ok((accepted, persisted.event))
     }
 
@@ -655,7 +675,17 @@ impl ConversationStore for SqliteConversationStore {
     fn adopt_pending_batch(
         &self,
         watermark: InboundSequence,
+        adoption: RuntimeEventEnvelope,
     ) -> Result<Vec<MessageBlock>, ConversationStoreError> {
+        let RuntimeEvent::InboundTurnAdopted {
+            message_ids: obligation,
+        } = &adoption.event
+        else {
+            return Err(ConversationStoreError::InvalidReference(
+                "the adoption transaction accepts only an InboundTurnAdopted obligation".to_owned(),
+            ));
+        };
+        let obligation = obligation.clone();
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -681,15 +711,35 @@ impl ConversationStore for SqliteConversationStore {
                 [seq_to_i64(watermark.get())?],
             )
             .map_err(|error| storage(format!("adopt pending delete: {error}")))?;
+        // The obligation names exactly the adopted work, in adoption order.
+        // A mismatch is a contract violation, never a silently absorbed
+        // difference: the durable authority would otherwise hold an answer
+        // obligation for work it did not adopt, or adopt work it owes no
+        // answer for.
+        let adopted_ids: Vec<MessageId> =
+            items.iter().map(|item| item.message_id.clone()).collect();
+        if obligation != adopted_ids {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "the adoption obligation names {obligation:?}, but the transaction adopts \
+                 {adopted_ids:?}"
+            )));
+        }
+        // An empty (or already-adopted) watermark adopts nothing and
+        // therefore acquires no obligation.
+        if !adopted_ids.is_empty() {
+            persist_event_tx(&transaction, &self.conversation_id, adoption)?;
+        }
         #[cfg(test)]
         if self.consume_admission_fault(AdmissionFaultOperation::AdoptPendingBatch)
             || Self::consume(&self.fail_adopt_remaining)
         {
             return Err(storage("fault injected: adopt commit"));
         }
+        process_death::reach("before:adopt_pending_batch");
         transaction
             .commit()
             .map_err(|error| storage(format!("adopt commit: {error}")))?;
+        process_death::reach("after:adopt_pending_batch");
         Ok(adopted)
     }
 
@@ -856,10 +906,12 @@ impl ConversationStore for SqliteConversationStore {
         if Self::consume(&self.fail_event_remaining) {
             return Err(storage("fault injected: canonical event journal commit"));
         }
+        process_death::reach_event("before:canonical", &event.event);
         let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
         transaction
             .commit()
             .map_err(|error| storage(format!("canonical event commit: {error}")))?;
+        process_death::reach_event("after:canonical", &persisted.event.event);
         Ok((
             persisted.event,
             TranscriptCommitReceipt { transcript_cursor },
@@ -900,12 +952,15 @@ impl ConversationStore for SqliteConversationStore {
             persisted
                 .push(persist_event_tx(&transaction, &self.conversation_id, event.clone())?.event);
         }
+        process_death::reach("before:append_canonical_batch");
         transaction
             .commit()
             .map_err(|error| storage(format!("canonical event batch commit: {error}")))?;
+        process_death::reach("after:append_canonical_batch");
         Ok((persisted, receipts))
     }
 
+    #[allow(clippy::too_many_lines)]
     fn commit_compaction(
         &self,
         input: CompactionCommitInput,
@@ -1008,9 +1063,11 @@ impl ConversationStore for SqliteConversationStore {
         if Self::consume(&self.fail_event_remaining) {
             return Err(storage("fault injected: compaction event journal commit"));
         }
+        process_death::reach("before:commit_compaction");
         transaction
             .commit()
             .map_err(|error| storage(format!("compaction commit: {error}")))?;
+        process_death::reach("after:commit_compaction");
         Ok((revision, generation, persisted.event, summary_cursor))
     }
 
@@ -1119,9 +1176,11 @@ impl ConversationStore for SqliteConversationStore {
         // anywhere below rolls all of it back, so request-scoped context
         // can never become canonical without its request starting.
         let persisted = self.insert_fresh_start_tx(&transaction, context, snapshot, timestamp)?;
+        process_death::reach("before:commit_model_turn_start");
         transaction
             .commit()
             .map_err(|error| storage(format!("request start commit: {error}")))?;
+        process_death::reach("after:commit_model_turn_start");
         Ok(persisted)
     }
 
@@ -1281,10 +1340,12 @@ impl ConversationStore for SqliteConversationStore {
         if Self::consume(&self.fail_event_remaining) {
             return Err(storage("fault injected: event commit"));
         }
+        process_death::reach_event("before:event", &event.event);
         let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
         transaction
             .commit()
             .map_err(|error| storage(format!("event commit: {error}")))?;
+        process_death::reach_event("after:event", &persisted.event.event);
         Ok(persisted.event)
     }
 
@@ -1310,9 +1371,11 @@ impl ConversationStore for SqliteConversationStore {
                 "interaction audit did not receive a transcript cursor".to_owned(),
             )
         })?;
+        process_death::reach_event("before:interaction", &persisted.event.event);
         transaction
             .commit()
             .map_err(|error| storage(format!("interaction audit commit: {error}")))?;
+        process_death::reach_event("after:interaction", &persisted.event.event);
         Ok((persisted.event, transcript_cursor))
     }
 
@@ -1435,9 +1498,11 @@ impl ConversationStore for SqliteConversationStore {
                 ],
             )
             .map_err(|error| storage(format!("open publication stream: {error}")))?;
+        process_death::reach("before:open_publication_stream");
         transaction
             .commit()
             .map_err(|error| storage(format!("publication open commit: {error}")))?;
+        process_death::reach("after:open_publication_stream");
         Ok(())
     }
 
@@ -1465,9 +1530,11 @@ impl ConversationStore for SqliteConversationStore {
                 stream.start.stream_id
             )));
         }
+        process_death::reach("before:stage_publication_frames");
         transaction
             .commit()
             .map_err(|error| storage(format!("publication staging commit: {error}")))?;
+        process_death::reach("after:stage_publication_frames");
         Ok(())
     }
 
@@ -1531,9 +1598,11 @@ impl ConversationStore for SqliteConversationStore {
                 params![seq_to_i64(terminal_sequence)?, stream_id.as_str()],
             )
             .map_err(|error| storage(format!("commit publication terminal: {error}")))?;
+        process_death::reach("before:commit_publication_terminal");
         transaction
             .commit()
             .map_err(|error| storage(format!("publication terminal commit: {error}")))?;
+        process_death::reach("after:commit_publication_terminal");
         Ok(())
     }
 
@@ -1626,9 +1695,11 @@ impl ConversationStore for SqliteConversationStore {
                 ],
             )
             .map_err(|error| storage(format!("settle canonical publication: {error}")))?;
+        process_death::reach("before:commit_canonical_publication");
         transaction
             .commit()
             .map_err(|error| storage(format!("canonical publication commit: {error}")))?;
+        process_death::reach("after:commit_canonical_publication");
         Ok((persisted.event, transcript_cursor))
     }
 
@@ -1723,9 +1794,11 @@ impl ConversationStore for SqliteConversationStore {
                 params![settlement.as_str(), stream_id.as_str()],
             )
             .map_err(|error| storage(format!("settle publication audit: {error}")))?;
+        process_death::reach("before:terminalize_publication_audit");
         transaction
             .commit()
             .map_err(|error| storage(format!("publication audit commit: {error}")))?;
+        process_death::reach("after:terminalize_publication_audit");
         Ok((audit, transcript_cursor))
     }
 
@@ -5493,7 +5566,8 @@ fn load_user_notification_tx(
 fn requires_specialized_transition(event: &RuntimeEvent) -> bool {
     matches!(
         event,
-        RuntimeEvent::AssistantMessageCommitted { .. }
+        RuntimeEvent::InboundTurnAdopted { .. }
+            | RuntimeEvent::AssistantMessageCommitted { .. }
             | RuntimeEvent::ToolMessageCommitted { .. }
             | RuntimeEvent::CompactionCompleted { .. }
             | RuntimeEvent::ModelRequestStarted { .. }
@@ -5876,7 +5950,16 @@ mod tests {
     fn acceptance_and_adoption_share_durable_identity() {
         let store = store();
         let accepted = store.accept_inbound(draft("hello")).unwrap();
-        let adopted = store.adopt_pending_batch(accepted.sequence).unwrap();
+        let adopted = store
+            .adopt_pending_batch(
+                accepted.sequence,
+                crate::durable::inbox::inbound_adoption_event(
+                    store.conversation_id(),
+                    None,
+                    vec![accepted.message_id.clone()],
+                ),
+            )
+            .unwrap();
         assert_eq!(adopted.len(), 1);
         assert!(store.load_pending().unwrap().is_empty());
         assert_eq!(store.load_head().unwrap().active_message_ids.len(), 1);
@@ -6151,7 +6234,18 @@ mod tests {
 
         let accepted = store.accept_inbound(draft("pending")).unwrap();
         store.arm_fail_next_adopt_commit();
-        assert!(store.adopt_pending_batch(accepted.sequence).is_err());
+        assert!(
+            store
+                .adopt_pending_batch(
+                    accepted.sequence,
+                    crate::durable::inbox::inbound_adoption_event(
+                        store.conversation_id(),
+                        None,
+                        vec![accepted.message_id.clone()],
+                    ),
+                )
+                .is_err()
+        );
         assert_eq!(store.load_pending().unwrap().len(), 1);
         assert!(store.load_canonical().unwrap().is_empty());
         assert_eq!(
@@ -6159,7 +6253,16 @@ mod tests {
             SurfaceRevision::INITIAL
         );
 
-        let adopted = store.adopt_pending_batch(accepted.sequence).unwrap();
+        let adopted = store
+            .adopt_pending_batch(
+                accepted.sequence,
+                crate::durable::inbox::inbound_adoption_event(
+                    store.conversation_id(),
+                    None,
+                    vec![accepted.message_id.clone()],
+                ),
+            )
+            .unwrap();
         assert_eq!(adopted.len(), 1);
         assert!(store.load_pending().unwrap().is_empty());
         assert_eq!(store.load_head().unwrap().active_message_ids.len(), 1);
@@ -7707,6 +7810,40 @@ mod tests {
             SqliteConversationStore::open(conversation_id, &path),
             Err(ConversationStoreError::SchemaVersionMismatch {
                 stored: 2,
+                expected: SQLITE_SCHEMA_VERSION
+            })
+        ));
+    }
+
+    /// Issue #111 adds the durable answer obligation
+    /// (`InboundTurnAdopted`) that startup recovery reads to decide whether an
+    /// adopted turn is still owed an answer.
+    ///
+    /// A version-8 database predates that vocabulary: its adoption
+    /// transactions committed no obligation fact, so a current reader would
+    /// interpret "the fact is absent" as "no answer is owed" and silently
+    /// strand exactly the crash states the obligation rescues — a turn adopted
+    /// into canonical history and killed before its attempt reached a request
+    /// start. The physical tables are unchanged, which is precisely why the
+    /// version must gate open rather than the schema shape.
+    #[test]
+    fn pre_answer_obligation_schema_is_rejected_explicitly() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("pre-answer-obligation.sqlite");
+        let conversation_id = ConversationId::new("conv-pre-answer-obligation");
+        {
+            let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
+            store
+                .conn
+                .lock()
+                .unwrap()
+                .execute("UPDATE rustx_store SET schema_version = 8 WHERE id = 1", [])
+                .unwrap();
+        }
+        assert!(matches!(
+            SqliteConversationStore::open(conversation_id, &path),
+            Err(ConversationStoreError::SchemaVersionMismatch {
+                stored: 8,
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));

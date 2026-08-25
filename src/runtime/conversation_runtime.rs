@@ -2403,7 +2403,10 @@ impl RuntimeInner {
         // Canonical adoption: the durable ledger append and the pending
         // removal commit in one transaction. On failure the selected items
         // remain durably pending and the failure is surfaced, never swallowed.
-        if let Err(error) = self.mailbox.adopt_pending_batch(&batch) {
+        // No attempt exists yet at the admission boundary: the obligation this
+        // adoption opens is owned by the conversation until the attempt this
+        // cycle admits starts its first model request.
+        if let Err(error) = self.mailbox.adopt_pending_batch(&batch, None) {
             self.record_durability_failure(
                 &mut state,
                 DurableOperation::AdoptPendingBatch,
@@ -3403,6 +3406,9 @@ impl ConversationRuntime {
             .resource_loader
             .prepare(&self.inner.capability)
             .await;
+        // FND-06: the reload build/publish boundary. A candidate generation
+        // is fully built here and nothing of it is published yet.
+        crate::runtime::process_death::reach("reload:prepared");
 
         let outcome = {
             let mut state = self.inner.lock_state();
@@ -3439,6 +3445,10 @@ impl ConversationRuntime {
                                 ));
                                 let capability_revision = resources.capability_revision();
                                 state.resources = resources;
+                                // FND-06: the complete new generation is
+                                // published and the admission gate is about
+                                // to reopen.
+                                crate::runtime::process_death::reach("reload:published");
                                 reload_gate.clear(&mut state);
                                 Ok(RuntimeResourceReloaded {
                                     resource_revision: revision,
@@ -4076,6 +4086,19 @@ impl ConversationRuntime {
         identity: &RequestIdentity,
     ) -> Result<ModelRequest, crate::runtime::request_history::RequestHistoryError> {
         RequestHistory::new(self.inner.store.clone()).reconstruct(identity)
+    }
+
+    /// The conversation-owned subagent registry (tests only).
+    ///
+    /// The FND-06 process-death suite needs the registry the *real*
+    /// composition built so it can stage one child through
+    /// [`SubagentRegistry::push_staged_override`](crate::runtime::subagent::SubagentRegistry)
+    /// — the same seam the in-crate registry tests use — and then drive the
+    /// ownership commit through the real Agent Loop and the real `subagent`
+    /// intrinsic. It is never part of the published API.
+    #[cfg(test)]
+    pub(crate) fn subagents(&self) -> Option<&crate::runtime::subagent::SubagentRegistry> {
+        self.inner.subagents.as_ref()
     }
 
     /// Inspects one subagent child through the authoritative registry
@@ -4994,6 +5017,24 @@ mod tests {
 
     impl crate::tools::executor::ProgressReporter for NoProgressForMcp {
         fn report(&self, _progress: crate::tools::types::ToolProgress) {}
+    }
+
+    /// Adopts one accepted inbound item with the durable answer obligation the
+    /// adoption transaction requires.
+    fn adopt_accepted(
+        store: &dyn ConversationStore,
+        accepted: &crate::durable::inbox::AcceptedInbound,
+    ) {
+        store
+            .adopt_pending_batch(
+                accepted.sequence,
+                crate::durable::inbox::inbound_adoption_event(
+                    store.conversation_id(),
+                    None,
+                    vec![accepted.message_id.clone()],
+                ),
+            )
+            .expect("adopt");
     }
 
     fn test_resources(
@@ -14391,7 +14432,7 @@ mod tests {
                     correlation: None,
                 })
                 .expect("accept");
-            store.adopt_pending_batch(accepted.sequence).expect("adopt");
+            adopt_accepted(store, &accepted);
             adopted_id = Some(accepted.message_id);
             store
                 .append_event(attempt_event(
@@ -14948,7 +14989,7 @@ mod tests {
                         correlation: None,
                     })
                     .expect("accept");
-                store.adopt_pending_batch(accepted.sequence).expect("adopt");
+                adopt_accepted(store, &accepted);
                 store
                     .append_event(attempt_event(
                         conversation_id,
@@ -15058,7 +15099,7 @@ mod tests {
                     correlation: None,
                 })
                 .expect("accept");
-            store.adopt_pending_batch(accepted.sequence).expect("adopt");
+            adopt_accepted(store, &accepted);
             store
                 .append_event(attempt_event(
                     conversation_id,
@@ -15164,7 +15205,7 @@ mod tests {
                     correlation: None,
                 })
                 .expect("accept");
-            store.adopt_pending_batch(accepted.sequence).expect("adopt");
+            adopt_accepted(store, &accepted);
             store
                 .append_event(attempt_event(
                     conversation_id,

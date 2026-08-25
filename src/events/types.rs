@@ -97,6 +97,14 @@ use crate::runtime::types::{CancellationReason, RuntimeError, TokenMeasurement};
 use crate::tools::types::{ToolExecutionResult, ToolProgress};
 
 /// The current schema version of [`RuntimeEventEnvelope`].
+///
+/// This version stamps the *envelope*, and it is deliberately independent of
+/// [`SQLITE_SCHEMA_VERSION`](crate::durable::SQLITE_SCHEMA_VERSION). Adding a
+/// new [`RuntimeEvent`] variant — Issue #111's `InboundTurnAdopted` is the
+/// latest — changes what a journal may *contain*, not how an envelope is
+/// framed, and a store whose journal predates a variant is refused wholesale
+/// by the database version gate rather than decoded under a compatibility
+/// rule. Bump this only when the envelope's own shape changes.
 pub const EVENT_SCHEMA_VERSION: u16 = 1;
 
 /// The envelope around every durable runtime event.
@@ -215,6 +223,33 @@ pub enum RuntimeEvent {
         attempt_number: u32,
         /// Delay before the retry, in milliseconds.
         retry_delay_ms: Option<u64>,
+    },
+
+    /// One inbound batch crossed the canonical-adoption linearization point
+    /// and became a turn this conversation owes a model answer for.
+    ///
+    /// This is the durable **answer obligation** of an adopted turn, and the
+    /// only durable fact that says "rustX accepted this work". It is committed
+    /// inside the adoption transaction itself, so a canonical `UserMessage`
+    /// and the obligation to answer it can never disagree.
+    ///
+    /// The obligation is *consumed* — never re-derived from canonical shape —
+    /// by exactly two later facts, whichever commits first:
+    ///
+    /// ```text
+    /// ModelRequestStarted   the turn was carried to the provider; from here
+    ///                       the external-outcome plane owns it
+    /// attempt terminal      the runtime concluded the turn (completed,
+    ///                       cancelled, failed, timed out, limited)
+    /// ```
+    ///
+    /// Recovery therefore continues exactly the turns a live runtime would
+    /// still owe an answer for, and supplied bootstrap history — a fork seed,
+    /// a persona lineage, a fixture prefix — never acquires an obligation,
+    /// because it was never adopted.
+    InboundTurnAdopted {
+        /// The adopted canonical messages, in inbound sequence order.
+        message_ids: Vec<MessageId>,
     },
 
     /// A complete canonical Assistant message was committed to the Message

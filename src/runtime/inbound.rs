@@ -38,11 +38,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::durable::inbox::{
     AcceptedInbound, ConversationInboundCapability, ConversationStore, ConversationStoreError,
-    InboundDraft, TranscriptCursor,
+    InboundDraft, TranscriptCursor, inbound_adoption_event,
 };
 use crate::events::types::RuntimeEventEnvelope;
 use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock};
-use crate::runtime::identity::{ConversationId, MessageId};
+use crate::runtime::identity::{AttemptId, ConversationId, MessageId};
 use crate::runtime::types::{ConversationLifecycle, LifecycleAdmission};
 
 /// The read-only observation seam of the conversation inbound boundary.
@@ -177,6 +177,23 @@ impl InboundBatch {
     #[must_use]
     pub fn into_items(self) -> Vec<InboundItem> {
         self.items
+    }
+
+    /// The durable answer obligation this batch acquires when it is adopted.
+    ///
+    /// `attempt_id` is the attempt that owns the adoption: the running attempt
+    /// of an Agent Loop safe-boundary drain, and `None` for the coordinator
+    /// admission path, where the attempt does not exist yet.
+    #[must_use]
+    pub fn adoption_event(&self, attempt_id: Option<AttemptId>) -> RuntimeEventEnvelope {
+        inbound_adoption_event(
+            &self.conversation_id,
+            attempt_id,
+            self.items
+                .iter()
+                .map(|item| item.message.id.clone())
+                .collect(),
+        )
     }
 }
 
@@ -1000,11 +1017,13 @@ impl ConversationInboundMailbox {
     /// message ledger and removes the pending records.
     ///
     /// This is the canonical-adoption linearization point: the durable
-    /// append and the pending removal share one transaction, so a crash can
-    /// never observe a pending record whose canonical message is absent nor
-    /// a canonical message that remains independently re-adoptable. The
-    /// returned messages are the adopted canonical `User` messages in strict
-    /// sequence order.
+    /// append, the pending removal, and the adopted turn's durable **answer
+    /// obligation** share one transaction, so a crash can never observe a
+    /// pending record whose canonical message is absent, a canonical message
+    /// that remains independently re-adoptable, or an adopted turn rustX owes
+    /// an answer for without the durable fact that says so. The returned
+    /// messages are the adopted canonical `User` messages in strict sequence
+    /// order.
     ///
     /// # Errors
     ///
@@ -1017,8 +1036,11 @@ impl ConversationInboundMailbox {
     pub fn adopt_pending_batch(
         &self,
         batch: &InboundBatch,
+        attempt_id: Option<AttemptId>,
     ) -> Result<Vec<MessageBlock>, MailboxError> {
-        let adopted = self.inbound.adopt_pending_batch(batch.watermark())?;
+        let adopted = self
+            .inbound
+            .adopt_pending_batch(batch.watermark(), batch.adoption_event(attempt_id))?;
         {
             let state = self.state.lock().expect("inbound mailbox lock poisoned");
             if let Some(observer) = &state.observer {
@@ -1221,7 +1243,7 @@ mod tests {
             .expect("still there");
         assert_eq!(again.watermark(), InboundSequence(3));
         // Adoption transfers exactly the watermark and removes the records.
-        let adopted = mailbox.adopt_pending_batch(&batch).expect("adopt");
+        let adopted = mailbox.adopt_pending_batch(&batch, None).expect("adopt");
         assert_eq!(adopted.len(), 3);
         assert!(
             mailbox.select_pending_batch().expect("select").is_none(),
@@ -1256,7 +1278,9 @@ mod tests {
             "selection is non-destructive: prior items are still pending"
         );
         // Adopt the first watermark only: item 3 remains pending.
-        let adopted = mailbox.adopt_pending_batch(&first).expect("adopt first");
+        let adopted = mailbox
+            .adopt_pending_batch(&first, None)
+            .expect("adopt first");
         assert_eq!(adopted.len(), 2);
         let remaining = mailbox
             .select_pending_batch()

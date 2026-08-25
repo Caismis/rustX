@@ -30,13 +30,20 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 8. An incompatible database
+The SQLite schema is development schema version 9. An incompatible database
 fails explicitly; there is no migration chain, legacy reader, compatibility
 fallback, dual write, or old storage mode. File-backed stores use WAL,
 `synchronous=FULL`, foreign-key enforcement, and a busy timeout. A successful
 SQLite commit is the local durability linearization point documented here.
 
-The version-8 physical tables are deliberately semantic rather than generic:
+Version 9 froze the durable **answer obligation** (Issue #111): adoption
+commits an `InboundTurnAdopted` fact naming the exact adopted batch, and
+startup recovery decides continuation from that fact alone. No table changed —
+which is exactly why the version gate matters. A v8 journal predates the
+vocabulary, so a current reader would read its silence as "no answer is owed"
+and strand precisely the crash states the obligation rescues.
+
+The version-9 physical tables are deliberately semantic rather than generic:
 
 | Table | Purpose and constraints |
 | --- | --- |
@@ -4897,15 +4904,20 @@ registry contents. Current configuration configures **future** work only.
 
 | Class | Durable evidence | Recovery action | Resume |
 | --- | --- | --- | --- |
-| **A — not started** | no attempt fact at all; accepted Pending Inbound may exist | none | ordinary Pending Inbound admission |
-| **B — admitted, no external start** | `AttemptStarted`, **no `ModelRequestStarted` ever**, **no `ToolExecutionStarted` ever** | one interrupted attempt terminal | the already-canonical turn may continue through a **new** attempt |
+| **A — not started** | no attempt fact at all | none | ordinary Pending Inbound admission |
+| **B — admitted, no external start** | `AttemptStarted`, **no `ModelRequestStarted` ever**, **no `ToolExecutionStarted` ever** | one interrupted attempt terminal | ordinary Pending Inbound admission |
 | **C — external start committed, outcome unknown** | `ModelRequestStarted` with no durable outcome, and/or `ToolExecutionStarted` with no durable outcome | canonical tool-turn repair, then one interrupted attempt terminal | blocked: recovery starts nothing |
 | **D — durable terminal exists** | one terminal attempt fact | none (absorbing) | ordinary Pending Inbound admission |
-| **E — external start committed, outcome durably known, settlement incomplete** | a `ModelRequestStarted` followed by `ModelRequestCompleted`/`ModelRequestFailed`, and/or `ToolExecutionStarted` followed by a durable outcome — with no attempt terminal | canonical tool-turn repair (exact durable result), then one interrupted attempt terminal | ordinary Pending Inbound admission; **no** automatic continuation, resend, or replay |
+| **E — external start committed, outcome durably known, settlement incomplete** | a `ModelRequestStarted` followed by `ModelRequestCompleted`/`ModelRequestFailed`, and/or `ToolExecutionStarted` followed by a durable outcome — with no attempt terminal | canonical tool-turn repair (exact durable result), then one interrupted attempt terminal | ordinary Pending Inbound admission; **no** automatic resend or replay |
 
-Class B is the **only** state whose meaning is "no external work started": it
-requires durable proof that **zero** external-start commits ever occurred for
-this attempt. A resolved outcome is not "never started" — the two facts live
+The attempt class answers "what happened to the external plane", and nothing
+else. **Whether a turn is still owed an answer is a separate durable
+question**, answered by the answer obligation below, so every class except C
+can continue an unanswered turn and none of them continues an answered one.
+
+Class B is the **only** state whose meaning is "no external work started" *for
+an attempt that exists*: it requires durable proof that **zero** external-start
+commits ever occurred for this attempt. A resolved outcome is not "never started" — the two facts live
 on separate axes and never collapse:
 
 ```text
@@ -5044,6 +5056,81 @@ succeeded, and an unresolved durable inconsistency is never silently converted
 into a healthy state: it fails construction instead. Recovery failure and the
 bounded live admission retry are distinct concepts; neither is overloaded into
 the other.
+
+### 7.9.0 The durable answer obligation
+
+Recovery must continue exactly the turns a live runtime would still owe an
+answer for — no more, no fewer. That question is **not** derivable from
+canonical shape (a trailing human message looks identical whether it was
+answered, cancelled, supplied as a fork seed, or accepted one millisecond ago)
+and it is not derivable from the attempt class either. It is therefore its own
+durable fact.
+
+`RuntimeEvent::InboundTurnAdopted` is committed **inside the canonical adoption
+transaction**, naming exactly the messages that transaction adopts. It is the
+one durable statement that says "rustX accepted this work", and the durable
+authority rejects an adoption whose obligation names anything else, so a
+canonical `UserMessage` and the obligation to answer it can never disagree.
+
+The obligation is **consumed** — never re-derived — by the first of two later
+facts:
+
+```text
+adoption ──▶ obligation open
+                │
+                ├─ ModelRequestStarted ──▶ consumed: the turn reached the
+                │                          provider; the external-outcome
+                │                          plane owns it from here
+                └─ attempt terminal ─────▶ consumed: the runtime concluded the
+                                           turn (completed, cancelled, failed,
+                                           timed out, limited)
+```
+
+This is what makes the ownership chain explicit across the three transitions
+that can strand a turn:
+
+- adoption commits **before** `AttemptStarted`, so a process that dies in that
+  window leaves an adopted turn with *zero* attempt evidence;
+- adoption also happens **mid-attempt**, at the Agent Loop's safe boundary,
+  where the attempt's own request plane still reports the *previous* request's
+  outcome;
+- a conversation's second and later turns are adopted while the journal already
+  holds complete, settled attempts.
+
+Recovery resumes `ContinueAdoptedTurn` exactly when an obligation is open and
+no external outcome is indeterminate; indeterminacy dominates. Supplied
+bootstrap history — a fork or clone seed, a tree node, a persona lineage —
+enters through `initialize`, which is not an adoption and commits no
+obligation, so a reopened seeded lineage answers nothing it never accepted.
+Recovery reads nothing but the obligation's own yes/no answer, so the evidence
+stays O(1) however large the lineage or the adopted batch is.
+
+### 7.9.1 Real process-death conformance (FND-06 / Issue #111)
+
+The recovery contract above is proved against an actual `SIGKILL` of an actual
+process running the actual runtime stack, not against a dropped store handle:
+
+```text
+parent test process
+  -> spawns a child running the real runtime stack over a real durable file
+  -> child reaches one named durable boundary and freezes there
+  -> parent SIGKILLs the child's whole process group
+  -> parent reopens the durable authority and runs real recovery
+```
+
+A boundary is a durable linearization point, never a wall-clock moment. The
+`cfg(test)`-only seam `crate::runtime::process_death` parks a child before or
+after one durable transition *while it holds the store's connection mutex*, so
+a parked process is incapable of committing anything else from any thread. The
+second rendezvous kind is a control socket the parent uses to edit resources
+underneath a live runtime, or to kill a process while a compaction summary side
+request is in flight. Ordering claims are read from the Event Journal by
+sequence; nothing sleeps or polls to reach a state.
+
+The complete boundary matrix — durable facts before the kill, allowed and
+forbidden post-reopen state, recovery action, and, for the resource cases, the
+loaded generation and the exact old/new model API context — is
+`docs/process-death-conformance.md`.
 
 ### 7.10 Bounded working set
 
