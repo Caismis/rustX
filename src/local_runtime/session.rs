@@ -45,7 +45,14 @@ use crate::model::session::SessionModelConfig;
 use crate::runtime::identity::{ConversationId, MessageId, ToolCallId};
 
 /// The persisted native session-catalog schema.
-pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 2;
+pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 3;
+
+/// The largest display name a Session may carry.
+pub const SESSION_NAME_LIMIT: usize = 120;
+
+/// The largest `/resume` row preview derived from a Session's first user
+/// message.
+const SESSION_PREVIEW_LIMIT: usize = 120;
 
 /// The largest page a native Session list request may return.
 pub const SESSION_LIST_PAGE_LIMIT: usize = 32;
@@ -142,8 +149,12 @@ pub struct SessionNode {
 pub struct SessionSnapshot {
     /// Session identity.
     pub id: SessionId,
-    /// User-defined display name.
-    pub name: String,
+    /// The user-defined display name, when this Session has one.
+    ///
+    /// A Session is born unnamed. The name is display metadata a user
+    /// chooses, never an identity: nothing resolves a Session by it, and an
+    /// unnamed Session is a complete, ordinary Session.
+    pub name: Option<String>,
     /// Creation instant.
     pub created_at: DateTime<Utc>,
     /// Last metadata/active-node publication instant.
@@ -188,8 +199,13 @@ pub struct SessionUserMessageBoundaryPage {
 pub struct SessionSummary {
     /// Session identity.
     pub id: SessionId,
-    /// Display name.
-    pub name: String,
+    /// The user-defined display name, when this Session has one.
+    pub name: Option<String>,
+    /// The first user message of this Session's root lineage, bounded to one
+    /// line. It is what an unnamed row is recognized by, and it is derived
+    /// for the page rather than stored: the catalog keeps no copy of
+    /// conversation content.
+    pub preview: Option<String>,
     /// Last metadata/active-node publication instant.
     pub updated_at: DateTime<Utc>,
     /// Active node in the session.
@@ -259,7 +275,9 @@ struct CatalogDocument {
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 struct PersistedSession {
     id: SessionId,
-    name: String,
+    /// Absent until a user names this Session; see [`SessionSnapshot::name`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     active_node: SessionNodeId,
@@ -366,7 +384,7 @@ impl SessionCatalog {
             session_id.clone(),
             PersistedSession {
                 id: session_id.clone(),
-                name: "New session".to_owned(),
+                name: None,
                 created_at: now,
                 updated_at: now,
                 active_node: node_id,
@@ -434,9 +452,20 @@ impl SessionCatalog {
         let mut page = Vec::with_capacity(limit);
         let mut has_more = false;
         for session in self.document.sessions.values() {
+            // A row is searched by what it shows. An unnamed Session shows
+            // its first user message, so matching only identity and name
+            // would hide exactly the rows a user has to recognize by their
+            // content.
+            let preview = self.preview(session)?;
             let matches = query.as_ref().is_none_or(|query| {
                 session.id.as_str().to_lowercase().contains(query)
-                    || session.name.to_lowercase().contains(query)
+                    || session
+                        .name
+                        .as_ref()
+                        .is_some_and(|name| name.to_lowercase().contains(query))
+                    || preview
+                        .as_ref()
+                        .is_some_and(|preview| preview.to_lowercase().contains(query))
             });
             if !matches {
                 continue;
@@ -452,6 +481,7 @@ impl SessionCatalog {
             page.push(SessionSummary {
                 id: session.id.clone(),
                 name: session.name.clone(),
+                preview,
                 updated_at: session.updated_at,
                 active_node: session.active_node.clone(),
                 active: session.id == self.document.active_session,
@@ -473,6 +503,53 @@ impl SessionCatalog {
     /// identity is not present.
     pub fn active_snapshot(&self) -> Result<SessionSnapshot, SessionError> {
         self.snapshot(&self.document.active_session)
+    }
+
+    /// Whether the active Session has never been used.
+    ///
+    /// An unused Session is exactly the Session a launch would otherwise
+    /// have to publish: one `New` root node whose durable conversation is
+    /// still at its initial Surface revision, with no canonical message and
+    /// nothing accepted into its Pending Inbound. Startup reuses that Session
+    /// instead of publishing another empty one, so repeated launches cannot
+    /// accumulate empty rows in `/resume`.
+    ///
+    /// Pending Inbound is part of the question, not a detail: a message that
+    /// was accepted durably but never adopted is work this Session owns, and
+    /// composing that lineage again is what adopts it. Treating it as unused
+    /// would resurrect a previous launch's prompt inside what the user asked
+    /// to be an empty Session.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError`] when the active identity is not persisted or
+    /// its durable conversation cannot be read.
+    pub(crate) fn active_is_unused(&self) -> Result<bool, SessionError> {
+        let session = self
+            .document
+            .sessions
+            .get(&self.document.active_session)
+            .ok_or_else(|| SessionError::UnknownSession {
+                session_id: self.document.active_session.clone(),
+            })?;
+        if session.nodes.len() != 1 {
+            return Ok(false);
+        }
+        let Some(node) = session.nodes.values().next() else {
+            return Ok(false);
+        };
+        if node.parent.is_some() || node.origin != SessionNodeOrigin::New {
+            return Ok(false);
+        }
+        let path = self.database_path(&session.id, &node.conversation_id);
+        let store = SqliteConversationStore::open(node.conversation_id.clone(), &path)
+            .map_err(SessionError::Store)?;
+        let head = store.load_head().map_err(SessionError::Store)?;
+        if head.revision != SurfaceRevision::INITIAL || !head.active_message_ids.is_empty() {
+            return Ok(false);
+        }
+        let pending = store.load_pending().map_err(SessionError::Store)?;
+        Ok(pending.is_empty())
     }
 
     /// Returns one Session snapshot.
@@ -592,13 +669,52 @@ impl SessionCatalog {
         conversation_database_path(&self.root, session_id, conversation_id)
     }
 
-    /// Atomically changes a Session display name. This touches metadata only.
+    /// The bounded single-line label an unnamed Session is recognized by:
+    /// the first ordinary user message of its root lineage.
+    ///
+    /// It is derived per page and never stored. The catalog is product
+    /// metadata, so caching conversation text in it would create a second
+    /// copy of history that could disagree with the conversation itself; a
+    /// Session's own durable store is the only authority for what was said
+    /// in it. Reading one bounded boundary page per row keeps that honest at
+    /// the page limit's cost.
+    ///
+    /// The root node is the subject on purpose. Branch nodes are seeded
+    /// copies of a source lineage, so the row would otherwise change what it
+    /// says whenever the active node moves, while the Session it names is
+    /// still the same Session that started with the same message.
+    fn preview(&self, session: &PersistedSession) -> Result<Option<String>, SessionError> {
+        let root = session
+            .nodes
+            .values()
+            .find(|node| node.parent.is_none())
+            .ok_or_else(|| SessionError::Catalog {
+                detail: format!("Session {} has no root node", session.id),
+            })?;
+        let path = self.database_path(&session.id, &root.conversation_id);
+        let store = SqliteConversationStore::open(root.conversation_id.clone(), &path)
+            .map_err(SessionError::Store)?;
+        let head = store.load_head().map_err(SessionError::Store)?;
+        let page = store
+            .load_user_message_boundaries_page(head.revision, 0, 1)
+            .map_err(SessionError::Store)?;
+        Ok(page
+            .boundaries
+            .first()
+            .and_then(|boundary| preview_of(&boundary.message)))
+    }
+
+    /// Atomically names a Session. This touches metadata only.
+    ///
+    /// Naming never moves, rewrites, or re-identifies anything: the Session
+    /// keeps its identity, its graph, and its conversations, and gains only
+    /// the label `/resume` shows in place of its first message.
     pub(crate) fn rename(
         &mut self,
         session_id: &SessionId,
         name: &str,
     ) -> Result<SessionSnapshot, SessionError> {
-        let name = normalize_name(name)?;
+        let name = Some(normalize_name(name)?);
         let mut next = self.document.clone();
         let session =
             next.sessions
@@ -813,11 +929,10 @@ impl SessionCatalog {
     pub(crate) fn publish_session(
         &mut self,
         prepared: &PreparedLineage,
-        name: &str,
         origin: SessionNodeOrigin,
     ) -> Result<SessionSnapshot, SessionError> {
         let session_id = prepared.session_id.clone();
-        let next = self.build_session_document(prepared, name, origin)?;
+        let next = self.build_session_document(prepared, origin)?;
         crate::runtime::process_death::reach("before:publish_session");
         self.commit(next)?;
         crate::runtime::process_death::reach("after:publish_session");
@@ -828,10 +943,9 @@ impl SessionCatalog {
     pub(crate) fn preflight_publish_session(
         &self,
         prepared: &PreparedLineage,
-        name: &str,
         origin: SessionNodeOrigin,
     ) -> Result<(), SessionError> {
-        validate_document(&self.build_session_document(prepared, name, origin)?)
+        validate_document(&self.build_session_document(prepared, origin)?)
     }
 
     /// Publishes a prepared branch node inside an existing Session and makes
@@ -943,7 +1057,6 @@ impl SessionCatalog {
     fn build_session_document(
         &self,
         prepared: &PreparedLineage,
-        name: &str,
         origin: SessionNodeOrigin,
     ) -> Result<CatalogDocument, SessionError> {
         if self.document.sessions.contains_key(&prepared.session_id) {
@@ -959,7 +1072,6 @@ impl SessionCatalog {
                 detail: "prepared conversation seed is not a database file".to_owned(),
             });
         }
-        let name = normalize_name(name)?;
         let now = Utc::now();
         let node = SessionNode {
             id: prepared.node_id.clone(),
@@ -974,7 +1086,11 @@ impl SessionCatalog {
             prepared.session_id.clone(),
             PersistedSession {
                 id: prepared.session_id.clone(),
-                name,
+                // Every Session is published unnamed. A generated label —
+                // "New session", "Fork of session-3" — is not a name a user
+                // chose; it only displaces the first message, which is the
+                // one thing that says what the Session is about.
+                name: None,
                 created_at: now,
                 updated_at: now,
                 active_node: prepared.node_id.clone(),
@@ -1319,12 +1435,55 @@ fn validate_id(value: &str, kind: &str) -> Result<(), SessionError> {
     Ok(())
 }
 
+/// Normalizes one user-supplied Session name into the single bounded line a
+/// selector row can show. A name that survives this is exactly what the row
+/// displays, so no renderer has to defend itself against a name.
 fn normalize_name(name: &str) -> Result<String, SessionError> {
-    let name = name.trim().to_owned();
-    if name.is_empty() || name.chars().count() > 120 {
+    let name = single_line(name);
+    if name.is_empty() || name.chars().count() > SESSION_NAME_LIMIT {
         return Err(SessionError::InvalidName);
     }
     Ok(name)
+}
+
+/// Renders one canonical user message as the bounded single line a `/resume`
+/// row shows for an unnamed Session. Non-text content contributes nothing:
+/// a Session opened with only an image has no first line to show, and saying
+/// so with `None` is more honest than inventing one.
+fn preview_of(message: &UserMessageBlock) -> Option<String> {
+    let text = message
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            UserContentBlock::Text(block) => Some(block.text.as_str()),
+            UserContentBlock::Image(_) | UserContentBlock::File(_) => None,
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let text = single_line(text.as_str());
+    if text.is_empty() {
+        return None;
+    }
+    Some(truncate(text, SESSION_PREVIEW_LIMIT))
+}
+
+/// Collapses every run of whitespace — line breaks included — into one space
+/// and trims the ends.
+fn single_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Bounds one already single-line label to `limit` characters, marking the
+/// cut so a truncated line never reads as the whole message.
+fn truncate(text: String, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text;
+    }
+    let kept = text
+        .chars()
+        .take(limit.saturating_sub(1))
+        .collect::<String>();
+    format!("{}\u{2026}", kept.trim_end())
 }
 
 fn conversation_database_path(
@@ -1521,7 +1680,11 @@ impl core::fmt::Display for SessionError {
                 write!(f, "unknown fork boundary user message {message_id}")
             }
             Self::InvalidName => {
-                f.write_str("session name must be 1-120 non-whitespace characters")
+                write!(
+                    f,
+                    "session name must be 1-{SESSION_NAME_LIMIT} characters after \
+                     whitespace is collapsed"
+                )
             }
         }
     }
@@ -1578,7 +1741,7 @@ mod tests {
     }"#;
 
     fn config() -> CurrentRuntimeConfig {
-        CurrentRuntimeConfig::from_json_slice(CONFIG.as_bytes()).expect("valid test config")
+        CurrentRuntimeConfig::from_jsonc_slice(CONFIG.as_bytes()).expect("valid test config")
     }
 
     fn state() -> SessionPersistentState {
@@ -1693,6 +1856,81 @@ mod tests {
         .expect("conversation store")
     }
 
+    /// The "unused Session" predicate startup reuses is exactly one `New`
+    /// root node whose conversation has no canonical history. Any committed
+    /// message disqualifies the Session, and so does a branch node — even a
+    /// branch whose own conversation seed is empty.
+    #[test]
+    fn only_an_untouched_root_session_counts_as_unused() {
+        let (_directory, mut catalog, _config) = open_catalog();
+        assert!(catalog.active_is_unused().expect("fresh catalog"));
+
+        // A Session-local model choice is metadata, not use.
+        catalog
+            .persist_active_model(config().model)
+            .expect("persist Session model");
+        assert!(catalog.active_is_unused().expect("model choice only"));
+
+        // A message that was accepted durably but never adopted is already
+        // this Session's work, however empty the canonical history still is.
+        let (session_id, node, _) = catalog.active_lineage().expect("root lineage");
+        let pending_store = store_for(&catalog, &session_id, &node.conversation_id);
+        pending_store
+            .accept_inbound(crate::durable::InboundDraft {
+                message_id: None,
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                content: vec![text("pending")],
+                timestamp: Utc::now(),
+                correlation: None,
+            })
+            .expect("accept pending inbound");
+        assert!(!catalog.active_is_unused().expect("pending inbound"));
+        drop(pending_store);
+
+        let history = source_history();
+        let (source_conversation, source_session, source_node) = append_history(&catalog, &history);
+        assert!(!catalog.active_is_unused().expect("used root"));
+
+        // Branching at the first user message leaves the active node's own
+        // conversation empty, while the Session itself is anything but.
+        let source_store = store_for(&catalog, &source_session, &source_conversation);
+        let revision = source_store.load_head().expect("source head").revision;
+        let source = HistoricalConversationSnapshot {
+            conversation_id: source_conversation,
+            surface_revision: revision,
+            messages: source_store
+                .load_surface_snapshot(revision)
+                .expect("historical source"),
+        };
+        let (prepared, _) = catalog
+            .prepare_tree_node_at_user_message(
+                &source_session,
+                &state(),
+                &source,
+                &MessageId::new("source-user-a"),
+            )
+            .expect("prepare tree node");
+        catalog
+            .publish_node(
+                &source_session,
+                &prepared,
+                source_node,
+                SessionNodeOrigin::New,
+            )
+            .expect("publish branch node");
+        assert!(!catalog.active_is_unused().expect("branched session"));
+
+        // A newly published Session is unused again.
+        let prepared = catalog
+            .prepare_session(&state(), &[])
+            .expect("prepare new session");
+        catalog
+            .publish_session(&prepared, SessionNodeOrigin::New)
+            .expect("publish new session");
+        assert!(catalog.active_is_unused().expect("new session"));
+    }
+
     #[test]
     fn new_and_name_publish_metadata_without_mutating_old_history() {
         let (_directory, mut catalog, _config) = open_catalog();
@@ -1707,9 +1945,13 @@ mod tests {
             .expect("prepare new session");
         let new_session_id = prepared.session_id.clone();
         let snapshot = catalog
-            .publish_session(&prepared, "New session", SessionNodeOrigin::New)
+            .publish_session(&prepared, SessionNodeOrigin::New)
             .expect("publish new session");
 
+        assert_eq!(
+            snapshot.name, None,
+            "a published Session is born unnamed; nothing generates a label for it"
+        );
         assert_ne!(snapshot.id, source_session);
         assert_ne!(
             snapshot.active_conversation_id, source_conversation,
@@ -1731,9 +1973,21 @@ mod tests {
         );
 
         let renamed = catalog
-            .rename(&new_session_id, "review branch")
+            .rename(&new_session_id, "  review\n branch  ")
             .expect("rename metadata");
-        assert_eq!(renamed.name, "review branch");
+        assert_eq!(
+            renamed.name.as_deref(),
+            Some("review branch"),
+            "a name is normalized into the single line a selector row shows"
+        );
+        assert!(matches!(
+            catalog.rename(&new_session_id, "   "),
+            Err(SessionError::InvalidName)
+        ));
+        assert!(matches!(
+            catalog.rename(&new_session_id, &"n".repeat(super::SESSION_NAME_LIMIT + 1)),
+            Err(SessionError::InvalidName)
+        ));
         let new_nodes = catalog
             .node_page(&new_session_id, 0, super::SESSION_TREE_PAGE_LIMIT)
             .expect("new node page")
@@ -1749,6 +2003,115 @@ mod tests {
         );
     }
 
+    /// A Session carries no name until a user gives it one, so a `/resume`
+    /// row identifies it by what it opened with. Naming replaces that line
+    /// and nothing else: the identity, the lineage, and the conversation are
+    /// untouched, and the row remains searchable by either.
+    #[test]
+    fn an_unnamed_session_is_listed_by_its_first_user_message() {
+        let (_directory, mut catalog, _config) = open_catalog();
+        let row = |catalog: &SessionCatalog| {
+            catalog
+                .list_page(None, 0, super::SESSION_LIST_PAGE_LIMIT)
+                .expect("session page")
+                .sessions
+                .into_iter()
+                .next()
+                .expect("the active Session is listed")
+        };
+
+        let empty = row(&catalog);
+        assert_eq!(empty.name, None, "a Session is born unnamed");
+        assert_eq!(
+            empty.preview, None,
+            "a Session that was never used has no first message to show either"
+        );
+
+        append_history(
+            &catalog,
+            &[
+                user("first", "  restore\n  the auth module  "),
+                user("second", "and then the session picker"),
+            ],
+        );
+        let used = row(&catalog);
+        assert_eq!(
+            used.preview.as_deref(),
+            Some("restore the auth module"),
+            "the row shows the Session's first user message as one collapsed line"
+        );
+        assert_eq!(used.name, None);
+        assert!(
+            !catalog
+                .list_page(Some("auth module"), 0, super::SESSION_LIST_PAGE_LIMIT)
+                .expect("content search")
+                .sessions
+                .is_empty(),
+            "an unnamed row is searchable by the line it shows"
+        );
+
+        let session_id = catalog.active_snapshot().expect("active snapshot").id;
+        catalog
+            .rename(&session_id, "Refactor auth module")
+            .expect("name the Session");
+        let named = row(&catalog);
+        assert_eq!(named.name.as_deref(), Some("Refactor auth module"));
+        assert_eq!(
+            named.preview.as_deref(),
+            Some("restore the auth module"),
+            "naming displaces the first message in the row, never in the Session"
+        );
+        assert_eq!(
+            named.id, session_id,
+            "a name is metadata; the identity a selection resolves is unchanged"
+        );
+    }
+
+    /// The derived row line is bounded and text-only: a long first message is
+    /// cut with a visible mark, and a Session opened with no text at all has
+    /// no line to show rather than an invented one.
+    #[test]
+    fn a_derived_row_line_is_bounded_and_only_ever_text() {
+        let (_directory, catalog, _config) = open_catalog();
+        let long = "auth ".repeat(60);
+        append_history(&catalog, &[user("long", long.as_str())]);
+        let preview = catalog
+            .list_page(None, 0, super::SESSION_LIST_PAGE_LIMIT)
+            .expect("session page")
+            .sessions
+            .swap_remove(0)
+            .preview
+            .expect("a long message still yields a line");
+        assert_eq!(preview.chars().count(), super::SESSION_PREVIEW_LIMIT);
+        assert!(preview.ends_with('\u{2026}'), "a cut line says it was cut");
+
+        let (_directory, catalog, _config) = open_catalog();
+        append_history(
+            &catalog,
+            &[MessageBlock::User(UserMessageBlock {
+                id: MessageId::new("image-only"),
+                content: vec![UserContentBlock::Image(
+                    crate::message::content::ImageReference {
+                        artifact_id: crate::runtime::identity::ArtifactId::new("artifact-1"),
+                        alt: None,
+                    },
+                )],
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                timestamp: None,
+            })],
+        );
+        assert_eq!(
+            catalog
+                .list_page(None, 0, super::SESSION_LIST_PAGE_LIMIT)
+                .expect("session page")
+                .sessions
+                .swap_remove(0)
+                .preview,
+            None
+        );
+    }
+
     #[test]
     fn session_list_projection_is_bounded_searchable_and_continuable() {
         let (_directory, mut catalog, _config) = open_catalog();
@@ -1756,13 +2119,12 @@ mod tests {
             let prepared = catalog
                 .prepare_session(&state(), &[])
                 .expect("prepare paged session");
-            catalog
-                .publish_session(
-                    &prepared,
-                    &format!("paged session {index}"),
-                    SessionNodeOrigin::New,
-                )
+            let published = catalog
+                .publish_session(&prepared, SessionNodeOrigin::New)
                 .expect("publish paged session");
+            catalog
+                .rename(&published.id, &format!("paged session {index}"))
+                .expect("name paged session");
         }
 
         let first = catalog
@@ -1791,7 +2153,10 @@ mod tests {
             .list_page(Some("paged session 1"), 0, 2)
             .expect("searchable bounded Session page");
         assert_eq!(filtered.sessions.len(), 1);
-        assert_eq!(filtered.sessions[0].name, "paged session 1");
+        assert_eq!(
+            filtered.sessions[0].name.as_deref(),
+            Some("paged session 1")
+        );
         assert!(matches!(
             catalog.list_page(None, 0, 0),
             Err(SessionError::Catalog { .. })
@@ -1986,7 +2351,7 @@ mod tests {
         let retried = catalog
             .rename(&before.id, "published after retry")
             .expect("ordinary metadata remains usable after pre-commit failure");
-        assert_eq!(retried.name, "published after retry");
+        assert_eq!(retried.name.as_deref(), Some("published after retry"));
     }
 
     #[test]
@@ -2007,11 +2372,15 @@ mod tests {
         let in_memory = catalog
             .active_snapshot()
             .expect("committed in-memory snapshot");
-        assert_eq!(in_memory.name, "visible but uncertain");
+        assert_eq!(in_memory.name.as_deref(), Some("visible but uncertain"));
         let reopened = reopen_catalog(directory.path());
         assert_eq!(
-            reopened.active_snapshot().expect("reopened snapshot").name,
-            "visible but uncertain",
+            reopened
+                .active_snapshot()
+                .expect("reopened snapshot")
+                .name
+                .as_deref(),
+            Some("visible but uncertain"),
             "the file crossed the visibility commit point even though durability was uncertain"
         );
     }
@@ -2096,7 +2465,6 @@ mod tests {
         let destination = catalog
             .publish_session(
                 &prepared,
-                "Clone of session-1",
                 SessionNodeOrigin::Clone {
                     source_session: source_session.clone(),
                     source_node: source_node.clone(),
@@ -2131,7 +2499,6 @@ mod tests {
         assert!(matches!(
             catalog.publish_session(
                 &clone,
-                "failed clone",
                 SessionNodeOrigin::Clone {
                     source_session: source_session.clone(),
                     source_node: source_node.clone(),
@@ -2159,7 +2526,6 @@ mod tests {
         assert!(matches!(
             catalog.publish_session(
                 &fork,
-                "failed fork",
                 SessionNodeOrigin::Fork {
                     source_session,
                     source_node,
@@ -2371,7 +2737,7 @@ mod tests {
             .expect("prepare private destination");
         std::fs::remove_file(&failed.database_path).expect("remove private seed");
         assert!(matches!(
-            catalog.publish_session(&failed, "invisible", SessionNodeOrigin::New),
+            catalog.publish_session(&failed, SessionNodeOrigin::New),
             Err(SessionError::Catalog { .. })
         ));
         assert_eq!(
@@ -2435,7 +2801,7 @@ mod tests {
             .expect("prepare new session after tree branch");
         assert_ne!(new_session.node_id, snapshot.active_node);
         catalog
-            .publish_session(&new_session, "after branch", SessionNodeOrigin::New)
+            .publish_session(&new_session, SessionNodeOrigin::New)
             .expect("publish new session after tree branch");
         assert_eq!(
             catalog

@@ -498,7 +498,8 @@ export interface SessionNodeView {
 
 export interface SessionView {
   id: SessionId;
-  name: string;
+  /** The user-chosen display name, absent until this Session is named. */
+  name?: string;
   created_at: string;
   updated_at: string;
   active_node: SessionNodeId;
@@ -508,7 +509,14 @@ export interface SessionView {
 
 export interface SessionSummaryView {
   id: SessionId;
-  name: string;
+  /** The user-chosen display name, absent until this Session is named. */
+  name?: string;
+  /**
+   * The Session's first user message, bounded to one line by Rust. It is
+   * what an unnamed row is recognized by; absent while a Session has said
+   * nothing yet.
+   */
+  preview?: string;
   updated_at: string;
   active_node: SessionNodeId;
   active: boolean;
@@ -705,6 +713,34 @@ export interface RuntimeClientSkill {
   location: string;
 }
 
+/**
+ * The client-visible projection of one immutable runtime resource
+ * generation.
+ *
+ * Identity and provenance, never content: the runtime publishes which
+ * project instruction files it loaded and how many bytes each one
+ * contributed, and the file itself stays on disk. A client that wants the
+ * text reads the file, exactly as it would read a `SKILL.md`.
+ *
+ * The revision is deliberately independent of `CapabilityView.revision`: a
+ * reload that changes only an `AGENTS.md` advances this one alone.
+ */
+export interface RuntimeClientResourcesView {
+  revision: number;
+  /** Root-most to workspace, in the runtime's own concatenation order. */
+  context_files?: RuntimeClientContextFile[];
+  /** Whether an agent profile/persona is frozen into this generation. */
+  agent_profile?: boolean;
+}
+
+/** One runtime-loaded project instruction file. */
+export interface RuntimeClientContextFile {
+  /** The canonical absolute host path the runtime read. */
+  path: string;
+  /** The exact byte length of the loaded content. */
+  bytes: number;
+}
+
 export interface CapabilityView {
   revision: CapabilityRevision;
   /** The active model-visible Tools; provider requests use exactly this set. */
@@ -732,7 +768,10 @@ export interface CapabilitySourceView {
   state: CapabilitySourceStateView;
 }
 
-export type TokenMeasurementSource = "provider_reported" | "estimated";
+export type TokenMeasurementSource =
+  | "provider_reported"
+  | "provider_anchored"
+  | "estimated";
 
 export interface TokenMeasurement {
   input_tokens: number;
@@ -777,6 +816,8 @@ export interface RuntimeClientSnapshot {
   status?: AgentStatusView;
   context: RuntimeClientContextView;
   capabilities: CapabilityView;
+  /** The active runtime resource generation (context files, agent profile). */
+  resources?: RuntimeClientResourcesView;
   /** The session's *desired* model. Never the running attempt's model. */
   model: SessionModelView;
 }
@@ -1052,6 +1093,7 @@ export type RuntimeClientEvent =
       subagent: RuntimeClientSubagent;
     }
   | { type: "capability_updated"; capabilities: CapabilityView }
+  | { type: "resources_updated"; resources: RuntimeClientResourcesView }
   | { type: "session_model_changed"; model: SessionModelView }
   | { type: "runtime_shutdown" };
 
@@ -1424,6 +1466,7 @@ export function isKnownRuntimeClientEvent(
     case "background_execution_updated":
     case "subagent_updated":
     case "capability_updated":
+    case "resources_updated":
     case "session_model_changed":
     case "runtime_shutdown":
       return true;

@@ -935,8 +935,15 @@ that a live child produced an Interrupted physical result.
   ConversationId lineage, durable conversation history, and explicitly
   Session-local choices. Its current persisted choice is the selected model.
   It never serializes a complete runtime/project configuration.
+- **Configuration documents are JSONC, and nothing else is relaxed.**
+  `models.jsonc` and `rustx.jsonc` accept `//` and `/* */` comments and
+  trailing commas so a hand-edited file can explain itself. Single-quoted
+  strings, unquoted property names, hexadecimal numbers, unary plus, missing
+  commas, and unknown fields all fail startup. The relaxation is surface
+  syntax only: every schema, default, and validation rule is unchanged, and
+  runtime-owned generated state under `runtime-root` stays strict JSON.
 - **Current runtime configuration is recomposed on every launch.**
-  `--config <rustx.json>` is parsed and validated before an existing Session
+  `--config <rustx.jsonc>` is parsed and validated before an existing Session
   catalog is opened. MCP definitions, native Tool policy and activation,
   Skill roots/resources, environment, context policy, timezone, agent
   settings, approval settings reserved for #100, and future capability
@@ -950,7 +957,7 @@ that a live child produced an Interrupted physical result.
   rediscover them. Explicit reload is the only in-process replacement; cold
   resume composes a fresh generation without restoring one from history.
 - **First-Session publication follows model validation.** On a fresh
-  `runtime-root`, composition loads the current `models.json` and validates
+  `runtime-root`, composition loads the current `models.jsonc` and validates
   the current runtime default before creating or publishing the root Session.
   A failed first launch cannot leave a durable Session containing an invalid
   model that poisons a later corrected launch. Existing Session models are
@@ -2016,11 +2023,42 @@ outside Surface history and is carried exactly by each Request Snapshot.
 
 Planning bounds the actual summary-model request, not the raw retired span.
 `SummaryRequest::model_input()` is the shared deterministic assembly of the
-fixed instruction, serialized request, and canonical User wrapper. Its
-estimated input must fit the summary invocation's own effective context
-window minus effective output budget; tools, Agent Status, Skill catalog, and
-provider continuation are absent from this invocation. Retention remains a
-token target, not a message-count target.
+fixed instruction, the rendered retired transcript, and the canonical User
+wrapper. The transcript is a bounded plain-text rendering, never the canonical
+JSON encoding: JSON structure, field names, and escaping cost more model input
+than the conversation they describe, and tool results, replayed reasoning, and
+tool-call arguments are truncated with an explicit truncation notice, so a
+summary request is always smaller than the history it replaces. Its estimated
+input must fit the summary invocation's own effective context window minus the
+session reserve minus its effective output budget — the reserve applies to
+this request exactly as it applies to a primary one, because the estimate that
+sizes it is approximate. Tools, Agent Status, Skill catalog, and provider
+continuation are absent from this invocation. Retention remains a token
+target, not a message-count target.
+
+A summary model that rejects the assembled request as larger than its own
+context window has measured that estimate, and the measurement is actionable:
+the pipeline replans the same compaction against a halved summary input budget
+(bounded, strictly decreasing, floored) rather than reporting failure. A
+compaction that recovers from a *primary* context overflow additionally plans
+against an `EstimateCorrection` — the exact integer ratio between the estimate
+of the rejected request and the provider-reported count for it, or a fixed
+three-quarters shrink when the provider reported no count. Both the soft input
+limit and the summary input limit are scaled by that ratio, so the recovery
+never targets the same budget the provider just rejected.
+
+A provider-reported input measurement is authoritative for the request it
+measured and for every request context that measured one is an ordered prefix
+of, under unchanged non-conversation input. In the first case the projection
+is `ProviderReported`; in the second it is `ProviderAnchored` — the reported
+number plus a deterministic estimate of exactly the canonical messages
+appended since. Neither is ever fabricated from an estimate, cumulative usage
+snapshots are never summed, and a broken prefix (a compaction Surface rewrite)
+or changed non-conversation input (Effective System Prompt, tool definitions)
+refuses the measurement outright rather than patching it with a guessed delta.
+The anti-loop compaction progress rule is unaffected: it compares two
+deterministic estimates of the actual request content and never a measurement
+of one provenance against a measurement of another.
 
 The primary request and summary side request have different lineages. A
 primary request uses the attempt-pinned Runtime Resource Snapshot and
@@ -3878,7 +3916,7 @@ contracts and provider protocols. These invariants are frozen by M2:
   selector over `model_catalog_get` and applies a choice through `model_set`;
   `/model show` renders `model_get`'s projection. The selector filters and
   formats the published catalog and nothing more. The client never
-  reads `models.json`, instantiates a provider SDK, resolves an API key, or
+  reads `models.jsonc`, instantiates a provider SDK, resolves an API key, or
   interprets provider protocol semantics. Only *effective* capability is
   advertised. Reasoning profiles are shown exactly as published: a
   reasoning-capable model with no profiles means reasoning is supported with
@@ -3943,6 +3981,63 @@ The user-facing `Session` owner is `LocalSessionSupervisor`, not
 `ConversationRuntime` attachment. Each graph node owns a distinct
 `ConversationId`; `ConversationSurface`, the Message Ledger, Request Snapshot,
 Event Journal, and runtime execution remain linear and branch-unaware.
+
+### Startup is not a resume
+
+A process start binds an **empty** Session. Without `--continue`, composition
+publishes one through the same prepare-then-publish protocol `/new` uses, and
+the Session the previous launch left active stays durable history reachable
+only through `/resume` and `/tree` — starting the product never reopens,
+rewinds, renames, or mutates it. `--continue` is the one request that binds
+the catalog's published active Session/node, and it is what a client repeats
+when it replaces the process to complete a Session transition that was
+already committed; the client never names the destination itself.
+
+An active Session that has never been used — exactly one `New` root node whose
+conversation is still at its initial Surface revision, with no canonical
+message and nothing accepted into its Pending Inbound — already is that empty
+Session, so it is bound as-is. Pending Inbound counts as use on purpose:
+composing that lineage is what adopts an accepted-but-unadopted message, so
+reusing such a Session would resurrect a previous launch's prompt inside the
+empty Session the user asked for. Repeated
+launches therefore cannot accumulate empty `/resume` rows, and a Session-local
+model choice made in such a Session survives the relaunch as ordinary
+Session-local state.
+
+Recovery follows the lineage, not the launch: an interrupted attempt in a
+Session this process does not open stays unreconciled until that lineage is
+composed again, when the ordinary per-conversation recovery pass runs. A
+launch never reconciles a Session it did not bind.
+
+### A Session name is display metadata, never an identity
+
+A Session is published **unnamed**, and nothing generates a label for it. The
+identity the catalog published is what every operation resolves — `--session`,
+`session_select`, `/resume`, `/tree`, and every replacement spawn — and no
+path anywhere resolves a Session by its name. Two Sessions may therefore carry
+the same name without ambiguity, because the name never had to distinguish
+them.
+
+What a name changes is one line of one row. An unnamed Session is identified
+in `/resume` by the bounded first ordinary user message of its **root**
+lineage: derived from that lineage's durable store when the page is built,
+never stored in the catalog, so the catalog holds no second copy of history
+that could disagree with the conversation itself. The root node is the subject
+because branch nodes are seeded copies — a row must not change what it says
+when the active node moves. A Session that has said nothing yet shows neither.
+
+Naming is metadata-only, and normalization is part of the contract: a name is
+collapsed to a single whitespace-normalized line, bounded to
+`SESSION_NAME_LIMIT` characters, and rejected when empty. What survives that
+is exactly what a row displays. The query behind `session_list` matches
+whatever a row can be recognized by — id, name, and the derived first-message
+line — so a search never hides a row it is showing.
+
+`--name` is `/name` moved to the command line. It names whichever Session the
+launch bound — empty, continued, or selected — strictly after that decision,
+so a name can never participate in choosing a Session. A replacement spawn
+drops it: the label belonged to the Session the user launched into, not to the
+Session a transition has just switched to.
 
 ### Publication and replacement linearization
 
@@ -4022,8 +4117,9 @@ architecture decision.
 ### Bounded native projections
 
 The native owner, not TypeScript rendering, enforces the projection bounds.
-`session_list` accepts an optional case-insensitive Session id/name query,
-bounded `limit`, and offset continuation. Rows are ordered by ascending
+`session_list` accepts an optional case-insensitive query over a row's
+identity, its name, and the derived first-message line an unnamed row shows,
+plus a bounded `limit` and offset continuation. Rows are ordered by ascending
 Session id. `session_tree_get` returns bounded
 node and historical user-message pages, each with its own continuation offset;
 nodes are deterministic `SessionNodeId` order and boundaries retain their

@@ -6,12 +6,17 @@ four paths explicitly. There is no cwd-based configuration discovery,
 global/project precedence, implicit `~/.rustx` configuration, or TUI-side
 configuration parser.
 
+Both configuration files are commented in place. Read them first: this
+document explains the contracts around them, while the files themselves
+explain each field where it is set, and carry commented-out entries for the
+options the baseline does not enable.
+
 The intended layout is:
 
 ```text
 examples/local-runtime/
-├── models.json
-├── rustx.json
+├── models.jsonc
+├── rustx.jsonc
 ├── workspace/
 │   └── .agents/
 │       └── tools/
@@ -28,10 +33,10 @@ examples/local-runtime/
 
 | Path | Owner and purpose |
 | --- | --- |
-| `models.json` | The runtime's provider/model authority: endpoint, credential source, model limits, capabilities, opaque request parameters, reasoning profiles, and protocol compatibility. |
-| `rustx.json` | The current runtime/project configuration: default model for new Sessions, context/timezone, native-tool policy and activation, MCP sources, Skill roots, and authorized environment. |
+| `models.jsonc` | The runtime's provider/model authority: endpoint, credential source, model limits, capabilities, opaque request parameters, reasoning profiles, and protocol compatibility. |
+| `rustx.jsonc` | The current runtime/project configuration: default model for new Sessions, context/timezone, native-tool policy and activation, MCP sources, Skill roots, and authorized environment. |
 | `workspace/` | The authoritative execution cwd and conventional project/source tree, including Skills and editable custom Python tool packages. Relative native file-tool paths resolve here. This is not a general filesystem sandbox for Read/Write/Edit/Grep/Glob. |
-| `workspace/.agents/tools/*` | Automatically discovered custom Python tool source packages; there is no separate registration entry in `rustx.json`. |
+| `workspace/.agents/tools/*` | Automatically discovered custom Python tool source packages; there is no separate registration entry in `rustx.jsonc`. |
 | `.rustx/` (`runtime-root`) | Runtime-owned generated artifacts, immutable Python tool versions, environments, and Session storage. Keep it disjoint from `workspace/`; it is a separate ownership domain, not a promise that every file under it is unreachable through every filesystem mechanism. |
 
 Native Read/Write/Edit/Grep/Glob paths may be relative to the execution cwd or
@@ -47,7 +52,23 @@ The runtime owns generated state under `runtime-root` (the example uses
 `examples/local-runtime/.rustx`) separately from the model's conventional
 project tree. Native file-tool paths are not implicitly confined to that tree.
 
-## `models.json`
+## Configuration format
+
+`models.jsonc` and `rustx.jsonc` are JSONC — ordinary JSON plus `//` and
+`/* */` comments and trailing commas. Editors already understand the dialect
+(`tsconfig.json`, VS Code settings); associating `*.jsonc` with "JSON with
+Comments" is all the setup needed.
+
+Nothing beyond comments and trailing commas is relaxed. Single-quoted
+strings, unquoted property names, hexadecimal numbers, unary plus, missing
+commas, and unknown fields all fail startup, because a configuration typo
+must never parse into something the author did not write. A syntax failure
+names the line and column; a schema failure names the field.
+
+The relaxation is surface syntax only. Runtime-owned generated state under
+`runtime-root` is unaffected and remains strict JSON.
+
+## `models.jsonc`
 
 The provider identity `example` is only a local name. The explicit
 `https://api.example.invalid/v1` endpoint must be replaced with the real
@@ -90,22 +111,22 @@ from their names. Their exact `enabled` state and provider-owned
 `requestParams` are the contract. The illustrative `reasoning_effort` value
 must be changed if the real provider uses a different reasoning parameter.
 
-## `rustx.json`
+## `rustx.jsonc`
 
 The baseline runtime config selects `example/demo-model` using the canonical
-`provider/model` identity. `models.json` supplies the available model and its
-defaults; `rustx.json.model` supplies the default for a brand-new Session.
+`provider/model` identity. `models.jsonc` supplies the available model and its
+defaults; `rustx.jsonc.model` supplies the default for a brand-new Session.
 An existing Session's explicitly selected model is persisted separately in
 the runtime-owned catalog and is never overwritten by this default.
 
-`rustx.json.model` chooses the starting model for a new Session and
+`rustx.jsonc.model` chooses the starting model for a new Session and
 overrides its `temperature` and output budget. The baseline uses the simpler
 `summaryModel.mode = "session"` policy, so summaries follow the admitted
 attempt's primary model.
 
 `context` contains current runtime policy values (`reserveTokens`,
 `keepRecentTokens`, and `summaryOutputCap`). The selected model's
-`contextWindow` remains in `models.json`.
+`contextWindow` remains in `models.jsonc`.
 
 `approvalMode` is the current runtime-wide HITL mode. It defaults to `policy`;
 `full_access` suppresses only approval prompts for the current runtime and is
@@ -148,7 +169,7 @@ sequential, approval-never tools, with `ask_user` publishing one bounded
 Question through the runtime-owned `InteractionCoordinator`.
 
 The harmless `RUSTX_EXAMPLE_MODE` entry demonstrates the authorized runtime
-environment. Keep provider credentials in `models.json`'s `apiKey` reference,
+environment. Keep provider credentials in `models.jsonc`'s `apiKey` reference,
 not in this table.
 
 `defaultTools` controls optional native/built-in Tool activation.
@@ -170,13 +191,15 @@ model-visible catalog.
 ## MCP servers
 
 The copyable baseline intentionally keeps `"mcpServers": {}`, so it does not
-require an external MCP process or endpoint at startup.
+require an external MCP process or endpoint at startup. `rustx.jsonc` carries
+one http and one stdio entry commented out next to it; uncommenting one is
+the whole edit.
 
 `mcpServers` is a named map keyed by MCP server identity — the same shape
 mainstream MCP clients use, so an entry can be copied straight from a
 server's own documentation. Three canonical entries:
 
-```json
+```jsonc
 {
   "mcpServers": {
     "exa": {
@@ -187,7 +210,7 @@ server's own documentation. Three canonical entries:
 }
 ```
 
-```json
+```jsonc
 {
   "mcpServers": {
     "exa": {
@@ -201,7 +224,7 @@ server's own documentation. Three canonical entries:
 }
 ```
 
-```json
+```jsonc
 {
   "mcpServers": {
     "exa": {
@@ -236,7 +259,7 @@ alias, no `sse`, and no `ws`. An entry that is ambiguous or contradictory
 the separate `mcpToolPolicies` map, keyed by the same identity, so an
 `mcpServers` entry stays ordinary MCP configuration:
 
-```json
+```jsonc
 {
   "mcpToolPolicies": {
     "exa": {
@@ -308,13 +331,13 @@ export RUSTX_EXAMPLE_API_KEY='replace-me'
 cargo build --bin rustx
 
 ./target/debug/rustx \
-  --models ./examples/local-runtime/models.json \
-  --config ./examples/local-runtime/rustx.json \
+  --models ./examples/local-runtime/models.jsonc \
+  --config ./examples/local-runtime/rustx.jsonc \
   --workspace ./examples/local-runtime/workspace \
   --runtime-root ./examples/local-runtime/.rustx
 ```
 
-The endpoint in `models.json` is an example URL, so replace it before making
+The endpoint in `models.jsonc` is an example URL, so replace it before making
 a model request. The binary remains a runtime process until its input closes;
 its stdout is reserved for protocol records and diagnostics go to stderr.
 
@@ -326,8 +349,8 @@ pnpm --dir tui install --frozen-lockfile
 
 pnpm --dir tui start \
   --binary "$PWD/target/debug/rustx" \
-  --models "$PWD/examples/local-runtime/models.json" \
-  --config "$PWD/examples/local-runtime/rustx.json" \
+  --models "$PWD/examples/local-runtime/models.jsonc" \
+  --config "$PWD/examples/local-runtime/rustx.jsonc" \
   --workspace "$PWD/examples/local-runtime/workspace" \
   --runtime-root "$PWD/examples/local-runtime/.rustx"
 ```

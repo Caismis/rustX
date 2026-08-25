@@ -1524,7 +1524,7 @@ mod tests {
             clock: Arc::new(SystemClock),
             spawn: SubagentSpawnPlan {
                 program: std::path::PathBuf::from("/nonexistent/rustx"),
-                models: std::path::PathBuf::from("/nonexistent/models.json"),
+                models: std::path::PathBuf::from("/nonexistent/models.jsonc"),
                 workspace,
                 runtime_root: runtime_root.clone(),
                 model: crate::model::session::SessionModelConfig::of(

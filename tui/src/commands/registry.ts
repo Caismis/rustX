@@ -44,8 +44,9 @@ export const COMMANDS: readonly CommandSpec[] = [
   },
   {
     name: "/name",
-    description: "Rename the active session without changing conversation history.",
-    argumentHint: "<text>",
+    description:
+      "Show the active session's name, or give it one; a name is display metadata only.",
+    argumentHint: "[text]",
   },
   { name: "/clone", description: "Clone the committed conversation head into a new session." },
   {

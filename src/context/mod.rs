@@ -54,7 +54,7 @@ pub use assembly::{
 };
 pub use engine::{
     CompactionBudgets, CompactionConstraints, CompactionPlan, ContextConfig, ContextEngine,
-    SessionContextPolicy,
+    EstimateCorrection, SessionContextPolicy,
 };
 pub use error::{ContextError, ContextErrorKind};
 pub use projection::ContextProjection;
@@ -65,8 +65,8 @@ pub use status::{
 };
 pub use summarizer::{ContextSummarizer, ModelBackedSummarizer, SummaryModelInput, SummaryRequest};
 pub use tokens::{
-    ClosureTokenEstimator, DefaultTokenEstimator, ProviderObservedInput, TokenEstimator,
-    bytes_to_tokens,
+    ClosureTokenEstimator, DefaultTokenEstimator, ObservedAnchor, ProviderObservedInput,
+    TokenEstimator, bytes_to_tokens, non_conversation_fingerprint,
 };
 
 /// The context runtime bundle handed to an `AgentExecution`.
@@ -160,19 +160,26 @@ impl ContextRuntime {
         };
         // The summary request is a bounded one-off: no tools, no Agent
         // Status, no Skill catalog, no continuation. Its input bound is
-        // therefore the summary model's own window minus its output budget;
-        // the session's conversational safety reserve belongs to the primary
-        // loop, not to this single request.
+        // derived with the same discipline as any other request of this
+        // runtime — window minus reserve minus output budget — and never as
+        // "the whole window". A summary input budget that spans almost the
+        // entire window lets compaction assemble a request *larger* than the
+        // one that just overflowed, so the recovery from a context overflow
+        // overflows again. The reserve is what keeps the derived budget
+        // honest against token-estimation error.
         let summary_input_limit = summary
             .context_window()
-            .checked_sub(u64::from(summary.max_output_tokens()))
+            .checked_sub(policy.reserve_tokens)
+            .and_then(|remaining| remaining.checked_sub(u64::from(summary.max_output_tokens())))
             .filter(|limit| *limit > 0)
             .ok_or_else(|| {
                 ContextError::new(
                     ContextErrorKind::InvalidConfiguration,
                     format!(
-                        "the summary model context window {} must exceed its output budget {}",
+                        "the summary model context window {} must exceed reserve_tokens {} plus \
+                         its output budget {}",
                         summary.context_window(),
+                        policy.reserve_tokens,
                         summary.max_output_tokens()
                     ),
                 )

@@ -679,14 +679,14 @@ mod unix_tests {
                 "exa-local": {"execution": "background_only", "concurrency": "parallel"},
             },
         });
-        let models_path = root.path().join("models.json");
-        let config_path = root.path().join("rustx.json");
-        std::fs::write(&models_path, MODELS_JSON).expect("models.json");
+        let models_path = root.path().join("models.jsonc");
+        let config_path = root.path().join("rustx.jsonc");
+        std::fs::write(&models_path, MODELS_JSON).expect("models.jsonc");
         std::fs::write(
             &config_path,
             serde_json::to_vec_pretty(&session).expect("session json"),
         )
-        .expect("rustx.json");
+        .expect("rustx.jsonc");
 
         let runtime = rustx::local_runtime::composition::LocalConversationRuntime::compose(
             &rustx::local_runtime::composition::LocalRuntimePaths {
@@ -696,6 +696,8 @@ mod unix_tests {
                 no_skills: false,
                 no_builtin_tools: false,
                 no_tools: false,
+                startup_session: rustx::local_runtime::StartupSession::Empty,
+                session_name: None,
                 tools: None,
                 exclude_tools: Vec::new(),
                 workspace,

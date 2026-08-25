@@ -196,7 +196,6 @@ export function sessionView(
 ): SessionView {
   return {
     id: "session-1",
-    name: "New session",
     created_at: "2026-08-21T00:00:00Z",
     updated_at: "2026-08-21T00:00:00Z",
     active_node: "node-1",

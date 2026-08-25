@@ -130,7 +130,7 @@ impl Lab {
         std::fs::create_dir_all(lab.workspace().join(".agents/skills/alpha"))
             .expect("skill directory");
         std::fs::create_dir_all(lab.root().join("private")).expect("runtime-private root");
-        std::fs::write(lab.root().join("models.json"), models_json()).expect("models.json");
+        std::fs::write(lab.root().join("models.jsonc"), models_json()).expect("models.jsonc");
         lab.write_runtime_config("never");
         lab.write_project_instructions("R1 project instructions.");
         lab.write_skill_frontmatter("alpha", "R1 alpha summary");
@@ -152,8 +152,8 @@ impl Lab {
     }
 
     pub(crate) fn write_runtime_config(&self, read_approval: &str) {
-        std::fs::write(self.root().join("rustx.json"), runtime_json(read_approval))
-            .expect("rustx.json");
+        std::fs::write(self.root().join("rustx.jsonc"), runtime_json(read_approval))
+            .expect("rustx.jsonc");
     }
 
     /// Replaces the loaded `AGENTS.md` project-instruction file.

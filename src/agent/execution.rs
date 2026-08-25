@@ -76,10 +76,10 @@ use crate::capabilities::AttemptCapabilityLease;
 use crate::context::compaction::{
     CompactionAttribution, CompactionExecutionError, execute_compaction,
 };
-use crate::context::engine::CompactionConstraints;
+use crate::context::engine::{CompactionConstraints, EstimateCorrection};
 use crate::context::error::{ContextError, ContextErrorKind};
 use crate::context::projection::ContextProjection;
-use crate::context::tokens::ProviderObservedInput;
+use crate::context::tokens::{ObservedAnchor, ProviderObservedInput};
 use crate::context::{
     AcceptedContext, ContextRuntime, ContributorInputSnapshot, DeferredContextProposal,
     MAX_DEFERRED_CONTEXT_PROPOSALS, MAX_PROPOSALS_PER_CONTRIBUTOR, render_effective_system_prompt,
@@ -92,7 +92,7 @@ use crate::events::types::{
 };
 use crate::message::types::{AssistantMessageBlock, MessageBlock, ToolMessageBlock};
 use crate::model::adapter::ModelEventStream;
-use crate::model::error::{ModelError, ModelErrorKind};
+use crate::model::error::{ModelError, ModelErrorKind, reported_input_tokens};
 use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
 use crate::model::session::AttemptModelSnapshot;
@@ -340,6 +340,15 @@ pub struct AgentExecution<'a> {
     context_generation_serial: u64,
     observed: Option<ProviderObservedInput>,
     last_request_fingerprint: Option<u64>,
+    /// The structural anchor of the last started request, kept so its
+    /// provider-reported input measurement can be reused for every later
+    /// request context that extends it.
+    last_request_anchor: Option<ObservedAnchor>,
+    /// The runtime's deterministic input estimate for the last started
+    /// request, kept so a provider overflow can be turned into a measured
+    /// estimator correction instead of being retried against the same
+    /// budget.
+    last_request_estimated_input: Option<u64>,
     /// The exact request identity of the in-flight provider request. The
     /// provider outcome fact (P) and the publication stream both name it, so
     /// neither can be attributed to a different request of the same turn.
@@ -453,6 +462,16 @@ struct PreparedModelTurn {
     /// The staged projection's fingerprint, used to match a later
     /// provider-observed input measurement to exactly this request context.
     fingerprint: u64,
+    /// The staged projection's structural anchor, used to reuse a later
+    /// provider-observed measurement for every request context this one is a
+    /// prefix of.
+    anchor: ObservedAnchor,
+    /// The runtime's deterministic input estimate for exactly this request.
+    ///
+    /// When the provider rejects the request as oversized, this is the
+    /// estimate that was proven wrong, and the pair (estimate, provider
+    /// count) is the correction the recovery compaction plans with.
+    estimated_input: u64,
 }
 
 /// The intermediate staged view of one model turn: scratch conversation,
@@ -671,6 +690,8 @@ impl<'a> AgentExecution<'a> {
             context_generation_serial: 0,
             observed: None,
             last_request_fingerprint: None,
+            last_request_anchor: None,
+            last_request_estimated_input: None,
             last_request_id: None,
             publication_policy: CoalescePolicy::default(),
             publication_clock: std::sync::Arc::new(SystemPublicationClock::new()),
@@ -1012,14 +1033,18 @@ impl<'a> AgentExecution<'a> {
                 failure: AttemptFailure::Runtime { error },
             });
         }
-        // A provider-reported input measurement applies only to the
-        // exact projection the completed request used.
+        // A provider-reported input measurement is authoritative for the
+        // exact projection the completed request used, and remains
+        // authoritative for the prefix it covers of every request context
+        // that extends it. Both facts travel with the measurement; the
+        // engine decides which one applies.
         if let Some(usage) = &reported_usage
             && let Some(fingerprint) = self.last_request_fingerprint.take()
         {
             self.observed = Some(ProviderObservedInput {
                 fingerprint,
                 input_tokens: usage.input_tokens,
+                anchor: self.last_request_anchor.take(),
             });
         }
         self.pending_continuation = turn_assembly.continuation;
@@ -1359,6 +1384,7 @@ impl<'a> AgentExecution<'a> {
                 &baseline_prompt,
                 None,
                 &[],
+                None,
             )
             .await?;
         }
@@ -1461,6 +1487,7 @@ impl<'a> AgentExecution<'a> {
                 &staged.effective_system_prompt,
                 None,
                 &staged_context,
+                None,
             )
             .await?;
             // Restage over the rewritten Surface: the staged context blocks
@@ -1661,11 +1688,18 @@ impl<'a> AgentExecution<'a> {
                 }
             })?);
         }
+        let anchor = ObservedAnchor::of(
+            &staged.projection.messages,
+            &staged.projection.effective_system_prompt,
+            &staged.request.tools,
+        );
         Ok(PreparedModelTurn {
             context,
             snapshot: staged.snapshot,
             request: staged.request,
             fingerprint: staged.projection.fingerprint(),
+            anchor,
+            estimated_input: staged.projection.estimated_input.input_tokens,
         })
     }
 
@@ -1765,6 +1799,8 @@ impl<'a> AgentExecution<'a> {
         }
         self.record_persisted_event(started);
         self.last_request_fingerprint = Some(prepared.fingerprint);
+        self.last_request_anchor = Some(prepared.anchor.clone());
+        self.last_request_estimated_input = Some(prepared.estimated_input);
         self.last_request_id = Some(prepared.snapshot.request_id.clone());
         let reconstructed = self
             .store
@@ -2064,6 +2100,7 @@ impl<'a> AgentExecution<'a> {
         effective_system_prompt: &str,
         overflow: Option<&ModelError>,
         staged_request_context: &[MessageBlock],
+        estimate_correction: Option<EstimateCorrection>,
     ) -> Result<(), Terminal> {
         if self.cancellation.is_cancelled() {
             return Err(Terminal::Cancelled {
@@ -2083,6 +2120,7 @@ impl<'a> AgentExecution<'a> {
                 fresh_inbound,
                 effective_system_prompt,
                 staged_request_context,
+                estimate_correction,
             )
             .await
         {
@@ -2136,6 +2174,7 @@ impl<'a> AgentExecution<'a> {
         fresh_inbound: Option<&FreshInboundTurn>,
         effective_system_prompt: &str,
         staged_request_context: &[MessageBlock],
+        estimate_correction: Option<EstimateCorrection>,
     ) -> Result<CompletedCompaction, ContextError> {
         let tools = self.tool_registry().model_definitions();
         let cancellation = self.cancellation.signal();
@@ -2151,6 +2190,7 @@ impl<'a> AgentExecution<'a> {
                 must_cover_through,
                 fresh_inbound,
                 staged_request_context,
+                estimate_correction,
             },
             &cancellation,
             CompactionAttribution {
@@ -2299,6 +2339,19 @@ impl<'a> AgentExecution<'a> {
         // the retry reuses the already-admitted context generation without
         // rerunning assembly.
         let fresh = self.pending_fresh_inbound.clone();
+        // The provider has just measured what this runtime only estimated.
+        // The recovery compaction plans against that measurement, not
+        // against the estimate the provider rejected: without this the
+        // retry aims at exactly the budget that already failed, and a
+        // conversation whose content this estimator under-counts overflows
+        // again — including on the summary request itself.
+        let estimate_correction = self
+            .last_request_estimated_input
+            .and_then(|estimated| {
+                reported_input_tokens(&overflow_error.message)
+                    .and_then(|observed| EstimateCorrection::new(estimated, observed))
+            })
+            .unwrap_or(EstimateCorrection::UNQUANTIFIED);
         match self
             .perform_compaction(
                 must_cover.as_ref(),
@@ -2306,6 +2359,7 @@ impl<'a> AgentExecution<'a> {
                 &effective_system_prompt,
                 Some(overflow_error),
                 &[],
+                Some(estimate_correction),
             )
             .await
         {

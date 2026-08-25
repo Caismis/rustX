@@ -4069,6 +4069,70 @@ mod tests {
         assert_eq!(snapshot.capabilities.sources, capabilities.sources);
     }
 
+    /// The runtime resource generation is a client-visible fact of its own:
+    /// the project instruction files the runtime actually loaded travel in
+    /// the snapshot, and a reload that discovers a new one publishes a
+    /// `ResourcesUpdated` event carrying it.
+    ///
+    /// This is deliberately not folded into the capability projection. The
+    /// reload below changes no executable capability at all — it adds an
+    /// `AGENTS.md` — so a client watching only `CapabilityUpdated` would
+    /// still believe no project instructions were loaded.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn resource_reload_publishes_the_loaded_project_context_files() {
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
+        let (attachment, _) = fixture
+            .host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .expect("attach");
+        let (initial, cursor) = fixture.host.snapshot().expect("snapshot");
+        assert!(
+            initial.resources.context_files.is_empty(),
+            "the fixture starts with no project instructions"
+        );
+        let subscription = attachment
+            .subscribe_events(cursor)
+            .expect("subscribe from the snapshot cursor");
+
+        let workspace = fixture
+            .runtime
+            .tool_runtime()
+            .workspace()
+            .root()
+            .to_path_buf();
+        let instructions = workspace.join("AGENTS.md");
+        std::fs::write(&instructions, "project authority").expect("write AGENTS.md");
+        let committed = fixture
+            .runtime
+            .reload_resources()
+            .await
+            .expect("the reload succeeds");
+
+        let events = receive_until(&subscription, |event| {
+            matches!(event.event, RuntimeClientEvent::ResourcesUpdated { .. })
+        })
+        .await;
+        let Some(RuntimeClientEvent::ResourcesUpdated { resources }) =
+            events.last().map(|event| &event.event)
+        else {
+            panic!("the resource update event is published: {events:?}");
+        };
+        assert_eq!(resources.revision, committed.resource_revision);
+        assert!(
+            resources
+                .context_files
+                .iter()
+                .any(|file| std::path::Path::new(&file.path) == instructions
+                    && file.bytes == "project authority".len() as u64),
+            "the published generation names the file it loaded: {:?}",
+            resources.context_files
+        );
+
+        // The folded snapshot agrees with the event stream.
+        let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
+        assert_eq!(&snapshot.resources, resources);
+    }
+
     /// The exact snapshot/cursor race, interleaving A (snapshot wins): the
     /// snapshot linearizes first and the concurrent transition is observed
     /// by a resume after the snapshot's cursor.
@@ -5577,7 +5641,7 @@ mod tests {
         )
         .await;
         let catalog_root = tempfile::tempdir().expect("catalog root");
-        let config = CurrentRuntimeConfig::from_json_slice(
+        let config = CurrentRuntimeConfig::from_jsonc_slice(
             br#"{
               "agentId": "agent-a",
               "model": {"model": "scripted/scripted"},

@@ -25,14 +25,14 @@ fn session_json(fragment: &str) -> String {
 }
 
 fn bindings(fragment: &str) -> McpServerBindings {
-    CurrentRuntimeConfig::from_json_slice(session_json(fragment).as_bytes())
+    CurrentRuntimeConfig::from_jsonc_slice(session_json(fragment).as_bytes())
         .expect("the configuration must parse")
         .mcp_bindings()
         .expect("the configuration must normalize")
 }
 
 fn rejection(fragment: &str) -> CurrentRuntimeConfigError {
-    CurrentRuntimeConfig::from_json_slice(session_json(fragment).as_bytes())
+    CurrentRuntimeConfig::from_jsonc_slice(session_json(fragment).as_bytes())
         .expect_err("the configuration must be rejected")
 }
 

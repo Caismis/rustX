@@ -1,7 +1,7 @@
 //! Issue #42: the Runtime Client model read/update contract.
 //!
 //! The client boundary must let #39 control the real session model without
-//! reading `models.json`, without rebuilding the runtime, and without
+//! reading `models.jsonc`, without rebuilding the runtime, and without
 //! inferring "which model is this attempt actually using" from event
 //! ordering. It must also never expose a credential.
 

@@ -15,9 +15,26 @@
  * A startup failure is reported on stderr with a bounded diagnostic and a
  * non-zero exit. The client resolves no credential and reads no runtime
  * configuration file of its own.
+ *
+ * Launching is not resuming. The first spawn asks for whatever Session the
+ * user asked for on the command line — an empty one by default, the active
+ * one under `--continue`/`--resume`, a named one under `--session` — while
+ * every later spawn is a **replacement** that completes a Session transition
+ * Rust has already published, so it always asks to continue the active
+ * selection. The client never names the destination Session itself; the
+ * catalog remains the authority for which Session a replaced process
+ * attaches to. `--resume` is the one startup Session behaviour that lives
+ * here, and only its presentation: the client opens the `/resume` selector
+ * once it has attached, and the choice it makes is the ordinary Session
+ * selection Rust publishes.
  */
 
-import { ArgumentError, USAGE, parseArguments } from "./cli.ts";
+import {
+  ArgumentError,
+  USAGE,
+  parseArguments,
+  replacementArguments,
+} from "./cli.ts";
 import { ChildRuntimeProcess } from "./runtime/child-process.ts";
 import { RuntimeClientConnection } from "./runtime/connection.ts";
 import { RuntimeClientAttachment } from "./runtime/attachment.ts";
@@ -74,9 +91,12 @@ async function main(argv: readonly string[]): Promise<number> {
     return 1;
   }
 
+  const replacement = replacementArguments(parsed);
   const app = new RustxTuiApp({
     ...runtime,
-    restartRuntime: () => startRuntime(parsed),
+    openSessionSelector: parsed.openSessionSelector,
+    workspace: parsed.paths.workspace,
+    restartRuntime: () => startRuntime(replacement),
   });
   return app.run();
 }

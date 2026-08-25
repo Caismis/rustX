@@ -1,9 +1,12 @@
 //! Token accounting and provenance.
 //!
 //! Every projected input measurement carries explicit provenance
-//! ([`TokenMeasurementSource`]): a provider-reported measurement is
-//! authoritative only for the exact projection the completed provider
-//! request measured; everything else is a deterministic runtime-owned
+//! ([`TokenMeasurementSource`]). A provider-reported measurement is
+//! authoritative for the exact projection the completed provider request
+//! measured, and remains authoritative for the prefix it covers of any
+//! request context that extends it: the measured part keeps the provider's
+//! number and only the canonical messages appended since are estimated.
+//! Everything else is a whole-projection deterministic runtime-owned
 //! estimate. Estimates are never converted into provider usage
 //! ([`ModelUsage`]), and cumulative provider usage snapshots are never
 //! summed.
@@ -12,21 +15,138 @@
 //! [`TokenMeasurementSource`]: crate::runtime::types::TokenMeasurementSource
 
 use crate::message::types::MessageBlock;
+use crate::runtime::identity::MessageId;
 use crate::tools::types::ModelToolDefinition;
 
-/// An observed provider-reported input measurement, tied to the exact
-/// projection it measured.
+/// An observed provider-reported input measurement, tied to the request
+/// context it measured.
 ///
-/// The engine applies it only when the request context being measured is
-/// fingerprint-identical to the observed one — the same Surface revision,
-/// the same hydrated messages, and the same Effective System Prompt; otherwise the
-/// measurement is dropped and a deterministic estimate is used instead.
+/// The measurement is authoritative for exactly the request it describes.
+/// The engine reuses it in two ways, and never in any other:
+///
+/// - **exactly**, when the request context being measured is
+///   fingerprint-identical to the observed one — the same Surface revision,
+///   the same hydrated messages, and the same Effective System Prompt;
+/// - **as an anchor**, when the measured context is a *prefix* of the one
+///   being measured and the non-conversation input is unchanged. The
+///   measured prefix keeps its provider-reported value and only the
+///   canonical messages appended since are estimated.
+///
+/// The second case is what keeps token accounting honest over a long
+/// conversation. A whole-conversation estimate compounds estimator error
+/// across every message ever sent, so a provider-neutral `bytes / 4`
+/// approximation drifts further from the truth the longer the conversation
+/// runs — which is exactly when the soft-limit decision matters most.
+/// Anchoring confines that error to the messages added since the last
+/// completed request. Otherwise the measurement is dropped and a full
+/// deterministic estimate is used.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderObservedInput {
     /// The fingerprint of the request context the provider request used.
     pub fingerprint: u64,
     /// The reported `ModelUsage.input_tokens` of that request.
+    ///
+    /// This is the adapter-normalized *effective* input of the request,
+    /// including provider cache-read and cache-creation input where the
+    /// provider reports those categories separately.
     pub input_tokens: u64,
+    /// The structural identity of the measured request context.
+    ///
+    /// Absent for a measurement recorded without one, which can then only be
+    /// reused on an exact fingerprint match.
+    pub anchor: Option<ObservedAnchor>,
+}
+
+/// The structural identity of one measured request context.
+///
+/// A hash cannot answer "is this a prefix of that", so the anchor keeps the
+/// ordered canonical identities the measured request projected, alongside a
+/// fingerprint of the non-conversation input the measurement already covers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObservedAnchor {
+    /// The ordered canonical message identities of the measured request.
+    pub message_ids: Vec<MessageId>,
+    /// The fingerprint of the non-conversation request input the measurement
+    /// already accounts for: the exact Effective System Prompt and the
+    /// compiled tool definitions.
+    ///
+    /// Their cost is inside `input_tokens`, so anchoring is sound only while
+    /// they are unchanged. When either changes the anchor is refused rather
+    /// than patched up with a guessed delta.
+    pub non_conversation_fingerprint: u64,
+}
+
+impl ObservedAnchor {
+    /// The anchor of one exact request context.
+    #[must_use]
+    pub fn of(
+        messages: &[MessageBlock],
+        effective_system_prompt: &str,
+        tool_definitions: &[ModelToolDefinition],
+    ) -> Self {
+        Self {
+            message_ids: messages
+                .iter()
+                .map(|message| message.id().clone())
+                .collect(),
+            non_conversation_fingerprint: non_conversation_fingerprint(
+                effective_system_prompt,
+                tool_definitions,
+            ),
+        }
+    }
+
+    /// Whether this anchor is a prefix of `messages` under the same
+    /// non-conversation input, and if so how many messages it covers.
+    ///
+    /// Equal length is a prefix: a context identical to the measured one
+    /// except for its Surface revision is still fully measured.
+    #[must_use]
+    pub fn covered_prefix(
+        &self,
+        messages: &[MessageBlock],
+        effective_system_prompt: &str,
+        tool_definitions: &[ModelToolDefinition],
+    ) -> Option<usize> {
+        if self.non_conversation_fingerprint
+            != non_conversation_fingerprint(effective_system_prompt, tool_definitions)
+        {
+            return None;
+        }
+        if self.message_ids.len() > messages.len() {
+            return None;
+        }
+        self.message_ids
+            .iter()
+            .zip(messages)
+            .all(|(measured, current)| measured == current.id())
+            .then_some(self.message_ids.len())
+    }
+}
+
+/// The deterministic fingerprint of the non-conversation input of one
+/// request: the exact Effective System Prompt and the compiled tool
+/// definitions.
+///
+/// # Panics
+///
+/// Panics only if the canonical tool definitions fail to serialize, which is
+/// unreachable for the runtime-owned types.
+#[must_use]
+pub fn non_conversation_fingerprint(
+    effective_system_prompt: &str,
+    tool_definitions: &[ModelToolDefinition],
+) -> u64 {
+    let bytes =
+        effective_system_prompt.as_bytes().iter().copied().chain(
+            serde_json::to_vec(tool_definitions).expect("canonical tool definitions serialize"),
+        );
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 /// The deterministic input-token estimator boundary.

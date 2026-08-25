@@ -1806,6 +1806,10 @@ impl RuntimeInner {
         // shutdown projection seed is necessarily false.
         let shutting_down = false;
         let model = state.model.view();
+        // The resource generation is part of the same freeze as every other
+        // seeded fact: a client attaching before the first reload still sees
+        // exactly which project instruction files the runtime loaded.
+        let resources = Arc::clone(&state.resources);
         let approval_mode = RuntimeInner::approval_mode_state(&state);
         let observer: Arc<RuntimeObserver> = Arc::new(RuntimeObserver::new(self));
         // Interaction pending state is an ephemeral runtime observation, but
@@ -1858,6 +1862,7 @@ impl RuntimeInner {
             pending_interactions,
             capabilities,
             capability_availability,
+            resources,
         })
     }
 
@@ -3444,7 +3449,20 @@ impl ConversationRuntime {
                                     capability,
                                 ));
                                 let capability_revision = resources.capability_revision();
-                                state.resources = resources;
+                                state.resources = Arc::clone(&resources);
+                                // The resource generation is a client-visible
+                                // fact in its own right: a reload that changes
+                                // only project instruction files never moves
+                                // the capability revision, so the capability
+                                // observation alone would leave a client
+                                // believing the retired files are still
+                                // loaded. Published under the same lock
+                                // acquisition that made this generation
+                                // current, so no observer can see the new
+                                // capability with the old resources.
+                                self.inner.observe(ConversationObservation::Resources {
+                                    snapshot: resources,
+                                });
                                 // FND-06: the complete new generation is
                                 // published and the admission gate is about
                                 // to reopen.
@@ -4302,6 +4320,8 @@ pub(crate) struct RuntimeBootstrapSnapshot {
     /// The authoritative capability-source availability at the cut
     /// (Issue #81).
     pub capability_availability: crate::capabilities::CapabilityAvailability,
+    /// The immutable runtime resource generation current at the cut.
+    pub resources: Arc<crate::runtime::resources::RuntimeResourceSnapshot>,
     /// Live process-owned native interactions at the bootstrap cut.
     pub pending_interactions: Vec<crate::runtime::interaction::InteractionRequest>,
 }
@@ -5534,7 +5554,7 @@ mod tests {
                 clock: Arc::new(crate::runtime::types::SystemClock),
                 spawn: crate::runtime::subagent::SubagentSpawnPlan {
                     program: std::path::PathBuf::from("/nonexistent/rustx"),
-                    models: std::path::PathBuf::from("/nonexistent/models.json"),
+                    models: std::path::PathBuf::from("/nonexistent/models.jsonc"),
                     workspace: workspace.clone(),
                     runtime_root: dir.path().join("subagents"),
                     model: crate::model::session::SessionModelConfig::of(
@@ -5643,7 +5663,7 @@ mod tests {
                 clock: Arc::new(crate::runtime::types::SystemClock),
                 spawn: crate::runtime::subagent::SubagentSpawnPlan {
                     program: std::path::PathBuf::from("/nonexistent/rustx"),
-                    models: std::path::PathBuf::from("/nonexistent/models.json"),
+                    models: std::path::PathBuf::from("/nonexistent/models.jsonc"),
                     workspace: workspace.clone(),
                     runtime_root: dir.path().join("subagents"),
                     model: crate::model::session::SessionModelConfig::of(

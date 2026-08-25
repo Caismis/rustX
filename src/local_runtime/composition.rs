@@ -133,15 +133,47 @@ use crate::tools::native::{NativeToolResources, register_native_tools};
 use crate::tools::runtime::ConversationToolRuntime;
 
 use super::config::{CurrentRuntimeConfig, CurrentRuntimeConfigError};
-use super::session::{SessionCatalog, SessionError, SessionPersistentState};
+use super::session::{
+    SessionCatalog, SessionError, SessionId, SessionNodeId, SessionNodeOrigin,
+    SessionPersistentState,
+};
 use super::supervisor::{LocalSessionSupervisor, SessionSupervisorError};
+
+/// Which Session a launch binds.
+///
+/// Startup is not a resume. A process begins on an empty Session and leaves
+/// every persisted Session as history reachable through `/resume`; binding a
+/// persisted one is an explicit request, in exactly two forms. Continuing the
+/// published active selection is the one a client repeats when it replaces
+/// the process to complete a Session switch that was already published
+/// durably; naming a Session is what a launch does when the user already
+/// knows where they want to be.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum StartupSession {
+    /// Start on an empty Session, publishing one when the active Session has
+    /// already been used.
+    #[default]
+    Empty,
+    /// Bind the Session/node the catalog publishes as active.
+    ContinueActive,
+    /// Bind the named persisted Session — and the named lineage node when
+    /// one is given — publishing that selection as active before the first
+    /// runtime is composed.
+    Select {
+        /// The persisted Session to bind.
+        session: SessionId,
+        /// The lineage node to bind; the Session's own active node when
+        /// absent.
+        node: Option<SessionNodeId>,
+    },
+}
 
 /// The explicit startup paths of one local runtime process.
 ///
 /// There is no discovery and no precedence: every path is given explicitly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalRuntimePaths {
-    /// The model catalog (`models.json`) path.
+    /// The model catalog (`models.jsonc`) path.
     pub models: PathBuf,
     /// The current runtime/project configuration path. It is read on every
     /// process start, including Session resume.
@@ -156,6 +188,16 @@ pub struct LocalRuntimePaths {
     /// Disable every optional Tool while retaining available metadata;
     /// mandatory native Read remains active.
     pub no_tools: bool,
+    /// The Session this launch binds. Startup never resumes on its own;
+    /// `--continue` is the explicit request behind
+    /// [`StartupSession::ContinueActive`] and `--session` the one behind
+    /// [`StartupSession::Select`].
+    pub startup_session: StartupSession,
+    /// The display name to give the Session this launch binds, from
+    /// `--name`. A Session is otherwise unnamed and `/resume` shows it by
+    /// its first message; naming one at startup is the same metadata
+    /// operation `/name` performs, moved to the command line.
+    pub session_name: Option<String>,
     /// Strict startup Tool allowlist, when supplied.
     pub tools: Option<Vec<String>>,
     /// Final startup Tool exclusions.
@@ -221,7 +263,7 @@ impl std::fmt::Debug for LocalRuntimeDependencies {
 }
 
 /// Reload-time resource composition for one local runtime. Command-line
-/// inputs are immutable; `rustx.json` and filesystem resources are read only
+/// inputs are immutable; `rustx.jsonc` and filesystem resources are read only
 /// when this loader is explicitly invoked by the runtime reload boundary.
 struct LocalRuntimeResourceLoader {
     paths: LocalRuntimePaths,
@@ -249,7 +291,7 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                     self.paths.config.display()
                 ))
             })?;
-            let config = CurrentRuntimeConfig::from_json_slice(&config_bytes)
+            let config = CurrentRuntimeConfig::from_jsonc_slice(&config_bytes)
                 .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
             let base_environment = config
                 .tool_environment()
@@ -370,7 +412,7 @@ impl LocalConversationCore {
         // one deterministic standalone lineage so repeated composition over
         // the same runtime root still recovers the same durable conversation.
         let config_bytes = read_file(&paths.config)?;
-        let runtime_config = CurrentRuntimeConfig::from_json_slice(&config_bytes)?;
+        let runtime_config = CurrentRuntimeConfig::from_jsonc_slice(&config_bytes)?;
         let registry = load_model_registry(paths, dependencies)?;
         Self::compose_from_config(
             paths,
@@ -620,7 +662,7 @@ impl LocalConversationCore {
         // 1-3. The model catalog/binding plane, identical to the ordinary
         // composition: the catalog file path is inherited from the parent.
         let catalog_bytes = read_file(&spec.models)?;
-        let catalog = ModelCatalog::from_json_slice(&catalog_bytes)?;
+        let catalog = ModelCatalog::from_jsonc_slice(&catalog_bytes)?;
         let resolved = catalog.resolve(dependencies.credentials.as_ref())?;
         let registry = ModelBindingRegistry::new(resolved)?;
 
@@ -832,9 +874,14 @@ impl std::fmt::Debug for LocalSessionProduct {
 }
 
 impl LocalSessionProduct {
-    /// Loads the native catalog, resolves its active node, composes that
-    /// `ConversationRuntime`, binds typed Session control, and activates the
-    /// runtime before serving protocol input.
+    /// Loads the native catalog, resolves the Session this launch starts on,
+    /// composes that `ConversationRuntime`, binds typed Session control, and
+    /// activates the runtime before serving protocol input.
+    ///
+    /// The startup Session is an empty one unless
+    /// [`LocalRuntimePaths::startup_session`] asks for the catalog's
+    /// published active selection or names a persisted Session, which is
+    /// published as the active selection before composition proceeds.
     ///
     /// # Errors
     ///
@@ -850,17 +897,59 @@ impl LocalSessionProduct {
         // failed first launch therefore cannot publish an invalid initial
         // Session-local model.
         let config_bytes = read_file(&paths.config)?;
-        let runtime_config = CurrentRuntimeConfig::from_json_slice(&config_bytes)?;
+        let runtime_config = CurrentRuntimeConfig::from_jsonc_slice(&config_bytes)?;
         let registry = load_model_registry(paths, dependencies)?;
         SessionModelState::new(registry.clone(), runtime_config.model.clone())?;
-        let catalog = if let Some(catalog) = SessionCatalog::open_existing(&paths.runtime_root)? {
+        let state = SessionPersistentState {
+            model: runtime_config.model.clone(),
+        };
+        let mut catalog = if let Some(catalog) = SessionCatalog::open_existing(&paths.runtime_root)?
+        {
             catalog
         } else {
-            let state = SessionPersistentState {
-                model: runtime_config.model.clone(),
-            };
             SessionCatalog::create(&paths.runtime_root, &state)?
         };
+        // Startup is not a resume. A launch begins on an empty Session and
+        // leaves every persisted Session as history reachable through
+        // `/resume`; only an explicit request binds a persisted one. An
+        // active Session that was never used is that empty Session already,
+        // so repeated launches publish nothing and cannot accumulate empty
+        // rows.
+        //
+        // A named Session takes the catalog transition `/resume` takes,
+        // moved ahead of composition: the selection is committed first, so
+        // the destination is authoritative durable state rather than a
+        // command-line argument this process would have to keep re-reading.
+        // A replacement spawn that continues the active selection therefore
+        // lands on it without naming it, and an unknown identity fails the
+        // launch instead of quietly opening something else.
+        match &paths.startup_session {
+            StartupSession::Empty => {
+                if !catalog.active_is_unused()? {
+                    let prepared = catalog.prepare_session(&state, &[])?;
+                    catalog.publish_session(&prepared, SessionNodeOrigin::New)?;
+                }
+            }
+            StartupSession::ContinueActive => {}
+            StartupSession::Select { session, node } => {
+                catalog.select(session, node.as_ref())?;
+            }
+        }
+        // `--name` names the Session this launch bound, whichever one that
+        // is. It is the startup form of `/name` and nothing more: naming is
+        // metadata, so it can only follow a decision about where the launch
+        // starts and can never be part of making it. A launch that names a
+        // Session it also asked to continue therefore renames that Session,
+        // exactly as typing `/name` in it would.
+        if let Some(name) = &paths.session_name {
+            let session_id = catalog
+                .active_snapshot()
+                .map_err(LocalRuntimeError::SessionCatalog)?
+                .id;
+            catalog
+                .rename(&session_id, name)
+                .map_err(LocalRuntimeError::SessionCatalog)?;
+        }
         let (session_id, node, session_state) = catalog
             .active_lineage()
             .map_err(LocalRuntimeError::SessionCatalog)?;
@@ -1066,7 +1155,7 @@ fn load_model_registry(
     dependencies: &LocalRuntimeDependencies,
 ) -> Result<ModelBindingRegistry, LocalRuntimeError> {
     let catalog_bytes = read_file(&paths.models)?;
-    let catalog = ModelCatalog::from_json_slice(&catalog_bytes)?;
+    let catalog = ModelCatalog::from_jsonc_slice(&catalog_bytes)?;
     let resolved = catalog.resolve(dependencies.credentials.as_ref())?;
     Ok(ModelBindingRegistry::new(resolved)?)
 }

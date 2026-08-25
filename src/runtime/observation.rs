@@ -158,6 +158,18 @@ pub(crate) enum ConversationObservation {
         /// capability source.
         availability: CapabilityAvailability,
     },
+    /// One published immutable runtime resource generation.
+    ///
+    /// A resource reload publishes this after the new generation becomes
+    /// the one future attempts acquire. It is deliberately separate from
+    /// `Capability`: a reload that changes only project instruction files
+    /// advances the resource revision while the capability revision — and
+    /// therefore the `Capability` observation's view — stays identical.
+    Resources {
+        /// The published immutable resource generation.
+        snapshot: Arc<crate::runtime::resources::RuntimeResourceSnapshot>,
+    },
+
     /// The coordinator admitted an attempt (before the loop started).
     AttemptAdmitted {
         /// The admitted attempt.

@@ -16,7 +16,7 @@ import { emptyPresentationState } from "../src/presentation/projection.ts";
 import { RuntimeClientConnection } from "../src/runtime/connection.ts";
 import { RuntimeClientAttachment } from "../src/runtime/attachment.ts";
 import { TransientFeedbackSurface } from "../src/ui/components/transient-feedback.ts";
-import { ArgumentError, parseArguments } from "../src/cli.ts";
+import { ArgumentError, parseArguments, replacementArguments } from "../src/cli.ts";
 import {
   attemptModel,
   approvalInteraction,
@@ -403,7 +403,7 @@ describe("CommandDispatcher", () => {
     assert.equal(
       afterCatalog[2]?.method,
       "model_catalog_get",
-      "the client reads the runtime catalog, never models.json",
+      "the client reads the runtime catalog, never models.jsonc",
     );
     peer.respond(3, {
       type: "model_catalog",
@@ -532,7 +532,7 @@ describe("CommandDispatcher", () => {
     assert.equal(
       peer.requests[2]?.method,
       "model_catalog_get",
-      "the selector reads the runtime catalog, never models.json",
+      "the selector reads the runtime catalog, never models.jsonc",
     );
     peer.respond(3, {
       type: "model_catalog",
@@ -584,7 +584,8 @@ describe("CommandDispatcher", () => {
     assert.equal(outcome.kind, "inspect");
     if (outcome.kind === "inspect") {
       assert.equal(outcome.title, "Session");
-      assert.match(outcome.body, /session review/);
+      assert.match(outcome.body, /name review/);
+      assert.match(outcome.body, /session session-1/);
       assert.match(outcome.body, /active node node-1/);
       assert.match(outcome.body, /conversation conv-test/);
     }
@@ -685,9 +686,9 @@ describe("CommandDispatcher", () => {
     }
   });
 
-  it("renames Session metadata without emitting a conversation message", async () => {
+  it("names the Session as metadata without emitting a conversation message", async () => {
     const { peer, dispatcher } = await harness();
-    const renaming = dispatcher.submit("/name design review");
+    const naming = dispatcher.submit("/name design review");
     await peer.awaitRequests(3);
     assert.deepEqual(peer.requests[2], {
       method: "session_name",
@@ -700,13 +701,45 @@ describe("CommandDispatcher", () => {
       restart_required: false,
     });
 
-    const outcome = await renaming;
+    const outcome = await naming;
     assert.equal(outcome.kind, "transient");
     if (outcome.kind === "transient") {
-      assert.match(outcome.text, /session renamed to design review/);
+      assert.match(outcome.text, /session named design review/);
     }
     assert.equal(
       peer.requests.some((request) => request.method === "submit_inbound"),
+      false,
+    );
+  });
+
+  // A Session is unnamed until someone names it, so a bare `/name` answers
+  // with the fact rather than a usage error, and it never writes metadata.
+  it("reports the active Session name instead of naming it", async () => {
+    const { peer, dispatcher } = await harness();
+    const asking = dispatcher.submit("/name");
+    await peer.awaitRequests(3);
+    assert.equal(peer.requests[2]?.method, "session_get");
+    peer.respond(3, { type: "session", session: sessionView() });
+
+    const unnamed = await asking;
+    assert.equal(unnamed.kind, "transient");
+    if (unnamed.kind === "transient") {
+      assert.match(unnamed.text, /session-1 is unnamed/);
+    }
+
+    const again = dispatcher.submit("/name");
+    await peer.awaitRequests(4);
+    peer.respond(4, {
+      type: "session",
+      session: sessionView({ name: "design review" }),
+    });
+    const named = await again;
+    assert.equal(named.kind, "transient");
+    if (named.kind === "transient") {
+      assert.match(named.text, /session name: design review/);
+    }
+    assert.equal(
+      peer.requests.some((request) => request.method === "session_name"),
       false,
     );
   });
@@ -1195,7 +1228,7 @@ describe("CLI arguments", () => {
     "--models",
     "/m.json",
     "--config",
-    "/rustx.json",
+    "/rustx.jsonc",
     "--workspace",
     "/ws",
     "--runtime-root",
@@ -1207,11 +1240,16 @@ describe("CLI arguments", () => {
     assert.equal(parsed.binary, "/usr/bin/rustx");
     assert.deepEqual(parsed.paths, {
       models: "/m.json",
-      config: "/rustx.json",
+      config: "/rustx.jsonc",
       workspace: "/ws",
       runtimeRoot: "/private",
     });
+    assert.equal(parsed.openSessionSelector, false);
     assert.deepEqual(parsed.startup, {
+      continueActiveSession: false,
+      session: undefined,
+      node: undefined,
+      sessionName: undefined,
       skillPaths: [],
       noSkills: false,
       noBuiltinTools: false,
@@ -1224,6 +1262,7 @@ describe("CLI arguments", () => {
   it("parses repeatable Skills and forwards startup controls without interpretation", () => {
     const parsed = parseArguments([
       ...complete,
+      "--continue",
       "--skill",
       "/user/skills/one",
       "--skill",
@@ -1237,6 +1276,10 @@ describe("CLI arguments", () => {
       "search",
     ]);
     assert.deepEqual(parsed.startup, {
+      continueActiveSession: true,
+      session: undefined,
+      node: undefined,
+      sessionName: undefined,
       skillPaths: ["/user/skills/one", "relative/skills/two"],
       noSkills: true,
       noBuiltinTools: true,
@@ -1244,6 +1287,100 @@ describe("CLI arguments", () => {
       tools: "read,search",
       excludeTools: "search",
     });
+  });
+
+  it("continues the active Session on a replacement spawn, never on a launch", () => {
+    // A launch starts on an empty Session; the spawn that completes a
+    // published Session transition asks for the catalog's active selection
+    // instead, and changes nothing else about the startup contract.
+    const launch = parseArguments(complete);
+    assert.equal(launch.startup.continueActiveSession, false);
+
+    const replacement = replacementArguments(launch);
+    assert.equal(replacement.startup.continueActiveSession, true);
+    assert.deepEqual(replacement.paths, launch.paths);
+    assert.equal(replacement.binary, launch.binary);
+    assert.deepEqual(
+      { ...replacement.startup, continueActiveSession: false },
+      launch.startup,
+    );
+    assert.equal(
+      launch.startup.continueActiveSession,
+      false,
+      "the launch arguments are not mutated",
+    );
+
+    assert.equal(
+      replacementArguments(parseArguments([...complete, "--continue"])).startup
+        .continueActiveSession,
+      true,
+    );
+  });
+
+  it("names a startup Session, or asks for the selector, but never both", () => {
+    // Naming a Session is forwarded verbatim: the catalog is the only thing
+    // that can resolve an identity, so the client neither validates nor
+    // defaults it.
+    const named = parseArguments([...complete, "--session", "session-3"]);
+    assert.equal(named.startup.session, "session-3");
+    assert.equal(named.startup.node, undefined);
+    assert.equal(named.startup.continueActiveSession, false);
+    assert.equal(named.openSessionSelector, false);
+
+    const node = parseArguments([
+      ...complete,
+      "--session",
+      "session-3",
+      "--node",
+      "node-7",
+    ]);
+    assert.equal(node.startup.node, "node-7");
+
+    // `--resume` is presentation over the continued Session: it publishes
+    // nothing of its own, so the runtime is asked to continue and the picker
+    // decides the rest.
+    const resumed = parseArguments([...complete, "--resume"]);
+    assert.equal(resumed.openSessionSelector, true);
+    assert.equal(resumed.startup.continueActiveSession, true);
+    assert.equal(resumed.startup.session, undefined);
+
+    // A replacement completes a transition the runtime already published, so
+    // it drops both the launch-time name and the launch-time picker rather
+    // than re-selecting what the user just switched away from.
+    const replacement = replacementArguments(node);
+    assert.equal(replacement.startup.session, undefined);
+    assert.equal(replacement.startup.node, undefined);
+    assert.equal(replacement.startup.continueActiveSession, true);
+    assert.equal(replacementArguments(resumed).openSessionSelector, false);
+    assert.equal(node.startup.session, "session-3", "the launch arguments are not mutated");
+  });
+
+  it("forwards a launch name and drops it from a replacement", () => {
+    // A name labels the Session the launch bound; it never chooses one, so
+    // it combines with every startup Session request and with none of them.
+    const alone = parseArguments([...complete, "--name", "auth refactor"]);
+    assert.equal(alone.startup.sessionName, "auth refactor");
+    assert.equal(alone.startup.session, undefined);
+    assert.equal(alone.startup.continueActiveSession, false);
+
+    const beside = parseArguments([
+      ...complete,
+      "--session",
+      "session-3",
+      "--name",
+      "auth refactor",
+    ]);
+    assert.equal(beside.startup.sessionName, "auth refactor");
+    assert.equal(beside.startup.session, "session-3");
+
+    // A replacement continues a Session the user has already switched to;
+    // carrying the launch name over would relabel that Session instead.
+    assert.equal(replacementArguments(alone).startup.sessionName, undefined);
+    assert.equal(
+      alone.startup.sessionName,
+      "auth refactor",
+      "the launch arguments are not mutated",
+    );
   });
 
   it("fails explicitly on malformed arguments", () => {
@@ -1254,6 +1391,15 @@ describe("CLI arguments", () => {
       [...complete, "--models", "/again.json"],
       [...complete, "--tools", "read", "--tools", "search"],
       [...complete, "--no-tools", "--no-tools"],
+      [...complete, "--continue", "--continue"],
+      [...complete, "--continue", "--session", "session-3"],
+      [...complete, "--resume", "--session", "session-3"],
+      [...complete, "--continue", "--resume"],
+      [...complete, "--node", "node-7"],
+      [...complete, "--session", "a", "--session", "b"],
+      [...complete, "--session"],
+      [...complete, "--name"],
+      [...complete, "--name", "one", "--name", "two"],
     ];
     for (const argv of cases) {
       assert.throws(

@@ -35,10 +35,33 @@ import type {
   RuntimeClientOutcome,
   RuntimeClientSkill,
   RuntimeClientTool,
+  SessionSummaryView,
+  SessionView,
   ToolOrigin,
 } from "../protocol/types.ts";
 import { BACKGROUND_TERMINAL_STATES } from "../protocol/types.ts";
 import type { PresentationState } from "./state.ts";
+
+/**
+ * The line that identifies one Session in the `/resume` selector.
+ *
+ * A Session is unnamed until a user names it, so an unnamed row shows what
+ * the Session opened with instead. Both halves are Rust's: the name it
+ * published and the first message it derived. This only chooses between
+ * them, and says so plainly when a Session has neither.
+ */
+export function sessionRowLabel(session: SessionSummaryView): string {
+  return session.name ?? session.preview ?? "(no messages)";
+}
+
+/**
+ * The Session label used away from the selector, where no first message has
+ * been derived. An unnamed Session is shown by its identity, which is the
+ * only other thing that says which Session it is.
+ */
+export function sessionLabel(session: SessionView): string {
+  return session.name ?? session.id;
+}
 
 /** A short human label for a tool origin. Cosmetic only. */
 export function originLabel(origin: ToolOrigin): string {

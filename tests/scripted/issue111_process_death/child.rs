@@ -277,12 +277,14 @@ fn terminal_count(seen: &[Seen]) -> usize {
 /// The explicit startup paths of one child, derived from the parent's lab.
 fn lab_paths(root: &Path) -> LocalRuntimePaths {
     LocalRuntimePaths {
-        models: root.join("models.json"),
-        config: root.join("rustx.json"),
+        models: root.join("models.jsonc"),
+        config: root.join("rustx.jsonc"),
         skill_paths: Vec::new(),
         no_skills: false,
         no_builtin_tools: false,
         no_tools: false,
+        startup_session: rustx::local_runtime::StartupSession::Empty,
+        session_name: None,
         tools: None,
         exclude_tools: Vec::new(),
         workspace: root.join("workspace"),
@@ -334,7 +336,7 @@ impl Child {
     ) -> Result<Self, String> {
         let paths = lab_paths(root);
         let config_bytes = std::fs::read(&paths.config).map_err(|error| error.to_string())?;
-        let runtime_config = CurrentRuntimeConfig::from_json_slice(&config_bytes)
+        let runtime_config = CurrentRuntimeConfig::from_jsonc_slice(&config_bytes)
             .map_err(|error| format!("{error:?}"))?;
         let model = Arc::new(FakeModel::new(scripts));
         let adapter: Arc<dyn crate::model::ModelAdapter> = model.clone();
@@ -505,7 +507,7 @@ async fn compose_session_child(
     let paths = lab_paths(root);
     let config_bytes = std::fs::read(&paths.config).expect("read the lab runtime config");
     let runtime_config =
-        CurrentRuntimeConfig::from_json_slice(&config_bytes).expect("valid runtime config");
+        CurrentRuntimeConfig::from_jsonc_slice(&config_bytes).expect("valid runtime config");
     let template = SessionPersistentState {
         model: runtime_config.model.clone(),
     };
@@ -1074,8 +1076,8 @@ async fn scenario_body(root: &Path, scenario: &str) {
             // inbound can never be adopted by this process.
             let paths = lab_paths(root);
             let config_bytes = std::fs::read(&paths.config).expect("read the lab runtime config");
-            let runtime_config =
-                CurrentRuntimeConfig::from_json_slice(&config_bytes).expect("valid runtime config");
+            let runtime_config = CurrentRuntimeConfig::from_jsonc_slice(&config_bytes)
+                .expect("valid runtime config");
             let adapter: Arc<dyn crate::model::ModelAdapter> = Arc::new(FakeModel::new(Vec::new()));
             let registry = fixture_registry(
                 &[FixtureModel::text(

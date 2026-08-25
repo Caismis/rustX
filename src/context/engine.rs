@@ -259,6 +259,71 @@ pub struct CompactionConstraints<'a> {
     /// the Surface the plan rewrites, and it exists only for exact planning
     /// of the upcoming request.
     pub staged_request_context: &'a [MessageBlock],
+    /// The measured error of this runtime's deterministic token estimate,
+    /// when a provider has just proven the estimate too optimistic.
+    ///
+    /// A compaction that recovers from a context overflow must not plan
+    /// against the very budget the provider just rejected: the estimator
+    /// said the failed request fit, and it did not. When present, every
+    /// runtime-owned budget of this plan — the soft input limit and the
+    /// summary model's input limit — is scaled into the estimate space the
+    /// observed error implies, so the post-compaction request targets a
+    /// genuinely smaller provider request rather than the same one again.
+    pub estimate_correction: Option<EstimateCorrection>,
+}
+
+/// The measured error of one deterministic token estimate.
+///
+/// The runtime's [`TokenEstimator`] is deliberately provider-neutral and
+/// therefore approximate. A provider rejection for context size is the one
+/// authoritative measurement of that approximation error, and this value
+/// carries it as an exact integer ratio — never a float, never a fabricated
+/// provider usage measurement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EstimateCorrection {
+    /// What the runtime estimated for the rejected request.
+    pub estimated_tokens: u64,
+    /// What the provider counted for that same request.
+    pub observed_tokens: u64,
+}
+
+impl EstimateCorrection {
+    /// The correction applied when a provider rejected a request as too
+    /// large but reported no token count: plan for a request a quarter
+    /// smaller than the estimate that was already proven wrong.
+    pub const UNQUANTIFIED: Self = Self {
+        estimated_tokens: 3,
+        observed_tokens: 4,
+    };
+
+    /// The correction implied by one provider-reported measurement, or
+    /// `None` when the measurement carries no usable error (a zero estimate,
+    /// or an observation that does not exceed the estimate).
+    #[must_use]
+    pub const fn new(estimated_tokens: u64, observed_tokens: u64) -> Option<Self> {
+        if estimated_tokens == 0 || observed_tokens <= estimated_tokens {
+            return None;
+        }
+        Some(Self {
+            estimated_tokens,
+            observed_tokens,
+        })
+    }
+
+    /// Scales one runtime-owned token budget into the estimate space this
+    /// correction implies. The result is never zero: a corrected budget
+    /// still has to admit a plan.
+    #[must_use]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "estimated_tokens < observed_tokens by construction, so the scaled value \
+                  never exceeds `budget` and always fits `u64`"
+    )]
+    pub const fn apply(self, budget: u64) -> u64 {
+        let scaled =
+            (budget as u128 * self.estimated_tokens as u128) / self.observed_tokens as u128;
+        if scaled == 0 { 1 } else { scaled as u64 }
+    }
 }
 
 /// The deterministic context engine.
@@ -387,12 +452,15 @@ impl ContextEngine {
     /// Ledger lookup. Retired Ledger history is never iterated and never
     /// hydrated, so the cost is a function of the active Surface alone.
     ///
-    /// The estimated input is `ProviderReported` only when an observed
-    /// provider measurement applies to exactly this request context
-    /// (identical fingerprint, including the Surface revision and the exact
-    /// Effective System Prompt); otherwise it is a deterministic estimate
-    /// that includes the Effective System Prompt and tool definitions. Estimates
-    /// never become provider usage.
+    /// The estimated input is `ProviderReported` when an observed provider
+    /// measurement applies to exactly this request context (identical
+    /// fingerprint, including the Surface revision and the exact Effective
+    /// System Prompt), and `ProviderAnchored` when the measured context is an
+    /// ordered prefix of this one under unchanged non-conversation input —
+    /// the reported number plus a deterministic estimate of only the messages
+    /// appended since. Otherwise it is a whole-projection deterministic
+    /// estimate that includes the Effective System Prompt and tool
+    /// definitions. Estimates never become provider usage.
     ///
     /// # Errors
     ///
@@ -453,6 +521,11 @@ impl ContextEngine {
     ///
     /// Panics only if the chosen span indices fall outside the Surface the
     /// candidates were derived from, which is unreachable by construction.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one candidate enumeration and one selection rule; splitting them \
+                  would hide which budget rejected which candidate"
+    )]
     pub fn plan_compaction(
         &self,
         state: &ConversationState,
@@ -461,7 +534,12 @@ impl ContextEngine {
         budgets: CompactionBudgets,
         constraints: &CompactionConstraints<'_>,
     ) -> Result<CompactionPlan, ContextError> {
-        let soft_limit = self.soft_input_limit(budgets.primary_output_budget)?;
+        let mut soft_limit = self.soft_input_limit(budgets.primary_output_budget)?;
+        let mut summary_input_limit = budgets.summary_input_limit;
+        if let Some(correction) = constraints.estimate_correction {
+            soft_limit = correction.apply(soft_limit);
+            summary_input_limit = correction.apply(summary_input_limit);
+        }
         let (active, index) = state
             .structure()
             .map_err(|error| conversation_failed(&error))?;
@@ -475,13 +553,22 @@ impl ContextEngine {
         };
 
         let mut candidates: Vec<Candidate> = Vec::new();
+        // The smallest summary input any span produced, kept only so a
+        // `CannotFit` failure can say *why* nothing fit instead of leaving
+        // an operator to guess between the two budgets.
+        let mut smallest_summary_input: Option<u64> = None;
         for end in first..=run_end {
             if end < min_end || end > max_end || index.validate_span(first, end).is_err() {
                 continue;
             }
             let span_messages = active[first..=end].to_vec();
             let summary_input_tokens = self.estimate_summary_input(span_messages);
-            if summary_input_tokens > budgets.summary_input_limit {
+            smallest_summary_input = Some(
+                smallest_summary_input.map_or(summary_input_tokens, |seen: u64| {
+                    seen.min(summary_input_tokens)
+                }),
+            );
+            if summary_input_tokens > summary_input_limit {
                 // The selected span would not fit the summary model's own
                 // request budget: this candidate is impossible.
                 continue;
@@ -517,7 +604,13 @@ impl ContextEngine {
                     "the compaction constraints leave no retirable surface span",
                 ));
             }
-            return Err(cannot_fit(&self.config));
+            return Err(cannot_fit(
+                &self.config,
+                soft_limit,
+                summary_input_limit,
+                None,
+                smallest_summary_input,
+            ));
         }
 
         let target = self.config.keep_recent_tokens;
@@ -536,7 +629,15 @@ impl ContextEngine {
                     .filter(fits)
                     .min_by_key(|candidate| candidate.end)
             })
-            .ok_or_else(|| cannot_fit(&self.config))?;
+            .ok_or_else(|| {
+                cannot_fit(
+                    &self.config,
+                    soft_limit,
+                    summary_input_limit,
+                    candidates.iter().map(|candidate| candidate.planned).min(),
+                    smallest_summary_input,
+                )
+            })?;
 
         let span = SurfaceSpan::new(
             index
@@ -702,23 +803,62 @@ impl ContextEngine {
                 source: TokenMeasurementSource::Estimated,
             },
         };
-        projection.estimated_input = match observed {
-            Some(observed) if observed.fingerprint == projection.fingerprint() => {
-                TokenMeasurement {
-                    input_tokens: observed.input_tokens,
-                    source: TokenMeasurementSource::ProviderReported,
-                }
-            }
-            _ => TokenMeasurement {
+        projection.estimated_input = observed
+            .and_then(|observed| self.reuse_measurement(observed, &projection, tool_definitions))
+            .unwrap_or_else(|| TokenMeasurement {
                 input_tokens: self.estimator.estimate_input(
                     &projection.messages,
                     &projection.effective_system_prompt,
                     tool_definitions,
                 ),
                 source: TokenMeasurementSource::Estimated,
-            },
-        };
+            });
         projection
+    }
+
+    /// Reuses one provider measurement for this projection, exactly or as a
+    /// prefix anchor, or refuses it.
+    ///
+    /// The exact match is unchanged: an identical request context keeps the
+    /// provider's own number with `ProviderReported` provenance. The anchored
+    /// case is the one that matters over a long conversation. The provider
+    /// measured the cost of a prefix of this context — including its
+    /// Effective System Prompt and tool definitions — so that part needs no
+    /// estimating at all, and only the canonical messages appended since are
+    /// estimated. Estimator error therefore applies to one turn's tail rather
+    /// than compounding across the entire history, which is what makes the
+    /// soft-limit decision trustworthy exactly when the conversation is long
+    /// enough for it to matter.
+    ///
+    /// The anchor is refused outright — never patched with a guessed delta —
+    /// when the Effective System Prompt or the tool definitions changed, or
+    /// when the measured identities are not an ordered prefix of this
+    /// projection (which is precisely what a compaction Surface rewrite
+    /// destroys).
+    fn reuse_measurement(
+        &self,
+        observed: &ProviderObservedInput,
+        projection: &ContextProjection,
+        tool_definitions: &[ModelToolDefinition],
+    ) -> Option<TokenMeasurement> {
+        if observed.fingerprint == projection.fingerprint() {
+            return Some(TokenMeasurement {
+                input_tokens: observed.input_tokens,
+                source: TokenMeasurementSource::ProviderReported,
+            });
+        }
+        let covered = observed.anchor.as_ref()?.covered_prefix(
+            &projection.messages,
+            &projection.effective_system_prompt,
+            tool_definitions,
+        )?;
+        let appended = self
+            .estimator
+            .estimate_conversation_input(&projection.messages[covered..]);
+        Some(TokenMeasurement {
+            input_tokens: observed.input_tokens.saturating_add(appended),
+            source: TokenMeasurementSource::ProviderAnchored,
+        })
     }
 }
 
@@ -835,11 +975,32 @@ fn conversation_failed(error: &ConversationError) -> ContextError {
     ContextError::new(ContextErrorKind::MalformedHistory, error.to_string())
 }
 
-fn cannot_fit(config: &ContextConfig) -> ContextError {
+/// The explicit `CannotFit` diagnostic.
+///
+/// Which of the two budgets was the binding constraint is the first thing an
+/// operator needs and the hardest thing to guess, so both effective limits
+/// and the best estimate each one rejected are named here.
+fn cannot_fit(
+    config: &ContextConfig,
+    soft_limit: u64,
+    summary_input_limit: u64,
+    best_planned: Option<u64>,
+    smallest_summary_input: Option<u64>,
+) -> ContextError {
+    let planned = best_planned.map_or_else(
+        || "no candidate span survived the summary input limit".to_owned(),
+        |planned| format!("the smallest post-compaction estimate was {planned}"),
+    );
+    let summary = smallest_summary_input.map_or_else(
+        || "no span was measurable".to_owned(),
+        |smallest| format!("the smallest summary request estimate was {smallest}"),
+    );
     ContextError::new(
         ContextErrorKind::CannotFit,
         format!(
-            "no complete-message surface span fits under window {} with reserve {}",
+            "no complete-message surface span fits under window {} with reserve {}: \
+             soft input limit {soft_limit} ({planned}), summary input limit \
+             {summary_input_limit} ({summary})",
             config.context_window_tokens, config.reserve_tokens
         ),
     )

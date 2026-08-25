@@ -360,7 +360,9 @@ describe("progressive disclosure bounds call details too", () => {
         content: "x",
       }),
     });
-    assert.match(rendered, /^ {2}a\.rs …$/m);
+    // The subject shares the header line, and stays exactly one line of it.
+    assert.match(rendered, /^◇ Write a\.rs …/m);
+    assert.ok(!rendered.includes("\nb"));
     assert.ok(rendered.split("\n").length <= DEFAULT_PREVIEW_LINES + 3);
   });
 
@@ -481,8 +483,10 @@ describe("specialized native renderers", () => {
         duration_ms: 2_800,
       }),
     });
-    assert.match(rendered, /^✓ Bash · ok · 2\.8s · exit 0$/m);
-    assert.match(rendered, /\$ cargo test --all \(timeout 600s\)/);
+    assert.match(
+      rendered,
+      /^✓ Bash \$ cargo test --all \(timeout 600s\) · ok · 2\.8s · exit 0$/m,
+    );
     assert.match(rendered, /test result: ok\. 842 passed/);
     assert.ok(!rendered.includes('"command"'));
   });

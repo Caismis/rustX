@@ -1334,7 +1334,7 @@ fn a_failed_reload_keeps_the_previous_generation() {
     let mut process = lab.spawn(child::RELOAD, None);
     process.wait_note("settled");
     lab.write_project_instructions("R2 project instructions.");
-    std::fs::write(lab.root().join("rustx.json"), "{ not json").expect("corrupt the config");
+    std::fs::write(lab.root().join("rustx.jsonc"), "{ not json").expect("corrupt the config");
     process.resume();
     let reload = process.wait_note_prefixed("reload:");
     assert_ne!(reload, "reload:ok", "the reload failed: {reload}");
@@ -1657,7 +1657,7 @@ fn invalid_current_resources_fail_runtime_creation() {
     first.sigkill();
     let snapshots_before = lab.durable().request_snapshots().len();
 
-    std::fs::write(lab.root().join("rustx.json"), "{ not json").expect("corrupt the config");
+    std::fs::write(lab.root().join("rustx.jsonc"), "{ not json").expect("corrupt the config");
     let mut second = lab.spawn(child::COMPOSE_ONLY, None);
     let outcome = second.wait_note_prefixed("compose:");
     second.sigkill();

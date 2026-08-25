@@ -52,12 +52,14 @@ fn paths(root: &std::path::Path, config: &std::path::Path) -> LocalRuntimePaths 
     let workspace = root.join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
     LocalRuntimePaths {
-        models: root.join("models.json"),
+        models: root.join("models.jsonc"),
         config: config.to_path_buf(),
         skill_paths: Vec::new(),
         no_skills: true,
         no_builtin_tools: false,
         no_tools: false,
+        startup_session: rustx::local_runtime::StartupSession::Empty,
+        session_name: None,
         tools: None,
         exclude_tools: Vec::new(),
         workspace,
@@ -126,10 +128,10 @@ fn model(reference: &str) -> SessionModelConfig {
 #[allow(clippy::too_many_lines)]
 async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
     let root = tempfile::tempdir().expect("root");
-    let config_path = root.path().join("rustx.json");
+    let config_path = root.path().join("rustx.jsonc");
     let skills_root = root.path().join("configured-skills");
     write_skill(&skills_root, "old-skill", "Old current resource");
-    std::fs::write(root.path().join("models.json"), MODELS).expect("models");
+    std::fs::write(root.path().join("models.jsonc"), MODELS).expect("models");
     std::fs::write(
         &config_path,
         config_json(
@@ -299,10 +301,10 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn invalid_current_config_is_rejected_even_when_a_catalog_exists() {
     let root = tempfile::tempdir().expect("root");
-    let config_path = root.path().join("rustx.json");
+    let config_path = root.path().join("rustx.jsonc");
     let skills_root = root.path().join("configured-skills");
     std::fs::create_dir_all(&skills_root).expect("Skill root");
-    std::fs::write(root.path().join("models.json"), MODELS).expect("models");
+    std::fs::write(root.path().join("models.jsonc"), MODELS).expect("models");
     std::fs::write(
         &config_path,
         config_json(
@@ -339,10 +341,10 @@ async fn invalid_current_config_is_rejected_even_when_a_catalog_exists() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn invalid_first_boot_model_does_not_publish_a_poisoned_session() {
     let root = tempfile::tempdir().expect("root");
-    let config_path = root.path().join("rustx.json");
+    let config_path = root.path().join("rustx.jsonc");
     let skills_root = root.path().join("configured-skills");
     std::fs::create_dir_all(&skills_root).expect("Skill root");
-    std::fs::write(root.path().join("models.json"), MODELS).expect("models");
+    std::fs::write(root.path().join("models.jsonc"), MODELS).expect("models");
     let startup = paths(root.path(), &config_path);
 
     std::fs::write(
@@ -393,4 +395,100 @@ async fn invalid_first_boot_model_does_not_publish_a_poisoned_session() {
         .expect("corrected startup published a root Session");
     assert!(catalog.contains("local/model-a"));
     assert!(!catalog.contains("local/missing"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn commented_configuration_documents_compose_a_runtime() {
+    let root = tempfile::tempdir().expect("root");
+    let config_path = root.path().join("rustx.jsonc");
+    std::fs::write(
+        root.path().join("models.jsonc"),
+        r#"{
+  // The provider identity is a local name, never an official endpoint.
+  "providers": {
+    "local": {
+      "baseUrl": "http://127.0.0.1:9/v1",
+      "apiKey": "$RUSTX_ISSUE96_KEY",
+      "models": [
+        {
+          "id": "model-a",
+          "protocol": "openai_chat_completions",
+          "contextWindow": 128000,
+          "maxOutputTokens": 512,
+          "capabilities": {
+            "inputModalities": ["text"],
+            "outputModalities": ["text"],
+            "toolCalls": true,
+            "reasoning": false,
+          },
+          /* Required for this protocol: how prior reasoning is replayed. */
+          "compat": {"chatReasoningReplay": "omit"},
+        },
+      ],
+    },
+  },
+}"#,
+    )
+    .expect("commented models");
+    std::fs::write(
+        &config_path,
+        r#"{
+  "schemaVersion": 2,
+  "agentId": "agent-issue96",
+  // The default model of a brand-new Session.
+  "model": {"model": "local/model-a"},
+  "context": {
+    "reserveTokens": 11,
+    "keepRecentTokens": 4096,
+  },
+  "defaultTools": ["read"],
+  // "mcpServers": {"exa": {"type": "http", "url": "https://mcp.exa.ai/mcp"}},
+  "mcpServers": {},
+}"#,
+    )
+    .expect("commented config");
+    let startup = paths(root.path(), &config_path);
+
+    let product = LocalSessionProduct::compose(&startup, &dependencies())
+        .await
+        .expect("JSONC configuration documents must compose");
+    assert_eq!(
+        product.runtime().model_view().configured.model.to_string(),
+        "local/model-a"
+    );
+    assert!(
+        !product
+            .runtime()
+            .capability()
+            .availability()
+            .contains_key(&CapabilitySourceId::Mcp(McpServerId::new("exa"))),
+        "a commented-out MCP entry must stay inert"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn relaxations_beyond_jsonc_still_fail_composition() {
+    let root = tempfile::tempdir().expect("root");
+    let config_path = root.path().join("rustx.jsonc");
+    std::fs::write(root.path().join("models.jsonc"), MODELS).expect("models");
+    let startup = paths(root.path(), &config_path);
+
+    std::fs::write(
+        &config_path,
+        r#"{
+  schemaVersion: 2,
+  'agentId': 'agent-issue96',
+  "model": {"model": "local/model-a"},
+  "context": {"reserveTokens": 11, "keepRecentTokens": 4096}
+}"#,
+    )
+    .expect("non-JSONC config");
+    let error = LocalSessionProduct::compose(&startup, &dependencies())
+        .await
+        .expect_err("unquoted keys and single-quoted strings must fail");
+    assert!(matches!(error, LocalRuntimeError::RuntimeConfig(_)));
+    assert!(
+        error.to_string().contains("line 2"),
+        "a syntax failure must report where it was detected: {error}"
+    );
 }

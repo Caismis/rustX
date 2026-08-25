@@ -1,0 +1,164 @@
+// models.jsonc — the runtime's provider/model authority.
+//
+// This file is JSONC: ordinary JSON plus `//` and `/* */` comments and
+// trailing commas. Nothing else is relaxed — single quotes, unquoted keys,
+// and missing commas still fail startup, and every unknown field is
+// rejected so a typo can never silently change runtime behavior.
+//
+// rustX never infers anything from a provider name, a hostname, or a model
+// ID. Every endpoint, credential source, limit, capability, and protocol
+// compatibility value below is a deliberate declaration.
+{
+  // The only catalog schema version this runtime accepts.
+  "schemaVersion": 1,
+
+  // Providers, keyed by a purely local identity. The key is the `provider`
+  // half of a `provider/model` reference; it selects no official URL.
+  "providers": {
+    "example": {
+      // The mandatory explicit endpoint. Replace it with the real one.
+      // It must be an absolute http(s) URL with no credentials, query, or
+      // fragment. Most OpenAI-compatible services end in `/v1`.
+      "baseUrl": "https://api.example.invalid/v1",
+
+      // The credential source. A `$NAME` value reads the named environment
+      // variable at startup and fails loudly when it is unset or empty:
+      //
+      //   export RUSTX_EXAMPLE_API_KEY='replace-me'
+      //
+      // A literal key is accepted too — never commit one. The resolved
+      // value is unreachable from events, errors, snapshots, and the TUI.
+      "apiKey": "$RUSTX_EXAMPLE_API_KEY",
+
+      "models": [
+        {
+          // The model identity within this provider. It may contain `/`,
+          // so `Qwen/Qwen3` here is referenced as `example/Qwen/Qwen3`.
+          "id": "demo-model",
+
+          // The protocol an adapter must speak. One of:
+          //   "openai_chat_completions" | "openai_responses"
+          //   "anthropic_messages"
+          "protocol": "openai_chat_completions",
+
+          // Model limits. Both must be positive and maxOutputTokens must be
+          // strictly smaller than contextWindow. `maxOutputTokens` is the
+          // configured budget, not necessarily the provider's ceiling; a
+          // Session may lower it further.
+          "contextWindow": 128000,
+          "maxOutputTokens": 4096,
+
+          // What this model can actually do. A rustX conversation model must
+          // declare at least text in and text out. Claiming a capability the
+          // model lacks produces provider errors, not graceful degradation.
+          "capabilities": {
+            "inputModalities": ["text"],
+            "outputModalities": ["text"],
+            "toolCalls": true,
+            "reasoning": true,
+          },
+
+          // Model-level provider wire parameters, sent verbatim. This is an
+          // opaque provider-owned map, not a universal sampling schema:
+          // adapt the keys to the selected service. Keys the runtime owns
+          // for this protocol (model, messages, tools, stream,
+          // stream_options, max_tokens, max_completion_tokens) are rejected.
+          "requestParams": {
+            "temperature": 0.2,
+          },
+
+          // Reasoning profiles. The names have no built-in meaning — the
+          // `enabled` flag and the provider-owned `requestParams` are the
+          // whole contract, and `reasoning_effort` below must be changed if
+          // the real provider spells its reasoning control differently.
+          // A Session picks a profile by name; `defaultProfile` applies when
+          // it does not. Omit this block entirely for a non-reasoning model.
+          "reasoning": {
+            "defaultProfile": "off",
+            "profiles": {
+              "off": {
+                "enabled": false,
+                "requestParams": {},
+              },
+              "on": {
+                "enabled": true,
+                "requestParams": {
+                  "reasoning_effort": "low",
+                },
+              },
+            },
+          },
+
+          // Structural translation metadata: real differences between
+          // OpenAI-compatible services, never provider wire values. Each
+          // field applies to exactly one protocol and is rejected under the
+          // others.
+          "compat": {
+            // Which max-token field this service accepts:
+            //   "max_completion_tokens" (current) | "max_tokens" (legacy)
+            "chatMaxTokensField": "max_completion_tokens",
+
+            // How prior assistant reasoning is replayed. Required for
+            // openai_chat_completions; follow the model's documentation:
+            //   "reasoning"          vLLM, OpenRouter plaintext reasoning
+            //   "reasoning_content"  DeepSeek V4, GLM, Qwen preserved thinking
+            //   "omit"               do not replay prior reasoning
+            // This governs history replay only. Whether the *next* response
+            // reasons is owned by the selected reasoning profile above, so
+            // the `off` profile does not imply "omit".
+            "chatReasoningReplay": "reasoning",
+
+            // Whether the service accepts `stream_options.include_usage`:
+            //   "supported" | "unsupported"
+            "chatStreamUsage": "supported",
+          },
+        },
+
+        // A second model of the same provider goes here. Everything above is
+        // per-model: two models of one provider may use different protocols,
+        // limits, and compat values.
+        //
+        // {
+        //   "id": "demo-responses-model",
+        //   "protocol": "openai_responses",
+        //   "contextWindow": 200000,
+        //   "maxOutputTokens": 32768,
+        //   "capabilities": {
+        //     "inputModalities": ["text"],
+        //     "outputModalities": ["text"],
+        //     "toolCalls": true,
+        //     "reasoning": true,
+        //   },
+        //   "compat": {
+        //     // Responses continuation structure:
+        //     //   "stored"     continue by previous_response_id
+        //     //   "stateless"  zero retention; replay encrypted reasoning
+        //     "responsesStorage": "stored",
+        //   },
+        // },
+      ],
+    },
+
+    // A second provider is an independent identity with its own endpoint and
+    // credential. Anthropic Messages models declare no `compat` fields:
+    //
+    // "anthropic": {
+    //   "baseUrl": "https://api.anthropic.com/v1",
+    //   "apiKey": "$ANTHROPIC_API_KEY",
+    //   "models": [
+    //     {
+    //       "id": "claude-model-id",
+    //       "protocol": "anthropic_messages",
+    //       "contextWindow": 200000,
+    //       "maxOutputTokens": 64000,
+    //       "capabilities": {
+    //         "inputModalities": ["text"],
+    //         "outputModalities": ["text"],
+    //         "toolCalls": true,
+    //         "reasoning": true,
+    //       },
+    //     },
+    //   ],
+    // },
+  },
+}

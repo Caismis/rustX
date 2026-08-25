@@ -80,16 +80,33 @@ struct Process {
 impl Process {
     /// Spawns the binary with explicit startup arguments.
     fn spawn(root: &std::path::Path, models: &str, session: &str, key: &str) -> Self {
+        Self::launch(root, models, session, key, false)
+    }
+
+    /// Reopens the Session this runtime root already published as active. A
+    /// launch is not a resume, so recovering a durable conversation across a
+    /// process death is an explicit `--continue`.
+    fn reopen(root: &std::path::Path, models: &str, session: &str, key: &str) -> Self {
+        Self::launch(root, models, session, key, true)
+    }
+
+    fn launch(
+        root: &std::path::Path,
+        models: &str,
+        session: &str,
+        key: &str,
+        continue_active: bool,
+    ) -> Self {
         let workspace = root.join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        std::fs::write(root.join("models.json"), models).expect("models.json");
-        std::fs::write(root.join("rustx.json"), session).expect("rustx.json");
+        std::fs::write(root.join("models.jsonc"), models).expect("models.jsonc");
+        std::fs::write(root.join("rustx.jsonc"), session).expect("rustx.jsonc");
         let mut command = tokio::process::Command::new(binary());
         command
             .arg("--models")
-            .arg(root.join("models.json"))
+            .arg(root.join("models.jsonc"))
             .arg("--config")
-            .arg(root.join("rustx.json"))
+            .arg(root.join("rustx.jsonc"))
             .arg("--workspace")
             .arg(&workspace)
             .arg("--runtime-root")
@@ -100,6 +117,9 @@ impl Process {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if continue_active {
+            command.arg("--continue");
+        }
         let mut child = command.spawn().expect("spawn the rustx binary");
         let stdin = child.stdin.take().expect("stdin is piped");
         let stdout = BufReader::new(child.stdout.take().expect("stdout is piped"));
@@ -598,7 +618,7 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
 
     // Reopen the same durable conversation. Recovery has no child process to
     // adopt and publishes one Runtime-authored Interrupted inbound.
-    let mut recovered = Process::spawn(root.path(), &models, SESSION_JSON, "subagent-secret");
+    let mut recovered = Process::reopen(root.path(), &models, SESSION_JSON, "subagent-secret");
     let response = recovered
         .request(|id| RuntimeClientRequest::Initialize {
             id: rustx::runtime_client::RequestId::new(id),
@@ -680,7 +700,7 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
 
     // A second restart must observe the absorbing terminal identity and must
     // not publish a second Runtime notice or relaunch anything.
-    let mut repeated = Process::spawn(root.path(), &models, SESSION_JSON, "subagent-secret");
+    let mut repeated = Process::reopen(root.path(), &models, SESSION_JSON, "subagent-secret");
     let response = repeated
         .request(|id| RuntimeClientRequest::Initialize {
             id: rustx::runtime_client::RequestId::new(id),

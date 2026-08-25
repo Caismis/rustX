@@ -4,13 +4,34 @@
  * ```text
  * rustx-tui --binary <path> --models <path> --config <path>
  *           --workspace <dir> --runtime-root <dir>
- *           [--skill <path>] [--no-skills]
+ *           [--continue | --resume | --session <id> [--node <id>]]
+ *           [--name <text>] [--skill <path>] [--no-skills]
  *           [--no-builtin-tools] [--no-tools]
  *           [--tools <a,b,c>] [--exclude-tools <a,b,c>]
  * ```
  *
+ * Without a Session request the runtime starts on an empty Session and every
+ * persisted Session stays reachable through `/resume`. Three requests change
+ * that, and they are mutually exclusive:
+ *
+ * - `--continue` starts on the Session the previous launch left active;
+ * - `--session <id>` (optionally `--node <id>`) starts on a named persisted
+ *   Session;
+ * - `--resume` opens the `/resume` selector over the continued Session as
+ *   soon as the client attaches, so a Session can be chosen instead of named.
+ *
+ * `--name` is not one of those requests. It names the Session the launch
+ * bound, whichever one that is, and it is forwarded to Rust like every other
+ * startup control — a Session is never opened by its name.
+ *
+ * Only `--resume` is a client behaviour, and only because drawing a picker is
+ * what a terminal client is for: it forwards `--continue`, then issues the
+ * ordinary `/resume` selection for whatever the user picks. Every other part
+ * of the decision is Rust's — this client neither reads the catalog nor
+ * resolves an identity it was given.
+ *
  * The four runtime paths are passed straight through to the Rust binary. This
- * client never opens, parses, validates, or defaults any of them: `models.json`
+ * client never opens, parses, validates, or defaults any of them: `models.jsonc`
  * and the current runtime config are Rust-owned authorities, and
  * reading them here would create a second one. Explicit arguments only — no
  * search path, no precedence, no profile discovery.
@@ -21,15 +42,23 @@ import type {
   RuntimeStartupOptions,
 } from "./runtime/child-process.ts";
 
-export const USAGE = `usage: rustx-tui --binary <rustx> --models <models.json> \\
-                 --config <rustx.json> --workspace <dir> --runtime-root <dir> \\
-                 [--skill <path>] [--no-skills] [--no-builtin-tools] [--no-tools] \\
+export const USAGE = `usage: rustx-tui --binary <rustx> --models <models.jsonc> \\
+                 --config <rustx.jsonc> --workspace <dir> --runtime-root <dir> \\
+                 [--continue | --resume | --session <id> [--node <id>]] \\
+                 [--name <text>] [--skill <path>] [--no-skills] [--no-builtin-tools] [--no-tools] \\
                  [--tools <a,b,c>] [--exclude-tools <a,b,c>]`;
 
 export interface TuiArguments {
   binary: string;
   paths: RuntimePaths;
   startup: RuntimeStartupOptions;
+  /**
+   * Open the `/resume` selector as soon as the client attaches. This is the
+   * only startup Session decision the client makes, and it makes none of it
+   * alone: the picker is drawn over the continued Session and the choice
+   * becomes an ordinary `/resume` selection Rust publishes.
+   */
+  openSessionSelector: boolean;
 }
 
 export class ArgumentError extends Error {
@@ -45,12 +74,17 @@ const VALUE_FLAGS = [
   "--config",
   "--workspace",
   "--runtime-root",
+  "--session",
+  "--node",
+  "--name",
   "--skill",
   "--tools",
   "--exclude-tools",
 ] as const;
 
 const BOOLEAN_FLAGS = [
+  "--continue",
+  "--resume",
   "--no-skills",
   "--no-builtin-tools",
   "--no-tools",
@@ -63,7 +97,7 @@ type BooleanFlag = (typeof BOOLEAN_FLAGS)[number];
  * Parses the argument vector.
  *
  * @throws {ArgumentError} on an unknown flag, a missing value, a repeated
- * flag, or a missing required flag.
+ * flag, a missing required flag, or a combination of Session requests.
  */
 export function parseArguments(argv: readonly string[]): TuiArguments {
   const values = new Map<ValueFlag, string>();
@@ -115,6 +149,23 @@ export function parseArguments(argv: readonly string[]): TuiArguments {
     return value;
   };
 
+  const session = values.get("--session");
+  const node = values.get("--node");
+  const resume = booleans.has("--resume");
+  const requests = [
+    booleans.has("--continue") ? "--continue" : undefined,
+    resume ? "--resume" : undefined,
+    session !== undefined ? "--session" : undefined,
+  ].filter((flag): flag is string => flag !== undefined);
+  if (requests.length > 1) {
+    throw new ArgumentError(
+      `arguments ${requests.join(" and ")} cannot be combined`,
+    );
+  }
+  if (node !== undefined && session === undefined) {
+    throw new ArgumentError("argument --node requires --session");
+  }
+
   return {
     binary: required("--binary"),
     paths: {
@@ -123,13 +174,50 @@ export function parseArguments(argv: readonly string[]): TuiArguments {
       workspace: required("--workspace"),
       runtimeRoot: required("--runtime-root"),
     },
+    openSessionSelector: resume,
     startup: {
+      // `--resume` draws its picker over the Session the last launch left
+      // active, so it publishes nothing of its own: cancelling the selector
+      // leaves that Session bound rather than stranding an empty one in the
+      // catalog beside it.
+      continueActiveSession: booleans.has("--continue") || resume,
+      session,
+      node,
+      sessionName: values.get("--name"),
       skillPaths,
       noSkills: booleans.has("--no-skills"),
       noBuiltinTools: booleans.has("--no-builtin-tools"),
       noTools: booleans.has("--no-tools"),
       tools: values.get("--tools"),
       excludeTools: values.get("--exclude-tools"),
+    },
+  };
+}
+
+/**
+ * The arguments of a **replacement** spawn.
+ *
+ * A replacement is never a new launch: it completes a Session transition the
+ * runtime has already published durably, so it continues the catalog's active
+ * selection however this client was started. The destination is not named
+ * here — the catalog stays the authority for it — which is exactly why a
+ * launch-time `--session`/`--node` is dropped rather than repeated: replaying
+ * it would re-select the Session the user has just switched away from. A
+ * launch-time `--resume` is dropped for the same reason: the selector is the
+ * choice this replacement is already carrying out. `--name` is dropped
+ * because it named the Session the user launched into: repeating it would
+ * put that label on whichever Session they switched to next.
+ */
+export function replacementArguments(parsed: TuiArguments): TuiArguments {
+  return {
+    ...parsed,
+    openSessionSelector: false,
+    startup: {
+      ...parsed.startup,
+      continueActiveSession: true,
+      session: undefined,
+      node: undefined,
+      sessionName: undefined,
     },
   };
 }

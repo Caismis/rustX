@@ -230,6 +230,7 @@ impl RuntimeClientProjection {
                 status: None,
                 context: RuntimeClientContextView::default(),
                 capabilities: initial_capabilities,
+                resources: super::snapshot::RuntimeClientResourcesView::default(),
                 model: initial_model,
             },
             replay: VecDeque::new(),
@@ -295,6 +296,7 @@ impl RuntimeClientProjection {
         for existing in &seed.subagents {
             upsert_subagent(&mut self.snapshot.subagents, subagent_view(existing));
         }
+        self.snapshot.resources = resources_view(&seed.resources);
         // An inactive runtime has never admitted an attempt, composed an
         // Agent Status, or compacted, so `attempt`, `status`, and
         // `context` keep their empty initial values by construction.
@@ -487,6 +489,14 @@ impl RuntimeClientProjection {
                 let capabilities = capability_view(&snapshot, &availability);
                 self.snapshot.capabilities = capabilities.clone();
                 vec![RuntimeClientEvent::CapabilityUpdated { capabilities }]
+            }
+            ConversationObservation::Resources { snapshot } => {
+                // The resource generation is a projection fact of its own.
+                // Folding it here keeps one owner for the translation, in
+                // the same layer that owns the capability translation.
+                let resources = resources_view(&snapshot);
+                self.snapshot.resources = resources.clone();
+                vec![RuntimeClientEvent::ResourcesUpdated { resources }]
             }
             ConversationObservation::AttemptAdmitted { attempt_id } => {
                 // The model is folded by the `AttemptModelFrozen`
@@ -1509,6 +1519,30 @@ pub(crate) fn capability_view(
         available_tools,
         skills,
         sources,
+    }
+}
+
+/// Builds the client-visible resource projection from one immutable
+/// runtime resource generation.
+///
+/// Identity and provenance only: the path the runtime read and the exact
+/// byte length it loaded. The content stays where it already is — on disk,
+/// and inside the runtime's own Effective System Prompt assembly — because
+/// a conversation projection is not a second copy of request input.
+pub(crate) fn resources_view(
+    resources: &crate::runtime::resources::RuntimeResourceSnapshot,
+) -> super::snapshot::RuntimeClientResourcesView {
+    super::snapshot::RuntimeClientResourcesView {
+        revision: resources.revision(),
+        context_files: resources
+            .project_context_files()
+            .iter()
+            .map(|file| super::snapshot::RuntimeClientContextFile {
+                path: file.path.display().to_string(),
+                bytes: file.content.len() as u64,
+            })
+            .collect(),
+        agent_profile: resources.agent_profile().is_some(),
     }
 }
 

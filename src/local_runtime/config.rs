@@ -101,17 +101,18 @@ fn default_tools() -> Vec<String> {
 }
 
 impl CurrentRuntimeConfig {
-    /// Parses and validates current runtime configuration from JSON bytes.
+    /// Parses and validates current runtime configuration from JSONC bytes.
+    ///
+    /// The document is [JSONC](crate::config_format): JSON plus comments and
+    /// trailing commas, so a `rustx.jsonc` can explain its own values.
     ///
     /// # Errors
     ///
-    /// Returns [`CurrentRuntimeConfigError::Syntax`] for malformed JSON or
+    /// Returns [`CurrentRuntimeConfigError::Syntax`] for malformed JSONC or
     /// unknown fields, and a specific validation error otherwise.
-    pub fn from_json_slice(bytes: &[u8]) -> Result<Self, CurrentRuntimeConfigError> {
-        let config: Self =
-            serde_json::from_slice(bytes).map_err(|error| CurrentRuntimeConfigError::Syntax {
-                detail: error.to_string(),
-            })?;
+    pub fn from_jsonc_slice(bytes: &[u8]) -> Result<Self, CurrentRuntimeConfigError> {
+        let config: Self = crate::config_format::parse(bytes)
+            .map_err(|detail| CurrentRuntimeConfigError::Syntax { detail })?;
         config.validate()?;
         Ok(config)
     }
@@ -566,7 +567,7 @@ mod tests {
     /// The minimal configuration parses and derives its policy pieces.
     #[test]
     fn minimal_configuration_parses() {
-        let config = CurrentRuntimeConfig::from_json_slice(MINIMAL.as_bytes()).expect("valid");
+        let config = CurrentRuntimeConfig::from_jsonc_slice(MINIMAL.as_bytes()).expect("valid");
         assert_eq!(config.approval_mode, crate::runtime::ApprovalMode::Policy);
         assert_eq!(config.context_policy().reserve_tokens, 1024);
         assert!(config.mcp_bindings().expect("bindings").is_empty());
@@ -587,7 +588,7 @@ mod tests {
             r#""agentId": "agent-a""#,
             r#""agentId": "agent-a", "approvalMode": "full_access""#,
         );
-        let config = CurrentRuntimeConfig::from_json_slice(json.as_bytes()).expect("valid");
+        let config = CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect("valid");
         assert_eq!(
             config.approval_mode,
             crate::runtime::ApprovalMode::FullAccess
@@ -604,7 +605,7 @@ mod tests {
             "futureKnob": true
         }"#;
         assert!(matches!(
-            CurrentRuntimeConfig::from_json_slice(json.as_bytes()).expect_err("must fail"),
+            CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect_err("must fail"),
             CurrentRuntimeConfigError::Syntax { .. }
         ));
     }
@@ -619,7 +620,7 @@ mod tests {
             "context": {"reserveTokens": 0, "keepRecentTokens": 0}
         }"#;
         assert!(matches!(
-            CurrentRuntimeConfig::from_json_slice(json.as_bytes()).expect_err("must fail"),
+            CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect_err("must fail"),
             CurrentRuntimeConfigError::UnsupportedSchemaVersion { .. }
         ));
     }
@@ -636,7 +637,7 @@ mod tests {
             ]
         }"#;
         assert!(matches!(
-            CurrentRuntimeConfig::from_json_slice(json.as_bytes()).expect_err("must fail"),
+            CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect_err("must fail"),
             CurrentRuntimeConfigError::Syntax { .. }
         ));
     }
@@ -649,7 +650,7 @@ mod tests {
             r#""keepRecentTokens": 4096"#,
             r#""keepRecentTokens": 0, "summaryOutputCap": 0"#,
         );
-        let error = CurrentRuntimeConfig::from_json_slice(json.as_bytes()).expect_err("must fail");
+        let error = CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect_err("must fail");
         assert!(matches!(error, CurrentRuntimeConfigError::Invalid { .. }));
         assert!(
             error

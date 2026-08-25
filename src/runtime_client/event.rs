@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 
 use super::snapshot::{
     AgentStatusView, CapabilityView, RuntimeClientBackgroundExecution, RuntimeClientContextView,
-    RuntimeClientSubagent, RuntimeClientTranscriptCursor,
+    RuntimeClientResourcesView, RuntimeClientSubagent, RuntimeClientTranscriptCursor,
     RuntimeClientTranscriptInteractionRequested, RuntimeClientTranscriptInteractionSettled,
 };
 use crate::events::types::AttemptLimit;
@@ -396,6 +396,19 @@ pub enum RuntimeClientEvent {
     CapabilityUpdated {
         /// The deterministic active capability projection.
         capabilities: CapabilityView,
+    },
+
+    /// The runtime published a new immutable resource generation.
+    ///
+    /// A resource reload republishes the project context files and the
+    /// resource revision. It is deliberately distinct from
+    /// [`Self::CapabilityUpdated`]: a reload that changes only an
+    /// `AGENTS.md` advances the resource revision and leaves the capability
+    /// revision untouched, and a client that folded only the capability
+    /// event would still believe the old context files were loaded.
+    ResourcesUpdated {
+        /// The active runtime resource projection after the reload.
+        resources: RuntimeClientResourcesView,
     },
 
     /// The authoritative session model configuration changed.

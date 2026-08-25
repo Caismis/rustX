@@ -120,9 +120,117 @@ pub(crate) fn is_context_window_error(message: &str, provider_code: Option<&str>
         || (message.contains("input token count") && message.contains("exceeds the maximum"))
 }
 
+/// The provider-reported input size of a rejected oversized request, in
+/// tokens, when the diagnostic message carries one.
+///
+/// This is the only authoritative measurement of how far this runtime's
+/// deterministic token estimate was off for a concrete request, so it is
+/// worth recovering even though it lives in an unstructured message: without
+/// it, the compaction that recovers from an overflow replans against exactly
+/// the estimate the provider just rejected.
+///
+/// Providers spell the number differently, so an explicit input/prompt
+/// marker is preferred and the largest plausible token count in the message
+/// is the fallback. The fallback is deliberately conservative: in every
+/// known spelling it is at least the real input size (it may be the window
+/// or input-plus-output), and over-reporting only makes the derived budget
+/// correction stricter, never looser.
+#[must_use]
+pub(crate) fn reported_input_tokens(message: &str) -> Option<u64> {
+    let lowered = message.to_ascii_lowercase();
+    for marker in [
+        "prompt contains at least ",
+        "prompt contains ",
+        "in the messages",
+        "input token count (",
+        "input length (",
+        "prompt has ",
+        "prompt is too long: ",
+        "the request contains ",
+    ] {
+        if let Some(found) = number_near(&lowered, marker) {
+            return Some(found);
+        }
+    }
+    largest_number(&lowered).filter(|value| *value >= 1_000)
+}
+
+/// The number adjacent to `marker`: the first number after it, or — for a
+/// trailing marker such as `in the messages` — the last number before it.
+fn number_near(haystack: &str, marker: &str) -> Option<u64> {
+    let at = haystack.find(marker)?;
+    if marker.starts_with("in the") {
+        return last_number(&haystack[..at]);
+    }
+    first_number(&haystack[at + marker.len()..])
+}
+
+/// Parses the first decimal number of `text`, tolerating digit grouping.
+fn first_number(text: &str) -> Option<u64> {
+    let mut digits = String::new();
+    for character in text.chars() {
+        if character.is_ascii_digit() {
+            digits.push(character);
+        } else if character == ',' && !digits.is_empty() {
+            // A digit separator inside a number; a trailing comma simply
+            // ends it, which the parse below tolerates.
+        } else if digits.is_empty() {
+            if character.is_alphabetic() {
+                // The marker was not immediately followed by a count.
+                return None;
+            }
+        } else {
+            break;
+        }
+    }
+    digits.parse().ok()
+}
+
+/// Parses the last decimal number of `text`.
+fn last_number(text: &str) -> Option<u64> {
+    let mut best = None;
+    let mut digits = String::new();
+    for character in text.chars() {
+        if character.is_ascii_digit() {
+            digits.push(character);
+        } else if character != ',' && !digits.is_empty() {
+            best = digits.parse().ok();
+            digits.clear();
+        }
+    }
+    if digits.is_empty() {
+        best
+    } else {
+        digits.parse().ok().or(best)
+    }
+}
+
+/// The largest decimal number appearing in `text`.
+fn largest_number(text: &str) -> Option<u64> {
+    let mut best: Option<u64> = None;
+    let mut digits = String::new();
+    let flush = |digits: &mut String, best: &mut Option<u64>| {
+        if let Ok(value) = digits.parse::<u64>()
+            && best.is_none_or(|current| value > current)
+        {
+            *best = Some(value);
+        }
+        digits.clear();
+    };
+    for character in text.chars() {
+        if character.is_ascii_digit() {
+            digits.push(character);
+        } else if character != ',' {
+            flush(&mut digits, &mut best);
+        }
+    }
+    flush(&mut digits, &mut best);
+    best
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ModelError, ModelErrorKind, is_context_window_error};
+    use super::{ModelError, ModelErrorKind, is_context_window_error, reported_input_tokens};
 
     /// Model errors round-trip with stable kind discriminators.
     #[test]
@@ -212,6 +320,49 @@ mod tests {
         ] {
             assert!(!is_context_window_error(message, code), "{message}");
         }
+    }
+
+    /// The provider-reported input size is recovered from every spelling
+    /// this runtime knows, and is never below the real input count.
+    #[test]
+    fn reported_input_tokens_recovers_the_provider_count() {
+        for (message, expected) in [
+            (
+                "prompt is too long: 213462 tokens > 200000 maximum",
+                213_462,
+            ),
+            (
+                "This model's maximum context length is 128000 tokens. However, you requested \
+                 32768 output tokens and your prompt contains at least 84033 input tokens",
+                84_033,
+            ),
+            (
+                "Input length (265330) exceeds model's maximum context length (262144)",
+                265_330,
+            ),
+            (
+                "The input token count (1196265) exceeds the maximum number of tokens allowed (1048575)",
+                1_196_265,
+            ),
+            (
+                "Prompt has 140000 tokens, but the configured context size is 131072 tokens",
+                140_000,
+            ),
+            (
+                "This model's maximum prompt length is 131072 but the request contains 537812 tokens",
+                537_812,
+            ),
+        ] {
+            assert_eq!(reported_input_tokens(message), Some(expected), "{message}");
+        }
+    }
+
+    /// A message with no usable count reports nothing rather than a
+    /// fabricated one.
+    #[test]
+    fn reported_input_tokens_declines_a_countless_message() {
+        assert_eq!(reported_input_tokens("context length exceeded"), None);
+        assert_eq!(reported_input_tokens("400 status code (no body)"), None);
     }
 
     #[test]

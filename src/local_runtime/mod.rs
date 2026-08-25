@@ -31,6 +31,7 @@ pub use cli::{ArgumentError, USAGE, parse_arguments};
 pub use composition::{
     HeadlessConversationRuntime, LocalConversationCore, LocalConversationRuntime,
     LocalRuntimeDependencies, LocalRuntimeError, LocalRuntimePaths, LocalSessionProduct,
+    StartupSession,
 };
 pub use config::{
     CURRENT_RUNTIME_SCHEMA_VERSION, CurrentRuntimeConfig, CurrentRuntimeConfigError,
@@ -39,9 +40,10 @@ pub use config::{
 pub use serve::{ProcessOutcome, run_process, serve};
 pub use session::{
     CatalogCommitError, HistoricalConversationSnapshot, SESSION_CATALOG_SCHEMA_VERSION,
-    SESSION_LIST_PAGE_LIMIT, SESSION_TREE_PAGE_LIMIT, SessionCatalog, SessionError, SessionId,
-    SessionListPage, SessionNode, SessionNodeId, SessionNodeOrigin, SessionNodePage,
-    SessionSnapshot, SessionSummary, SessionUserMessageBoundary, SessionUserMessageBoundaryPage,
+    SESSION_LIST_PAGE_LIMIT, SESSION_NAME_LIMIT, SESSION_TREE_PAGE_LIMIT, SessionCatalog,
+    SessionError, SessionId, SessionListPage, SessionNode, SessionNodeId, SessionNodeOrigin,
+    SessionNodePage, SessionSnapshot, SessionSummary, SessionUserMessageBoundary,
+    SessionUserMessageBoundaryPage,
 };
 pub use supervisor::{
     LocalSessionSupervisor, SessionSupervisorError, SessionSwitchResult, SessionTreeResult,

@@ -10,6 +10,15 @@ use chrono::Utc;
 
 use crate::context::ContextRuntime;
 use crate::context::engine::CompactionConstraints;
+
+/// The bounded number of summary-budget shrinks one compaction may attempt
+/// after the summary model rejected its request as too large.
+const MAX_SUMMARY_SHRINKS: u32 = 3;
+
+/// The floor a shrinking summary input budget never crosses. Below it a
+/// summary request could no longer carry a useful span, and the honest
+/// outcome is an explicit compaction failure.
+const MIN_SUMMARY_INPUT_LIMIT: u64 = 4_096;
 use crate::context::error::{ContextError, ContextErrorKind};
 use crate::context::tokens::ProviderObservedInput;
 use crate::conversation::ConversationState;
@@ -76,20 +85,46 @@ pub(crate) async fn execute_compaction(
         context
             .engine
             .build_projection(conversation, tools, observed, effective_system_prompt)?;
-    let budgets = context.compaction_budgets;
-    let plan =
-        context
-            .engine
-            .plan_compaction(conversation, &projection, tools, budgets, constraints)?;
-    let summary_request = plan.summary_request();
-    let summary = tokio::select! {
-        biased;
-        () = cancellation.cancelled() => {
-            return Err(cancelled("compaction cancelled while summarizing").into());
+    let mut budgets = context.compaction_budgets;
+    // The summary input budget is derived from a deterministic estimate, and
+    // an estimate can be wrong. When the summary model itself rejects the
+    // assembled request as too large, that rejection is the authoritative
+    // measurement: the compaction replans the same transition against a
+    // halved summary input budget instead of abandoning the conversation to
+    // the overflow that triggered it. Each shrink strictly reduces the
+    // budget, so the loop terminates.
+    let mut shrinks: u32 = 0;
+    let (plan, summary) = loop {
+        let plan = context.engine.plan_compaction(
+            conversation,
+            &projection,
+            tools,
+            budgets,
+            constraints,
+        )?;
+        let summary_request = plan.summary_request();
+        let summary = tokio::select! {
+            biased;
+            () = cancellation.cancelled() => {
+                return Err(cancelled("compaction cancelled while summarizing").into());
+            }
+            result = context
+                .summarizer
+                .summarize(summary_request, cancellation.child()) => result,
+        };
+        match summary {
+            Ok(summary) => break (plan, summary),
+            Err(error)
+                if error.kind == ContextErrorKind::SummaryInputTooLarge
+                    && shrinks < MAX_SUMMARY_SHRINKS
+                    && budgets.summary_input_limit > MIN_SUMMARY_INPUT_LIMIT =>
+            {
+                shrinks += 1;
+                budgets.summary_input_limit =
+                    (budgets.summary_input_limit / 2).max(MIN_SUMMARY_INPUT_LIMIT);
+            }
+            Err(error) => return Err(error.into()),
         }
-        result = context
-            .summarizer
-            .summarize(summary_request, cancellation.child()) => result?,
     };
     if cancellation.is_cancelled() {
         return Err(cancelled("compaction cancelled before the semantic commit").into());
@@ -105,10 +140,17 @@ pub(crate) async fn execute_compaction(
         constraints.staged_request_context,
         tools,
     );
-    let fits = exact_after
-        < context
-            .engine
-            .soft_input_limit(budgets.primary_output_budget)?;
+    // The exact post-compaction fit is checked against the same corrected
+    // budget the plan was built with: after a provider has proven this
+    // runtime's estimate optimistic, a plan that only fits the uncorrected
+    // limit is not a plan that fits.
+    let mut soft_limit = context
+        .engine
+        .soft_input_limit(budgets.primary_output_budget)?;
+    if let Some(correction) = constraints.estimate_correction {
+        soft_limit = correction.apply(soft_limit);
+    }
+    let fits = exact_after < soft_limit;
     if !fits {
         return Err(ContextError::new(
             ContextErrorKind::CannotFit,

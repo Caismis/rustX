@@ -27,6 +27,7 @@
 
 import assert from "node:assert/strict";
 import { existsSync, writeFileSync, mkdirSync } from "node:fs";
+import { join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 
@@ -49,6 +50,7 @@ const SKIP = existsSync(BINARY)
     : "uv is not installed; the shared provider emulator cannot run"
   : `the rustx binary is not built at ${BINARY}; run \`cargo build --bin rustx\``;
 
+const PROJECT_INSTRUCTIONS = "# Project\n\nthe workspace instruction file\n";
 const CREDENTIAL_VARIABLE = "RUSTX_TUI_INTEGRATION_KEY";
 const CREDENTIAL_VALUE = "integration-secret";
 
@@ -117,14 +119,17 @@ describe("real rustx child integration", { skip: SKIP }, () => {
     fixture = TempFixture.create("rustx-tui-");
     const workspace = fixture.path("workspace");
     mkdirSync(workspace, { recursive: true });
-    writeFileSync(fixture.path("models.json"), modelsJson(provider.url("/v1")));
-    writeFileSync(fixture.path("rustx.json"), RUNTIME_CONFIG_JSON);
+    // A real project instruction file, so the resource projection is proven
+    // against what the runtime actually loaded rather than a fixture.
+    writeFileSync(join(workspace, "AGENTS.md"), PROJECT_INSTRUCTIONS);
+    writeFileSync(fixture.path("models.jsonc"), modelsJson(provider.url("/v1")));
+    writeFileSync(fixture.path("rustx.jsonc"), RUNTIME_CONFIG_JSON);
 
     const child = ChildRuntimeProcess.spawn({
       binary: BINARY,
       paths: {
-        models: fixture.path("models.json"),
-        config: fixture.path("rustx.json"),
+        models: fixture.path("models.jsonc"),
+        config: fixture.path("rustx.jsonc"),
         workspace,
         runtimeRoot: fixture.path("private"),
       },
@@ -176,6 +181,21 @@ describe("real rustx child integration", { skip: SKIP }, () => {
       "fixture/integration-model",
     );
     assert.equal(initial.sessionModel.effective.contextWindow, 128_000);
+
+    // The runtime names the project instruction files it loaded, by path and
+    // by exact byte length. The client never reads the file to find out.
+    const contextFiles = initial.resources.context_files ?? [];
+    const instructions = contextFiles.find((file) =>
+      file.path.endsWith(`${sep}AGENTS.md`),
+    );
+    assert.ok(
+      instructions,
+      `AGENTS.md in the published generation: ${JSON.stringify(initial.resources)}`,
+    );
+    assert.equal(
+      instructions.bytes,
+      Buffer.byteLength(PROJECT_INSTRUCTIONS, "utf8"),
+    );
 
     // --- model / capability inspection through the protocol only -----------
     const catalog = await session.modelCatalog();
@@ -339,7 +359,11 @@ const COMPACTION_RUNTIME_CONFIG_JSON = JSON.stringify({
   schemaVersion: 2,
   agentId: "agent-tui-compaction",
   model: { model: "fixture/integration-model" },
-  context: { reserveTokens: 8_192, keepRecentTokens: 256 },
+  // Both compaction budgets carry the reserve, so the shared limit is
+  // 56000 - 1536 - 1024 = 53440: above the selected span's estimate (~51k)
+  // and below the whole turn-two request estimate (~56k). See the same
+  // derivation in tests/issue47_conformance.rs.
+  context: { reserveTokens: 1_536, keepRecentTokens: 256 },
 });
 
 const TUI_TURN_ONE = "tui compaction: turn one";
@@ -414,19 +438,19 @@ describe("real rustx child repeated compaction", { skip: SKIP }, () => {
     const workspace = fixture.path("workspace");
     mkdirSync(workspace, { recursive: true });
     writeFileSync(
-      fixture.path("models.json"),
+      fixture.path("models.jsonc"),
       compactionModelsJson(provider.url("/v1")),
     );
     writeFileSync(
-      fixture.path("rustx.json"),
+      fixture.path("rustx.jsonc"),
       COMPACTION_RUNTIME_CONFIG_JSON,
     );
 
     const child = ChildRuntimeProcess.spawn({
       binary: BINARY,
       paths: {
-        models: fixture.path("models.json"),
-        config: fixture.path("rustx.json"),
+        models: fixture.path("models.jsonc"),
+        config: fixture.path("rustx.jsonc"),
         workspace,
         runtimeRoot: fixture.path("private"),
       },

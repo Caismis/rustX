@@ -14,7 +14,7 @@ import { Markdown } from "@earendil-works/pi-tui";
 import { reduce } from "../src/presentation/projection.ts";
 import { correlateTools } from "../src/presentation/tools.ts";
 import { renderTranscript } from "../src/ui/components/transcript.ts";
-import { markdownTheme } from "../src/ui/theme.ts";
+import { markdownTheme, role } from "../src/ui/theme.ts";
 import {
   assistantBlocks,
   assistantMessage,
@@ -216,7 +216,7 @@ describe("reasoning", () => {
       reasoning?.kind === "markdown"
         ? reasoning.defaultTextStyle?.color?.("x")
         : undefined,
-      "[90mx[0m",
+      role.reasoning("x"),
       "reasoning carries the muted role",
     );
     assert.equal(
@@ -247,8 +247,12 @@ describe("reasoning", () => {
       .render(100)
       .join("\n");
 
-    assert.match(rendered, /\[90m after/);
-    assert.match(rendered, /\[90m tail/);
+    // The reasoning colour is reopened after every nested span that reset
+    // it, so the whole run reads as reasoning rather than only its first
+    // fragment.
+    const reopen = role.reasoning("").split("\u001b[39m")[0]!;
+    assert.ok(rendered.includes(`${reopen} after`));
+    assert.ok(rendered.includes(`${reopen} tail`));
   });
 
   it("collapses to a marker when hidden, and never becomes answer text", () => {
@@ -256,7 +260,7 @@ describe("reasoning", () => {
     const hidden = renderTranscript(state, prefs({ reasoningVisible: false }));
 
     assert.equal(hidden.length, 2);
-    assert.equal(blockText(hidden[0]!), "✻ Thinking…");
+    assert.equal(blockText(hidden[0]!), "Thinking...");
     assert.equal(blockText(hidden[1]!), "the answer");
     // The reasoning body is gone from the screen but was never promoted.
     assert.ok(!transcriptString(state, prefs({ reasoningVisible: false })).includes("step one"));
@@ -345,11 +349,19 @@ describe("inbound provenance", () => {
         runtimeInbound("m2", "a runtime turn"),
       ],
     });
-    const [human, runtime] = transcriptText(state);
+    const blocks = renderTranscript(state, prefs());
+    const [human, provenance, runtime] = blocks;
 
-    assert.equal(human, "▌ a human turn");
-    assert.match(runtime ?? "", /^▌ runtime\n/);
-    assert.match(runtime ?? "", /a runtime turn/);
+    // A human turn is its own band and carries no label.
+    assert.equal(blockText(human!), "a human turn");
+    assert.equal(human?.background, "user");
+    // A runtime-originated turn is labelled above the band, never disguised
+    // as a human one — and it still gets the same band, because it is still
+    // an inbound turn.
+    assert.equal(blockText(provenance!), "runtime");
+    assert.equal(provenance?.background, undefined);
+    assert.equal(blockText(runtime!), "a runtime turn");
+    assert.equal(runtime?.background, "user");
   });
 
   it("marks a compaction summary as one", () => {
