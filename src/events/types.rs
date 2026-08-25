@@ -217,6 +217,33 @@ pub enum RuntimeEvent {
         retry_delay_ms: Option<u64>,
     },
 
+    /// One inbound batch crossed the canonical-adoption linearization point
+    /// and became a turn this conversation owes a model answer for.
+    ///
+    /// This is the durable **answer obligation** of an adopted turn, and the
+    /// only durable fact that says "rustX accepted this work". It is committed
+    /// inside the adoption transaction itself, so a canonical `UserMessage`
+    /// and the obligation to answer it can never disagree.
+    ///
+    /// The obligation is *consumed* — never re-derived from canonical shape —
+    /// by exactly two later facts, whichever commits first:
+    ///
+    /// ```text
+    /// ModelRequestStarted   the turn was carried to the provider; from here
+    ///                       the external-outcome plane owns it
+    /// attempt terminal      the runtime concluded the turn (completed,
+    ///                       cancelled, failed, timed out, limited)
+    /// ```
+    ///
+    /// Recovery therefore continues exactly the turns a live runtime would
+    /// still owe an answer for, and supplied bootstrap history — a fork seed,
+    /// a persona lineage, a fixture prefix — never acquires an obligation,
+    /// because it was never adopted.
+    InboundTurnAdopted {
+        /// The adopted canonical messages, in inbound sequence order.
+        message_ids: Vec<MessageId>,
+    },
+
     /// A complete canonical Assistant message was committed to the Message
     /// Ledger. The event references the message by identity only; message
     /// content is never duplicated into the Event Journal.

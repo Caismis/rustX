@@ -168,7 +168,9 @@ fn finite_watermark_excludes_post_watermark_arrivals() {
     store.accept_inbound(runtime("C")).expect("C");
     // The selected batch is frozen: adoption through its watermark adopts
     // exactly A and B, never C.
-    let adopted = store.adopt_pending_batch(batch.watermark).expect("adopt");
+    let adopted = store
+        .adopt_pending_batch(batch.watermark, adoption_of(&store, batch.watermark))
+        .expect("adopt");
     assert_eq!(adopted.len(), 2);
     let remaining = store
         .select_pending_batch()
@@ -190,7 +192,9 @@ fn adoption_is_atomic_and_exactly_once_across_reopen() {
         .select_pending_batch()
         .expect("select")
         .expect("batch");
-    let adopted = store.adopt_pending_batch(batch.watermark).expect("adopt");
+    let adopted = store
+        .adopt_pending_batch(batch.watermark, adoption_of(&store, batch.watermark))
+        .expect("adopt");
     assert_eq!(adopted.len(), 2);
     drop(store);
 
@@ -217,7 +221,10 @@ fn adoption_is_atomic_and_exactly_once_across_reopen() {
     );
     // Adopting the same watermark again finds nothing pending.
     let again = reopened
-        .adopt_pending_batch(rustx::runtime::inbound::InboundSequence::new(2))
+        .adopt_pending_batch(
+            rustx::runtime::inbound::InboundSequence::new(2),
+            adoption_of(&reopened, rustx::runtime::inbound::InboundSequence::new(2)),
+        )
         .expect("adopt again");
     assert!(
         again.is_empty(),
@@ -252,7 +259,9 @@ fn producer_correlation_retry_is_exactly_once() {
 
     // Adopt, then retry again: the retry still resolves to the same
     // acceptance and produces no new pending/canonical delivery.
-    store.adopt_pending_batch(first.sequence).expect("adopt");
+    store
+        .adopt_pending_batch(first.sequence, adoption_of(&store, first.sequence))
+        .expect("adopt");
     let after_adopt = store
         .accept_inbound(InboundDraft {
             message_id: Some(MessageId::new("background-exec_1-terminal")),
@@ -394,7 +403,10 @@ fn canonical_ledger_preserves_intervening_assistant_and_tool_facts_across_reopen
     // Inbound batch 1.
     store.accept_inbound(human("A")).expect("accept A");
     store
-        .adopt_pending_batch(rustx::runtime::inbound::InboundSequence::new(1))
+        .adopt_pending_batch(
+            rustx::runtime::inbound::InboundSequence::new(1),
+            adoption_of(&store, rustx::runtime::inbound::InboundSequence::new(1)),
+        )
         .expect("adopt A");
     // Intervening canonical facts (assistant + tool) between the two
     // inbound adoptions, appended through the canonical durability seam.
@@ -405,7 +417,10 @@ fn canonical_ledger_preserves_intervening_assistant_and_tool_facts_across_reopen
     // Inbound batch 2.
     store.accept_inbound(human("B")).expect("accept B");
     store
-        .adopt_pending_batch(rustx::runtime::inbound::InboundSequence::new(2))
+        .adopt_pending_batch(
+            rustx::runtime::inbound::InboundSequence::new(2),
+            adoption_of(&store, rustx::runtime::inbound::InboundSequence::new(2)),
+        )
         .expect("adopt B");
     drop(store);
 
@@ -506,7 +521,10 @@ fn initial_history_identity_is_exact() {
     // live execution does (adopted inbound, assistant facts, ...).
     store.accept_inbound(human("C")).expect("accept C");
     store
-        .adopt_pending_batch(rustx::runtime::inbound::InboundSequence::new(1))
+        .adopt_pending_batch(
+            rustx::runtime::inbound::InboundSequence::new(1),
+            adoption_of(&store, rustx::runtime::inbound::InboundSequence::new(1)),
+        )
         .expect("adopt C");
     drop(store);
 
@@ -614,7 +632,10 @@ fn ledger_without_bootstrap_identity_fails_closed() {
     // inbound appends to the Ledger directly).
     store.accept_inbound(human("A")).expect("accept A");
     store
-        .adopt_pending_batch(rustx::runtime::inbound::InboundSequence::new(1))
+        .adopt_pending_batch(
+            rustx::runtime::inbound::InboundSequence::new(1),
+            adoption_of(&store, rustx::runtime::inbound::InboundSequence::new(1)),
+        )
         .expect("adopt A");
     assert_eq!(store.load_canonical().expect("load").len(), 1);
 
@@ -708,4 +729,23 @@ fn recovery_safety_fails_closed_on_incomplete_or_compacted_prefixes() {
     });
     recovery_safety(&[user("u0"), user("u1"), summary])
         .expect("durable Surface history makes compaction restart-safe");
+}
+
+/// The durable answer obligation of one adoption, built from exactly the
+/// pending items the adoption transaction will consume.
+fn adoption_of(
+    store: &SqliteConversationStore,
+    watermark: rustx::runtime::inbound::InboundSequence,
+) -> rustx::events::types::RuntimeEventEnvelope {
+    rustx::durable::inbox::inbound_adoption_event(
+        store.conversation_id(),
+        None,
+        store
+            .load_pending()
+            .expect("pending")
+            .into_iter()
+            .filter(|item| item.sequence <= watermark)
+            .map(|item| item.message_id)
+            .collect(),
+    )
 }

@@ -14,7 +14,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::conversation::{SurfaceRevision, SurfaceSpan};
-use crate::events::types::RuntimeEventEnvelope;
+use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use crate::message::types::{
     InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
@@ -23,7 +23,9 @@ use crate::model::types::ModelRequest;
 use crate::publication::{
     PublicationAudit, PublicationFrame, PublicationStreamRecord, PublicationStreamStart,
 };
-use crate::runtime::identity::{ConversationId, MessageId, PublicationStreamId, RequestId};
+use crate::runtime::identity::{
+    AttemptId, ConversationId, EventId, MessageId, PublicationStreamId, RequestId,
+};
 use crate::runtime::inbound::InboundSequence;
 use crate::runtime::types::TokenMeasurement;
 
@@ -142,6 +144,49 @@ pub struct PendingBatch {
     pub watermark: InboundSequence,
     /// The selected items in strict sequence order.
     pub items: Vec<PendingInboundItem>,
+}
+
+impl PendingBatch {
+    /// The durable answer obligation this batch acquires when it is adopted.
+    ///
+    /// `attempt_id` is the attempt that owns the adoption: the running attempt
+    /// of a safe-boundary drain, and `None` for the coordinator admission
+    /// path, where no attempt exists yet.
+    #[must_use]
+    pub fn adoption_event(&self, attempt_id: Option<AttemptId>) -> RuntimeEventEnvelope {
+        inbound_adoption_event(
+            &self.conversation_id,
+            attempt_id,
+            self.items
+                .iter()
+                .map(|item| item.message_id.clone())
+                .collect(),
+        )
+    }
+}
+
+/// Builds the [`RuntimeEvent::InboundTurnAdopted`] fact of one adoption.
+///
+/// The adoption transaction commits this fact with the canonical messages it
+/// names, so the durable authority can never hold an adopted turn without the
+/// obligation to answer it, nor an obligation naming messages it did not adopt.
+#[must_use]
+pub fn inbound_adoption_event(
+    conversation_id: &ConversationId,
+    attempt_id: Option<AttemptId>,
+    message_ids: Vec<MessageId>,
+) -> RuntimeEventEnvelope {
+    RuntimeEventEnvelope {
+        schema_version: EVENT_SCHEMA_VERSION,
+        // The durable owner allocates the identity with the sequence.
+        event_id: EventId::new(""),
+        sequence: 0,
+        conversation_id: conversation_id.clone(),
+        attempt_id,
+        turn_id: None,
+        timestamp: Utc::now(),
+        event: RuntimeEvent::InboundTurnAdopted { message_ids },
+    }
 }
 
 /// The bounded current working set loaded from the durable Conversation
@@ -605,10 +650,12 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
     /// Selects a finite pending batch without consuming it.
     fn select_pending_batch(&self) -> Result<Option<PendingBatch>, ConversationStoreError>;
 
-    /// Adopts the selected pending watermark atomically.
+    /// Adopts the selected pending watermark atomically, together with the
+    /// durable answer obligation of the adopted turn.
     fn adopt_pending_batch(
         &self,
         watermark: InboundSequence,
+        adoption: RuntimeEventEnvelope,
     ) -> Result<Vec<MessageBlock>, ConversationStoreError>;
 
     /// Reads pending items for bootstrap.
@@ -677,16 +724,25 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// durable canonical message ledger, in strict sequence order, returning
     /// the adopted canonical messages.
     ///
-    /// Adoption and pending removal share one transaction. Adopting an empty
-    /// (or already-adopted) watermark returns an empty vector.
+    /// Adoption, pending removal, and the adopted turn's durable **answer
+    /// obligation** share one transaction: `adoption` must be a
+    /// [`RuntimeEvent::InboundTurnAdopted`] naming exactly the adopted
+    /// messages, in the same order. A crash can therefore never observe a
+    /// canonical `UserMessage` whose obligation is missing, an obligation
+    /// naming work that was not adopted, or a pending record whose canonical
+    /// message already exists. Adopting an empty (or already-adopted)
+    /// watermark returns an empty vector and commits no obligation.
     ///
     /// # Errors
     ///
-    /// Returns [`ConversationStoreError::Storage`] when the adoption transaction
+    /// Returns [`ConversationStoreError::InvalidReference`] when `adoption` is
+    /// not the obligation of exactly this adoption, and
+    /// [`ConversationStoreError::Storage`] when the adoption transaction
     /// fails; on failure the selected items remain pending and recoverable.
     fn adopt_pending_batch(
         &self,
         watermark: InboundSequence,
+        adoption: RuntimeEventEnvelope,
     ) -> Result<Vec<MessageBlock>, ConversationStoreError>;
 
     /// Loads every accepted-but-not-yet-adopted pending item in strict
@@ -1076,8 +1132,9 @@ impl<T: ConversationStore + ?Sized> ConversationInboundCapability for T {
     fn adopt_pending_batch(
         &self,
         watermark: InboundSequence,
+        adoption: RuntimeEventEnvelope,
     ) -> Result<Vec<MessageBlock>, ConversationStoreError> {
-        ConversationStore::adopt_pending_batch(self, watermark)
+        ConversationStore::adopt_pending_batch(self, watermark, adoption)
     }
 
     fn load_pending(&self) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {
@@ -1205,8 +1262,9 @@ impl ConversationInboundCapability for StoreInboundCapability {
     fn adopt_pending_batch(
         &self,
         watermark: InboundSequence,
+        adoption: RuntimeEventEnvelope,
     ) -> Result<Vec<MessageBlock>, ConversationStoreError> {
-        self.store.adopt_pending_batch(watermark)
+        self.store.adopt_pending_batch(watermark, adoption)
     }
 
     fn load_pending(&self) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {

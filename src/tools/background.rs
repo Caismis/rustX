@@ -2835,7 +2835,10 @@ mod tests {
             1,
             "exactly one terminal inbound publication"
         );
-        let _ = fixture.mailbox.adopt_pending_batch(&batch).expect("adopt");
+        let _ = fixture
+            .mailbox
+            .adopt_pending_batch(&batch, None)
+            .expect("adopt");
         assert!(
             fixture
                 .mailbox

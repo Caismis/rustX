@@ -660,7 +660,17 @@ impl ConversationStore for SqliteConversationStore {
     fn adopt_pending_batch(
         &self,
         watermark: InboundSequence,
+        adoption: RuntimeEventEnvelope,
     ) -> Result<Vec<MessageBlock>, ConversationStoreError> {
+        let RuntimeEvent::InboundTurnAdopted {
+            message_ids: obligation,
+        } = &adoption.event
+        else {
+            return Err(ConversationStoreError::InvalidReference(
+                "the adoption transaction accepts only an InboundTurnAdopted obligation".to_owned(),
+            ));
+        };
+        let obligation = obligation.clone();
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -686,6 +696,24 @@ impl ConversationStore for SqliteConversationStore {
                 [seq_to_i64(watermark.get())?],
             )
             .map_err(|error| storage(format!("adopt pending delete: {error}")))?;
+        // The obligation names exactly the adopted work, in adoption order.
+        // A mismatch is a contract violation, never a silently absorbed
+        // difference: the durable authority would otherwise hold an answer
+        // obligation for work it did not adopt, or adopt work it owes no
+        // answer for.
+        let adopted_ids: Vec<MessageId> =
+            items.iter().map(|item| item.message_id.clone()).collect();
+        if obligation != adopted_ids {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "the adoption obligation names {obligation:?}, but the transaction adopts \
+                 {adopted_ids:?}"
+            )));
+        }
+        // An empty (or already-adopted) watermark adopts nothing and
+        // therefore acquires no obligation.
+        if !adopted_ids.is_empty() {
+            persist_event_tx(&transaction, &self.conversation_id, adoption)?;
+        }
         #[cfg(test)]
         if self.consume_admission_fault(AdmissionFaultOperation::AdoptPendingBatch)
             || Self::consume(&self.fail_adopt_remaining)
@@ -5523,7 +5551,8 @@ fn load_user_notification_tx(
 fn requires_specialized_transition(event: &RuntimeEvent) -> bool {
     matches!(
         event,
-        RuntimeEvent::AssistantMessageCommitted { .. }
+        RuntimeEvent::InboundTurnAdopted { .. }
+            | RuntimeEvent::AssistantMessageCommitted { .. }
             | RuntimeEvent::ToolMessageCommitted { .. }
             | RuntimeEvent::CompactionCompleted { .. }
             | RuntimeEvent::ModelRequestStarted { .. }
@@ -5906,7 +5935,16 @@ mod tests {
     fn acceptance_and_adoption_share_durable_identity() {
         let store = store();
         let accepted = store.accept_inbound(draft("hello")).unwrap();
-        let adopted = store.adopt_pending_batch(accepted.sequence).unwrap();
+        let adopted = store
+            .adopt_pending_batch(
+                accepted.sequence,
+                crate::durable::inbox::inbound_adoption_event(
+                    store.conversation_id(),
+                    None,
+                    vec![accepted.message_id.clone()],
+                ),
+            )
+            .unwrap();
         assert_eq!(adopted.len(), 1);
         assert!(store.load_pending().unwrap().is_empty());
         assert_eq!(store.load_head().unwrap().active_message_ids.len(), 1);
@@ -6181,7 +6219,18 @@ mod tests {
 
         let accepted = store.accept_inbound(draft("pending")).unwrap();
         store.arm_fail_next_adopt_commit();
-        assert!(store.adopt_pending_batch(accepted.sequence).is_err());
+        assert!(
+            store
+                .adopt_pending_batch(
+                    accepted.sequence,
+                    crate::durable::inbox::inbound_adoption_event(
+                        store.conversation_id(),
+                        None,
+                        vec![accepted.message_id.clone()],
+                    ),
+                )
+                .is_err()
+        );
         assert_eq!(store.load_pending().unwrap().len(), 1);
         assert!(store.load_canonical().unwrap().is_empty());
         assert_eq!(
@@ -6189,7 +6238,16 @@ mod tests {
             SurfaceRevision::INITIAL
         );
 
-        let adopted = store.adopt_pending_batch(accepted.sequence).unwrap();
+        let adopted = store
+            .adopt_pending_batch(
+                accepted.sequence,
+                crate::durable::inbox::inbound_adoption_event(
+                    store.conversation_id(),
+                    None,
+                    vec![accepted.message_id.clone()],
+                ),
+            )
+            .unwrap();
         assert_eq!(adopted.len(), 1);
         assert!(store.load_pending().unwrap().is_empty());
         assert_eq!(store.load_head().unwrap().active_message_ids.len(), 1);

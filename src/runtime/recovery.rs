@@ -108,7 +108,7 @@ use chrono::{DateTime, Utc};
 use crate::conversation::{RecoverySafetyError, recovery_safety};
 use crate::durable::{ConversationStore, ConversationStoreError, PendingInboundItem};
 use crate::events::types::{AttemptFailure, RuntimeEvent, RuntimeEventEnvelope};
-use crate::message::types::{AssistantContentBlock, InboundKind, MessageBlock, ToolMessageBlock};
+use crate::message::types::{AssistantContentBlock, MessageBlock, ToolMessageBlock};
 use crate::publication::{PublicationAuditKind, PublicationStreamRecord};
 use crate::runtime::identity::{
     AttemptId, ConversationId, EventId, MessageId, PublicationStreamId, RequestId, SubagentId,
@@ -388,16 +388,22 @@ pub struct RecoveryEvidence {
     highest_subagent_ordinal: u64,
     /// Whether the Event Journal contains any attempt fact at all.
     saw_any_attempt: bool,
-    /// Whether the trailing message of the current Surface belongs to the
-    /// immutable bootstrap prefix this lineage was initialized with.
+    /// The one adopted turn this conversation still owes a model answer for,
+    /// or `None` when it owes none.
     ///
-    /// Supplied history is not work rustX accepted: only a message this
-    /// conversation durably **adopted** through Pending Inbound is a turn the
-    /// runtime promised to answer. Class A's continuation permission is
-    /// therefore restricted to a trailing human message this flag denies.
-    /// Only the answer is retained, so the evidence stays O(1) even for a
-    /// lineage seeded with a large forked prefix.
-    trailing_active_is_bootstrap: bool,
+    /// This is the durable **answer obligation** of
+    /// [`RuntimeEvent::InboundTurnAdopted`], never an inference from canonical
+    /// shape: the obligation is opened by the adoption transaction itself and
+    /// consumed by the first `ModelRequestStarted` or attempt terminal that
+    /// follows it. Recovery therefore continues exactly the turns a live
+    /// runtime would still owe an answer for — including a turn adopted at a
+    /// mid-attempt safe boundary, and a turn adopted while no attempt existed
+    /// yet — and never answers supplied bootstrap history, which no adoption
+    /// ever accepted.
+    ///
+    /// Only the trailing identity of the adopted batch is retained, so the
+    /// evidence stays O(1) however large the adopted batch or the lineage is.
+    unanswered_adopted_turn: Option<MessageId>,
     /// Publication streams that never settled (Issue #108).
     ///
     /// The records carry frozen identities and the durable P/U evidence only.
@@ -423,17 +429,6 @@ impl RecoveryEvidence {
         let head = store.load_head()?;
         let active = store.load_messages(&head.active_message_ids)?;
         let pending = store.load_pending()?;
-        // Only a trailing *human* message can carry a continuation
-        // obligation, so the bootstrap prefix is read only when one exists and
-        // nothing but the answer survives the statement.
-        let trailing_active_is_bootstrap = match active.last() {
-            Some(MessageBlock::User(user)) if user.kind == InboundKind::Message => store
-                .load_bootstrap_history()?
-                .iter()
-                .any(|message| crate::conversation::message_id_of(message) == user.id),
-            _ => false,
-        };
-
         let mut evidence = Self {
             conversation_id,
             active,
@@ -448,7 +443,7 @@ impl RecoveryEvidence {
             highest_background_ordinal: 0,
             highest_subagent_ordinal: 0,
             saw_any_attempt: false,
-            trailing_active_is_bootstrap,
+            unanswered_adopted_turn: None,
             unsettled_publications: store.load_unsettled_publication_streams()?,
         };
         evidence.active_ids = evidence
@@ -498,12 +493,25 @@ impl RecoveryEvidence {
                         tools: ToolExternalSummary::default(),
                     });
             }
+            RuntimeEvent::InboundTurnAdopted { message_ids } => {
+                // The adoption transaction opened an answer obligation. Only
+                // the trailing identity is retained: the obligation is one
+                // yes/no fact plus the turn it names, never the batch.
+                if let Some(last) = message_ids.last() {
+                    self.unanswered_adopted_turn = Some(last.clone());
+                }
+            }
             RuntimeEvent::AttemptCompleted { attempt_id, .. }
             | RuntimeEvent::AttemptCancelled { attempt_id, .. }
             | RuntimeEvent::AttemptTimedOut { attempt_id }
             | RuntimeEvent::AttemptLimitExceeded { attempt_id, .. }
             | RuntimeEvent::AttemptFailed { attempt_id, .. } => {
                 self.note_attempt(attempt_id);
+                // The attempt concluded the turn it owned. A live runtime
+                // starts nothing further for it — a cancelled turn stays
+                // unanswered — so the obligation is consumed here exactly as
+                // it is live.
+                self.unanswered_adopted_turn = None;
                 // A durable terminal is absorbing: the attempt leaves the
                 // unresolved working set and never returns to it. Its tool
                 // repair evidence survives independently: an incomplete
@@ -513,6 +521,11 @@ impl RecoveryEvidence {
                 self.unsettled_attempts.remove(attempt_id);
             }
             RuntimeEvent::ModelRequestStarted { request_id, .. } => {
+                // The adopted turn was carried to the provider. From here the
+                // external-outcome plane owns it: whether it is answered,
+                // indeterminate, or known-and-unsettled is the attempt
+                // classification's question, never the obligation's.
+                self.unanswered_adopted_turn = None;
                 if let Some(attempt) = self.current_attempt_mut(envelope) {
                     // The newest start is the in-flight request. The
                     // transition is monotonic: a started request can never
@@ -896,15 +909,13 @@ pub enum AttemptRecoveryClass {
     /// Pending Inbound (if any) remains authoritative and is ordinary
     /// admissible work.
     ///
-    /// Canonical adoption commits **before** the admitted attempt publishes
-    /// its `AttemptStarted` fact, so a process that dies in that window leaves
-    /// an adopted-but-unanswered canonical turn with zero attempt evidence.
-    /// That is Class B's situation with strictly less external history — no
-    /// attempt ever existed, so nothing external can have happened — and it
-    /// resumes the same way (see [`ResumeDisposition::ContinueAdoptedTurn`]).
-    /// A trailing human message that merely arrived as the lineage's immutable
-    /// bootstrap prefix is supplied history, not accepted work, and never
-    /// acquires that answer obligation.
+    /// The class says nothing about continuation on its own: canonical
+    /// adoption commits **before** the admitted attempt publishes its
+    /// `AttemptStarted` fact, so a process that dies in that window leaves an
+    /// adopted-but-unanswered canonical turn with zero attempt evidence. What
+    /// continues is decided by the durable answer obligation of the adoption
+    /// transaction (see [`ResumeDisposition::ContinueAdoptedTurn`]), which
+    /// this class neither creates nor cancels.
     NotStarted,
     /// **Class B.** An attempt was admitted and its inbound was already
     /// canonicalized, but no external side effect ever crossed a start
@@ -1011,13 +1022,17 @@ pub enum ResumeDisposition {
     /// attempt. The `UserMessage` is already canonical and is never
     /// re-adopted.
     ///
-    /// Two classes reach it, for the same reason — the adopted turn is
-    /// canonical and **no external side effect ever crossed a start commit**:
-    /// Class B, whose attempt existed but started nothing, and Class A, where
-    /// the process died between the adoption transaction and the attempt's own
-    /// `AttemptStarted` commit so no attempt exists at all. Refusing to
-    /// continue in the second case would durably strand a user turn that the
-    /// runtime had already accepted into canonical history.
+    /// The permission is the durable **answer obligation** of
+    /// [`RuntimeEvent::InboundTurnAdopted`](crate::events::types::RuntimeEvent::InboundTurnAdopted):
+    /// an adoption transaction committed the turn and neither a
+    /// `ModelRequestStarted` nor an attempt terminal has consumed it since. It
+    /// is therefore reached from every attempt class except the indeterminate
+    /// one — no attempt at all (death inside the adoption/attempt-start
+    /// window), an attempt that started nothing, a durably terminal attempt
+    /// whose successor turn was adopted after it, and a live attempt that
+    /// drained new inbound at a safe boundary and died before its next request
+    /// start. Deciding it from canonical shape instead would strand every one
+    /// of those turns the runtime had already accepted.
     ContinueAdoptedTurn,
     /// Continuation is blocked because an external outcome is indeterminate
     /// (Class C). Pending Inbound remains admissible — that is new
@@ -1103,26 +1118,32 @@ impl RecoveryPlan {
     pub fn classify(evidence: &RecoveryEvidence) -> Self {
         let tool_repairs = Self::plan_tool_repairs(evidence);
         let attempt = Self::classify_attempt(evidence);
-        let resume = match &attempt {
-            AttemptRecoveryClass::AdmittedWithoutExternalStart { .. }
-                if awaits_model_turn(&evidence.active) =>
-            {
-                ResumeDisposition::ContinueAdoptedTurn
-            }
-            // Class A reaches the same permission only through the
-            // adoption/attempt-start window: an ordinary human turn this
-            // conversation durably **adopted** is canonical and unanswered
-            // while no attempt fact exists at all, which is strictly weaker
-            // external history than Class B, never stronger. A trailing human
-            // message that merely arrived as immutable bootstrap history is
-            // supplied context, not work rustX accepted, and is excluded.
-            AttemptRecoveryClass::NotStarted if awaits_adopted_model_turn(evidence) => {
-                ResumeDisposition::ContinueAdoptedTurn
-            }
-            AttemptRecoveryClass::IndeterminateExternalOutcome { .. } => {
-                ResumeDisposition::BlockedIndeterminate
-            }
-            _ => ResumeDisposition::PendingInboundOnly,
+        // Continuation follows from two independent durable questions, and
+        // from nothing else — no canonical-shape inference, no attempt class
+        // special case, no bootstrap-prefix probe:
+        //
+        // ```text
+        // is any external outcome indeterminate?   -> nothing may continue
+        // is an adopted turn still unanswered?     -> that turn continues
+        // ```
+        //
+        // The obligation is what the adoption transaction durably recorded, so
+        // every attempt class can carry one: none at all (the process died
+        // between adoption and `AttemptStarted`), an attempt that started
+        // nothing (Class B), a durably terminal attempt whose successor turn
+        // was adopted after it (Class D), and an attempt whose *previous*
+        // request outcome is known while the turn adopted after it never
+        // reached a request start (Class E). Indeterminacy dominates: Pending
+        // Inbound stays admissible, but recovery itself starts nothing.
+        let resume = if matches!(
+            &attempt,
+            AttemptRecoveryClass::IndeterminateExternalOutcome { .. }
+        ) {
+            ResumeDisposition::BlockedIndeterminate
+        } else if evidence.unanswered_adopted_turn.is_some() {
+            ResumeDisposition::ContinueAdoptedTurn
+        } else {
+            ResumeDisposition::PendingInboundOnly
         };
         Self {
             conversation_id: evidence.conversation_id.clone(),
@@ -1940,41 +1961,6 @@ pub fn recover(
     Ok(report)
 }
 
-/// Whether the current Surface ends in an adopted ordinary inbound turn that
-/// is still awaiting its model answer.
-///
-/// Used only to decide whether a Class B continuation has anything to
-/// continue. It inspects committed canonical structure — never a producer
-/// state, a client cache, or a timestamp heuristic — and it deliberately
-/// requires an ordinary [`InboundKind::Message`]: a runtime compaction summary
-/// is user-role *history*, not unanswered work, and must never be mistaken for
-/// a turn that needs an answer.
-///
-/// The continuation runs as an explicit `InitialTurnTrigger::Continuation`,
-/// never as a reconstructed fresh-inbound turn. A `FreshInboundTurn` is
-/// process-local **execution** state describing a batch this runtime adopted;
-/// it was never durable, so recovery would have to fabricate it. Recovery
-/// fabricates nothing: the recovered attempt continues committed canonical
-/// history, which is exactly what durable evidence supports.
-fn awaits_model_turn(active: &[MessageBlock]) -> bool {
-    matches!(
-        active.last(),
-        Some(MessageBlock::User(user)) if user.kind == InboundKind::Message
-    )
-}
-
-/// Whether the current Surface ends in an *adopted* ordinary inbound turn that
-/// is still awaiting its model answer.
-///
-/// Adopted, not merely present: the immutable bootstrap prefix a lineage was
-/// initialized with is supplied history — a fork/clone seed, a subagent
-/// persona lineage, a test fixture — and answering it was never a promise this
-/// conversation made. Only inbound this conversation durably accepted and then
-/// adopted creates that obligation.
-fn awaits_adopted_model_turn(evidence: &RecoveryEvidence) -> bool {
-    awaits_model_turn(&evidence.active) && !evidence.trailing_active_is_bootstrap
-}
-
 /// The honest canonical result of a tool execution whose external outcome the
 /// runtime does not know.
 fn interrupted_result() -> ToolExecutionResult {
@@ -2036,7 +2022,7 @@ mod tests {
             highest_background_ordinal: 0,
             highest_subagent_ordinal: 0,
             saw_any_attempt: false,
-            trailing_active_is_bootstrap: false,
+            unanswered_adopted_turn: None,
             unsettled_publications: Vec::new(),
         }
     }
@@ -2060,9 +2046,27 @@ mod tests {
                 },
             )],
             source: crate::message::types::UserSource::Human,
-            kind: InboundKind::Message,
+            kind: crate::message::types::InboundKind::Message,
             timestamp: None,
         })
+    }
+
+    fn adopted(ids: &[&str]) -> RuntimeEventEnvelope {
+        envelope(
+            RuntimeEvent::InboundTurnAdopted {
+                message_ids: ids.iter().map(|id| MessageId::new(*id)).collect(),
+            },
+            None,
+        )
+    }
+
+    fn adopted_by(attempt_id: AttemptId, ids: &[&str]) -> RuntimeEventEnvelope {
+        envelope(
+            RuntimeEvent::InboundTurnAdopted {
+                message_ids: ids.iter().map(|id| MessageId::new(*id)).collect(),
+            },
+            Some(attempt_id),
+        )
     }
 
     /// Canonical adoption commits before the attempt publishes its start fact.
@@ -2073,22 +2077,147 @@ mod tests {
     fn an_adopted_unanswered_turn_without_attempt_evidence_continues() {
         let mut evidence = base_evidence();
         evidence.active = vec![trailing_human("msg-adopted")];
+        fold_all(&mut evidence, &[adopted(&["msg-adopted"])]);
         let plan = RecoveryPlan::classify(&evidence);
         assert_eq!(plan.attempt_class(), &AttemptRecoveryClass::NotStarted);
         assert_eq!(plan.resume(), ResumeDisposition::ContinueAdoptedTurn);
     }
 
-    /// The same trailing shape supplied as the lineage's immutable bootstrap
-    /// prefix is context, never accepted work: a fork/clone seed or a persona
-    /// lineage must not acquire an answer obligation it never made.
+    /// The same trailing canonical shape with no adoption behind it — a
+    /// lineage's immutable bootstrap prefix, a fork/clone seed, a persona
+    /// lineage — is supplied context, never work rustX accepted, and acquires
+    /// no answer obligation.
     #[test]
-    fn a_bootstrap_trailing_human_message_is_not_an_adopted_turn() {
+    fn a_trailing_human_message_without_an_adoption_is_not_an_adopted_turn() {
         let mut evidence = base_evidence();
         evidence.active = vec![trailing_human("msg-seed")];
-        evidence.trailing_active_is_bootstrap = true;
         let plan = RecoveryPlan::classify(&evidence);
         assert_eq!(plan.attempt_class(), &AttemptRecoveryClass::NotStarted);
         assert_eq!(plan.resume(), ResumeDisposition::PendingInboundOnly);
+    }
+
+    /// The counterexample the canonical-shape rule could not see: an ordinary
+    /// multi-turn conversation whose *second* message is adopted after the
+    /// first attempt already reached its terminal. Nothing about the trailing
+    /// message distinguishes it from the first turn's answered one, and the
+    /// journal holds attempt facts, so only the obligation proves the turn is
+    /// still owed.
+    #[test]
+    fn a_turn_adopted_after_a_settled_attempt_continues() {
+        let mut evidence = base_evidence();
+        evidence.active = vec![trailing_human("msg-2")];
+        fold_all(
+            &mut evidence,
+            &[
+                adopted(&["msg-1"]),
+                started(attempt(0)),
+                request_started(attempt(0), "req-0"),
+                request_completed(attempt(0)),
+                completed(attempt(0)),
+                adopted(&["msg-2"]),
+            ],
+        );
+        let plan = RecoveryPlan::classify(&evidence);
+        assert_eq!(plan.attempt_class(), &AttemptRecoveryClass::AlreadyTerminal);
+        assert_eq!(plan.resume(), ResumeDisposition::ContinueAdoptedTurn);
+    }
+
+    /// The second counterexample: a live attempt drained new inbound at a safe
+    /// boundary and died before the model request that would carry it. The
+    /// attempt's own request plane still reports the *previous* request's
+    /// known outcome, so the attempt class alone would answer "nothing to
+    /// continue".
+    #[test]
+    fn a_turn_drained_into_a_live_attempt_continues() {
+        let mut evidence = base_evidence();
+        evidence.active = vec![trailing_human("msg-2")];
+        fold_all(
+            &mut evidence,
+            &[
+                adopted(&["msg-1"]),
+                started(attempt(0)),
+                request_started(attempt(0), "req-0"),
+                request_completed(attempt(0)),
+                adopted_by(attempt(0), &["msg-2"]),
+            ],
+        );
+        assert!(matches!(
+            plan_class(&evidence),
+            AttemptRecoveryClass::ExternalOutcomeKnown { .. }
+        ));
+        assert_eq!(
+            RecoveryPlan::classify(&evidence).resume(),
+            ResumeDisposition::ContinueAdoptedTurn
+        );
+    }
+
+    /// The obligation is consumed by the request start that carries the turn
+    /// to the provider: from there the external-outcome plane decides, and a
+    /// completed answer is not re-answered on the next startup.
+    #[test]
+    fn a_request_start_consumes_the_obligation() {
+        let mut evidence = base_evidence();
+        evidence.active = vec![trailing_human("msg-1")];
+        fold_all(
+            &mut evidence,
+            &[
+                adopted(&["msg-1"]),
+                started(attempt(0)),
+                request_started(attempt(0), "req-0"),
+                request_completed(attempt(0)),
+                completed(attempt(0)),
+            ],
+        );
+        assert_eq!(
+            RecoveryPlan::classify(&evidence).resume(),
+            ResumeDisposition::PendingInboundOnly
+        );
+    }
+
+    /// An attempt terminal consumes the obligation of the turn it owned, so a
+    /// turn the user cancelled before any request stays unanswered across the
+    /// restart — exactly as it does live.
+    #[test]
+    fn an_attempt_terminal_consumes_the_obligation() {
+        let mut evidence = base_evidence();
+        evidence.active = vec![trailing_human("msg-1")];
+        fold_all(
+            &mut evidence,
+            &[
+                adopted(&["msg-1"]),
+                started(attempt(0)),
+                cancelled(attempt(0)),
+            ],
+        );
+        assert_eq!(plan_class(&evidence), AttemptRecoveryClass::AlreadyTerminal);
+        assert_eq!(
+            RecoveryPlan::classify(&evidence).resume(),
+            ResumeDisposition::PendingInboundOnly
+        );
+    }
+
+    /// Indeterminacy dominates an open obligation: a started external side
+    /// effect whose outcome is unknown blocks continuation even for a turn the
+    /// conversation still owes an answer for.
+    #[test]
+    fn an_indeterminate_outcome_blocks_an_open_obligation() {
+        let mut evidence = base_evidence();
+        evidence.active = vec![trailing_human("msg-2")];
+        fold_all(
+            &mut evidence,
+            &[
+                adopted(&["msg-1"]),
+                started(attempt(0)),
+                request_started(attempt(0), "req-0"),
+                request_completed(attempt(0)),
+                adopted_by(attempt(0), &["msg-2"]),
+                tool_started(attempt(0), "call-1"),
+            ],
+        );
+        assert_eq!(
+            RecoveryPlan::classify(&evidence).resume(),
+            ResumeDisposition::BlockedIndeterminate
+        );
     }
 
     fn started(attempt_id: AttemptId) -> RuntimeEventEnvelope {
@@ -2098,6 +2227,51 @@ mod tests {
             },
             Some(attempt_id),
         )
+    }
+
+    fn request_started(attempt_id: AttemptId, request: &str) -> RuntimeEventEnvelope {
+        envelope(
+            RuntimeEvent::ModelRequestStarted {
+                request_id: RequestId::new(request),
+                model: "model-x".to_owned(),
+            },
+            Some(attempt_id),
+        )
+    }
+
+    fn request_completed(attempt_id: AttemptId) -> RuntimeEventEnvelope {
+        envelope(
+            RuntimeEvent::ModelRequestCompleted {
+                request_id: RequestId::new("req-0"),
+                finish_reason: ModelFinishReason::Stop,
+                usage: None,
+            },
+            Some(attempt_id),
+        )
+    }
+
+    fn completed(attempt_id: AttemptId) -> RuntimeEventEnvelope {
+        envelope(
+            RuntimeEvent::AttemptCompleted {
+                attempt_id: attempt_id.clone(),
+                finish_reason: ModelFinishReason::Stop,
+            },
+            Some(attempt_id),
+        )
+    }
+
+    fn cancelled(attempt_id: AttemptId) -> RuntimeEventEnvelope {
+        envelope(
+            RuntimeEvent::AttemptCancelled {
+                attempt_id: attempt_id.clone(),
+                reason: CancellationReason::UserRequested,
+            },
+            Some(attempt_id),
+        )
+    }
+
+    fn plan_class(evidence: &RecoveryEvidence) -> AttemptRecoveryClass {
+        RecoveryPlan::classify(evidence).attempt_class().clone()
     }
 
     fn tool_started(attempt_id: AttemptId, call: &str) -> RuntimeEventEnvelope {

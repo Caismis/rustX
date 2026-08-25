@@ -362,6 +362,61 @@ fn accepted_pending_inbound_survives_a_crash_unchanged() {
     );
 }
 
+/// A lineage seeded from supplied history — a fork, a clone, a tree node, a
+/// persona seed — owes no answer for its own bootstrap prefix.
+///
+/// The prefix ends in an ordinary human message, exactly like an adopted turn
+/// this conversation accepted, so no canonical *shape* can tell the two apart.
+/// The difference is durable and structural: supplied history enters through
+/// `initialize`, which is not an adoption and commits no answer obligation, so
+/// a reopened forked lineage starts nothing until its own first inbound
+/// arrives.
+#[test]
+fn a_seeded_lineage_owes_no_answer_for_its_bootstrap_prefix() {
+    let durable = Durable::new();
+    {
+        let store = durable.open();
+        // The exact `/fork` seed shape: the canonical prefix up to and
+        // including the selected user message.
+        store
+            .initialize(&[
+                user_block("seed-user-1", "the forked question"),
+                assistant_with_calls("seed-assistant-1", &[]),
+                user_block("seed-user-2", "the trailing forked question"),
+            ])
+            .expect("bootstrap the forked lineage");
+    }
+
+    let report = recover_reopened(&durable);
+    assert_eq!(
+        report.resume(),
+        ResumeDisposition::PendingInboundOnly,
+        "supplied history is context, never work this conversation accepted"
+    );
+    assert!(report.reconciliation().is_empty());
+
+    // The same lineage after it accepts and adopts one message of its own does
+    // owe an answer, so the rule is about adoption rather than about seeds.
+    {
+        let store = durable.open();
+        let batch = {
+            store
+                .accept_inbound(human("my own first turn"))
+                .expect("accept");
+            store
+                .select_pending_batch()
+                .expect("select")
+                .expect("batch")
+        };
+        adopt_through(&store, batch.watermark);
+    }
+    assert_eq!(
+        recover_reopened(&durable).resume(),
+        ResumeDisposition::ContinueAdoptedTurn,
+        "the lineage's own adopted turn is owed an answer"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Test B — crash after the canonical adoption commit
 // ---------------------------------------------------------------------------
@@ -382,7 +437,7 @@ fn crash_after_adoption_keeps_the_user_message_canonical_exactly_once() {
             .select_pending_batch()
             .expect("select")
             .expect("batch");
-        store.adopt_pending_batch(batch.watermark).expect("adopt");
+        adopt_through(&store, batch.watermark);
         accepted
     };
 
@@ -409,10 +464,7 @@ fn crash_after_adoption_keeps_the_user_message_canonical_exactly_once() {
     // Re-adopting the same watermark finds nothing: the durable transition
     // consumed the pending record in the same transaction.
     assert!(
-        store
-            .adopt_pending_batch(accepted.sequence)
-            .expect("adopt again")
-            .is_empty(),
+        adopt_through(&store, accepted.sequence).is_empty(),
         "an adopted item can never re-enter adoption"
     );
 }
@@ -435,7 +487,7 @@ fn crash_before_request_start_is_class_b_and_permits_continuation() {
         let store = durable.open();
         store.initialize(&[]).expect("bootstrap");
         let accepted = store.accept_inbound(human("answer me")).expect("accept");
-        store.adopt_pending_batch(accepted.sequence).expect("adopt");
+        adopt_through(&store, accepted.sequence);
         store
             .append_event(envelope(
                 "attempt-started",
@@ -511,7 +563,7 @@ fn started_request_with_unknown_outcome_is_indeterminate_and_never_resent() {
         let accepted = store
             .accept_inbound(human("ask the model"))
             .expect("accept");
-        store.adopt_pending_batch(accepted.sequence).expect("adopt");
+        adopt_through(&store, accepted.sequence);
         store
             .append_event(envelope(
                 "attempt-started",
@@ -637,7 +689,7 @@ fn completed_model_request_before_assistant_commit_is_not_class_b() {
         let accepted = store
             .accept_inbound(human("the model answered"))
             .expect("accept");
-        store.adopt_pending_batch(accepted.sequence).expect("adopt");
+        adopt_through(&store, accepted.sequence);
         store
             .append_event(envelope(
                 "attempt-started",
@@ -762,7 +814,7 @@ fn failed_model_request_before_terminal_is_not_retried() {
         let store = durable.open();
         store.initialize(&[]).expect("bootstrap");
         let accepted = store.accept_inbound(human("ask")).expect("accept");
-        store.adopt_pending_batch(accepted.sequence).expect("adopt");
+        adopt_through(&store, accepted.sequence);
         store
             .append_event(envelope(
                 "attempt-started",
@@ -1850,7 +1902,7 @@ fn historical_attempt_tool_evidence_never_aliases_the_unsettled_attempt() {
         // Attempt 2: the provider reuses the same call id in its next
         // response, but the process crashes before anything starts.
         let accepted = store.accept_inbound(human("turn two")).expect("accept");
-        store.adopt_pending_batch(accepted.sequence).expect("adopt");
+        adopt_through(&store, accepted.sequence);
         store
             .append_event(envelope(
                 "attempt-2-started",
@@ -2108,7 +2160,7 @@ fn repeated_restarts_settle_once_and_then_change_nothing() {
         let store = durable.open();
         store.initialize(&[]).expect("bootstrap");
         let accepted = store.accept_inbound(human("ask")).expect("accept");
-        store.adopt_pending_batch(accepted.sequence).expect("adopt");
+        adopt_through(&store, accepted.sequence);
         store
             .append_event(envelope(
                 "attempt-started",
@@ -2686,7 +2738,7 @@ fn recovery_is_a_pure_function_of_durable_authority() {
         let store = durable.open();
         store.initialize(&[]).expect("bootstrap");
         let accepted = store.accept_inbound(human("hello")).expect("accept");
-        store.adopt_pending_batch(accepted.sequence).expect("adopt");
+        adopt_through(&store, accepted.sequence);
         store
             .append_event(envelope(
                 "attempt-started",
@@ -2901,4 +2953,34 @@ fn a_durably_settled_subagent_needs_no_recovery() {
         1,
         "the watermark still reseeds from settled evidence"
     );
+}
+
+/// The durable answer obligation of one adoption, built from exactly the
+/// pending items the adoption transaction will consume.
+fn adoption_of(
+    store: &SqliteConversationStore,
+    watermark: rustx::runtime::inbound::InboundSequence,
+) -> rustx::events::types::RuntimeEventEnvelope {
+    rustx::durable::inbox::inbound_adoption_event(
+        store.conversation_id(),
+        None,
+        store
+            .load_pending()
+            .expect("pending")
+            .into_iter()
+            .filter(|item| item.sequence <= watermark)
+            .map(|item| item.message_id)
+            .collect(),
+    )
+}
+
+/// Adopts everything through `watermark`, together with the durable answer
+/// obligation the adoption transaction requires.
+fn adopt_through(
+    store: &SqliteConversationStore,
+    watermark: rustx::runtime::inbound::InboundSequence,
+) -> Vec<MessageBlock> {
+    store
+        .adopt_pending_batch(watermark, adoption_of(store, watermark))
+        .expect("adopt")
 }

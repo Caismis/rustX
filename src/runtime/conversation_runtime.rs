@@ -2403,7 +2403,10 @@ impl RuntimeInner {
         // Canonical adoption: the durable ledger append and the pending
         // removal commit in one transaction. On failure the selected items
         // remain durably pending and the failure is surfaced, never swallowed.
-        if let Err(error) = self.mailbox.adopt_pending_batch(&batch) {
+        // No attempt exists yet at the admission boundary: the obligation this
+        // adoption opens is owned by the conversation until the attempt this
+        // cycle admits starts its first model request.
+        if let Err(error) = self.mailbox.adopt_pending_batch(&batch, None) {
             self.record_durability_failure(
                 &mut state,
                 DurableOperation::AdoptPendingBatch,
@@ -5001,6 +5004,24 @@ mod tests {
 
     impl crate::tools::executor::ProgressReporter for NoProgressForMcp {
         fn report(&self, _progress: crate::tools::types::ToolProgress) {}
+    }
+
+    /// Adopts one accepted inbound item with the durable answer obligation the
+    /// adoption transaction requires.
+    fn adopt_accepted(
+        store: &dyn ConversationStore,
+        accepted: &crate::durable::inbox::AcceptedInbound,
+    ) {
+        store
+            .adopt_pending_batch(
+                accepted.sequence,
+                crate::durable::inbox::inbound_adoption_event(
+                    store.conversation_id(),
+                    None,
+                    vec![accepted.message_id.clone()],
+                ),
+            )
+            .expect("adopt");
     }
 
     fn test_resources(
@@ -14398,7 +14419,7 @@ mod tests {
                     correlation: None,
                 })
                 .expect("accept");
-            store.adopt_pending_batch(accepted.sequence).expect("adopt");
+            adopt_accepted(store, &accepted);
             adopted_id = Some(accepted.message_id);
             store
                 .append_event(attempt_event(
@@ -14955,7 +14976,7 @@ mod tests {
                         correlation: None,
                     })
                     .expect("accept");
-                store.adopt_pending_batch(accepted.sequence).expect("adopt");
+                adopt_accepted(store, &accepted);
                 store
                     .append_event(attempt_event(
                         conversation_id,
@@ -15065,7 +15086,7 @@ mod tests {
                     correlation: None,
                 })
                 .expect("accept");
-            store.adopt_pending_batch(accepted.sequence).expect("adopt");
+            adopt_accepted(store, &accepted);
             store
                 .append_event(attempt_event(
                     conversation_id,
@@ -15171,7 +15192,7 @@ mod tests {
                     correlation: None,
                 })
                 .expect("accept");
-            store.adopt_pending_batch(accepted.sequence).expect("adopt");
+            adopt_accepted(store, &accepted);
             store
                 .append_event(attempt_event(
                     conversation_id,
