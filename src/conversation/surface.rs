@@ -134,6 +134,25 @@ impl SurfaceOp {
             } => vec![start, end, replacement],
         }
     }
+
+    /// The one canonical identity this operation brings onto the Surface.
+    ///
+    /// Every operation in the vocabulary introduces exactly one: an append
+    /// introduces the message it appends, and a compaction introduces its
+    /// summary. The other identities a `Replace` names are its span, which
+    /// earlier operations introduced and this one retires.
+    ///
+    /// This is the pairing between the two durable orders. A canonical row
+    /// and the operation that introduces it are committed in the same
+    /// transaction, so a lineage the runtime can reach names each canonical
+    /// identity here exactly once, in Ledger order.
+    #[must_use]
+    pub const fn introduces(&self) -> &MessageId {
+        match self {
+            Self::Append { message_id } => message_id,
+            Self::Replace { replacement, .. } => replacement,
+        }
+    }
 }
 
 /// Applies one Surface operation to an active identity order.

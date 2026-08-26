@@ -256,14 +256,34 @@ impl LineageSeed {
     /// inherits canonical facts its Surface no longer shows together with
     /// the operations that retired them.
     ///
+    /// The seed is checked against what durable transitions can actually
+    /// reach, not merely against what replays. Every transition that adds a
+    /// canonical row adds it together with the one Surface operation that
+    /// introduces it, inside one transaction: an ordinary commit appends the
+    /// message it committed, and a compaction appends its summary to the
+    /// Ledger and replaces a span with that same summary. So the two orders
+    /// this type carries are not independent — the canonical identities in
+    /// Ledger order are exactly the identities the history introduces in
+    /// revision order, one for one.
+    ///
+    /// Requiring that equality is what closes the two gaps a replay check
+    /// alone leaves open. A canonical row no operation ever introduces
+    /// replays fine and is still unreachable: it would be a conversation-owned
+    /// fact with no Surface provenance at all, invisible to the history the
+    /// destination's own forks read, yet fully visible to everything that
+    /// rebuilds state from canonical history — the task list included. And a
+    /// Ledger ordered against its own history replays fine too, while
+    /// recording commits in an order no sequence of transitions produced.
+    ///
     /// # Errors
     ///
     /// Returns [`ConversationStoreError::InvalidReference`] when the history
     /// names an identity `canonical` does not carry, does not replay against
-    /// an initially empty Surface, or replaces a span with a message that is
-    /// not a `User(Runtime / CompactionSummary)`. None is a state any
-    /// sequence of durable transitions could reach, and a store that
-    /// accepted one would hold a Surface history it could never reconstruct.
+    /// an initially empty Surface, replaces a span with a message that is not
+    /// a `User(Runtime / CompactionSummary)`, or introduces identities that
+    /// are not the seeded Ledger in its own order. None is a state any
+    /// sequence of durable transitions could reach, and a store that accepted
+    /// one would hold a Surface history it could never reconstruct.
     pub fn replayed(
         canonical: Vec<MessageBlock>,
         surface_history: Vec<SurfaceOp>,
@@ -298,6 +318,35 @@ impl LineageSeed {
             }
             crate::conversation::apply_surface_op(&mut surface, operation)
                 .map_err(ConversationStoreError::InvalidReference)?;
+        }
+        // The provenance pairing: one operation per canonical row, in the
+        // Ledger's own order.
+        let introduced: Vec<&MessageId> =
+            surface_history.iter().map(SurfaceOp::introduces).collect();
+        let committed: Vec<MessageId> = canonical
+            .iter()
+            .map(crate::conversation::message_id_of)
+            .collect();
+        if introduced.len() != committed.len()
+            || introduced
+                .iter()
+                .zip(&committed)
+                .any(|(introduced, committed)| *introduced != committed)
+        {
+            let render = |ids: &[&MessageId]| {
+                ids.iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "the seeded Surface history introduces [{}], which is not the seeded \
+                 Ledger [{}] in commit order; a reachable lineage introduces each \
+                 canonical row with exactly one operation, in the order the Ledger \
+                 carries it",
+                render(&introduced),
+                render(&committed.iter().collect::<Vec<_>>())
+            )));
         }
         Ok(Self {
             canonical,

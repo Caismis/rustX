@@ -4372,6 +4372,29 @@ holds, not an input a reopen could contradict.
 provenance half a `prepare_*` selects, alongside the Surface snapshot and the
 canonical history.
 
+`LineageSeed` is the public durable authority both halves are admitted
+through, so it is checked against what durable transitions can *reach*, not
+merely against what replays. Every transition that adds a canonical row adds
+it together with the one Surface operation that introduces it, inside one
+transaction: an ordinary commit appends the message it committed, and a
+compaction appends its summary to the Ledger and replaces a span with that
+same summary. The two orders the seed carries are therefore not independent:
+
+> **The canonical identities in Ledger order are exactly the identities the
+> seeded history introduces in revision order, one for one.**
+
+Requiring that equality is what closes the two gaps a replay check alone
+leaves open, and both are gaps a *durable authority* must not have. A
+canonical row no operation ever introduces replays perfectly and is still
+unreachable — it would be conversation state with no Surface provenance at
+all, invisible to the boundaries a later fork of the destination reads, and
+fully visible to everything that rebuilds from canonical history, the task
+list included. A Ledger ordered against its own history replays perfectly
+too, while recording commits in an order no sequence of transitions produced.
+Each Surface operation introduces exactly one identity — `Append` its message,
+`Replace` its replacement — which is what makes the pairing checkable without
+any new vocabulary.
+
 ### Bounded native projections
 
 The native owner, not TypeScript rendering, enforces the projection bounds.

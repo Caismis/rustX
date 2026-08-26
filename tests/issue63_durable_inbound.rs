@@ -526,12 +526,15 @@ fn a_seeded_lineage_keeps_canonical_facts_its_surface_does_not_show() {
     });
     let dir = tempdir().expect("temp dir");
     let path = dir.path().join("seeded.db");
-    // Ledger order: the retired facts, then the summary that replaced them.
+    // Ledger order is commit order, so it is the order the operations below
+    // introduced these rows: the two facts, the live message committed after
+    // them, and last the summary a compaction appended when it retired the
+    // first two.
     let canonical = vec![
         user("msg-retired-a", "A"),
         user("msg-retired-b", "B"),
-        summary.clone(),
         user("msg-live", "C"),
+        summary.clone(),
     ];
     // Surface history: the source appended the retired facts and the live
     // one, then replaced the retired span with the summary. The summary is
@@ -680,6 +683,71 @@ fn a_seeded_surface_history_must_replay_against_the_seeded_ledger() {
         ),
         Err(ConversationStoreError::InvalidReference(_))
     ));
+}
+
+/// Replaying is necessary and not sufficient. `LineageSeed` is the public
+/// durable authority a lineage copy is admitted through, so it has to refuse
+/// every seed no sequence of durable transitions could have produced — not
+/// only the ones that fail to project.
+///
+/// The pairing it enforces is the one the runtime commits: a canonical row
+/// and the single Surface operation that introduces it are written in the
+/// same transaction, so the Ledger in commit order *is* the identities the
+/// history introduces in revision order. Both seeds below satisfy every
+/// reference, replay cleanly to a well-formed Surface, and are still states
+/// the store can never reach.
+#[test]
+fn a_seeded_lineage_must_introduce_its_ledger_in_ledger_order() {
+    let user = |id: &str, text: &str| {
+        MessageBlock::User(rustx::message::types::UserMessageBlock {
+            id: MessageId::new(id),
+            content: text_blocks(text),
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+        })
+    };
+
+    // A Ledger ordered against its own history. Every reference resolves and
+    // the replay yields [A, B], but the two rows were introduced in the
+    // opposite order to the one the Ledger records, which no pair of commits
+    // produces.
+    assert!(
+        matches!(
+            LineageSeed::replayed(
+                vec![user("msg-b", "B"), user("msg-a", "A")],
+                vec![
+                    SurfaceOp::Append {
+                        message_id: MessageId::new("msg-a"),
+                    },
+                    SurfaceOp::Append {
+                        message_id: MessageId::new("msg-b"),
+                    },
+                ],
+            ),
+            Err(ConversationStoreError::InvalidReference(_))
+        ),
+        "a seeded Ledger ordered against its own operation history is refused"
+    );
+
+    // A canonical row no operation introduces or retires. It replays fine —
+    // the history never mentions it — and that is exactly the danger: it is
+    // conversation state with no Surface provenance whatsoever, invisible to
+    // the boundaries a later fork of this lineage reads, and fully visible to
+    // everything that rebuilds from canonical history, the task list
+    // included.
+    assert!(
+        matches!(
+            LineageSeed::replayed(
+                vec![user("msg-a", "A"), user("msg-orphan", "hidden")],
+                vec![SurfaceOp::Append {
+                    message_id: MessageId::new("msg-a"),
+                }],
+            ),
+            Err(ConversationStoreError::InvalidReference(_))
+        ),
+        "a canonical row no Surface operation ever introduced is refused"
+    );
 }
 
 /// Issue #63 bootstrap identity: the durable store records one immutable
