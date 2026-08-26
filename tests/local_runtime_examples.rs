@@ -19,9 +19,25 @@ fn read_example(name: &str) -> Vec<u8> {
 }
 
 #[test]
+fn committed_configuration_examples_are_commented_jsonc() {
+    for name in ["models.jsonc", "rustx.jsonc"] {
+        let bytes = read_example(name);
+        let text = String::from_utf8(bytes.clone()).expect("committed example is UTF-8");
+        assert!(
+            text.contains("//"),
+            "{name} must explain its fields in place"
+        );
+        assert!(
+            serde_json::from_slice::<serde_json::Value>(&bytes).is_err(),
+            "{name} must exercise the JSONC reader, not merely be valid JSON"
+        );
+    }
+}
+
+#[test]
 fn committed_model_example_uses_the_production_catalog_contract() {
-    let catalog = ModelCatalog::from_json_slice(&read_example("models.json"))
-        .expect("models.json must parse through ModelCatalog");
+    let catalog = ModelCatalog::from_jsonc_slice(&read_example("models.jsonc"))
+        .expect("models.jsonc must parse through ModelCatalog");
     let model_ref = ModelRef::parse("example/demo-model").expect("canonical model reference");
     let model = catalog.model(&model_ref).expect("example model exists");
     assert_eq!(model.protocol, ModelProtocol::OpenAiChatCompletions);
@@ -67,10 +83,10 @@ fn committed_model_example_uses_the_production_catalog_contract() {
 
 #[test]
 fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_policy() {
-    let catalog = ModelCatalog::from_json_slice(&read_example("models.json"))
-        .expect("models.json must parse through ModelCatalog");
-    let config = CurrentRuntimeConfig::from_json_slice(&read_example("rustx.json"))
-        .expect("rustx.json must parse through CurrentRuntimeConfig");
+    let catalog = ModelCatalog::from_jsonc_slice(&read_example("models.jsonc"))
+        .expect("models.jsonc must parse through ModelCatalog");
+    let config = CurrentRuntimeConfig::from_jsonc_slice(&read_example("rustx.jsonc"))
+        .expect("rustx.jsonc must parse through CurrentRuntimeConfig");
 
     assert_eq!(config.model.model.to_string(), "example/demo-model");
     catalog

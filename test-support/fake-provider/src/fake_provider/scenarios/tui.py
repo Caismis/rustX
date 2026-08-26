@@ -36,13 +36,14 @@ SUMMARY_TWO_TEXT = "tui summary two: the assistant produced filler report two."
 
 
 def _filler(marker: str) -> str:
-    """~200 KB of deterministic filler, worth roughly 53k estimated tokens.
+    """~200 KB of deterministic filler, worth roughly 51k estimated tokens.
 
-    The compaction describe block publishes a 56k-token window with an 8k
-    reserve and a 1k output budget, so the next turn crosses the soft input
-    limit while the complete-message compaction span still fits the summary
-    model's own request budget. The block text is byte-identical to the Rust
-    conformance scenarios' so the same proven margins hold.
+    The compaction describe block publishes a 56k-token window with a 1.5k
+    reserve and a 1k output budget. Both the soft input limit and the summary
+    input limit carry the reserve, so both are 53.4k: above this span's
+    estimate and below the whole next-turn request estimate. The block text is
+    byte-identical to the Rust conformance scenarios' so the same proven
+    margins hold.
     """
     return (marker + " ") + " ".join(
         f"compaction filler block {index:05d}." for index in range(6800)

@@ -7,7 +7,7 @@
  * and never inspects a byte of stdout.
  *
  * The startup paths pass straight through to the binary. This client never
- * reads or interprets `models.json`, the current runtime config, the
+ * reads or interprets `models.jsonc`, the current runtime config, the
  * workspace, or the runtime root: those are Rust-owned configuration, and
  * reading them here would create a second model/Session authority.
  *
@@ -33,8 +33,29 @@ export interface RuntimePaths {
   runtimeRoot: string;
 }
 
-/** Startup capability controls forwarded verbatim to the Rust owner. */
+/** Startup controls forwarded verbatim to the Rust owner. */
 export interface RuntimeStartupOptions {
+  /**
+   * Start on the Session the catalog has published as active instead of an
+   * empty one. A launch is not a resume: the runtime begins on an empty
+   * Session unless this asks otherwise, and a client replacing the process to
+   * complete a Session switch it already published sets it.
+   */
+  continueActiveSession: boolean;
+  /**
+   * Start on this persisted Session instead. The identity is forwarded
+   * verbatim: the catalog is the only thing that can say whether it names
+   * anything, and a launch that names nothing fails in Rust.
+   */
+  session?: string | undefined;
+  /** The lineage node to start on, meaningful only beside `session`. */
+  node?: string | undefined;
+  /**
+   * Name the Session this launch binds. A name is display metadata Rust
+   * publishes, never a way to choose a Session, so it qualifies whichever
+   * Session the flags above bound.
+   */
+  sessionName?: string | undefined;
   /** Repeatable explicit Skill package/root paths, in caller order. */
   skillPaths: string[];
   /** Disable automatic/default Skill roots. */
@@ -112,6 +133,18 @@ export class ChildRuntimeProcess {
   static spawn(options: ChildRuntimeProcessOptions): ChildRuntimeProcess {
     const startup = options.startup ?? emptyRuntimeStartupOptions();
     const startupArguments: string[] = [];
+    if (startup.continueActiveSession) {
+      startupArguments.push("--continue");
+    }
+    if (startup.session !== undefined) {
+      startupArguments.push("--session", startup.session);
+    }
+    if (startup.node !== undefined) {
+      startupArguments.push("--node", startup.node);
+    }
+    if (startup.sessionName !== undefined) {
+      startupArguments.push("--name", startup.sessionName);
+    }
     for (const skillPath of startup.skillPaths) {
       startupArguments.push("--skill", skillPath);
     }
@@ -273,6 +306,10 @@ export class ChildRuntimeProcess {
 
 function emptyRuntimeStartupOptions(): RuntimeStartupOptions {
   return {
+    continueActiveSession: false,
+    session: undefined,
+    node: undefined,
+    sessionName: undefined,
     skillPaths: [],
     noSkills: false,
     noBuiltinTools: false,

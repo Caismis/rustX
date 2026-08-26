@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 
 use super::snapshot::{
     AgentStatusView, CapabilityView, RuntimeClientBackgroundExecution, RuntimeClientContextView,
-    RuntimeClientSubagent, RuntimeClientTranscriptCursor,
+    RuntimeClientResourcesView, RuntimeClientSubagent, RuntimeClientTranscriptCursor,
     RuntimeClientTranscriptInteractionRequested, RuntimeClientTranscriptInteractionSettled,
 };
 use crate::events::types::AttemptLimit;
@@ -396,6 +396,35 @@ pub enum RuntimeClientEvent {
     CapabilityUpdated {
         /// The deterministic active capability projection.
         capabilities: CapabilityView,
+    },
+
+    /// The runtime published a new immutable resource generation: the
+    /// project context files it loaded **and** the capability generation
+    /// they were composed against, as one fact.
+    ///
+    /// A reload commits both halves together, so it publishes one event
+    /// carrying both. Splitting it into a capability event beside a
+    /// resource event would allocate two cursors, and an incremental client
+    /// that folds events — rather than re-reading `snapshot_get` — would
+    /// then hold the new capability generation beside the resource
+    /// generation the same reload retired. That pairing never existed in
+    /// the runtime, so it is never published.
+    ///
+    /// Both halves travel even when only one moved: a reload that changes
+    /// only an `AGENTS.md` advances the resource revision and repeats the
+    /// unchanged capability view, and a reload that only rebuilds tools
+    /// does the converse. The carried revisions, not the event's presence,
+    /// tell a client what changed.
+    ///
+    /// [`Self::CapabilityUpdated`] remains the observation for a capability
+    /// commit that is *not* a resource generation — an availability
+    /// transition or an activation committed on its own authority.
+    ResourceGenerationUpdated {
+        /// The active capability projection this generation was composed
+        /// against.
+        capabilities: CapabilityView,
+        /// The active runtime resource projection after the reload.
+        resources: RuntimeClientResourcesView,
     },
 
     /// The authoritative session model configuration changed.

@@ -62,6 +62,7 @@ export function emptyPresentationState(
     subagents: [],
     context: { compaction_in_progress: false, compaction_count: 0 },
     capabilities: { revision: 0, tools: [], skills: [] },
+    resources: { revision: 0, context_files: [], agent_profile: false },
     sessionModel,
     runtimeShutdown: false,
     effectiveApprovalMode: "policy",
@@ -143,6 +144,11 @@ export function replaceFromSnapshot(
     status: snapshot.status,
     context: snapshot.context,
     capabilities: snapshot.capabilities,
+    resources: snapshot.resources ?? {
+      revision: 0,
+      context_files: [],
+      agent_profile: false,
+    },
     sessionModel: snapshot.model,
     runtimeShutdown: snapshot.shutting_down,
     effectiveApprovalMode: snapshot.effective_approval_mode,
@@ -529,6 +535,17 @@ export function reduce(
 
     case "capability_updated":
       next.capabilities = event.capabilities;
+      return next;
+
+    case "resource_generation_updated":
+      // A reload commits the resource generation and the capability
+      // generation it was composed against as one fact, and publishes them
+      // as one event at one cursor. Both halves are folded here, together:
+      // there is no cut of this reducer at which the client holds the new
+      // capability generation beside the resource generation the same
+      // reload retired.
+      next.capabilities = event.capabilities;
+      next.resources = event.resources;
       return next;
 
     case "session_model_changed":

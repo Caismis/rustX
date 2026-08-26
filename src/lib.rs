@@ -6,6 +6,7 @@
 
 pub mod agent;
 pub mod capabilities;
+pub mod config_format;
 pub mod context;
 pub mod conversation;
 pub mod durable;

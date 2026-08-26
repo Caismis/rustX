@@ -235,6 +235,7 @@ pub fn finalize_provider_request(
             message: "a translated provider request must be a JSON object".to_owned(),
             retry_after_ms: None,
             provider_code: None,
+            context_overflow: None,
         });
     };
     validate_request_params_layer(params, protocol, RequestParamsLayer::EffectiveRequest).map_err(
@@ -243,6 +244,7 @@ pub fn finalize_provider_request(
             message: collision.to_string(),
             retry_after_ms: None,
             provider_code: None,
+            context_overflow: None,
         },
     )?;
     overlay_shallow(&mut object, params);
@@ -1039,6 +1041,7 @@ pub fn validate_content_modalities(
                 ),
                 retry_after_ms: None,
                 provider_code: None,
+                context_overflow: None,
             });
         }
     }

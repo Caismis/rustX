@@ -225,10 +225,33 @@ pub struct CapabilityResourceInputs {
 /// back into the coordinator; the Runtime Client projection (Issue #37)
 /// treats each callback as one projection fold under its own
 /// synchronization boundary.
+///
+/// **Exception.** A commit made by the claiming `ConversationRuntime`
+/// (see [`CapabilityCoordinator::commit_runtime`]) fires no callback at
+/// all. That commit is one half of a runtime resource reload, and the
+/// runtime publishes the whole generation — capability, availability, and
+/// resources — as a single observation. Firing here as well would let a
+/// consumer fold the capability half on its own and briefly present a
+/// generation that never existed.
 pub trait CapabilityObserver: Send + Sync {
     /// Observes one activated immutable capability snapshot and its
     /// authoritative availability state.
     fn on_snapshot(&self, snapshot: &CapabilitySnapshot, availability: &CapabilityAvailability);
+}
+
+/// One committed capability generation, returned to a caller that owns its
+/// publication.
+///
+/// The pair is exactly what the observer callback would have carried. It is
+/// handed back instead of fired for
+/// [`CapabilityCoordinator::commit_runtime`], whose caller must publish it
+/// together with the matching resource generation.
+#[derive(Debug, Clone)]
+pub(crate) struct CommittedCapability {
+    /// The activated immutable capability snapshot.
+    pub(crate) snapshot: Arc<CapabilitySnapshot>,
+    /// The authoritative per-source availability state at that commit.
+    pub(crate) availability: CapabilityAvailability,
 }
 
 /// A prepared but not yet committed candidate capability.
@@ -1194,17 +1217,27 @@ impl CapabilityCoordinator {
         candidate: PreparedCapabilityCandidate,
     ) -> Result<Arc<CapabilitySnapshot>, CapabilityCommitError> {
         self.commit_with_authority(candidate, None)
+            .map(|committed| committed.snapshot)
     }
 
     /// Publishes a prepared capability candidate for the claiming
     /// `ConversationRuntime`. The token is created only by
     /// [`Self::claim_conversation_runtime`] and is not exposed to ordinary
     /// coordinator callers.
+    ///
+    /// **This path deliberately fires no capability observation.** A
+    /// runtime-owned commit is one half of a larger fact: the runtime
+    /// publishes a new capability generation and a new resource generation
+    /// together, and a consumer that sees the first without the second sees
+    /// a generation that never existed — new tools alongside retired
+    /// project instruction files. The committed pair is returned so the
+    /// runtime can publish the complete generation as one observation.
+    /// Every other commit path still observes itself.
     pub(crate) fn commit_runtime(
         &self,
         publication: &RuntimeCapabilityPublication,
         candidate: PreparedCapabilityCandidate,
-    ) -> Result<Arc<CapabilitySnapshot>, CapabilityCommitError> {
+    ) -> Result<CommittedCapability, CapabilityCommitError> {
         self.commit_with_authority(candidate, Some(publication))
     }
 
@@ -1213,7 +1246,7 @@ impl CapabilityCoordinator {
         &self,
         mut candidate: PreparedCapabilityCandidate,
         publication: Option<&RuntimeCapabilityPublication>,
-    ) -> Result<Arc<CapabilitySnapshot>, CapabilityCommitError> {
+    ) -> Result<CommittedCapability, CapabilityCommitError> {
         let mut state = self
             .inner
             .state
@@ -1260,6 +1293,10 @@ impl CapabilityCoordinator {
         }
         let lifecycle = state.conversation_lifecycle.clone();
         let candidate_inputs = candidate.resource_inputs.clone();
+        // A runtime-owned commit hands its observation to the runtime,
+        // which publishes it together with the resource generation of the
+        // same reload. See `commit_runtime`.
+        let defers_observation = publication.is_some();
         let commit = || {
             // The lifecycle commit boundary is held around the final
             // validation and revision swap. If drain won while the
@@ -1297,13 +1334,17 @@ impl CapabilityCoordinator {
                 let availability_changed =
                     Self::install_availability(&mut state, &candidate.availability);
                 let snapshot = state.snapshot.clone();
+                let availability = state.availability.clone();
                 drop(invalidation);
-                if availability_changed {
+                if availability_changed && !defers_observation {
                     // An availability-only change never advances the
                     // revision, but it is still observed.
-                    Self::fire_observer(&self.inner.observer, &snapshot, &state.availability);
+                    Self::fire_observer(&self.inner.observer, &snapshot, &availability);
                 }
-                return Ok(snapshot);
+                return Ok(CommittedCapability {
+                    snapshot,
+                    availability,
+                });
             }
             Self::install_availability(&mut state, &candidate.availability);
             let revision = CapabilityRevision::new(state.revision.get() + 1);
@@ -1338,8 +1379,13 @@ impl CapabilityCoordinator {
                 .expect("capability resource-input lock poisoned") = candidate_inputs.clone();
             let availability = state.availability.clone();
             drop(invalidation);
-            Self::fire_observer(&self.inner.observer, &snapshot, &availability);
-            Ok(snapshot)
+            if !defers_observation {
+                Self::fire_observer(&self.inner.observer, &snapshot, &availability);
+            }
+            Ok(CommittedCapability {
+                snapshot,
+                availability,
+            })
         };
         let result = if let Some(lifecycle) = lifecycle {
             lifecycle
@@ -1950,7 +1996,7 @@ body
         let published = coordinator
             .commit_runtime(&publication, runtime_candidate)
             .expect("the private runtime publication path remains available");
-        assert_eq!(published.revision(), CapabilityRevision::new(1));
+        assert_eq!(published.snapshot.revision(), CapabilityRevision::new(1));
     }
 
     /// Runtime drain wins the capability commit boundary: a candidate may be
@@ -1975,7 +2021,7 @@ body
         hook.wait_entered();
         assert!(lifecycle.begin_drain());
         hook.proceed();
-        let result = commit_task.join().expect("commit task");
+        let result = commit_task.join().expect("commit task").map(|_| ());
         assert_eq!(result, Err(CapabilityCommitError::ConversationInactive));
         assert_eq!(
             coordinator.current_snapshot().revision(),

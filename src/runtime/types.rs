@@ -675,6 +675,16 @@ pub enum TokenMeasurementSource {
     /// (`ModelUsage.input_tokens` of the completed request). Never
     /// fabricated, never a sum of cumulative snapshots.
     ProviderReported,
+    /// A provider-reported measurement of a **prefix** of this request
+    /// context, plus a deterministic estimate of the canonical messages
+    /// appended since it was taken.
+    ///
+    /// This is neither pure provider usage nor a pure estimate, and it is
+    /// labelled as its own thing rather than being folded into either. It
+    /// exists because a whole-conversation estimate compounds estimator
+    /// error over every message ever sent, while this measurement confines
+    /// that error to the messages added since the last completed request.
+    ProviderAnchored,
     /// A deterministic runtime-owned estimate.
     Estimated,
 }

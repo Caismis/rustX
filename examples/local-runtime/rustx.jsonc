@@ -1,0 +1,188 @@
+// rustx.jsonc — the current runtime/project configuration.
+//
+// This file is JSONC: ordinary JSON plus `//` and `/* */` comments and
+// trailing commas. Unknown fields are rejected, so a typo fails startup
+// instead of silently changing runtime semantics.
+//
+// Everything here is *current-launch* state, re-read on every process start
+// including resume. None of it is Session history: an existing Session's
+// explicitly selected model lives in the runtime-owned Session catalog under
+// `runtime-root` and is never overwritten by this file.
+{
+  // The only runtime configuration schema version this runtime accepts.
+  "schemaVersion": 2,
+
+  // The agent identity recorded on this conversation's attempts and
+  // inherited by its subagents. Any non-empty name.
+  "agentId": "default-agent",
+
+  // The model a brand-new Session starts with. `models.jsonc` declares what
+  // exists; this block picks one and overrides its defaults.
+  "model": {
+    // The canonical `provider/model` reference. It must exist in
+    // `models.jsonc` or startup fails before any Session is created.
+    "model": "example/demo-model",
+
+    // A profile name from that model's `reasoning.profiles`. Omit to take
+    // the model's own `defaultProfile`.
+    "reasoningProfile": "off",
+
+    // Session-level provider wire parameters, overlaid on the model-level
+    // `requestParams` key by key. A key owned by the selected reasoning
+    // profile may not be repeated here.
+    "requestParams": {
+      "temperature": 0.1,
+    },
+
+    // The output budget for this Session. Omit to use the model's
+    // configured `maxOutputTokens`.
+    "maxOutputTokens": 2048,
+
+    // Which model writes compaction summaries:
+    //   {"mode": "session"}  follow the admitted attempt's primary model
+    //   {"mode": "explicit", "model": "...", ...}  a dedicated model,
+    //       optionally with its own reasoningProfile, requestParams, and
+    //       maxOutputTokens — useful when the primary model is expensive.
+    "summaryModel": {
+      "mode": "session",
+    },
+  },
+
+  // The runtime-wide HITL mode, applied at attempt boundaries:
+  //   "policy"       honor each Tool's configured approval policy
+  //   "full_access"  suppress approval prompts for this runtime only
+  // It is never restored from Session history.
+  "approvalMode": "policy",
+
+  // The IANA timezone of the temporal Agent Status section. The process and
+  // system local timezone are never consulted. Omit for UTC.
+  "timezone": "Asia/Shanghai",
+
+  // Context policy. The context *window* is not here: it belongs to the
+  // selected model and is taken from that attempt's model snapshot.
+  "context": {
+    // Tokens permanently held out of whichever window is in force.
+    "reserveTokens": 4096,
+    // Tokens of recent conversation kept uncompressed by compaction.
+    "keepRecentTokens": 12000,
+    // The output cap applied to the summary invocation itself. Optional;
+    // must be positive when present.
+    "summaryOutputCap": 1024,
+  },
+
+  // Native tool policy. Three independent axes per tool, each with a
+  // deterministic default, so a tool listed here only to change one axis
+  // still reads explicitly:
+  //   execution:   "foreground_only" | "background_only" | "model_selectable"
+  //   concurrency: "sequential" | "parallel"
+  //   approval:    "never" | "always"   (defaults to "never")
+  //
+  // Availability, activation, approval, approval mode, execution ownership,
+  // and concurrency are separate facts; none implies another.
+  //
+  // "model_selectable" makes the model choose ownership per call through a
+  // required top-level `execution_mode` argument that rustX injects into the
+  // schema and strips before the tool sees it. Because rustX writes into the
+  // root schema under that policy, such a tool's schema root must stay
+  // simple — no allOf/anyOf/oneOf/$ref/const/enum at the root, and no
+  // `execution_mode` of its own.
+  //
+  // The `background_task` and `ask_user` intrinsics are deliberately absent:
+  // they are fixed foreground, sequential, approval-never.
+  "nativeTools": {
+    "read": {
+      "execution": "foreground_only",
+      "concurrency": "parallel",
+    },
+    "write": {
+      "execution": "foreground_only",
+      "concurrency": "sequential",
+    },
+    "edit": {
+      "execution": "foreground_only",
+      "concurrency": "sequential",
+    },
+    "glob": {
+      "execution": "foreground_only",
+      "concurrency": "parallel",
+    },
+    "grep": {
+      "execution": "foreground_only",
+      "concurrency": "parallel",
+    },
+    "bash": {
+      // The model picks foreground or background per call. Add
+      // "approval": "always" to require a human decision for every call.
+      "execution": "model_selectable",
+      "concurrency": "sequential",
+    },
+  },
+
+  // MCP servers, keyed by server identity, in the same shape mainstream MCP
+  // clients use — an entry can be copied straight from a server's own
+  // README. The baseline is empty so this example needs no external process.
+  //
+  // Exactly two transports exist. There is no `streamable-http` alias, no
+  // `sse`, and no `ws`. `{"url": ...}` alone means http and
+  // `{"command": ...}` alone means stdio; anything ambiguous or
+  // contradictory fails startup rather than being guessed at.
+  //
+  // "exa": {
+  //   "type": "http",
+  //   "url": "https://mcp.exa.ai/mcp",
+  //   "headers": {"x-api-key": "YOUR_EXA_API_KEY"},
+  // },
+  // "local": {
+  //   "type": "stdio",
+  //   "command": "npx",
+  //   "args": ["-y", "some-mcp-server"],
+  //   "env": {"SOME_API_KEY": "..."},
+  //   "cwd": "subdir",            // workspace-relative
+  // },
+  "mcpServers": {},
+
+  // rustX's own invocation policy for an MCP server's tools, keyed by the
+  // same identity. It is deliberately separate so `mcpServers` entries stay
+  // copy-pasteable. A server without an entry gets foreground_only +
+  // sequential; an entry naming an undeclared server fails startup.
+  //
+  // "exa": {
+  //   "execution": "foreground_only",
+  //   "concurrency": "parallel",
+  //   "approval": "never",
+  // },
+  "mcpToolPolicies": {},
+
+  // Which optional built-in tools are active. Mandatory native Read stays
+  // active and available whatever this list says — `[]` leaves the optional
+  // built-ins available but inactive, and `--no-builtin-tools` / `--no-tools`
+  // / `--tools` / `--exclude-tools` refine this after discovery.
+  "defaultTools": [
+    "background_task", // spawn and manage conversation-owned background work
+    "ask_user",        // publish one bounded Question to the human
+    "read",
+    "write",
+    "edit",
+    "glob",
+    "grep",
+    "bash",
+    "subagent",        // delegate to a child runtime of this agent
+  ],
+
+  // Extra Skill roots, package directories, or SKILL.md paths. Relative
+  // paths resolve against the canonical workspace root. These are additions:
+  // `~/.rustx/skills`, `~/.agents/skills`, `<workspace>/.rustx/skills`, and
+  // `<workspace>/.agents/skills` are discovered automatically (and
+  // `--no-skills` drops those automatic roots). Unlike an automatic root, a
+  // path listed here must exist.
+  //
+  // "skills": ["../shared-skills", "workspace/.agents/skills/pdf"],
+  "skills": [],
+
+  // The base authorized tool environment. Every entry is explicit: no
+  // process environment variable reaches a tool implicitly. Keep provider
+  // credentials in `models.jsonc`'s `apiKey` reference instead of here.
+  "environment": {
+    "RUSTX_EXAMPLE_MODE": "local-runtime",
+  },
+}

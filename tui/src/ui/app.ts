@@ -36,6 +36,7 @@
  */
 
 import {
+  Box,
   Container,
   Editor,
   Loader,
@@ -55,7 +56,7 @@ import {
   type ExpandTarget,
   type PreferenceChange,
 } from "../commands/dispatcher.ts";
-import { focusedInteraction } from "../presentation/selectors.ts";
+import { focusedInteraction, sessionLabel } from "../presentation/selectors.ts";
 import { correlateTools } from "../presentation/tools.ts";
 import type { PresentationState } from "../presentation/state.ts";
 import type { ChildRuntimeProcess } from "../runtime/child-process.ts";
@@ -88,6 +89,7 @@ import {
   startupVisible,
   workingStatus,
 } from "./components/status.ts";
+import { renderResourceBanner } from "./components/resources.ts";
 import { renderTranscript } from "./components/transcript.ts";
 import {
   type PresentationPreferences,
@@ -101,12 +103,28 @@ import {
   withToggledInteraction,
   withToggledToolCall,
 } from "./preferences.ts";
-import { editorTheme, markdownTheme, style } from "./theme.ts";
+import { background, editorTheme, markdownTheme, style } from "./theme.ts";
+import type { TranscriptBlock } from "./components/transcript.ts";
 
 export interface RustxTuiAppOptions {
   session: RuntimeClientAttachment;
   connection: RuntimeClientConnection;
   child: ChildRuntimeProcess;
+  /**
+   * Open the `/resume` selector as soon as the first attachment is live.
+   * This is `--resume`: the picker is presentation over the Session the
+   * launch already bound, and the choice becomes the ordinary Session
+   * selection Rust publishes.
+   */
+  openSessionSelector?: boolean;
+  /**
+   * The workspace the runtime was launched against.
+   *
+   * Presentation only: it shortens the absolute paths the runtime publishes
+   * for display. The client never reads it, resolves against it, or treats
+   * it as a second opinion about where the runtime is running.
+   */
+  workspace?: string;
   /** Re-spawns and re-attaches after Rust publishes a lineage switch. */
   restartRuntime?: () => Promise<RuntimeAttachmentHandle>;
   /** How long the child gets to exit after the shutdown sequence. */
@@ -137,6 +155,8 @@ export class RustxTuiApp {
   #child: ChildRuntimeProcess;
   readonly #dispatcher: CommandDispatcher;
   readonly #restartRuntime: (() => Promise<RuntimeAttachmentHandle>) | undefined;
+  readonly #openSessionSelectorAtStartup: boolean;
+  readonly #workspace: string | undefined;
   readonly #terminationGraceMs: number | undefined;
 
   readonly #tui: TUI;
@@ -167,6 +187,8 @@ export class RustxTuiApp {
     this.#connection = options.connection;
     this.#child = options.child;
     this.#restartRuntime = options.restartRuntime;
+    this.#openSessionSelectorAtStartup = options.openSessionSelector ?? false;
+    this.#workspace = options.workspace;
     this.#terminationGraceMs = options.terminationGraceMs;
 
     this.#tui = new TUI(new ProcessTerminal());
@@ -279,6 +301,31 @@ export class RustxTuiApp {
             this.#showTransient("error", `session metadata unavailable: ${compactDiagnostic(error)}`);
           },
         );
+      }
+      // `--resume` is the same selection `/resume` performs, asked for on the
+      // command line: the runtime is already attached to the Session the
+      // launch bound, and the picker is opened over it. Cancelling therefore
+      // leaves that Session bound and publishes nothing.
+      if (this.#openSessionSelectorAtStartup) {
+        const selectorLease = this.#presentationLease();
+        void selectorLease.session
+          .listSessions()
+          .then((page) => {
+            if (!this.#isCurrentPresentationLease(selectorLease)) return;
+            this.#showSessionSelector(
+              page.sessions,
+              page.nextOffset,
+              "",
+              selectorLease,
+            );
+          })
+          .catch((error: unknown) => {
+            if (!this.#isCurrentPresentationLease(selectorLease)) return;
+            this.#showTransient(
+              "error",
+              `session list unavailable: ${compactDiagnostic(error)}`,
+            );
+          });
       }
       this.#tui.addInputListener((data) => {
         // Any user input acknowledges the one current transient feedback item.
@@ -829,7 +876,7 @@ export class RustxTuiApp {
     if (!change.restartRequired) {
       this.#showTransient(
         "info",
-        `active session: ${change.session.name} · node ${change.session.active_node}`,
+        `active session: ${sessionLabel(change.session)} · node ${change.session.active_node}`,
       );
       return;
     }
@@ -848,8 +895,8 @@ export class RustxTuiApp {
     this.#showTransient(
       change.restartDiagnostic === undefined ? "info" : "error",
       change.restartDiagnostic === undefined
-        ? `switching to session ${change.session.name}…`
-        : `Session ${change.session.name} committed before durability became uncertain: ${compactDiagnostic(change.restartDiagnostic)}`,
+        ? `switching to session ${sessionLabel(change.session)}…`
+        : `Session ${sessionLabel(change.session)} committed before durability became uncertain: ${compactDiagnostic(change.restartDiagnostic)}`,
     );
     const oldSession = this.#session;
     const oldConnection = this.#connection;
@@ -880,7 +927,7 @@ export class RustxTuiApp {
       }
       this.#showTransient(
         "info",
-        `active session: ${authoritative.name} · node ${authoritative.active_node}`,
+        `active session: ${sessionLabel(authoritative)} · node ${authoritative.active_node}`,
       );
       const state = refreshLease.session.state;
       if (state !== undefined) this.#renderState(state);
@@ -953,7 +1000,7 @@ export class RustxTuiApp {
       if (!this.#isCurrentPresentationLease(refreshLease)) return;
       this.#showTransient(
         "info",
-        `attached to authoritative Session ${authoritative.name} · node ${authoritative.active_node}`,
+        `attached to authoritative Session ${sessionLabel(authoritative)} · node ${authoritative.active_node}`,
       );
       const state = refreshLease.session.state;
       if (state !== undefined) this.#renderState(state);
@@ -1173,21 +1220,21 @@ export class RustxTuiApp {
           0,
         ),
       );
+      // What the runtime is actually running with — its project context
+      // files, its Skill catalog, its active Tools — stated once, before the
+      // first turn, entirely from the capability and resource projections.
+      const resources = renderResourceBanner(state, {
+        workspace: this.#workspace,
+      });
+      if (resources.length > 0) {
+        this.#startup.addChild(new Spacer(1));
+        this.#startup.addChild(new Text(resources, 1, 0));
+      }
     }
 
     this.#transcript.clear();
     for (const block of renderTranscript(state, this.#preferences, correlation)) {
-      this.#transcript.addChild(
-        block.kind === "markdown"
-          ? new Markdown(
-              block.markdown,
-              1,
-              0,
-              markdownTheme,
-              block.defaultTextStyle,
-            )
-          : new Text(block.text, 1, 0),
-      );
+      this.#transcript.addChild(banded(block));
       this.#transcript.addChild(new Spacer(1));
     }
 
@@ -1298,4 +1345,37 @@ function compactDiagnostic(error: unknown): string {
 
 function nextTick(): Promise<void> {
   return new Promise((resolve) => process.nextTick(resolve));
+}
+
+/**
+ * Lays one transcript block out, on its background band when it has one.
+ *
+ * The band is the app's job because the app is the only layer that knows how
+ * wide the terminal is: a background has to be filled to the edge of the
+ * line, and a component that composed one into its own string would paint a
+ * ragged block whose colour stopped at its longest line. Pi's `Box` does the
+ * filling; everything above only names the band.
+ *
+ * A banded block owns its horizontal padding through the box, so its inner
+ * component takes none — otherwise the padding would be applied twice and the
+ * band would sit one column further in than the content it frames.
+ */
+function banded(block: TranscriptBlock): Container | Box | Text | Markdown {
+  const pad = block.background === undefined ? 1 : 0;
+  const content =
+    block.kind === "markdown"
+      ? new Markdown(
+          block.markdown,
+          pad,
+          0,
+          markdownTheme,
+          block.defaultTextStyle,
+        )
+      : new Text(block.text, pad, 0);
+  if (block.background === undefined) {
+    return content;
+  }
+  const box = new Box(1, 1, background[block.background]);
+  box.addChild(content);
+  return box;
 }

@@ -71,6 +71,7 @@ pub fn validate_request(
                 .to_owned(),
             retry_after_ms: None,
             provider_code: None,
+            context_overflow: None,
         });
     }
 
@@ -145,6 +146,7 @@ fn invalid_request(message: String) -> ModelError {
         message,
         retry_after_ms: None,
         provider_code: None,
+        context_overflow: None,
     }
 }
 

@@ -665,6 +665,7 @@ mod tests {
                     message: "boom".to_owned(),
                     retry_after_ms: None,
                     provider_code: None,
+                    context_overflow: None,
                 },
             })
             .expect("legal rejected request");

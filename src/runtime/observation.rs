@@ -151,6 +151,11 @@ pub(crate) enum ConversationObservation {
     /// authoritative per-source availability state at that commit (Issue
     /// #81). The availability may change without a revision swap (a
     /// diagnostic-only change); the snapshot never changes without one.
+    ///
+    /// A runtime resource reload does **not** publish this variant: it
+    /// commits a capability generation and a resource generation together
+    /// and publishes both as one [`ConversationObservation::Resources`], so
+    /// no consumer can fold half a generation.
     Capability {
         /// The activated immutable capability snapshot.
         snapshot: Arc<CapabilitySnapshot>,
@@ -158,6 +163,33 @@ pub(crate) enum ConversationObservation {
         /// capability source.
         availability: CapabilityAvailability,
     },
+    /// One published immutable runtime resource generation, **including the
+    /// capability generation it was built against**.
+    ///
+    /// This is the complete result of one resource reload and the only
+    /// observation a reload emits. The capability half is deliberately not
+    /// published separately: the two writes are ordered inside the runtime,
+    /// but the consumer folding this queue runs on its own task under its
+    /// own lock, so two observations would be two folds and a subscriber
+    /// could observe the new capability beside the retired resource
+    /// generation — a pairing that never existed. One observation makes the
+    /// generation atomic for every consumer by construction rather than by
+    /// timing.
+    ///
+    /// Both halves are still carried explicitly, because the resource
+    /// revision and the capability revision move independently: a reload
+    /// that only rewrites project instruction files advances the resource
+    /// revision and leaves the capability revision exactly where it was.
+    Resources {
+        /// The published immutable resource generation. Its
+        /// `capability()` is the capability snapshot committed by the same
+        /// reload.
+        snapshot: Arc<crate::runtime::resources::RuntimeResourceSnapshot>,
+        /// The authoritative availability of every evaluated optional
+        /// capability source at that same commit.
+        availability: CapabilityAvailability,
+    },
+
     /// The coordinator admitted an attempt (before the loop started).
     AttemptAdmitted {
         /// The admitted attempt.
@@ -256,6 +288,13 @@ pub(crate) struct PendingObservations {
     /// deterministically instead of by timeout.
     #[cfg(test)]
     worker_exit: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+    /// Test-only park switch. While set, [`drain`](PendingObservations::drain)
+    /// yields nothing, so a test can step the queue itself instead of
+    /// racing the projection worker. It is read and written only while the
+    /// queue lock is held, so a worker that has already entered `drain`
+    /// either completed before the park or observes it.
+    #[cfg(test)]
+    parked: AtomicBool,
 }
 
 impl PendingObservations {
@@ -266,6 +305,8 @@ impl PendingObservations {
             closed: AtomicBool::new(false),
             #[cfg(test)]
             worker_exit: Mutex::new(None),
+            #[cfg(test)]
+            parked: AtomicBool::new(false),
         }
     }
 
@@ -287,6 +328,12 @@ impl PendingObservations {
             .queue
             .lock()
             .expect("pending observation queue lock poisoned");
+        #[cfg(test)]
+        if self.parked.load(Ordering::Acquire) {
+            // Parked under the queue lock: whatever the projection worker
+            // was about to fold, it folds nothing from here on.
+            return Vec::new();
+        }
         queue.drain(..).collect()
     }
 
@@ -316,6 +363,44 @@ impl PendingObservations {
             .expect("pending observation queue lock poisoned")
             .clear();
         self.notify.notify_one();
+    }
+
+    /// Test-only: removes and returns the single oldest queued
+    /// observation, so a test can stop between two enqueues and inspect the
+    /// consumer's state at exactly that cut.
+    #[cfg(test)]
+    pub(crate) fn pop_one(&self) -> Option<ConversationObservation> {
+        self.queue
+            .lock()
+            .expect("pending observation queue lock poisoned")
+            .pop_front()
+    }
+
+    /// Test-only: stops the projection worker from folding anything, so a
+    /// test owns the fold schedule and can inspect every cut of the
+    /// observation stream deterministically.
+    ///
+    /// Parking takes the queue lock, so it is ordered against every
+    /// concurrent `drain`: a worker either drained before the park or
+    /// drains nothing after it. [`pop_one`](PendingObservations::pop_one)
+    /// and [`queued`](PendingObservations::queued) deliberately ignore the
+    /// park — they are the test's own hands on the queue.
+    #[cfg(test)]
+    pub(crate) fn park(&self) {
+        let _queue = self
+            .queue
+            .lock()
+            .expect("pending observation queue lock poisoned");
+        self.parked.store(true, Ordering::Release);
+    }
+
+    /// Test-only: the number of observations waiting to be folded.
+    #[cfg(test)]
+    pub(crate) fn queued(&self) -> usize {
+        self.queue
+            .lock()
+            .expect("pending observation queue lock poisoned")
+            .len()
     }
 
     /// Installs the test-only worker-exit signal.

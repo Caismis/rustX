@@ -126,7 +126,15 @@ pending Question/Approval interaction, or manual compaction, and retains one
 counted lifecycle admission while releasing the synchronous state lock before
 asynchronous discovery/preparation. On success it commits the complete
 capability candidate and publishes the complete resource generation before
-reopening admission. On failure it keeps the old pair and reopens the gate.
+reopening admission — as **one** observation carrying the capability
+snapshot, its availability, and the resource snapshot, which folds into one
+`ResourceGenerationUpdated` Runtime Client event at one cursor. The
+capability half is deliberately not published separately: the projection
+worker folds on its own task and is woken by every enqueue, so two enqueues
+are two folds a subscriber can be scheduled between, and two events are two
+cursors an incremental client can sit between. Either would expose the new
+capability generation beside the retired resource generation, a pairing no
+runtime state ever had. On failure it keeps the old pair and reopens the gate.
 Thus an admitted attempt lands wholly before or wholly after reload and cannot
 observe mixed project, Skill, extension, or Tool generations. Reload emits no
 canonical message.

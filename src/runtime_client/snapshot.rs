@@ -34,8 +34,8 @@ use crate::model::session::{AttemptModelView, SessionModelView};
 use crate::model::types::ModelUsage;
 use crate::publication::PublicationAudit;
 use crate::runtime::identity::{
-    AttemptId, CapabilityRevision, ConversationId, EventId, InteractionId, MessageId, SkillId,
-    SkillVersionId, ToolCallId, ToolExecutionId, ToolId, TurnId,
+    AttemptId, CapabilityRevision, ConversationId, EventId, InteractionId, MessageId,
+    RuntimeResourceRevision, SkillId, SkillVersionId, ToolCallId, ToolExecutionId, ToolId, TurnId,
 };
 use crate::runtime::inbound::InboundSequence;
 use crate::runtime::interaction::InteractionRequest;
@@ -127,6 +127,17 @@ pub struct RuntimeClientSnapshot {
     pub context: RuntimeClientContextView,
     /// The active capability projection.
     pub capabilities: CapabilityView,
+    /// The active runtime resource generation: the project context files
+    /// the runtime actually loaded, and whether an agent profile is frozen
+    /// into the generation.
+    ///
+    /// This is deliberately separate from [`CapabilityView`]: a
+    /// resource-only reload advances the resource revision while the
+    /// capability revision stays put. Nothing here is conversation content
+    /// — a project context file is request input the runtime assembles into
+    /// the Effective System Prompt, never a canonical Ledger message.
+    #[serde(default)]
+    pub resources: RuntimeClientResourcesView,
     /// The redacted session model state: the authoritative *desired*
     /// configuration and its resolution.
     ///
@@ -850,6 +861,39 @@ pub struct RuntimeClientTool {
     pub replay_policy: ToolReplayPolicy,
     /// Where the tool comes from.
     pub origin: ToolOrigin,
+}
+
+/// The client-visible projection of one immutable runtime resource
+/// generation.
+///
+/// It carries identity and provenance, never content: a client that wants
+/// the text of a project context file reads the file, exactly as it would
+/// read a `SKILL.md`. Publishing the bytes here would create a second copy
+/// of request input inside a conversation projection.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeClientResourcesView {
+    /// The monotonic process-local resource generation.
+    #[serde(default)]
+    pub revision: RuntimeResourceRevision,
+    /// The runtime-loaded project instruction files, root-most to
+    /// workspace, in the exact order the runtime concatenated them.
+    #[serde(default)]
+    pub context_files: Vec<RuntimeClientContextFile>,
+    /// Whether an immutable agent profile/persona is frozen into this
+    /// generation. The persona text itself is runtime-owned request input.
+    #[serde(default)]
+    pub agent_profile: bool,
+}
+
+/// One runtime-loaded project instruction file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeClientContextFile {
+    /// The canonical absolute host path the runtime read.
+    pub path: String,
+    /// The exact byte length of the loaded content.
+    pub bytes: u64,
 }
 
 /// One external Skill catalog entry.

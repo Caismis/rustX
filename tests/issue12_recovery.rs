@@ -1090,6 +1090,7 @@ fn failed_model_request_before_terminal_is_not_retried() {
                         message: "durable provider failure".to_owned(),
                         retry_after_ms: None,
                         provider_code: None,
+                        context_overflow: None,
                     },
                 },
             ))

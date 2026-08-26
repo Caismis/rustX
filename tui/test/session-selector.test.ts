@@ -57,6 +57,40 @@ describe("native Session selectors", () => {
     );
   });
 
+  // A Session is unnamed until someone names it, so its row is the first
+  // message Rust derived — and a row is searched by whichever of the two it
+  // is actually showing.
+  it("shows and searches an unnamed Session by its first message", () => {
+    const selector = new SessionSelector({
+      sessions: [
+        {
+          id: "session-3",
+          preview: "restore the auth module",
+          updated_at: "2026-08-19T00:00:00Z",
+          active_node: "node-3",
+          active: false,
+        },
+        {
+          id: "session-4",
+          updated_at: "2026-08-18T00:00:00Z",
+          active_node: "node-4",
+          active: false,
+        },
+      ],
+    });
+    const rendered = selector.render(80).map(plainText).join("\n");
+    assert.match(rendered, /restore the auth module/);
+    assert.match(rendered, /\(no messages\)/);
+
+    let selected: string | undefined;
+    selector.onSelect = (session) => {
+      selected = session.id;
+    };
+    for (const character of "auth") selector.handleInput(character);
+    selector.handleInput("\r");
+    assert.equal(selected, "session-3");
+  });
+
   it("keeps fork selection as a native historical boundary", () => {
     const selector = new BoundarySelector({
       boundaries: [boundary],

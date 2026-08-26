@@ -37,6 +37,22 @@ pub enum MessageBlock {
     Tool(ToolMessageBlock),
 }
 
+impl MessageBlock {
+    /// The durable identity of this canonical message.
+    ///
+    /// Canonical messages are immutable Ledger facts keyed by this identity,
+    /// so equal identities imply equal content: comparing identities is a
+    /// sound and cheap way to decide whether two projections share a prefix.
+    #[must_use]
+    pub const fn id(&self) -> &MessageId {
+        match self {
+            Self::User(user) => &user.id,
+            Self::Assistant(assistant) => &assistant.id,
+            Self::Tool(tool) => &tool.id,
+        }
+    }
+}
+
 /// A stable index identifying one content block within the ordered content
 /// list of the canonical message being assembled.
 ///

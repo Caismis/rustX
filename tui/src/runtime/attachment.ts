@@ -311,7 +311,7 @@ export class RuntimeClientAttachment {
     return result.execution;
   }
 
-  /** The safe public catalog. This is why the client never reads models.json. */
+  /** The safe public catalog. This is why the client never reads models.jsonc. */
   async modelCatalog(): Promise<ModelCatalogView> {
     const result = await this.#connection.request({
       method: "model_catalog_get",

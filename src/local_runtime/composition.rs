@@ -133,15 +133,48 @@ use crate::tools::native::{NativeToolResources, register_native_tools};
 use crate::tools::runtime::ConversationToolRuntime;
 
 use super::config::{CurrentRuntimeConfig, CurrentRuntimeConfigError};
-use super::session::{SessionCatalog, SessionError, SessionPersistentState};
+use super::session::{
+    SessionCatalog, SessionError, SessionId, SessionNodeId, SessionNodeOrigin,
+    SessionPersistentState,
+};
 use super::supervisor::{LocalSessionSupervisor, SessionSupervisorError};
+
+/// Which Session a launch binds.
+///
+/// Startup is not a resume. A process begins on an empty Session and leaves
+/// every persisted Session as history reachable through `/resume`; binding a
+/// persisted one is an explicit request, in exactly two forms. Continuing the
+/// published active selection is the one a client repeats when it replaces
+/// the process to complete a Session switch that was already published
+/// durably; naming a Session is what a launch does when the user already
+/// knows where they want to be.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum StartupSession {
+    /// Start on an empty Session, publishing one when the active Session has
+    /// already been used.
+    #[default]
+    Empty,
+    /// Bind the Session/node the catalog publishes as active.
+    ContinueActive,
+    /// Bind the named persisted Session — and the named lineage node when
+    /// one is given. The selection is *planned* before the runtime is
+    /// composed and published with it: a launch that cannot compose the
+    /// Session it named leaves the active selection where it found it.
+    Select {
+        /// The persisted Session to bind.
+        session: SessionId,
+        /// The lineage node to bind; the Session's own active node when
+        /// absent.
+        node: Option<SessionNodeId>,
+    },
+}
 
 /// The explicit startup paths of one local runtime process.
 ///
 /// There is no discovery and no precedence: every path is given explicitly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalRuntimePaths {
-    /// The model catalog (`models.json`) path.
+    /// The model catalog (`models.jsonc`) path.
     pub models: PathBuf,
     /// The current runtime/project configuration path. It is read on every
     /// process start, including Session resume.
@@ -156,6 +189,16 @@ pub struct LocalRuntimePaths {
     /// Disable every optional Tool while retaining available metadata;
     /// mandatory native Read remains active.
     pub no_tools: bool,
+    /// The Session this launch binds. Startup never resumes on its own;
+    /// `--continue` is the explicit request behind
+    /// [`StartupSession::ContinueActive`] and `--session` the one behind
+    /// [`StartupSession::Select`].
+    pub startup_session: StartupSession,
+    /// The display name to give the Session this launch binds, from
+    /// `--name`. A Session is otherwise unnamed and `/resume` shows it by
+    /// its first message; naming one at startup is the same metadata
+    /// operation `/name` performs, moved to the command line.
+    pub session_name: Option<String>,
     /// Strict startup Tool allowlist, when supplied.
     pub tools: Option<Vec<String>>,
     /// Final startup Tool exclusions.
@@ -221,7 +264,7 @@ impl std::fmt::Debug for LocalRuntimeDependencies {
 }
 
 /// Reload-time resource composition for one local runtime. Command-line
-/// inputs are immutable; `rustx.json` and filesystem resources are read only
+/// inputs are immutable; `rustx.jsonc` and filesystem resources are read only
 /// when this loader is explicitly invoked by the runtime reload boundary.
 struct LocalRuntimeResourceLoader {
     paths: LocalRuntimePaths,
@@ -249,7 +292,7 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                     self.paths.config.display()
                 ))
             })?;
-            let config = CurrentRuntimeConfig::from_json_slice(&config_bytes)
+            let config = CurrentRuntimeConfig::from_jsonc_slice(&config_bytes)
                 .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
             let base_environment = config
                 .tool_environment()
@@ -370,7 +413,7 @@ impl LocalConversationCore {
         // one deterministic standalone lineage so repeated composition over
         // the same runtime root still recovers the same durable conversation.
         let config_bytes = read_file(&paths.config)?;
-        let runtime_config = CurrentRuntimeConfig::from_json_slice(&config_bytes)?;
+        let runtime_config = CurrentRuntimeConfig::from_jsonc_slice(&config_bytes)?;
         let registry = load_model_registry(paths, dependencies)?;
         Self::compose_from_config(
             paths,
@@ -620,7 +663,7 @@ impl LocalConversationCore {
         // 1-3. The model catalog/binding plane, identical to the ordinary
         // composition: the catalog file path is inherited from the parent.
         let catalog_bytes = read_file(&spec.models)?;
-        let catalog = ModelCatalog::from_json_slice(&catalog_bytes)?;
+        let catalog = ModelCatalog::from_jsonc_slice(&catalog_bytes)?;
         let resolved = catalog.resolve(dependencies.credentials.as_ref())?;
         let registry = ModelBindingRegistry::new(resolved)?;
 
@@ -773,7 +816,39 @@ impl LocalConversationCore {
         self.into_interactive_with_control(Some(control))
     }
 
+    /// Binds the native Session supervisor as the Runtime Client control
+    /// seam and leaves the runtime **inert**, for a caller that must commit
+    /// durable state between binding and activation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LocalRuntimeError`] when the Runtime Client host cannot be
+    /// bound over the inactive runtime.
+    pub(crate) fn into_bound_with_session_control(
+        self,
+        control: Arc<dyn RuntimeClientSessionControl>,
+    ) -> Result<LocalConversationRuntime, LocalRuntimeError> {
+        self.into_bound_with_control(Some(control))
+    }
+
     fn into_interactive_with_control(
+        self,
+        control: Option<Arc<dyn RuntimeClientSessionControl>>,
+    ) -> Result<LocalConversationRuntime, LocalRuntimeError> {
+        let runtime = self.into_bound_with_control(control)?;
+        runtime.activate();
+        Ok(runtime)
+    }
+
+    /// Binds the Runtime Client host over the composed runtime and stops
+    /// there: the returned runtime is **inert**.
+    ///
+    /// Binding and activation are separated so a caller with a durable
+    /// commit of its own — the local product composition and its startup
+    /// catalog transaction — can place that commit between them. Every
+    /// fallible composition step is then on the pre-commit side, and the
+    /// activation that follows the commit cannot fail.
+    fn into_bound_with_control(
         self,
         control: Option<Arc<dyn RuntimeClientSessionControl>>,
     ) -> Result<LocalConversationRuntime, LocalRuntimeError> {
@@ -795,11 +870,6 @@ impl LocalConversationCore {
                 replay_limit: None,
             })?,
         };
-
-        // 15. Activation: the one shared Inactive -> Running lifecycle
-        // transition. The client host-binding decision is now frozen, the
-        // admission worker starts, and semantic execution may begin.
-        self.runtime.activate();
 
         Ok(LocalConversationRuntime { core: self, host })
     }
@@ -832,9 +902,19 @@ impl std::fmt::Debug for LocalSessionProduct {
 }
 
 impl LocalSessionProduct {
-    /// Loads the native catalog, resolves its active node, composes that
-    /// `ConversationRuntime`, binds typed Session control, and activates the
-    /// runtime before serving protocol input.
+    /// Loads the native catalog, resolves the Session this launch starts on,
+    /// composes that `ConversationRuntime`, binds typed Session control, and
+    /// activates the runtime before serving protocol input.
+    ///
+    /// The startup Session is an empty one unless
+    /// [`LocalRuntimePaths::startup_session`] asks for the catalog's
+    /// published active selection or names a persisted Session. Whichever
+    /// it is, the catalog transition is planned first and committed once,
+    /// after composition and host binding have succeeded, so a launch that
+    /// fails changes no published catalog state at all — including a first
+    /// launch, which publishes no catalog. The destination conversation
+    /// database may be seeded before that commit; a conversation the
+    /// catalog does not name is neither selectable nor resumable.
     ///
     /// # Errors
     ///
@@ -850,18 +930,75 @@ impl LocalSessionProduct {
         // failed first launch therefore cannot publish an invalid initial
         // Session-local model.
         let config_bytes = read_file(&paths.config)?;
-        let runtime_config = CurrentRuntimeConfig::from_json_slice(&config_bytes)?;
+        let runtime_config = CurrentRuntimeConfig::from_jsonc_slice(&config_bytes)?;
         let registry = load_model_registry(paths, dependencies)?;
         SessionModelState::new(registry.clone(), runtime_config.model.clone())?;
+        let state = SessionPersistentState {
+            model: runtime_config.model.clone(),
+        };
+        // A first launch builds the root Session in memory and publishes
+        // nothing yet. `catalog.json` is written by the one startup
+        // transaction below, together with whatever else this launch
+        // decided — so a first launch that fails to compose leaves a
+        // runtime root with no catalog at all. The seeded conversation
+        // database it leaves behind is not published state: nothing names
+        // it, so it is neither selectable nor resumable.
         let catalog = if let Some(catalog) = SessionCatalog::open_existing(&paths.runtime_root)? {
             catalog
         } else {
-            let state = SessionPersistentState {
-                model: runtime_config.model.clone(),
-            };
-            SessionCatalog::create(&paths.runtime_root, &state)?
+            SessionCatalog::create_unpublished(&paths.runtime_root, &state)?
         };
-        let (session_id, node, session_state) = catalog
+        // Startup is not a resume. A launch begins on an empty Session and
+        // leaves every persisted Session as history reachable through
+        // `/resume`; only an explicit request binds a persisted one. An
+        // active Session that was never used is that empty Session already,
+        // so repeated launches publish nothing and cannot accumulate empty
+        // rows.
+        //
+        // A named Session takes the catalog transition `/resume` takes,
+        // decided ahead of composition rather than published ahead of it.
+        // It is *planned* here and committed at the end: composing the destination is what can still fail — a
+        // Session whose recorded model no longer exists in `models.jsonc`,
+        // a database that will not open — and a launch that fails must not
+        // leave the active selection somewhere the user never asked for.
+        // A replacement spawn that continues the active selection therefore
+        // lands on it without naming it, and an unknown identity fails the
+        // launch instead of quietly opening something else.
+        //
+        // `prepare_session` still seeds its destination database here. That
+        // is not a published fact: a seeded conversation the catalog does
+        // not name is unreachable — neither selectable nor resumable — so
+        // an abandoned plan leaves an inert orphan and nothing else.
+        let planned = match &paths.startup_session {
+            StartupSession::Empty => {
+                if catalog.active_is_unused()? {
+                    catalog.plan_unchanged()
+                } else {
+                    let prepared = catalog.prepare_session(&state, &[])?;
+                    catalog.plan_session(&prepared, SessionNodeOrigin::New)?
+                }
+            }
+            StartupSession::ContinueActive => catalog.plan_unchanged(),
+            StartupSession::Select { session, node } => {
+                catalog.plan_select(session, node.as_ref())?
+            }
+        };
+        // `--name` names the Session this launch bound, whichever one that
+        // is. It is the startup form of `/name` and nothing more: naming is
+        // metadata, so it can only follow a decision about where the launch
+        // starts and can never be part of making it. A launch that names a
+        // Session it also asked to continue therefore renames that Session,
+        // exactly as typing `/name` in it would — and, like the selection
+        // itself, only if the launch actually starts.
+        let planned = match &paths.session_name {
+            Some(name) => planned
+                .with_name(name)
+                .map_err(LocalRuntimeError::SessionCatalog)?,
+            None => planned,
+        };
+        // The destination is read from the plan, not from the catalog on
+        // disk: this is where the launch is about to compose.
+        let (session_id, node, session_state) = planned
             .active_lineage()
             .map_err(LocalRuntimeError::SessionCatalog)?;
         let database_path = catalog.database_path(&session_id, &node.conversation_id);
@@ -874,10 +1011,10 @@ impl LocalSessionProduct {
             })?
             .to_path_buf();
 
-        let supervisor = Arc::new(LocalSessionSupervisor::new(
-            catalog,
-            runtime_config.model.clone(),
-        ));
+        // Everything fallible happens against the planned destination and
+        // before the catalog changes: composition, recovery, and the
+        // Runtime Client host binding. The runtime is left inert.
+        let default_model = runtime_config.model.clone();
         let core = LocalConversationCore::compose_from_config(
             paths,
             dependencies,
@@ -888,11 +1025,26 @@ impl LocalSessionProduct {
             artifacts_root,
         )
         .await?;
-        let runtime = core.into_interactive_with_session_control(supervisor.clone())?;
+        let supervisor = Arc::new(LocalSessionSupervisor::new(catalog, default_model));
+        let runtime = core.into_bound_with_session_control(supervisor.clone())?;
+
+        // The one catalog transaction of startup. Before this line the
+        // catalog is byte-for-byte what the launch found; after it, the
+        // published selection and the composed runtime describe the same
+        // lineage.
+        supervisor
+            .commit_startup(planned)
+            .await
+            .map_err(LocalRuntimeError::SessionCatalog)?;
+
+        // Past the commit, nothing may fail on its own terms: the lineage
+        // check below compares the committed selection with the runtime
+        // composed from that same plan, and activation is infallible.
         supervisor
             .install_runtime(runtime.runtime().clone())
             .await
             .map_err(LocalRuntimeError::SessionSupervisor)?;
+        runtime.activate();
         Ok(Self {
             runtime,
             supervisor,
@@ -956,6 +1108,16 @@ impl LocalConversationRuntime {
         LocalConversationCore::compose(paths, dependencies)
             .await?
             .into_interactive()
+    }
+
+    /// Performs the one shared Inactive -> Running lifecycle transition.
+    ///
+    /// The client host-binding decision is frozen by the time this runs,
+    /// the admission worker starts, and semantic execution may begin. This
+    /// is infallible by construction, which is what lets a caller place its
+    /// own durable commit immediately before it.
+    pub(crate) fn activate(&self) {
+        self.core.runtime.activate();
     }
 
     /// The one conversation runtime coordinator of this process.
@@ -1066,7 +1228,7 @@ fn load_model_registry(
     dependencies: &LocalRuntimeDependencies,
 ) -> Result<ModelBindingRegistry, LocalRuntimeError> {
     let catalog_bytes = read_file(&paths.models)?;
-    let catalog = ModelCatalog::from_json_slice(&catalog_bytes)?;
+    let catalog = ModelCatalog::from_jsonc_slice(&catalog_bytes)?;
     let resolved = catalog.resolve(dependencies.credentials.as_ref())?;
     Ok(ModelBindingRegistry::new(resolved)?)
 }

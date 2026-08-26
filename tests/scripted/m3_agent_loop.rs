@@ -210,6 +210,7 @@ fn fail(kind: rustx::model::ModelErrorKind, message: &str) -> ModelEvent {
             message: message.to_owned(),
             retry_after_ms: None,
             provider_code: None,
+            context_overflow: None,
         },
     }
 }
@@ -352,6 +353,7 @@ async fn model_failure_before_content_fails_attempt() {
         message: "timed out".to_owned(),
         retry_after_ms: None,
         provider_code: None,
+        context_overflow: None,
     };
     let expected = vec![
         RuntimeEvent::AttemptStarted {
@@ -382,6 +384,7 @@ async fn model_failure_before_content_fails_attempt() {
                     message: "timed out".to_owned(),
                     retry_after_ms: None,
                     provider_code: None,
+                    context_overflow: None,
                 },
             },
         },
@@ -1614,6 +1617,7 @@ async fn missing_required_continuation_fails_explicitly() {
                     message: "required provider continuation state is missing".to_owned(),
                     retry_after_ms: None,
                     provider_code: None,
+                    context_overflow: None,
                 },
             },
         },
@@ -1687,6 +1691,7 @@ async fn unsupported_capability_stays_terminal_failure() {
                     message: "server-side fallback blocks are not supported".to_owned(),
                     retry_after_ms: None,
                     provider_code: None,
+                    context_overflow: None,
                 },
             },
         },

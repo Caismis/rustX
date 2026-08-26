@@ -23,8 +23,8 @@ const FAKE_RUNTIME = fileURLToPath(
 chmodSync(FAKE_RUNTIME, 0o755);
 
 const PATHS: RuntimePaths = {
-  models: "/models.json",
-  config: "/rustx.json",
+  models: "/models.jsonc",
+  config: "/rustx.jsonc",
   workspace: "/ws",
   runtimeRoot: "/private",
 };
@@ -57,9 +57,9 @@ describe("ChildRuntimeProcess", () => {
     // parsed, validated, or defaulted any of them.
     assert.deepEqual(JSON.parse((await output).trim()), [
       "--models",
-      "/models.json",
+      "/models.jsonc",
       "--config",
-      "/rustx.json",
+      "/rustx.jsonc",
       "--workspace",
       "/ws",
       "--runtime-root",
@@ -67,11 +67,15 @@ describe("ChildRuntimeProcess", () => {
     ]);
   });
 
-  it("forwards startup Tool and Skill controls in deterministic order", async () => {
+  it("forwards startup Session, Tool, and Skill controls in deterministic order", async () => {
     const child = ChildRuntimeProcess.spawn({
       binary: FAKE_RUNTIME,
       paths: PATHS,
       startup: {
+        continueActiveSession: false,
+        session: "session-3",
+        node: "node-7",
+        sessionName: "auth refactor",
         skillPaths: ["/skills/first", "relative/second"],
         noSkills: true,
         noBuiltinTools: true,
@@ -86,13 +90,19 @@ describe("ChildRuntimeProcess", () => {
 
     assert.deepEqual(JSON.parse((await output).trim()), [
       "--models",
-      "/models.json",
+      "/models.jsonc",
       "--config",
-      "/rustx.json",
+      "/rustx.jsonc",
       "--workspace",
       "/ws",
       "--runtime-root",
       "/private",
+      "--session",
+      "session-3",
+      "--node",
+      "node-7",
+      "--name",
+      "auth refactor",
       "--skill",
       "/skills/first",
       "--skill",

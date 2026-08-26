@@ -78,14 +78,14 @@ impl Process {
     fn spawn(root: &std::path::Path, models: &str, session: &str, key: Option<&str>) -> Self {
         let workspace = root.join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        std::fs::write(root.join("models.json"), models).expect("models.json");
-        std::fs::write(root.join("rustx.json"), session).expect("rustx.json");
+        std::fs::write(root.join("models.jsonc"), models).expect("models.jsonc");
+        std::fs::write(root.join("rustx.jsonc"), session).expect("rustx.jsonc");
         let mut command = tokio::process::Command::new(binary());
         command
             .arg("--models")
-            .arg(root.join("models.json"))
+            .arg(root.join("models.jsonc"))
             .arg("--config")
-            .arg(root.join("rustx.json"))
+            .arg(root.join("rustx.jsonc"))
             .arg("--workspace")
             .arg(&workspace)
             .arg("--runtime-root")
@@ -239,7 +239,7 @@ async fn the_process_serves_a_real_conversation_runtime() {
         );
     }
 
-    // the selectable-model query: the client never reads models.json
+    // the selectable-model query: the client never reads models.jsonc
     let response = process
         .request(|id| RuntimeClientRequest::ModelCatalogGet {
             id: rustx::runtime_client::RequestId::new(id),
@@ -386,14 +386,14 @@ async fn invalid_startup_configuration_never_writes_to_stdout() {
         let root = tempfile::tempdir().expect("temp root");
         let workspace = root.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        std::fs::write(root.path().join("models.json"), &models).expect("models.json");
-        std::fs::write(root.path().join("rustx.json"), &session).expect("rustx.json");
+        std::fs::write(root.path().join("models.jsonc"), &models).expect("models.jsonc");
+        std::fs::write(root.path().join("rustx.jsonc"), &session).expect("rustx.jsonc");
         let mut command = std::process::Command::new(binary());
         command
             .arg("--models")
-            .arg(root.path().join("models.json"))
+            .arg(root.path().join("models.jsonc"))
             .arg("--config")
-            .arg(root.path().join("rustx.json"))
+            .arg(root.path().join("rustx.jsonc"))
             .arg("--workspace")
             .arg(&workspace)
             .arg("--runtime-root")
@@ -462,17 +462,17 @@ async fn a_started_process_writes_no_banner() {
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
     std::fs::write(
-        root.path().join("models.json"),
+        root.path().join("models.jsonc"),
         models_json(&server.url("/v1")),
     )
-    .expect("models.json");
-    std::fs::write(root.path().join("rustx.json"), SESSION_JSON).expect("rustx.json");
+    .expect("models.jsonc");
+    std::fs::write(root.path().join("rustx.jsonc"), SESSION_JSON).expect("rustx.jsonc");
 
     let mut child = std::process::Command::new(binary())
         .arg("--models")
-        .arg(root.path().join("models.json"))
+        .arg(root.path().join("models.jsonc"))
         .arg("--config")
-        .arg(root.path().join("rustx.json"))
+        .arg(root.path().join("rustx.jsonc"))
         .arg("--workspace")
         .arg(&workspace)
         .arg("--runtime-root")

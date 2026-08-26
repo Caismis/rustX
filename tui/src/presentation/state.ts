@@ -34,6 +34,7 @@ import type {
   RuntimeClientBackgroundExecution,
   RuntimeClientContextView,
   RuntimeClientCursor,
+  RuntimeClientResourcesView,
   RuntimeClientSubagent,
   RuntimeClientTranscriptCursor,
   InteractionRequest,
@@ -158,6 +159,8 @@ export interface PresentationState {
   status?: AgentStatusView;
   context: RuntimeClientContextView;
   capabilities: CapabilityView;
+  /** The active runtime resource generation: context files, agent profile. */
+  resources: RuntimeClientResourcesView;
   /** The session's *desired* model configuration. */
   sessionModel: SessionModelView;
   /** True once runtime drain begins; shutdown responses complete at quiescence. */

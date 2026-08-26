@@ -30,6 +30,10 @@ path = "src/bin/interactive_supervisor.rs"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The hand-editable configuration document format. `models.jsonc` and
+# `rustx.jsonc` are JSONC: ordinary JSON plus comments and trailing commas.
+# Only the deserializer comes from here; every schema stays serde-owned.
+jsonc-parser = { version = "0.33.1", features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = { version = "0.10", features = ["serde"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net", "io-util", "io-std", "process"] }

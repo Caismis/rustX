@@ -23,8 +23,8 @@ use rustx::agent::{
 use rustx::context::{
     AcceptedSystemSection, ClosureTokenEstimator, CompactionBudgets, ContextAssembly,
     ContextConfig, ContextEngine, ContextError, ContextErrorKind, ContextProposal, ContextRuntime,
-    ContextSummarizer, DefaultTokenEstimator, ModelBackedSummarizer, ProviderObservedInput,
-    SummaryRequest, SystemSectionLane, TokenEstimator, UserMessageProposal,
+    ContextSummarizer, DefaultTokenEstimator, ModelBackedSummarizer, ObservedAnchor,
+    ProviderObservedInput, SummaryRequest, SystemSectionLane, TokenEstimator, UserMessageProposal,
     render_effective_system_prompt,
 };
 use rustx::conversation::{
@@ -255,6 +255,7 @@ fn fail(kind: rustx::model::ModelErrorKind, message: &str) -> ModelEvent {
             message: message.to_owned(),
             retry_after_ms: None,
             provider_code: None,
+            context_overflow: None,
         },
     }
 }
@@ -272,6 +273,7 @@ fn overflow_error() -> rustx::model::ModelError {
         message: "context window exceeded".to_owned(),
         retry_after_ms: None,
         provider_code: None,
+        context_overflow: None,
     }
 }
 
@@ -809,8 +811,9 @@ fn tool_definitions_never_satisfy_the_recent_retention_target() {
 // Token accounting
 // ---------------------------------------------------------------------------
 
-/// A provider-reported measurement applies only to exactly the projection
-/// that was measured; everything else is a deterministic estimate.
+/// A measurement recorded without a structural anchor applies only to
+/// exactly the projection that was measured; everything else is a
+/// deterministic estimate.
 #[test]
 fn provider_reported_usage_applies_only_to_the_exact_projection() {
     let engine = engine(1_000, 10, 5, weighted(10, 10, 10));
@@ -821,6 +824,7 @@ fn provider_reported_usage_applies_only_to_the_exact_projection() {
     let observed = ProviderObservedInput {
         fingerprint: projection.fingerprint(),
         input_tokens: 42,
+        anchor: None,
     };
     let measured = engine
         .build_projection(&history, &[], Some(&observed), "")
@@ -831,8 +835,8 @@ fn provider_reported_usage_applies_only_to_the_exact_projection() {
         TokenMeasurementSource::ProviderReported
     );
 
-    // A different history is a different projection: the observed
-    // measurement does not apply, and the estimate is used instead.
+    // A different history is a different projection, and without an anchor
+    // the measurement cannot be carried forward at all.
     let grown = state(vec![user("u1", "hi"), user("u2", "more")]);
     let estimated = engine
         .build_projection(&grown, &[], Some(&observed), "")
@@ -844,8 +848,104 @@ fn provider_reported_usage_applies_only_to_the_exact_projection() {
     );
 }
 
+/// A provider measurement stays authoritative for the prefix it covers.
+///
+/// This is the difference between token accounting that drifts and token
+/// accounting that does not. A whole-conversation estimate compounds
+/// estimator error over every message ever sent; an anchored measurement
+/// keeps the provider's own number for everything it measured and estimates
+/// only what was appended since.
+#[test]
+fn a_provider_measurement_anchors_every_context_that_extends_it() {
+    let engine = engine(10_000, 0, 0, weighted(10, 10, 10));
+    let measured = state(vec![user("u1", ""), user("u2", "")]);
+    let before = engine
+        .build_projection(&measured, &[], None, "")
+        .expect("projection");
+    // The deterministic estimate of the measured context is 20; the provider
+    // counted 900 for the very same request.
+    assert_eq!(before.estimated_input.input_tokens, 20);
+    let observed = ProviderObservedInput {
+        fingerprint: before.fingerprint(),
+        input_tokens: 900,
+        anchor: Some(ObservedAnchor::of(&before.messages, "", &[])),
+    };
+
+    let mut grown = state(vec![user("u1", ""), user("u2", "")]);
+    grown
+        .commit(assistant("a1", vec![text_block("x")]))
+        .expect("append the assistant turn");
+    grown.commit(user("u3", "")).expect("append the next turn");
+    let anchored = engine
+        .build_projection(&grown, &[], Some(&observed), "")
+        .expect("anchored projection");
+    assert_eq!(
+        anchored.estimated_input.source,
+        TokenMeasurementSource::ProviderAnchored
+    );
+    assert_eq!(
+        anchored.estimated_input.input_tokens, 920,
+        "900 measured for the covered prefix, plus the estimate of exactly \
+         the two messages appended since"
+    );
+}
+
+/// The anchor covers the Effective System Prompt and the tool definitions of
+/// the measured request, so a change to either refuses it outright. The
+/// runtime never patches a stale measurement with a guessed delta.
+#[test]
+fn an_anchor_is_refused_when_the_non_conversation_input_changed() {
+    let engine = engine(10_000, 0, 0, weighted(10, 10, 10));
+    let measured = state(vec![user("u1", "")]);
+    let before = engine
+        .build_projection(&measured, &[], None, "")
+        .expect("projection");
+    let observed = ProviderObservedInput {
+        fingerprint: before.fingerprint(),
+        input_tokens: 900,
+        anchor: Some(ObservedAnchor::of(&before.messages, "", &[])),
+    };
+    let mut grown = state(vec![user("u1", "")]);
+    grown.commit(user("u2", "")).expect("append");
+
+    assert_eq!(
+        engine
+            .build_projection(&grown, &[], Some(&observed), "")
+            .expect("projection")
+            .estimated_input
+            .source,
+        TokenMeasurementSource::ProviderAnchored,
+        "unchanged non-conversation input anchors"
+    );
+    assert_eq!(
+        engine
+            .build_projection(&grown, &[], Some(&observed), "new guidance")
+            .expect("projection")
+            .estimated_input
+            .source,
+        TokenMeasurementSource::Estimated,
+        "a changed Effective System Prompt refuses the anchor"
+    );
+    assert_eq!(
+        engine
+            .build_projection(
+                &grown,
+                &[common::model_tool("alpha", "tool-alpha")],
+                Some(&observed),
+                ""
+            )
+            .expect("projection")
+            .estimated_input
+            .source,
+        TokenMeasurementSource::Estimated,
+        "a changed tool set refuses the anchor"
+    );
+}
+
 /// A Surface rewrite invalidates a stale provider-reported measurement: the
-/// request context it measured no longer exists.
+/// request context it measured no longer exists, so not even its anchor
+/// survives. An ordinary append is the opposite case — the measured context
+/// is still a prefix, so the measurement is carried forward.
 #[test]
 fn a_surface_rewrite_invalidates_a_stale_observed_measurement() {
     let engine = engine(10_000, 0, 0, weighted(10, 10, 10));
@@ -856,6 +956,7 @@ fn a_surface_rewrite_invalidates_a_stale_observed_measurement() {
     let observed = ProviderObservedInput {
         fingerprint: before.fingerprint(),
         input_tokens: 42,
+        anchor: Some(ObservedAnchor::of(&before.messages, "", &[])),
     };
     // The measurement applies to exactly the context it measured.
     assert_eq!(
@@ -884,17 +985,19 @@ fn a_surface_rewrite_invalidates_a_stale_observed_measurement() {
         TokenMeasurementSource::Estimated,
         "a surface rewrite must invalidate the stale observed measurement"
     );
-    // An ordinary append does the same.
+    // An ordinary append is not a rewrite: the measured context is still an
+    // ordered prefix, so its provider-reported cost is kept and only the
+    // appended message is estimated.
     let mut appended = state(vec![user("u1", ""), user("u2", ""), user("u3", "")]);
     appended.commit(user("u4", "")).expect("append");
+    let extended = engine
+        .build_projection(&appended, &[], Some(&observed), "")
+        .expect("projection after the append");
     assert_eq!(
-        engine
-            .build_projection(&appended, &[], Some(&observed), "")
-            .expect("projection after the append")
-            .estimated_input
-            .source,
-        TokenMeasurementSource::Estimated
+        extended.estimated_input.source,
+        TokenMeasurementSource::ProviderAnchored
     );
+    assert_eq!(extended.estimated_input.input_tokens, 52);
 }
 
 /// Missing provider usage means the deterministic estimate, never a
@@ -1169,6 +1272,7 @@ fn staged_context_is_evaluated_exactly_per_compaction_candidate() {
                 must_cover_through: None,
                 fresh_inbound: None,
                 staged_request_context: &staged,
+                estimate_correction: None,
             },
         )
         .expect("the exact hypothetical evaluation selects a fitting candidate");
@@ -1842,6 +1946,215 @@ async fn summary_model_cannot_fit_leaves_execution_uncommitted() {
     assert_no_compaction_committed(&result);
 }
 
+/// A summary request the summary model itself rejects as too large is not a
+/// dead end.
+///
+/// The selected span was *estimated* to fit the summary model's own request
+/// budget, and the provider proved that estimate wrong. Abandoning the
+/// compaction here is what makes a context overflow unrecoverable: the
+/// attempt would report the original overflow again with nothing compacted.
+/// Instead the pipeline replans the same transition against a halved summary
+/// input budget and summarizes again.
+#[tokio::test]
+async fn a_rejected_summary_request_replans_against_a_smaller_budget() {
+    let model = fake_model(vec![
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(text_delta(0, "provisional")),
+            FakeStep::Emit(overflow_event()),
+        ],
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(text_delta(0, "retry ok")),
+            FakeStep::Emit(done_with_usage(ModelFinishReason::Stop, 4)),
+        ],
+    ]);
+    let tools = ToolRegistry::new();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let summarizer = Arc::new(FakeContextSummarizer::new(vec![
+        FakeSummaryStep::Fail(ContextError::new(
+            ContextErrorKind::SummaryInputTooLarge,
+            "the summary request exceeded the summary model context window",
+        )),
+        FakeSummaryStep::Return("summary-1".to_owned()),
+    ]));
+    let runtime = ContextRuntime::with_scripted_summarizer(
+        engine(500, 0, 5, weighted(100, 10, 0)),
+        summarizer.clone(),
+        rustx::context::AgentStatusComposer::default(),
+        CompactionBudgets::new(1, 1, 1_000_000),
+    );
+    let tool_runtime = common::tool_runtime("conv-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
+            capability.into_lease(),
+            &cancellation,
+            runtime,
+            &tool_runtime,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime")
+        .run()
+        .await,
+        tool_runtime.durable_store().as_ref(),
+    );
+
+    assert_eq!(
+        summarizer.requests().len(),
+        2,
+        "the rejected summary request is replanned, not abandoned"
+    );
+    assert!(
+        result
+            .event_history
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::CompactionCompleted { .. })),
+        "the replanned compaction commits: {:?}",
+        result.event_history
+    );
+    assert!(
+        !result
+            .event_history
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::CompactionFailed { .. })),
+        "a recovered rejection is not a compaction failure"
+    );
+    assert_outcome(
+        &result,
+        &AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop,
+        },
+    );
+}
+
+/// The summary input budget selects the span, so tightening it selects a
+/// strictly smaller one. This is the mechanism the replanning loop above
+/// relies on, measured with the real frozen estimator rather than scripted
+/// weights.
+#[test]
+fn a_tighter_summary_input_limit_selects_a_smaller_span() {
+    let engine = engine(1_000_000, 0, 0, Arc::new(DefaultTokenEstimator));
+    let history = state(vec![
+        user("u1", &"alpha ".repeat(64)),
+        user("u2", &"bravo ".repeat(64)),
+        user("u3", &"charlie ".repeat(64)),
+        user("u4", &"delta ".repeat(64)),
+    ]);
+    let projection = engine
+        .build_projection(&history, &[], None, "")
+        .expect("projection");
+    let wide = engine
+        .plan_compaction(
+            &history,
+            &projection,
+            &[],
+            CompactionBudgets::new(0, 0, 1_000_000),
+            &rustx::context::CompactionConstraints::default(),
+        )
+        .expect("an unconstrained summary budget retires the whole run");
+    assert_eq!(wide.span.end, MessageId::new("u4"));
+
+    let narrow = engine
+        .plan_compaction(
+            &history,
+            &projection,
+            &[],
+            CompactionBudgets::new(0, 0, wide.summary_input_tokens - 1),
+            &rustx::context::CompactionConstraints::default(),
+        )
+        .expect("a tighter summary budget still admits a shorter span");
+    assert!(
+        narrow.retired.len() < wide.retired.len(),
+        "a tighter summary budget must retire fewer messages: {} vs {}",
+        narrow.retired.len(),
+        wide.retired.len()
+    );
+    assert!(narrow.summary_input_tokens < wide.summary_input_tokens);
+}
+
+/// A measured estimate correction scales the budget it is applied to by the
+/// observed ratio, and never to zero.
+#[test]
+fn an_estimate_correction_scales_budgets_by_the_observed_ratio() {
+    let correction =
+        rustx::context::EstimateCorrection::new(80_000, 100_000).expect("a real correction");
+    assert_eq!(correction.apply(50_000), 40_000);
+    assert_eq!(correction.apply(1), 1, "a corrected budget is never zero");
+    assert_eq!(
+        rustx::context::EstimateCorrection::UNQUANTIFIED.apply(4_000),
+        3_000
+    );
+    assert_eq!(
+        rustx::context::EstimateCorrection::new(0, 10),
+        None,
+        "a zero estimate carries no measurable error"
+    );
+    assert_eq!(
+        rustx::context::EstimateCorrection::new(10, 10),
+        None,
+        "an observation that matches the estimate is not a correction"
+    );
+}
+
+/// The correction constrains the request it was measured on, and no other.
+///
+/// An [`EstimateCorrection`] is the ratio between what this runtime
+/// estimated for one *primary* request and what the provider counted for
+/// that same request. It is a fact about that request, not a calibration of
+/// a tokenizer: the deviation can come from the provider continuation, the
+/// tool schemas, the effective system prompt, or request-specific fixed
+/// overhead. The summary request carries none of those — no tools, no Agent
+/// Status, no Skill catalog, no continuation — so the ratio is not evidence
+/// about it even when both requests go to the same model. A stored
+/// continuation alone can put a hundred thousand provider-counted tokens
+/// behind the primary request that the summary request will never send.
+///
+/// So the corrected plan below still admits the span the uncorrected plan
+/// admitted. A summary request that is genuinely too large is rejected by
+/// the summary model, and the bounded shrink loop replans against that
+/// measurement instead of a borrowed one.
+#[test]
+fn an_estimate_correction_never_crosses_into_the_summary_request() {
+    let engine = engine(1_000_000, 0, 0, weighted(10, 10, 0));
+    let history = state(vec![user("u1", ""), user("u2", ""), user("u3", "")]);
+    let projection = engine
+        .build_projection(&history, &[], None, "")
+        .expect("projection");
+    // The assembled summary request weighs ten tokens under this estimator,
+    // so a budget of thirty is comfortable. A four-to-one correction
+    // measured on the primary request would compress it to seven and reject
+    // the span — if it were allowed to travel there.
+    let budgets = CompactionBudgets::new(0, 0, 30);
+    let uncorrected = engine
+        .plan_compaction(
+            &history,
+            &projection,
+            &[],
+            budgets,
+            &rustx::context::CompactionConstraints::default(),
+        )
+        .expect("the summary budget admits the span");
+    let corrected = engine
+        .plan_compaction(
+            &history,
+            &projection,
+            &[],
+            budgets,
+            &rustx::context::CompactionConstraints {
+                estimate_correction: rustx::context::EstimateCorrection::new(1, 4),
+                ..Default::default()
+            },
+        )
+        .expect("a primary-request correction never shrinks the summary budget");
+    assert_eq!(
+        corrected.summary_input_tokens, uncorrected.summary_input_tokens,
+        "the summary request is planned against its own budget"
+    );
+    assert!(corrected.summary_input_tokens <= 30);
+}
+
 /// Repeated compaction operates from the **current** Surface and never
 /// rediscovers retired Ledger history.
 ///
@@ -2317,6 +2630,7 @@ fn progress_rule_rejects_growth_even_when_provider_reported_before_is_larger() {
     let observed = ProviderObservedInput {
         fingerprint: plain_projection.fingerprint(),
         input_tokens: 1_000,
+        anchor: None,
     };
     let projection = engine
         .build_projection(&history, &[], Some(&observed), "")
@@ -2372,6 +2686,7 @@ fn progress_rule_accepts_decrease_even_when_provider_reported_before_is_smaller(
     let observed = ProviderObservedInput {
         fingerprint: plain_projection.fingerprint(),
         input_tokens: 50,
+        anchor: None,
     };
     let projection = engine
         .build_projection(&history, &[], Some(&observed), "")
@@ -2523,6 +2838,11 @@ fn continuation_owner_is_never_split() {
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // the full expected trace is asserted verbatim
 async fn proactive_compaction_before_the_next_turn() {
+    // The first request's reported usage is load-bearing: it becomes the
+    // anchor of the next turn's measurement, so it is scripted to agree with
+    // this estimator's view of the same context (one User message at weight
+    // 100). The pressure that triggers compaction therefore comes from the
+    // assistant turn and tool result appended after it.
     let scripted = scripted_call();
     let model = fake_model(vec![
         vec![
@@ -2530,7 +2850,7 @@ async fn proactive_compaction_before_the_next_turn() {
             FakeStep::Emit(tool_call_events(0, &scripted)[0].clone()),
             FakeStep::Emit(tool_call_events(0, &scripted)[1].clone()),
             FakeStep::Emit(tool_call_events(0, &scripted)[2].clone()),
-            FakeStep::Emit(done_with_usage(ModelFinishReason::ToolCalls, 15)),
+            FakeStep::Emit(done_with_usage(ModelFinishReason::ToolCalls, 100)),
         ],
         vec![
             FakeStep::Emit(started()),
@@ -2587,9 +2907,9 @@ async fn proactive_compaction_before_the_next_turn() {
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             finish_reason: ModelFinishReason::ToolCalls,
             usage: Some(ModelUsage {
-                input_tokens: 15,
+                input_tokens: 100,
                 output_tokens: 4,
-                total_tokens: 19,
+                total_tokens: 104,
                 details: None,
             }),
         },
@@ -4627,9 +4947,13 @@ async fn model_backed_summarizer_issues_a_canonical_request() {
             "summary instruction must preserve continuation guidance: {required}"
         );
     }
-    // The serialized input is deterministic and embedded verbatim.
-    let serialized = serde_json::to_string(&request).expect("serialize");
-    assert!(text.contains(&serialized));
+    // The rendered transcript is deterministic and embedded verbatim.
+    let rendered = request.render_transcript();
+    assert!(text.contains(&rendered));
+    assert!(
+        text.contains("<retired-conversation>"),
+        "the retired span must be delimited for the summary model"
+    );
     assert_eq!(requests[0].messages, request.model_input().messages);
 }
 

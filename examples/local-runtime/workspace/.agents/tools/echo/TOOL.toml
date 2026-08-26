@@ -1,6 +1,25 @@
+# The manifest of one custom Python tool package. rustX discovers this
+# package because it sits at <workspace>/.agents/tools/echo/; there is no
+# registration entry in rustx.jsonc.
+
+# The only package manifest schema version this runtime accepts.
 schema_version = 1
+
+# The model-facing tool name. It must equal the package directory name.
 name = "echo"
+
+# The model-facing description. It is what the model reads to decide whether
+# to call this tool, so describe the effect, not the implementation.
 description = "Return the message supplied to the example tool."
+
+# "<module>:<function>" inside this package. The function takes the validated
+# arguments and returns a JSON-serializable object.
 entrypoint = "tool:main"
+
+# The same three policy axes native tools use, declared by the package
+# instead of by rustx.jsonc:
+#   execution:   "foreground_only" | "background_only" | "model_selectable"
+#   concurrency: "sequential" | "parallel"
+#   approval:    "never" | "always"   (optional; defaults to "never")
 execution = "foreground_only"
 concurrency = "sequential"

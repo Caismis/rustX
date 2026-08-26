@@ -15,7 +15,7 @@
  * touching the terminal itself. That keeps it testable without a real
  * terminal and keeps Pi at the outermost layer.
  *
- * What it must never do: read `models.json`, resolve a credential, execute a
+ * What it must never do: read `models.jsonc`, resolve a credential, execute a
  * tool, read a `SKILL.md`, compose an Agent Status, drain a mailbox, or reach
  * a provider. Every one of those is Rust-owned, and several are reachable
  * only through operations this file calls.
@@ -32,6 +32,7 @@ import {
   inactiveToolsByOrigin,
   originLabel,
   outcomeLabel,
+  sessionLabel,
   skills,
   toolsByOrigin,
   unavailableInputModalities,
@@ -385,7 +386,10 @@ export class CommandDispatcher {
     return inspect(
       "Session",
       [
-        `session ${refreshed.name} (${refreshed.id})`,
+        // An unnamed Session has no name line rather than a placeholder one:
+        // the identity below is what it is actually known by.
+        ...(refreshed.name === undefined ? [] : [`name ${refreshed.name}`]),
+        `session ${refreshed.id}`,
         `active node ${refreshed.active_node}`,
         `conversation ${refreshed.active_conversation_id}`,
         `nodes ${refreshed.node_count}`,
@@ -425,13 +429,28 @@ export class CommandDispatcher {
     );
   }
 
+  /**
+   * `/name` shows the active Session's name, and `/name <text>` sets it.
+   *
+   * Reporting the current name is the useful answer to a bare `/name`: a
+   * Session is unnamed until someone names it, so "this one has no name" is
+   * the fact the user is asking about, not a syntax mistake to correct.
+   */
   async #name(
     session: RuntimeClientAttachment,
     argument: string,
   ): Promise<CommandOutcome> {
-    if (argument.trim().length === 0) return transient("error", "usage: /name <text>");
-    const renamed = await session.nameSession(argument);
-    return transient("info", `session renamed to ${renamed.name}`);
+    if (argument.trim().length === 0) {
+      const current = await session.refreshSession();
+      return transient(
+        "info",
+        current.name === undefined
+          ? `session ${current.id} is unnamed; use /name <text> to name it`
+          : `session name: ${current.name}`,
+      );
+    }
+    const named = await session.nameSession(argument);
+    return transient("info", `session named ${sessionLabel(named)}`);
   }
 
   async #fork(session: RuntimeClientAttachment): Promise<CommandOutcome> {

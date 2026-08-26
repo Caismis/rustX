@@ -858,6 +858,7 @@ async fn failed_overflow_audit_blocks_the_retry_request() {
                     message: "context window exceeded".to_owned(),
                     retry_after_ms: None,
                     provider_code: None,
+                    context_overflow: None,
                 },
             }),
         ],

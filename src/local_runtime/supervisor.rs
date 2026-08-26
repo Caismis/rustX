@@ -110,6 +110,28 @@ impl LocalSessionSupervisor {
         }
     }
 
+    /// Commits the startup catalog transition this launch planned.
+    ///
+    /// This is the one durable catalog write of composition, and it is
+    /// deliberately the *last* fallible step: the runtime for the planned
+    /// destination is already composed and bound by the time it runs, so a
+    /// composition failure can never leave a launch that did not start
+    /// having moved the active selection, published an empty Session, or
+    /// renamed one. Everything after this commit — installing the runtime,
+    /// activating it — is structurally infallible for a freshly composed
+    /// supervisor.
+    ///
+    /// # Errors
+    ///
+    /// Returns the catalog commit failure, including the distinct
+    /// committed-but-durability-uncertain outcome, unchanged.
+    pub(crate) async fn commit_startup(
+        &self,
+        planned: super::session::PlannedCatalog,
+    ) -> Result<(), SessionError> {
+        self.state.lock().await.catalog.commit_planned(planned)
+    }
+
     /// Arms a deterministic pre-visibility catalog fault for unit tests.
     #[cfg(test)]
     pub(crate) async fn arm_catalog_write_fault_before_rename(&self) {
@@ -260,13 +282,10 @@ impl LocalSessionSupervisor {
         let origin = super::session::SessionNodeOrigin::New;
         state
             .catalog
-            .preflight_publish_session(&prepared, "New session", origin.clone())?;
+            .preflight_publish_session(&prepared, origin.clone())?;
         self.quiesce_old(&mut state).await?;
         let session_id = prepared.session_id.clone();
-        match state
-            .catalog
-            .publish_session(&prepared, "New session", origin)
-        {
+        match state.catalog.publish_session(&prepared, origin) {
             Ok(snapshot) => {
                 debug_assert_eq!(snapshot.id, session_id);
                 Ok(SessionSwitchResult {
@@ -344,18 +363,12 @@ impl LocalSessionSupervisor {
             source_node: source_node.id.clone(),
             source_surface_revision: source.surface_revision,
         };
-        state.catalog.preflight_publish_session(
-            &prepared,
-            &format!("Clone of {source_session}"),
-            origin.clone(),
-        )?;
+        state
+            .catalog
+            .preflight_publish_session(&prepared, origin.clone())?;
         self.quiesce_old(&mut state).await?;
         let session_id = prepared.session_id.clone();
-        match state.catalog.publish_session(
-            &prepared,
-            &format!("Clone of {source_session}"),
-            origin,
-        ) {
+        match state.catalog.publish_session(&prepared, origin) {
             Ok(snapshot) => Ok(SessionSwitchResult {
                 session: snapshot,
                 editor_content: None,
@@ -392,17 +405,12 @@ impl LocalSessionSupervisor {
             source_surface_revision: surface_revision,
             source_user_message: message_id.clone(),
         };
-        state.catalog.preflight_publish_session(
-            &prepared,
-            &format!("Fork of {source_session}"),
-            origin.clone(),
-        )?;
+        state
+            .catalog
+            .preflight_publish_session(&prepared, origin.clone())?;
         self.quiesce_old(&mut state).await?;
         let session_id = prepared.session_id.clone();
-        match state
-            .catalog
-            .publish_session(&prepared, &format!("Fork of {source_session}"), origin)
-        {
+        match state.catalog.publish_session(&prepared, origin) {
             Ok(snapshot) => Ok(SessionSwitchResult {
                 session: snapshot,
                 editor_content: Some(editor_content),
@@ -825,6 +833,7 @@ fn session_summary_view(summary: SessionSummary) -> SessionSummaryView {
     SessionSummaryView {
         id: summary.id.as_str().to_owned(),
         name: summary.name,
+        preview: summary.preview,
         updated_at: summary.updated_at,
         active_node: summary.active_node.as_str().to_owned(),
         active: summary.active,

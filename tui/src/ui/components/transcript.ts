@@ -6,16 +6,25 @@
  * primary content on the screen rather than one labelled row among many:
  *
  * ```text
- * user            ▌ the question, verbatim
+ * user            the question on its own background band
  * assistant text  ordinary Markdown, no banner
- * reasoning       dimmed, or one `Thinking…` marker when hidden
+ * reasoning       dimmed italic, or one `Thinking...` marker when hidden
  * refusal         explicitly a refusal, never an answer
- * tool_call       one correlated tool card (see ./tool-card.ts)
+ * tool_call       one correlated tool card on a state-coloured band
+ *                 (see ./tool-card.ts)
  * tool result     folded into that card when folding preserves canonical
  *                 order, otherwise that card's continuation at its own
  *                 canonical position — never repeated, never reordered
  * system          dimmed diagnostic with its authority
  * ```
+ *
+ * A block may name a *background band* — the visual grammar Pi uses, and the
+ * one this client now follows. The band is a layout fact, not a text
+ * decoration: a block says which band it belongs to and the app shell fills
+ * the terminal width with it, because the shell is the only layer that knows
+ * how wide the line is. A band never carries meaning of its own that the
+ * text does not also state: a denied tool call says `denied`, and the band
+ * colour is a second reading of the same runtime fact, never the only one.
  *
  * Canonical block order is preserved exactly. When a model emits
  * `reasoning, text, tool_call, text`, that is what the reader sees, in that
@@ -51,8 +60,12 @@ import {
   type PresentationPreferences,
   isToolCallExpanded,
 } from "../preferences.ts";
-import { role, style } from "../theme.ts";
-import { type ToolCardPart, renderToolCard } from "./tool-card.ts";
+import { type BackgroundRole, role, style } from "../theme.ts";
+import {
+  type ToolCardPart,
+  cardBackground,
+  renderToolCard,
+} from "./tool-card.ts";
 
 /**
  * One rendered transcript block.
@@ -68,8 +81,16 @@ export type TranscriptBlock =
       key: string;
       markdown: string;
       defaultTextStyle?: DefaultTextStyle;
+      /** The background band this block is drawn on, when it has one. */
+      background?: BackgroundRole;
     }
-  | { kind: "text"; key: string; text: string };
+  | {
+      kind: "text";
+      key: string;
+      text: string;
+      /** The background band this block is drawn on, when it has one. */
+      background?: BackgroundRole;
+    };
 
 /** Everything the transcript renderer needs beyond the projection itself. */
 export interface TranscriptContext {
@@ -321,17 +342,24 @@ function renderCommitted(
       const body = message.content
         .map((block) => (block.type === "text" ? block.text : `(${block.type})`))
         .join("\n");
-      const lines =
-        labels.length === 0
-          ? []
-          : [role.meta(`▌ ${labels.join(" · ")}`)];
-      return [
-        {
+      const blocks: TranscriptBlock[] = [];
+      if (labels.length > 0) {
+        // Provenance stays outside the band: it is what the runtime says
+        // about the turn, not part of what the turn said.
+        blocks.push({
           kind: "text",
-          key: entry.key,
-          text: [...lines, ...bar(body, role.user)].join("\n"),
-        },
-      ];
+          key: `${entry.key}:provenance`,
+          text: role.meta(labels.join(" · ")),
+        });
+      }
+      blocks.push({
+        kind: "markdown",
+        key: entry.key,
+        markdown: body,
+        defaultTextStyle: { color: role.user },
+        background: "user",
+      });
+      return blocks;
     }
 
     case "assistant": {
@@ -480,7 +508,11 @@ function reasoningBlock(
   context: TranscriptContext,
 ): TranscriptBlock {
   if (!context.preferences.reasoningVisible) {
-    return { kind: "text", key, text: role.reasoning("✻ Thinking…") };
+    return {
+      kind: "text",
+      key,
+      text: style.italic(role.reasoning("Thinking...")),
+    };
   }
   return {
     kind: "markdown",
@@ -488,7 +520,7 @@ function reasoningBlock(
     markdown: texts.join("\n\n"),
     // Applied as Markdown's default text style so the renderer reapplies it
     // after nested spans reset their own ANSI styling.
-    defaultTextStyle: { color: role.reasoning },
+    defaultTextStyle: { color: role.reasoning, italic: true },
   };
 }
 
@@ -535,6 +567,11 @@ function toolBlock(
       },
       part,
     ),
+    // The band restates the lifecycle the card's own status words already
+    // carry. A `call` part is still in flight by construction — its result
+    // is rendered below, at the result's canonical position — so it keeps
+    // the pending band whatever the settlement below it says.
+    background: cardBackground(part === "call" ? undefined : tool.lifecycle),
   };
 }
 

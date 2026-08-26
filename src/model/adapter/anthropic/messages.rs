@@ -272,6 +272,7 @@ async fn open_stream(
                 message: reqwest_error.to_string(),
                 retry_after_ms: None,
                 provider_code: None,
+                context_overflow: None,
             })
         }
     }
@@ -332,6 +333,7 @@ fn cancelled_error() -> ModelError {
         message: "model invocation cancelled".to_owned(),
         retry_after_ms: None,
         provider_code: None,
+        context_overflow: None,
     }
 }
 
@@ -341,6 +343,7 @@ fn sse_failure(error: &eventsource_stream::EventStreamError<reqwest::Error>) -> 
         message: format!("Anthropic SSE stream failed: {error}"),
         retry_after_ms: None,
         provider_code: None,
+        context_overflow: None,
     }
 }
 
@@ -511,7 +514,9 @@ impl AnthropicStreamNormalizer {
                     ),
                     retry_after_ms: None,
                     provider_code,
-                })
+                    context_overflow: None,
+                }
+                .normalized())
             }
         }
     }
@@ -958,6 +963,7 @@ impl AnthropicStreamNormalizer {
                     ),
                     retry_after_ms: None,
                     provider_code: Some(stop_reason),
+                    context_overflow: None,
                 },
             }]);
         }
@@ -1008,6 +1014,7 @@ fn provider_error(message: String) -> ModelError {
         message,
         retry_after_ms: None,
         provider_code: None,
+        context_overflow: None,
     }
 }
 
@@ -1038,5 +1045,6 @@ fn unsupported(message: impl Into<String>) -> ModelError {
         message,
         retry_after_ms: None,
         provider_code: None,
+        context_overflow: None,
     }
 }
