@@ -688,6 +688,7 @@ mod tests {
                         message: "retries exhausted".to_owned(),
                         retry_after_ms: None,
                         provider_code: None,
+                        context_overflow: None,
                     },
                 },
             },
@@ -853,6 +854,7 @@ mod tests {
             message: "retries exhausted".to_owned(),
             retry_after_ms: Some(5_000),
             provider_code: Some("rate_limit_exceeded".to_owned()),
+            context_overflow: None,
         };
         let event = RuntimeEvent::AttemptFailed {
             attempt_id: AttemptId::new("attempt-1"),

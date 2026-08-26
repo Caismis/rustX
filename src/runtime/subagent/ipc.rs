@@ -379,7 +379,7 @@ mod tests {
             parent_agent_id: AgentId::new("agent-parent"),
             profile: "explore".to_owned(),
             persona: "persona".to_owned(),
-            models: PathBuf::from("/tmp/models.json"),
+            models: PathBuf::from("/tmp/models.jsonc"),
             model: SessionModelConfig::of(
                 serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),
             ),

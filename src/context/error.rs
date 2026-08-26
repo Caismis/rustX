@@ -52,6 +52,15 @@ pub enum ContextErrorKind {
     /// Summary generation failed (a model-backed summarizer refusal, a tool
     /// request, a model failure, or a scripted fake failure).
     SummaryFailed,
+    /// The summary model rejected the summary request itself as larger than
+    /// its own context window.
+    ///
+    /// This is the one summary failure that is *actionable*: the selected
+    /// span was estimated to fit and provably did not, so the compaction
+    /// pipeline replans the same compaction against a smaller summary input
+    /// budget instead of abandoning the conversation to the overflow that
+    /// triggered it.
+    SummaryInputTooLarge,
     /// Summary generation was cancelled.
     Cancelled,
     /// Agent Status composition failed: an extension section provider

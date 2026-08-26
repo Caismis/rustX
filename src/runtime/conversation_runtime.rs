@@ -1806,6 +1806,10 @@ impl RuntimeInner {
         // shutdown projection seed is necessarily false.
         let shutting_down = false;
         let model = state.model.view();
+        // The resource generation is part of the same freeze as every other
+        // seeded fact: a client attaching before the first reload still sees
+        // exactly which project instruction files the runtime loaded.
+        let resources = Arc::clone(&state.resources);
         let approval_mode = RuntimeInner::approval_mode_state(&state);
         let observer: Arc<RuntimeObserver> = Arc::new(RuntimeObserver::new(self));
         // Interaction pending state is an ephemeral runtime observation, but
@@ -1858,6 +1862,7 @@ impl RuntimeInner {
             pending_interactions,
             capabilities,
             capability_availability,
+            resources,
         })
     }
 
@@ -3437,6 +3442,10 @@ impl ConversationRuntime {
                                 })
                             }
                             Ok(capability) => {
+                                let crate::capabilities::CommittedCapability {
+                                    snapshot: capability,
+                                    availability,
+                                } = capability;
                                 let revision = state.resources.revision().next();
                                 let resources = Arc::new(RuntimeResourceSnapshot::from_prepared(
                                     revision,
@@ -3444,7 +3453,35 @@ impl ConversationRuntime {
                                     capability,
                                 ));
                                 let capability_revision = resources.capability_revision();
-                                state.resources = resources;
+                                state.resources = Arc::clone(&resources);
+                                // One observation carries the whole
+                                // generation: the resource snapshot and the
+                                // capability generation it was built
+                                // against. `commit_runtime` fired no
+                                // capability observation of its own,
+                                // precisely so this is the only one.
+                                //
+                                // Ordering the two writes under this lock
+                                // is not enough on its own. The consumer of
+                                // this queue folds on its own task under
+                                // its own lock and never takes this one, so
+                                // two enqueued observations are two folds
+                                // and a subscriber can be woken between
+                                // them — long enough to publish new tools
+                                // beside project instruction files the same
+                                // reload retired. A single observation
+                                // removes the window rather than narrowing
+                                // it.
+                                //
+                                // Both halves are still needed: a reload
+                                // that only rewrites project instruction
+                                // files advances the resource revision and
+                                // leaves the capability revision untouched,
+                                // so neither half implies the other.
+                                self.inner.observe(ConversationObservation::Resources {
+                                    snapshot: resources,
+                                    availability,
+                                });
                                 // FND-06: the complete new generation is
                                 // published and the admission gate is about
                                 // to reopen.
@@ -4302,6 +4339,8 @@ pub(crate) struct RuntimeBootstrapSnapshot {
     /// The authoritative capability-source availability at the cut
     /// (Issue #81).
     pub capability_availability: crate::capabilities::CapabilityAvailability,
+    /// The immutable runtime resource generation current at the cut.
+    pub resources: Arc<crate::runtime::resources::RuntimeResourceSnapshot>,
     /// Live process-owned native interactions at the bootstrap cut.
     pub pending_interactions: Vec<crate::runtime::interaction::InteractionRequest>,
 }
@@ -5534,7 +5573,7 @@ mod tests {
                 clock: Arc::new(crate::runtime::types::SystemClock),
                 spawn: crate::runtime::subagent::SubagentSpawnPlan {
                     program: std::path::PathBuf::from("/nonexistent/rustx"),
-                    models: std::path::PathBuf::from("/nonexistent/models.json"),
+                    models: std::path::PathBuf::from("/nonexistent/models.jsonc"),
                     workspace: workspace.clone(),
                     runtime_root: dir.path().join("subagents"),
                     model: crate::model::session::SessionModelConfig::of(
@@ -5643,7 +5682,7 @@ mod tests {
                 clock: Arc::new(crate::runtime::types::SystemClock),
                 spawn: crate::runtime::subagent::SubagentSpawnPlan {
                     program: std::path::PathBuf::from("/nonexistent/rustx"),
-                    models: std::path::PathBuf::from("/nonexistent/models.json"),
+                    models: std::path::PathBuf::from("/nonexistent/models.jsonc"),
                     workspace: workspace.clone(),
                     runtime_root: dir.path().join("subagents"),
                     model: crate::model::session::SessionModelConfig::of(
@@ -7460,6 +7499,7 @@ mod tests {
                     message: "context window exceeded".to_owned(),
                     retry_after_ms: None,
                     provider_code: None,
+                    context_overflow: None,
                 },
             }),
         ];
@@ -12757,6 +12797,7 @@ mod tests {
                     message: "provider settled cancellation".to_owned(),
                     retry_after_ms: None,
                     provider_code: None,
+                    context_overflow: None,
                 },
             }),
         ];
@@ -14803,6 +14844,7 @@ mod tests {
                     message: "provider settled cancellation".to_owned(),
                     retry_after_ms: None,
                     provider_code: None,
+                    context_overflow: None,
                 },
             }),
         ];

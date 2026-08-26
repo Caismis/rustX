@@ -195,6 +195,7 @@ fn overflow_turn() -> Vec<FakeStep> {
                 message: "context window exceeded".to_owned(),
                 retry_after_ms: None,
                 provider_code: None,
+                context_overflow: None,
             },
         }),
     ]
@@ -1085,6 +1086,7 @@ async fn session_summary_mode_freezes_the_attempt_summary_model_against_mid_atte
                     message: "context window exceeded".to_owned(),
                     retry_after_ms: None,
                     provider_code: None,
+                    context_overflow: None,
                 },
             }),
         ],

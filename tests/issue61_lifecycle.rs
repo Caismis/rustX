@@ -78,10 +78,10 @@ const RUNTIME_CONFIG_JSON: &str = r#"{
 fn startup(root: &std::path::Path, models: &str, config: &str) -> LocalRuntimePaths {
     let workspace = root.join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
-    let models_path = root.join("models.json");
-    let config_path = root.join("rustx.json");
-    std::fs::write(&models_path, models).expect("models.json");
-    std::fs::write(&config_path, config).expect("rustx.json");
+    let models_path = root.join("models.jsonc");
+    let config_path = root.join("rustx.jsonc");
+    std::fs::write(&models_path, models).expect("models.jsonc");
+    std::fs::write(&config_path, config).expect("rustx.jsonc");
     LocalRuntimePaths {
         models: models_path,
         config: config_path,
@@ -89,6 +89,8 @@ fn startup(root: &std::path::Path, models: &str, config: &str) -> LocalRuntimePa
         no_skills: false,
         no_builtin_tools: false,
         no_tools: false,
+        startup_session: rustx::local_runtime::StartupSession::Empty,
+        session_name: None,
         tools: None,
         exclude_tools: Vec::new(),
         workspace,

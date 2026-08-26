@@ -623,6 +623,7 @@ async fn explicit_summary_mode_is_resolved_once_and_frozen_at_admission() {
                         message: "too long".to_owned(),
                         retry_after_ms: None,
                         provider_code: None,
+                        context_overflow: None,
                     },
                 }),
             ],

@@ -264,6 +264,7 @@ fn cancelled_error() -> ModelError {
         message: "model invocation cancelled".to_owned(),
         retry_after_ms: None,
         provider_code: None,
+        context_overflow: None,
     }
 }
 
@@ -581,6 +582,7 @@ impl ChatStreamNormalizer {
                     .unwrap_or_else(|| "provider reported an unsuccessful base_resp".to_owned()),
                 retry_after_ms: None,
                 provider_code: base.status_code.map(|code| code.to_string()),
+                context_overflow: None,
             });
         }
         if chunk.choices.len() > 1 {
@@ -623,6 +625,7 @@ impl ChatStreamNormalizer {
                         ),
                         retry_after_ms: None,
                         provider_code: Some(reason.clone()),
+                        context_overflow: None,
                     });
                 }
                 if matches!(
@@ -636,6 +639,7 @@ impl ChatStreamNormalizer {
                         ),
                         retry_after_ms: None,
                         provider_code: Some(reason.clone()),
+                        context_overflow: None,
                     });
                 }
                 self.finish_reason = Some(map_chat_finish_reason(Some(reason)));
@@ -985,6 +989,7 @@ fn provider_error(message: String) -> ModelError {
         message,
         retry_after_ms: None,
         provider_code: None,
+        context_overflow: None,
     }
 }
 
@@ -1071,7 +1076,9 @@ fn chat_stream_error(error: &serde_json::Value) -> ModelError {
         message: format!("OpenAI-compatible stream error: {message}"),
         retry_after_ms: None,
         provider_code: provider_code.map(str::to_owned),
+        context_overflow: None,
     }
+    .normalized()
 }
 
 /// Translates a canonical request into the final Chat Completions request
@@ -1118,12 +1125,14 @@ fn translate_request(request: &ModelRequest) -> Result<serde_json::Value, ModelE
         message: format!("failed to build Chat Completions request: {e}"),
         retry_after_ms: None,
         provider_code: None,
+        context_overflow: None,
     })?;
     let mut value = serde_json::to_value(&typed).map_err(|e| ModelError {
         kind: ModelErrorKind::InvalidRequest,
         message: format!("failed to serialize the Chat Completions request: {e}"),
         retry_after_ms: None,
         provider_code: None,
+        context_overflow: None,
     })?;
     let wire_messages = value
         .get_mut("messages")
@@ -1133,6 +1142,7 @@ fn translate_request(request: &ModelRequest) -> Result<serde_json::Value, ModelE
             message: "serialized Chat Completions request has no message array".to_owned(),
             retry_after_ms: None,
             provider_code: None,
+            context_overflow: None,
         })?;
     if wire_messages.len() != assistant_reasoning.len() {
         return Err(ModelError {
@@ -1140,6 +1150,7 @@ fn translate_request(request: &ModelRequest) -> Result<serde_json::Value, ModelE
             message: "serialized Chat Completions message count changed unexpectedly".to_owned(),
             retry_after_ms: None,
             provider_code: None,
+            context_overflow: None,
         });
     }
     for (wire_message, reasoning) in wire_messages.iter_mut().zip(assistant_reasoning) {
@@ -1151,6 +1162,7 @@ fn translate_request(request: &ModelRequest) -> Result<serde_json::Value, ModelE
             message: "serialized Chat Completions message is not an object".to_owned(),
             retry_after_ms: None,
             provider_code: None,
+            context_overflow: None,
         })?;
         if let Some(field) = request
             .invocation
@@ -1418,6 +1430,7 @@ fn unsupported(message: impl Into<String>) -> ModelError {
         message,
         retry_after_ms: None,
         provider_code: None,
+        context_overflow: None,
     }
 }
 
@@ -1427,6 +1440,7 @@ fn invalid_request(message: &str) -> ModelError {
         message: message.to_owned(),
         retry_after_ms: None,
         provider_code: None,
+        context_overflow: None,
     }
 }
 

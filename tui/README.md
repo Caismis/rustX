@@ -87,8 +87,8 @@ cargo build --bin rustx
 
 pnpm --dir tui start \
   --binary "$PWD/target/debug/rustx" \
-  --models "$PWD/examples/local-runtime/models.json" \
-  --config "$PWD/examples/local-runtime/rustx.json" \
+  --models "$PWD/examples/local-runtime/models.jsonc" \
+  --config "$PWD/examples/local-runtime/rustx.jsonc" \
   --workspace "$PWD/examples/local-runtime/workspace" \
   --runtime-root "$PWD/examples/local-runtime/.rustx"
 ```
@@ -97,11 +97,21 @@ The four startup paths are passed straight through. The `--config` path is
 the current runtime/project configuration; after startup the native
 SessionCatalog/SessionGraph under `--runtime-root` owns durable user sessions
 and lineages. **The client never opens,
-parses, or interprets any of them** — `models.json` is a runtime-owned model
+parses, or interprets any of them** — `models.jsonc` is a runtime-owned model
 authority, and reading it here would create a second one. Provider credentials
 are resolved by the Rust process from the environment it inherits. For the
 complete copyable configuration and Python-tool example, see
 [`examples/local-runtime/README.md`](../examples/local-runtime/README.md).
+
+Starting the client is not resuming a Session. Every launch begins on an
+empty Session, and the Sessions of earlier launches stay reachable through
+`/resume`. `--continue` starts on the Session the last launch left active
+instead. Rust owns that selection; the client only forwards the flag.
+
+`--name <text>` names the Session the launch bound, whichever one that is —
+the startup form of `/name`. It is metadata, not a Session request: it
+combines with `--continue`, `--session`, and neither, and a replacement spawn
+drops it so a later Session cannot inherit the label.
 
 The TUI may also forward the runtime's bounded startup controls:
 `--skill <path>` (repeatable), `--no-skills`, `--no-builtin-tools`,
@@ -124,7 +134,10 @@ spawn rustx
 Session replacement is also native-owned. A successful `/new`, `/resume`,
 `/clone`, `/fork`, or `/tree` result may require replacing the child process;
 the TUI closes the old attachment and the restarted Rust process re-reads the
-authoritative catalog. A committed-but-durability-uncertain fork/tree result
+authoritative catalog. A replacement spawn always passes `--continue`, because
+it completes a transition Rust has already published — that is the difference
+between replacing the process and launching the client, which starts on an
+empty Session. A committed-but-durability-uncertain fork/tree result
 also carries the selected user content as transient editor data. The TUI
 restores it only after `session_get` confirms the restarted Session/node, and
 it is not canonical until submitted. Tree node and history pages have
@@ -179,6 +192,7 @@ The command-to-surface classification is:
 | `/resume` | picker; a direct session id is a control operation with transient result |
 | `/fork`, `/tree` | picker; the selected session operation has transient/replacement feedback |
 | `/new`, `/clone` | control with transient/replacement feedback |
+| `/name` | inspection of the active Session's name, as transient feedback |
 | `/name <text>`, `/model <provider/model>` | control with transient result |
 | `/cancel`, `/compact`, `/approve`, `/approval` | control with transient acceptance/validation result |
 | `/reasoning`, `/expand` | preference |
@@ -228,12 +242,18 @@ The TUI's current slash-command surface is grouped by purpose:
 
 ### Session lifecycle
 
+A launch already starts on an empty Session; the commands below move between
+Sessions afterwards.
+
 - `/new` — create a new independent local Session.
 - `/resume [session-id]` — search persisted Sessions, or activate the given
   Session directly.
 - `/session` — show active Session metadata: name, id, node, conversation, and
   node count.
-- `/name <text>` — rename the active Session without changing its history.
+- `/name [text]` — show the active Session's name, or give it one. Sessions
+  are unnamed by default; `/resume` lists an unnamed Session by its first
+  message, and a name replaces that line without touching history, identity,
+  or lineage. Nothing is ever resolved by a name.
 - `/clone` — clone the committed conversation head into a new Session.
 - `/fork` — choose a historical user message and open an editable fork in a
   new Session.
@@ -387,7 +407,7 @@ The selector searches the model reference *and* useful metadata the catalog
 publishes — protocol, modalities, capabilities, reasoning profiles, and
 limits. It preserves configured, effective, and attempt-frozen identities and
 shows the highlighted row's effective facts exactly as published. The client
-does not read `models.json`, infer provider behavior from a model prefix, or
+does not read `models.jsonc`, infer provider behavior from a model prefix, or
 invent a reasoning scale. Selecting a row calls the canonical dispatcher
 `model_set` path; a `replacement_required` result is interpreted by the same
 `#handleOutcome` flow as `/model` and Session commands.

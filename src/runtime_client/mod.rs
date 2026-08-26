@@ -117,11 +117,11 @@ pub use snapshot::{
     CapabilityView, ForegroundToolExecution, ForegroundToolState, InFlightAssistantMessage,
     InFlightBlock, InboundDiagnostics, InboundDrainView, InboundItemView, RuntimeClientAttempt,
     RuntimeClientAttemptPhase, RuntimeClientBackgroundExecution, RuntimeClientCompactionView,
-    RuntimeClientContextView, RuntimeClientSkill, RuntimeClientSnapshot, RuntimeClientStatusFact,
-    RuntimeClientStatusSection, RuntimeClientTool, RuntimeClientTranscriptCursor,
-    RuntimeClientTranscriptEntry, RuntimeClientTranscriptInteractionRequested,
-    RuntimeClientTranscriptInteractionSettled, RuntimeClientTranscriptItem,
-    RuntimeClientTranscriptPage, RuntimeDurabilityFailure,
+    RuntimeClientContextFile, RuntimeClientContextView, RuntimeClientResourcesView,
+    RuntimeClientSkill, RuntimeClientSnapshot, RuntimeClientStatusFact, RuntimeClientStatusSection,
+    RuntimeClientTool, RuntimeClientTranscriptCursor, RuntimeClientTranscriptEntry,
+    RuntimeClientTranscriptInteractionRequested, RuntimeClientTranscriptInteractionSettled,
+    RuntimeClientTranscriptItem, RuntimeClientTranscriptPage, RuntimeDurabilityFailure,
 };
 pub use types::{
     AttachmentId, RUNTIME_CLIENT_PROTOCOL_VERSION, RequestId, RuntimeClientCursor,

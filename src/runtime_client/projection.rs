@@ -230,6 +230,7 @@ impl RuntimeClientProjection {
                 status: None,
                 context: RuntimeClientContextView::default(),
                 capabilities: initial_capabilities,
+                resources: super::snapshot::RuntimeClientResourcesView::default(),
                 model: initial_model,
             },
             replay: VecDeque::new(),
@@ -295,6 +296,7 @@ impl RuntimeClientProjection {
         for existing in &seed.subagents {
             upsert_subagent(&mut self.snapshot.subagents, subagent_view(existing));
         }
+        self.snapshot.resources = resources_view(&seed.resources);
         // An inactive runtime has never admitted an attempt, composed an
         // Agent Status, or compacted, so `attempt`, `status`, and
         // `context` keep their empty initial values by construction.
@@ -487,6 +489,33 @@ impl RuntimeClientProjection {
                 let capabilities = capability_view(&snapshot, &availability);
                 self.snapshot.capabilities = capabilities.clone();
                 vec![RuntimeClientEvent::CapabilityUpdated { capabilities }]
+            }
+            ConversationObservation::Resources {
+                snapshot,
+                availability,
+            } => {
+                // One reload, one fold, one event. The runtime publishes the
+                // resource generation and the capability generation it was
+                // built against as a single observation precisely so both
+                // views move together: this arm updates the snapshot
+                // completely before returning, so no `snapshot()` call can
+                // land between the two halves and read a pairing that never
+                // existed.
+                //
+                // The published event carries both halves for the same
+                // reason. Two events would be two cursors, and a client
+                // that maintains its projection from the event stream would
+                // sit at the first one holding the new capability
+                // generation beside the retired resource generation.
+                // Adjacent is not atomic; one event is.
+                let capabilities = capability_view(snapshot.capability(), &availability);
+                let resources = resources_view(&snapshot);
+                self.snapshot.capabilities = capabilities.clone();
+                self.snapshot.resources = resources.clone();
+                vec![RuntimeClientEvent::ResourceGenerationUpdated {
+                    capabilities,
+                    resources,
+                }]
             }
             ConversationObservation::AttemptAdmitted { attempt_id } => {
                 // The model is folded by the `AttemptModelFrozen`
@@ -1512,6 +1541,30 @@ pub(crate) fn capability_view(
     }
 }
 
+/// Builds the client-visible resource projection from one immutable
+/// runtime resource generation.
+///
+/// Identity and provenance only: the path the runtime read and the exact
+/// byte length it loaded. The content stays where it already is — on disk,
+/// and inside the runtime's own Effective System Prompt assembly — because
+/// a conversation projection is not a second copy of request input.
+pub(crate) fn resources_view(
+    resources: &crate::runtime::resources::RuntimeResourceSnapshot,
+) -> super::snapshot::RuntimeClientResourcesView {
+    super::snapshot::RuntimeClientResourcesView {
+        revision: resources.revision(),
+        context_files: resources
+            .project_context_files()
+            .iter()
+            .map(|file| super::snapshot::RuntimeClientContextFile {
+                path: file.path.display().to_string(),
+                bytes: file.content.len() as u64,
+            })
+            .collect(),
+        agent_profile: resources.agent_profile().is_some(),
+    }
+}
+
 /// Inserts or replaces one background view, preserving execution
 /// allocation order.
 fn upsert_background(
@@ -2364,6 +2417,7 @@ mod tests {
                     message: "retry".to_owned(),
                     retry_after_ms: Some(10),
                     provider_code: Some("rate_limit_exceeded".to_owned()),
+                    context_overflow: None,
                 },
             },
             RuntimeEvent::ModelRetryScheduled {
@@ -2581,6 +2635,7 @@ mod tests {
                         message: "retries exhausted".to_owned(),
                         retry_after_ms: Some(5_000),
                         provider_code: Some("rate_limit_exceeded".to_owned()),
+                        context_overflow: None,
                     },
                 },
             },

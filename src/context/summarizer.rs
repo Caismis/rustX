@@ -13,6 +13,8 @@
 //! the Skill catalog, never carries provider continuation, and never commits
 //! anything to the Message Ledger.
 
+use std::fmt::Write as _;
+
 use futures_util::StreamExt;
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
@@ -20,13 +22,15 @@ use serde::{Deserialize, Serialize};
 use crate::context::error::{ContextError, ContextErrorKind};
 use crate::message::content::TextBlock;
 use crate::message::types::{
-    InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+    AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, ToolMessageBlock,
+    UserContentBlock, UserMessageBlock, UserSource,
 };
 use crate::model::event::ModelEvent;
 use crate::model::invocation::ResolvedModelInvocation;
 use crate::model::types::ModelRequest;
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::MessageId;
+use crate::tools::types::{ToolExecutionStatus, ToolResultContent};
 
 /// One summarizer request.
 ///
@@ -44,14 +48,32 @@ pub struct SummaryRequest {
 /// The exact provider-neutral model input assembled for one summary request.
 ///
 /// Both compaction planning and [`ModelBackedSummarizer`] consume this value:
-/// the fixed instruction, deterministic `SummaryRequest` JSON, and canonical
-/// runtime User wrapper therefore cannot drift between estimation and the
-/// production invocation.
+/// the fixed instruction, the deterministic rendered transcript, and the
+/// canonical runtime User wrapper therefore cannot drift between estimation
+/// and the production invocation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SummaryModelInput {
     /// The complete canonical messages sent to the summary model.
     pub messages: Vec<MessageBlock>,
 }
+
+/// The maximum characters of one tool result rendered into a summary
+/// request.
+///
+/// Tool output dominates the token cost of an agentic conversation and is
+/// the least summary-relevant part of it: the head of a result carries the
+/// outcome, the tail is bulk. Without this bound the rendered span is
+/// *larger* than the conversation it replaces, which is exactly how a
+/// compaction triggered by a context overflow overflows again.
+pub const SUMMARY_TOOL_RESULT_MAX_CHARS: usize = 2_000;
+
+/// The maximum characters of one reasoning block rendered into a summary
+/// request. Replayed reasoning is bulky and historical; the summary needs
+/// its gist, never its full text.
+pub const SUMMARY_REASONING_MAX_CHARS: usize = 1_000;
+
+/// The maximum characters of one rendered tool-call argument payload.
+pub const SUMMARY_TOOL_ARGUMENTS_MAX_CHARS: usize = 1_000;
 
 impl SummaryRequest {
     /// Whether this request covers at least one canonical message.
@@ -60,21 +82,40 @@ impl SummaryRequest {
         !self.retired.is_empty()
     }
 
-    /// Serializes the request envelope deterministically.
+    /// Renders the retired span as the deterministic plain-text transcript
+    /// the summary model reads.
     ///
-    /// # Panics
-    ///
-    /// Panics only if canonical runtime-owned data fails to serialize.
+    /// This is deliberately **not** the canonical JSON encoding. Canonical
+    /// JSON is the durable interchange format, and pushing it through a
+    /// model request costs far more tokens than the conversation it
+    /// describes: every structural quote, field name, and escaped newline
+    /// becomes input. The rendering below is a pure, deterministic function
+    /// of the retired span that keeps what a summary needs — who said what,
+    /// which tools ran with which arguments, and how they ended — while
+    /// bounding the bulk contributors (tool results, replayed reasoning,
+    /// tool-call arguments).
     #[must_use]
-    pub fn serialized_input(&self) -> String {
-        serde_json::to_string(self).expect("summary request serializes")
+    pub fn render_transcript(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        for message in &self.retired {
+            match message {
+                MessageBlock::User(user) => render_user(user, &mut parts),
+                MessageBlock::Assistant(assistant) => render_assistant(assistant, &mut parts),
+                MessageBlock::Tool(tool) => render_tool(tool, &mut parts),
+            }
+        }
+        parts.join("\n\n")
     }
 
     /// Assembles the exact canonical model input used by the production
     /// summary invocation.
     #[must_use]
     pub fn model_input(&self) -> SummaryModelInput {
-        let instruction = format!("{}\n\n{}", SUMMARY_INSTRUCTION, self.serialized_input());
+        let instruction = format!(
+            "{}\n\n<retired-conversation>\n{}\n</retired-conversation>",
+            SUMMARY_INSTRUCTION,
+            self.render_transcript()
+        );
         SummaryModelInput {
             messages: vec![MessageBlock::User(UserMessageBlock {
                 id: MessageId::new("summary-request"),
@@ -85,6 +126,137 @@ impl SummaryRequest {
             })],
         }
     }
+}
+
+/// Truncates on a character boundary, reporting how much was dropped.
+///
+/// Truncation is always announced: a summary model must never be able to
+/// mistake a cut-off tool result for a complete one.
+fn truncate_for_summary(text: &str, max_chars: usize) -> String {
+    let mut indices = text.char_indices();
+    let Some((cut, _)) = indices.nth(max_chars) else {
+        return text.to_owned();
+    };
+    let dropped = text[cut..].chars().count();
+    format!(
+        "{}\n[... {dropped} more characters truncated]",
+        &text[..cut]
+    )
+}
+
+/// The transcript label of one inbound message's provenance and kind.
+fn user_label(user: &UserMessageBlock) -> String {
+    match (&user.kind, &user.source) {
+        (InboundKind::CompactionSummary, _) => "Earlier summary".to_owned(),
+        (InboundKind::Context(kind), _) => format!("Runtime context ({kind:?})"),
+        (_, UserSource::Runtime) => "Runtime".to_owned(),
+        (_, UserSource::Agent { agent_id }) => format!("Agent {agent_id}"),
+        (_, UserSource::Fleet) => "Fleet".to_owned(),
+        (_, UserSource::ExternalSystem) => "External system".to_owned(),
+        (_, UserSource::Extension { contributor }) => format!("Extension {contributor}"),
+        (_, UserSource::Human) => "User".to_owned(),
+    }
+}
+
+fn render_user(user: &UserMessageBlock, parts: &mut Vec<String>) {
+    let mut rendered = String::new();
+    for block in &user.content {
+        if !rendered.is_empty() {
+            rendered.push('\n');
+        }
+        match block {
+            UserContentBlock::Text(text) => rendered.push_str(&text.text),
+            UserContentBlock::Image(image) => {
+                let _ = write!(rendered, "[image {}]", image.artifact_id);
+            }
+            UserContentBlock::File(file) => {
+                let _ = write!(
+                    rendered,
+                    "[file {}]",
+                    file.name.as_deref().unwrap_or("attachment")
+                );
+            }
+        }
+    }
+    if rendered.is_empty() {
+        return;
+    }
+    parts.push(format!("[{}]: {rendered}", user_label(user)));
+}
+
+fn render_assistant(assistant: &AssistantMessageBlock, parts: &mut Vec<String>) {
+    for block in &assistant.content {
+        match block {
+            AssistantContentBlock::Text(text) if !text.text.is_empty() => {
+                parts.push(format!("[Assistant]: {}", text.text));
+            }
+            AssistantContentBlock::Reasoning(reasoning) => {
+                if let Some(text) = reasoning.text.as_deref()
+                    && !text.is_empty()
+                {
+                    parts.push(format!(
+                        "[Assistant thinking]: {}",
+                        truncate_for_summary(text, SUMMARY_REASONING_MAX_CHARS)
+                    ));
+                }
+            }
+            AssistantContentBlock::ToolCall(call) => {
+                let arguments = serde_json::to_string(&call.arguments)
+                    .unwrap_or_else(|_| "[unserializable]".to_owned());
+                parts.push(format!(
+                    "[Tool call {}]: {}({})",
+                    call.id,
+                    call.name,
+                    truncate_for_summary(&arguments, SUMMARY_TOOL_ARGUMENTS_MAX_CHARS)
+                ));
+            }
+            AssistantContentBlock::Refusal(refusal) => {
+                parts.push(format!("[Assistant refusal]: {}", refusal.text));
+            }
+            AssistantContentBlock::Image(image) => {
+                parts.push(format!("[Assistant image]: {}", image.artifact_id));
+            }
+            AssistantContentBlock::Text(_) => {}
+        }
+    }
+}
+
+fn render_tool(tool: &ToolMessageBlock, parts: &mut Vec<String>) {
+    let mut rendered = String::new();
+    for content in &tool.result.content {
+        if !rendered.is_empty() {
+            rendered.push('\n');
+        }
+        match content {
+            ToolResultContent::Text(text) => rendered.push_str(&text.text),
+            ToolResultContent::Json { value } => rendered.push_str(
+                &serde_json::to_string(value).unwrap_or_else(|_| "[unserializable]".to_owned()),
+            ),
+            ToolResultContent::File(file) => {
+                let _ = write!(
+                    rendered,
+                    "[file {}]",
+                    file.name.as_deref().unwrap_or("artifact")
+                );
+            }
+            ToolResultContent::Image(image) => {
+                let _ = write!(rendered, "[image {}]", image.artifact_id);
+            }
+        }
+    }
+    let status = match &tool.result.status {
+        ToolExecutionStatus::Success => "success".to_owned(),
+        ToolExecutionStatus::Failed { error } => format!("failed: {error}"),
+        ToolExecutionStatus::Denied { reason } => format!("denied: {reason}"),
+        ToolExecutionStatus::Cancelled { reason } => format!("cancelled: {reason:?}"),
+        ToolExecutionStatus::TimedOut => "timed out".to_owned(),
+        ToolExecutionStatus::Interrupted => "interrupted".to_owned(),
+    };
+    parts.push(format!(
+        "[Tool result {} ({status})]: {}",
+        tool.tool_id,
+        truncate_for_summary(&rendered, SUMMARY_TOOL_RESULT_MAX_CHARS)
+    ));
 }
 
 /// The summary service.
@@ -142,18 +314,14 @@ impl ModelBackedSummarizer {
         SUMMARY_INSTRUCTION
     }
 
-    /// Serializes the request input deterministically for the model.
+    /// Renders the request input deterministically for the model.
     ///
-    /// The serialization is canonical JSON over runtime-owned types and is
-    /// a pure function of the request.
-    ///
-    /// # Panics
-    ///
-    /// Panics only if the canonical request input fails to serialize, which
-    /// is unreachable for the canonical runtime-owned types.
+    /// The rendering is a pure function of the request; see
+    /// [`SummaryRequest::render_transcript`] for why it is a bounded plain
+    /// transcript rather than the canonical JSON encoding.
     #[must_use]
     pub fn serialize_input(request: &SummaryRequest) -> String {
-        request.serialized_input()
+        request.render_transcript()
     }
 }
 
@@ -208,19 +376,30 @@ impl ContextSummarizer for ModelBackedSummarizer {
                         finish_reason = Some(reason);
                     }
                     ModelEvent::Failed { error } => {
-                        return Err(
-                            if error.kind == crate::model::error::ModelErrorKind::Cancelled {
+                        return Err(match error.kind {
+                            crate::model::error::ModelErrorKind::Cancelled => ContextError::new(
+                                ContextErrorKind::Cancelled,
+                                "summary generation cancelled",
+                            ),
+                            // The summary request itself did not fit the
+                            // summary model. This is not a dead end: it is
+                            // evidence that the planned span was estimated
+                            // too optimistically, and the pipeline replans
+                            // against a smaller budget.
+                            crate::model::error::ModelErrorKind::ContextWindowExceeded => {
                                 ContextError::new(
-                                    ContextErrorKind::Cancelled,
-                                    "summary generation cancelled",
+                                    ContextErrorKind::SummaryInputTooLarge,
+                                    format!(
+                                        "the summary request exceeded the summary model context window: {}",
+                                        error.message
+                                    ),
                                 )
-                            } else {
-                                summary_failed(&format!(
-                                    "summary generation failed: {}",
-                                    error.message
-                                ))
-                            },
-                        );
+                            }
+                            _ => summary_failed(&format!(
+                                "summary generation failed: {}",
+                                error.message
+                            )),
+                        });
                     }
                 }
             }
@@ -315,12 +494,13 @@ impl SummaryStreamState {
 
 #[cfg(test)]
 mod tests {
-    use super::{ModelBackedSummarizer, SummaryRequest};
+    use super::{ModelBackedSummarizer, SUMMARY_TOOL_RESULT_MAX_CHARS, SummaryRequest};
     use crate::message::content::TextBlock;
     use crate::message::types::{
-        InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+        InboundKind, MessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
-    use crate::runtime::identity::MessageId;
+    use crate::runtime::identity::{MessageId, ToolCallId, ToolId};
+    use crate::tools::types::{ToolExecutionResult, ToolExecutionStatus, ToolResultContent};
 
     fn request() -> SummaryRequest {
         SummaryRequest {
@@ -356,10 +536,58 @@ mod tests {
         assert_eq!(
             text.text,
             format!(
-                "{}\n\n{}",
+                "{}\n\n<retired-conversation>\n{}\n</retired-conversation>",
                 ModelBackedSummarizer::instruction(),
-                request.serialized_input()
+                request.render_transcript()
             )
         );
+    }
+
+    /// The rendered transcript is plain text, not canonical JSON, and it
+    /// bounds the bulk contributors. A summary request must never be larger
+    /// than the history it replaces.
+    #[test]
+    fn rendered_transcript_bounds_tool_output() {
+        let request = SummaryRequest {
+            retired: vec![MessageBlock::Tool(ToolMessageBlock {
+                id: MessageId::new("tool-1"),
+                tool_call_id: ToolCallId::new("call-1"),
+                tool_id: ToolId::new("tool-bash"),
+                result: ToolExecutionResult {
+                    status: ToolExecutionStatus::Success,
+                    content: vec![ToolResultContent::Text(TextBlock {
+                        text: "x".repeat(50_000),
+                    })],
+                    duration_ms: 1,
+                    exit_code: Some(0),
+                    artifacts: Vec::new(),
+                    truncation: None,
+                    managed_output: None,
+                },
+            })],
+        };
+        let rendered = request.render_transcript();
+        assert!(
+            rendered.chars().count() < SUMMARY_TOOL_RESULT_MAX_CHARS + 200,
+            "a tool result must be truncated into the summary request"
+        );
+        assert!(rendered.contains("more characters truncated"));
+        assert!(
+            rendered.len()
+                < serde_json::to_vec(&request.retired)
+                    .expect("canonical messages serialize")
+                    .len(),
+            "the rendered transcript must be smaller than the canonical encoding"
+        );
+    }
+
+    /// Truncation never splits a multi-byte character.
+    #[test]
+    fn truncation_respects_character_boundaries() {
+        let text = "汉".repeat(10);
+        let truncated = super::truncate_for_summary(&text, 4);
+        assert!(truncated.starts_with("汉汉汉汉\n[..."));
+        assert_eq!(super::truncate_for_summary(&text, 10), text);
+        assert_eq!(super::truncate_for_summary(&text, 99), text);
     }
 }

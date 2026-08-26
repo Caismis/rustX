@@ -30,6 +30,7 @@ import { correlateTools, runningTools } from "../../presentation/tools.ts";
 import {
   activeBackground,
   describeReasoning,
+  sessionLabel,
   unavailableCapabilities,
 } from "../../presentation/selectors.ts";
 import { role, style, plainText, plainWidth } from "../theme.ts";
@@ -422,7 +423,7 @@ export function renderStartup(
   ];
   if (session !== undefined) {
     lines.push(
-      `${role.meta("session")} ${role.accent(session.name)} · ${role.meta(`node ${session.active_node}`)}`,
+      `${role.meta("session")} ${role.accent(sessionLabel(session))} · ${role.meta(`node ${session.active_node}`)}`,
     );
   }
   lines.push(

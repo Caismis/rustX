@@ -159,6 +159,7 @@ impl FakeModel {
                         message: "fake model script exhausted".to_owned(),
                         retry_after_ms: None,
                         provider_code: None,
+                        context_overflow: None,
                     },
                 })]
             })
@@ -214,6 +215,7 @@ impl ModelAdapter for FakeModel {
                                         message: "fake model cancelled".to_owned(),
                                         retry_after_ms: None,
                                         provider_code: None,
+                                        context_overflow: None,
                                     },
                                 },
                                 script,

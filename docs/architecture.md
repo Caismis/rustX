@@ -899,7 +899,7 @@ model/types.rs             ModelRequest, ModelUsage, ModelProtocol, and the
                            history plus the frozen Effective System Prompt;
                            no semantic context attachment type crosses this
                            layer.
-model/catalog.rs           the validated models.json catalog: explicit
+model/catalog.rs           the validated models.jsonc catalog: explicit
                            provider endpoints and credential sources,
                            redacted credentials, model definitions,
                            capabilities, reasoning profiles, bounded compat
@@ -916,6 +916,9 @@ local_runtime/             the local conversation runtime process: bounded
                            current runtime configuration, the one composition owner,
                            the startup argument contract, and the stdio
                            serving lifecycle
+config_format.rs           the one JSONC reader behind models.jsonc and
+                           rustx.jsonc: comments and trailing commas, no
+                           other relaxation, and no schema of its own
 model/finish.rs            ModelFinishReason
 model/error.rs             ModelError, ModelErrorKind
 model/event.rs             ModelEvent (adapter-to-kernel streaming protocol)
@@ -1363,9 +1366,18 @@ Key contracts:
   System authority is request-time state and therefore cannot be retired or
   resurrected by Surface replacement.
 - Token measurements carry explicit provenance
-  (`ProviderReported`/`Estimated`); provider-reported `input_tokens` apply
-  only to the exact measured projection (deterministic fingerprint), and
-  estimates never become provider usage.
+  (`ProviderReported`/`ProviderAnchored`/`Estimated`), and estimates never
+  become provider usage. A provider-reported `input_tokens` applies as
+  `ProviderReported` only to the exact measured projection (deterministic
+  fingerprint). It additionally applies as `ProviderAnchored` to any request
+  context the measured one is an ordered **prefix** of, under unchanged
+  non-conversation input (Effective System Prompt and tool definitions):
+  the measured prefix keeps the provider's number and only the canonical
+  messages appended since are estimated. A whole-conversation estimate
+  compounds estimator error over every message ever sent, so anchoring is
+  what keeps the soft-limit decision trustworthy on a long conversation; a
+  compaction Surface rewrite destroys the prefix and the measurement is
+  refused outright rather than patched with a guessed delta.
 - `TokenMeasurement` and `TokenMeasurementSource` are Layer 0 value contracts
   owned by `runtime/types.rs`. The Context Engine owns the estimator,
   provider-observation validity, provenance application, and compaction
@@ -1384,12 +1396,25 @@ Key contracts:
 - The `ContextSummarizer` service is provider-neutral; the production
   `ModelBackedSummarizer` issues a canonical one-off `ModelRequest` (no
   tools, no Agent Status, no Skill catalog, no continuation) through the
-  `SummaryRequest::model_input()` assembly shared with the planner. The
-  summary input limit therefore covers the fixed instruction, serialized
-  request, and canonical User wrapper, using the summary invocation's own
-  effective context window and output budget, never the primary model's
-  window, through the
-  existing `ModelAdapter` boundary. It is constructed from the attempt's
+  `SummaryRequest::model_input()` assembly shared with the planner. That
+  assembly renders the retired span as a bounded plain-text transcript —
+  truncating tool results, replayed reasoning, and tool-call arguments with an
+  explicit notice — rather than embedding the canonical JSON encoding, so the
+  summary request is always smaller than the history it replaces. The summary
+  input limit covers the fixed instruction, the rendered transcript, and the
+  canonical User wrapper, and is derived as the summary invocation's own
+  effective context window minus the session reserve minus its output budget,
+  never the primary model's window, through the
+  existing `ModelAdapter` boundary. A summary model rejecting that request as
+  oversized replans the compaction against a halved summary input budget
+  (bounded and strictly decreasing) instead of failing, and a compaction
+  recovering from a primary context overflow scales the soft input limit — and
+  only that limit — by the measured `EstimateCorrection` for the rejected
+  request. The correction never crosses into the summary input limit, same
+  summary model or not: it measures one primary request, whose deviation can
+  come from the continuation, the tool schemas, or the effective system
+  prompt, none of which this request carries. The summary budget is bounded
+  by the summary model's own rejection. It is constructed from the attempt's
   *frozen summary policy*, never from an independently injected summarizer:
   in `session` mode that is the attempt's own primary invocation, in
   `explicit` mode a separately resolved catalog model. The context plane's
@@ -2357,7 +2382,7 @@ M3 Agent Loop
 Selection is upstream of the adapters and entirely catalog-driven:
 
 ```text
-models.json
+models.jsonc
     -> ModelCatalog                  validated: explicit baseUrl, explicit
                                      apiKey source, protocol, limits,
                                      capabilities, reasoning profiles, compat
@@ -3707,7 +3732,7 @@ Three methods complete the contract:
   protocol, context window, configured max output, declared *and* effective
   capabilities, reasoning profile identities with their semantic enabled
   state, the default profile, and the redacted credential *source*. This is
-  why #39 never reads `models.json`. No endpoint, no credential, no adapter
+  why #39 never reads `models.jsonc`. No endpoint, no credential, no adapter
   internal, and no compat object appears.
 - `model_get` — the authoritative session model state.
 - `model_set` — a **whole-state replacement**, never a JSON patch.
@@ -3723,7 +3748,8 @@ domain.
 ### Layer 8: The local conversation runtime process (Issue #42, Issue #61)
 
 ```text
-explicit startup arguments (--models --config --workspace --runtime-root)
+explicit startup arguments (--models --config --workspace --runtime-root
+                            [--continue] [--name])
         |
 ModelCatalog + CurrentRuntimeConfig + selected SessionPersistentState
         |
@@ -3743,8 +3769,20 @@ ModelCatalog + CurrentRuntimeConfig + selected SessionPersistentState
 ```
 
 `LocalSessionProduct::compose` is the native local product composition owner.
-It loads the durable `SessionCatalog`, resolves its active `SessionNode`, and
-composes exactly one linear `ConversationRuntime` for that node. The lower
+It loads the durable `SessionCatalog`, resolves the `SessionNode` this launch
+starts on, and composes exactly one linear `ConversationRuntime` for that
+node. A launch is not a resume: without `--continue` the process publishes and
+binds an empty Session, and the catalog's previously active Session stays
+durable history reachable through `/resume`. `--continue`
+(`StartupSession::ContinueActive`) binds the published active Session/node
+instead, which is how a client completes a switch that required a process
+replacement. An active Session that was never used — one `New` root node whose
+conversation is still at its initial Surface revision, with no canonical
+message and an empty Pending Inbound — already *is* that empty Session, so it
+is reused and repeated launches cannot accumulate empty `/resume` rows. Deferred lineage recovery follows from this: an interrupted
+attempt in a Session this launch does not open is reconciled by the ordinary
+per-conversation recovery pass the next time that lineage is composed, not by
+an unrelated launch. The lower
 `LocalConversationRuntime::compose` and `HeadlessConversationRuntime::compose`
 paths remain available for non-session composition callers. A product session
 switch reaches native quiescence before catalog publication; the TUI then
@@ -3764,7 +3802,7 @@ activation, Skill roots/resources, environment, context policy, timezone,
 agent settings, and future capability-source settings are launch-scoped
 inputs.
 
-`--config <rustx.json>` and project resources are read and validated once on
+`--config <rustx.jsonc>` and project resources are read and validated once on
 every process start before ordinary request admission. Composition combines that current
 `CurrentRuntimeConfig` with the selected Session state and active node. A
 resume therefore loads a fresh Runtime Resource Snapshot with current
@@ -3774,9 +3812,15 @@ uses the current runtime model default; clone/fork/tree operations copy only
 the intentionally Session-local state.
 
 On a fresh runtime root, composition resolves and validates the current model
-catalog and default model before it calls the mutating first-Session
-publication path. A failed first launch therefore cannot publish a durable
-root Session containing an invalid model. Existing Session models are then
+catalog and default model before it builds the root Session at all, and it
+builds that root Session as an *unpublished* plan: `catalog.json` is written
+by the single startup catalog transaction that also commits any selection or
+name this launch decided, after the workspace, capability composition,
+recovery, and Runtime Client host binding have all succeeded. A failed first
+launch therefore publishes no catalog at all — not a root Session containing
+an invalid model, and not a resumable Session belonging to a process that
+never started. The seeded destination database is not a published fact: a
+conversation the catalog does not name is neither selectable nor resumable. Existing Session models are then
 validated separately and remain authoritative for resume; current defaults
 are still validated on every launch without overwriting them.
 
@@ -3857,6 +3901,26 @@ state. The catalog is stored under the native runtime root, while every node's
 SQLite conversation database is independently bound to its own
 `ConversationId`.
 
+Launching the runtime is not one of these transitions. A process start
+without `--continue` publishes an empty Session through the same
+prepare-then-publish protocol `/new` uses and binds that, so nothing about a
+previous Session is reopened, rewound, or renamed by starting the product;
+persisted Sessions are reachable only through `/resume` and `/tree`. Because
+an unused active Session already satisfies that, it is bound as-is rather than
+publishing another empty one beside it.
+
+A Session is published **unnamed**. A name is display metadata a user
+chooses, never an identity: `--session`, `/resume`, and every switch resolve
+the identity the catalog published, and nothing anywhere resolves a name. An
+unnamed Session is therefore a complete, ordinary Session, and `/resume`
+identifies it by the bounded first user message of its root lineage, derived
+per page from that lineage's durable store and never copied into the catalog.
+A name, once given, replaces that line in the row and changes nothing else.
+`--name <text>` is the startup form of `/name`: it names whichever Session the
+launch bound — empty, continued, or selected — after that decision has been
+made, so naming can never be part of making it. A replacement spawn drops it,
+because it labelled the Session the user launched into.
+
 `/new` prepares an empty private destination and publishes a new Session and
 root node only after its durable conversation seed is valid. `/name` commits
 metadata only. `/resume` selects persisted metadata, `/tree` selects a node or
@@ -3870,8 +3934,9 @@ quiescence or any terminal publication outcome. The last state is absorbing;
 The TUI renders typed projections and owns only picker query/focus/editor
 state; it never opens the catalog or a conversation database. Ordinary
 Session metadata is a bounded native projection: `/resume` accepts an optional
-case-insensitive id/name query and an offset with a native maximum page size,
-and returns a continuation offset. Rows are ordered by Session identity.
+case-insensitive query over what a row can be recognized by — its id, its
+name, and the first-message line an unnamed row shows — and an offset with a
+native maximum page size, and returns a continuation offset. Rows are ordered by Session identity.
 `/session` returns active metadata only,
 not the graph. `/tree` returns independently bounded node and historical
 user-message pages with deterministic continuations. Older Sessions and
@@ -4007,9 +4072,18 @@ observes *why* a source is unavailable instead of inferring failure from a
 dead transport. `CapabilityRevision` advances only when the effective
 committed executable capability set changes; an availability-only change
 never fabricates a revision but is still observed: both kinds of commit
-publish the one `CapabilityUpdated` Runtime Client event carrying the
-complete folded `CapabilityView`, whose `revision` tells the client
-whether the executable capability identity changed.
+publish one Runtime Client event carrying the complete folded
+`CapabilityView`, whose `revision` tells the client whether the executable
+capability identity changed. Which event depends on who committed. A
+capability commit made on its own authority publishes `CapabilityUpdated`.
+A runtime-owned resource reload commits the capability generation and the
+resource generation as one fact, so it publishes one
+`ResourceGenerationUpdated` carrying both views — never a capability event
+beside a resource event. Two events would occupy two cursors, and a client
+that maintains its projection incrementally would sit at the first one
+holding the new capability generation beside the resource generation the
+same reload retired. That pairing exists in no runtime state, so it is
+never published.
 
 The governing invariant for the active node is:
 
@@ -4036,6 +4110,20 @@ Configuration is explicit paths only. M10 (#13) owns discovery, precedence,
 profiles, and manifest UX; none of that exists here. Unknown fields are
 rejected everywhere, so a typo fails startup loudly rather than silently
 changing semantics.
+
+Both configuration documents — `models.jsonc` and `rustx.jsonc` — are JSONC:
+JSON plus `//` and `/* */` comments and trailing commas. A human owns these
+files, so the format has to carry the reasoning behind a value next to the
+value. `config_format` is the single place that decision is made; it chooses
+the surface syntax only, and every schema, default, and unknown-field rule
+stays serde-owned. Nothing else is relaxed: single-quoted strings, unquoted
+property names, hexadecimal numbers, unary plus, and missing commas are
+rejected exactly like an unknown field. A syntax failure reports the line and
+column it was detected on; a schema failure reports serde's own message,
+because the position of a schema failure is the enclosing container rather
+than the offending member. Generated runtime-owned state under `runtime-root`
+is unaffected: nothing writes JSONC, and the Session catalog stays strict
+JSON.
 
 #### Native async subagents (Issue #60 / M9.25)
 
@@ -4132,11 +4220,11 @@ subagent capability. Parent hard death closes the control channel; the child
 exits, and restart classifies the old nonterminal ownership as Interrupted
 without reattach, replay, PID adoption, or relaunch.
 
-Representative `models.json` (no real credential ever appears in a catalog
+Representative `models.jsonc` (no real credential ever appears in a catalog
 checked into a repository — `$ENV_VAR` is the reason the literal form exists
 only for local development):
 
-```json
+```jsonc
 {
   "providers": {
     "gateway": {
@@ -4213,7 +4301,7 @@ client can explain why.
 
 Representative current runtime/project configuration:
 
-```json
+```jsonc
 {
   "schemaVersion": 2,
   "agentId": "agent-default",
@@ -4356,6 +4444,14 @@ ChildRuntimeProcess     OS process lifecycle only: spawn with the explicit
                         contract, stdio, a bounded stderr tail, stdin close,
                         wait, bounded fallback termination. It never reads a
                         byte of stdout and never interprets a startup path.
+                        The startup Session flag is forwarded, never decided:
+                        a launch passes `--continue` only when the user did,
+                        and a replacement spawn — the one that completes an
+                        already published Session transition — always passes
+                        it, without naming the destination Session itself. A
+                        launch-time `--name` is forwarded the same way and
+                        dropped from a replacement, so a Session switched to
+                        later never inherits the launch's label.
 
 RuntimeClientConnection the single owner of JSONL framing, request-id
                         allocation, the pending RPC map, response
@@ -4487,7 +4583,7 @@ resync_required -> snapshot_get -> replace the projection -> subscribe after
 ```
 
 **What the client must never do**, and does not: construct ModelAdapters or
-provider HTTP clients, parse `models.json`, resolve credentials or endpoints,
+provider HTTP clients, parse `models.jsonc`, resolve credentials or endpoints,
 build context engines or summarizers, register tools, read `SKILL.md`,
 compose an Agent Status, infer a mailbox drain, execute a tool, or let a tool's
 name or origin decide an execution semantic. Tool identity may choose a
@@ -4951,7 +5047,7 @@ Startup may consume only rustX-owned durable authority:
 
 Historical truth is never reconstructed from a Runtime Client snapshot or
 cache, TUI cards, current DSH state, current Skill discovery, current Agent
-Status, current filesystem state, current `models.json`, a live
+Status, current filesystem state, current `models.jsonc`, a live
 `ContextContributor` run, regenerated dynamic context, or old process-memory
 registry contents. Current configuration configures **future** work only.
 

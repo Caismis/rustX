@@ -16,6 +16,7 @@ import type {
   SessionSummaryView,
   SessionUserMessageBoundaryView,
 } from "../../protocol/types.ts";
+import { sessionRowLabel } from "../../presentation/selectors.ts";
 import { role, style } from "../theme.ts";
 
 const VISIBLE_ROWS = 8;
@@ -135,7 +136,8 @@ export class SessionSelector implements Component, Focusable {
         const index = start + offset;
         const marker = index === this.#selected ? role.accent("❯") : " ";
         const active = session.active ? role.success(" active") : "";
-        lines.push(`${marker} ${index === this.#selected ? style.bold(session.name) : session.name}${active}`);
+        const label = sessionRowLabel(session);
+        lines.push(`${marker} ${index === this.#selected ? style.bold(label) : label}${active}`);
         lines.push(`    ${role.meta(`${session.id} · node ${session.active_node}`)}`);
       }
       if (visible.length > VISIBLE_ROWS) {
@@ -268,8 +270,12 @@ export class BoundarySelector implements Component, Focusable {
   }
 }
 
+// A row is searched by everything it can be recognized by, which for an
+// unnamed Session is the first message it shows. Rust filters the same way,
+// so a query narrows the same rows whether it is answered from the current
+// page or from the catalog.
 function sessionSearchText(session: SessionSummaryView): string {
-  return `${session.name} ${session.id} ${session.active_node}`;
+  return `${sessionRowLabel(session)} ${session.id} ${session.active_node}`;
 }
 
 function boundarySearchText(boundary: SessionUserMessageBoundaryView): string {

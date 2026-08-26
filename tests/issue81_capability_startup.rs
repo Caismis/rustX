@@ -62,10 +62,10 @@ fn startup(root: &tempfile::TempDir, session: &str) -> (std::path::PathBuf, Loca
     let canonical = std::fs::canonicalize(root.path()).expect("canonical root");
     let workspace = canonical.join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
-    let models_path = canonical.join("models.json");
-    let session_path = canonical.join("rustx.json");
-    std::fs::write(&models_path, MODELS_JSON).expect("models.json");
-    std::fs::write(&session_path, session).expect("rustx.json");
+    let models_path = canonical.join("models.jsonc");
+    let session_path = canonical.join("rustx.jsonc");
+    std::fs::write(&models_path, MODELS_JSON).expect("models.jsonc");
+    std::fs::write(&session_path, session).expect("rustx.jsonc");
     (
         canonical.clone(),
         LocalRuntimePaths {
@@ -75,6 +75,8 @@ fn startup(root: &tempfile::TempDir, session: &str) -> (std::path::PathBuf, Loca
             no_skills: false,
             no_builtin_tools: false,
             no_tools: false,
+            startup_session: rustx::local_runtime::StartupSession::Empty,
+            session_name: None,
             tools: None,
             exclude_tools: Vec::new(),
             workspace,
@@ -821,7 +823,7 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
         "schema_version = 1\nname = \"other-name\"\ndescription = \"Broken\"\nentrypoint = \"tool:main\"\nexecution = \"foreground_only\"\nconcurrency = \"sequential\"\n",
     )
     .expect("manifest");
-    std::fs::write(root.path().join("models.json"), MODELS_JSON).expect("models.json");
+    std::fs::write(root.path().join("models.jsonc"), MODELS_JSON).expect("models.jsonc");
     // ... and an MCP server whose program does not exist.
     let session = serde_json::json!({
         "agentId": "agent-81",
@@ -835,14 +837,14 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
             },
         },
     });
-    std::fs::write(root.path().join("rustx.json"), session.to_string()).expect("rustx.json");
+    std::fs::write(root.path().join("rustx.jsonc"), session.to_string()).expect("rustx.jsonc");
 
     let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_rustx"));
     command
         .arg("--models")
-        .arg(root.path().join("models.json"))
+        .arg(root.path().join("models.jsonc"))
         .arg("--config")
-        .arg(root.path().join("rustx.json"))
+        .arg(root.path().join("rustx.jsonc"))
         .arg("--workspace")
         .arg(&workspace)
         .arg("--runtime-root")

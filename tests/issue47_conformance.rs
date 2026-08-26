@@ -89,21 +89,25 @@ const SUMMARY_TWO_TEXT: &str = "conformance summary two: the assistant produced 
 /// The compaction window and reserve.
 ///
 /// The emulator's scripted turn-one reply is ~200 KB, which the frozen
-/// `ceil(bytes / 4)` estimator values at roughly 53k tokens. Two bounds have
+/// `ceil(bytes / 4)` estimator values at roughly 51k tokens. Two bounds have
 /// to hold at once, and both are structural, not statistical:
 ///
 /// ```text
 /// trigger:  window - reserve - output   <=  the turn-two request estimate
-/// summary:  the selected span estimate  <=  window - summary output
+/// summary:  the selected span estimate  <=  window - reserve - summary output
 /// ```
 ///
-/// A 56k window with an 8k reserve satisfies both with several thousand
-/// tokens of margin on each side: the primary request provably crosses its
-/// soft limit, and the complete-message span provably fits the summary
-/// model's own request budget. Compaction never splits a message to get
-/// there.
+/// Both budgets carry the reserve, so both bounds are the same number here
+/// (the primary and summary output budgets are both 1k), and that number has
+/// to land between the selected span's estimate (~51k) and the whole
+/// turn-two request estimate (~56k). The difference between the two is the
+/// non-retirable request input — the Effective System Prompt, the tool
+/// definitions, and the turn-two user message — so a 56k window with a 1.5k
+/// reserve puts the shared limit at ~53.4k, roughly centred in that band
+/// with ~2.4k of margin on each side. Compaction never splits a message to
+/// get there.
 const COMPACTION_CONTEXT_WINDOW: u64 = 56_000;
-const COMPACTION_RESERVE_TOKENS: u64 = 8_192;
+const COMPACTION_RESERVE_TOKENS: u64 = 1_536;
 
 // ---------------------------------------------------------------------------
 // The composed driver
@@ -166,19 +170,21 @@ impl Driver {
         let workspace = root.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         std::fs::write(
-            root.path().join("models.json"),
+            root.path().join("models.jsonc"),
             models_json(emulator, setup),
         )
-        .expect("models.json");
-        std::fs::write(root.path().join("rustx.json"), session_json(setup)).expect("rustx.json");
+        .expect("models.jsonc");
+        std::fs::write(root.path().join("rustx.jsonc"), session_json(setup)).expect("rustx.jsonc");
 
         let paths = LocalRuntimePaths {
-            models: root.path().join("models.json"),
-            config: root.path().join("rustx.json"),
+            models: root.path().join("models.jsonc"),
+            config: root.path().join("rustx.jsonc"),
             skill_paths: setup.skill_paths.clone(),
             no_skills: setup.no_skills,
             no_builtin_tools: false,
             no_tools: false,
+            startup_session: rustx::local_runtime::StartupSession::Empty,
+            session_name: None,
             tools: None,
             exclude_tools: Vec::new(),
             workspace,
@@ -1249,18 +1255,20 @@ async fn a_crash_after_the_request_start_commit_never_resends_the_request() {
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
     std::fs::write(
-        root.path().join("models.json"),
+        root.path().join("models.jsonc"),
         models_json(&emulator, &setup),
     )
-    .expect("models.json");
-    std::fs::write(root.path().join("rustx.json"), session_json(&setup)).expect("rustx.json");
+    .expect("models.jsonc");
+    std::fs::write(root.path().join("rustx.jsonc"), session_json(&setup)).expect("rustx.jsonc");
     let paths = LocalRuntimePaths {
-        models: root.path().join("models.json"),
-        config: root.path().join("rustx.json"),
+        models: root.path().join("models.jsonc"),
+        config: root.path().join("rustx.jsonc"),
         skill_paths: setup.skill_paths.clone(),
         no_skills: setup.no_skills,
         no_builtin_tools: false,
         no_tools: false,
+        startup_session: rustx::local_runtime::StartupSession::Empty,
+        session_name: None,
         tools: None,
         exclude_tools: Vec::new(),
         workspace,

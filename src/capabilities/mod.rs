@@ -55,6 +55,7 @@ pub use availability::{
     CAPABILITY_FAILURE_REASON_MAX_BYTES, CapabilityAvailability, CapabilitySourceId,
     CapabilitySourceState, capability_failure_reason,
 };
+pub(crate) use coordinator::CommittedCapability;
 pub use coordinator::{
     AttemptCapabilityLease, CapabilityCoordinator, CapabilityCoordinatorConfig, CapabilityObserver,
     CapabilityResourceInputs, PreparedCapabilityCandidate,

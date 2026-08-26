@@ -156,13 +156,11 @@ describe("snapshot reconstruction", () => {
     assert.match(screen, /Now checking the lints\./, "the streaming answer");
 
     // The settled tool card, joined from three separate runtime facts
-    assert.match(screen, /✓ Bash · ok · 2\.8s · exit 0/);
-    assert.match(screen, /\$ cargo test/);
+    assert.match(screen, /✓ Bash \$ cargo test · ok · 2\.8s · exit 0/);
     assert.match(screen, /test result: ok\. 842 passed/, "the committed result body");
 
     // The live tool card, with runtime progress
-    assert.match(screen, /◐ Grep · running · scanning · 40\/900/);
-    assert.match(screen, /"AttemptSettled"/);
+    assert.match(screen, /◐ Grep "AttemptSettled" · running · scanning · 40\/900/);
 
     // Activity
     assert.match(screen, /Background · 1 active of 1 known/);

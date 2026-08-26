@@ -2,17 +2,21 @@
  * The one visual entity of one logical tool call.
  *
  * ```text
- * assembled            ◇ Bash
- *                        $ cargo test --all
+ * assembled            ◇ Bash $ cargo test --all
  *
- * running (+progress)  ◐ Bash · running · 842/900
- *                        $ cargo test --all
+ * running (+progress)  ◐ Bash $ cargo test --all · running · 842/900
  *
- * settled              ✓ Bash · 2.8s · exit 0
- *                        $ cargo test --all
- *                        test result: ok. 842 passed
- *                        … 17 more lines · ctrl+o to expand
+ * settled              ✓ Bash $ cargo test --all · ok · 2.8s · exit 0
+ *                      test result: ok. 842 passed
+ *                      … 17 more lines · ctrl+o to expand
  * ```
+ *
+ * The whole card is drawn on one background band — pending, settled-well, or
+ * settled-badly — which is Pi's visual grammar for a tool call. The band is
+ * chosen by {@link cardBackground} and filled by the app shell, the one layer
+ * that knows the terminal width. It restates the lifecycle rather than
+ * carrying it: three bands cannot express six settlements, so the status
+ * words below are what actually say `denied`, `timed out`, or `interrupted`.
  *
  * The same `ToolCallId` produces the same card through all three states; the
  * card is not three records that happen to be adjacent.
@@ -31,7 +35,8 @@
  *
  * ```text
  * header         glyph, title, runtime lifecycle   clipped, always visible
- * subject        the one-line identity of the call bounded, always visible
+ * subject        the one-line identity of the call bounded, always visible,
+ *                                                  drawn on the header line
  * call detail    argument JSON, a diff, a command  bounded when collapsed
  * reason         failure / denial prose            bounded when collapsed
  * result summary runtime-published counts          bounded, always visible
@@ -54,8 +59,8 @@
  *
  * Expanding a card spends only facts the client already holds — the published
  * arguments and the committed result — so it issues no runtime request, no
- * re-execution, no filesystem read, and no refetch. The subject stays one
- * line either way; expanded, it is the complete published value.
+ * re-execution, no filesystem read, and no refetch. The subject stays on the
+ * header line either way; expanded, it is the complete published value.
  *
  * ## Cards split when, and only when, folding would reorder canonical facts
  *
@@ -83,7 +88,7 @@ import {
   SUBJECT_BUDGET,
   SUMMARY_BUDGET,
 } from "../preferences.ts";
-import { role, style } from "../theme.ts";
+import { type BackgroundRole, role, style } from "../theme.ts";
 import {
   type ToolCallPresentation,
   type ToolPresentationRenderer,
@@ -108,6 +113,27 @@ import {
  */
 export type ToolCardPart = "full" | "call" | "continuation";
 
+/**
+ * The background band one card is drawn on.
+ *
+ * Three bands for six settlements, so the band is never the only statement
+ * of what happened: it separates "still working" from "settled well" from
+ * "settled badly", and the card's own status words carry which of the four
+ * bad settlements it was. A card with no lifecycle yet — a `call` part whose
+ * result renders further down — is still in flight and gets the pending
+ * band.
+ */
+export function cardBackground(
+  lifecycle: ToolLifecycle | undefined,
+): BackgroundRole {
+  if (lifecycle === undefined || lifecycle.type !== "settled") {
+    return "toolPending";
+  }
+  return lifecycle.result.status.type === "success"
+    ? "toolSuccess"
+    : "toolError";
+}
+
 /** Renders one correlated tool call as one card, or as one part of one. */
 export function renderToolCard(
   tool: CorrelatedTool,
@@ -125,9 +151,8 @@ export function renderToolCard(
     // subject — so it reads as that call settling rather than as a second
     // tool record, and it carries the runtime lifecycle.
     lines.push(
-      `${role.chrome("↳")} ${statusGlyph(tool.lifecycle)} ${title(call)}${statusSuffix(tool.lifecycle)}`,
+      `${role.chrome("↳")} ${statusGlyph(tool.lifecycle)} ${header(call, context)}${statusSuffix(tool.lifecycle)}`,
     );
-    pushSubject(lines, call, context);
     pushResult(lines, renderer, tool, args, context);
     return lines.join("\n");
   }
@@ -136,11 +161,10 @@ export function renderToolCard(
   // rendered below, at the result's own canonical position, and restating the
   // settlement here would report one runtime fact twice.
   lines.push(
-    `${part === "call" ? role.meta("◇") : statusGlyph(tool.lifecycle)} ${title(call)}${
+    `${part === "call" ? role.meta("◇") : statusGlyph(tool.lifecycle)} ${header(call, context)}${
       part === "call" ? `${role.chrome(" · ")}${role.meta("result below")}` : statusSuffix(tool.lifecycle)
     }`,
   );
-  pushSubject(lines, call, context);
   for (const line of preview(call.detail ?? [], context, "argument line")) {
     lines.push(`  ${line}`);
   }
@@ -149,6 +173,20 @@ export function renderToolCard(
     pushResult(lines, renderer, tool, args, context);
   }
   return lines.join("\n");
+}
+
+/**
+ * The one identity line of a card: what was called, and on what.
+ *
+ * Title and subject share the line, the way Pi draws a tool call — `read
+ * src/lib.rs`, `$ cargo test` — rather than stacking the subject underneath.
+ * Both halves are still bounded by their own contracts: the title is header
+ * chrome and clipped unconditionally, the subject is externally derived and
+ * bounded to one line.
+ */
+function header(call: ToolCallPresentation, context: ToolRenderContext): string {
+  const subject = boundedSubject(call, context);
+  return subject === undefined ? title(call) : `${title(call)} ${subject}`;
 }
 
 /**
@@ -175,17 +213,16 @@ function title(call: ToolCallPresentation): string {
  * is bounded to {@link SUBJECT_BUDGET} with an inline elision marker, and
  * expanded it is the complete published value the client already holds.
  */
-function pushSubject(
-  lines: string[],
+function boundedSubject(
   call: ToolCallPresentation,
   context: ToolRenderContext,
-): void {
+): string | undefined {
   if (call.subject === undefined || call.subject.length === 0) {
-    return;
+    return undefined;
   }
   const [first, ...rest] = call.subject.split("\n");
   const head = boundedLine(first ?? "", SUBJECT_BUDGET, context);
-  lines.push(`  ${head}${rest.length === 0 ? "" : role.meta(" …")}`);
+  return `${head}${rest.length === 0 ? "" : role.meta(" …")}`;
 }
 
 /** The settled bands: reason, summary, bounded body, runtime truncation. */
@@ -274,6 +311,11 @@ function resultBody(
   if (result.status.type === "denied") {
     reason.push(...toLines(result.status.reason).map((line) => role.warning(line)));
   }
+  // Verbatim tool output reads as output, not as answer: one colour for the
+  // whole body, the way Pi draws it. The band is applied here rather than in
+  // a renderer so no present or future renderer can opt its output out of
+  // looking like output.
+  const detail = (body.detail ?? []).map((line) => role.toolOutput(line));
   return [
     ...preview(reason, context, "reason line"),
     // `summary` is contractually a short structural fact — `42 matches`,
@@ -282,7 +324,7 @@ function resultBody(
     // visible, so it is the obvious way to smuggle arbitrary tool prose past
     // progressive disclosure. Now it is not.
     ...bounded(body.summary ?? [], SUMMARY_BUDGET, context, "summary line"),
-    ...preview(body.detail ?? [], context),
+    ...preview(detail, context),
   ];
 }
 

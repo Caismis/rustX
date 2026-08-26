@@ -114,8 +114,9 @@ pub enum SessionNodeOriginView {
 pub struct SessionView {
     /// Session identity.
     pub id: String,
-    /// User-facing name.
-    pub name: String,
+    /// The user-chosen display name, absent until this Session is named.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// Creation instant.
     pub created_at: chrono::DateTime<chrono::Utc>,
     /// Last metadata/active-node publication instant.
@@ -133,8 +134,13 @@ pub struct SessionView {
 pub struct SessionSummaryView {
     /// Session identity.
     pub id: String,
-    /// User-facing name.
-    pub name: String,
+    /// The user-chosen display name, absent until this Session is named.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The bounded first user message of this Session, which is what an
+    /// unnamed row shows instead of a name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
     /// Last metadata/active-node publication instant.
     pub updated_at: chrono::DateTime<chrono::Utc>,
     /// Active node identity.
@@ -409,7 +415,7 @@ pub enum RuntimeClientRequest {
     /// Read the safe public model catalog: which models and reasoning
     /// profiles this runtime can select.
     ///
-    /// This exists so a client never reads `models.json` itself. The result
+    /// This exists so a client never reads `models.jsonc` itself. The result
     /// carries no credential, no adapter internal, and no compat
     /// implementation object.
     ModelCatalogGet {
@@ -469,11 +475,12 @@ pub enum RuntimeClientRequest {
         /// Requested bounded page size.
         limit: usize,
     },
-    /// Rename active Session metadata.
+    /// Name the active Session. Metadata only: no conversation, lineage, or
+    /// identity is touched, and no Session is ever resolved by its name.
     SessionName {
         /// Attachment-scoped request id.
         id: RequestId,
-        /// New bounded display name.
+        /// The new bounded single-line display name.
         name: String,
     },
     /// Create and activate a new empty Session.
@@ -1205,7 +1212,7 @@ mod tests {
         let result = RuntimeClientResult::SessionCommittedRestartRequired {
             session: SessionView {
                 id: "session-2".to_owned(),
-                name: "fork".to_owned(),
+                name: None,
                 created_at: now,
                 updated_at: now,
                 active_node: "node-2".to_owned(),

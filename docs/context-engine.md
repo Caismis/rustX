@@ -400,11 +400,54 @@ runtime-owned side request:
 
 ~~~text
 runtime-owned summary instruction
-    + exactly the planned retired Surface messages, in order
+    + the planned retired Surface messages rendered as a bounded plain-text
+      transcript, in order
     + no Tools
     + no primary System guidance, project instructions, Skill catalog,
       extension Tool definitions, or primary continuation
 ~~~
+
+The rendering is deliberately not the canonical JSON encoding. Canonical JSON
+is the durable interchange format; pushing it through a model request spends
+more input on structure, field names, and escaping than on the conversation
+itself, which is how a compaction triggered by a context overflow overflows
+again. The transcript keeps who said what, which tools ran with which
+arguments, and how they ended, and truncates the bulk contributors — tool
+results, replayed reasoning, and tool-call arguments — always with an explicit
+truncation notice, so a summary model can never mistake a cut-off result for a
+complete one. The rendering remains a pure deterministic function of the
+retired span and is shared by the planner's estimate and the production
+request.
+
+Two budgets bound this request, and both carry the session reserve:
+
+~~~text
+soft input limit    = window - reserve - primary output budget
+summary input limit = summary window - reserve - summary output budget
+~~~
+
+The reserve is on both sides because the estimate that sizes them is
+approximate. When a provider measures that approximation — by rejecting a
+request as oversized — the measurement is used rather than discarded. A
+summary-model rejection replans the same compaction against a halved summary
+input budget (bounded, strictly decreasing, floored); a primary-model overflow
+produces an `EstimateCorrection`, the exact integer ratio between this
+runtime's estimate for the rejected request and the provider's reported count
+for it, and the soft input limit above is scaled by that ratio for the
+recovery compaction. With no reported count the correction is a fixed
+three-quarters shrink. Either way the recovery never aims at the budget that
+just failed.
+
+A correction never crosses to the summary input limit, even when the summary
+invocation names the same model. The ratio is a measurement of one request,
+not a calibration of a tokenizer: the deviation it records can come from the
+provider continuation, the tool schemas, the effective system prompt, or
+request-specific fixed overhead, and the summary request carries none of
+those. A stored continuation alone can put six figures of provider-counted
+input behind a primary request that the summary request will never send, so
+reusing the ratio could compress a workable summary budget to `CannotFit` on
+evidence about something else. Each request is measured by its own rejection:
+the summary model's own rejection is what shrinks the summary budget.
 
 The summary request does not inherit the primary Effective System Prompt,
 depend on the primary request prefix, share provider KV/cache continuity, or
@@ -456,6 +499,30 @@ contribute to the full request estimate; only conversation content counts
 toward keep_recent_tokens. A projection contains complete canonical
 messages only and carries surface_revision, messages, the exact prompt, and
 its measurement.
+
+That estimate is only the fallback. A provider-reported `input_tokens` is a
+measurement of a real request, and it is reused for as long as it remains
+true:
+
+~~~text
+exact  same fingerprint                     -> ProviderReported (the number)
+anchor measured messages are an ordered
+       prefix, non-conversation input
+       unchanged                            -> ProviderAnchored
+                                               (the number + estimate of the
+                                                messages appended since)
+none   otherwise                            -> Estimated (whole projection)
+~~~
+
+The anchored case is the one that matters. A provider-neutral `bytes / 4`
+approximation drifts further from the truth the longer a conversation runs,
+and a whole-conversation estimate compounds that drift over every message
+ever sent — precisely when the soft-limit decision matters most. Anchoring
+confines the error to the messages appended since the last completed request.
+The anchor covers the Effective System Prompt and the tool definitions of the
+measured request, because their cost is inside the reported number; a change
+to either, or a compaction Surface rewrite that destroys the prefix, refuses
+the anchor rather than patching it with a guessed delta.
 
 The Context Engine is deliberately narrow. It is not a lifecycle or hook
 host: the Issue #56 `PreStepPolicy` and `ToolResultObserver` seams belong to
