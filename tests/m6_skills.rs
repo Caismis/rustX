@@ -484,6 +484,7 @@ async fn bash_reaches_skill_assets_through_the_published_location() {
                 },
             ),
             subagents: None,
+            todos: rustx::tools::todo::ConversationTodoList::new(conversation_id.clone()),
         },
         rustx::tools::native::NativeToolPolicies::default(),
     )
@@ -567,6 +568,7 @@ async fn bash_cd_cannot_redefine_the_skill_root() {
                 },
             ),
             subagents: None,
+            todos: rustx::tools::todo::ConversationTodoList::new(conversation_id.clone()),
         },
         rustx::tools::native::NativeToolPolicies::default(),
     )

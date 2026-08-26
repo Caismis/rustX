@@ -9,9 +9,10 @@
 //! `Never`/`Always` approval through the concrete bounded
 //! [`NativeToolPolicies`] configuration. The only intentionally fixed
 //! policy is the runtime intrinsic `background_task` (foreground-only,
-//! sequential, approval-never), and `ask_user` is likewise fixed to
-//! foreground-only, sequential, approval-never because it is the native
-//! Questionnaire capability itself.
+//! sequential, approval-never), and `ask_user` and `todo` are likewise
+//! fixed to foreground-only, sequential, approval-never: one is the native
+//! Questionnaire capability itself, and the other mutates conversation-owned
+//! task state that two concurrent calls would race on.
 //!
 //! The default is foreground-only sequential for every ordinary native
 //! tool: the model-facing surface of the native tool plane is conservative
@@ -54,6 +55,7 @@ mod registration;
 mod search;
 mod subagent;
 mod support;
+mod todo;
 mod write;
 
 #[cfg(test)]
@@ -91,11 +93,15 @@ pub struct NativeToolResources {
     /// means the intrinsic is not registered at all, so recursive
     /// delegation is absent by construction.
     pub subagents: Option<crate::runtime::subagent::SubagentRegistry>,
+    /// The conversation-owned task list used by the `todo` tool. It is the
+    /// conversation's own list: a child runtime composes its own resources
+    /// and therefore never reaches this one.
+    pub todos: crate::tools::todo::ConversationTodoList,
 }
 
 /// The concrete, bounded per-tool policy configuration of the six ordinary
-/// configurable native tools. `ask_user` and `background_task` are runtime
-/// intrinsics with fixed policies and are not configurable through this table.
+/// configurable native tools. `ask_user`, `background_task`, and `todo` own
+/// fixed policies and are not configurable through this table.
 ///
 /// Execution policy belongs to the registered tool definition, not to the
 /// native tool plane as a whole: each ordinary native tool independently
@@ -187,6 +193,7 @@ pub(crate) fn native_tool_registrations(
     let NativeToolResources {
         background,
         subagents,
+        todos,
     } = resources;
     let mut registrations = vec![
         background_task::registration(background),
@@ -197,6 +204,7 @@ pub(crate) fn native_tool_registrations(
         glob::registration(policies.glob),
         grep::registration(policies.grep),
         bash::registration(policies.bash),
+        todo::registration(todos),
     ];
     // The `subagent` intrinsic exists only in a runtime that owns a
     // subagent registry (never inside a child runtime).

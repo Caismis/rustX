@@ -2,8 +2,8 @@
 //!
 //! One conversation owns one [`ConversationToolRuntime`]: the canonical
 //! workspace boundary, the artifact store, the explicit authorized tool
-//! environment, the conversation inbound mailbox, and the authoritative
-//! background registry. An `AgentExecution` receives a reference to the
+//! environment, the conversation inbound mailbox, the authoritative
+//! background registry, and the conversation's task list. An `AgentExecution` receives a reference to the
 //! bundle and drains `tool_runtime.mailbox()`; detached background runners
 //! receive cloned handles. No process-global tool state exists.
 //!
@@ -74,6 +74,7 @@ use crate::tools::background::{
 };
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::managed_output::{ManagedOutputError, ManagedToolOutput};
+use crate::tools::todo::ConversationTodoList;
 use crate::tools::workspace::{Workspace, WorkspaceError};
 
 /// A conversation tool runtime construction failure.
@@ -251,6 +252,9 @@ pub struct ConversationToolRuntime {
     tool_output: ManagedToolOutput,
     environment: ToolEnvironment,
     background: ConversationBackgroundRegistry,
+    /// The conversation's task list, rebuilt from its own durable history at
+    /// construction.
+    todos: ConversationTodoList,
     /// The one composition-time binding shared by the runtime and its narrow
     /// mailbox capability.
     durable_binding: ConversationStoreBinding,
@@ -410,6 +414,20 @@ impl ConversationToolRuntime {
                 event_sink: config.event_sink,
             },
         );
+        // The task list is conversation state that was already published as
+        // canonical tool results, so it is *rebuilt* here rather than
+        // restored from a second persistence path: whatever the last
+        // committed `todo` result said the list was, it still is. A
+        // conversation with no such result opens with an empty list.
+        let todos = ConversationTodoList::rebuilt(
+            conversation_id.clone(),
+            &durable_binding
+                .full_store()
+                .load_canonical()
+                .map_err(|error| {
+                    ConversationRuntimeError::DurableConversation(error.to_string())
+                })?,
+        );
         Ok(Self {
             conversation_id,
             workspace,
@@ -417,12 +435,22 @@ impl ConversationToolRuntime {
             tool_output,
             environment,
             background,
+            todos,
             durable_binding,
             runtime_client: Arc::new(RuntimeClientBinding {
                 bound: AtomicBool::new(false),
                 coordinator_claimed: AtomicBool::new(false),
             }),
         })
+    }
+
+    /// The conversation-owned task list served by the native `todo` tool.
+    ///
+    /// One conversation owns one list, bound at construction like every
+    /// other conversation-owned resource here.
+    #[must_use]
+    pub fn todos(&self) -> &ConversationTodoList {
+        &self.todos
     }
 
     /// Returns the full durable authority composed for this tool runtime.

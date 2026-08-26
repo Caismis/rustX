@@ -956,6 +956,7 @@ pub fn native_fixture_with(
         rustx::tools::native::NativeToolResources {
             background: runtime.background().clone(),
             subagents: None,
+            todos: runtime.todos().clone(),
         },
         policies,
     )

@@ -66,6 +66,11 @@ export const COMMANDS: readonly CommandSpec[] = [
     description: "Show the active Skill catalog from the capability projection.",
   },
   {
+    name: "/todos",
+    description:
+      "Show the complete task list the agent is tracking, grouped by status. The panel above the editor shows the same list, bounded.",
+  },
+  {
     name: "/status",
     description: "Show the runtime-composed Agent Status and runtime diagnostics.",
   },

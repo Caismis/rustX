@@ -164,8 +164,11 @@ composed roots and `execution_mode` included. The same rule applies to
 switching an MCP server's tools to `model_selectable`: their schemas come from
 the server verbatim, and a server that ships a composed root will be rejected
 until you pick a fixed policy for it. The runtime intrinsics `background_task` and
-`ask_user` are not configured in this table: both are fixed foreground,
-sequential, approval-never tools. `ask_user` accepts one structured
+`ask_user`, and the `todo` task list, are not configured in this table: all
+three are fixed foreground, sequential, approval-never tools. `todo` keeps the
+conversation's own task list — one call per change, and every settled call
+returns the complete list, which is also what a restarted or resumed runtime
+rebuilds the list from. `ask_user` accepts one structured
 questionnaire object containing 1–4 related questions and publishes exactly one
 questionnaire interaction through the runtime-owned `InteractionCoordinator`.
 The client always offers bounded custom text; the model does not send

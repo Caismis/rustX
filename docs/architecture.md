@@ -860,12 +860,18 @@ runtime/subagent/          SubagentRegistry (conversation-owned one-shot
                            task as sole process owner, cancel/escalation,
                            exactly-once terminal publication), the bounded
                            framed control IPC, and process supervision
+tools/todo.rs              ConversationTodoList: the conversation-owned task
+                           list (id allocation, status machine, blocked_by
+                           graph validation) rebuilt at construction from
+                           the last snapshot the conversation's own
+                           canonical `todo` results committed
 tools/runtime.rs           ConversationToolRuntime: the per-conversation
-                           bundle of workspace, artifacts, environment, and
-                           background registry handed to AgentExecution
+                           bundle of workspace, artifacts, environment,
+                           background registry, and task list handed to
+                           AgentExecution
 tools/native/             the native tool plane: one module per native
                            capability (read/, write/, edit/, glob/, grep/,
-                           bash/, background_task/), each owning its name,
+                           bash/, background_task/, todo/), each owning its name,
                            description, typed input contract, generated
                            schema, executor, and private helpers;
                            registration.rs owns the NativeToolRegistration
@@ -1955,6 +1961,24 @@ point, a cancel-vs-completion linearization rule, bounded latest progress
 snapshots, and exactly-once terminal inbound mailbox publication
 (`background-exec_N-terminal`). The `background_task` intrinsic
 (foreground-only, sequential) provides `status` and idempotent `cancel`.
+
+The bundle also owns the conversation's `ConversationTodoList`: the task
+list the native `todo` tool mutates. It is deliberately *not* a second
+persistence path. Every settled `todo` call publishes the complete
+post-call snapshot as the structured content of its own canonical tool
+result, so the durable record of the list is ordinary conversation
+history; `ConversationToolRuntime` construction rebuilds the list by
+taking the last such snapshot from the canonical Ledger, and a rejected
+call publishes nothing because it mutated nothing. A list therefore
+survives a process restart, a Session resume, and a compaction exactly as
+far as the conversation history that carries it does, and a reference
+client reconstructs the same list from the same fact without any
+client-side task state. The tool is fixed foreground-only, sequential,
+approval-never: one list cannot be mutated by a detached execution, two
+concurrent mutations would publish racing snapshots, and there is nothing
+in a task list for a human to approve. A subagent child composes the
+read-only `explore` profile and has no `todo` registration at all, so
+session isolation of the list is structural rather than a check.
 
 The dispatch ownership commit is the background linearization point: the
 registry synchronization boundary is acquired first and the final

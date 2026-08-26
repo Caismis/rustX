@@ -21,7 +21,7 @@ use rustx::tools::types::{
 };
 use std::sync::Arc;
 
-const NATIVE_TOOL_NAMES: [&str; 8] = [
+const NATIVE_TOOL_NAMES: [&str; 9] = [
     "read",
     "write",
     "edit",
@@ -30,6 +30,7 @@ const NATIVE_TOOL_NAMES: [&str; 8] = [
     "bash",
     "background_task",
     "ask_user",
+    "todo",
 ];
 
 fn definition(fixture: &common::NativeFixture, name: &str) -> rustx::tools::types::ToolDefinition {
@@ -280,6 +281,7 @@ fn native_tools_preserve_legal_execution_policies_and_fixed_background_task_poli
             NativeToolResources {
                 background: runtime.background().clone(),
                 subagents: None,
+                todos: runtime.todos().clone(),
             },
             NativeToolPolicies::uniform(ToolInvocationPolicy::new(
                 execution,
@@ -388,6 +390,7 @@ fn independent_native_execution_policies_coexist_in_one_registry() {
         NativeToolResources {
             background: runtime.background().clone(),
             subagents: None,
+            todos: runtime.todos().clone(),
         },
         policies,
     )

@@ -564,6 +564,42 @@ attempt-cancelled settlement. A decline succeeds as
 `{"cancelled":true,"answers":[]}`; attempt cancellation and provider
 unavailability remain distinct runtime/tool outcomes.
 
+### The conversation task list and `todo`
+
+`todo` is one ordinary foreground, sequential, approval-never Tool over the
+conversation-owned `ConversationTodoList`. Task ids are conversation-unique
+and allocated in creation order from `next_id`; a rejected call allocates
+nothing. Status transitions are `pending <-> in_progress`, either to
+`completed`, and any status to `deleted`; `completed` may only become
+`deleted`, and `deleted` is terminal. A transition to the current status is
+accepted and reported as a no-op. `delete` tombstones a task and never
+removes it, so historical `blocked_by` references still resolve; tombstones
+are hidden from `list` unless `include_deleted` is set, and are never counted
+in `done/total`.
+
+Dependency edges are validated before the list is written: an unknown id, a
+tombstoned id, a self-block, and an edge that would close a cycle in the
+`blocked_by` graph are all rejected, and a rejected call leaves the list
+exactly as it was. Reverse `blocks` edges are derived from the other tasks'
+`blocked_by` sets and never stored.
+
+Every *settled* call publishes the complete post-call snapshot as the
+structured content of its own canonical tool result; a rejected call is an
+ordinary failed ToolResult carrying the specific reason and publishes no
+snapshot. That published snapshot is the only durable record of the list:
+`ConversationToolRuntime` construction rebuilds the list from the last such
+snapshot in canonical history, so a restart, a Session resume, and a
+compaction preserve exactly what the conversation still carries. There is no
+sidecar file, no separate durability path, and no migration. A subagent child
+registers no `todo` tool, so a child can neither read nor overwrite its
+parent's list.
+
+The TUI derives its task panel and `/todos` from the same canonical fact by
+the runtime's own `ToolId`, never by tool name or JSON shape, and stores no
+task state of its own: a fresh authoritative snapshot reproduces the panel
+exactly. The panel is bounded and drops completed rows before unfinished ones,
+always naming what it hid; `/todos` prints the complete list.
+
 ### Runtime Client and TUI projection
 
 The Runtime Client carries native interaction facts through typed

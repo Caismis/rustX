@@ -58,6 +58,7 @@ import {
 } from "../commands/dispatcher.ts";
 import { focusedInteraction, focusedQuestionnaire, sessionLabel } from "../presentation/selectors.ts";
 import { correlateTools } from "../presentation/tools.ts";
+import { selectTodos } from "../presentation/todos.ts";
 import type { PresentationState } from "../presentation/state.ts";
 import type { ChildRuntimeProcess } from "../runtime/child-process.ts";
 import type { RuntimeClientConnection } from "../runtime/connection.ts";
@@ -91,6 +92,7 @@ import {
 } from "./components/status.ts";
 import { renderResourceBanner } from "./components/resources.ts";
 import { renderTranscript } from "./components/transcript.ts";
+import { renderTodoPanel } from "./components/todos.ts";
 import {
   type PresentationPreferences,
   defaultPreferences,
@@ -165,6 +167,14 @@ export class RustxTuiApp {
   readonly #startup = new Container();
   readonly #transcript = new Container();
   readonly #activity = new Container();
+  /**
+   * The task panel, drawn between the conversation and the editor.
+   *
+   * It is the plan the reader needs *while typing the next message*, so it
+   * sits at the bottom of the scrollback rather than inside the transcript,
+   * and it is rebuilt from the projection like every other component here.
+   */
+  readonly #todos = new Container();
   readonly #transient = new TransientFeedbackSurface();
   readonly #footer = new Text("", 1, 0);
   readonly #editor: Editor;
@@ -211,6 +221,7 @@ export class RustxTuiApp {
     this.#tui.addChild(this.#transcript);
     this.#tui.addChild(this.#activity);
     this.#tui.addChild(this.#transient);
+    this.#tui.addChild(this.#todos);
     this.#tui.addChild(new Spacer(1));
     this.#tui.addChild(this.#editor);
     this.#tui.addChild(this.#footer);
@@ -1259,6 +1270,16 @@ export class RustxTuiApp {
       if (section.length > 0) {
         this.#activity.addChild(new Text(section, 1, 0));
       }
+    }
+
+    // The plan, derived from the same transcript the conversation is drawn
+    // from. An empty panel draws nothing at all.
+    this.#todos.clear();
+    const todos = renderTodoPanel(selectTodos(state), {
+      columns: this.#tui.terminal.columns,
+    });
+    if (todos.length > 0) {
+      this.#todos.addChild(new Text(todos, 1, 0));
     }
 
     const working = workingStatus(state);

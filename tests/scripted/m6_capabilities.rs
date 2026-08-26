@@ -23,6 +23,7 @@ use rustx::tools::background::{
 };
 use rustx::tools::environment::ToolEnvironment;
 use rustx::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
+use rustx::tools::todo::ConversationTodoList;
 use rustx::tools::types::{
     ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode,
 };
@@ -128,6 +129,7 @@ fn conversation_with_options(
         NativeToolResources {
             background: background.clone(),
             subagents: None,
+            todos: ConversationTodoList::new(conversation_id.clone()),
         },
         NativeToolPolicies::default(),
     )
@@ -1629,6 +1631,7 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
         NativeToolResources {
             background: conversation.background.clone(),
             subagents: None,
+            todos: ConversationTodoList::new(conversation.background.conversation_id().clone()),
         },
         NativeToolPolicies::default(),
     )

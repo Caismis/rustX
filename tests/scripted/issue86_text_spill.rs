@@ -71,6 +71,7 @@ fn fixture() -> IssueFixture {
         NativeToolResources {
             background: runtime.background().clone(),
             subagents: None,
+            todos: runtime.todos().clone(),
         },
         NativeToolPolicies::uniform(ToolInvocationPolicy::new(
             ToolExecutionPolicy::ModelSelectable,

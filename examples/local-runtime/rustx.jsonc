@@ -167,6 +167,7 @@
     "grep",
     "bash",
     "subagent",        // delegate to a child runtime of this agent
+    "todo",            // track multi-step work as a visible task list
   ],
 
   // Extra Skill roots, package directories, or SKILL.md paths. Relative
