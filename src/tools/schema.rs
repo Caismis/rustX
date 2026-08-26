@@ -67,9 +67,9 @@
 //! ```
 //!
 //! Nothing here applies to `ForegroundOnly`/`BackgroundOnly` tools — they
-//! receive no injected field, so an arbitrary root schema (the `ask_user`
-//! intrinsic's root `anyOf`, or any MCP server's own reference-heavy schema)
-//! stays valid, `execution_mode` included.
+//! receive no injected field, so an ordinary root schema (including the
+//! native `ask_user` questionnaire contract or an MCP server's own
+//! reference-heavy schema) stays valid, `execution_mode` included.
 
 use jsonschema::Validator;
 

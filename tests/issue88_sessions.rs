@@ -18,7 +18,7 @@ use rustx::message::types::{
 };
 use rustx::model::catalog::MapCredentialEnvironment;
 use rustx::runtime::identity::MessageId;
-use rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1;
+use rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION;
 use rustx::runtime_client::types::{
     RequestId, RuntimeClientError, RuntimeClientRequest, RuntimeClientResult,
 };
@@ -160,7 +160,7 @@ async fn native_new_resume_name_and_quiescence_are_product_operations() {
     let endpoint = product.endpoint();
     let initialized = endpoint.handle_request(RuntimeClientRequest::Initialize {
         id: request_id(1),
-        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
     });
     let Some(RuntimeClientResult::Initialized { .. }) = initialized.result else {
         panic!("initialize must succeed: {initialized:?}");
@@ -289,7 +289,7 @@ async fn native_new_resume_name_and_quiescence_are_product_operations() {
     let resumed_endpoint = resumed.endpoint();
     let initialized = resumed_endpoint.handle_request(RuntimeClientRequest::Initialize {
         id: request_id(6),
-        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
     });
     let Some(RuntimeClientResult::Initialized { snapshot, .. }) = initialized.result else {
         panic!("resumed runtime must initialize: {initialized:?}");
@@ -334,7 +334,7 @@ async fn native_new_resume_name_and_quiescence_are_product_operations() {
     let restored_endpoint = restored.endpoint();
     let restored_initialized = restored_endpoint.handle_request(RuntimeClientRequest::Initialize {
         id: request_id(8),
-        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
     });
     let Some(RuntimeClientResult::Initialized { snapshot, .. }) = restored_initialized.result
     else {
@@ -412,7 +412,7 @@ async fn startup_begins_on_an_empty_session_unless_continue_is_requested() {
     let endpoint = switching.endpoint();
     let initialized = endpoint.handle_request(RuntimeClientRequest::Initialize {
         id: request_id(1),
-        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
     });
     assert!(matches!(
         initialized.result,

@@ -235,15 +235,7 @@ pub(crate) fn translate_request(
             context_overflow: None,
         });
     }
-    let tools: Vec<WireTool> = request
-        .tools
-        .iter()
-        .map(|tool| WireTool {
-            name: tool.name.clone(),
-            description: Some(tool.description.clone()),
-            input_schema: tool.input_schema.clone(),
-        })
-        .collect();
+    let tools = translate_tools(&request.tools);
 
     let wire = WireRequest {
         model: request.model().to_owned(),
@@ -265,6 +257,17 @@ pub(crate) fn translate_request(
         request.request_params(),
         ModelProtocol::AnthropicMessages,
     )
+}
+
+fn translate_tools(tools: &[crate::tools::types::ModelToolDefinition]) -> Vec<WireTool> {
+    tools
+        .iter()
+        .map(|tool| WireTool {
+            name: tool.name.clone(),
+            description: Some(tool.description.clone()),
+            input_schema: tool.input_schema.clone(),
+        })
+        .collect()
 }
 
 /// Translates the canonical message list into Anthropic wire messages and
@@ -525,6 +528,62 @@ pub(crate) fn resolve_tool(tools: &ValidatedTools, name: &str) -> Result<ToolId,
         .resolve(name)
         .cloned()
         .ok_or_else(|| invalid_request(&format!("model called unknown tool name {name:?}")))
+}
+
+#[cfg(test)]
+mod questionnaire_schema_tests {
+    use super::translate_tools;
+    use crate::tools::types::ModelToolDefinition;
+    use serde_json::json;
+
+    #[test]
+    fn anthropic_messages_preserves_the_nested_questionnaire_schema() {
+        let schema = json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["questions"],
+            "properties": {
+                "questions": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 4,
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["question", "header", "options"],
+                        "properties": {
+                            "question": {"type": "string", "maxLength": 4096},
+                            "header": {"type": "string", "maxLength": 16},
+                            "options": {
+                                "type": "array",
+                                "minItems": 2,
+                                "maxItems": 4,
+                                "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": ["label", "description"],
+                                    "properties": {
+                                        "label": {"type": "string", "maxLength": 60},
+                                        "description": {"type": "string", "maxLength": 1024},
+                                        "preview": {"type": "string", "maxLength": 8192}
+                                    }
+                                }
+                            },
+                            "multi_select": {"type": "boolean"}
+                        }
+                    }
+                }
+            }
+        });
+        let encoded = translate_tools(&[ModelToolDefinition {
+            id: crate::runtime::identity::ToolId::new("tool-ask-user"),
+            name: "ask_user".to_owned(),
+            description: "structured questionnaire".to_owned(),
+            input_schema: schema.clone(),
+        }]);
+        assert_eq!(encoded[0].name, "ask_user");
+        assert_eq!(encoded[0].input_schema, schema);
+    }
 }
 
 #[cfg(test)]

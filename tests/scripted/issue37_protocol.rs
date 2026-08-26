@@ -1,4 +1,4 @@
-//! Issue #37: Runtime Client Protocol v1 wire-contract tests.
+//! Issue #37: Runtime Client Protocol v2 wire-contract tests.
 //!
 //! These tests exercise the protocol boundary exclusively through the
 //! public Runtime Client surface: deterministic serialization of every
@@ -8,6 +8,12 @@
 
 use super::support;
 
+use rustx::runtime::identity::{AttemptId, ConversationId, InteractionId};
+use rustx::runtime::interaction::{
+    InteractionKind, InteractionOutcome, InteractionRequest, InteractionResponse,
+    OptionSpecification, QuestionSpecification, QuestionnaireAnswer, QuestionnaireAnswerEntry,
+    QuestionnaireResponse, QuestionnaireSpecification, QuestionnaireSubmission, SingleOptionAnswer,
+};
 use rustx::runtime_client::RuntimeClientHost;
 use rustx::runtime_client::{
     RuntimeClientCursor, RuntimeClientError, RuntimeClientEvent, RuntimeClientProtocolEvent,
@@ -92,7 +98,7 @@ fn protocol_envelopes_round_trip_deterministically() {
 fn protocol_errors_round_trip_with_stable_categories() {
     let cases = [
         RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 1,
+            supported: 2,
             requested: 2,
         },
         RuntimeClientError::AttachmentInUse {
@@ -128,13 +134,144 @@ fn protocol_errors_round_trip_with_stable_categories() {
     }
 }
 
+fn questionnaire() -> QuestionnaireSpecification {
+    QuestionnaireSpecification {
+        questions: vec![QuestionSpecification {
+            question: "Which direction?".to_owned(),
+            header: "Direction".to_owned(),
+            options: vec![
+                OptionSpecification {
+                    label: "First".to_owned(),
+                    description: "The first authored option.".to_owned(),
+                    preview: Some("# First".to_owned()),
+                },
+                OptionSpecification {
+                    label: "Second".to_owned(),
+                    description: "The second authored option.".to_owned(),
+                    preview: None,
+                },
+            ],
+            multi_select: false,
+        }],
+    }
+}
+
+#[test]
+fn v2_questionnaire_pending_response_decline_and_settlement_round_trip() {
+    let questionnaire = questionnaire();
+    let interaction_id = InteractionId::new("interaction-questionnaire-v2");
+    let request = InteractionRequest {
+        id: interaction_id.clone(),
+        conversation_id: ConversationId::new("conv-questionnaire-v2"),
+        attempt_id: AttemptId::new("attempt-questionnaire-v2"),
+        turn: 1,
+        kind: InteractionKind::Questionnaire {
+            questionnaire: questionnaire.clone(),
+        },
+    };
+    let submitted = QuestionnaireResponse::Submitted(QuestionnaireSubmission {
+        answers: vec![QuestionnaireAnswerEntry {
+            question_index: 0,
+            answer: QuestionnaireAnswer::SingleOption(SingleOptionAnswer {
+                label: "First".to_owned(),
+            }),
+        }],
+    });
+    let submitted_request = RuntimeClientRequest::InteractionRespond {
+        id: request_id(20),
+        interaction_id: interaction_id.clone(),
+        response: InteractionResponse::Questionnaire {
+            response: submitted.clone(),
+        },
+    };
+    let declined_request = RuntimeClientRequest::InteractionRespond {
+        id: request_id(21),
+        interaction_id: interaction_id.clone(),
+        response: InteractionResponse::Questionnaire {
+            response: QuestionnaireResponse::Declined,
+        },
+    };
+    let pending = RuntimeClientProtocolEvent {
+        cursor: RuntimeClientCursor::new(20),
+        event: RuntimeClientEvent::InteractionPending {
+            interaction: request.clone(),
+        },
+    };
+    let submitted_settled = RuntimeClientProtocolEvent {
+        cursor: RuntimeClientCursor::new(21),
+        event: RuntimeClientEvent::InteractionSettled {
+            interaction_id: interaction_id.clone(),
+            outcome: InteractionOutcome::Responded {
+                response: InteractionResponse::Questionnaire {
+                    response: submitted,
+                },
+            },
+        },
+    };
+    let declined_settled = RuntimeClientProtocolEvent {
+        cursor: RuntimeClientCursor::new(22),
+        event: RuntimeClientEvent::InteractionSettled {
+            interaction_id,
+            outcome: InteractionOutcome::Responded {
+                response: InteractionResponse::Questionnaire {
+                    response: QuestionnaireResponse::Declined,
+                },
+            },
+        },
+    };
+
+    let pending_json = serde_json::to_value(&pending).expect("pending questionnaire JSON");
+    assert_eq!(pending_json["event"]["type"], "interaction_pending");
+    assert_eq!(
+        pending_json["event"]["interaction"]["kind"]["type"],
+        "questionnaire"
+    );
+    assert_eq!(
+        pending_json["event"]["interaction"]["kind"]["questionnaire"],
+        serde_json::to_value(&questionnaire).expect("questionnaire JSON")
+    );
+    assert_eq!(
+        serde_json::from_value::<RuntimeClientProtocolEvent>(pending_json)
+            .expect("pending round trip"),
+        pending
+    );
+
+    for request in [submitted_request, declined_request] {
+        let json = serde_json::to_value(&request).expect("questionnaire response JSON");
+        assert_eq!(json["method"], "interaction_respond");
+        assert_eq!(json["response"]["type"], "questionnaire");
+        let decoded: RuntimeClientRequest =
+            serde_json::from_value(json).expect("questionnaire response round trip");
+        assert_eq!(decoded, request);
+    }
+    for event in [submitted_settled, declined_settled] {
+        let json = serde_json::to_value(&event).expect("settled questionnaire JSON");
+        assert_eq!(json["event"]["type"], "interaction_settled");
+        assert_eq!(
+            serde_json::from_value::<RuntimeClientProtocolEvent>(json).expect("settled round trip"),
+            event
+        );
+    }
+
+    let old_question_response = serde_json::json!({
+        "method": "interaction_respond",
+        "id": 30,
+        "interaction_id": "interaction-questionnaire-v2",
+        "response": {"type": "question", "answer": "pasted text"}
+    });
+    assert!(
+        serde_json::from_value::<RuntimeClientRequest>(old_question_response).is_err(),
+        "the obsolete Question response is not a v2 response"
+    );
+}
+
 /// The snapshot and its sections round-trip exactly; no internal executor
 /// or path data exists on the wire.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn snapshot_dto_round_trips() {
     let host = host().await;
     let (attachment, initialized) = host
-        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     let RuntimeClientResult::Initialized {
         snapshot, cursor, ..
@@ -171,7 +308,7 @@ async fn snapshot_dto_round_trips() {
 async fn attachment_request_correlation_and_version_negotiation() {
     let host = host().await;
     let (attachment, initialized) = host
-        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     let RuntimeClientResult::Initialized {
         attachment_id,
@@ -202,7 +339,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         incompatible,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 1,
+            supported: 2,
             requested: 7,
         })
     ));
@@ -210,7 +347,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     // The initialize method cannot re-initialize an admitted attachment.
     let reinit = attachment.handle_request(RuntimeClientRequest::Initialize {
         id: request_id(9),
-        protocol_version: 1,
+        protocol_version: 2,
     });
     assert!(matches!(
         reinit.error,
@@ -225,14 +362,14 @@ async fn attachment_request_correlation_and_version_negotiation() {
 async fn request_ids_are_attachment_scoped() {
     let host = host().await;
     let (first, _) = host
-        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("first attach");
     let first_response =
         first.handle_request(RuntimeClientRequest::SnapshotGet { id: request_id(1) });
     assert!(first_response.error.is_none());
     first.detach();
     let (second, _) = host
-        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("second attach");
     let second_response =
         second.handle_request(RuntimeClientRequest::SnapshotGet { id: request_id(1) });
@@ -253,7 +390,7 @@ async fn request_ids_are_attachment_scoped() {
 async fn second_attachment_never_evicts_the_first() {
     let host = host().await;
     let (first, initialized) = host
-        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("first attach");
     let RuntimeClientResult::Initialized {
         attachment_id: first_id,
@@ -262,7 +399,7 @@ async fn second_attachment_never_evicts_the_first() {
     else {
         panic!("initialized");
     };
-    let second = host.attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1);
+    let second = host.attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION);
     assert!(matches!(
         second,
         Err(RuntimeClientError::AttachmentInUse {
@@ -279,13 +416,13 @@ async fn second_attachment_never_evicts_the_first() {
 async fn detach_releases_the_attachment_exactly() {
     let host = host().await;
     let (first, _) = host
-        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     // Idempotent double detach.
     first.detach();
     first.detach();
     let (second, _) = host
-        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach after detach");
     let response = second.handle_request(RuntimeClientRequest::SnapshotGet { id: request_id(3) });
     assert!(response.error.is_none());
@@ -297,11 +434,11 @@ async fn attachment_raii_drop_detaches() {
     let host = host().await;
     {
         let (attachment, _) = host
-            .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let _ = attachment;
     }
     let (_, _) = host
-        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach after drop");
 }

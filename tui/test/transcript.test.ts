@@ -453,10 +453,20 @@ describe("durable transcript audits", () => {
               turn_id: "turn-1",
               interaction_id: "interaction-1",
               subject: {
-                type: "question",
-                prompt: "Which environment?",
-                choices: ["staging", "production"],
-                allow_free_text: false,
+                type: "questionnaire",
+                questionnaire: {
+                  questions: [
+                    {
+                      question: "Which environment?",
+                      header: "Environment",
+                      options: [
+                        { label: "staging", description: "A safe test environment." },
+                        { label: "production", description: "The live environment." },
+                      ],
+                      multi_select: false,
+                    },
+                  ],
+                },
               },
             },
           },
@@ -470,8 +480,15 @@ describe("durable transcript audits", () => {
               turn_id: "turn-1",
               interaction_id: "interaction-1",
               settlement: {
-                type: "answered",
-                answer: { type: "choice", value: "staging" },
+                type: "questionnaire_submitted",
+                submission: {
+                  answers: [
+                    {
+                      question_index: 0,
+                      answer: { type: "single_option", value: { label: "staging" } },
+                    },
+                  ],
+                },
               },
             },
           },
@@ -482,8 +499,8 @@ describe("durable transcript audits", () => {
 
     assert.match(rendered, /historical interaction · requested · not actionable/);
     assert.match(rendered, /Which environment/);
-    assert.match(rendered, /historical interaction · settled · answered/);
-    assert.match(rendered, /choice: staging/);
+    assert.match(rendered, /historical interaction · settled · questionnaire submitted/);
+    assert.match(rendered, /single_option/);
     assert.doesNotMatch(rendered, /respond|pending prompt|approve action/i);
   });
 });

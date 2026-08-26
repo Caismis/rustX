@@ -1,7 +1,7 @@
 //! The Runtime Client host: the projection + control + attachment adapter
 //! over the conversation runtime coordinator (Issue #61).
 //!
-//! [`RuntimeClientHost`] is the Runtime Client boundary of Protocol v1. It
+//! [`RuntimeClientHost`] is the Runtime Client boundary of Protocol v2. It
 //! observes and controls the
 //! [`ConversationRuntime`](crate::runtime::conversation_runtime::ConversationRuntime)
 //! of the same conversation; it does **not** own the conversation runtime:
@@ -21,7 +21,7 @@
 //!
 //! The host owns:
 //!
-//! - the one-active-attachment v1 policy;
+//! - the one-active-attachment v2 policy;
 //! - the Runtime Client projection (snapshot read model, cursor allocation,
 //!   bounded replay, subscribers) and its linearization boundary;
 //! - protocol adaptation: request dispatch, `model_set`/`shutdown`/
@@ -122,7 +122,7 @@ use super::snapshot::{
     RuntimeClientTranscriptCursor, RuntimeClientTranscriptPage, transcript_page_view,
 };
 use super::types::{
-    AttachmentId, RUNTIME_CLIENT_PROTOCOL_VERSION_V1, RuntimeClientCursor, RuntimeClientError,
+    AttachmentId, RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientCursor, RuntimeClientError,
     RuntimeClientProtocolEvent, RuntimeClientResult, RuntimeClientSessionRequest,
 };
 use crate::durable::{TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT, TRANSCRIPT_PAGE_LIMIT_MAX};
@@ -143,7 +143,7 @@ pub enum HostConstructionError {
     /// The conversation runtime identity is already bound to a Runtime
     /// Client host.
     ///
-    /// Protocol v1 binds one runtime identity to at most one
+    /// Protocol v2 binds one runtime identity to at most one
     /// [`RuntimeClientHost`] for that identity's lifetime, so cloning a
     /// runtime never yields a second bindable identity and dropping the
     /// bound host never makes it bindable again. Reconnect replaces the
@@ -248,7 +248,7 @@ pub(crate) struct ClientState {
     /// The Runtime Client projection: snapshot read model, cursor,
     /// bounded replay, subscribers.
     projection: RuntimeClientProjection,
-    /// The at-most-one active attachment of Protocol v1.
+    /// The at-most-one active attachment of Protocol v2.
     attachment: Option<AttachmentState>,
     /// The next attachment identity sequence.
     next_attachment_seq: u64,
@@ -420,7 +420,7 @@ impl ClientInner {
     /// Admits one attachment: the internal primitive behind the
     /// `initialize` protocol method.
     ///
-    /// Protocol v1 allows at most one active attachment; a second
+    /// Protocol v2 allows at most one active attachment; a second
     /// simultaneous attach fails deterministically and never evicts the
     /// first. The returned snapshot and cursor are linearized with the
     /// admission under the one projection synchronization boundary.
@@ -438,9 +438,9 @@ impl ClientInner {
     ) -> Result<(super::attachment::RuntimeAttachment, RuntimeClientResult), RuntimeClientError>
     {
         self.ensure_session_runtime_live()?;
-        if protocol_version != RUNTIME_CLIENT_PROTOCOL_VERSION_V1 {
+        if protocol_version != RUNTIME_CLIENT_PROTOCOL_VERSION {
             return Err(RuntimeClientError::UnsupportedProtocolVersion {
-                supported: RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+                supported: RUNTIME_CLIENT_PROTOCOL_VERSION,
                 requested: protocol_version,
             });
         }
@@ -2441,7 +2441,7 @@ mod tests {
         let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
         let (first, initialized) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("first attach");
         let RuntimeClientResult::Initialized {
             attachment_id,
@@ -2456,7 +2456,7 @@ mod tests {
 
         let second = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1);
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION);
         assert!(matches!(
             second,
             Err(RuntimeClientError::AttachmentInUse {
@@ -2481,7 +2481,7 @@ mod tests {
         assert!(matches!(
             bad,
             Err(RuntimeClientError::UnsupportedProtocolVersion {
-                supported: 1,
+                supported: 2,
                 requested: 9,
             })
         ));
@@ -2491,7 +2491,7 @@ mod tests {
         first.detach();
         let (second_attachment, initialized) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach after detach");
         let RuntimeClientResult::Initialized {
             attachment_id: second_id,
@@ -2514,12 +2514,12 @@ mod tests {
         let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
         let (attachment, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         drop(attachment);
         let (second, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach after drop");
         assert!(
             second
@@ -2537,7 +2537,7 @@ mod tests {
         let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
         let (attachment, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         attachment.detach();
         let response = attachment.handle_request(RuntimeClientRequest::SnapshotGet {
@@ -2560,7 +2560,7 @@ mod tests {
             host_fixture(vec![one_turn_stop()], ToolRegistry::new(), composer()).await;
         let (attachment, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let subscription = attachment
             .subscribe_events(RuntimeClientCursor::new(0))
@@ -2703,7 +2703,7 @@ mod tests {
         .await;
         let (attachment, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let subscription = attachment
             .subscribe_events(RuntimeClientCursor::new(0))
@@ -2905,7 +2905,7 @@ mod tests {
         .await;
         let (attachment, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let subscription = attachment
             .subscribe_events(RuntimeClientCursor::new(0))
@@ -2999,7 +2999,7 @@ mod tests {
         .await;
         let (attachment, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let subscription = attachment
             .subscribe_events(RuntimeClientCursor::new(0))
@@ -3088,7 +3088,7 @@ mod tests {
         let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
         let (attachment, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let response = attachment.handle_request(RuntimeClientRequest::CancelCurrentAttempt {
             id: crate::runtime_client::RequestId::new(1),
@@ -3120,7 +3120,7 @@ mod tests {
         .await;
         let (attachment, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         attachment.handle_request(RuntimeClientRequest::SubmitInbound {
             id: crate::runtime_client::RequestId::new(1),
@@ -3143,7 +3143,7 @@ mod tests {
         // A reattached client sees the attempt still running.
         let (second, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("reattach");
         let (snapshot, cursor) = fixture.host.snapshot().expect("snapshot");
         assert!(
@@ -3253,7 +3253,7 @@ mod tests {
 
         let (attachment, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let (before, _) = fixture.host.snapshot().expect("snapshot");
         assert_eq!(before.background.len(), 1);
@@ -3320,7 +3320,7 @@ mod tests {
             host_fixture(vec![one_turn_stop()], ToolRegistry::new(), composer()).await;
         let (attachment, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let subscription = attachment
             .subscribe_events(RuntimeClientCursor::new(0))
@@ -3433,7 +3433,7 @@ mod tests {
         .await;
         let (attachment, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let subscription = attachment
             .subscribe_events(RuntimeClientCursor::new(0))
@@ -3647,7 +3647,7 @@ mod tests {
         // An attached client watching the event stream from the baseline
         // cut, exactly as an incremental consumer would.
         let (attachment, _) = host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         // Fold everything the composition produced, so the queue holds the
         // reload's observations and nothing else.
@@ -4005,7 +4005,7 @@ mod tests {
         let endpoint = fixture.host.endpoint();
         let response = endpoint.handle_request(RuntimeClientRequest::Initialize {
             id: crate::runtime_client::RequestId::new(1),
-            protocol_version: crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+            protocol_version: crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
         });
         assert!(response.error.is_none());
 
@@ -4024,7 +4024,7 @@ mod tests {
         let reconnected = fixture.host.endpoint();
         let response = reconnected.handle_request(RuntimeClientRequest::Initialize {
             id: crate::runtime_client::RequestId::new(1),
-            protocol_version: crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+            protocol_version: crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
         });
         assert!(
             matches!(
@@ -4207,7 +4207,7 @@ mod tests {
         let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
         let (attachment, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let (_, cursor) = fixture.host.snapshot().expect("snapshot");
         let subscription = attachment
@@ -4290,7 +4290,7 @@ mod tests {
         let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
         let (attachment, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let (initial, cursor) = fixture.host.snapshot().expect("snapshot");
         assert!(
@@ -4407,7 +4407,7 @@ mod tests {
         admission_gate.release();
         let (attachment, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let subscription = attachment
             .subscribe_events(cursor)
@@ -4504,7 +4504,7 @@ mod tests {
         assert!(after_cursor > cursor, "the transition advanced the cursor");
         let (attachment, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let subscription = attachment
             .subscribe_events(cursor)
@@ -4544,7 +4544,7 @@ mod tests {
             host_fixture(vec![one_turn_stop()], ToolRegistry::new(), composer()).await;
         let (attachment, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let subscription = attachment
             .subscribe_events(RuntimeClientCursor::new(0))
@@ -4563,7 +4563,7 @@ mod tests {
         attachment.detach();
         let (second, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("reattach");
         let second_subscription = second
             .subscribe_events(RuntimeClientCursor::new(0))
@@ -4628,7 +4628,7 @@ mod tests {
 
         let (attachment, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
         assert!(matches!(
@@ -4713,7 +4713,7 @@ mod tests {
         // Run one attempt to completion.
         let (attachment, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let subscription = attachment
             .subscribe_events(RuntimeClientCursor::new(0))
@@ -4762,7 +4762,7 @@ mod tests {
             host_fixture(vec![one_turn_stop()], ToolRegistry::new(), composer).await;
         let (attachment, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let subscription = attachment
             .subscribe_events(RuntimeClientCursor::new(0))
@@ -4832,7 +4832,7 @@ mod tests {
         let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
         let (attachment, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
 
         let response = attachment
@@ -4879,7 +4879,7 @@ mod tests {
         .await;
         let (attachment, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let subscription = attachment
             .subscribe_events(RuntimeClientCursor::new(0))
@@ -4966,7 +4966,7 @@ mod tests {
         attachment.detach();
         let (reattached, initialized) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach after shutdown still works");
         let RuntimeClientResult::Initialized { snapshot, .. } = initialized else {
             panic!("fresh initialize returns a snapshot");
@@ -5023,7 +5023,7 @@ mod tests {
         admission_gate.arm();
         let (attachment, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let subscription = attachment
             .subscribe_events(RuntimeClientCursor::new(0))
@@ -5111,7 +5111,7 @@ mod tests {
         .await;
         let (attachment, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
 
         // Run the first attempt; its settlement handoff parks at the gate
@@ -5249,7 +5249,7 @@ mod tests {
             host_fixture(vec![script, one_turn_stop()], tools, composer()).await;
         let (attachment, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let subscription = attachment
             .subscribe_events(RuntimeClientCursor::new(0))
@@ -5344,7 +5344,7 @@ mod tests {
         .await;
         let (attachment_a, _) = fixture_a
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let subscription_a = attachment_a
             .subscribe_events(RuntimeClientCursor::new(0))
@@ -5400,7 +5400,7 @@ mod tests {
         .await;
         let (attachment_b, _) = fixture_b
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let subscription_b = attachment_b
             .subscribe_events(RuntimeClientCursor::new(0))
@@ -5479,7 +5479,7 @@ mod tests {
         .await;
         let (attachment, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let subscription = attachment
             .subscribe_events(RuntimeClientCursor::new(0))
@@ -5893,7 +5893,7 @@ mod tests {
     fn initialize_endpoint(endpoint: &RuntimeClientEndpoint) {
         let response = endpoint.handle_request(RuntimeClientRequest::Initialize {
             id: crate::runtime_client::RequestId::new(1),
-            protocol_version: crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+            protocol_version: crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
         });
         assert!(response.error.is_none(), "initialize failed: {response:?}");
     }
@@ -6369,7 +6369,7 @@ mod tests {
         assert!(fixture.runtime.is_activated());
 
         let (attachment, _) = host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let (_, cursor) = host.snapshot().expect("snapshot");
         let subscription = attachment.subscribe_events(cursor).expect("subscribe");
@@ -6503,7 +6503,7 @@ mod tests {
         fixture.runtime.activate();
 
         let (first, _) = host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let (_, cursor) = host.snapshot().expect("snapshot");
         let subscription = first.subscribe_events(cursor).expect("subscribe");
@@ -6531,7 +6531,7 @@ mod tests {
         // semantic owners, and the projection observed the settlement it
         // was detached for.
         let (second, _) = host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("reattach");
         let (snapshot, cursor) = host.snapshot().expect("snapshot");
         assert!(
@@ -6664,7 +6664,7 @@ mod tests {
         // A subscription from the bootstrap cursor observes nothing at all
         // until a real post-activation transition happens.
         let (attachment, _) = host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let subscription = attachment
             .subscribe_events(RuntimeClientCursor::new(0))
@@ -7592,7 +7592,7 @@ mod tests {
 
         // The first cursor belongs to a real post-activation transition.
         let (attachment, _) = host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let subscription = attachment
             .subscribe_events(RuntimeClientCursor::new(0))
@@ -7696,7 +7696,7 @@ mod tests {
             "the rejected update left the model unchanged"
         );
         let (attachment, _) = host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let subscription = attachment
             .subscribe_events(RuntimeClientCursor::new(0))
@@ -7761,7 +7761,7 @@ mod tests {
             "the refused shutdown never marked the runtime shutting down"
         );
         let (attachment, _) = host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let subscription = attachment
             .subscribe_events(RuntimeClientCursor::new(0))
@@ -7813,7 +7813,7 @@ mod tests {
         fixture.runtime.activate();
 
         let (attachment, _) = host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let subscription = attachment
             .subscribe_events(RuntimeClientCursor::new(0))

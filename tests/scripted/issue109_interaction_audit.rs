@@ -39,7 +39,10 @@ use rustx::context::{
 use rustx::conversation::ConversationState;
 use rustx::durable::{ConversationStore, SqliteConversationStore};
 use rustx::events::interaction::{
-    InteractionSettlement, InteractionSubject, interaction_arguments_digest,
+    CustomAnswer, InteractionSettlement, InteractionSubject, OptionSpecification,
+    QuestionSpecification, QuestionnaireAnswer, QuestionnaireAnswerEntry, QuestionnaireResponse,
+    QuestionnaireSpecification, QuestionnaireSubmission, SingleOptionAnswer,
+    interaction_arguments_digest,
 };
 use rustx::events::types::{RuntimeEvent, RuntimeEventEnvelope};
 use rustx::message::content::TextBlock;
@@ -50,7 +53,7 @@ use rustx::runtime::identity::{
 };
 use rustx::runtime::types::{CancellationReason, ConversationLifecycle};
 use rustx::runtime::{
-    ApprovalDecision, InteractionOutcome, InteractionRequest, InteractionResponse, QuestionAnswer,
+    ApprovalDecision, InteractionOutcome, InteractionRequest, InteractionResponse,
 };
 use rustx::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
 use rustx::tools::types::{
@@ -60,7 +63,7 @@ use rustx::tools::types::{
 use tokio::sync::watch;
 
 use crate::runtime::interaction::{
-    InteractionCoordinator, InteractionError, InteractionObserver, QuestionFacts,
+    InteractionCoordinator, InteractionError, InteractionObserver, QuestionnaireFacts,
 };
 use crate::scripted_suites::common;
 use crate::scripted_suites::support;
@@ -609,7 +612,7 @@ async fn approved_settlement_commits_before_tool_execution_started() {
     );
     assert!(matches!(
         run.observer.settled().as_slice(),
-        [(_, InteractionOutcome::Answered { .. })]
+        [(_, InteractionOutcome::Responded { .. })]
     ));
 }
 
@@ -834,13 +837,29 @@ async fn interaction_audit_survives_client_detach_and_reattach() {
         let cancellation = cancellation.execution_cancellation();
         tokio::spawn(async move {
             coordinator
-                .request_question(
+                .request_questionnaire(
                     AttemptId::new("attempt-detach"),
-                    QuestionFacts {
+                    QuestionnaireFacts {
                         turn: 1,
-                        prompt: "Which target?".to_owned(),
-                        choices: Some(vec!["staging".to_owned(), "production".to_owned()]),
-                        allow_free_text: false,
+                        questionnaire: QuestionnaireSpecification {
+                            questions: vec![QuestionSpecification {
+                                question: "Which target?".to_owned(),
+                                header: "Target".to_owned(),
+                                options: vec![
+                                    OptionSpecification {
+                                        label: "staging".to_owned(),
+                                        description: "A safe test environment.".to_owned(),
+                                        preview: None,
+                                    },
+                                    OptionSpecification {
+                                        label: "production".to_owned(),
+                                        description: "The live environment.".to_owned(),
+                                        preview: None,
+                                    },
+                                ],
+                                multi_select: false,
+                            }],
+                        },
                     },
                     cancellation,
                 )
@@ -868,20 +887,30 @@ async fn interaction_audit_survives_client_detach_and_reattach() {
     coordinator
         .respond(
             &interaction_id,
-            InteractionResponse::Question {
-                answer: QuestionAnswer::Choice {
-                    value: "staging".to_owned(),
-                },
+            InteractionResponse::Questionnaire {
+                response: QuestionnaireResponse::Submitted(QuestionnaireSubmission {
+                    answers: vec![QuestionnaireAnswerEntry {
+                        question_index: 0,
+                        answer: QuestionnaireAnswer::SingleOption(SingleOptionAnswer {
+                            label: "staging".to_owned(),
+                        }),
+                    }],
+                }),
             },
         )
         .expect("the reattached client answers the live interaction");
     assert_eq!(
         waiter.await.expect("question waiter"),
-        InteractionOutcome::Answered {
-            response: InteractionResponse::Question {
-                answer: QuestionAnswer::Choice {
-                    value: "staging".to_owned(),
-                },
+        InteractionOutcome::Responded {
+            response: InteractionResponse::Questionnaire {
+                response: QuestionnaireResponse::Submitted(QuestionnaireSubmission {
+                    answers: vec![QuestionnaireAnswerEntry {
+                        question_index: 0,
+                        answer: QuestionnaireAnswer::SingleOption(SingleOptionAnswer {
+                            label: "staging".to_owned(),
+                        }),
+                    }],
+                }),
             },
         }
     );
@@ -891,24 +920,32 @@ async fn interaction_audit_survives_client_detach_and_reattach() {
         facts.as_slice(),
         [
             RuntimeEvent::InteractionRequested {
-                subject: InteractionSubject::Question { prompt, .. },
+                subject: InteractionSubject::Questionnaire { questionnaire },
                 ..
             },
             RuntimeEvent::InteractionSettled {
-                settlement: InteractionSettlement::Answered {
-                    answer: QuestionAnswer::Choice { value }
-                },
+                settlement: InteractionSettlement::QuestionnaireSubmitted { submission },
                 ..
             }
-        ] if prompt == "Which target?" && value == "staging"
+        ] if questionnaire.questions[0].question == "Which target?"
+            && matches!(
+                &submission.answers[0].answer,
+                QuestionnaireAnswer::SingleOption(SingleOptionAnswer { label })
+                    if label == "staging"
+            )
     ));
     assert_eq!(
         coordinator.respond(
             &interaction_id,
-            InteractionResponse::Question {
-                answer: QuestionAnswer::FreeText {
-                    value: "late".to_owned(),
-                },
+            InteractionResponse::Questionnaire {
+                response: QuestionnaireResponse::Submitted(QuestionnaireSubmission {
+                    answers: vec![QuestionnaireAnswerEntry {
+                        question_index: 0,
+                        answer: QuestionnaireAnswer::Custom(CustomAnswer {
+                            answer: "late".to_owned(),
+                        }),
+                    }],
+                }),
             },
         ),
         Err(InteractionError::NotPending {

@@ -16,7 +16,7 @@ use rustx::local_runtime::composition::{
 };
 use rustx::model::ModelProtocol;
 use rustx::model::catalog::MapCredentialEnvironment;
-use rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1;
+use rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION;
 use rustx::runtime_client::types::{RequestId, RuntimeClientRequest, RuntimeClientResult};
 
 /// A catalog whose credential comes from the environment, exercising the
@@ -122,7 +122,7 @@ async fn composition_owns_one_conversation_domain() {
     // composed tool catalog. An uncommitted candidate would leave it empty.
     let (_attachment, result) = runtime
         .host()
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     let RuntimeClientResult::Initialized { snapshot, .. } = result else {
         panic!("initialize returns the snapshot");
@@ -334,7 +334,7 @@ async fn the_endpoint_speaks_for_the_one_composed_host() {
     let endpoint = runtime.endpoint();
     let response = endpoint.handle_request(RuntimeClientRequest::Initialize {
         id: RequestId::new(1),
-        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
     });
     let Some(RuntimeClientResult::Initialized {
         conversation_id,
@@ -352,7 +352,7 @@ async fn the_endpoint_speaks_for_the_one_composed_host() {
     let second = runtime.endpoint();
     let response = second.handle_request(RuntimeClientRequest::Initialize {
         id: RequestId::new(1),
-        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
     });
     assert!(
         matches!(

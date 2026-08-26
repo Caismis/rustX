@@ -59,10 +59,10 @@ export function workingStatus(state: PresentationState): string | undefined {
     (interaction) => interaction.attempt_id === attempt.attemptId,
   );
   if (waiting.length > 0) {
-    const questions = waiting.filter((interaction) => interaction.kind.type === "question");
+    const questions = waiting.filter((interaction) => interaction.kind.type === "questionnaire");
     const approvals = waiting.length - questions.length;
     if (questions.length > 0 && approvals === 0) {
-      return questions.length === 1 ? "Waiting for an answer…" : `Waiting for ${questions.length} answers…`;
+      return questions.length === 1 ? "Waiting for questionnaire…" : `Waiting for ${questions.length} questionnaires…`;
     }
     if (questions.length > 0) {
       return `Waiting for ${waiting.length} human responses…`;

@@ -2657,7 +2657,7 @@ mod mcp_race_tests {
                 artifacts: runtime_bundle.artifacts(),
                 tool_output: runtime_bundle.tool_output(),
                 environment: runtime_bundle.environment(),
-                question_requester: None,
+                questionnaire_requester: None,
             },
         )
         .await;

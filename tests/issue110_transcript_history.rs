@@ -19,7 +19,11 @@ use rustx::durable::{
     CompactionCommitInput, ConversationStore, ConversationStoreError, InboundDraft,
     SqliteConversationStore, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT, TranscriptCursor, TranscriptItem,
 };
-use rustx::events::interaction::{InteractionSettlement, InteractionSubject};
+use rustx::events::interaction::{
+    InteractionSettlement, InteractionSubject, OptionSpecification, QuestionSpecification,
+    QuestionnaireAnswer, QuestionnaireAnswerEntry, QuestionnaireResponse,
+    QuestionnaireSpecification, QuestionnaireSubmission, SingleOptionAnswer,
+};
 use rustx::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use rustx::local_runtime::composition::{
     HeadlessConversationRuntime, LocalConversationRuntime, LocalRuntimeDependencies,
@@ -44,8 +48,8 @@ use rustx::runtime::identity::{
     PublicationStreamId, RequestId, ToolCallId, ToolId, TurnId,
 };
 use rustx::runtime::types::{TokenMeasurement, TokenMeasurementSource};
-use rustx::runtime::{InteractionResponse, QuestionAnswer, RuntimeResourceRevision};
-use rustx::runtime_client::{RUNTIME_CLIENT_PROTOCOL_VERSION_V1, RuntimeClientResult};
+use rustx::runtime::{InteractionResponse, RuntimeResourceRevision};
+use rustx::runtime_client::{RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientResult};
 use rustx::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus, ToolResultContent};
 
 const CONVERSATION: &str = "conv-fnd05";
@@ -332,10 +336,26 @@ fn requested_interaction(interaction_id: &InteractionId) -> RuntimeEventEnvelope
         "interaction",
         RuntimeEvent::InteractionRequested {
             interaction_id: interaction_id.clone(),
-            subject: InteractionSubject::Question {
-                prompt: "Which environment?".to_owned(),
-                choices: Some(vec!["staging".to_owned(), "production".to_owned()]),
-                allow_free_text: false,
+            subject: InteractionSubject::Questionnaire {
+                questionnaire: QuestionnaireSpecification {
+                    questions: vec![QuestionSpecification {
+                        question: "Which environment?".to_owned(),
+                        header: "Environment".to_owned(),
+                        options: vec![
+                            OptionSpecification {
+                                label: "staging".to_owned(),
+                                description: "A safe test environment.".to_owned(),
+                                preview: None,
+                            },
+                            OptionSpecification {
+                                label: "production".to_owned(),
+                                description: "The live environment.".to_owned(),
+                                preview: None,
+                            },
+                        ],
+                        multi_select: false,
+                    }],
+                },
             },
         },
     )
@@ -347,9 +367,14 @@ fn settled_interaction(interaction_id: &InteractionId) -> RuntimeEventEnvelope {
         "interaction",
         RuntimeEvent::InteractionSettled {
             interaction_id: interaction_id.clone(),
-            settlement: InteractionSettlement::Answered {
-                answer: QuestionAnswer::Choice {
-                    value: "staging".to_owned(),
+            settlement: InteractionSettlement::QuestionnaireSubmitted {
+                submission: QuestionnaireSubmission {
+                    answers: vec![QuestionnaireAnswerEntry {
+                        question_index: 0,
+                        answer: QuestionnaireAnswer::SingleOption(SingleOptionAnswer {
+                            label: "staging".to_owned(),
+                        }),
+                    }],
                 },
             },
         },
@@ -592,13 +617,13 @@ async fn requirement_05_detach_and_reattach_reads_the_same_durable_transcript() 
 
     let (first, first_result) = runtime
         .host()
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("first attach");
     let first_snapshot = initialized_snapshot(first_result);
     runtime.host().detach(first.attachment_id());
     let (_second, second_result) = runtime
         .host()
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("reattach");
     let second_snapshot = initialized_snapshot(second_result);
     assert_eq!(first_snapshot.transcript, second_snapshot.transcript);
@@ -643,7 +668,7 @@ async fn requirement_06_headless_history_is_available_to_a_later_client() {
         .expect("interactive reopen");
     let (_, result) = interactive
         .host()
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("later attach");
     assert_eq!(
         client_page_message_ids(&initialized_snapshot(result).transcript),
@@ -857,7 +882,7 @@ async fn requirement_11_interaction_audits_page_without_recovering_a_waiter() {
         .expect("cold reopen");
     let (attachment, result) = runtime
         .host()
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach after audit recovery");
     let snapshot = initialized_snapshot(result);
     assert!(snapshot.pending_interactions.is_empty());
@@ -877,10 +902,15 @@ async fn requirement_11_interaction_audits_page_without_recovering_a_waiter() {
     assert!(matches!(
         runtime.host().respond_interaction(
             &interaction_id,
-            InteractionResponse::Question {
-                answer: QuestionAnswer::Choice {
-                    value: "staging".to_owned(),
-                },
+            InteractionResponse::Questionnaire {
+                response: QuestionnaireResponse::Submitted(QuestionnaireSubmission {
+                    answers: vec![QuestionnaireAnswerEntry {
+                        question_index: 0,
+                        answer: QuestionnaireAnswer::SingleOption(SingleOptionAnswer {
+                            label: "staging".to_owned(),
+                        }),
+                    }],
+                }),
             },
         ),
         Err(rustx::runtime_client::RuntimeClientError::InteractionNotPending { .. })
@@ -1012,7 +1042,7 @@ async fn requirement_12_transcript_paging_preserves_runtime_client_cursor_invari
         .expect("interactive composition");
     let (attachment, _result) = runtime
         .host()
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     let live_before = runtime.host().snapshot().expect("snapshot").1;
     let newest_page = runtime

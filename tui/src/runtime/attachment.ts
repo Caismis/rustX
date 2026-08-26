@@ -2,7 +2,7 @@
  * The client-facing attachment lifecycle.
  *
  * ```text
- * spawn -> initialize(v1) -> authoritative snapshot + cursor
+ * spawn -> initialize(v2) -> authoritative snapshot + cursor
  *       -> install presentation projection
  *       -> subscribe_events(after cursor)
  *       -> interactive
@@ -41,7 +41,7 @@ import {
 } from "../presentation/projection.ts";
 import type { PresentationState } from "../presentation/state.ts";
 import {
-  RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+  RUNTIME_CLIENT_PROTOCOL_VERSION,
   type ApprovalMode,
   type AgentId,
   type CapabilityView,
@@ -159,7 +159,7 @@ export class RuntimeClientAttachment {
   async attach(): Promise<AttachmentIdentity> {
     const result = await this.#connection.request({
       method: "initialize",
-      protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+      protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
     });
     if (result.type !== "initialized") {
       throw new Error(`initialize returned ${result.type}`);

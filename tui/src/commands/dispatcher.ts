@@ -28,7 +28,6 @@ import {
   capabilitySummary,
   describeConfiguredReasoning,
   describeReasoning,
-  focusedInteraction,
   inactiveToolsByOrigin,
   originLabel,
   outcomeLabel,
@@ -45,7 +44,6 @@ import type {
   CatalogModelView,
   InteractionId,
   InteractionResponse,
-  QuestionAnswer,
   SessionNodeView,
   SessionSummaryView,
   SessionUserMessageBoundaryView,
@@ -164,11 +162,9 @@ export class CommandDispatcher {
   /**
    * Handles one editor submission.
    *
-   * Plain text becomes one `submit_inbound` when no interaction is pending.
-   * While an interaction is pending, the same editor submission becomes a
-   * typed response to the deterministic focused interaction. The runtime
-   * owns message ids, inbound sequences, timestamps, response validation, and
-   * settlement; this client never fabricates any of them.
+   * Plain text is always an ordinary inbound message. Questionnaire answers
+   * are sent only by the focused questionnaire surface, which constructs the
+   * typed whole-questionnaire response.
    */
   async submit(line: string): Promise<CommandOutcome> {
     const session = this.#context.session;
@@ -178,10 +174,6 @@ export class CommandDispatcher {
       if (text.length === 0) {
         return { kind: "none" };
       }
-      const focused = focusedInteraction(session.state);
-      if (focused !== undefined) {
-        return await this.#respondFocusedInteraction(session, focused, text);
-      }
       try {
         await session.submitInbound([{ type: "text", text }]);
         return { kind: "none" };
@@ -190,33 +182,6 @@ export class CommandDispatcher {
       }
     }
     return this.#dispatch(session, command.name, command.argument);
-  }
-
-  /**
-   * Routes ordinary editor text to the deterministic focused interaction.
-   *
-   * The response is still sent through Runtime Client; this method only maps
-   * presentation input to the typed protocol response. The runtime remains
-   * the authority for validation, races, and settlement.
-   */
-  async #respondFocusedInteraction(
-    session: RuntimeClientAttachment,
-    interaction: NonNullable<ReturnType<typeof focusedInteraction>>,
-    text: string,
-  ): Promise<CommandOutcome> {
-    const mapped = implicitInteractionResponse(interaction, text);
-    if ("error" in mapped) {
-      return transient("error", mapped.error);
-    }
-    try {
-      await session.respondInteraction(interaction.id, mapped.response);
-      return transient(
-        "info",
-        `focused ${interaction.kind.type} response accepted for interaction ${interaction.id}`,
-      );
-    } catch (error) {
-      return failure(error);
-    }
   }
 
   async #dispatch(
@@ -269,8 +234,6 @@ export class CommandDispatcher {
           return await this.#cancel(session, argument);
         case "/approve":
           return await this.#approve(session, argument);
-        case "/answer":
-          return await this.#answer(session, argument);
         case "/approval":
           return await this.#approvalMode(session, argument);
         case "/quit":
@@ -622,30 +585,6 @@ export class CommandDispatcher {
     return transient("info", `response accepted for interaction ${interactionId}`);
   }
 
-  async #answer(
-    session: RuntimeClientAttachment,
-    argument: string,
-  ): Promise<CommandOutcome> {
-    const parts = argument.split(/\s+/).filter((part) => part.length > 0);
-    if (parts.length < 3) {
-      return transient("error", "usage: /answer <interaction-id> <choice|text> <value>");
-    }
-    const interactionId = parts[0]!;
-    const answerKind = parts[1]!;
-    const value = parts.slice(2).join(" ");
-    let answer: QuestionAnswer;
-    if (answerKind === "choice") {
-      answer = { type: "choice", value };
-    } else if (answerKind === "text") {
-      answer = { type: "free_text", value };
-    } else {
-      return transient("error", "usage: /answer <interaction-id> <choice|text> <value>");
-    }
-    const response: InteractionResponse = { type: "question", answer };
-    await session.respondInteraction(interactionId, response);
-    return transient("info", `response accepted for interaction ${interactionId}`);
-  }
-
   async #approvalMode(
     session: RuntimeClientAttachment,
     argument: string,
@@ -752,59 +691,6 @@ function expandPreference(argument: string): CommandOutcome {
 
 function usage(spelling: string): CommandOutcome {
   return transient("error", `usage: ${spelling}`);
-}
-
-type ImplicitInteractionResponse =
-  | { response: InteractionResponse }
-  | { error: string };
-
-/** Maps one ordinary editor submission to the focused typed interaction. */
-function implicitInteractionResponse(
-  interaction: NonNullable<ReturnType<typeof focusedInteraction>>,
-  text: string,
-): ImplicitInteractionResponse {
-  if (interaction.kind.type === "question") {
-    const choice = interaction.kind.choices?.find((value) => value === text);
-    if (choice !== undefined) {
-      return {
-        response: {
-          type: "question",
-          answer: { type: "choice", value: choice },
-        },
-      };
-    }
-    if (interaction.kind.allow_free_text) {
-      return {
-        response: {
-          type: "question",
-          answer: { type: "free_text", value: text },
-        },
-      };
-    }
-    return {
-      error: `focused question requires one of: ${(interaction.kind.choices ?? []).join(", ")}`,
-    };
-  }
-
-  const parts = text.split(/\s+/).filter((part) => part.length > 0);
-  const decision = parts[0]?.toLowerCase();
-  if (decision === "allow" && parts.length === 1) {
-    return { response: { type: "approval", decision: { type: "allow" } } };
-  }
-  if (decision === "deny") {
-    return {
-      response: {
-        type: "approval",
-        decision: {
-          type: "deny",
-          reason: parts.slice(1).join(" ") || "denied by Runtime Client",
-        },
-      },
-    };
-  }
-  return {
-    error: "focused approval requires `allow` or `deny [reason]`; use /approve for an explicit interaction id",
-  };
 }
 
 function inspect(title: string, body: string): CommandOutcome {

@@ -31,7 +31,7 @@ use rustx::message::content::TextBlock;
 use rustx::message::types::UserContentBlock;
 use rustx::model::catalog::MapCredentialEnvironment;
 use rustx::model::session::SessionModelView;
-use rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1;
+use rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION;
 
 const CREDENTIAL_VARIABLE: &str = "RUSTX_CONFORMANCE_KEY";
 const CREDENTIAL_VALUE: &str = "conformance-secret";
@@ -248,7 +248,7 @@ async fn interactive_and_headless_share_one_semantic_composition() {
     // conversation.
     let (_attachment, result) = interactive
         .host()
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     assert!(matches!(
         result,
@@ -373,7 +373,7 @@ async fn interactive_production_turn_still_builds_over_the_same_composition() {
         .expect("inbound accepted");
     let (attachment, _) = runtime
         .host()
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     let (_, cursor) = runtime.host().snapshot().expect("snapshot");
     let subscription = attachment.subscribe_events(cursor).expect("subscribe");

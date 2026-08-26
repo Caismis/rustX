@@ -30,11 +30,14 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 9. An incompatible database
+The SQLite schema is development schema version 10. An incompatible database
 fails explicitly; there is no migration chain, legacy reader, compatibility
-fallback, dual write, or old storage mode. File-backed stores use WAL,
-`synchronous=FULL`, foreign-key enforcement, and a busy timeout. A successful
-SQLite commit is the local durability linearization point documented here.
+fallback, dual write, or old storage mode. Version 10 freezes the structured
+Questionnaire interaction audit vocabulary introduced by Issue #126. Version
+9 and every older development schema are rejected at open. File-backed stores
+use WAL, `synchronous=FULL`, foreign-key enforcement, and a busy timeout. A
+successful SQLite commit is the local durability linearization point
+documented here.
 
 Version 9 froze the durable **answer obligation** (Issue #111): adoption
 commits an `InboundTurnAdopted` fact naming the exact adopted batch, and
@@ -43,7 +46,14 @@ which is exactly why the version gate matters. A v8 journal predates the
 vocabulary, so a current reader would read its silence as "no answer is owed"
 and strand precisely the crash states the obligation rescues.
 
-The version-9 physical tables are deliberately semantic rather than generic:
+Version 10 freezes the structured Questionnaire interaction audit vocabulary
+(Issue #126): one requested fact stores the complete bounded questionnaire by
+value, and one terminal settlement stores either the canonical submitted
+answers, an explicit decline, or owning-attempt cancellation. A v9 journal may
+contain the obsolete Question/Answered payloads and is rejected rather than
+decoded or migrated.
+
+The version-10 physical tables are deliberately semantic rather than generic:
 
 | Table | Purpose and constraints |
 | --- | --- |
@@ -351,7 +361,7 @@ The ownership table is:
 | Rendering and input | TUI projection |
 | Attempt cancellation | `AgentCancellation` |
 | Tool cancellation observation | owner-observing `ExecutionCancellation` with one-way child derivation |
-| Native Question capability | crate-private `QuestionRequester` bound by the Agent Loop attempt |
+| Native Questionnaire capability | crate-private `QuestionnaireRequester` bound by the Agent Loop attempt |
 | Runtime drain and quiescence | `ConversationRuntime` / `ConversationLifecycle` |
 | Crash recovery | existing M9 recovery owner |
 
@@ -360,7 +370,7 @@ The pre-tool seam is total and typed: every `AttemptLifecycle` carries one
 binding to its owning `InteractionCoordinator`. The binding is not a
 replaceable production rendezvous strategy, and no public generic interaction
 trait exists. The only Tool Plane consumer is native `ask_user`, which gets a
-crate-private `QuestionRequester` containing the attempt identity, the
+crate-private `QuestionnaireRequester` containing the attempt identity, the
 owner-observing `ExecutionCancellation` capability, and that coordinator. A standalone
 inert execution has no interaction provider and therefore fails an `Ask`
 closed. The configured
@@ -373,31 +383,70 @@ form framework.
 `PreToolPolicy` runs only after registry identity resolution, reserved metadata
 stripping, tool-owned semantic normalization, and business-argument
 validation, and after the Assistant `ToolCall` is canonical. For `ask_user`,
-preflight turns a bare prompt into canonical `allow_free_text: true`, derives
-choice-only mode as `false`, and rejects empty/duplicate/oversized choices
-before a `PreparedInvocation` can be returned. The executor consumes that
-canonical invocation; it cannot rediscover model-argument validity. The
-policy cannot resolve a tool, dispatch it, or alter the prepared invocation.
+preflight validates one ordinary typed questionnaire object and rejects
+malformed, unknown, duplicate, reserved, or out-of-bounds values before a
+`PreparedInvocation` can be returned. It never parses JSON stored in strings or
+coerces string booleans. The executor consumes that canonical invocation; it
+cannot rediscover model-argument validity. The policy cannot resolve a tool,
+dispatch it, or alter the prepared invocation.
 
-Question is a separate bounded interaction kind, not an approval variant. The
-native `ask_user` Tool uses the ordinary Tool Plane path and fixed
-foreground/sequential/approval-never policy:
+Questionnaire is a separate bounded interaction kind, not an approval
+variant. The native `ask_user` Tool uses the ordinary Tool Plane path and
+fixed foreground/sequential/approval-never policy. One invocation is one
+coordinator interaction, even when it contains several related questions:
 
 ```text
 Assistant ToolCall(ask_user)
-  -> ToolRegistry preflight
+  -> registry preflight and one immutable QuestionnaireSpecification
   -> ordinary executor
-  -> InteractionCoordinator Question(prompt, finite choices, free-text flag)
-  -> Runtime Client / TUI typed QuestionAnswer
+  -> one InteractionCoordinator Questionnaire publication
+  -> one pending Runtime Client questionnaire
+  -> one submitted or declined response
+  -> one durable settlement
   -> ordinary ToolResult
   -> model continuation
 ```
 
-It has no filesystem, network, process, or authorization authority and never
-creates a recursive approval request. With no interaction-capable client it
-returns an explicit failed ToolResult. Approval responses contain only
-`Allow`/`Deny`; Question answers contain only a validated choice or bounded
-free text. Neither response can replace the original Tool arguments.
+The model-facing contract is one ordinary root object with only the required
+`questions` array. It accepts 1–4 questions, each with a required non-empty
+`question` (at most 4096 Unicode scalar values), short `header` (at most 16),
+2–4 authored `{label, description, preview?}` options, and an optional
+`multi_select` boolean defaulting to false. Labels are bounded to 60 scalar
+values, descriptions to 1024, previews to 8192, and custom answers to 4096:
+
+```json
+{
+  "questions": [
+    {
+      "question": "Which visual direction should I use?",
+      "header": "Visual style",
+      "options": [
+        {
+          "label": "Swiss / Klein blue (Recommended)",
+          "description": "Information-first typography with strong hierarchy and blue highlights.",
+          "preview": "Optional Markdown preview"
+        },
+        {
+          "label": "Electronic magazine",
+          "description": "Serif typography, warmer colors, and a more editorial composition."
+        }
+      ],
+      "multi_select": false
+    }
+  ]
+}
+```
+
+Custom text is always available as a client-owned row; the model never sends
+`allow_free_text` and never authors an `Other` sentinel. Related blocking
+questions belong in one call. A client response carries only question indices
+and typed option/custom decisions. Submitted answers may be partial; accepted
+answers are normalized into question order and authored option order. Previews
+are rendered for single-select questions. With no interaction-capable client,
+`ask_user` returns an explicit failed ToolResult. A user decline is a successful
+result `{ "cancelled": true, "answers": [] }`, while attempt cancellation
+remains `ToolExecutionStatus::Cancelled`; neither response can replace the
+original Tool arguments.
 
 The runtime control plane exposes `effective_approval_mode` and a pending
 desired mode. A busy attempt freezes the effective mode it admitted; later
@@ -430,12 +479,12 @@ The asynchronous policy boundary has one cancellation rule: after
 consuming `Allow`, `Deny`, `Ask`, or a policy error. If cancellation is
 observable, the decision is not consumed and the call receives the normal
 cancelled result slot. An `Ask` response is subject to a second checkpoint;
-`Answered(Allow)` is a rendezvous outcome, never tool-start authority.
+`Responded(Allow)` is a rendezvous outcome, never tool-start authority.
 
 The coordinator's pending state has one mutex-protected terminal transition:
 
 ```text
-Pending --response--> Answered
+Pending --response--> Responded
 Pending --owner cancellation/runtime drain--> Cancelled
 ```
 
@@ -453,7 +502,7 @@ consume the already-selected first-winner reason at this boundary; it never
 receives the owner or performs cause arbitration of its own. The view cannot
 expose the owner's signal; its `child_signal()` can only derive a subordinate
 signal whose cancellation does not propagate upward. A response that arrives
-after cancellation is observable cannot publish `Answered`; it is rejected as
+after cancellation is observable cannot publish `Responded`; it is rejected as
 `not_pending` after the matching `Cancelled { reason }` transition. During
 drain,
 `ConversationRuntime` requests `RuntimeShutdown`, reads the active attempt's
@@ -511,8 +560,9 @@ state.
 and subagent ownership lifecycles already use. The store rejects a duplicate
 request, a duplicate or contradictory settlement, a settlement without its
 request, and a settlement whose terminal its subject cannot produce (an
-Approval cannot be "answered", a Question cannot be "approved"; cancellation
-is the one terminal both share). Both facts carry a canonical event identity
+Approval cannot be questionnaire-submitted, a Questionnaire cannot be
+approved; cancellation is the one terminal both share). Both facts carry a
+canonical event identity
 derived from the interaction identity, so the pair resolves through the unique
 `event_id` index rather than a Journal scan.
 
@@ -540,22 +590,26 @@ payloads and a fact that bypassed the live coordinator must still be refused:
   refuses to commit an Assistant message without an open publication stream, so
   every real approval has a frozen `(attempt, turn, message_id)` owner and no
   lenient branch is needed for a state the runtime cannot produce.
-- Interaction audit payload bounds are durable-store invariants. Prompt,
-  choice count/length/uniqueness, answer mode and length, approval request
+- Interaction audit payload bounds are durable-store invariants. Questionnaire
+  count, question/header text, option count/label/description/preview,
+  question and option uniqueness, answer mode/index/length, approval request
   reason, denial reason, tool-name length, and the canonical lowercase-hex
   form of `arguments_digest` are all checked at the store. The limits live in
   one place, `events::interaction`, which both the coordinator's live
   validation and the store's durable validation call, so they cannot drift and
   a future PostgreSQL backend reuses the same contract.
-- A Question settlement must satisfy the exact requested Question contract,
-  not merely carry the `Answered` variant: a `Choice` must be one the Question
-  offered, and `FreeText` requires a Question that accepted free text.
+- A Questionnaire settlement must satisfy the exact requested questionnaire
+  contract, not merely carry a response variant: indices are unique and in
+  range, single-select answers name one authored option or custom text, and
+  multi-select answers name a non-empty unique authored set. Empty submission
+  is the distinct decline settlement.
 
 Two ordering rules make the plane observable rather than merely intended:
 
 ```text
-InteractionRequested          -> the prompt is released to a client
-InteractionSettled(Approved)  -> ToolExecutionStarted -> external side effect
+InteractionRequested                   -> questionnaire is released to a client
+InteractionSettled(Submitted/Declined) -> semantic waiter resumes
+InteractionSettled(Approved)           -> ToolExecutionStarted -> external side effect
 ```
 
 The requested fact commits inside the same critical section that admits the
@@ -584,8 +638,9 @@ historical identity is durably spent in both directions, so a current runtime
 that wants the same tool must reach a **new** live approval under a new
 identity.
 
-Payloads stay bounded. A Question subject is stored by value because the
-Question contract already bounds its prompt and choices; an Approval subject
+Payloads stay bounded. A Questionnaire subject is stored by value because the
+questionnaire contract bounds every question, option description/preview, and
+answer string; an Approval subject
 names the call/tool identity and policy reason by value and pins the exact
 model-issued argument value by SHA-256 digest, because that value is already
 durable by-value in the canonical `ToolCall` the Message Ledger owns — which
@@ -603,7 +658,7 @@ underneath the waiter. Only after settlement and attempt completion may a
 reload publish a new generation, and that generation affects a later admitted
 attempt only.
 
-Runtime Client v1 carries the same semantic plane through
+Runtime Client v2 carries the same semantic plane through
 `interaction_respond`, typed acceptance/errors, `interaction_pending` and
 `interaction_settled` events, and `snapshot.pending_interactions`. Snapshot
 plus cursor and subscribe-after-cursor retain the existing repair invariant.
@@ -724,7 +779,7 @@ runtime/identity.rs        strong IDs (ConversationId, MessageId, AgentId,
                            McpServerId, SkillId, SkillVersionId, ArtifactId)
                            and CapabilityRevision
 runtime/interaction.rs     provider-independent native Approval and bounded
-                           Question requests, typed responses/outcomes,
+                           Questionnaire requests, typed responses/outcomes,
                            coordinator pending registry, terminal rendezvous,
                            and Runtime Client observation
 runtime/cancellation.rs   CancellationSignal: the one runtime-owned
@@ -1714,7 +1769,7 @@ Tool-execution wrappers/middleware, post-tool result replacement, pre-tool
 argument or identity rewriting, generic question/form frameworks, generalized
 permission/risk policy, subagent lifecycle observation (#60), and
 turn-stopping/forced continuation are intentionally absent. The bounded
-native Approval and Question seams are implemented by M9.2/#100 above; they do
+native Approval and Questionnaire seams are implemented by M9.2/#100 above; they do
 not expand into those frameworks.
 `docs/agent-loop.md` section 4.3 carries the full authority matrix.
 
@@ -1846,9 +1901,9 @@ equivalence in both directions at once.
 
 None of the three rules applies under `ForegroundOnly`/`BackgroundOnly`,
 which receive no injected field: an arbitrary composed, reference-heavy root
-stays valid there, `execution_mode` included. That scoping is load-bearing — the `ask_user` intrinsic's canonical
-schema is a root `anyOf` with no root `properties` at all, and MCP servers
-ship arbitrary JSON Schema — so the policy-unaware
+stays valid there, `execution_mode` included. That scoping is load-bearing —
+the native `ask_user` questionnaire is a normal closed root object and MCP
+servers may ship arbitrary JSON Schema — so the policy-unaware
 `validate_canonical_schema` must stay permissive. The contract therefore lives
 in the bounded layer that owns both the effective policy and the compiled
 model-facing schema.
@@ -2865,7 +2920,7 @@ environment, finite timeout, bounded diagnostics, and no generic
 
 The outermost layer exposes the runtime to humans and other systems:
 
-- Runtime Client Protocol v1 (semantic client boundary)
+- Runtime Client Protocol v2 (semantic client boundary)
 - Local interactive CLI
 - Runtime command interface
 - HTTP control interface
@@ -2874,7 +2929,7 @@ The outermost layer exposes the runtime to humans and other systems:
 
 AG-UI is an output projection, not the internal durable event model.
 
-#### Runtime Client Protocol v1 implementation (Issue #37)
+#### Runtime Client Protocol v2 implementation (Issue #37)
 
 Issue #37 implements the one external semantic normalization boundary in
 `src/runtime_client`:
@@ -2889,7 +2944,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-      Runtime Client Protocol v1
+      Runtime Client Protocol v2
 ```
 
 The governing invariant is that all authoritative execution and
@@ -2898,7 +2953,7 @@ deterministic projections and never become a second authority. The
 internal `RuntimeEvent` vocabulary is an execution-fact vocabulary, **not**
 the wire contract: `RuntimeClientEvent` and `RuntimeClientSnapshot` are
 explicit runtime-owned projection types with their own versioning
-(`RUNTIME_CLIENT_PROTOCOL_VERSION_V1`, independent from
+(`RUNTIME_CLIENT_PROTOCOL_VERSION`, independent from
 `EVENT_SCHEMA_VERSION`, the manifest schema version, and the crate
 version), lifecycle semantics, and cursor domain
 (`RuntimeClientCursor`). Later transports (Issue #38 stdio JSONL,
@@ -2959,7 +3014,7 @@ runtime_client/attachment.rs   RuntimeAttachment: at-most-one attachment,
                                event subscription delivery
 runtime_client/endpoint.rs     RuntimeClientEndpoint: the transport-neutral
                                semantic entry point that dispatches every
-                               v1 request, `initialize` included
+                               v2 request, `initialize` included
 runtime_client/transport/      byte-stream adapters beneath the semantic
                                layer (Issue #38); `stdio.rs` is the strict
                                stdio/JSONL transport
@@ -2997,7 +3052,7 @@ Runtime Client is a projection/control/attachment adapter over it.
 
 - **The semantic endpoint owns `initialize`.** `RuntimeClientEndpoint` is
   the boundary a transport wraps. It starts unattached and accepts every
-  v1 request; `initialize` performs version negotiation, single-attachment
+  v2 request; `initialize` performs version negotiation, single-attachment
   admission, `AttachmentId` allocation, and the linearized initial
   snapshot, storing the resulting attachment. Non-`initialize` requests
   before that are `not_attached`; a successful `detach` (or dropping the
@@ -3261,7 +3316,7 @@ Runtime Client is a projection/control/attachment adapter over it.
   dropped: rebinding a surviving runtime bundle would require a recovery
   model for canonical history, pending mailbox projection, and cursor
   continuity that the Runtime Client projection does not own. Recreating a host over the same
-  runtime bundle is **not** supported v1 recovery — a new host requires a
+  runtime bundle is **not** supported by the current recovery contract — a new host requires a
   new `ConversationToolRuntime` identity. Observer installation on the
   mailbox, background registry, and capability coordinator is crate-private
   for the same reason: it is a runtime coordination seam, not a public
@@ -3384,7 +3439,7 @@ Runtime Client is a projection/control/attachment adapter over it.
   compaction start, failure, and committed completion project with optional
   attempt attribution and update the shared context read model. Internal
   `RuntimeEvent` evolution therefore cannot silently break Runtime Client
-  Protocol v1.
+  Protocol v2.
 - **Streaming repair.** The snapshot carries an in-flight Assistant output
   view (accumulated blocks) and foreground tool views keyed by the
   logical tool-call identity, so a client repairing after `resync`
@@ -3419,7 +3474,7 @@ Runtime Client is a projection/control/attachment adapter over it.
   subscribe, and subscription polls) then fails with
   `projection_exhausted`. A read never hands back a model that silently
   stopped folding authoritative transitions.
-- **Attachment lifecycle.** Protocol v1 admits at most one active
+- **Attachment lifecycle.** Protocol v2 admits at most one active
   attachment: the first attach succeeds, a second fails with
   `attachment_in_use` and never evicts the first, detach (explicit or
   RAII drop) releases ownership, reconnects receive a fresh attachment
@@ -3513,7 +3568,7 @@ Runtime Client is a projection/control/attachment adapter over it.
 - **Protocol envelope.** A transport-neutral JSON-RPC-style envelope:
   `request(id, method + typed params)`, `response(id, result | error)`,
   and `event(cursor + typed payload)` with no request ids on
-  notifications. Every v1 method is client-initiated
+  notifications. Every v2 method is client-initiated
   (`initialize`, `submit_inbound`, `cancel_current_attempt`,
   `snapshot_get`, `subscribe_events`, `capability_get`,
   `background_status`, `background_cancel`, `detach`, `shutdown`).
@@ -3539,7 +3594,7 @@ rustX Runtime
 Runtime Client projection
       |
       v
-Runtime Client Protocol v1        semantic; Issue #37
+Runtime Client Protocol v2        semantic; Issue #37
       |
       v
 transport adapters                framing only; src/runtime_client/transport
@@ -3585,10 +3640,10 @@ means adding a sibling module there; no semantic module moves.
   string stays in one record and multiline pretty-printed JSON is not
   supported. CRLF input is accepted by removing exactly one `\r` before
   the terminating LF; no other whitespace is touched.
-- **Malformed and oversized input is transport-fatal.** Protocol v1 has
+- **Malformed and oversized input is transport-fatal.** Protocol v2 has
   no uncorrelated error envelope, and a malformed frame may not even
   carry a request id, so the transport invents none. Any complete
-  in-bound-size record that does not deserialize to the exact v1 request
+  in-bound-size record that does not deserialize to the exact v2 request
   type — malformed JSON, unknown method, unknown field, wrong parameter
   type, empty or whitespace-only record — ends the session with a
   framing error, applies nothing, and writes no protocol record. An
@@ -3606,7 +3661,7 @@ means adding a sibling module there; no semantic module moves.
   background execution, and capability state continue under their own
   owners, and no projection lock is held across any transport await.
 - **Active-subscription lag closes the transport.** After a stall the
-  subscription may fall behind the bounded replay ring. Protocol v1 has
+  subscription may fall behind the bounded replay ring. Protocol v2 has
   no uncorrelated stream-error record, so the session ends with a typed
   local `SubscriptionLagged` error carrying the cursor information and
   the client repairs from an authoritative snapshot after reconnecting.
@@ -4359,7 +4414,7 @@ beside it:
 rustX Runtime semantics
         |
         v
-Runtime Client Protocol v1
+Runtime Client Protocol v2
         |
         v
 rustX TypeScript projection

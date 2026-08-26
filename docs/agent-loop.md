@@ -328,7 +328,7 @@ priority number, no registration-order term, and no new ordering model.
 
 This split is the load-bearing rule of the phase:
 
-| Question | Answer | Owner |
+| Timing question | Answer | Owner |
 |---|---|---|
 | *When* does a proposal become eligible? | after the owning tool batch settles, at the next primary step | Agent Loop |
 | *Who* owns the fact it states? | the identity the producing observer was registered under | Context Assembly |
@@ -715,7 +715,7 @@ There is one post-evaluation cancellation checkpoint: when
 consuming any `Allow`, `Deny`, `Ask`, or error value. Observable cancellation
 therefore produces a normal cancelled slot and publishes no interaction or
 denial from that decision. The `Ask` wait has a second post-wait checkpoint;
-even `Answered(Allow)` is rechecked before the existing start frontier and
+even `Responded(Allow)` is rechecked before the existing start frontier and
 cannot grant execution authority.
 
 The coordinator's response and owner-cancellation paths use one synchronized
@@ -728,7 +728,7 @@ second counted settlement admission. This composes with M9c drain without a
 second lifecycle or shutdown participant framework.
 
 Interaction publication and settlement are also durable-before-release
-(Issue #109). The requested audit fact commits before the prompt reaches a
+(Issue #109). The requested audit fact commits before the questionnaire reaches a
 client, and `InteractionSettled(Approved)` commits before the Agent Loop can
 emit `ToolExecutionStarted`, so the durable order the Journal shows is always
 
@@ -739,7 +739,7 @@ InteractionRequested -> InteractionSettled(Approved) -> ToolExecutionStarted -> 
 That ordering is a consequence of the wait itself: the semantic waiter is not
 released until the settled fact is committed, so the post-wait cancellation
 checkpoint and the start frontier are both strictly downstream of the durable
-decision. The audit is still only evidence — the `Answered(Allow)` recheck
+decision. The audit is still only evidence — the `Responded(Allow)` recheck
 above is what grants execution authority in this process, and a historical
 approval read back after a restart grants none.
 
@@ -766,36 +766,32 @@ pending interaction retains an `ExecutionCancellation` observation view, not
 the owning attempt's `AgentCancellation` handle. Generic ToolExecutors receive
 that owner-observing `ExecutionCancellation` capability only; the native
 `ask_user` path receives a
-crate-private `QuestionRequester` bound to the same attempt and coordinator.
+crate-private `QuestionnaireRequester` bound to the same attempt and coordinator.
 If that authority has already selected a cause before a waiter or client
 response reaches the terminal transition, the interaction records the same
 `Cancelled { reason }` outcome and the response is `interaction_not_pending`;
-it cannot publish `Answered`. Runtime drain is also only a cancellation
+it cannot publish `Responded`. Runtime drain is also only a cancellation
 contender: after requesting `RuntimeShutdown`, `ConversationRuntime` reads the
 active attempt's first-winner reason and propagates it to pending interaction
 settlement. `UserRequested` therefore survives a later drain, while
 `RuntimeShutdown` is recorded consistently when it wins first.
 
 The interaction domain is provider-independent and bounded to Approval and
-Question in 0.1. Question is not a pre-tool Agent Loop branch: the native
-`ask_user` capability is an ordinary foreground/sequential/approval-never
-Tool whose executor requests a Question through that bounded requester and
-the same coordinator, then returns the typed answer as an ordinary ToolResult.
-Questions carry only a bounded
-prompt, optional finite choices, and an optional free-text flag. In the native
-tool contract, a bare prompt means open-ended free text; a supplied non-empty
-choice list is choice-only unless `allow_free_text: true` is explicit. The
-Registry normalizer and canonical schema reject empty lists, duplicates,
-Unicode-bound violations, and invalid answer modes before an interaction
-provider is consulted. The executor never revalidates model arguments after
-preflight. Generic forms/workflows, provider SDK
-payloads, argument rewriting, and a generalized permission language are not
-part of this seam.
+Questionnaire in 0.1. Questionnaire is not a pre-tool Agent Loop branch: the
+native `ask_user` capability is an ordinary foreground/sequential/approval-never
+Tool whose executor requests one whole questionnaire through the bounded
+requester and the same coordinator, then returns an ordinary ToolResult. The
+Registry normalizer and canonical schema reject malformed nesting, unknown
+fields, empty/duplicate/out-of-bounds values, reserved labels, and
+multi-select previews before an interaction provider is consulted. The
+executor never revalidates model arguments after preflight. Generic
+forms/workflows, provider SDK payloads, argument rewriting, and a generalized
+permission language are not part of this seam.
 
 `FullAccess` is runtime control state, not Tool authorization. It cannot
 activate disabled or excluded Tools, bypass execution ownership or
 concurrency policy, grant authority, or auto-answer a pending Approval or
-Question. While an attempt is busy, `desired_approval_mode` changes and
+Questionnaire. While an attempt is busy, `desired_approval_mode` changes and
 `effective_approval_mode` remains frozen; after terminal settlement the
 runtime reconciles the latest desired value before admitting the next attempt.
 The current runtime/project configuration may set `approvalMode` (default
@@ -826,7 +822,7 @@ assembly, never a re-execution handle.
 | `ContextContributor` (#55) | finite immutable `ContributorInputSnapshot` | bounded typed proposals | canonical state, identity, provenance, lanes, ordering | Context Assembly |
 | `PreStepPolicy` (#56) | final immutable `AcceptedContext` + attempt/turn/revision identity | `Enter` / `Reject { reason }` | history, Surface, `MessageId`s, tool identity/arguments, cancellation, provider dispatch, terminal state | Agent Loop |
 | `PreToolPolicy` (#64) | immutable preflight-resolved `PreToolView` | `Allow` / `Deny { reason }` / `Ask { reason }` | registry resolution, canonical state, tool identity/arguments, cancellation, executor start | Agent Loop / attempt lifecycle |
-| `InteractionCoordinator` (#100) | immutable Approval or Question facts | one typed response/cancellation rendezvous | Agent Loop scheduling, canonical history, ToolCall arguments, executor state | ConversationRuntime |
+| `InteractionCoordinator` (#100) | immutable Approval or Questionnaire facts | one typed response/cancellation rendezvous | Agent Loop scheduling, canonical history, ToolCall arguments, executor state | ConversationRuntime |
 | `ToolResultObserver` (#56) | immutable finalized `ToolExecutionResult` + canonical `ToolCallId`, batch position, stable `ToolId`/`ToolOrigin`, and the read-only `ObservedToolInvocation` (mode + validated arguments) | bounded deferred `UserMessageProposal`s | the result, the `ToolCall`, `ToolMessage` count, history, cancellation, terminal state, the Effective System Prompt, **and its own provenance/lane/identity** | Agent Loop / tool batch |
 | Deferred context staging | ordered transient proposals + their bound producer reference | candidate input of the next Context Assembly | Ledger and Surface directly; the semantics of what it stages; whether a named extension is trusted | Agent Loop |
 | Context admission | final accepted context | canonical `User` facts + Surface advancement | arbitrary history | Agent Loop + `ConversationState` |
@@ -845,7 +841,7 @@ These are absent by decision, not as TODO compatibility hooks:
   `ToolCall` (`id`, `tool_id`, `name`, `arguments`) is a conversation fact.
 - **Generic forms/workflows, generalized permission/risk policy, and
   provider-specific interaction payloads** — Issue #100 deliberately keeps
-  Question bounded and makes `ask_user` an ordinary Tool Plane capability.
+  Questionnaire bounded and makes `ask_user` an ordinary Tool Plane capability.
 - **Subagent lifecycle observation** — Issue #60 owns the native subagent
   runtime; the observation seam follows the owner.
 - **`TurnStoppingPolicy` / forced continuation** — no native owner exists.

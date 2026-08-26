@@ -201,7 +201,7 @@ async fn submit_idle_admits_and_settles_asynchronously() {
     let (model_handle, host) =
         host("conv-37-idle", model, ToolRegistry::new(), composer(), None).await;
     let (attachment, _) = host
-        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     let subscription = attachment
         .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(0))
@@ -283,7 +283,7 @@ async fn submit_while_busy_queues_for_the_next_drain() {
     let (model_handle, host) =
         host("conv-37-busy", model, ToolRegistry::new(), composer(), None).await;
     let (attachment, _) = host
-        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     let subscription = attachment
         .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(0))
@@ -356,7 +356,7 @@ async fn cancel_current_attempt_is_acceptance_not_settlement() {
     )
     .await;
     let (attachment, _) = host
-        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     let subscription = attachment
         .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(0))
@@ -448,7 +448,7 @@ async fn foreground_tools_project_with_stable_identities() {
     tool_b.register(&mut tools);
     let (_, host) = host("conv-37-tools", model, tools, composer(), None).await;
     let (attachment, _) = host
-        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     let subscription = attachment
         .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(0))
@@ -540,7 +540,7 @@ async fn streaming_repair_from_a_mid_stream_snapshot() {
     )
     .await;
     let (attachment, _) = host
-        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     let subscription = attachment
         .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(0))
@@ -648,7 +648,7 @@ async fn stalled_subscriber_resyncs_explicitly_and_never_buffers() {
     .await;
     let mut parked = model_handle.parked();
     let (attachment, _) = host
-        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     // Registered but deliberately never polled: this is the stalled
     // consumer.
@@ -782,7 +782,7 @@ async fn agent_status_shares_one_composition() {
     let (model_handle, host) =
         host("conv-37-status", model, ToolRegistry::new(), composer, None).await;
     let (attachment, _) = host
-        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     let subscription = attachment
         .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(0))
@@ -890,7 +890,7 @@ async fn agent_status_is_composed_exactly_once_per_request() {
 
     let (model_handle, host) = host("conv-37-compose-once", model, tools, composer, None).await;
     let (attachment, _) = host
-        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     let subscription = attachment
         .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(0))
@@ -1018,7 +1018,7 @@ async fn capability_projection_carries_builtin_tools_and_revision() {
     let model = FakeModel::new(Vec::new());
     let (_, host) = host("conv-37-cap", model, tools, composer(), None).await;
     let (attachment, _) = host
-        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     let response = attachment.handle_request(RuntimeClientRequest::CapabilityGet {
         id: rustx::runtime_client::RequestId::new(1),

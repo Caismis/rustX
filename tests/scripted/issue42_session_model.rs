@@ -30,7 +30,7 @@ use rustx::model::session::{SessionModelConfig, SessionModelState, SummaryModelP
 use rustx::model::{ModelAdapter, ModelEvent, ModelFinishReason, ModelProtocol};
 use rustx::runtime_client::types::{RequestId, RuntimeClientRequest, RuntimeClientResult};
 use rustx::runtime_client::{
-    EventDelivery, EventSubscription, RUNTIME_CLIENT_PROTOCOL_VERSION_V1, RuntimeClientCursor,
+    EventDelivery, EventSubscription, RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientCursor,
     RuntimeClientEvent, RuntimeClientHost, RuntimeClientProtocolEvent,
 };
 use rustx::tools::executor::ToolRegistry;
@@ -247,7 +247,7 @@ fn attach(
     host: &RuntimeClientHost,
 ) -> (rustx::runtime_client::RuntimeAttachment, EventSubscription) {
     let attachment = host
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach")
         .0;
     let subscription = attachment

@@ -47,7 +47,7 @@ use rustx::runtime_client::host::{EventDelivery, EventSubscription, RuntimeClien
 use rustx::runtime_client::snapshot::RuntimeClientAttemptPhase;
 use rustx::runtime_client::types::RuntimeClientResult;
 use rustx::runtime_client::{
-    RUNTIME_CLIENT_PROTOCOL_VERSION_V1, RuntimeClientAttemptFailure, RuntimeClientEvent,
+    RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientAttemptFailure, RuntimeClientEvent,
     RuntimeClientOutcome,
 };
 
@@ -202,7 +202,7 @@ impl Driver {
             .expect("the real runtime composes against the emulator catalog");
         let (attachment, result) = runtime
             .host()
-            .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let RuntimeClientResult::Initialized { cursor, .. } = result else {
             panic!("initialize returns the snapshot");

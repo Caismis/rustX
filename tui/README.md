@@ -1,7 +1,7 @@
 # `rustx-tui`
 
 The rustX reference terminal client: a Pi-TUI presentation layer over Runtime
-Client Protocol v1.
+Client Protocol v2.
 
 ## The one architectural rule
 
@@ -124,7 +124,7 @@ active even when these controls disable optional tools.
 
 ```text
 spawn rustx
-  -> initialize(v1)
+        -> initialize(v2)
   -> authoritative snapshot + cursor
   -> install the presentation projection
   -> subscribe_events(after cursor)
@@ -194,7 +194,7 @@ The command-to-surface classification is:
 | `/new`, `/clone` | control with transient/replacement feedback |
 | `/name` | inspection of the active Session's name, as transient feedback |
 | `/name <text>`, `/model <provider/model>` | control with transient result |
-| `/cancel`, `/compact`, `/approve`, `/answer`, `/approval` | control with transient acceptance/validation result |
+| `/cancel`, `/compact`, `/approve`, `/approval` | control with transient acceptance/validation result |
 | `/reasoning`, `/expand` | preference |
 | `/quit` | quit |
 | invalid, unknown, or empty-result command feedback | transient |
@@ -282,8 +282,6 @@ does not implement a parallel Session system.
   progress and completion remain authoritative Runtime Client facts.
 - `/approve <interaction-id> <allow|deny> [reason]` — answer one runtime-owned
   Approval interaction.
-- `/answer <interaction-id> <choice|text> <value>` — answer one runtime-owned
-  Question interaction.
 - `/approval <policy|full_access>` — request the runtime ApprovalMode.
 - `/debug` — show bounded presentation and protocol diagnostics.
 - `/reasoning [on|off]` — change the display preference for model reasoning;
@@ -305,8 +303,9 @@ runtime's own Agent Status rendering; `/compact` invokes one
 `compact_context` operation and waits for its durable terminal result;
 `/debug` shows bounded diagnostics and
 never a credential; `/approve` sends a finite typed response to one
-runtime-owned Approval interaction, `/answer` sends a typed Question response,
-and `/approval` requests a runtime control-plane mode change. The TUI never
+runtime-owned Approval interaction, the questionnaire overlay sends one typed
+whole-questionnaire response, and `/approval` requests a runtime control-plane
+mode change. The TUI never
 edits displayed Tool arguments, suppresses pending prompts, auto-answers them,
 or keeps a local outcome.
 
@@ -337,29 +336,51 @@ yet defined a client-facing attachment contract.
 
 ## Native HITL
 
-Pending Approval and Question interactions arrive as runtime-owned
+Pending Approval and Questionnaire interactions arrive as runtime-owned
 `interaction_pending` events and in
 the authoritative `snapshot.pending_interactions` view. The presentation
 reducer sorts and replaces those facts like every other projection value;
 reconnect/resync discards local assumptions and rebuilds the list from the
 snapshot. The renderer shows the immutable tool identity, mode, reason, and
-validated arguments for Approval, and the bounded prompt, finite choices, and
-free-text flag for Question. `/approve` sends only an Approval response;
-`/answer` sends only a Question response. Neither invokes a Tool, mutates
+validated arguments for Approval, and the bounded questionnaire facts, option
+descriptions, previews, review tab, and client-owned custom row. `/approve`
+sends only an Approval response; the questionnaire overlay sends one typed
+whole-questionnaire response. Neither invokes a Tool, mutates
 arguments, infers an outcome from detach/EOF, or callbacks into the Agent
 Loop.
 
-When one or more interactions are pending, the TUI marks the interaction with
-the smallest `InteractionId` as focused. This selection is derived from the
-authoritative projection, so it is stable across reconnect and resync. Plain
-editor input is routed through the Runtime Client to that focused interaction
-instead of becoming a new inbound message: an exact Question choice is sent
-as a typed choice response, otherwise allowed free text is sent as a typed
-free-text response; a focused Approval accepts `allow` or `deny [reason]`.
-An invalid implicit response is reported transiently and does not submit a
-conversation message. Explicit `/answer`, `/approve`, and `/cancel` remain
-available for addressing a specific interaction or attempt. The TUI never
-settles, suppresses, or auto-answers an interaction locally.
+When questionnaires are pending, the TUI focuses the questionnaire with the
+smallest `InteractionId`. This selection is derived from the authoritative
+projection, so it is stable across reconnect and resync. Plain editor input
+always remains an ordinary inbound message. The focused questionnaire overlay
+alone collects authored option selections or bounded custom text and sends one
+typed whole-questionnaire submission; Approval remains explicitly
+command-driven through `/approve`, and `/cancel` addresses attempt
+cancellation. The TUI never settles, suppresses, or auto-answers an
+interaction locally.
+
+The focused questionnaire is a real Pi-TUI overlay. It reconstructs from
+`snapshot.pending_interactions` after attachment/resync, shows one tab per
+question plus a review/submit tab, renders option descriptions and Markdown
+previews, and uses a side-by-side preview when the terminal is wide enough or
+stacks it on narrow terminals. `Tab`/`Shift+Tab` changes tabs, arrows move
+rows, `Enter` chooses or submits, and `Space` toggles a multi-select option.
+Every question includes the client-owned `Type something.` row with a 4096
+Unicode-scalar draft bound. Partial submission is valid; unanswered questions
+remain visible in review. `Esc` explicitly declines only the focused
+questionnaire and `Ctrl+C` keeps its existing meaning of cancelling the owning
+attempt. A local draft is never converted into a response by detach, EOF, or
+attachment replacement; a settled interaction closes the overlay and restores
+editor focus.
+
+Custom-answer editing delegates raw input to Pi-TUI 0.82.1's native `Input`,
+so bracketed paste, multi-character batches, Kitty printable input,
+grapheme-aware cursor movement, deletion, and the 4096-scalar bound share one
+input path. The questionnaire component owns an explicit height-aware
+viewport: every visible line is display-width bounded, the focused row and
+Review/Submit remain reachable, and long Markdown previews can be inspected
+with PageUp/PageDown without allowing preview content to displace the option
+list.
 
 The footer displays authoritative `approval policy` or `approval FULL ACCESS`
 and shows a pending arrow when the runtime has accepted a busy-time mode

@@ -11,7 +11,7 @@
 //! policy is the runtime intrinsic `background_task` (foreground-only,
 //! sequential, approval-never), and `ask_user` is likewise fixed to
 //! foreground-only, sequential, approval-never because it is the native
-//! Question capability itself.
+//! Questionnaire capability itself.
 //!
 //! The default is foreground-only sequential for every ordinary native
 //! tool: the model-facing surface of the native tool plane is conservative

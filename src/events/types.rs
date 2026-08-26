@@ -69,7 +69,7 @@
 //!
 //! [`RuntimeEvent::InteractionRequested`] and
 //! [`RuntimeEvent::InteractionSettled`] (Issue #109) are the low-frequency
-//! semantic facts of the Question/Approval plane. They are **audit evidence
+//! semantic facts of the Questionnaire/Approval plane. They are **audit evidence
 //! only**: the pending waiter that they describe is process-owned workflow
 //! state and is never reconstructed from them. In particular a historical
 //! `InteractionSettled(Approved)` never authorizes a tool execution after a
@@ -430,7 +430,7 @@ pub enum RuntimeEvent {
     ///
     /// This is the **requested** half of the durable interaction audit. It
     /// commits strictly before rustX releases the prompt to a user-facing
-    /// client, so no user can be shown a Question or Approval without durable
+    /// client, so no user can be shown a Questionnaire or Approval without durable
     /// evidence that the interaction existed, which attempt/turn owned it, and
     /// exactly what was asked.
     ///

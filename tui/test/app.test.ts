@@ -21,7 +21,7 @@ import type { RuntimeClientAttachment } from "../src/runtime/attachment.ts";
 import type { SessionSummaryView } from "../src/protocol/types.ts";
 import {
   attemptView,
-  questionInteraction,
+  questionnaireInteraction,
   catalogModel,
   sessionModel,
   sessionView,
@@ -51,14 +51,30 @@ function fakeSession(
     },
   },
 ): RuntimeClientAttachment {
-  return {
+  const stateListeners = new Set<(nextState: unknown) => void>();
+  const snapshotListeners = new Set<() => void>();
+  const session = {
     state,
-    onState: () => () => {},
-    onSnapshot: () => () => {},
+    onState: (listener: (nextState: unknown) => void) => {
+      stateListeners.add(listener);
+      return () => stateListeners.delete(listener);
+    },
+    onSnapshot: (listener: () => void) => {
+      snapshotListeners.add(listener);
+      return () => snapshotListeners.delete(listener);
+    },
     updateState: () => {},
     shutdown: async () => {},
     waitForAttemptSettlement: waitForSettlement,
-  } as unknown as RuntimeClientAttachment;
+    publishState(nextState: unknown): void {
+      session.state = nextState;
+      for (const listener of stateListeners) listener(nextState);
+    },
+    publishSnapshot(): void {
+      for (const listener of snapshotListeners) listener();
+    },
+  };
+  return session as unknown as RuntimeClientAttachment;
 }
 
 function fakeChild(log: string[]): ChildRuntimeProcess {
@@ -343,15 +359,15 @@ describe("RustxTuiApp lifecycle", () => {
     await running;
   });
 
-  it("routes ordinary editor input to a focused Question, never to inbound", async () => {
-    const question = questionInteraction();
+  it("opens a questionnaire overlay and submits one typed response", async () => {
+    const questionnaire = questionnaireInteraction();
     const state = {
       ...emptyPresentationState(sessionModel("alpha/model-a")),
       attempt: {
         ...attemptView(),
         phase: { type: "running" as const },
       },
-      pendingInteractions: [question],
+      pendingInteractions: [questionnaire],
     };
     const session = fakeSession(async () => {}, state);
     const api = session as unknown as {
@@ -359,19 +375,13 @@ describe("RustxTuiApp lifecycle", () => {
         interactionId: string,
         response: unknown,
       ) => Promise<void>;
-      submitInbound: () => Promise<never>;
     };
     let response!: (value: { id: string; response: unknown }) => void;
     const responseObserved = new Promise<{ id: string; response: unknown }>((resolve) => {
       response = resolve;
     });
-    let submitted = 0;
     api.respondInteraction = async (interactionId, typedResponse) => {
       response({ id: interactionId, response: typedResponse });
-    };
-    api.submitInbound = async () => {
-      submitted += 1;
-      throw new Error("focused interaction input must not submit inbound");
     };
 
     const app = new RustxTuiApp({
@@ -380,46 +390,47 @@ describe("RustxTuiApp lifecycle", () => {
       child: fakeChild([]),
     });
     const running = app.run();
-    process.stdin.emit("data", "production\r");
+    await waitForApplicationContinuation();
+    process.stdin.emit("data", "\r");
+    await waitForApplicationContinuation();
+    process.stdin.emit("data", "\t");
+    await waitForApplicationContinuation();
+    process.stdin.emit("data", "\r");
 
     assert.deepEqual(await responseObserved, {
-      id: question.id,
+      id: questionnaire.id,
       response: {
-        type: "question",
-        answer: { type: "choice", value: "production" },
+        type: "questionnaire",
+        response: {
+          type: "submitted",
+          value: {
+            answers: [{
+              question_index: 0,
+              answer: { type: "single_option", value: { label: "staging" } },
+            }],
+          },
+        },
       },
     });
-    assert.equal(submitted, 0);
 
     await app.quit();
     await running;
   });
 
-  it("keeps Escape and Ctrl+C on runtime cancellation while interaction focus is active", async () => {
+  it("Esc declines only the focused questionnaire", async () => {
     const state = {
       ...emptyPresentationState(sessionModel("alpha/model-a")),
-      pendingInteractions: [questionInteraction()],
+      pendingInteractions: [questionnaireInteraction()],
     };
     const session = fakeSession(async () => {}, state);
     const api = session as unknown as {
-      cancelCurrentAttempt: () => Promise<string>;
-      submitInbound: () => Promise<never>;
+      respondInteraction: (interactionId: string, response: unknown) => Promise<void>;
     };
-    let cancelled = 0;
-    let submitted = 0;
-    let resolveCancellation!: () => void;
-    let cancellationObserved = new Promise<void>((resolve) => {
-      resolveCancellation = resolve;
+    let decline!: (value: { id: string; response: unknown }) => void;
+    const declineObserved = new Promise<{ id: string; response: unknown }>((resolve) => {
+      decline = resolve;
     });
-    api.cancelCurrentAttempt = async () => {
-      cancelled += 1;
-      resolveCancellation();
-      return "attempt-1";
-    };
-    api.submitInbound = async () => {
-      submitted += 1;
-      throw new Error("control input must not submit inbound");
-    };
+    api.respondInteraction = async (id, response) => decline({ id, response });
 
     const app = new RustxTuiApp({
       session,
@@ -429,16 +440,89 @@ describe("RustxTuiApp lifecycle", () => {
     const running = app.run();
 
     process.stdin.emit("data", "\u001b");
-    await cancellationObserved;
-    assert.equal(cancelled, 1);
+    assert.deepEqual(await declineObserved, {
+      id: "attempt-1-interaction-question-1",
+      response: {
+        type: "questionnaire",
+        response: { type: "declined" },
+      },
+    });
 
-    cancellationObserved = new Promise<void>((resolve) => {
+    await app.quit();
+    await running;
+  });
+
+  it("closes a questionnaire overlay when an authoritative remote settlement arrives", async () => {
+    const questionnaire = questionnaireInteraction();
+    const state = {
+      ...emptyPresentationState(sessionModel("alpha/model-a")),
+      pendingInteractions: [questionnaire],
+    };
+    const session = fakeSession(async () => {}, state) as RuntimeClientAttachment & {
+      publishState(nextState: unknown): void;
+    };
+    let responses = 0;
+    (session as unknown as {
+      respondInteraction: () => Promise<void>;
+    }).respondInteraction = async () => {
+      responses += 1;
+    };
+
+    const app = new RustxTuiApp({
+      session,
+      connection: fakeConnection(),
+      child: fakeChild([]),
+    });
+    const running = app.run();
+    await waitForApplicationContinuation();
+
+    session.publishState({
+      ...state,
+      pendingInteractions: [],
+    });
+    await waitForApplicationContinuation();
+    process.stdin.emit("data", "\r");
+    await waitForApplicationContinuation();
+
+    assert.equal(responses, 0, "remote settlement must close the local overlay");
+    await app.quit();
+    await running;
+  });
+
+  it("Ctrl+C cancels the owning attempt while the questionnaire is focused", async () => {
+    const state = {
+      ...emptyPresentationState(sessionModel("alpha/model-a")),
+      attempt: {
+        ...attemptView(),
+        phase: { type: "running" as const },
+      },
+      pendingInteractions: [questionnaireInteraction()],
+    };
+    const session = fakeSession(async () => {}, state);
+    const api = session as unknown as {
+      cancelCurrentAttempt: () => Promise<string>;
+    };
+    let resolveCancellation!: () => void;
+    const cancellationObserved = new Promise<void>((resolve) => {
       resolveCancellation = resolve;
     });
+    let cancelled = 0;
+    api.cancelCurrentAttempt = async () => {
+      cancelled += 1;
+      resolveCancellation();
+      return "attempt-1";
+    };
+
+    const app = new RustxTuiApp({
+      session,
+      connection: fakeConnection(),
+      child: fakeChild([]),
+    });
+    const running = app.run();
+
     process.stdin.emit("data", "\u0003");
     await cancellationObserved;
-    assert.equal(cancelled, 2);
-    assert.equal(submitted, 0);
+    assert.equal(cancelled, 1);
 
     await app.quit();
     await running;

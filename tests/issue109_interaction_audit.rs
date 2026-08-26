@@ -36,9 +36,11 @@ use rustx::durable::{
     interaction_audit_capability,
 };
 use rustx::events::interaction::{
-    InteractionSettlement, InteractionSubject, MAX_APPROVAL_DENIAL_REASON_CHARS,
-    MAX_APPROVAL_REQUEST_REASON_CHARS, MAX_QUESTION_ANSWER_CHARS, MAX_QUESTION_CHOICE_CHARS,
-    MAX_QUESTION_CHOICES, MAX_QUESTION_PROMPT_CHARS, interaction_arguments_digest,
+    CustomAnswer, InteractionSettlement, InteractionSubject, MAX_APPROVAL_REQUEST_REASON_CHARS,
+    MAX_OPTION_LABEL_CHARS, MAX_QUESTION_TEXT_CHARS, MAX_QUESTIONNAIRE_QUESTIONS,
+    MultipleOptionAnswer, OptionSpecification, QuestionSpecification, QuestionnaireAnswer,
+    QuestionnaireAnswerEntry, QuestionnaireSpecification, QuestionnaireSubmission,
+    SingleOptionAnswer, interaction_arguments_digest,
 };
 use rustx::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use rustx::message::types::{
@@ -50,13 +52,13 @@ use rustx::model::{
     RequestSnapshot,
 };
 use rustx::publication::{PublicationFrame, PublicationPayload, PublicationStreamStart};
+use rustx::runtime::ApprovalDecision;
 use rustx::runtime::identity::{
     AttemptId, CapabilityRevision, ConversationId, EventId, InteractionId, MessageId,
     PublicationStreamId, RequestId, ToolCallId, ToolId, TurnId,
 };
 use rustx::runtime::recovery::{AttemptRecoveryClass, RecoveryReport, recover};
 use rustx::runtime::types::{CancellationReason, RuntimeClock};
-use rustx::runtime::{ApprovalDecision, QuestionAnswer};
 use rustx::tools::types::{ToolCall, ToolCallStart, ToolExecutionStatus};
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -169,6 +171,47 @@ fn approval_subject() -> InteractionSubject {
         tool_name: "alpha".to_owned(),
         arguments_digest: interaction_arguments_digest(&canonical_arguments()),
         reason: "the policy asked".to_owned(),
+    }
+}
+
+fn questionnaire_specification() -> QuestionnaireSpecification {
+    QuestionnaireSpecification {
+        questions: vec![QuestionSpecification {
+            question: "Which target?".to_owned(),
+            header: "Target".to_owned(),
+            options: vec![
+                OptionSpecification {
+                    label: "staging".to_owned(),
+                    description: "A safe test environment.".to_owned(),
+                    preview: None,
+                },
+                OptionSpecification {
+                    label: "production".to_owned(),
+                    description: "The live environment.".to_owned(),
+                    preview: None,
+                },
+            ],
+            multi_select: false,
+        }],
+    }
+}
+
+fn questionnaire_subject() -> InteractionSubject {
+    InteractionSubject::Questionnaire {
+        questionnaire: questionnaire_specification(),
+    }
+}
+
+fn submitted_option(label: &str) -> InteractionSettlement {
+    InteractionSettlement::QuestionnaireSubmitted {
+        submission: QuestionnaireSubmission {
+            answers: vec![QuestionnaireAnswerEntry {
+                question_index: 0,
+                answer: QuestionnaireAnswer::SingleOption(SingleOptionAnswer {
+                    label: label.to_owned(),
+                }),
+            }],
+        },
     }
 }
 
@@ -545,8 +588,8 @@ fn the_durable_authority_owns_the_interaction_state_machine() {
 }
 
 /// A settlement must be a terminal its requested subject can actually
-/// produce: an Approval cannot be answered with a Question answer, and a
-/// Question cannot be approved.
+/// produce: an Approval cannot receive questionnaire facts, and a
+/// Questionnaire cannot be approved.
 #[test]
 fn a_settlement_must_match_the_subject_it_settles() {
     let store = policy_boundary_store();
@@ -558,25 +601,14 @@ fn a_settlement_must_match_the_subject_it_settles() {
     assert!(matches!(
         store.append_interaction_audit(settled(
             &approval,
-            InteractionSettlement::Answered {
-                answer: QuestionAnswer::FreeText {
-                    value: "not an approval decision".to_owned(),
-                },
-            },
+            InteractionSettlement::QuestionnaireDeclined,
         )),
         Err(ConversationStoreError::InvalidReference(_))
     ));
 
     let question = InteractionId::for_attempt(&attempt(), 2);
     store
-        .append_interaction_audit(requested(
-            &question,
-            InteractionSubject::Question {
-                prompt: "Which target?".to_owned(),
-                choices: None,
-                allow_free_text: true,
-            },
-        ))
+        .append_interaction_audit(requested(&question, questionnaire_subject()))
         .expect("question requested");
     assert!(matches!(
         store.append_interaction_audit(settled(&question, InteractionSettlement::Approved)),
@@ -832,14 +864,7 @@ fn an_unanswered_interaction_is_evidence_and_is_never_resurrected() {
         let store = durable.open();
         commit_turn_up_to_the_policy_boundary(&store);
         store
-            .append_interaction_audit(requested(
-                &id,
-                InteractionSubject::Question {
-                    prompt: "Which target?".to_owned(),
-                    choices: Some(vec!["staging".to_owned(), "production".to_owned()]),
-                    allow_free_text: false,
-                },
-            ))
+            .append_interaction_audit(requested(&id, questionnaire_subject()))
             .expect("requested");
     }
 
@@ -849,7 +874,7 @@ fn an_unanswered_interaction_is_evidence_and_is_never_resurrected() {
         matches!(
             facts.as_slice(),
             [RuntimeEvent::InteractionRequested {
-                subject: InteractionSubject::Question { .. },
+                subject: InteractionSubject::Questionnaire { .. },
                 ..
             }]
         ),
@@ -1237,57 +1262,71 @@ fn interaction_audit_payload_bounds_are_durable_invariants() {
         );
     };
 
+    let mut oversized_question = questionnaire_specification();
+    oversized_question.questions[0].question = "p".repeat(MAX_QUESTION_TEXT_CHARS + 1);
     refused(
-        InteractionSubject::Question {
-            prompt: "p".repeat(MAX_QUESTION_PROMPT_CHARS + 1),
-            choices: None,
-            allow_free_text: true,
+        InteractionSubject::Questionnaire {
+            questionnaire: oversized_question,
         },
-        "an oversized prompt",
+        "oversized question text",
     );
+    let mut oversized_count = questionnaire_specification();
+    oversized_count.questions = (0..=MAX_QUESTIONNAIRE_QUESTIONS)
+        .map(|index| QuestionSpecification {
+            question: format!("Question {index}"),
+            header: format!("Q{index}"),
+            options: vec![
+                OptionSpecification {
+                    label: "A".to_owned(),
+                    description: "A".to_owned(),
+                    preview: None,
+                },
+                OptionSpecification {
+                    label: "B".to_owned(),
+                    description: "B".to_owned(),
+                    preview: None,
+                },
+            ],
+            multi_select: false,
+        })
+        .collect();
     refused(
-        InteractionSubject::Question {
-            prompt: "Which target?".to_owned(),
-            choices: Some(
-                (0..=MAX_QUESTION_CHOICES)
-                    .map(|index| format!("choice-{index}"))
-                    .collect(),
-            ),
-            allow_free_text: false,
+        InteractionSubject::Questionnaire {
+            questionnaire: oversized_count,
         },
-        "an oversized choice count",
+        "oversized question count",
     );
+    let mut oversized_label = questionnaire_specification();
+    oversized_label.questions[0].options[0].label = "c".repeat(MAX_OPTION_LABEL_CHARS + 1);
     refused(
-        InteractionSubject::Question {
-            prompt: "Which target?".to_owned(),
-            choices: Some(vec!["c".repeat(MAX_QUESTION_CHOICE_CHARS + 1)]),
-            allow_free_text: false,
+        InteractionSubject::Questionnaire {
+            questionnaire: oversized_label,
         },
-        "an oversized choice value",
+        "oversized option label",
     );
+    let mut duplicate_labels = questionnaire_specification();
+    duplicate_labels.questions[0].options[1].label = "staging".to_owned();
     refused(
-        InteractionSubject::Question {
-            prompt: "Which target?".to_owned(),
-            choices: Some(vec!["staging".to_owned(), "staging".to_owned()]),
-            allow_free_text: false,
+        InteractionSubject::Questionnaire {
+            questionnaire: duplicate_labels,
         },
-        "duplicate choices",
+        "duplicate option labels",
     );
+    let mut too_few_options = questionnaire_specification();
+    too_few_options.questions[0].options.clear();
     refused(
-        InteractionSubject::Question {
-            prompt: "Which target?".to_owned(),
-            choices: Some(Vec::new()),
-            allow_free_text: false,
+        InteractionSubject::Questionnaire {
+            questionnaire: too_few_options,
         },
-        "an empty choice list",
+        "an empty authored option list",
     );
+    let mut reserved_label = questionnaire_specification();
+    reserved_label.questions[0].options[0].label = "Type something.".to_owned();
     refused(
-        InteractionSubject::Question {
-            prompt: "Which target?".to_owned(),
-            choices: None,
-            allow_free_text: false,
+        InteractionSubject::Questionnaire {
+            questionnaire: reserved_label,
         },
-        "an unanswerable Question mode with neither choices nor free text",
+        "a client-reserved option label",
     );
     refused(
         InteractionSubject::Approval {
@@ -1321,120 +1360,81 @@ fn interaction_audit_payload_bounds_are_durable_invariants() {
     );
 }
 
-/// A Question settlement must satisfy the exact requested Question contract,
-/// not merely carry the `Answered` variant. A durable audit that claims a user
-/// picked a choice the Question never offered, or typed free text into a
-/// Question that refused it, is a record no live coordinator could produce.
+/// A questionnaire settlement must satisfy the exact requested facts and retain
+/// the canonical answer decisions by value.
 #[test]
-fn a_question_settlement_must_satisfy_the_exact_requested_question() {
+fn a_questionnaire_settlement_must_satisfy_the_exact_requested_facts() {
     let store = policy_boundary_store();
 
     let choices_only = InteractionId::for_attempt(&attempt(), 1);
     store
-        .append_interaction_audit(requested(
-            &choices_only,
-            InteractionSubject::Question {
-                prompt: "Which target?".to_owned(),
-                choices: Some(vec!["staging".to_owned(), "production".to_owned()]),
-                allow_free_text: false,
-            },
-        ))
+        .append_interaction_audit(requested(&choices_only, questionnaire_subject()))
+        .expect("requested");
+    assert!(
+        matches!(
+            store.append_interaction_audit(settled(&choices_only, submitted_option("canary"),)),
+            Err(ConversationStoreError::InvalidReference(_))
+        ),
+        "an option the requested questionnaire never offered is refused"
+    );
+    assert!(
+        store
+            .append_interaction_audit(settled(
+                &choices_only,
+                InteractionSettlement::QuestionnaireSubmitted {
+                    submission: QuestionnaireSubmission {
+                        answers: vec![QuestionnaireAnswerEntry {
+                            question_index: 0,
+                            answer: QuestionnaireAnswer::Custom(CustomAnswer {
+                                answer: "canary".to_owned(),
+                            }),
+                        }],
+                    },
+                },
+            ))
+            .is_ok(),
+        "custom answers are always available at runtime"
+    );
+
+    let multi = InteractionId::for_attempt(&attempt(), 2);
+    let mut multi_spec = questionnaire_specification();
+    multi_spec.questions[0].multi_select = true;
+    let multi_subject = InteractionSubject::Questionnaire {
+        questionnaire: multi_spec,
+    };
+    store
+        .append_interaction_audit(requested(&multi, multi_subject))
         .expect("requested");
     assert!(
         matches!(
             store.append_interaction_audit(settled(
-                &choices_only,
-                InteractionSettlement::Answered {
-                    answer: QuestionAnswer::Choice {
-                        value: "canary".to_owned(),
+                &multi,
+                InteractionSettlement::QuestionnaireSubmitted {
+                    submission: QuestionnaireSubmission {
+                        answers: vec![QuestionnaireAnswerEntry {
+                            question_index: 0,
+                            answer: QuestionnaireAnswer::MultipleOption(MultipleOptionAnswer {
+                                selected: vec!["staging".to_owned(), "staging".to_owned()],
+                            }),
+                        }],
                     },
                 },
             )),
             Err(ConversationStoreError::InvalidReference(_))
         ),
-        "a choice the requested Question never offered is refused"
+        "duplicated multi-selection is refused"
     );
-    assert!(
-        matches!(
-            store.append_interaction_audit(settled(
-                &choices_only,
-                InteractionSettlement::Answered {
-                    answer: QuestionAnswer::FreeText {
-                        value: "canary".to_owned(),
-                    },
-                },
-            )),
-            Err(ConversationStoreError::InvalidReference(_))
-        ),
-        "free text is refused when the requested Question did not allow it"
-    );
+
+    let declined = InteractionId::for_attempt(&attempt(), 3);
+    store
+        .append_interaction_audit(requested(&declined, questionnaire_subject()))
+        .expect("requested");
     store
         .append_interaction_audit(settled(
-            &choices_only,
-            InteractionSettlement::Answered {
-                answer: QuestionAnswer::Choice {
-                    value: "staging".to_owned(),
-                },
-            },
+            &declined,
+            InteractionSettlement::QuestionnaireDeclined,
         ))
-        .expect("an offered choice settles the exact Question");
-
-    let free_text = InteractionId::for_attempt(&attempt(), 2);
-    store
-        .append_interaction_audit(requested(
-            &free_text,
-            InteractionSubject::Question {
-                prompt: "Which target?".to_owned(),
-                choices: None,
-                allow_free_text: true,
-            },
-        ))
-        .expect("requested");
-    assert!(
-        matches!(
-            store.append_interaction_audit(settled(
-                &free_text,
-                InteractionSettlement::Answered {
-                    answer: QuestionAnswer::FreeText {
-                        value: "a".repeat(MAX_QUESTION_ANSWER_CHARS + 1),
-                    },
-                },
-            )),
-            Err(ConversationStoreError::InvalidReference(_))
-        ),
-        "an oversized free-text answer is refused"
-    );
-    assert!(
-        matches!(
-            store.append_interaction_audit(settled(
-                &free_text,
-                InteractionSettlement::Answered {
-                    answer: QuestionAnswer::FreeText {
-                        value: String::new(),
-                    },
-                },
-            )),
-            Err(ConversationStoreError::InvalidReference(_))
-        ),
-        "an empty answer is not an answer"
-    );
-
-    let denied = InteractionId::for_attempt(&attempt(), 3);
-    store
-        .append_interaction_audit(requested(&denied, approval_subject()))
-        .expect("requested");
-    assert!(
-        matches!(
-            store.append_interaction_audit(settled(
-                &denied,
-                InteractionSettlement::Denied {
-                    reason: "d".repeat(MAX_APPROVAL_DENIAL_REASON_CHARS + 1),
-                },
-            )),
-            Err(ConversationStoreError::InvalidReference(_))
-        ),
-        "an oversized denial reason is refused"
-    );
+        .expect("decline is a distinct terminal settlement");
 }
 
 /// Both facts of one interaction belong to the exact same conversation +
@@ -1489,7 +1489,7 @@ fn a_settlement_is_pinned_to_the_exact_attempt_and_turn_of_its_request() {
         .expect("the settlement pinned to the requested envelope commits");
 }
 
-/// A denial settlement retains the exact client-facing reason, and a Question
+/// A denial settlement retains the exact client-facing reason, and a Questionnaire
 /// settlement retains the exact user answer, so the audit answers "what did
 /// the human actually decide" without consulting current policy.
 #[test]
@@ -1511,25 +1511,11 @@ fn settlements_retain_the_exact_decision_by_value() {
 
     let answered = InteractionId::for_attempt(&attempt(), 2);
     store
-        .append_interaction_audit(requested(
-            &answered,
-            InteractionSubject::Question {
-                prompt: "Which target?".to_owned(),
-                choices: Some(vec!["staging".to_owned()]),
-                allow_free_text: false,
-            },
-        ))
+        .append_interaction_audit(requested(&answered, questionnaire_subject()))
         .expect("requested");
     store
-        .append_interaction_audit(settled(
-            &answered,
-            InteractionSettlement::Answered {
-                answer: QuestionAnswer::Choice {
-                    value: "staging".to_owned(),
-                },
-            },
-        ))
-        .expect("answered");
+        .append_interaction_audit(settled(&answered, submitted_option("staging")))
+        .expect("questionnaire submitted");
 
     let facts = interaction_facts(&store);
     assert!(matches!(
@@ -1542,11 +1528,13 @@ fn settlements_retain_the_exact_decision_by_value() {
     assert!(matches!(
         &facts[3],
         RuntimeEvent::InteractionSettled {
-            settlement: InteractionSettlement::Answered {
-                answer: QuestionAnswer::Choice { value }
-            },
+            settlement: InteractionSettlement::QuestionnaireSubmitted { submission },
             ..
-        } if value == "staging"
+        } if matches!(
+            &submission.answers[0].answer,
+            QuestionnaireAnswer::SingleOption(SingleOptionAnswer { label })
+                if label == "staging"
+        )
     ));
 
     // The finite approval decision has no argument channel, which is why the

@@ -59,7 +59,7 @@ export function approvalInteraction(
   };
 }
 
-export function questionInteraction(
+export function questionnaireInteraction(
   id = "attempt-1-interaction-question-1",
 ): InteractionRequest {
   return {
@@ -68,10 +68,20 @@ export function questionInteraction(
     attempt_id: "attempt-1",
     turn: 3,
     kind: {
-      type: "question",
-      prompt: "Which environment should I use?",
-      choices: ["staging", "production"],
-      allow_free_text: false,
+      type: "questionnaire",
+      questionnaire: {
+        questions: [
+          {
+            question: "Which environment should I use?",
+            header: "Environment",
+            options: [
+              { label: "staging", description: "A safe test environment." },
+              { label: "production", description: "The live environment." },
+            ],
+            multi_select: false,
+          },
+        ],
+      },
     },
   };
 }

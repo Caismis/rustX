@@ -8,6 +8,8 @@ the repository.
 
 from __future__ import annotations
 
+import json
+
 from fake_provider.scenario import (
     OPENAI_CHAT_COMPLETIONS,
     Expect,
@@ -15,6 +17,7 @@ from fake_provider.scenario import (
     Scenario,
     Step,
     Stream,
+    ToolCall,
     Text,
     Usage,
 )
@@ -68,6 +71,80 @@ def tui_integration() -> Scenario:
                 headers_present=("content-type",),
             ),
             Stream(Text(REPLY, pieces=2), Finish("stop"), Usage(12, 3)),
+        ),
+    )
+
+
+QUESTIONNAIRE_PROMPT = "choose the visual direction"
+QUESTIONNAIRE_ARGUMENTS = json.dumps(
+    {
+        "questions": [
+            {
+                "question": "Which visual direction should I use?",
+                "header": "Visual style",
+                "options": [
+                    {
+                        "label": "Swiss / Klein blue",
+                        "description": "Information-first typography with strong hierarchy.",
+                        "preview": "## Swiss preview\n\nBlue hierarchy.",
+                    },
+                    {
+                        "label": "Electronic magazine",
+                        "description": "A warmer editorial composition with serif typography.",
+                    },
+                ],
+                "multi_select": False,
+            },
+            {
+                "question": "Which elements should be enabled?",
+                "header": "Elements",
+                "options": [
+                    {"label": "Charts", "description": "Show quantitative charts."},
+                    {"label": "Comments", "description": "Show reviewer comments."},
+                ],
+                "multi_select": True,
+            },
+        ]
+    },
+    separators=(",", ":"),
+)
+
+
+def tui_ask_user_questionnaire() -> Scenario:
+    """One structured ask_user call, then the model's next turn."""
+    return Scenario(
+        "tui_ask_user_questionnaire",
+        Step(
+            Expect(
+                protocol=OPENAI_CHAT_COMPLETIONS,
+                model=INTEGRATION_MODEL,
+                body_contains=(QUESTIONNAIRE_PROMPT, "multi_select", "description"),
+                tools_include=("ask_user",),
+                headers_present=("content-type",),
+            ),
+            Stream(
+                ToolCall(
+                    "call-ask-user-1",
+                    "ask_user",
+                    QUESTIONNAIRE_ARGUMENTS,
+                ),
+                Finish("tool_calls"),
+            ),
+        ),
+        Step(
+            Expect(
+                protocol=OPENAI_CHAT_COMPLETIONS,
+                model=INTEGRATION_MODEL,
+                body_contains=(
+                    r'\"cancelled\":false',
+                    r'\"question_index\":0',
+                    r'\"header\":\"Visual style\"',
+                    r'\"kind\":\"option\"',
+                    "Swiss / Klein blue",
+                ),
+                tools_include=("ask_user",),
+            ),
+            Stream(Text("Questionnaire continued"), Finish("stop")),
         ),
     )
 
@@ -132,4 +209,8 @@ def tui_compaction() -> Scenario:
     )
 
 
-SCENARIOS = {"tui_integration": tui_integration, "tui_compaction": tui_compaction}
+SCENARIOS = {
+    "tui_integration": tui_integration,
+    "tui_ask_user_questionnaire": tui_ask_user_questionnaire,
+    "tui_compaction": tui_compaction,
+}

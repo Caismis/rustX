@@ -136,7 +136,7 @@
 //!   time an observer sees it.
 //! - **Generic forms/workflows**, **subagent lifecycle** (Issue #60), and
 //!   **turn-stopping/forced continuation**: each remains outside this bounded
-//!   pre-tool seam. The native `ask_user` Tool owns its Question interaction
+//!   pre-tool seam. The native `ask_user` Tool owns its Questionnaire interaction
 //!   through the normal Tool Plane instead of adding an Agent Loop branch.
 //!
 //! [`AgentExecutionObserver`](super::AgentExecutionObserver) is a different
@@ -156,7 +156,7 @@ use crate::runtime::identity::{
 #[cfg(test)]
 use crate::runtime::interaction::TestInteractionRendezvous;
 use crate::runtime::interaction::{
-    ApprovalFacts, InteractionCoordinator, InteractionOutcome, QuestionRequester,
+    ApprovalFacts, InteractionCoordinator, InteractionOutcome, QuestionnaireRequester,
 };
 use crate::runtime::types::ApprovalMode;
 use crate::tools::types::{
@@ -376,14 +376,14 @@ impl InteractionBinding {
         }
     }
 
-    fn native_question_requester(
+    fn native_questionnaire_requester(
         &self,
         attempt_id: AttemptId,
         cancellation: ExecutionCancellation,
         turn: u32,
-    ) -> Option<QuestionRequester> {
+    ) -> Option<QuestionnaireRequester> {
         match self {
-            Self::Native(coordinator) => Some(QuestionRequester::new(
+            Self::Native(coordinator) => Some(QuestionnaireRequester::new(
                 Arc::clone(coordinator),
                 attempt_id,
                 cancellation,
@@ -757,17 +757,17 @@ impl AttemptLifecycle {
             .await
     }
 
-    /// Binds the one native Question capability for a foreground invocation.
+    /// Binds the one native Questionnaire capability for a foreground invocation.
     /// The returned value is crate-private and carries only a read-only
     /// cancellation view; it never exposes the attempt cancellation owner.
-    pub(crate) fn native_question_requester(
+    pub(crate) fn native_questionnaire_requester(
         &self,
         attempt_id: AttemptId,
         cancellation: ExecutionCancellation,
         turn: u32,
-    ) -> Option<QuestionRequester> {
+    ) -> Option<QuestionnaireRequester> {
         self.interaction
-            .native_question_requester(attempt_id, cancellation, turn)
+            .native_questionnaire_requester(attempt_id, cancellation, turn)
     }
 
     /// Binds the observer that speaks for the **native** runtime observation

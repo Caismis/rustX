@@ -1,5 +1,5 @@
 /**
- * Runtime Client Protocol v1 — the TypeScript mirror of the wire contract.
+ * Runtime Client Protocol v2 — the TypeScript mirror of the wire contract.
  *
  * These declarations describe the JSON rustX already speaks. They are a
  * *transcription* of the Rust types in `src/runtime_client/`, never a second
@@ -11,7 +11,7 @@
  * - nothing in this file interprets a value. `requestParams` stays opaque
  *   provider-owned JSON, capability sets are read as published, and tool
  *   arguments/results are carried, not parsed for meaning;
- * - Runtime Client Protocol v1 event discriminators are a closed vocabulary at
+ * - Runtime Client Protocol v2 event discriminators are a closed vocabulary at
  *   the connection boundary: an unknown event is a protocol error, not a
  *   presentation fact; other open values remain opaque or are checked at
  *   their owning boundary.
@@ -23,7 +23,7 @@
  * camelCase.
  */
 
-export const RUNTIME_CLIENT_PROTOCOL_VERSION_V1 = 1;
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 2;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -285,9 +285,44 @@ export type ApprovalDecision =
   | { type: "allow" }
   | { type: "deny"; reason: string };
 
-export type QuestionAnswer =
-  | { type: "choice"; value: string }
-  | { type: "free_text"; value: string };
+export type OptionSpecification = {
+  label: string;
+  description: string;
+  preview?: string;
+};
+
+export type QuestionSpecification = {
+  question: string;
+  header: string;
+  options: OptionSpecification[];
+  multi_select: boolean;
+};
+
+export type QuestionnaireSpecification = {
+  questions: QuestionSpecification[];
+};
+
+export type SingleOptionAnswer = { label: string };
+export type CustomAnswer = { answer: string };
+export type MultipleOptionAnswer = { selected: string[] };
+
+export type QuestionnaireAnswer =
+  | { type: "single_option"; value: SingleOptionAnswer }
+  | { type: "custom"; value: CustomAnswer }
+  | { type: "multiple_option"; value: MultipleOptionAnswer };
+
+export type QuestionnaireAnswerEntry = {
+  question_index: number;
+  answer: QuestionnaireAnswer;
+};
+
+export type QuestionnaireSubmission = {
+  answers: QuestionnaireAnswerEntry[];
+};
+
+export type QuestionnaireResponse =
+  | { type: "submitted"; value: QuestionnaireSubmission }
+  | { type: "declined" };
 
 export type InteractionResponse =
   | {
@@ -295,8 +330,8 @@ export type InteractionResponse =
       decision: ApprovalDecision;
     }
   | {
-      type: "question";
-      answer: QuestionAnswer;
+      type: "questionnaire";
+      response: QuestionnaireResponse;
     };
 
 export type InteractionRequest = {
@@ -316,15 +351,13 @@ export type InteractionRequest = {
         reason: string;
       }
     | {
-        type: "question";
-        prompt: string;
-        choices?: string[];
-        allow_free_text: boolean;
+        type: "questionnaire";
+        questionnaire: QuestionnaireSpecification;
       };
 };
 
 export type InteractionOutcome =
-  | { type: "answered"; response: InteractionResponse }
+  | { type: "responded"; response: InteractionResponse }
   | { type: "cancelled"; reason: CancellationReason }
   | { type: "unavailable" };
 
@@ -339,17 +372,16 @@ export type InteractionSubject =
       reason: string;
     }
   | {
-      type: "question";
-      prompt: string;
-      choices?: string[];
-      allow_free_text: boolean;
+      type: "questionnaire";
+      questionnaire: QuestionnaireSpecification;
     };
 
 /** The terminal value retained by the durable interaction audit. */
 export type InteractionSettlement =
   | { type: "approved" }
   | { type: "denied"; reason: string }
-  | { type: "answered"; answer: QuestionAnswer }
+  | { type: "questionnaire_submitted"; submission: QuestionnaireSubmission }
+  | { type: "questionnaire_declined" }
   | { type: "cancelled"; reason: CancellationReason };
 
 // ---------------------------------------------------------------------------
@@ -1426,11 +1458,11 @@ export type RuntimeClientOutboundRecord =
   | RuntimeClientProtocolEvent;
 
 /**
- * Checks only the discriminator of one Runtime Client Protocol v1 event.
+ * Checks only the discriminator of one Runtime Client Protocol v2 event.
  *
  * The connection owns structural protocol validation, so this deliberately
  * does not validate the event payload. Once this returns true, the reducer
- * may receive the event as a known v1 fact.
+ * may receive the event as a known v2 fact.
  */
 export function isKnownRuntimeClientEvent(
   value: unknown,
@@ -1482,7 +1514,7 @@ export function isKnownRuntimeClientEvent(
 /**
  * Classifies one decoded outbound record.
  *
- * A known notification carries a cursor and a known v1 event discriminator.
+ * A known notification carries a cursor and a known v2 event discriminator.
  * Malformed or future event-shaped records are handled separately by the
  * connection so they cannot fall through as responses.
  */

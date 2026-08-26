@@ -59,7 +59,7 @@ use rustx::runtime::continuation::{
 };
 use rustx::runtime_client::types::{RequestId, RuntimeClientRequest};
 use rustx::runtime_client::{
-    EventDelivery, EventSubscription, RUNTIME_CLIENT_PROTOCOL_VERSION_V1, RuntimeAttachment,
+    EventDelivery, EventSubscription, RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeAttachment,
     RuntimeClientCursor, RuntimeClientError, RuntimeClientEvent, RuntimeClientHost,
     RuntimeClientProtocolEvent,
 };
@@ -204,7 +204,7 @@ fn overflow_turn() -> Vec<FakeStep> {
 /// Attaches one client and subscribes it to the full observation stream.
 fn attach(host: &RuntimeClientHost) -> (RuntimeAttachment, EventSubscription) {
     let attachment = host
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach")
         .0;
     let subscription = attachment

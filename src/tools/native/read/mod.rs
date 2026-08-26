@@ -333,7 +333,7 @@ mod tests {
                     artifacts: &artifacts,
                     tool_output: &tool_output,
                     environment: &environment,
-                    question_requester: None,
+                    questionnaire_requester: None,
                 },
             )
         };

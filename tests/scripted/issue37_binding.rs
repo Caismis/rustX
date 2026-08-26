@@ -287,7 +287,7 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
     runtime.activate();
 
     let attachment = host_a
-        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     let subscription = attachment
         .0
@@ -508,7 +508,7 @@ async fn reconnect_replaces_the_attachment_not_the_host() {
     let first = host.endpoint();
     let response = first.handle_request(RuntimeClientRequest::Initialize {
         id: rustx::runtime_client::RequestId::new(1),
-        protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+        protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
     });
     let Some(RuntimeClientResult::Initialized {
         attachment_id: first_id,
@@ -529,7 +529,7 @@ async fn reconnect_replaces_the_attachment_not_the_host() {
     let second = host.endpoint();
     let response = second.handle_request(RuntimeClientRequest::Initialize {
         id: rustx::runtime_client::RequestId::new(1),
-        protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+        protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
     });
     let Some(RuntimeClientResult::Initialized {
         attachment_id: second_id,
@@ -604,7 +604,7 @@ async fn the_host_conversation_identity_is_the_tool_runtime_identity() {
     let endpoint = host.endpoint();
     let response = endpoint.handle_request(RuntimeClientRequest::Initialize {
         id: rustx::runtime_client::RequestId::new(1),
-        protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+        protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
     });
     let Some(RuntimeClientResult::Initialized {
         conversation_id, ..
@@ -620,7 +620,7 @@ async fn the_host_conversation_identity_is_the_tool_runtime_identity() {
     drop(endpoint);
 
     let (attachment, _) = host
-        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     let subscription = attachment
         .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(0))

@@ -28,7 +28,7 @@ use futures_util::future::BoxFuture;
 
 use crate::runtime::cancellation::ExecutionCancellation;
 use crate::runtime::identity::{ConversationId, ToolExecutionId, ToolId};
-use crate::runtime::interaction::QuestionRequester;
+use crate::runtime::interaction::QuestionnaireRequester;
 use crate::tools::artifacts::ArtifactStore;
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::managed_output::ManagedToolOutput;
@@ -63,7 +63,7 @@ pub trait ProgressReporter: Send + Sync {
 /// owner-observing runtime cancellation view, the workspace boundary, the progress reporter,
 /// the artifact store, the managed tool-output store, and the explicit
 /// authorized environment. The native `ask_user` executor additionally
-/// receives one crate-private, attempt-bound Question requester. It cannot
+/// receives one crate-private, attempt-bound Questionnaire requester. It cannot
 /// obtain the Agent Loop's cancellation authority or any generic interaction
 /// extension seam. Executor-specific resources (process ids, MCP SDK types,
 /// Python runtime objects) belong inside executor implementations and never
@@ -104,17 +104,17 @@ pub struct ToolExecutionContext<'a> {
     pub tool_output: &'a ManagedToolOutput,
     /// The explicit authorized tool environment.
     pub environment: &'a ToolEnvironment,
-    /// The one bounded native Question capability. This is intentionally not
+    /// The one bounded native Questionnaire capability. This is intentionally not
     /// public: generic `ToolExecutor` implementations can observe only
     /// [`ExecutionCancellation`], while the native `ask_user` path receives a
     /// runtime-bound requester through an internal construction seam.
-    pub(crate) question_requester: Option<QuestionRequester>,
+    pub(crate) questionnaire_requester: Option<QuestionnaireRequester>,
 }
 
 impl<'a> ToolExecutionContext<'a> {
     /// Constructs a detached execution context without native interaction
     /// authority. Runtime-owned foreground dispatch adds its bounded
-    /// Question requester through the crate-private builder below.
+    /// Questionnaire requester through the crate-private builder below.
     #[must_use]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -136,23 +136,26 @@ impl<'a> ToolExecutionContext<'a> {
             artifacts,
             tool_output,
             environment,
-            question_requester: None,
+            questionnaire_requester: None,
         }
     }
 
-    /// Adds the one runtime-bound native Question requester.
+    /// Adds the one runtime-bound native Questionnaire requester.
     #[must_use]
-    pub(crate) fn with_question_requester(mut self, requester: QuestionRequester) -> Self {
-        self.question_requester = Some(requester);
+    pub(crate) fn with_questionnaire_requester(
+        mut self,
+        requester: QuestionnaireRequester,
+    ) -> Self {
+        self.questionnaire_requester = Some(requester);
         self
     }
 
-    /// Returns the bounded requester to the native `ask_user` implementation.
+    /// Returns the bounded questionnaire requester to the native `ask_user` implementation.
     /// The concrete type and this accessor are crate-private, so external
     /// `ToolExecutor` implementations cannot acquire native interaction
     /// authority.
-    pub(crate) fn question_requester(&self) -> Option<&QuestionRequester> {
-        self.question_requester.as_ref()
+    pub(crate) fn questionnaire_requester(&self) -> Option<&QuestionnaireRequester> {
+        self.questionnaire_requester.as_ref()
     }
 }
 
@@ -377,7 +380,7 @@ impl ToolRegistration {
 
 /// The name of the runtime intrinsic background inspection tool.
 pub const BACKGROUND_TASK_TOOL_NAME: &str = "background_task";
-/// The native human-question tool.
+/// The native human-questionnaire tool.
 pub const ASK_USER_TOOL_NAME: &str = "ask_user";
 
 impl ToolRegistry {
@@ -1478,7 +1481,7 @@ mod tests {
             artifacts: &artifacts,
             tool_output: &tool_output,
             environment: &ToolEnvironment::new(),
-            question_requester: None,
+            questionnaire_requester: None,
         };
         let executor = registry.executor(&prepared.invocation.tool_id);
         let _result = executor

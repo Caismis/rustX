@@ -479,7 +479,7 @@ async fn run_session(
 
 /// One `initialize` record.
 fn initialize_record(id: u64) -> Vec<u8> {
-    format!("{{\"method\":\"initialize\",\"id\":{id},\"protocol_version\":1}}\n").into_bytes()
+    format!("{{\"method\":\"initialize\",\"id\":{id},\"protocol_version\":2}}\n").into_bytes()
 }
 
 /// Parses one captured record as a response.
@@ -555,7 +555,7 @@ async fn crlf_records_are_accepted() {
     let outcome = run_session(
         host.endpoint(),
         &[
-            b"{\"method\":\"initialize\",\"id\":1,\"protocol_version\":1}\r\n",
+            b"{\"method\":\"initialize\",\"id\":1,\"protocol_version\":2}\r\n",
             b"{\"method\":\"snapshot_get\",\"id\":2}\r\n",
         ],
         PIPE_BYTES,
@@ -642,7 +642,7 @@ async fn physical_multiline_json_is_a_framing_failure() {
 /// Every structurally invalid record is transport-fatal, applies nothing,
 /// and produces no fabricated protocol record.
 ///
-/// Protocol v1 has no uncorrelated error envelope; a malformed frame may
+/// Protocol v2 has no uncorrelated error envelope; a malformed frame may
 /// not even carry a request id, so inventing one would be a second
 /// protocol.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -659,7 +659,7 @@ async fn invalid_records_are_fatal_and_write_nothing() {
         ),
         (
             "wrong-type",
-            br#"{"method":"initialize","id":"two","protocol_version":1}"#,
+            br#"{"method":"initialize","id":"two","protocol_version":2}"#,
         ),
     ];
     for (name, record) in cases {
@@ -1134,7 +1134,7 @@ async fn eof_detaches_without_cancelling_the_running_attempt() {
     let response =
         endpoint.handle_request(rustx::runtime_client::RuntimeClientRequest::Initialize {
             id: rustx::runtime_client::RequestId::new(1),
-            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
         });
     assert!(
         matches!(
@@ -1235,7 +1235,7 @@ async fn a_broken_output_pipe_detaches_without_retrying() {
     let response =
         endpoint.handle_request(rustx::runtime_client::RuntimeClientRequest::Initialize {
             id: rustx::runtime_client::RequestId::new(1),
-            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
         });
     assert!(matches!(
         response.result,
@@ -1402,7 +1402,7 @@ async fn shutdown_does_not_close_the_transport() {
 /// runtime meanwhile keeps admitting inbound, running attempts, and
 /// publishing into its own bounded replay ring. When the consumer finally
 /// resumes, the transport discovers its subscription fell behind that ring;
-/// Protocol v1 has no uncorrelated stream-error record, so the session
+/// Protocol v2 has no uncorrelated stream-error record, so the session
 /// terminates with the typed local lag error and the client repairs from an
 /// authoritative snapshot after reconnecting.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1515,7 +1515,7 @@ async fn a_blocked_consumer_stalls_the_transport_not_the_runtime() {
 
     // 6. Release the consumer. The blocked response completes, and the
     //    transport then discovers its subscription fell behind the bounded
-    //    replay ring. Protocol v1 has no uncorrelated stream-error record,
+    //    replay ring. Protocol v2 has no uncorrelated stream-error record,
     //    so the session ends with the typed local lag error.
     sink.open();
     let result = tokio::time::timeout(LIVENESS_GUARD, session)
@@ -1556,7 +1556,7 @@ async fn a_blocked_consumer_stalls_the_transport_not_the_runtime() {
     let response =
         endpoint.handle_request(rustx::runtime_client::RuntimeClientRequest::Initialize {
             id: rustx::runtime_client::RequestId::new(1),
-            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
         });
     let Some(RuntimeClientResult::Initialized { cursor, .. }) = response.result else {
         panic!("the lagged transport released its attachment");

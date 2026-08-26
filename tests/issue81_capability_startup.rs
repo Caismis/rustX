@@ -21,7 +21,7 @@ use rustx::local_runtime::composition::{
 use rustx::model::catalog::MapCredentialEnvironment;
 use rustx::runtime::identity::ConversationId;
 use rustx::runtime_client::snapshot::{CapabilitySourceDescriptor, CapabilitySourceStateView};
-use rustx::runtime_client::{RUNTIME_CLIENT_PROTOCOL_VERSION_V1, RuntimeClientResult};
+use rustx::runtime_client::{RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientResult};
 
 /// A catalog whose only model is never invoked: these tests compose the
 /// runtime and drive tools directly, they do not run an attempt.
@@ -134,7 +134,7 @@ fn attach_snapshot(
 ) -> rustx::runtime_client::RuntimeClientSnapshot {
     let (_attachment, result) = runtime
         .host()
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     let RuntimeClientResult::Initialized { snapshot, .. } = result else {
         panic!("initialize returns the snapshot");
@@ -863,7 +863,7 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
     let response = process_request(&mut stdin, &mut stdout, 1, |id| {
         RuntimeClientRequest::Initialize {
             id,
-            protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+            protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
         }
     })
     .await;

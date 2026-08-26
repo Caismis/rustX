@@ -2925,21 +2925,24 @@ impl<'a> AgentExecution<'a> {
                     // The interaction terminal winner owns the rendezvous,
                     // but it never grants execution authority. Apply the
                     // same post-await cancellation precedence before the
-                    // Answered/Deny/Unavailable value is consumed.
+                    // Responded/Deny/Unavailable value is consumed.
                     if self.cancellation.is_cancelled() {
                         PreToolResolution::Cancelled(self.cancellation.reason())
                     } else {
                         match outcome {
-                            InteractionOutcome::Answered { response } => match response {
+                            InteractionOutcome::Responded { response } => match response {
                                 InteractionResponse::Approval { decision } => match decision {
                                     ApprovalDecision::Allow => PreToolResolution::Allow,
                                     ApprovalDecision::Deny { reason } => {
                                         PreToolResolution::Denied(reason)
                                     }
                                 },
-                                InteractionResponse::Question { .. } => PreToolResolution::Denied(
-                                    "approval interaction returned a Question response".to_owned(),
-                                ),
+                                InteractionResponse::Questionnaire { .. } => {
+                                    PreToolResolution::Denied(
+                                        "approval interaction returned a questionnaire response"
+                                            .to_owned(),
+                                    )
+                                }
                             },
                             InteractionOutcome::Cancelled { reason } => {
                                 PreToolResolution::Cancelled(reason)
@@ -3197,12 +3200,12 @@ impl<'a> AgentExecution<'a> {
             self.tool_runtime.tool_output(),
             self.capability.snapshot().effective_environment(),
         );
-        let context = match self.lifecycle.native_question_requester(
+        let context = match self.lifecycle.native_questionnaire_requester(
             self.request.attempt_id.clone(),
             self.cancellation.execution_cancellation(),
             self.turn,
         ) {
-            Some(requester) => context.with_question_requester(requester),
+            Some(requester) => context.with_questionnaire_requester(requester),
             None => context,
         };
         let future = executor.execute(invocation.clone(), context);

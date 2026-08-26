@@ -21,7 +21,7 @@ use rustx::tools::types::{
 };
 use std::sync::Arc;
 
-const NATIVE_TOOL_NAMES: [&str; 7] = [
+const NATIVE_TOOL_NAMES: [&str; 8] = [
     "read",
     "write",
     "edit",
@@ -29,6 +29,7 @@ const NATIVE_TOOL_NAMES: [&str; 7] = [
     "grep",
     "bash",
     "background_task",
+    "ask_user",
 ];
 
 fn definition(fixture: &common::NativeFixture, name: &str) -> rustx::tools::types::ToolDefinition {
@@ -645,46 +646,78 @@ async fn native_agent_loop_preflight_rejection_settles_without_starting_an_execu
     );
 }
 
-/// The `ModelSelectable` root-schema contract is scoped to that policy alone.
+#[tokio::test]
+async fn malformed_ask_user_rejects_before_interaction_publication() {
+    let fixture = common::native_fixture();
+    let audit = run_native_script(
+        &fixture,
+        support::fake::ScriptedCall {
+            id: "call-invalid-ask-user",
+            tool_id: "tool-ask-user",
+            name: "ask_user",
+            arguments: serde_json::json!({
+                "allow_free_text": "true",
+                "choices": "[\"Swiss style\", \"Electronic magazine style\"]",
+                "prompt": "Which visual style should I use?"
+            }),
+        },
+    )
+    .await;
+
+    assert!(
+        !audit
+            .event_history
+            .iter()
+            .any(|event| { matches!(event, RuntimeEvent::InteractionRequested { .. }) })
+    );
+    assert!(!audit.event_history.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::ToolExecutionStarted { tool_call_id, .. }
+                if tool_call_id.as_str() == "call-invalid-ask-user"
+        )
+    }));
+    let tool_message = audit
+        .messages()
+        .iter()
+        .find_map(|message| match message {
+            MessageBlock::Tool(tool) if tool.tool_call_id.as_str() == "call-invalid-ask-user" => {
+                Some(tool)
+            }
+            _ => None,
+        })
+        .expect("rejected ask_user result slot");
+    assert!(matches!(
+        tool_message.result.status,
+        ToolExecutionStatus::Failed { .. }
+    ));
+}
+
+/// The native questionnaire is one ordinary, decoratable root object.
 ///
-/// `ask_user` is the live proof that rustX must keep accepting composed root
-/// schemas: its canonical schema is a root `anyOf` with no root `properties`
-/// at all, and arbitrary MCP servers ship schemas of that shape too. It
-/// registers normally (it is a fixed foreground intrinsic), while the same
-/// schema is refused under `ModelSelectable`, where rustX would have to
-/// inject a required root property into a composition it cannot reason about.
+/// The old `ask_user` schema was a root composition with three interdependent
+/// modes. The replacement has one required `questions` property, so the
+/// structural contract is visible to every provider adapter and to the
+/// registry preflight path.
 #[test]
-fn composed_root_schemas_stay_valid_outside_model_selectable() {
+fn ask_user_is_one_plain_questionnaire_schema() {
     use rustx::tools::{
-        SchemaError, ToolExecutionPolicy, validate_canonical_schema,
-        validate_execution_metadata_contract,
+        ToolExecutionPolicy, validate_canonical_schema, validate_execution_metadata_contract,
     };
 
     let fixture = common::native_fixture();
     let ask_user = definition(&fixture, "ask_user").input_schema;
-    assert!(
-        ask_user["anyOf"].is_array() && ask_user.get("properties").is_none(),
-        "ask_user describes its arguments with a root composition: {ask_user}"
-    );
-    validate_canonical_schema(&ask_user)
-        .expect("the policy-unaware canonical validator accepts a composed root");
-    for policy in [
-        ToolExecutionPolicy::ForegroundOnly,
-        ToolExecutionPolicy::BackgroundOnly,
-    ] {
-        validate_execution_metadata_contract(policy, &ask_user)
-            .expect("a fixed policy injects nothing, so the root shape is irrelevant");
-    }
-    assert!(
-        matches!(
-            validate_execution_metadata_contract(ToolExecutionPolicy::ModelSelectable, &ask_user),
-            Err(SchemaError::UndecoratableRootSchema(keyword)) if keyword == "anyOf"
-        ),
-        "a composed root falls outside the decoratable root profile"
-    );
+    assert_eq!(ask_user["type"], "object");
+    assert_eq!(required(&ask_user), ["questions"]);
+    assert_eq!(properties(&ask_user), ["questions"]);
+    assert!(ask_user.get("anyOf").is_none());
+    assert!(ask_user.get("oneOf").is_none());
+    assert_eq!(ask_user["additionalProperties"], false);
+    validate_canonical_schema(&ask_user).expect("the questionnaire root is canonical");
+    validate_execution_metadata_contract(ToolExecutionPolicy::ForegroundOnly, &ask_user)
+        .expect("the fixed foreground policy preserves the ordinary root");
 
-    // Every ordinary native tool matches the decoratable root profile, which
-    // is why an allowlist costs nothing in practice.
+    // Every model-selectable native tool matches the decoratable root profile.
     for name in ["read", "write", "edit", "glob", "grep", "bash"] {
         let schema = definition(&fixture, name).input_schema;
         validate_execution_metadata_contract(ToolExecutionPolicy::ModelSelectable, &schema)

@@ -278,9 +278,15 @@ function renderInteractionRequested(
       ...bar(`arguments digest: ${entry.subject.arguments_digest}`, style.dim),
     );
   } else {
-    lines.push(role.warning("question"), ...bar(entry.subject.prompt, style.dim));
-    if (entry.subject.choices !== undefined) {
-      lines.push(...bar(`choices: ${entry.subject.choices.join(", ")}`, style.dim));
+    lines.push(role.warning("questionnaire"));
+    for (const question of entry.subject.questionnaire.questions) {
+      lines.push(...bar(`${question.header}: ${question.question}`, style.dim));
+      lines.push(
+        ...bar(
+          `options: ${question.options.map((option) => option.label).join(", ")}`,
+          style.dim,
+        ),
+      );
     }
   }
   return [{ kind: "text", key: entry.key, text: lines.join("\n") }];
@@ -297,9 +303,15 @@ function renderInteractionSettled(
   ];
   if (entry.settlement.type === "denied" || entry.settlement.type === "cancelled") {
     lines.push(...bar(entry.settlement.reason, style.dim));
-  } else if (entry.settlement.type === "answered") {
-    const answer = entry.settlement.answer;
-    lines.push(...bar(`${answer.type}: ${answer.value}`, style.dim));
+  } else if (entry.settlement.type === "questionnaire_submitted") {
+    lines.push(
+      ...bar(
+        entry.settlement.submission.answers
+          .map((answer) => `${answer.question_index}: ${answer.answer.type}`)
+          .join(", "),
+        style.dim,
+      ),
+    );
   }
   return [{ kind: "text", key: entry.key, text: lines.join("\n") }];
 }
@@ -312,8 +324,10 @@ function settlementLabel(
       return "approved";
     case "denied":
       return "denied";
-    case "answered":
-      return "answered";
+    case "questionnaire_submitted":
+      return "questionnaire submitted";
+    case "questionnaire_declined":
+      return "questionnaire declined";
     case "cancelled":
       return "cancelled";
   }

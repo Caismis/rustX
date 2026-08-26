@@ -55,7 +55,8 @@ use tokio::sync::oneshot;
 use crate::durable::{ConversationInteractionAudit, TranscriptCursor};
 use crate::events::interaction::{
     InteractionSettlement, InteractionSubject, interaction_arguments_digest,
-    validate_interaction_settlement, validate_interaction_subject, validate_question_contract,
+    normalize_questionnaire_response, validate_interaction_settlement,
+    validate_interaction_subject,
 };
 use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use crate::runtime::cancellation::ExecutionCancellation;
@@ -64,6 +65,12 @@ use crate::runtime::identity::{
 };
 use crate::runtime::types::{CancellationReason, ConversationLifecycle, LifecycleAdmission};
 use crate::tools::types::{ToolInvocationMode, ToolOrigin};
+
+pub use crate::events::interaction::{
+    CustomAnswer, MultipleOptionAnswer, OptionSpecification, QuestionSpecification,
+    QuestionnaireAnswer, QuestionnaireAnswerEntry, QuestionnaireDeclined, QuestionnaireResponse,
+    QuestionnaireSpecification, QuestionnaireSubmission, SingleOptionAnswer,
+};
 
 /// The bounded native interaction vocabulary of the 0.1 protocol.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -87,16 +94,11 @@ pub enum InteractionKind {
         /// The native policy's bounded explanation for asking.
         reason: String,
     },
-    /// Ask the user one bounded question. This is deliberately not a generic
-    /// form or workflow vocabulary.
-    Question {
-        /// The bounded human-facing prompt.
-        prompt: String,
-        /// Optional finite choice labels.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        choices: Option<Vec<String>>,
-        /// Whether a free-text answer is accepted in addition to choices.
-        allow_free_text: bool,
+    /// Ask the user one bounded questionnaire. This is one coordinator
+    /// interaction, not a sequence of old single-question interactions.
+    Questionnaire {
+        /// The complete immutable facts shown to the Runtime Client.
+        questionnaire: QuestionnaireSpecification,
     },
 }
 
@@ -140,26 +142,12 @@ pub enum InteractionResponse {
         /// The finite approval decision.  It has no tool arguments.
         decision: ApprovalDecision,
     },
-    /// The response to a Question request.
-    Question {
-        /// The typed answer, with no tool-argument replacement channel.
-        answer: QuestionAnswer,
-    },
-}
-
-/// The finite typed answer accepted by a Question interaction.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum QuestionAnswer {
-    /// A selected value from the request's finite choices.
-    Choice {
-        /// The exact selected choice value.
-        value: String,
-    },
-    /// A bounded free-text response.
-    FreeText {
-        /// The user's text.
-        value: String,
+    /// The response to a Questionnaire request. It carries only indices and
+    /// answer decisions; the request facts remain authoritative in the
+    /// pending interaction.
+    Questionnaire {
+        /// A submitted answer set or explicit decline.
+        response: QuestionnaireResponse,
     },
 }
 
@@ -167,8 +155,9 @@ pub enum QuestionAnswer {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InteractionOutcome {
-    /// A client supplied the terminal typed response.
-    Answered {
+    /// A client supplied the terminal typed response, including an explicit
+    /// questionnaire decline.
+    Responded {
         /// The accepted response.
         response: InteractionResponse,
     },
@@ -257,21 +246,17 @@ impl ApprovalFacts {
     }
 }
 
-/// The bounded facts used to construct one Question request.
+/// The bounded facts used to construct one Questionnaire request.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct QuestionFacts {
+pub(crate) struct QuestionnaireFacts {
     /// The model turn or tool turn that owns the question.
     pub(crate) turn: u32,
-    /// The bounded prompt.
-    pub(crate) prompt: String,
-    /// Optional finite choices.
-    pub(crate) choices: Option<Vec<String>>,
-    /// Whether free text is accepted.
-    pub(crate) allow_free_text: bool,
+    /// The complete immutable questionnaire specification.
+    pub(crate) questionnaire: QuestionnaireSpecification,
 }
 
-impl QuestionFacts {
-    /// Validates the bounded Question contract before publication.
+impl QuestionnaireFacts {
+    /// Validates the bounded Questionnaire contract before publication.
     ///
     /// The native `ask_user` Tool uses this same validator before it checks
     /// provider availability, so malformed model arguments become a clear
@@ -280,35 +265,33 @@ impl QuestionFacts {
     ///
     /// # Errors
     ///
-    /// Returns a bounded argument diagnostic when the prompt, choice list, or
-    /// answer mode cannot produce an answerable Question.
+    /// Returns a bounded argument diagnostic when the questionnaire cannot
+    /// produce an answerable interaction.
     pub(crate) fn validate(&self) -> Result<(), String> {
-        validate_question_contract(&self.prompt, self.choices.as_deref(), self.allow_free_text)
+        validate_interaction_subject(&InteractionSubject::Questionnaire {
+            questionnaire: self.questionnaire.clone(),
+        })
     }
 
     /// Splits the owned facts into the live client-facing request and its
-    /// bounded durable audit subject. A Question subject is stored by value
-    /// because the Question contract already bounds it.
+    /// bounded durable audit subject. The same immutable questionnaire is
+    /// stored by value so the audit and live request cannot diverge.
     fn into_published(
         self,
         conversation_id: ConversationId,
         attempt_id: AttemptId,
         id: InteractionId,
     ) -> (InteractionRequest, InteractionSubject) {
-        let subject = InteractionSubject::Question {
-            prompt: self.prompt.clone(),
-            choices: self.choices.clone(),
-            allow_free_text: self.allow_free_text,
+        let subject = InteractionSubject::Questionnaire {
+            questionnaire: self.questionnaire.clone(),
         };
         let request = InteractionRequest {
             id,
             conversation_id,
             attempt_id,
             turn: self.turn,
-            kind: InteractionKind::Question {
-                prompt: self.prompt,
-                choices: self.choices,
-                allow_free_text: self.allow_free_text,
+            kind: InteractionKind::Questionnaire {
+                questionnaire: self.questionnaire,
             },
         };
         (request, subject)
@@ -338,16 +321,23 @@ pub(crate) fn interaction_settled_event_id(interaction_id: &InteractionId) -> Ev
 /// no user saw.
 fn audit_settlement(outcome: &InteractionOutcome) -> Option<InteractionSettlement> {
     match outcome {
-        InteractionOutcome::Answered { response } => match response {
+        InteractionOutcome::Responded { response } => match response {
             InteractionResponse::Approval { decision } => Some(match decision {
                 ApprovalDecision::Allow => InteractionSettlement::Approved,
                 ApprovalDecision::Deny { reason } => InteractionSettlement::Denied {
                     reason: reason.clone(),
                 },
             }),
-            InteractionResponse::Question { answer } => Some(InteractionSettlement::Answered {
-                answer: answer.clone(),
-            }),
+            InteractionResponse::Questionnaire { response } => match response {
+                QuestionnaireResponse::Submitted(submission) => {
+                    Some(InteractionSettlement::QuestionnaireSubmitted {
+                        submission: submission.clone(),
+                    })
+                }
+                QuestionnaireResponse::Declined => {
+                    Some(InteractionSettlement::QuestionnaireDeclined)
+                }
+            },
         },
         InteractionOutcome::Cancelled { reason } => {
             Some(InteractionSettlement::Cancelled { reason: *reason })
@@ -631,7 +621,7 @@ struct PendingInteraction {
     /// An owner-observing cancellation view. This is the same live view used
     /// by the waiter and lets a response that arrives
     /// after cancellation became observable consume the already-selected
-    /// cause instead of publishing an `Answered` terminal outcome. The
+    /// cause instead of publishing a `Responded` terminal outcome. The
     /// coordinator never receives the authority that can request or
     /// arbitrate cancellation.
     cancellation: ExecutionCancellation,
@@ -778,23 +768,23 @@ pub(crate) struct InteractionCoordinator {
     wait_cancellation_gate: Mutex<Option<Arc<InteractionWaitCancellationGate>>>,
 }
 
-/// The bounded native Question capability bound to one Agent Loop attempt.
+/// The bounded native Questionnaire capability bound to one Agent Loop attempt.
 ///
 /// This is intentionally a concrete crate-private value rather than a public
 /// generic interaction trait. It carries only the attempt identity, a read-only
 /// execution-cancellation view, and the one conversation-owned coordinator.
-/// Its sole operation is to publish and await a Question; it cannot request
+/// Its sole operation is to publish and await a Questionnaire; it cannot request
 /// cancellation, arbitrate model-turn start, settle Approval, or mutate
 /// canonical history.
 #[derive(Clone)]
-pub(crate) struct QuestionRequester {
+pub(crate) struct QuestionnaireRequester {
     coordinator: Arc<InteractionCoordinator>,
     attempt_id: AttemptId,
     cancellation: ExecutionCancellation,
     turn: u32,
 }
 
-impl QuestionRequester {
+impl QuestionnaireRequester {
     pub(crate) fn new(
         coordinator: Arc<InteractionCoordinator>,
         attempt_id: AttemptId,
@@ -809,12 +799,18 @@ impl QuestionRequester {
         }
     }
 
-    /// Publishes and awaits one bounded Question through the existing
+    /// Publishes and awaits one bounded Questionnaire through the existing
     /// runtime-owned coordinator.
-    pub(crate) async fn request_question(&self, mut facts: QuestionFacts) -> InteractionOutcome {
+    pub(crate) async fn request_questionnaire(
+        &self,
+        mut facts: QuestionnaireFacts,
+    ) -> InteractionOutcome {
         facts.turn = self.turn;
+        if facts.validate().is_err() {
+            return InteractionOutcome::Unavailable;
+        }
         self.coordinator
-            .request_question(self.attempt_id.clone(), facts, self.cancellation.clone())
+            .request_questionnaire(self.attempt_id.clone(), facts, self.cancellation.clone())
             .await
     }
 }
@@ -959,14 +955,14 @@ impl InteractionCoordinator {
         self.publish(request, subject, cancellation)
     }
 
-    /// Publishes one bounded Question request and returns the owner-owned
+    /// Publishes one bounded Questionnaire request and returns the owner-owned
     /// waiter. It uses the exact same lifecycle admission, identity,
     /// durable-before-prompt publication, and terminal settlement path as
     /// Approval.
-    fn publish_question_with_cancellation(
+    fn publish_questionnaire_with_cancellation(
         &self,
         attempt_id: AttemptId,
-        facts: QuestionFacts,
+        facts: QuestionnaireFacts,
         cancellation: &ExecutionCancellation,
     ) -> Result<InteractionTicket, InteractionOutcome> {
         let id = self.allocate_id(&attempt_id)?;
@@ -975,7 +971,7 @@ impl InteractionCoordinator {
         self.publish(request, subject, cancellation)
     }
 
-    /// The one publication transition shared by Approval and Question.
+    /// The one publication transition shared by Approval and Questionnaire.
     ///
     /// The durable requested fact commits inside the same critical section
     /// that admits the pending entry, and strictly **before**
@@ -1066,19 +1062,19 @@ impl InteractionCoordinator {
         self.wait(ticket, cancellation).await
     }
 
-    /// Publishes and awaits one Question through the runtime-owned
+    /// Publishes and awaits one Questionnaire through the runtime-owned
     /// coordinator.
-    pub(crate) async fn request_question(
+    pub(crate) async fn request_questionnaire(
         &self,
         attempt_id: AttemptId,
-        facts: QuestionFacts,
+        facts: QuestionnaireFacts,
         cancellation: ExecutionCancellation,
     ) -> InteractionOutcome {
-        let ticket = match self.publish_question_with_cancellation(attempt_id, facts, &cancellation)
-        {
-            Ok(ticket) => ticket,
-            Err(outcome) => return outcome,
-        };
+        let ticket =
+            match self.publish_questionnaire_with_cancellation(attempt_id, facts, &cancellation) {
+                Ok(ticket) => ticket,
+                Err(outcome) => return outcome,
+            };
         self.wait(ticket, cancellation).await
     }
 
@@ -1117,7 +1113,7 @@ impl InteractionCoordinator {
     ///
     /// Returns [`InteractionError::NotPending`] for a stale, duplicate, or
     /// already-cancelled identity, [`InteractionError::InvalidResponse`]
-    /// when the typed response violates the bounded Approval or Question
+    /// when the typed response violates the bounded Approval or Questionnaire
     /// contract, and [`InteractionError::AuditFailed`] when the durable
     /// settled fact could not commit. The last case is reported to the client
     /// exactly because the response must never appear accepted ahead of the
@@ -1127,7 +1123,7 @@ impl InteractionCoordinator {
         interaction_id: &InteractionId,
         response: InteractionResponse,
     ) -> Result<(), InteractionError> {
-        let outcome = InteractionOutcome::Answered { response };
+        let outcome = InteractionOutcome::Responded { response };
         let transition = self.settle(interaction_id, outcome, true)?;
         if transition.cancellation_won {
             return Err(InteractionError::NotPending {
@@ -1245,14 +1241,14 @@ impl InteractionCoordinator {
             // The owning AgentCancellation owns cause arbitration. A response that
             // arrives after that authority has already won can only trigger
             // the same cancellation terminal outcome; it cannot publish an
-            // Answered result and leave the interaction out of sync with its
+            // response result and leave the interaction out of sync with its
             // owning attempt.
             outcome = InteractionOutcome::Cancelled {
                 reason: pending.cancellation.reason(),
             };
         }
-        if validate_response && let InteractionOutcome::Answered { response } = &outcome {
-            validate_response_for(&pending.subject, response)?;
+        if validate_response && let InteractionOutcome::Responded { response } = &mut outcome {
+            *response = validate_response_for(&pending.subject, response)?;
         }
         // Removing the pending entry and selecting the terminal outcome are
         // one mutex-protected transition.  The losing response/cancellation
@@ -1383,29 +1379,55 @@ impl std::error::Error for InteractionError {}
 fn validate_response_for(
     subject: &InteractionSubject,
     response: &InteractionResponse,
-) -> Result<(), InteractionError> {
-    let settlement = match response {
-        InteractionResponse::Approval { decision } => match decision {
-            ApprovalDecision::Allow => InteractionSettlement::Approved,
-            ApprovalDecision::Deny { reason } => InteractionSettlement::Denied {
-                reason: reason.clone(),
-            },
-        },
-        InteractionResponse::Question { answer } => InteractionSettlement::Answered {
-            answer: answer.clone(),
-        },
-    };
-    validate_interaction_settlement(subject, &settlement)
-        .map_err(|message| InteractionError::InvalidResponse { message })
+) -> Result<InteractionResponse, InteractionError> {
+    match (subject, response) {
+        (
+            InteractionSubject::Questionnaire { questionnaire },
+            InteractionResponse::Questionnaire { response },
+        ) => normalize_questionnaire_response(questionnaire, response)
+            .and_then(|response| {
+                let settlement = match &response {
+                    QuestionnaireResponse::Submitted(submission) => {
+                        InteractionSettlement::QuestionnaireSubmitted {
+                            submission: submission.clone(),
+                        }
+                    }
+                    QuestionnaireResponse::Declined => InteractionSettlement::QuestionnaireDeclined,
+                };
+                validate_interaction_settlement(
+                    &InteractionSubject::Questionnaire {
+                        questionnaire: questionnaire.clone(),
+                    },
+                    &settlement,
+                )?;
+                Ok(InteractionResponse::Questionnaire { response })
+            })
+            .map_err(|message| InteractionError::InvalidResponse { message }),
+        (InteractionSubject::Approval { .. }, InteractionResponse::Approval { .. }) => {
+            let InteractionResponse::Approval { decision } = response else {
+                unreachable!("the tuple pattern already matched Approval")
+            };
+            let settlement = match decision {
+                ApprovalDecision::Allow => InteractionSettlement::Approved,
+                ApprovalDecision::Deny { reason } => InteractionSettlement::Denied {
+                    reason: reason.clone(),
+                },
+            };
+            validate_interaction_settlement(subject, &settlement)
+                .map_err(|message| InteractionError::InvalidResponse { message })?;
+            Ok(response.clone())
+        }
+        _ => Err(InteractionError::InvalidResponse {
+            message: "interaction response kind does not match its request".to_owned(),
+        }),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::agent::cancellation::AgentCancellation;
-    use crate::events::interaction::{
-        MAX_APPROVAL_REQUEST_REASON_CHARS, MAX_QUESTION_PROMPT_CHARS,
-    };
+    use crate::events::interaction::{MAX_APPROVAL_REQUEST_REASON_CHARS, MAX_QUESTION_TEXT_CHARS};
     use crate::runtime::identity::ConversationId;
     use crate::runtime::types::ConversationLifecycleState;
     use tokio::sync::oneshot;
@@ -1432,24 +1454,82 @@ mod tests {
         coordinator.publish_approval(AttemptId::new(attempt), facts(call))
     }
 
-    fn question_facts() -> QuestionFacts {
-        QuestionFacts {
-            turn: 4,
-            prompt: "Choose a deployment target".to_owned(),
-            choices: Some(vec!["staging".to_owned(), "production".to_owned()]),
-            allow_free_text: false,
+    fn questionnaire_specification() -> QuestionnaireSpecification {
+        QuestionnaireSpecification {
+            questions: vec![QuestionSpecification {
+                question: "Choose a deployment target".to_owned(),
+                header: "Target".to_owned(),
+                options: vec![
+                    OptionSpecification {
+                        label: "staging".to_owned(),
+                        description: "A safe test environment.".to_owned(),
+                        preview: None,
+                    },
+                    OptionSpecification {
+                        label: "production".to_owned(),
+                        description: "The live environment.".to_owned(),
+                        preview: None,
+                    },
+                ],
+                multi_select: false,
+            }],
         }
     }
 
-    fn publish_question(
+    fn questionnaire_facts() -> QuestionnaireFacts {
+        QuestionnaireFacts {
+            turn: 4,
+            questionnaire: questionnaire_specification(),
+        }
+    }
+
+    fn multi_questionnaire_facts() -> QuestionnaireFacts {
+        QuestionnaireFacts {
+            turn: 5,
+            questionnaire: QuestionnaireSpecification {
+                questions: vec![QuestionSpecification {
+                    question: "Which review surfaces should be enabled?".to_owned(),
+                    header: "Surfaces".to_owned(),
+                    options: vec![
+                        OptionSpecification {
+                            label: "Charts".to_owned(),
+                            description: "Show quantitative charts.".to_owned(),
+                            preview: None,
+                        },
+                        OptionSpecification {
+                            label: "Comments".to_owned(),
+                            description: "Show reviewer comments.".to_owned(),
+                            preview: None,
+                        },
+                    ],
+                    multi_select: true,
+                }],
+            },
+        }
+    }
+
+    fn single_response(label: &str) -> InteractionResponse {
+        InteractionResponse::Questionnaire {
+            response: QuestionnaireResponse::Submitted(QuestionnaireSubmission {
+                answers: vec![QuestionnaireAnswerEntry {
+                    question_index: 0,
+                    answer: QuestionnaireAnswer::SingleOption(SingleOptionAnswer {
+                        label: label.to_owned(),
+                    }),
+                }],
+            }),
+        }
+    }
+
+    fn publish_questionnaire(
         coordinator: &InteractionCoordinator,
         attempt: &str,
     ) -> Result<InteractionTicket, InteractionOutcome> {
         let cancellation =
             AgentCancellation::new(CancellationReason::UserRequested).execution_cancellation();
-        coordinator.publish_question_with_cancellation(
+        coordinator.publish_questionnaire_with_cancellation(
             AttemptId::new(attempt),
-            question_facts(),
+            questionnaire_facts(),
             &cancellation,
         )
     }
@@ -1606,7 +1686,7 @@ mod tests {
         coordinator
             .respond(&id, response.clone())
             .expect("accepted");
-        assert_eq!(wait.await, InteractionOutcome::Answered { response });
+        assert_eq!(wait.await, InteractionOutcome::Responded { response });
         assert_eq!(
             coordinator.respond(
                 &id,
@@ -1619,31 +1699,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn question_publishes_once_and_accepts_one_typed_answer() {
-        let coordinator = coordinator();
+    async fn questionnaire_publishes_once_and_accepts_one_typed_answer() {
+        let (coordinator, audit) = audited_coordinator();
         coordinator.set_provider_available(true);
-        let ticket = publish_question(&coordinator, "question-attempt").expect("published");
+        let expected = questionnaire_facts();
+        let owner = AgentCancellation::new(CancellationReason::UserRequested);
+        let owner_cancellation = owner.execution_cancellation();
+        let ticket = coordinator
+            .publish_questionnaire_with_cancellation(
+                AttemptId::new("questionnaire-attempt"),
+                expected.clone(),
+                &owner_cancellation,
+            )
+            .expect("published");
         let id = ticket.id.clone();
         let request = coordinator
             .pending_snapshot()
             .into_iter()
             .next()
-            .expect("one pending question");
+            .expect("one pending questionnaire");
         assert_eq!(request.id, id);
-        assert!(matches!(request.kind, InteractionKind::Question { .. }));
-        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-        let waiter = coordinator.wait(ticket, cancellation.execution_cancellation());
-        let response = InteractionResponse::Question {
-            answer: QuestionAnswer::Choice {
-                value: "staging".to_owned(),
-            },
-        };
+        assert!(matches!(
+            request.kind,
+            InteractionKind::Questionnaire { questionnaire }
+                if questionnaire == expected.questionnaire
+        ));
+        assert!(matches!(
+            audit.events().as_slice(),
+            [RuntimeEvent::InteractionRequested {
+                subject: InteractionSubject::Questionnaire { questionnaire },
+                ..
+            }] if questionnaire == &expected.questionnaire
+        ));
+        let waiter = coordinator.wait(ticket, owner.execution_cancellation());
+        let response = single_response("staging");
         coordinator
             .respond(&id, response.clone())
-            .expect("answered");
+            .expect("questionnaire submitted");
         assert_eq!(
             waiter.await,
-            InteractionOutcome::Answered {
+            InteractionOutcome::Responded {
                 response: response.clone()
             }
         );
@@ -1655,7 +1750,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bounded_question_requester_observes_owner_cancellation_only() {
+    async fn bounded_questionnaire_requester_observes_owner_cancellation_only() {
         let coordinator = coordinator();
         coordinator.set_provider_available(true);
         let (pending_sender, pending_receiver) = oneshot::channel();
@@ -1663,65 +1758,196 @@ mod tests {
             sender: Mutex::new(Some(pending_sender)),
         }));
         let owner = AgentCancellation::new(CancellationReason::UserRequested);
-        let requester = QuestionRequester::new(
+        let requester = QuestionnaireRequester::new(
             coordinator.clone(),
             AttemptId::new("bounded-question-attempt"),
             owner.execution_cancellation(),
             9,
         );
         let waiter =
-            tokio::spawn(async move { requester.request_question(question_facts()).await });
-        let interaction_id = pending_receiver.await.expect("Question was published");
+            tokio::spawn(
+                async move { requester.request_questionnaire(questionnaire_facts()).await },
+            );
+        let interaction_id = pending_receiver.await.expect("Questionnaire was published");
         assert!(owner.request_cancel(CancellationReason::RuntimeShutdown));
         assert_eq!(
-            waiter.await.expect("Question waiter"),
+            waiter.await.expect("Questionnaire waiter"),
             InteractionOutcome::Cancelled {
                 reason: CancellationReason::RuntimeShutdown
             }
         );
         assert_eq!(
-            coordinator.respond(
-                &interaction_id,
-                InteractionResponse::Question {
-                    answer: QuestionAnswer::Choice {
-                        value: "staging".to_owned(),
-                    },
-                },
-            ),
+            coordinator.respond(&interaction_id, single_response("staging"),),
             Err(InteractionError::NotPending { interaction_id })
         );
     }
 
     #[tokio::test]
-    async fn question_rejects_answers_outside_its_declared_vocabulary() {
+    async fn questionnaire_rejects_answers_outside_its_declared_vocabulary() {
         let coordinator = coordinator();
         coordinator.set_provider_available(true);
-        let ticket = publish_question(&coordinator, "question-validation").expect("published");
+        let ticket =
+            publish_questionnaire(&coordinator, "questionnaire-validation").expect("published");
         let id = ticket.id.clone();
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         let waiter = coordinator.wait(ticket, cancellation.execution_cancellation());
         assert!(matches!(
             coordinator.respond(
                 &id,
-                InteractionResponse::Question {
-                    answer: QuestionAnswer::FreeText {
-                        value: "not allowed".to_owned(),
-                    },
+                InteractionResponse::Questionnaire {
+                    response: QuestionnaireResponse::Submitted(QuestionnaireSubmission {
+                        answers: vec![QuestionnaireAnswerEntry {
+                            question_index: 0,
+                            answer: QuestionnaireAnswer::MultipleOption(MultipleOptionAnswer {
+                                selected: vec!["staging".to_owned()],
+                            }),
+                        }],
+                    }),
                 },
             ),
             Err(InteractionError::InvalidResponse { .. })
         ));
         coordinator
+            .respond(&id, single_response("production"))
+            .expect("valid answer");
+        assert!(matches!(waiter.await, InteractionOutcome::Responded { .. }));
+    }
+
+    #[tokio::test]
+    async fn questionnaire_rejects_invalid_indices_labels_duplicates_and_modes() {
+        let coordinator = coordinator();
+        coordinator.set_provider_available(true);
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let facts = multi_questionnaire_facts();
+        let ticket = coordinator
+            .publish_questionnaire_with_cancellation(
+                AttemptId::new("question-validation-complete"),
+                facts,
+                &cancellation.execution_cancellation(),
+            )
+            .expect("published");
+        let id = ticket.id.clone();
+        let waiter = coordinator.wait(ticket, cancellation.execution_cancellation());
+
+        let invalid_responses = [
+            QuestionnaireResponse::Submitted(QuestionnaireSubmission {
+                answers: vec![QuestionnaireAnswerEntry {
+                    question_index: 1,
+                    answer: QuestionnaireAnswer::MultipleOption(MultipleOptionAnswer {
+                        selected: vec!["Charts".to_owned()],
+                    }),
+                }],
+            }),
+            QuestionnaireResponse::Submitted(QuestionnaireSubmission {
+                answers: vec![
+                    QuestionnaireAnswerEntry {
+                        question_index: 0,
+                        answer: QuestionnaireAnswer::MultipleOption(MultipleOptionAnswer {
+                            selected: vec!["Charts".to_owned()],
+                        }),
+                    },
+                    QuestionnaireAnswerEntry {
+                        question_index: 0,
+                        answer: QuestionnaireAnswer::MultipleOption(MultipleOptionAnswer {
+                            selected: vec!["Comments".to_owned()],
+                        }),
+                    },
+                ],
+            }),
+            QuestionnaireResponse::Submitted(QuestionnaireSubmission {
+                answers: vec![QuestionnaireAnswerEntry {
+                    question_index: 0,
+                    answer: QuestionnaireAnswer::MultipleOption(MultipleOptionAnswer {
+                        selected: vec!["Unknown".to_owned()],
+                    }),
+                }],
+            }),
+            QuestionnaireResponse::Submitted(QuestionnaireSubmission {
+                answers: vec![QuestionnaireAnswerEntry {
+                    question_index: 0,
+                    answer: QuestionnaireAnswer::MultipleOption(MultipleOptionAnswer {
+                        selected: vec!["Charts".to_owned(), "Charts".to_owned()],
+                    }),
+                }],
+            }),
+            QuestionnaireResponse::Submitted(QuestionnaireSubmission {
+                answers: vec![QuestionnaireAnswerEntry {
+                    question_index: 0,
+                    answer: QuestionnaireAnswer::SingleOption(SingleOptionAnswer {
+                        label: "Charts".to_owned(),
+                    }),
+                }],
+            }),
+        ];
+        for response in invalid_responses {
+            assert!(matches!(
+                coordinator.respond(&id, InteractionResponse::Questionnaire { response }),
+                Err(InteractionError::InvalidResponse { .. })
+            ));
+        }
+
+        coordinator
             .respond(
                 &id,
-                InteractionResponse::Question {
-                    answer: QuestionAnswer::Choice {
-                        value: "production".to_owned(),
-                    },
+                InteractionResponse::Questionnaire {
+                    response: QuestionnaireResponse::Submitted(QuestionnaireSubmission {
+                        answers: vec![QuestionnaireAnswerEntry {
+                            question_index: 0,
+                            answer: QuestionnaireAnswer::MultipleOption(MultipleOptionAnswer {
+                                selected: vec!["Comments".to_owned(), "Charts".to_owned()],
+                            }),
+                        }],
+                    }),
                 },
             )
-            .expect("valid answer");
-        assert!(matches!(waiter.await, InteractionOutcome::Answered { .. }));
+            .expect("the valid response wins after rejected responses");
+        assert_eq!(
+            waiter.await,
+            InteractionOutcome::Responded {
+                response: InteractionResponse::Questionnaire {
+                    response: QuestionnaireResponse::Submitted(QuestionnaireSubmission {
+                        answers: vec![QuestionnaireAnswerEntry {
+                            question_index: 0,
+                            answer: QuestionnaireAnswer::MultipleOption(MultipleOptionAnswer {
+                                selected: vec!["Charts".to_owned(), "Comments".to_owned()],
+                            }),
+                        }],
+                    }),
+                },
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_questionnaire_decline_is_a_response_not_attempt_cancellation() {
+        let coordinator = coordinator();
+        coordinator.set_provider_available(true);
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let ticket = coordinator
+            .publish_questionnaire_with_cancellation(
+                AttemptId::new("question-decline"),
+                questionnaire_facts(),
+                &cancellation.execution_cancellation(),
+            )
+            .expect("published");
+        let id = ticket.id.clone();
+        let waiter = coordinator.wait(ticket, cancellation.execution_cancellation());
+        coordinator
+            .respond(
+                &id,
+                InteractionResponse::Questionnaire {
+                    response: QuestionnaireResponse::Declined,
+                },
+            )
+            .expect("decline is a valid interaction response");
+        assert_eq!(
+            waiter.await,
+            InteractionOutcome::Responded {
+                response: InteractionResponse::Questionnaire {
+                    response: QuestionnaireResponse::Declined,
+                },
+            }
+        );
     }
 
     #[tokio::test]
@@ -1730,9 +1956,9 @@ mod tests {
         coordinator.set_provider_available(true);
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         let ticket = coordinator
-            .publish_question_with_cancellation(
+            .publish_questionnaire_with_cancellation(
                 AttemptId::new("question-cancel"),
-                question_facts(),
+                questionnaire_facts(),
                 &cancellation.execution_cancellation(),
             )
             .expect("published");
@@ -1747,14 +1973,7 @@ mod tests {
             }
         );
         assert_eq!(
-            coordinator.respond(
-                &id,
-                InteractionResponse::Question {
-                    answer: QuestionAnswer::Choice {
-                        value: "staging".to_owned(),
-                    },
-                },
-            ),
+            coordinator.respond(&id, single_response("staging"),),
             Err(InteractionError::NotPending { interaction_id: id })
         );
     }
@@ -1819,13 +2038,13 @@ mod tests {
             coordinator
                 .wait(ticket, cancellation.execution_cancellation())
                 .await,
-            InteractionOutcome::Answered { response }
+            InteractionOutcome::Responded { response }
         );
     }
 
     /// `AgentCancellation` owns the first-winner cause even if its waiter has
     /// not yet reached the coordinator. A client response in that scheduler
-    /// window must settle the same cancellation outcome, never `Answered`.
+    /// window must settle the same cancellation outcome, never `Responded`.
     #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
     async fn cancellation_authority_wins_before_waiter_terminal_poll() {
         let coordinator = coordinator();
@@ -2085,7 +2304,7 @@ mod tests {
             coordinator
                 .wait(ticket, cancellation.execution_cancellation())
                 .await,
-            InteractionOutcome::Answered { .. }
+            InteractionOutcome::Responded { .. }
         ));
         assert_eq!(
             settled.lock().expect("settled states lock").as_slice(),
@@ -2279,28 +2498,28 @@ mod tests {
 
         let cancellation =
             AgentCancellation::new(CancellationReason::UserRequested).execution_cancellation();
+        let mut too_long = questionnaire_specification();
+        too_long.questions[0].question = "p".repeat(MAX_QUESTION_TEXT_CHARS + 1);
+        let mut duplicate_options = questionnaire_specification();
+        duplicate_options.questions[0].options[1].label = "staging".to_owned();
+        let mut too_few = questionnaire_specification();
+        too_few.questions[0].options.truncate(1);
         for facts in [
-            QuestionFacts {
+            QuestionnaireFacts {
                 turn: 4,
-                prompt: "p".repeat(MAX_QUESTION_PROMPT_CHARS + 1),
-                choices: None,
-                allow_free_text: true,
+                questionnaire: too_long,
             },
-            QuestionFacts {
+            QuestionnaireFacts {
                 turn: 4,
-                prompt: "Which target?".to_owned(),
-                choices: Some(vec!["staging".to_owned(), "staging".to_owned()]),
-                allow_free_text: false,
+                questionnaire: duplicate_options,
             },
-            QuestionFacts {
+            QuestionnaireFacts {
                 turn: 4,
-                prompt: "Which target?".to_owned(),
-                choices: None,
-                allow_free_text: false,
+                questionnaire: too_few,
             },
         ] {
             assert!(matches!(
-                coordinator.publish_question_with_cancellation(
+                coordinator.publish_questionnaire_with_cancellation(
                     attempt.clone(),
                     facts,
                     &cancellation
@@ -2323,21 +2542,14 @@ mod tests {
     async fn an_accepted_response_is_always_a_settlement_the_store_accepts() {
         let (coordinator, audit) = audited_coordinator();
         coordinator.set_provider_available(true);
-        let ticket = publish_question(&coordinator, "conversation-attempt-1")
+        let ticket = publish_questionnaire(&coordinator, "conversation-attempt-1")
             .expect("provider is available");
         let id = ticket.id.clone();
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         let wait = coordinator.wait(ticket, cancellation.execution_cancellation());
 
         assert!(matches!(
-            coordinator.respond(
-                &id,
-                InteractionResponse::Question {
-                    answer: QuestionAnswer::Choice {
-                        value: "canary".to_owned(),
-                    },
-                },
-            ),
+            coordinator.respond(&id, single_response("canary"),),
             Err(InteractionError::InvalidResponse { .. })
         ));
         assert!(
@@ -2349,14 +2561,7 @@ mod tests {
         );
 
         coordinator
-            .respond(
-                &id,
-                InteractionResponse::Question {
-                    answer: QuestionAnswer::Choice {
-                        value: "staging".to_owned(),
-                    },
-                },
-            )
+            .respond(&id, single_response("staging"))
             .expect("an offered choice is accepted");
         let _ = wait.await;
 
@@ -2546,7 +2751,7 @@ mod tests {
             .expect("reconnected provider can answer the old pending request");
         assert!(matches!(
             wait.await,
-            InteractionOutcome::Answered {
+            InteractionOutcome::Responded {
                 response: InteractionResponse::Approval {
                     decision: ApprovalDecision::Allow
                 }

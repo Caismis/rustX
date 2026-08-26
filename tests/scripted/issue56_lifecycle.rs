@@ -1239,7 +1239,7 @@ async fn answered_allow_is_rechecked_against_cancellation_before_tool_start() {
         answered_rx
             .wait_for(|entered| *entered)
             .await
-            .expect("Answered(Allow) terminal outcome");
+            .expect("Allow terminal outcome");
         assert!(controller_cancellation.request_cancel(CancellationReason::RuntimeShutdown));
         release.send_replace(true);
     });
@@ -1266,7 +1266,7 @@ async fn answered_allow_is_rechecked_against_cancellation_before_tool_start() {
         .await
         .expect("Ask interaction publication");
     response_sender
-        .send(InteractionOutcome::Answered {
+        .send(InteractionOutcome::Responded {
             response: InteractionResponse::Approval {
                 decision: ApprovalDecision::Allow,
             },
@@ -1284,7 +1284,7 @@ async fn answered_allow_is_rechecked_against_cancellation_before_tool_start() {
     assert_eq!(
         *interaction_count.borrow_and_update(),
         1,
-        "Answered(Allow) came from one published Ask"
+        "Allow came from one published Ask"
     );
     assert_cancelled_tool_slot_without_start(
         &result,
@@ -1791,7 +1791,7 @@ async fn approval_allow_executes_the_exact_prepared_invocation() {
     assert!(!*tool_handle.started.borrow(), "Allow has not arrived yet");
 
     response_tx
-        .send(InteractionOutcome::Answered {
+        .send(InteractionOutcome::Responded {
             response: InteractionResponse::Approval {
                 decision: ApprovalDecision::Allow,
             },
@@ -1954,7 +1954,7 @@ async fn parallel_batch_resolves_approvals_before_any_tool_start() {
         .await
         .expect("first approval request");
     first_tx
-        .send(InteractionOutcome::Answered {
+        .send(InteractionOutcome::Responded {
             response: InteractionResponse::Approval {
                 decision: ApprovalDecision::Allow,
             },
@@ -1967,7 +1967,7 @@ async fn parallel_batch_resolves_approvals_before_any_tool_start() {
     assert!(!*alpha_handle.started.borrow());
     assert!(!*beta_handle.started.borrow());
     second_tx
-        .send(InteractionOutcome::Answered {
+        .send(InteractionOutcome::Responded {
             response: InteractionResponse::Approval {
                 decision: ApprovalDecision::Deny {
                     reason: "second denied".to_owned(),
