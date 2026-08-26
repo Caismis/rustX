@@ -19,7 +19,7 @@ import type {
 import { markdownTheme, role } from "../theme.ts";
 
 const MAX_CUSTOM_ANSWER_CHARS = 4096;
-const PREVIEW_VIEWPORT_LINES = 12;
+const PREVIEW_CONTENT_LINES = 12;
 
 export interface QuestionnaireOverlayOptions {
   interactionId: string;
@@ -60,7 +60,7 @@ export class QuestionnaireOverlay implements Component {
   #viewportHeight = 24;
   #previewOffset = 0;
   #previewLineCount = 0;
-  #bodyScrollOffset: number | undefined;
+  #previewContentViewport = PREVIEW_CONTENT_LINES;
 
   constructor(options: QuestionnaireOverlayOptions) {
     this.interactionId = options.interactionId;
@@ -191,25 +191,13 @@ export class QuestionnaireOverlay implements Component {
         safeWidth,
       ),
     ];
+    const available = Math.max(1, this.#viewportHeight - header.length - footer.length);
     const body = this.#submitting
       ? { lines: [role.pending("Submitting response…")], focusLine: 0 }
       : this.#tab === this.questionnaire.questions.length
-        ? this.#renderReview(safeWidth)
-        : this.#renderQuestion(safeWidth);
-
-    const available = Math.max(1, this.#viewportHeight - header.length - footer.length);
-    const maxOffset = Math.max(0, body.lines.length - available);
-    const focusLine = Math.max(0, Math.min(body.focusLine, body.lines.length - 1));
-    const focusOffset = Math.max(
-      0,
-      Math.min(maxOffset, focusLine - Math.floor(available / 2)),
-    );
-    const offset = Math.max(
-      0,
-      Math.min(maxOffset, this.#bodyScrollOffset ?? focusOffset),
-    );
-    const bodyLines = body.lines.slice(offset, offset + available);
-    const lines = [...header, ...bodyLines, ...footer];
+        ? this.#renderReview(safeWidth, available)
+        : this.#renderQuestion(safeWidth, available);
+    const lines = [...header, ...body.lines, ...footer];
 
     // Tiny test terminals cannot display the full frame. Keep the contract
     // explicit even there: no line escapes the component's requested height
@@ -242,7 +230,7 @@ export class QuestionnaireOverlay implements Component {
     return lines.length > 0 ? lines : [""];
   }
 
-  #renderQuestion(width: number): RenderedBody {
+  #renderQuestion(width: number, viewportHeight: number): RenderedBody {
     const question = this.questionnaire.questions[this.#tab]!;
     const questionLines = wrapStyled(role.strong(question.question), width);
     const intro = ["", ...questionLines.map((line) => fitLine(line, width))];
@@ -253,31 +241,54 @@ export class QuestionnaireOverlay implements Component {
       const leftWidth = Math.max(1, Math.floor((width - gutter) * 0.52));
       const rightWidth = Math.max(1, width - gutter - leftWidth);
       const left = this.#renderQuestionRows(question, leftWidth);
-      const right = this.#renderPreview(preview, rightWidth);
+      const right = this.#renderPreview(
+        preview,
+        rightWidth,
+        Math.max(1, viewportHeight - 2),
+      );
       const count = Math.max(left.lines.length, right.length);
       const combined = Array.from({ length: count }, (_, index) => {
         const leftLine = padLine(left.lines[index] ?? "", leftWidth);
         const rightLine = fitLine(right[index] ?? "", rightWidth);
         return `${leftLine} ${rightLine}`;
       });
-      return {
-        lines: [...intro, ...combined],
-        focusLine: intro.length + left.focusLine,
-      };
+      return clipToFocus(
+        [...intro, ...combined],
+        intro.length + left.focusLine,
+        viewportHeight,
+      );
     }
 
     const rows = this.#renderQuestionRows(question, width);
-    const lines = [...intro, ...rows.lines];
-    if (preview !== undefined) {
-      lines.push("", ...this.#renderPreview(preview, width));
-    } else {
+    const list = clipToFocus(
+      [...intro, ...rows.lines],
+      intro.length + rows.focusLine,
+      preview === undefined
+        ? viewportHeight
+        : narrowOptionViewport(viewportHeight),
+    );
+    if (preview === undefined) {
       this.#previewLineCount = 0;
       this.#previewOffset = 0;
-      this.#bodyScrollOffset = undefined;
+      this.#previewContentViewport = PREVIEW_CONTENT_LINES;
+      return list;
     }
+
+    const previewViewport = narrowPreviewViewport(viewportHeight);
+    if (previewViewport === 0) {
+      this.#previewLineCount = 0;
+      this.#previewOffset = 0;
+      this.#previewContentViewport = PREVIEW_CONTENT_LINES;
+      return list;
+    }
+    const previewLines = this.#renderPreview(
+      preview,
+      width,
+      Math.max(1, previewViewport - 2),
+    );
     return {
-      lines,
-      focusLine: intro.length + rows.focusLine,
+      lines: [...list.lines, ...previewLines].slice(0, viewportHeight),
+      focusLine: list.focusLine,
     };
   }
 
@@ -324,18 +335,24 @@ export class QuestionnaireOverlay implements Component {
     return { lines, focusLine };
   }
 
-  #renderPreview(preview: string, width: number): string[] {
+  #renderPreview(
+    preview: string,
+    width: number,
+    contentViewport = PREVIEW_CONTENT_LINES,
+  ): string[] {
     const markdown = new Markdown(preview, 0, 0, markdownTheme);
     const allLines = markdown.render(Math.max(1, width));
     const lines = allLines.length > 0 ? allLines : ["(empty preview)"];
     this.#previewLineCount = lines.length;
+    this.#previewContentViewport = Math.max(1, Math.floor(contentViewport));
+    const maxOffset = Math.max(0, lines.length - this.#previewContentViewport);
     this.#previewOffset = Math.max(
       0,
-      Math.min(this.#previewOffset, Math.max(0, lines.length - 1)),
+      Math.min(this.#previewOffset, maxOffset),
     );
     const visible = lines.slice(
       this.#previewOffset,
-      this.#previewOffset + PREVIEW_VIEWPORT_LINES,
+      this.#previewOffset + this.#previewContentViewport,
     );
     const first = this.#previewOffset + 1;
     const last = Math.min(
@@ -354,7 +371,7 @@ export class QuestionnaireOverlay implements Component {
     ];
   }
 
-  #renderReview(width: number): RenderedBody {
+  #renderReview(width: number, viewportHeight: number): RenderedBody {
     const lines: string[] = ["", fitLine(role.strong("Review your answers"), width)];
     for (const [index, question] of this.questionnaire.questions.entries()) {
       const answer = this.#answerFor(index);
@@ -380,7 +397,7 @@ export class QuestionnaireOverlay implements Component {
         width,
       ),
     );
-    return { lines, focusLine: lines.length - 2 };
+    return clipToFocus(lines, lines.length - 2, viewportHeight);
   }
 
   #focusedPreview(question: QuestionSpecification): string | undefined {
@@ -460,7 +477,7 @@ export class QuestionnaireOverlay implements Component {
     this.#row = 0;
     this.#previewOffset = 0;
     this.#previewLineCount = 0;
-    this.#bodyScrollOffset = undefined;
+    this.#previewContentViewport = PREVIEW_CONTENT_LINES;
     this.#changed();
   }
 
@@ -473,7 +490,7 @@ export class QuestionnaireOverlay implements Component {
     this.#row = next;
     this.#previewOffset = 0;
     this.#previewLineCount = 0;
-    this.#bodyScrollOffset = undefined;
+    this.#previewContentViewport = PREVIEW_CONTENT_LINES;
     this.#changed();
   }
 
@@ -481,20 +498,14 @@ export class QuestionnaireOverlay implements Component {
     if (this.#tab >= this.questionnaire.questions.length || this.#previewLineCount <= 0) {
       return;
     }
-    const page = Math.max(1, PREVIEW_VIEWPORT_LINES - 2);
+    const page = Math.max(1, this.#previewContentViewport);
+    const maxOffset = Math.max(0, this.#previewLineCount - this.#previewContentViewport);
     const next = Math.max(
       0,
-      Math.min(
-        Math.max(0, this.#previewLineCount - 1),
-        this.#previewOffset + direction * page,
-      ),
+      Math.min(maxOffset, this.#previewOffset + direction * page),
     );
     if (next === this.#previewOffset) return;
     this.#previewOffset = next;
-    this.#bodyScrollOffset = Math.max(
-      0,
-      (this.#bodyScrollOffset ?? 0) + direction * page,
-    );
     this.#changed();
   }
 
@@ -517,6 +528,31 @@ function scalarPrefix(value: string, maximum: number): string {
 
 function wrapStyled(value: string, width: number): string[] {
   return wrapTextWithAnsi(value, Math.max(1, width));
+}
+
+function clipToFocus(lines: string[], focusLine: number, viewportHeight: number): RenderedBody {
+  const height = Math.max(1, Math.floor(viewportHeight));
+  if (lines.length === 0) return { lines: [""], focusLine: 0 };
+  const safeFocus = Math.max(0, Math.min(focusLine, lines.length - 1));
+  const maxOffset = Math.max(0, lines.length - height);
+  const offset = Math.max(
+    0,
+    Math.min(maxOffset, safeFocus - Math.floor(height / 2)),
+  );
+  return {
+    lines: lines.slice(offset, offset + height),
+    focusLine: safeFocus - offset,
+  };
+}
+
+function narrowPreviewViewport(viewportHeight: number): number {
+  if (viewportHeight < 4) return 0;
+  return Math.min(14, Math.max(3, Math.floor(viewportHeight / 2)));
+}
+
+function narrowOptionViewport(viewportHeight: number): number {
+  const previewHeight = narrowPreviewViewport(viewportHeight);
+  return Math.max(1, viewportHeight - previewHeight);
 }
 
 function fitLine(value: string, width: number): string {

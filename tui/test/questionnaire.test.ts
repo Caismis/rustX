@@ -378,4 +378,75 @@ describe("QuestionnaireOverlay", () => {
     assert.notEqual(plainText(later.join("\n")), plainText(wide.join("\n")));
     assert.match(plainText(later.join("\n")), /preview-01[0-9]/);
   });
+
+  it("keeps focus visible while independently paging previews in both layouts", () => {
+    const preview = Array.from(
+      { length: 400 },
+      (_, index) => `preview-${String(index).padStart(3, "0")} ${"x".repeat(20)}`,
+    ).join("\n").slice(0, 8192);
+
+    for (const width of [120, 56]) {
+      const view = singleOverlay(
+        singleQuestionnaire({
+          question: "Which preview should be inspected?",
+          header: "Preview",
+          options: [
+            { label: "First option", description: "The initially focused option.", preview },
+            { label: "Second option", description: "Another option with its own preview.", preview },
+          ],
+          multi_select: false,
+        }),
+        () => {},
+      );
+      view.setViewportHeight(14);
+
+      const initial = view.render(width);
+      assertBounded(initial, width, 14);
+      assert.equal(
+        initial.filter((line) => plainText(line).includes("›")).length,
+        1,
+      );
+      assert.match(plainText(initial.join("\n")), /› .*First option/);
+      assert.match(plainText(initial.join("\n")), /preview-000/);
+
+      view.handleInput("\u001b[6~");
+      const paged = view.render(width);
+      assertBounded(paged, width, 14);
+      assert.notDeepEqual(paged, initial, `PageDown should advance preview at width ${width}`);
+      const pagedFocus = paged.filter((line) => plainText(line).includes("›"));
+      assert.equal(pagedFocus.length, 1, "PageDown must not hide the focused row");
+      assert.match(plainText(pagedFocus[0]!), /First option/);
+
+      for (let page = 0; page < 100; page += 1) view.handleInput("\u001b[6~");
+      const end = view.render(width);
+      assertBounded(end, width, 14);
+      assert.match(plainText(end.join("\n")), /lines \d+-\d+ of \d+/);
+      assert.deepEqual(view.render(width), end, "PageDown at the end must be bounded");
+
+      for (let page = 0; page < 100; page += 1) view.handleInput("\u001b[5~");
+      const beginning = view.render(width);
+      assertBounded(beginning, width, 14);
+      assert.match(plainText(beginning.join("\n")), /preview-000/);
+
+      view.handleInput("\u001b[6~");
+      view.handleInput("\u001b[B");
+      const secondOption = view.render(width);
+      assertBounded(secondOption, width, 14);
+      const secondFocus = secondOption.filter((line) => plainText(line).includes("›"));
+      assert.equal(secondFocus.length, 1, "the newly focused row must remain visible");
+      assert.match(plainText(secondFocus[0]!), /Second option/);
+      assert.match(
+        plainText(secondOption.join("\n")),
+        /preview-000/,
+        "moving focus must reset preview scrolling for the new option",
+      );
+
+      view.handleInput("\u001b[6~");
+      view.handleInput("\t");
+      const review = view.render(width);
+      assertBounded(review, width, 14);
+      assert.match(plainText(review.join("\n")), /Review \/ submit/);
+      assert.match(plainText(review.join("\n")), /› .*Submit/);
+    }
+  });
 });
