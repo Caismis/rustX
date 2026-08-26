@@ -4395,6 +4395,20 @@ Each Surface operation introduces exactly one identity — `Append` its message,
 `Replace` its replacement — which is what makes the pairing checkable without
 any new vocabulary.
 
+The promise this section states is a change of *meaning* at a fixed record
+layout, so the persisted `SESSION_CATALOG_SCHEMA_VERSION` moves with it —
+version 4 is the first catalog whose `Clone` and `Fork` origins promise a
+destination that retained its source's operation history. A version-3 catalog
+decodes cleanly and carries the same fields and the same origin records; its
+destinations were seeded by flattening the source Surface, so their recorded
+branch points are artefacts of the copy. Nothing at the record level tells the
+two apart, which is exactly why the version and not an inspection is the gate:
+opening an older catalog here would branch a lineage this document already
+considers wrong as though its boundaries were the source's. The reader refuses
+it. No migration is offered, because a version-3 destination's real provenance
+was discarded when it was seeded and cannot be reconstructed from what it
+kept.
+
 ### Bounded native projections
 
 The native owner, not TypeScript rendering, enforces the projection bounds.

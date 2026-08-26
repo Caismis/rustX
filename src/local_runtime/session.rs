@@ -47,7 +47,26 @@ use crate::model::session::SessionModelConfig;
 use crate::runtime::identity::{ConversationId, MessageId, ToolCallId};
 
 /// The persisted native session-catalog schema.
-pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 3;
+///
+/// The version gates *meaning*, not layout. Version 4 is the first catalog
+/// whose `Clone` and `Fork` origins promise that the destination lineage
+/// retained the source's Surface operation history — the provenance
+/// `lineage_cut` copies and every later `/fork` or `/tree` of the copy
+/// reads back. A version-3 catalog carries the same fields and the same
+/// origin records, and its destinations were seeded by flattening the source
+/// Surface into one append per active message: a history that never happened,
+/// in which a compaction summary appears to predate the user message it
+/// actually postdates.
+///
+/// Nothing distinguishes the two at the record level, so a reader cannot tell
+/// a genuine copied history from a flattened one by inspection. Opening a
+/// version-3 catalog under this code would take a lineage the document itself
+/// now considers wrong and branch from it as though its boundaries were the
+/// source's. The version is therefore the boundary: a catalog written before
+/// the promise is refused rather than silently reinterpreted. Because a
+/// version-3 destination's real provenance was discarded at seed time, no
+/// migration can reconstruct it, and none is attempted.
+pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 4;
 
 /// The largest display name a Session may carry.
 pub const SESSION_NAME_LIMIT: usize = 120;
@@ -1710,6 +1729,9 @@ fn snapshot_of(session: &PersistedSession) -> Result<SessionSnapshot, SessionErr
 }
 
 fn validate_document(document: &CatalogDocument) -> Result<(), SessionError> {
+    // An unexpected version is refused, never interpreted. See
+    // `SESSION_CATALOG_SCHEMA_VERSION`: the fields of an older catalog decode
+    // cleanly and mean something this code does not promise.
     if document.schema_version != SESSION_CATALOG_SCHEMA_VERSION {
         return Err(SessionError::Catalog {
             detail: format!(
@@ -2674,6 +2696,68 @@ mod tests {
         .expect("new catalog");
         let (_, _, fresh_state) = fresh.active_lineage().expect("fresh lineage");
         assert_eq!(fresh_state.model, current);
+    }
+
+    /// The lineage provenance promise moved, so the persisted version that
+    /// gates it moved with it.
+    ///
+    /// A catalog written before the promise decodes perfectly: same fields,
+    /// same `Clone` origin, same destination database. What differs is only
+    /// what the destination's retained history *means* — the older seed
+    /// flattened the source Surface into one append per active message, so
+    /// its recorded branch points are artefacts of the copy. Nothing in the
+    /// record distinguishes that from a genuinely copied history, so this
+    /// code must refuse the document rather than read a lineage it would then
+    /// fork at the wrong boundaries. The published clone below is what such a
+    /// catalog holds; only its version is put back.
+    #[test]
+    fn a_pre_provenance_session_catalog_is_refused_rather_than_reinterpreted() {
+        let (directory, mut catalog, _config) = open_catalog();
+        let history = source_history();
+        let (source_conversation, source_session, source_node) = append_history(&catalog, &history);
+        let source_store = store_for(&catalog, &source_session, &source_conversation);
+        let revision = source_store.load_head().expect("source head").revision;
+        let source = lineage_at(&source_store, &source_conversation, revision);
+        let clone = catalog
+            .prepare_clone_session(&state(), &source)
+            .expect("prepare clone");
+        catalog
+            .publish_session(
+                &clone,
+                SessionNodeOrigin::Clone {
+                    source_session,
+                    source_node,
+                    source_surface_revision: revision,
+                },
+            )
+            .expect("publish clone");
+
+        // Everything about the document stays as it is; only the version goes
+        // back to the one written before copies retained their provenance.
+        let path = catalog.path.clone();
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).expect("catalog bytes")).expect("catalog JSON");
+        assert_eq!(
+            document["schema_version"],
+            serde_json::json!(super::SESSION_CATALOG_SCHEMA_VERSION),
+            "the published catalog carries the current schema"
+        );
+        document["schema_version"] = serde_json::json!(super::SESSION_CATALOG_SCHEMA_VERSION - 1);
+        fs::write(
+            &path,
+            serde_json::to_vec(&document).expect("downgraded catalog"),
+        )
+        .expect("write downgraded catalog");
+
+        let error = SessionCatalog::open_existing(directory.path())
+            .expect_err("a pre-provenance catalog must not open");
+        let SessionError::Catalog { detail } = error else {
+            panic!("a version mismatch is a catalog error");
+        };
+        assert!(
+            detail.contains("unsupported session catalog schema"),
+            "the refusal names the schema, not some downstream symptom: {detail}"
+        );
     }
 
     #[test]
