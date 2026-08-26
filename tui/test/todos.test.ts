@@ -24,7 +24,7 @@ import {
   progress,
   selectTodos,
 } from "../src/presentation/todos.ts";
-import { sanitizeField, sanitizeLine } from "../src/sanitize.ts";
+import { sanitizeData, sanitizeField, sanitizeLine } from "../src/sanitize.ts";
 import type { MessageBlock, ToolExecutionResult } from "../src/protocol/types.ts";
 import { plainText } from "../src/ui/theme.ts";
 import { rendererFor } from "../src/ui/components/tool-renderers.ts";
@@ -266,9 +266,38 @@ describe("task text a terminal must not be handed", () => {
     );
   });
 
-  it("strips bidi controls that would reverse what the reader sees", () => {
-    const RLO = String.fromCharCode(0x202e);
-    assert.equal(sanitizeField(`ship${RLO}dangerous`), `ship${String.fromCharCode(0xfffd)}dangerous`);
+  /**
+   * Unicode's `Bidi_Control` property is twelve code points, and the twelfth
+   * is the one that gets left out: `U+061C` ARABIC LETTER MARK sits in the
+   * Arabic block rather than beside the other eleven, and it is `Cf` rather
+   * than a control character, so it survives every rule written from the
+   * LRM/RLM, embedding, and isolate families — while reversing reading order
+   * exactly as they do. The list is asserted whole so the next one added is
+   * added here too.
+   */
+  it("strips every bidi control that would reverse what the reader sees", () => {
+    const MARK = String.fromCharCode(0xfffd);
+    for (const code of [
+      0x061c, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068,
+      0x2069,
+    ]) {
+      const control = String.fromCharCode(code);
+      assert.equal(
+        sanitizeField(`ship${control}dangerous`),
+        `ship${MARK}dangerous`,
+        `U+${code.toString(16).toUpperCase().padStart(4, "0")} still reaches the row`,
+      );
+      assert.equal(
+        sanitizeField(`ship${control}dangerous`, true),
+        `ship${MARK}dangerous`,
+        "the long-form field keeps line breaks, not bidi controls",
+      );
+      assert.deepEqual(
+        sanitizeData({ [`own${control}er`]: [`me${control}`, 3] }),
+        { owner: ["me", 3] },
+        "nor does a key or a nested value keep one",
+      );
+    }
   });
 
   it("keeps line breaks in the one long-form field", () => {
@@ -359,6 +388,48 @@ describe("what the tool card may hand a terminal", () => {
     assert.ok(
       plainText(dangerous).includes("[8mhidden[0m visible"),
       "and the reader can see what the model actually wrote",
+    );
+  });
+
+  /**
+   * The card draws the same characters the runtime refuses, and it draws
+   * them before the runtime has seen them. `U+061C` is the one that would
+   * have survived both halves of that boundary at once: the runtime's rule
+   * was `is_control` plus a hand-listed bidi set, and the client's was that
+   * same set written as a character class.
+   */
+  it("draws no bidi control at all, including the one that is not a control character", () => {
+    const ALM = String.fromCharCode(0x061c);
+    const settled = (subject: string): ToolExecutionResult => ({
+      status: { type: "success" },
+      content: [
+        { type: "text", text: `[pending] #1 ${subject}` },
+        { type: "json", value: { tasks: [{ subject }] } },
+      ],
+      duration_ms: 0,
+      artifacts: [],
+    });
+    const card = todoCard(
+      { action: "create", subject: `ship${ALM}dangerous`, owner: `me${ALM}` },
+      settled(`ship${ALM}dangerous`),
+    );
+    assert.ok(!card.includes(ALM), "no reading-order reversal reaches the terminal");
+    // The two bands neutralize it differently, and deliberately: an argument
+    // is short model-written text where a mark tells the reader something
+    // was removed, and a result body is arbitrary tool output where one mark
+    // per stray byte would be noise. So the dangerous card is exactly the
+    // card of the marked arguments and the plain body.
+    assert.equal(
+      card,
+      todoCard(
+        {
+          action: "create",
+          subject: `ship${String.fromCharCode(0xfffd)}dangerous`,
+          owner: `me${String.fromCharCode(0xfffd)}`,
+        },
+        settled("shipdangerous"),
+      ),
+      "the card is exactly the card of the same text with it already gone",
     );
   });
 

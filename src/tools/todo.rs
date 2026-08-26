@@ -195,8 +195,16 @@ impl TodoTask {
 ///   so enough of them push the conversation off the screen no matter what
 ///   the panel's row budget says;
 /// - **control**: `ESC`-introduced CSI/OSC sequences, the C1 range, and the
-///   bidi overrides can repaint colours, move the cursor, retitle the
+///   bidi controls can repaint colours, move the cursor, retitle the
 ///   window, or reverse the reading order of text around them.
+///
+/// The bidi half is Unicode's `Bidi_Control` property, and it is refused
+/// *whole*: U+061C, U+200E, U+200F, U+202A–U+202E, and U+2066–U+2069 — twelve
+/// code points, not the eleven that look alike. U+061C ARABIC LETTER MARK is
+/// the one that hides: it is `Cf`, not a control character, so
+/// [`char::is_control`] does not see it, and a set assembled by eye from the
+/// `LRM`/`RLM`/embedding/isolate families leaves it out. It reverses reading
+/// order exactly as its neighbours do.
 ///
 /// `multiline` keeps `\n` legal for the one field whose whole purpose is
 /// long-form prose, and it never reaches a bounded panel row.
@@ -208,7 +216,11 @@ pub fn forbidden_control(value: &str, multiline: bool) -> Option<char> {
         }
         character.is_control()
             || matches!(character,
-                '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+                '\u{061c}'
+                    | '\u{200e}'
+                    | '\u{200f}'
+                    | '\u{202a}'..='\u{202e}'
+                    | '\u{2066}'..='\u{2069}')
     })
 }
 
@@ -1978,8 +1990,14 @@ mod tests {
 
     #[test]
     fn every_character_a_terminal_row_cannot_hold_is_named() {
+        // The bidi half is Unicode's `Bidi_Control` property in full. U+061C
+        // is listed first because it is the one that gets left out: it is
+        // `Cf` rather than a control character, so it survives every check
+        // written in terms of `char::is_control`.
         for character in [
-            '\n', '\r', '\t', '\u{1b}', '\u{7f}', '\u{9b}', '\u{202e}', '\u{2066}',
+            '\n', '\r', '\t', '\u{1b}', '\u{7f}', '\u{9b}', '\u{061c}', '\u{200e}', '\u{200f}',
+            '\u{202a}', '\u{202b}', '\u{202c}', '\u{202d}', '\u{202e}', '\u{2066}', '\u{2067}',
+            '\u{2068}', '\u{2069}',
         ] {
             assert_eq!(
                 forbidden_control(&format!("ship{character}now"), false),
@@ -1988,6 +2006,10 @@ mod tests {
                 character as u32
             );
         }
+        assert!(
+            !'\u{061c}'.is_control(),
+            "the rule cannot be `is_control` alone, which is how U+061C was missed"
+        );
         assert_eq!(forbidden_control("ship it — now", false), None);
         assert_eq!(
             forbidden_control("first\nsecond", true),

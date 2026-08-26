@@ -594,7 +594,12 @@ Task text is model-written and a client draws it, so the tool's input contract
 rejects control characters — the C0 and C1 ranges, `DEL`, and the Unicode bidi
 controls — in `subject`, `active_form`, `owner`, `description`, and in metadata
 keys and every string inside a metadata value, before any list state is
-touched. `description` is long-form prose that no bounded row draws and keeps
+touched. "The bidi controls" means Unicode's `Bidi_Control` property in full,
+runtime and client alike: `U+061C`, `U+200E`, `U+200F`, `U+202A`–`U+202E`,
+`U+2066`–`U+2069`. `U+061C` is named because it is the one a rule states
+without meaning to omit — it is `Cf` rather than a control character, so it
+passes anything written in terms of "control character", and it lives in the
+Arabic block rather than beside the other eleven. `description` is long-form prose that no bounded row draws and keeps
 line breaks; nothing else may contain one, so a single-line field is one
 physical client row.
 

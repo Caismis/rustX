@@ -37,11 +37,23 @@
  * more.
  */
 
-/** Every character no rendered text may carry. */
-const FORBIDDEN = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+/**
+ * Every character no rendered text may carry.
+ *
+ * The bidi half is Unicode's `Bidi_Control` property, and it is the whole
+ * property rather than the part that comes to mind: `U+061C`, `U+200E`,
+ * `U+200F`, `U+202A`–`U+202E`, `U+2066`–`U+2069`. `U+061C` ARABIC LETTER MARK
+ * is the one that hides — it sits in the Arabic block, far from the others,
+ * and it is `Cf` rather than a control character, so a set written out from
+ * the LRM/RLM, embedding, and isolate families leaves it out while it
+ * reverses reading order exactly as they do.
+ */
+const FORBIDDEN =
+  /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 
 /** The same set minus the line break, for text that is allowed to wrap. */
-const FORBIDDEN_MULTILINE = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+const FORBIDDEN_MULTILINE =
+  /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 
 /** The SGR sequences this client emits itself. */
 const SGR = /\u001b\[[0-9;]*m/g;

@@ -309,6 +309,12 @@ async fn text_a_terminal_row_cannot_hold_is_rejected_before_anything_is_written(
         ("active_form", "writing\tfast"),
         ("owner", "me\r"),
         ("subject", "ship\u{202e}suofegnad"),
+        // U+061C ARABIC LETTER MARK: a bidi control that is `Cf` rather than
+        // a control character, so every rule written as `is_control` lets it
+        // through while it reverses reading order like its neighbours.
+        ("subject", "ship\u{61c}dangerous"),
+        ("active_form", "shipping\u{61c}now"),
+        ("owner", "me\u{61c}"),
     ] {
         let rejected = run_tool(
             &fixture,
@@ -444,6 +450,12 @@ async fn metadata_keys_and_values_obey_the_same_text_rule() {
         serde_json::json!({ "owner": "me\u{202e}dangerous" }),
         serde_json::json!({ "owner": { "nested": "line\nbreak" } }),
         serde_json::json!({ "owner": ["fine", "tab\there"] }),
+        // The same U+061C, in each of the three places metadata nests: a
+        // key, a value, and a string inside a nested value.
+        serde_json::json!({ "own\u{61c}er": "me" }),
+        serde_json::json!({ "owner": "me\u{61c}reversed" }),
+        serde_json::json!({ "owner": { "nested": "me\u{61c}reversed" } }),
+        serde_json::json!({ "owner": ["fine", "me\u{61c}reversed"] }),
     ] {
         let rejected = run_tool(
             &fixture,
