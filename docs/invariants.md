@@ -602,10 +602,21 @@ Input validation is not the whole boundary, because a client draws things the
 runtime never validated: a tool *call* is rendered from the model's own
 arguments while the assistant message is still streaming, before any executor
 has seen them, so a call that will be rejected has already been drawn. A
-client therefore sanitizes at its own rendering boundary as well — the styling
-it emitted itself survives, and nothing a model wrote can move the cursor,
-repaint the screen, retitle the window, reverse reading order, or buy itself a
-second physical row.
+client therefore sanitizes at its own rendering boundary as well — nothing a
+model or a tool wrote can move the cursor, repaint the screen, retitle the
+window, reverse reading order, or buy itself a second physical row.
+
+Where that reduction happens is part of the invariant. Untrusted text is
+reduced **before** it is styled, at the boundary where it enters the
+presentation layer: published argument text, the values that text parses into,
+and every string of a committed result. Once a row has been assembled out of
+styled fragments, an `ESC` the client's own theme emitted and an `ESC` that
+arrived in content are the same bytes, so a filter applied to the finished line
+that spares "the client's own styling" spares a model-written `ESC[8m` too —
+conceal, a forged colour, a reset theme. Argument *text* and parsed argument
+*values* are reduced separately, because `"\u001b"` is six harmless characters
+in published JSON and one `ESC` after parsing. What remains on the assembled
+line is a layout backstop: one built line is one physical row.
 
 Every *settled* call publishes the complete post-call snapshot as the
 structured content of its own canonical tool result; a rejected call is an

@@ -88,7 +88,7 @@ import {
   SUBJECT_BUDGET,
   SUMMARY_BUDGET,
 } from "../preferences.ts";
-import { sanitizeLine } from "../../sanitize.ts";
+import { sanitizeData, sanitizeField, sanitizeLine } from "../../sanitize.ts";
 import { type BackgroundRole, role, style } from "../theme.ts";
 import {
   type ToolCallPresentation,
@@ -137,13 +137,18 @@ export function cardBackground(
 
 /** Renders one correlated tool call as one card, or as one part of one. */
 export function renderToolCard(
-  tool: CorrelatedTool,
+  published: CorrelatedTool,
   context: ToolRenderContext,
   part: ToolCardPart = "full",
 ): string {
-  const args = parseArguments(tool.argumentsText);
+  // Nothing below this line reads `published`. Everything a renderer, a
+  // budget, or the header touches comes from the reduced copy, because the
+  // reduction has to happen while it is still possible to tell content from
+  // styling. See {@link drawableTool}.
+  const tool = drawableTool(published);
+  const args = sanitizeData(parseArguments(tool.argumentsText));
   const renderer = rendererFor(tool.toolId);
-  const call = presentCall(renderer.renderCall(args), tool);
+  const call = presentCall(renderer.renderCall(args), tool, args);
   const lines: string[] = [];
 
   if (part === "continuation") {
@@ -177,22 +182,54 @@ export function renderToolCard(
 }
 
 /**
- * The card's one rendering boundary.
+ * The card's one content boundary: the entity as this terminal may draw it.
  *
- * Everything above this point composes lines out of two externally-derived
- * sources — the model's own tool arguments and the tool's own output — and
- * neither is validated for *this* terminal. The call band is the sharper
- * case: it is drawn from arguments while the assistant message is still
- * streaming, so a call the runtime will reject has already been printed by
- * the time it is rejected, and no amount of input validation downstream can
- * unprint it.
+ * A card composes lines out of two externally-derived sources — the model's
+ * own tool arguments and the tool's own output — and neither is validated
+ * for *this* terminal. The call band is the sharper case: it is drawn from
+ * arguments while the assistant message is still streaming, so a call the
+ * runtime will reject has already been printed by the time it is rejected,
+ * and no amount of input validation downstream can unprint it.
  *
- * So the card sanitizes what it hands the renderer, once, here, for every
- * tool that has a renderer and every tool that never will. The styling this
- * client emitted survives; a control character that arrived in content does
- * not. Because no surviving line can contain a line break, the number of
- * physical rows a card draws is exactly the number of lines it built — which
- * is what every band budget above already assumed.
+ * The reduction happens **here**, before a renderer or the theme has touched
+ * anything, and that ordering is the whole point. A card is assembled out of
+ * styled fragments, and once it is assembled an `ESC` the theme wrote and an
+ * `ESC` that arrived in a tool argument are indistinguishable — so a filter
+ * on the finished line that spares "this client's own colours" spares the
+ * model's `ESC[8m` too, and hidden text, a forged colour, or a reset theme
+ * goes to the terminal. Reducing the entity first means every renderer,
+ * present and future, is handed content that was never dangerous, and the
+ * line filter below is left with nothing but layout to enforce.
+ *
+ * Argument *text* and parsed argument *values* are reduced separately on
+ * purpose: `"\u001b"` inside published JSON is six harmless characters in the
+ * text and one `ESC` after `JSON.parse`, so reducing only the text would
+ * leave every renderer that reads a field wide open.
+ */
+function drawableTool(tool: CorrelatedTool): CorrelatedTool {
+  return {
+    callId: tool.callId,
+    toolId: sanitizeField(tool.toolId),
+    name: sanitizeField(tool.name),
+    argumentsText: sanitizeField(tool.argumentsText, true),
+    // One reduction for the whole lifecycle: a runtime-published progress
+    // message, a failure reason, result text, result JSON, and any field a
+    // future result grows are all covered by construction rather than by a
+    // list this function would have to keep current.
+    lifecycle: sanitizeData(tool.lifecycle) as ToolLifecycle,
+    committed: tool.committed,
+  };
+}
+
+/**
+ * The card's one *layout* boundary.
+ *
+ * Content is already reduced by {@link drawableTool}, so what is left to
+ * enforce is the row count: because no surviving line can contain a line
+ * break, the number of physical rows a card draws is exactly the number of
+ * lines it built — which is what every band budget above already assumed.
+ * The styling this client emitted survives, and by this point that is the
+ * only styling there is.
  */
 function drawable(lines: string[]): string {
   return lines.map(sanitizeLine).join("\n");
@@ -278,12 +315,14 @@ function pushResult(
 function presentCall(
   presentation: ToolCallPresentation | undefined,
   tool: CorrelatedTool,
+  args: unknown,
 ): ToolCallPresentation {
   const fallbackTitle = tool.name || tool.toolId;
   if (presentation === undefined) {
-    const generic = genericRenderer.renderCall(
-      parseArguments(tool.argumentsText),
-    );
+    // The same reduced arguments the specialized renderer was handed: a
+    // second `parseArguments` here would decode the published text again and
+    // hand the generic renderer values nothing had reduced.
+    const generic = genericRenderer.renderCall(args);
     return {
       title: fallbackTitle,
       subject: generic?.subject,

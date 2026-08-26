@@ -307,6 +307,11 @@ describe("what the tool card may hand a terminal", () => {
    * assistant message is still streaming — before any executor, and
    * therefore before any rejection, has seen them. Input validation cannot
    * unprint what was already printed, so the card is the boundary.
+   *
+   * Asserted on the card itself, never on `plainText(card)`: `plainText`
+   * strips every SGR sequence, including the ones an argument smuggled in,
+   * so an assertion made through it passes on a card that is handing the
+   * terminal exactly what this test exists to catch.
    */
   it("draws a rejected call's arguments without handing them to the terminal", () => {
     const card = todoCard({
@@ -314,13 +319,68 @@ describe("what the tool card may hand a terminal", () => {
       subject: `${ESC}[2J${ESC}]0;owned${BEL}safe${LF}second line`,
       status: `pending${RLO}gnidnep`,
     });
-    assert.ok(!plainText(card).includes(ESC), "no ESC reaches the terminal");
-    assert.ok(!plainText(card).includes(RLO), "no bidi override reaches the terminal");
+    assert.ok(!card.includes(`${ESC}[2J`), "no screen clear reaches the terminal");
+    assert.ok(!card.includes(`${ESC}]0;`), "no window retitle reaches the terminal");
+    assert.ok(!card.includes(BEL), "no OSC terminator reaches the terminal");
+    assert.ok(!card.includes(RLO), "no bidi override reaches the terminal");
     assert.equal(
       card.split(LF).length,
       1,
       "a newline in an argument cannot buy the call band a second row",
     );
+  });
+
+  /**
+   * `ESC[8m` is *conceal*, and it is an SGR sequence — the same shape the
+   * theme itself emits. That is the whole difficulty: a card is assembled
+   * out of styled fragments, so a filter applied to the finished line cannot
+   * tell the model's `ESC[8m` from the client's `ESC[2m`, and one that
+   * spares "our own colours" spares this too. The reduction therefore
+   * happens before styling, where provenance is still known.
+   *
+   * The assertion is an equality rather than a search: the dangerous card
+   * must render identically to the card of the same arguments with the
+   * escapes already removed — no hidden text, no extra styling, nothing.
+   */
+  it("keeps model-written SGR out of a card it cannot distinguish it in", () => {
+    const dangerous = todoCard({
+      action: "create",
+      subject: `${ESC}[8mhidden${ESC}[0m visible`,
+    });
+    assert.ok(
+      !dangerous.includes(`${ESC}[8m`),
+      "a concealed run would hide text the reader is being shown",
+    );
+    assert.equal(
+      dangerous,
+      todoCard({ action: "create", subject: "[8mhidden[0m visible" }),
+      "the payload draws as the inert text it should have been",
+    );
+    assert.ok(
+      plainText(dangerous).includes("[8mhidden[0m visible"),
+      "and the reader can see what the model actually wrote",
+    );
+  });
+
+  /**
+   * A published argument is JSON *text*: `"\u001b"` in it is six harmless
+   * characters until `JSON.parse` turns them into one `ESC`. Reducing the
+   * text alone would leave every renderer that reads a parsed field exposed.
+   */
+  it("reduces the arguments a renderer reads, not just the text they arrived in", () => {
+    const card = renderToolCard(
+      {
+        callId: "call-todo",
+        toolId: TODO_TOOL_ID,
+        name: "todo",
+        argumentsText: '{"action":"create","subject":"\\u001b[8mhidden"}',
+        lifecycle: { type: "assembled" },
+        committed: false,
+      },
+      cardContext,
+    );
+    assert.ok(!card.includes(`${ESC}[8m`), "the decoded escape never reaches the card");
+    assert.ok(plainText(card).includes("[8mhidden"));
   });
 
   /**
@@ -339,15 +399,37 @@ describe("what the tool card may hand a terminal", () => {
             type: "text",
             text: `[pending] #1 Ship${LF}metadata.${ESC}]0;owned${BEL}key: ${RLO}value`,
           },
+          { type: "json", value: { subject: `${ESC}[8mhidden`, owner: `me${RLO}` } },
         ],
+        duration_ms: 0,
+        exit_code: undefined,
+        artifacts: [],
+      },
+    );
+    assert.ok(!card.includes(`${ESC}]0;`), "no window retitle reaches the terminal");
+    assert.ok(!card.includes(`${ESC}[8m`), "nor a concealed run out of the result JSON");
+    assert.ok(!card.includes(BEL));
+    assert.ok(!card.includes(RLO));
+  });
+
+  /**
+   * A failure reason is runtime-published prose drawn into an always-visible
+   * band, and it is the one string on a card that a *tool* — not the model —
+   * chooses. It goes through the same reduction.
+   */
+  it("draws a rejection reason without handing it to the terminal", () => {
+    const card = todoCard(
+      { action: "create", subject: "Ship" },
+      {
+        status: { type: "failed", error: `${ESC}[8mrejected${ESC}]0;owned${BEL}` },
+        content: [],
         duration_ms: 0,
         artifacts: [],
       },
     );
-    const plain = plainText(card);
-    assert.ok(!plain.includes(ESC));
-    assert.ok(!plain.includes(BEL));
-    assert.ok(!plain.includes(RLO));
+    assert.ok(!card.includes(`${ESC}[8m`));
+    assert.ok(!card.includes(`${ESC}]0;`));
+    assert.ok(!card.includes(BEL));
   });
 
   it("keeps the styling this client emitted", () => {
