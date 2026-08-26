@@ -521,11 +521,15 @@ fn current_head(
     let canonical = runtime
         .historical_canonical_history()
         .map_err(SessionSupervisorError::Store)?;
+    let surface_history = runtime
+        .historical_surface_history(surface_revision)
+        .map_err(SessionSupervisorError::Store)?;
     Ok(HistoricalConversationSnapshot {
         conversation_id: runtime.conversation_id().clone(),
         surface_revision,
         messages,
         canonical,
+        surface_history,
     })
 }
 
@@ -540,11 +544,15 @@ fn historical_snapshot(
     let canonical = runtime
         .historical_canonical_history()
         .map_err(SessionSupervisorError::Store)?;
+    let surface_history = runtime
+        .historical_surface_history(surface_revision)
+        .map_err(SessionSupervisorError::Store)?;
     Ok(HistoricalConversationSnapshot {
         conversation_id: runtime.conversation_id().clone(),
         surface_revision,
         messages,
         canonical,
+        surface_history,
     })
 }
 

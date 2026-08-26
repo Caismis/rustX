@@ -4066,6 +4066,27 @@ impl ConversationRuntime {
         self.inner.store.load_surface_snapshot(revision)
     }
 
+    /// Reads the retained Surface operations through the selected revision,
+    /// in revision order.
+    ///
+    /// This is the third part of a lineage copy. A Surface snapshot says what
+    /// the model can see and the canonical history says what the conversation
+    /// is; this says how the one became the other. A copy that dropped it
+    /// would show the right Surface over a history that never happened, and
+    /// the copy's *own* fork and tree boundaries are read out of that history
+    /// — see [`crate::durable::LineageSeed`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the durable store error when the selected revision is not
+    /// retained or its operation history cannot be read.
+    pub fn historical_surface_history(
+        &self,
+        through: SurfaceRevision,
+    ) -> Result<Vec<crate::conversation::SurfaceOp>, ConversationStoreError> {
+        self.inner.store.load_surface_history(through)
+    }
+
     /// Reads the first retained Surface revision for each ordinary inbound
     /// user message through the selected revision. This is the native Session
     /// boundary read and avoids replaying and materializing every revision.

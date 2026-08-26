@@ -4213,9 +4213,10 @@ Session a transition has just switched to.
 The native replacement sequence has these ordered points:
 
 1. Source preparation selects an exact retained `SurfaceRevision` (or current
-   head) and materializes the immutable seed — **both halves of it**, the
-   Surface at that revision and the canonical history it was projected from
-   (see *A lineage copy is a copy of the conversation, not of its Surface*).
+   head) and materializes the immutable seed — **all three parts of it**, the
+   Surface at that revision, the canonical history it was projected from, and
+   the retained Surface operations that projected it (see *A lineage copy is a
+   copy of the conversation, not of its Surface*).
    The source can mutate after this read without changing the prepared
    destination.
 2. The old runtime reaches semantic quiescence only when
@@ -4292,8 +4293,9 @@ architecture decision.
 `LineageSeed`, which has two distinguishable parts:
 
 ```text
-canonical   the source Ledger cut the destination inherits, in commit order
-surface     the subset of it active on the destination Surface, in Surface order
+canonical        the source Ledger cut the destination inherits, in commit order
+surface history  the retained Surface operations that project that cut, in
+                 revision order
 ```
 
 The two parts exist because compaction separates them. Compaction is a
@@ -4303,39 +4305,72 @@ history therefore outlives its own model-visible record — the task list is the
 first such state and will not be the last. A seed carrying only the Surface
 would drop exactly those retired facts, so cloning a conversation before a
 compaction and cloning it after would produce destinations that mean different
-things, with no user-visible cause. The invariant is the negative one:
+things, with no user-visible cause. The first invariant is the negative one:
 
 > **A compaction changes the context projection, never what copying the
 > conversation means.**
 
-The cut is taken from the Surface prefix the operation selected: every source
-Ledger row up to and including the newest one that prefix reaches. That rule
-carries both properties a copy needs. It inherits retired facts, because a
-compaction summary is a *later* Ledger row than the facts it retired, so
-cutting at the summary carries them along. And it excludes everything
-committed after the selected revision, because the cut is bounded by the
-prefix rather than by the current Ledger end — a turn that commits while a
-fork is being prepared is not silently inherited by it. A prefix that reaches
-nothing (a fork at the very first user message) cuts to the empty lineage,
-which is what such a fork means.
+The second half of the seed is the *history*, not merely the final active set,
+and it is what makes copying survive the operations that follow it. A copy is
+not a terminal object: the user forks and branches the copy afterwards, and
+`/fork` and `/tree` read the copy's own retained operation log to find their
+boundaries. Compaction makes Surface order and Ledger order disagree — the
+summary is the newest canonical row and the oldest active one — so a copy
+rebuilt from the final projection alone, one append per active message, would
+record a history in which the summary predates a user message it actually
+postdates. That copy shows the right Surface and branches at the wrong places.
+So the invariant is stated on the composition:
+
+> **Copying a lineage is closed under the lineage operations that follow it: a
+> fork or branch taken on the copy, at a boundary the copy itself reports,
+> means what the same operation taken on the source means.**
+
+The cut is taken over that history. One forward replay of the source's
+operations through the selected revision decides two things at once:
+
+- which operations the destination inherits. An operation is dropped when it
+  introduces an excluded identity: an `Append` of a message committed at or
+  after the selected boundary, or a `Replace` whose span holds anything
+  already excluded — a summary of work at or after the boundary is itself work
+  at or after the boundary. A `Replace` whose span lies entirely below the
+  boundary is inherited, so a compaction the source already performed over the
+  copied prefix stays performed. A clone selects no boundary and so excludes
+  nothing;
+- which canonical rows the destination inherits: exactly those the retained
+  operations name. That is the closure the destination's Surface needs — a
+  retained summary drags along the facts it retired — and it is why a
+  compaction that retired a `todo` result carries the result into the
+  destination while leaving it off the destination's Surface.
+
+Both properties a copy needs fall out of that. Retired facts are inherited,
+and everything committed after the selected revision is excluded, because the
+bound comes from the selected history rather than from the current Ledger end
+— a turn that commits while a fork is being prepared is not silently inherited
+by it. A boundary that excludes everything (a fork at the very first user
+message) retains no operation and cuts to the empty lineage, which is what
+such a fork means.
 
 Inherited canonical facts are inherited as the source holds them: durable,
 readable by anything that rebuilds state from canonical history, and **not**
-model-visible. The destination's Surface is exactly the prefix that was
-selected, so a clone never re-shows context the source already summarized
+model-visible. A clone never re-shows context the source already summarized
 away. Destination identities are remapped through one map covering both parts,
-so a Surface message and a retired message it depends on still agree — which
+so a retained `Replace` and the retired messages it names still agree — which
 is also why a `ToolResult` whose `Assistant` tool call was retired by
 compaction now seeds correctly instead of failing identity resolution.
 
 `ConversationStore::initialize_lineage` is the one durable seam that writes
-such a seed, and it writes the two parts in two passes because they are not in
-the same order: the Ledger in canonical commit order, the Surface in Surface
-order. A compaction summary the source produced *last* is the fact its Surface
-shows *first*, and one pass could reproduce only one of those. Reopening
-re-supplies the canonical part alone, which is the bootstrap identity the
-store verifies; the projection is durable state the store already holds, not
-an input a reopen could contradict.
+such a seed. It writes the canonical part in Ledger commit order and then
+replays the seeded history as the destination's own retained operation log
+from revision 1, inheriting the compaction generation those operations record.
+Flattening the history into one append per active message would produce the
+same Surface and a history that never happened, and the destination's own
+branch points would then be artefacts of the copy rather than facts of the
+source. Reopening re-supplies the canonical part alone, which is the bootstrap
+identity the store verifies; the history is durable state the store already
+holds, not an input a reopen could contradict.
+`ConversationStore::load_surface_history` is the matching read: it is the
+provenance half a `prepare_*` selects, alongside the Surface snapshot and the
+canonical history.
 
 ### Bounded native projections
 

@@ -43,6 +43,7 @@ pub use ledger::{LedgerAccess, LedgerError, MessageLedger, message_id_of};
 pub use structure::{StructuralError, StructuralIndex};
 pub use surface::{
     ConversationSurface, SurfaceAccess, SurfaceError, SurfaceOp, SurfaceRevision, SurfaceSpan,
+    apply_surface_op,
 };
 
 use std::collections::BTreeSet;

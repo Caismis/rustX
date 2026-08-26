@@ -1974,9 +1974,9 @@ call publishes nothing because it mutated nothing. A list therefore
 survives a process restart, a Session resume, and a compaction exactly as
 far as the conversation history that carries it does — and survives a
 Session clone, fork, and tree branch because a lineage copy copies that
-canonical history, not only the Surface projection of it (see *A lineage
-copy is a copy of the conversation, not of its Surface* in
-`docs/invariants.md`, and `durable::LineageSeed`).
+canonical history and the Surface operations that project it, not only
+the current projection (see *A lineage copy is a copy of the conversation,
+not of its Surface* in `docs/invariants.md`, and `durable::LineageSeed`).
 
 That is only true while the in-memory list cannot run ahead of the
 Ledger, so a `todo` call writes *staged* state owned by a `TodoBatch`

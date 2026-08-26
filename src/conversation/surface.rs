@@ -115,6 +115,70 @@ pub enum SurfaceOp {
     },
 }
 
+impl SurfaceOp {
+    /// Every canonical identity this operation names, in a stable order.
+    ///
+    /// A lineage copy needs this: an operation history can only be replayed
+    /// against a Ledger that carries every message the history mentions, and
+    /// the identities a `Replace` names are exactly the provenance that
+    /// distinguishes "the summary was always there" from "the summary
+    /// replaced these facts".
+    #[must_use]
+    pub fn message_ids(&self) -> Vec<&MessageId> {
+        match self {
+            Self::Append { message_id } => vec![message_id],
+            Self::Replace {
+                start,
+                end,
+                replacement,
+            } => vec![start, end, replacement],
+        }
+    }
+}
+
+/// Applies one Surface operation to an active identity order.
+///
+/// This is the single definition of what an operation *means*. Every reader
+/// of a retained operation log — durable reconstruction, seed validation, and
+/// the Session lineage cut — replays through here, so no two of them can
+/// disagree about the Surface a history denotes.
+///
+/// # Errors
+///
+/// Returns the reason the operation does not apply to `active`. The caller
+/// wraps it in its own error domain.
+pub fn apply_surface_op(active: &mut Vec<MessageId>, operation: &SurfaceOp) -> Result<(), String> {
+    match operation {
+        SurfaceOp::Append { message_id } => {
+            if active.contains(message_id) {
+                return Err(format!(
+                    "Surface Append repeats active message {message_id}"
+                ));
+            }
+            active.push(message_id.clone());
+        }
+        SurfaceOp::Replace {
+            start,
+            end,
+            replacement,
+        } => {
+            let from = active
+                .iter()
+                .position(|id| id == start)
+                .ok_or_else(|| format!("Surface Replace start {start} is not active"))?;
+            let to = active
+                .iter()
+                .position(|id| id == end)
+                .ok_or_else(|| format!("Surface Replace end {end} is not active"))?;
+            if to < from || active.contains(replacement) {
+                return Err("Surface Replace has an invalid span or active replacement".to_owned());
+            }
+            active.splice(from..=to, [replacement.clone()]);
+        }
+    }
+    Ok(())
+}
+
 /// One inclusive active span of the Conversation Surface.
 ///
 /// The convention is frozen and tested: `[start ..= end]`, both endpoints

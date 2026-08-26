@@ -30,11 +30,12 @@
 //!
 //! Cloning, forking, and branching a Session follow it too, but that is a
 //! property of *Session lineage*, not of this module: a lineage copy is
-//! seeded with the source's canonical history cut, not only with the Surface
-//! projection of it, so a `todo` result a compaction has already retired is
-//! still inherited. This module states no requirement on that seam beyond
-//! the one it already states on the Ledger — see
-//! [`crate::durable::LineageSeed`]. Nothing keyed on `todo` exists in the
+//! seeded with the source's canonical history cut and the Surface operations
+//! that project it, not only with the current projection, so a `todo` result
+//! a compaction has already retired is still inherited — and so is the
+//! branch point a later fork of that copy cuts at. This module states no
+//! requirement on that seam beyond the one it already states on the Ledger —
+//! see [`crate::durable::LineageSeed`]. Nothing keyed on `todo` exists in the
 //! Session layer, and nothing needs to.
 //!
 //! # Session isolation
