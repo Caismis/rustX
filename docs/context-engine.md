@@ -433,9 +433,21 @@ summary-model rejection replans the same compaction against a halved summary
 input budget (bounded, strictly decreasing, floored); a primary-model overflow
 produces an `EstimateCorrection`, the exact integer ratio between this
 runtime's estimate for the rejected request and the provider's reported count
-for it, and both budgets above are scaled by that ratio for the recovery
-compaction. With no reported count the correction is a fixed three-quarters
-shrink. Either way the recovery never aims at the budget that just failed.
+for it, and the soft input limit above is scaled by that ratio for the
+recovery compaction. With no reported count the correction is a fixed
+three-quarters shrink. Either way the recovery never aims at the budget that
+just failed.
+
+A correction never crosses to the summary input limit, even when the summary
+invocation names the same model. The ratio is a measurement of one request,
+not a calibration of a tokenizer: the deviation it records can come from the
+provider continuation, the tool schemas, the effective system prompt, or
+request-specific fixed overhead, and the summary request carries none of
+those. A stored continuation alone can put six figures of provider-counted
+input behind a primary request that the summary request will never send, so
+reusing the ratio could compress a workable summary budget to `CannotFit` on
+evidence about something else. Each request is measured by its own rejection:
+the summary model's own rejection is what shrinks the summary budget.
 
 The summary request does not inherit the primary Effective System Prompt,
 depend on the primary request prefix, share provider KV/cache continuity, or

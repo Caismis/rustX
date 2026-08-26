@@ -956,11 +956,15 @@ that a live child produced an Interrupted physical result.
   continuations, compaction, attachment changes, and lineage projection never
   rediscover them. Explicit reload is the only in-process replacement; cold
   resume composes a fresh generation without restoring one from history.
-- **First-Session publication follows model validation.** On a fresh
-  `runtime-root`, composition loads the current `models.jsonc` and validates
-  the current runtime default before creating or publishing the root Session.
-  A failed first launch cannot leave a durable Session containing an invalid
-  model that poisons a later corrected launch. Existing Session models are
+- **First-Session publication follows model validation and full
+  composition.** On a fresh `runtime-root`, composition loads the current
+  `models.jsonc` and validates the current runtime default before building
+  the root Session, and the root Session is built as an unpublished plan:
+  `catalog.json` is written by the one startup catalog transaction, after
+  composition, recovery, and host binding have succeeded. A failed first
+  launch leaves the runtime root exactly as it found it — no catalog, no
+  Session containing an invalid model, and no resumable row for a process
+  that never started. Existing Session models are
   validated independently and are never replaced by the current default.
 - **Model ownership is split deliberately.** The current runtime model is
   the default for a brand-new Session. An explicitly selected Session model
@@ -2043,9 +2047,13 @@ the pipeline replans the same compaction against a halved summary input budget
 compaction that recovers from a *primary* context overflow additionally plans
 against an `EstimateCorrection` — the exact integer ratio between the estimate
 of the rejected request and the provider-reported count for it, or a fixed
-three-quarters shrink when the provider reported no count. Both the soft input
-limit and the summary input limit are scaled by that ratio, so the recovery
-never targets the same budget the provider just rejected.
+three-quarters shrink when the provider reported no count. The correction
+scales the soft input limit and nothing else, so the recovery never targets
+the same budget the provider just rejected. It never scales the summary input
+limit, same summary model or not: a correction measures one request, and the
+summary request carries neither the continuation, the tools, nor the effective
+system prompt whose deviation the ratio may record. The summary budget is
+bounded by the summary model's own rejection.
 
 A provider-reported input measurement is authoritative for the request it
 measured and for every request context that measured one is an ordered prefix

@@ -1093,7 +1093,11 @@ export type RuntimeClientEvent =
       subagent: RuntimeClientSubagent;
     }
   | { type: "capability_updated"; capabilities: CapabilityView }
-  | { type: "resources_updated"; resources: RuntimeClientResourcesView }
+  | {
+      type: "resource_generation_updated";
+      capabilities: CapabilityView;
+      resources: RuntimeClientResourcesView;
+    }
   | { type: "session_model_changed"; model: SessionModelView }
   | { type: "runtime_shutdown" };
 
@@ -1466,7 +1470,7 @@ export function isKnownRuntimeClientEvent(
     case "background_execution_updated":
     case "subagent_updated":
     case "capability_updated":
-    case "resources_updated":
+    case "resource_generation_updated":
     case "session_model_changed":
     case "runtime_shutdown":
       return true;

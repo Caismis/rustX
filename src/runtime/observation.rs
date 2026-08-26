@@ -288,6 +288,13 @@ pub(crate) struct PendingObservations {
     /// deterministically instead of by timeout.
     #[cfg(test)]
     worker_exit: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+    /// Test-only park switch. While set, [`drain`](PendingObservations::drain)
+    /// yields nothing, so a test can step the queue itself instead of
+    /// racing the projection worker. It is read and written only while the
+    /// queue lock is held, so a worker that has already entered `drain`
+    /// either completed before the park or observes it.
+    #[cfg(test)]
+    parked: AtomicBool,
 }
 
 impl PendingObservations {
@@ -298,6 +305,8 @@ impl PendingObservations {
             closed: AtomicBool::new(false),
             #[cfg(test)]
             worker_exit: Mutex::new(None),
+            #[cfg(test)]
+            parked: AtomicBool::new(false),
         }
     }
 
@@ -319,6 +328,12 @@ impl PendingObservations {
             .queue
             .lock()
             .expect("pending observation queue lock poisoned");
+        #[cfg(test)]
+        if self.parked.load(Ordering::Acquire) {
+            // Parked under the queue lock: whatever the projection worker
+            // was about to fold, it folds nothing from here on.
+            return Vec::new();
+        }
         queue.drain(..).collect()
     }
 
@@ -359,6 +374,24 @@ impl PendingObservations {
             .lock()
             .expect("pending observation queue lock poisoned")
             .pop_front()
+    }
+
+    /// Test-only: stops the projection worker from folding anything, so a
+    /// test owns the fold schedule and can inspect every cut of the
+    /// observation stream deterministically.
+    ///
+    /// Parking takes the queue lock, so it is ordered against every
+    /// concurrent `drain`: a worker either drained before the park or
+    /// drains nothing after it. [`pop_one`](PendingObservations::pop_one)
+    /// and [`queued`](PendingObservations::queued) deliberately ignore the
+    /// park — they are the test's own hands on the queue.
+    #[cfg(test)]
+    pub(crate) fn park(&self) {
+        let _queue = self
+            .queue
+            .lock()
+            .expect("pending observation queue lock poisoned");
+        self.parked.store(true, Ordering::Release);
     }
 
     /// Test-only: the number of observations waiting to be folded.

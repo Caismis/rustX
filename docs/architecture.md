@@ -3753,9 +3753,15 @@ uses the current runtime model default; clone/fork/tree operations copy only
 the intentionally Session-local state.
 
 On a fresh runtime root, composition resolves and validates the current model
-catalog and default model before it calls the mutating first-Session
-publication path. A failed first launch therefore cannot publish a durable
-root Session containing an invalid model. Existing Session models are then
+catalog and default model before it builds the root Session at all, and it
+builds that root Session as an *unpublished* plan: `catalog.json` is written
+by the single startup catalog transaction that also commits any selection or
+name this launch decided, after the workspace, capability composition,
+recovery, and Runtime Client host binding have all succeeded. A failed first
+launch therefore publishes no catalog at all — not a root Session containing
+an invalid model, and not a resumable Session belonging to a process that
+never started. The seeded destination database is not a published fact: a
+conversation the catalog does not name is neither selectable nor resumable. Existing Session models are then
 validated separately and remain authoritative for resume; current defaults
 are still validated on every launch without overwriting them.
 
@@ -4007,9 +4013,18 @@ observes *why* a source is unavailable instead of inferring failure from a
 dead transport. `CapabilityRevision` advances only when the effective
 committed executable capability set changes; an availability-only change
 never fabricates a revision but is still observed: both kinds of commit
-publish the one `CapabilityUpdated` Runtime Client event carrying the
-complete folded `CapabilityView`, whose `revision` tells the client
-whether the executable capability identity changed.
+publish one Runtime Client event carrying the complete folded
+`CapabilityView`, whose `revision` tells the client whether the executable
+capability identity changed. Which event depends on who committed. A
+capability commit made on its own authority publishes `CapabilityUpdated`.
+A runtime-owned resource reload commits the capability generation and the
+resource generation as one fact, so it publishes one
+`ResourceGenerationUpdated` carrying both views — never a capability event
+beside a resource event. Two events would occupy two cursors, and a client
+that maintains its projection incrementally would sit at the first one
+holding the new capability generation beside the resource generation the
+same reload retired. That pairing exists in no runtime state, so it is
+never published.
 
 The governing invariant for the active node is:
 

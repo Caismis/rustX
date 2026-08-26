@@ -854,6 +854,64 @@ async fn a_failed_empty_launch_publishes_no_session() {
     );
 }
 
+/// A **first** launch that fails to compose publishes no catalog at all.
+///
+/// This is the one startup that has nothing to preserve — there is no
+/// catalog, no Session, no selection — and it is the one that most easily
+/// leaks a lie. Creating the root Session eagerly writes `catalog.json`
+/// before the workspace, the capability composition, the recovery pass, and
+/// the host binding have run; when one of those fails, the runtime root is
+/// left with a visible, resumable Session belonging to a process that never
+/// started, and the next launch continues into it.
+///
+/// So the first catalog document is a plan like any other, committed in the
+/// same startup transaction. A failed first launch leaves the runtime root
+/// as it found it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_first_launch_publishes_no_catalog() {
+    let root = tempfile::tempdir().expect("temp root");
+    let paths = paths(root.path());
+    let dependencies = dependencies();
+    let runtime_root = root.path().join("runtime");
+    let catalog_path = runtime_root.join("sessions").join("catalog.json");
+
+    // Nothing has ever launched here: the failure below is the first thing
+    // this runtime root sees.
+    assert!(!catalog_path.exists(), "the runtime root starts empty");
+    let broken_workspace = root.path().join("workspace-is-a-file");
+    std::fs::write(&broken_workspace, b"not a directory").expect("workspace file");
+    let doomed = LocalRuntimePaths {
+        workspace: broken_workspace,
+        ..paths.clone()
+    };
+    let _failure = LocalSessionProduct::compose(&doomed, &dependencies)
+        .await
+        .expect_err("a Workspace that is not a directory cannot be composed");
+
+    assert!(
+        !catalog_path.exists(),
+        "a first launch that never started published a catalog"
+    );
+    assert!(
+        SessionCatalog::open_existing(&runtime_root)
+            .expect("open catalog")
+            .is_none(),
+        "a first launch that never started left a resumable Session"
+    );
+
+    // The runtime root is still fresh, so the next launch is a first launch
+    // and starts on the root Session it publishes itself.
+    let recovered = LocalSessionProduct::compose(&paths, &dependencies)
+        .await
+        .expect("the untouched runtime root still composes");
+    assert_eq!(
+        session_ids(&runtime_root).len(),
+        1,
+        "the successful launch published exactly one Session"
+    );
+    drop(recovered);
+}
+
 /// The active node of the catalog's published active Session.
 fn active_node_id(runtime_root: &std::path::Path) -> rustx::local_runtime::SessionNodeId {
     SessionCatalog::open_existing(runtime_root)

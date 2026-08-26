@@ -396,7 +396,7 @@ fn runtime_with(
         engine(window, reserve, keep_recent, estimator),
         Arc::new(summarizer),
         rustx::context::AgentStatusComposer::default(),
-        CompactionBudgets::new(1, 1, 1_000_000, true),
+        CompactionBudgets::new(1, 1, 1_000_000),
     )
 }
 
@@ -413,7 +413,7 @@ fn runtime_with_assembly(
         Arc::new(summarizer),
         rustx::context::AgentStatusComposer::default(),
         assembly,
-        CompactionBudgets::new(1, 1, 1_000_000, true),
+        CompactionBudgets::new(1, 1, 1_000_000),
     )
 }
 
@@ -548,7 +548,7 @@ fn compaction_cannot_remove_request_time_skill_catalog_guidance() {
             &state,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0, 1_000_000, true),
+            CompactionBudgets::new(0, 0, 1_000_000),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("a complete canonical span is compactable");
@@ -604,7 +604,7 @@ async fn proactive_compaction_accounts_for_frozen_extension_system_sections() {
         summarizer.clone(),
         rustx::context::AgentStatusComposer::default(),
         assembly,
-        CompactionBudgets::new(1, 1, 1_000_000, true),
+        CompactionBudgets::new(1, 1, 1_000_000),
     );
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let tool_runtime = common::tool_runtime("conv-1");
@@ -783,7 +783,7 @@ fn tool_definitions_never_satisfy_the_recent_retention_target() {
             &history,
             &projection_cheap,
             &tools,
-            CompactionBudgets::new(0, 0, 1_000_000, true),
+            CompactionBudgets::new(0, 0, 1_000_000),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -792,7 +792,7 @@ fn tool_definitions_never_satisfy_the_recent_retention_target() {
             &history,
             &projection_expensive,
             &tools,
-            CompactionBudgets::new(0, 0, 1_000_000, true),
+            CompactionBudgets::new(0, 0, 1_000_000),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -973,7 +973,7 @@ fn a_surface_rewrite_invalidates_a_stale_observed_measurement() {
         &engine,
         &mut history,
         "s1",
-        CompactionBudgets::new(0, 0, 1_000_000, true),
+        CompactionBudgets::new(0, 0, 1_000_000),
     )
     .expect("compact");
     let after = engine
@@ -1163,7 +1163,7 @@ fn compaction_uses_primary_budget_for_soft_limit_and_smaller_summary_reservation
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(10, 5, 1_000_000, true),
+            CompactionBudgets::new(10, 5, 1_000_000),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan fits with the smaller summary reservation");
@@ -1194,7 +1194,7 @@ fn compaction_uses_larger_explicit_summary_reservation_for_hard_fit() {
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(10, 25, 1_000_000, true),
+            CompactionBudgets::new(10, 25, 1_000_000),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("full compaction fits with the larger summary reservation");
@@ -1267,7 +1267,7 @@ fn staged_context_is_evaluated_exactly_per_compaction_candidate() {
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(0, 1, 1_000_000, true),
+            CompactionBudgets::new(0, 1, 1_000_000),
             &rustx::context::CompactionConstraints {
                 must_cover_through: None,
                 fresh_inbound: None,
@@ -1364,7 +1364,7 @@ fn simple_complete_turn_boundary() {
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0, 1_000_000, true),
+            CompactionBudgets::new(0, 0, 1_000_000),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -1416,7 +1416,7 @@ fn multiple_tool_calls_stay_with_their_results() {
             &conversation_state,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0, 1_000_000, true),
+            CompactionBudgets::new(0, 0, 1_000_000),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -1425,7 +1425,7 @@ fn multiple_tool_calls_stay_with_their_results() {
         &engine,
         &mut conversation_state,
         "s1",
-        CompactionBudgets::new(0, 0, 1_000_000, true),
+        CompactionBudgets::new(0, 0, 1_000_000),
     )
     .expect("compact");
     assert_eq!(
@@ -1477,7 +1477,7 @@ fn no_edge_crosses_the_chosen_cut() {
         &engine,
         &mut history,
         "s1",
-        CompactionBudgets::new(0, 0, 1_000_000, true),
+        CompactionBudgets::new(0, 0, 1_000_000),
     )
     .expect("compact");
     assert_eq!(record.generation, 1);
@@ -1510,7 +1510,7 @@ fn candidate_selection_is_deterministic() {
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0, 1_000_000, true),
+            CompactionBudgets::new(0, 0, 1_000_000),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -1519,7 +1519,7 @@ fn candidate_selection_is_deterministic() {
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0, 1_000_000, true),
+            CompactionBudgets::new(0, 0, 1_000_000),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan again");
@@ -1555,7 +1555,7 @@ fn planner_selects_the_exact_inclusive_span_without_a_system_barrier() {
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0, 1_000_000, true),
+            CompactionBudgets::new(0, 0, 1_000_000),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -1594,7 +1594,7 @@ fn planner_selects_the_exact_inclusive_span_without_a_system_barrier() {
             &history,
             &all_projection,
             &[],
-            CompactionBudgets::new(0, 0, 1_000_000, true),
+            CompactionBudgets::new(0, 0, 1_000_000),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("the complete canonical prefix is compactable");
@@ -1630,7 +1630,7 @@ fn message_count_alone_does_not_control_the_cut() {
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0, 1_000_000, true),
+            CompactionBudgets::new(0, 0, 1_000_000),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -1659,7 +1659,7 @@ fn retained_suffix_approximates_the_recent_target() {
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0, 1_000_000, true),
+            CompactionBudgets::new(0, 0, 1_000_000),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -1687,7 +1687,7 @@ fn structural_rule_may_force_extra_retention() {
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0, 1_000_000, true),
+            CompactionBudgets::new(0, 0, 1_000_000),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -1716,7 +1716,7 @@ fn token_target_may_retain_fewer_messages_than_recent() {
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0, 1_000_000, true),
+            CompactionBudgets::new(0, 0, 1_000_000),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -1748,7 +1748,7 @@ fn oversized_material_is_retired_as_complete_messages() {
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0, 1_000_000, true),
+            CompactionBudgets::new(0, 0, 1_000_000),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -1784,7 +1784,7 @@ fn a_single_oversized_message_cannot_fit_instead_of_splitting() {
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0, 1_000_000, true),
+            CompactionBudgets::new(0, 0, 1_000_000),
             &rustx::context::CompactionConstraints {
                 must_cover_through: None,
                 fresh_inbound: Some(&fresh),
@@ -1811,7 +1811,7 @@ fn a_span_never_exceeds_the_summary_model_input_limit() {
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0, 25, true),
+            CompactionBudgets::new(0, 0, 25),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -1823,7 +1823,7 @@ fn a_span_never_exceeds_the_summary_model_input_limit() {
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0, 9, true),
+            CompactionBudgets::new(0, 0, 9),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect_err("no span fits the summary model");
@@ -1864,7 +1864,7 @@ fn summary_input_bound_accounts_for_instruction_json_and_wrapper_overhead() {
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0, actual_tokens - 1, true),
+            CompactionBudgets::new(0, 0, actual_tokens - 1),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect_err("raw fit must not hide the assembled request overflow");
@@ -1878,7 +1878,7 @@ fn summary_input_bound_accounts_for_instruction_json_and_wrapper_overhead() {
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0, actual_tokens, true),
+            CompactionBudgets::new(0, 0, actual_tokens),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("the exact assembled limit accepts the candidate");
@@ -1905,7 +1905,7 @@ async fn summary_model_cannot_fit_leaves_execution_uncommitted() {
         engine(500, 0, 0, weighted(10, 10, 0)),
         summarizer.clone(),
         rustx::context::AgentStatusComposer::default(),
-        CompactionBudgets::new(1, 1, 9, true),
+        CompactionBudgets::new(1, 1, 9),
     );
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
@@ -1982,7 +1982,7 @@ async fn a_rejected_summary_request_replans_against_a_smaller_budget() {
         engine(500, 0, 5, weighted(100, 10, 0)),
         summarizer.clone(),
         rustx::context::AgentStatusComposer::default(),
-        CompactionBudgets::new(1, 1, 1_000_000, true),
+        CompactionBudgets::new(1, 1, 1_000_000),
     );
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
@@ -2050,7 +2050,7 @@ fn a_tighter_summary_input_limit_selects_a_smaller_span() {
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0, 1_000_000, true),
+            CompactionBudgets::new(0, 0, 1_000_000),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("an unconstrained summary budget retires the whole run");
@@ -2061,7 +2061,7 @@ fn a_tighter_summary_input_limit_selects_a_smaller_span() {
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0, wide.summary_input_tokens - 1, true),
+            CompactionBudgets::new(0, 0, wide.summary_input_tokens - 1),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("a tighter summary budget still admits a shorter span");
@@ -2074,8 +2074,8 @@ fn a_tighter_summary_input_limit_selects_a_smaller_span() {
     assert!(narrow.summary_input_tokens < wide.summary_input_tokens);
 }
 
-/// A measured estimate correction scales every runtime-owned planning budget
-/// by the observed ratio, and never to zero.
+/// A measured estimate correction scales the budget it is applied to by the
+/// observed ratio, and never to zero.
 #[test]
 fn an_estimate_correction_scales_budgets_by_the_observed_ratio() {
     let correction =
@@ -2098,23 +2098,36 @@ fn an_estimate_correction_scales_budgets_by_the_observed_ratio() {
     );
 }
 
-/// Planning applies the correction to the summary input budget **when the
-/// summary request goes to the primary model**: one tokenizer measured the
-/// primary request, and the same tokenizer will measure this summary
-/// request, so a compaction recovering from an overflow may not assemble a
-/// summary request the same estimator would have called safe.
+/// The correction constrains the request it was measured on, and no other.
+///
+/// An [`EstimateCorrection`] is the ratio between what this runtime
+/// estimated for one *primary* request and what the provider counted for
+/// that same request. It is a fact about that request, not a calibration of
+/// a tokenizer: the deviation can come from the provider continuation, the
+/// tool schemas, the effective system prompt, or request-specific fixed
+/// overhead. The summary request carries none of those — no tools, no Agent
+/// Status, no Skill catalog, no continuation — so the ratio is not evidence
+/// about it even when both requests go to the same model. A stored
+/// continuation alone can put a hundred thousand provider-counted tokens
+/// behind the primary request that the summary request will never send.
+///
+/// So the corrected plan below still admits the span the uncorrected plan
+/// admitted. A summary request that is genuinely too large is rejected by
+/// the summary model, and the bounded shrink loop replans against that
+/// measurement instead of a borrowed one.
 #[test]
-fn an_estimate_correction_tightens_a_same_model_summary_input_budget() {
+fn an_estimate_correction_never_crosses_into_the_summary_request() {
     let engine = engine(1_000_000, 0, 0, weighted(10, 10, 0));
     let history = state(vec![user("u1", ""), user("u2", ""), user("u3", "")]);
     let projection = engine
         .build_projection(&history, &[], None, "")
         .expect("projection");
     // The assembled summary request weighs ten tokens under this estimator,
-    // so a budget of thirty is comfortable — until a provider reports that
-    // it counted four tokens for every one this runtime estimated.
-    let budgets = CompactionBudgets::new(0, 0, 30, true);
-    engine
+    // so a budget of thirty is comfortable. A four-to-one correction
+    // measured on the primary request would compress it to seven and reject
+    // the span — if it were allowed to travel there.
+    let budgets = CompactionBudgets::new(0, 0, 30);
+    let uncorrected = engine
         .plan_compaction(
             &history,
             &projection,
@@ -2122,8 +2135,8 @@ fn an_estimate_correction_tightens_a_same_model_summary_input_budget() {
             budgets,
             &rustx::context::CompactionConstraints::default(),
         )
-        .expect("the uncorrected budget admits the span");
-    let error = engine
+        .expect("the summary budget admits the span");
+    let corrected = engine
         .plan_compaction(
             &history,
             &projection,
@@ -2134,43 +2147,12 @@ fn an_estimate_correction_tightens_a_same_model_summary_input_budget() {
                 ..Default::default()
             },
         )
-        .expect_err("the corrected budget rejects the same span");
-    assert_eq!(error.kind, ContextErrorKind::CannotFit);
-}
-
-/// The correction stops at the model it measured. A distinct summary model
-/// has its own tokenizer, its own window, and its own estimation error, so
-/// the primary model's measured ratio is not evidence about it and must not
-/// shrink its budget. When *that* request is genuinely too large, the
-/// summary model reports it and the compaction shrink loop replans against
-/// that measurement instead of a borrowed one.
-#[test]
-fn an_estimate_correction_does_not_cross_into_a_distinct_summary_model() {
-    let engine = engine(1_000_000, 0, 0, weighted(10, 10, 0));
-    let history = state(vec![user("u1", ""), user("u2", ""), user("u3", "")]);
-    let projection = engine
-        .build_projection(&history, &[], None, "")
-        .expect("projection");
-    // Exactly the budget and correction the same-model case rejects, with
-    // the one difference that decides the question: the summary request is
-    // not tokenized by the model that produced the measurement.
-    let budgets = CompactionBudgets::new(0, 0, 30, false);
-    let plan = engine
-        .plan_compaction(
-            &history,
-            &projection,
-            &[],
-            budgets,
-            &rustx::context::CompactionConstraints {
-                estimate_correction: rustx::context::EstimateCorrection::new(1, 4),
-                ..Default::default()
-            },
-        )
-        .expect("a distinct summary model keeps its own uncorrected budget");
-    assert!(
-        plan.summary_input_tokens <= 30,
-        "the summary span still fits the summary model's own budget"
+        .expect("a primary-request correction never shrinks the summary budget");
+    assert_eq!(
+        corrected.summary_input_tokens, uncorrected.summary_input_tokens,
+        "the summary request is planned against its own budget"
     );
+    assert!(corrected.summary_input_tokens <= 30);
 }
 
 /// Repeated compaction operates from the **current** Surface and never
@@ -2185,7 +2167,7 @@ fn an_estimate_correction_does_not_cross_into_a_distinct_summary_model() {
 #[test]
 fn repeated_compaction_never_resurrects_retired_history() {
     let engine = engine(10_000, 0, 0, weighted(10, 10, 0));
-    let budgets = CompactionBudgets::new(0, 0, 1_000_000, true);
+    let budgets = CompactionBudgets::new(0, 0, 1_000_000);
     let mut history = state(vec![
         user("A", ""),
         user("B", ""),
@@ -2437,7 +2419,7 @@ fn finite_reads_for(
 #[test]
 fn normal_compaction_reads_only_the_current_surface() {
     let engine = engine(10_000_000, 0, 0, weighted(10, 10, 0));
-    let budgets = CompactionBudgets::new(0, 0, 1_000_000, true);
+    let budgets = CompactionBudgets::new(0, 0, 1_000_000);
 
     let small = finite_reads_for(20, &engine, budgets);
     let large = finite_reads_for(2_000, &engine, budgets);
@@ -2471,7 +2453,7 @@ fn first_compaction_commits_one_summary_and_one_replacement() {
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0, 1_000_000, true),
+            CompactionBudgets::new(0, 0, 1_000_000),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -2553,7 +2535,7 @@ fn second_compaction_selects_from_the_current_surface() {
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0, 1_000_000, true),
+            CompactionBudgets::new(0, 0, 1_000_000),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("first plan");
@@ -2582,7 +2564,7 @@ fn second_compaction_selects_from_the_current_surface() {
             &history,
             &projection2,
             &[],
-            CompactionBudgets::new(0, 0, 1_000_000, true),
+            CompactionBudgets::new(0, 0, 1_000_000),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("second plan");
@@ -2618,7 +2600,7 @@ fn no_progress_compaction_is_rejected() {
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0, 1_000_000, true),
+            CompactionBudgets::new(0, 0, 1_000_000),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -2662,7 +2644,7 @@ fn progress_rule_rejects_growth_even_when_provider_reported_before_is_larger() {
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0, 1_000_000, true),
+            CompactionBudgets::new(0, 0, 1_000_000),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -2714,7 +2696,7 @@ fn progress_rule_accepts_decrease_even_when_provider_reported_before_is_smaller(
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0, 1_000_000, true),
+            CompactionBudgets::new(0, 0, 1_000_000),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -2754,7 +2736,7 @@ fn empty_and_whitespace_summaries_are_rejected() {
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0, 1_000_000, true),
+            CompactionBudgets::new(0, 0, 1_000_000),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -2789,7 +2771,7 @@ fn continuation_constraint_covers_the_owning_turn_completely() {
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0, 1_000_000, true),
+            CompactionBudgets::new(0, 0, 1_000_000),
             &rustx::context::CompactionConstraints {
                 must_cover_through: Some(&MessageId::new("a1")),
                 fresh_inbound: None,
@@ -2834,7 +2816,7 @@ fn continuation_owner_is_never_split() {
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0, 1_000_000, true),
+            CompactionBudgets::new(0, 0, 1_000_000),
             &rustx::context::CompactionConstraints {
                 must_cover_through: Some(&MessageId::new("a1")),
                 fresh_inbound: None,
@@ -3654,7 +3636,7 @@ async fn overflow_retry_preserves_pending_fresh_inbound_and_context_generation()
             &candidate_history,
             &candidate_projection,
             &[],
-            CompactionBudgets::new(1, 1, 1_000_000, true),
+            CompactionBudgets::new(1, 1, 1_000_000),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("an unrestricted candidate crosses fresh inbound");
@@ -3672,7 +3654,7 @@ async fn overflow_retry_preserves_pending_fresh_inbound_and_context_generation()
             &candidate_history,
             &candidate_projection,
             &[],
-            CompactionBudgets::new(1, 1, 1_000_000, true),
+            CompactionBudgets::new(1, 1, 1_000_000),
             &rustx::context::CompactionConstraints {
                 must_cover_through: None,
                 fresh_inbound: Some(&fresh),
@@ -4396,7 +4378,7 @@ async fn failing_status_provider_is_preparation_failure_not_compaction() {
                 engine(10_000_000, 0, 0, weighted(10, 10, 10)),
                 Arc::new(FakeContextSummarizer::new(Vec::new())),
                 composer,
-                CompactionBudgets::new(1, 1, 1_000_000, true),
+                CompactionBudgets::new(1, 1, 1_000_000),
             ),
             &tool_runtime,
             rustx::agent::AttemptLifecycle::inert(),

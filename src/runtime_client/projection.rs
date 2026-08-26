@@ -494,28 +494,28 @@ impl RuntimeClientProjection {
                 snapshot,
                 availability,
             } => {
-                // One reload, one fold. The runtime publishes the resource
-                // generation and the capability generation it was built
-                // against as a single observation precisely so both views
-                // move together: this arm updates the snapshot completely
-                // before returning, so no subscriber and no `snapshot()`
-                // call can land between the two halves and read a pairing
-                // that never existed.
+                // One reload, one fold, one event. The runtime publishes the
+                // resource generation and the capability generation it was
+                // built against as a single observation precisely so both
+                // views move together: this arm updates the snapshot
+                // completely before returning, so no `snapshot()` call can
+                // land between the two halves and read a pairing that never
+                // existed.
                 //
-                // Two events still leave here, in generation order, because
-                // the two revisions are independent facts — a reload that
-                // only rewrote project instruction files emits an unchanged
-                // capability view beside a new resource view. Both are
-                // appended under this one fold, so a cursor sees them
-                // adjacent or not at all.
+                // The published event carries both halves for the same
+                // reason. Two events would be two cursors, and a client
+                // that maintains its projection from the event stream would
+                // sit at the first one holding the new capability
+                // generation beside the retired resource generation.
+                // Adjacent is not atomic; one event is.
                 let capabilities = capability_view(snapshot.capability(), &availability);
                 let resources = resources_view(&snapshot);
                 self.snapshot.capabilities = capabilities.clone();
                 self.snapshot.resources = resources.clone();
-                vec![
-                    RuntimeClientEvent::CapabilityUpdated { capabilities },
-                    RuntimeClientEvent::ResourcesUpdated { resources },
-                ]
+                vec![RuntimeClientEvent::ResourceGenerationUpdated {
+                    capabilities,
+                    resources,
+                }]
             }
             ConversationObservation::AttemptAdmitted { attempt_id } => {
                 // The model is folded by the `AttemptModelFrozen`
@@ -2047,7 +2047,7 @@ mod tests {
             engine,
             Arc::new(FakeContextSummarizer::new(vec![summary_step])),
             AgentStatusComposer::default(),
-            CompactionBudgets::new(1, 1, 1_000_000, true),
+            CompactionBudgets::new(1, 1, 1_000_000),
         );
         let tool_runtime = crate::scripted_suites::common::tool_runtime("projection-order");
         let store = tool_runtime.durable_store();

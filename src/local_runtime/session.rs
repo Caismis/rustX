@@ -370,6 +370,14 @@ pub struct SessionCatalog {
     root: PathBuf,
     path: PathBuf,
     document: CatalogDocument,
+    /// Whether `document` has ever been written to `path`.
+    ///
+    /// A first launch composes against a catalog that exists only in
+    /// memory (see [`Self::create_unpublished`]), so an unpublished catalog
+    /// has a pending first write even when nothing about the launch changed
+    /// it: [`Self::plan_unchanged`] plans that write, and it lands in the
+    /// same single startup transaction as every other catalog decision.
+    published: bool,
     #[cfg(test)]
     write_fault: Arc<Mutex<Option<CatalogWriteFault>>>,
 }
@@ -408,6 +416,7 @@ impl SessionCatalog {
             root,
             path,
             document,
+            published: true,
             #[cfg(test)]
             write_fault: Arc::new(Mutex::new(None)),
         }))
@@ -420,11 +429,48 @@ impl SessionCatalog {
     /// composition layer owns that authority and must complete it before
     /// calling this mutating Session-domain operation.
     ///
+    /// Startup does not take this path: it composes against
+    /// [`Self::create_unpublished`] and commits the first catalog write in
+    /// the same transaction as every other startup decision. Nothing in
+    /// production creates and publishes a first Session in one step, so this
+    /// is the test-only shorthand for "a runtime root that has already
+    /// launched once".
+    ///
     /// # Errors
     ///
     /// Returns [`SessionError`] when the private conversation seed or catalog
     /// publication cannot be completed.
+    #[cfg(test)]
     pub(crate) fn create(
+        runtime_root: &Path,
+        state: &SessionPersistentState,
+    ) -> Result<Self, SessionError> {
+        let mut catalog = Self::create_unpublished(runtime_root, state)?;
+        let planned = catalog.plan_unchanged();
+        catalog.commit_planned(planned)?;
+        Ok(catalog)
+    }
+
+    /// Builds the first root Session **without** publishing it.
+    ///
+    /// The returned catalog names a root Session that `catalog.json` does
+    /// not yet mention. That is deliberate: a first launch still has to
+    /// compose a runtime for that Session — workspace, capabilities,
+    /// recovery, host binding — and every one of those steps can fail. A
+    /// catalog written before them leaves a visible, resumable Session
+    /// behind a launch that never started, and the next launch resumes into
+    /// it.
+    ///
+    /// The seeded conversation database is not a published fact: a
+    /// conversation the catalog does not name is neither selectable nor
+    /// resumable, so an abandoned first launch leaves an inert file and
+    /// nothing else.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError`] when the private conversation seed cannot be
+    /// created.
+    pub(crate) fn create_unpublished(
         runtime_root: &Path,
         state: &SessionPersistentState,
     ) -> Result<Self, SessionError> {
@@ -477,15 +523,14 @@ impl SessionCatalog {
             next_node_ordinal: 2,
             sessions,
         };
-        let catalog = Self {
+        Ok(Self {
             root,
             path,
             document,
+            published: false,
             #[cfg(test)]
             write_fault: Arc::new(Mutex::new(None)),
-        };
-        catalog.persist(&catalog.document)?;
-        Ok(catalog)
+        })
     }
 
     /// Arms one deterministic catalog-write fault for the next mutation.
@@ -1090,11 +1135,16 @@ impl SessionCatalog {
     }
 
     /// A planned catalog transition that changes nothing.
+    ///
+    /// An unpublished catalog — a first launch, see
+    /// [`Self::create_unpublished`] — still has a pending first write, so
+    /// its "unchanged" plan commits the document it was built with. Every
+    /// other catalog commits nothing.
     #[must_use]
     pub(crate) fn plan_unchanged(&self) -> PlannedCatalog {
         PlannedCatalog {
             document: self.document.clone(),
-            changed: false,
+            changed: !self.published,
         }
     }
 
@@ -1265,6 +1315,7 @@ impl SessionCatalog {
         match self.persist(&next) {
             Ok(()) => {
                 self.document = next;
+                self.published = true;
                 Ok(())
             }
             Err(
@@ -1277,6 +1328,7 @@ impl SessionCatalog {
                 // though the directory durability barrier could not be
                 // proven, then surface the distinct post-commit outcome.
                 self.document = next;
+                self.published = true;
                 Err(error)
             }
             Err(error) => Err(error),

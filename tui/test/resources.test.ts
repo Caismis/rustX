@@ -77,14 +77,58 @@ describe("loaded resources", () => {
     assert.match(banner(state), /\[Context\]\n {2}agent profile/);
   });
 
-  it("folds a resource reload without waiting for a capability revision", () => {
+  it("folds a reload's whole generation from one event", () => {
     const before = stateOf({
       resources: { revision: 1, context_files: [], agent_profile: false },
     });
     const after = reduce(before, {
       cursor: runtimeCursor(before.cursor + 1),
       event: {
-        type: "resources_updated",
+        type: "resource_generation_updated",
+        capabilities: {
+          ...before.capabilities,
+          revision: before.capabilities.revision + 1,
+          skills: [
+            {
+              id: "skill-generation",
+              version_id: "skill-generation@1",
+              name: "generation-skill",
+              description: "published together",
+              location: ".rustx/skills/generation/SKILL.md",
+            },
+          ],
+        },
+        resources: {
+          revision: 2,
+          context_files: [{ path: "/work/project/AGENTS.md", bytes: 9 }],
+          agent_profile: false,
+        },
+      },
+    });
+
+    // One event, one cursor, both halves. There is no intermediate state in
+    // which this client holds the new capability generation beside the
+    // resource generation the same reload retired.
+    assert.equal(after.resources.revision, 2);
+    assert.equal(after.capabilities.revision, before.capabilities.revision + 1);
+    assert.deepEqual(
+      (after.capabilities.skills ?? []).map((skill) => skill.name),
+      ["generation-skill"],
+    );
+    assert.match(banner(after, "/work/project"), /\[Context\]\n {2}AGENTS\.md/);
+  });
+
+  it("folds a resource-only reload without waiting for a capability revision", () => {
+    const before = stateOf({
+      resources: { revision: 1, context_files: [], agent_profile: false },
+    });
+    const after = reduce(before, {
+      cursor: runtimeCursor(before.cursor + 1),
+      event: {
+        type: "resource_generation_updated",
+        // A reload that only rewrote project instructions repeats the
+        // capability view it composed against, unchanged revision and all.
+        capabilities: before.capabilities,
         resources: {
           revision: 2,
           context_files: [{ path: "/work/project/AGENTS.md", bytes: 9 }],
@@ -95,7 +139,6 @@ describe("loaded resources", () => {
 
     assert.equal(after.resources.revision, 2);
     assert.match(banner(after, "/work/project"), /\[Context\]\n {2}AGENTS\.md/);
-    // The capability projection is a separate authority and is untouched.
     assert.equal(after.capabilities.revision, before.capabilities.revision);
   });
 });

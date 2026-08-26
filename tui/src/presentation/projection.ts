@@ -537,10 +537,14 @@ export function reduce(
       next.capabilities = event.capabilities;
       return next;
 
-    case "resources_updated":
-      // A resource reload republishes context provenance without touching
-      // the capability revision. Folding only `capability_updated` would
-      // leave the client naming retired files as loaded.
+    case "resource_generation_updated":
+      // A reload commits the resource generation and the capability
+      // generation it was composed against as one fact, and publishes them
+      // as one event at one cursor. Both halves are folded here, together:
+      // there is no cut of this reducer at which the client holds the new
+      // capability generation beside the resource generation the same
+      // reload retired.
+      next.capabilities = event.capabilities;
       next.resources = event.resources;
       return next;
 

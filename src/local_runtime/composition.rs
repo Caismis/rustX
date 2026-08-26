@@ -930,10 +930,15 @@ impl LocalSessionProduct {
         let state = SessionPersistentState {
             model: runtime_config.model.clone(),
         };
+        // A first launch builds the root Session in memory and publishes
+        // nothing yet. `catalog.json` is written by the one startup
+        // transaction below, together with whatever else this launch
+        // decided — so a first launch that fails to compose leaves a
+        // runtime root with no catalog at all, exactly as it found it.
         let catalog = if let Some(catalog) = SessionCatalog::open_existing(&paths.runtime_root)? {
             catalog
         } else {
-            SessionCatalog::create(&paths.runtime_root, &state)?
+            SessionCatalog::create_unpublished(&paths.runtime_root, &state)?
         };
         // Startup is not a resume. A launch begins on an empty Session and
         // leaves every persisted Session as history reachable through

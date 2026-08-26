@@ -290,6 +290,19 @@ impl ClientInner {
     pub(crate) fn queued_observations(&self) -> usize {
         self.pending.queued()
     }
+
+    /// Test-only: parks the projection worker so the test owns the fold
+    /// schedule.
+    ///
+    /// The worker is spawned when the host is constructed and is woken by
+    /// every enqueue, so without this a test that wants to look at an
+    /// intermediate cut is racing it: the queue can be drained before the
+    /// test reads it. Parking is ordered against every concurrent drain, so
+    /// after this returns only [`Self::fold_one_observation`] advances the
+    /// projection.
+    pub(crate) fn park_projection_worker(&self) {
+        self.pending.park();
+    }
 }
 
 /// The shared Runtime Client host state.
@@ -3601,19 +3614,25 @@ mod tests {
         .expect("SKILL.md");
     }
 
-    /// A resource reload is one generation or nothing. Every cut of the
-    /// observation stream is checked, so a consumer can never see the new
-    /// capability generation beside the retired resource generation.
+    /// A resource reload is one generation or nothing — in the snapshot the
+    /// projection folds *and* in the event stream a client folds. Every cut
+    /// of both is checked, so a consumer can never see the new capability
+    /// generation beside the retired resource generation.
     ///
     /// The window this closes is real and not a lock-ordering detail: the
     /// projection worker folds on its own task, takes only the projection
     /// lock, and is woken by *every* enqueue. Two enqueues under the runtime
     /// state lock are still two folds, and the worker can be scheduled
-    /// between them — so a subscriber can be handed a snapshot whose new
-    /// tools sit beside project instruction files the same reload retired.
-    /// The reload therefore publishes exactly one observation carrying the
-    /// whole generation, and this test steps the queue one observation at a
-    /// time to prove there is no cut in between.
+    /// between them. Two *events* have the same defect one level out: they
+    /// occupy two cursors, and a client that maintains its own projection
+    /// incrementally sits at the first one holding a pairing the runtime
+    /// never had. The reload therefore publishes exactly one observation
+    /// carrying the whole generation, which folds into exactly one event.
+    ///
+    /// The projection worker is parked for the duration, so the fold
+    /// schedule belongs to this test rather than to the scheduler: without
+    /// that, the worker may drain the queue before the assertions below run
+    /// and the test would pass by luck instead of by construction.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_resource_reload_never_exposes_a_half_published_generation() {
         let (_adapter, fixture) =
@@ -3625,15 +3644,26 @@ mod tests {
             coordinator,
         } = fixture;
 
+        // An attached client watching the event stream from the baseline
+        // cut, exactly as an incremental consumer would.
+        let (attachment, _) = host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .expect("attach");
         // Fold everything the composition produced, so the queue holds the
         // reload's observations and nothing else.
         let (baseline, baseline_cursor) = host.snapshot().expect("snapshot");
+        let subscription = attachment
+            .subscribe_events(baseline_cursor)
+            .expect("subscribe from the snapshot cursor");
         let inner = host.weak_inner().upgrade().expect("host is live");
         assert_eq!(
             inner.queued_observations(),
             0,
             "the baseline snapshot drained the queue"
         );
+
+        // From here the test owns every fold.
+        inner.park_projection_worker();
 
         // A reload that genuinely moves both halves of the generation.
         write_probe_skill(&dir.path().join("workspace"), "generation-skill");
@@ -3663,6 +3693,10 @@ mod tests {
         assert_eq!(before.capabilities.revision, baseline.capabilities.revision);
         assert_eq!(before.resources.revision, baseline.resources.revision);
         assert_eq!(before_cursor, baseline_cursor, "no event was published yet");
+        assert!(
+            matches!(subscription.try_next(), EventDelivery::Pending),
+            "an unfolded observation publishes nothing"
+        );
 
         // Step the queue one observation at a time and check every cut.
         let mut cuts = 0;
@@ -3683,6 +3717,38 @@ mod tests {
             );
         }
         assert_eq!(cuts, 1, "there is exactly one cut to check");
+
+        // The same property one level out: the client stream carries the
+        // whole generation at a single cursor, so no incremental fold of it
+        // can produce a half-published pairing either.
+        let mut delivered = Vec::new();
+        while let EventDelivery::Event(event) = subscription.try_next() {
+            delivered.push(event);
+        }
+        assert_eq!(
+            delivered.len(),
+            1,
+            "one generation is one cursor: {delivered:?}"
+        );
+        let RuntimeClientEvent::ResourceGenerationUpdated {
+            capabilities,
+            resources,
+        } = &delivered[0].event
+        else {
+            panic!("the reload publishes its generation: {delivered:?}");
+        };
+        assert_eq!(
+            (capabilities.revision, resources.revision),
+            (reloaded.capability_revision, reloaded.resource_revision),
+            "the one event carries both halves of the committed generation"
+        );
+        assert!(
+            capabilities
+                .skills
+                .iter()
+                .any(|skill| skill.name == "generation-skill"),
+            "the published capability half is the one the reload composed"
+        );
 
         drop(host);
         drop(runtime);
@@ -4133,8 +4199,9 @@ mod tests {
     /// Python plane becomes unavailable while the committed executable set
     /// is unchanged — never advances `CapabilityRevision`, yet a
     /// continuously attached client still observes it as one
-    /// `CapabilityUpdated` event whose view reports the unchanged revision.
-    /// No `snapshot_get` polling is needed to discover the transition.
+    /// `ResourceGenerationUpdated` event whose capability view reports the
+    /// unchanged revision. No `snapshot_get` polling is needed to discover
+    /// the transition.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn an_availability_only_commit_publishes_a_capability_update_without_a_revision_swap() {
         let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
@@ -4175,10 +4242,13 @@ mod tests {
         );
 
         let events = receive_until(&subscription, |event| {
-            matches!(event.event, RuntimeClientEvent::CapabilityUpdated { .. })
+            matches!(
+                event.event,
+                RuntimeClientEvent::ResourceGenerationUpdated { .. }
+            )
         })
         .await;
-        let Some(RuntimeClientEvent::CapabilityUpdated { capabilities }) =
+        let Some(RuntimeClientEvent::ResourceGenerationUpdated { capabilities, .. }) =
             events.last().map(|event| &event.event)
         else {
             panic!("the capability update event is published: {events:?}");
@@ -4209,12 +4279,12 @@ mod tests {
     /// The runtime resource generation is a client-visible fact of its own:
     /// the project instruction files the runtime actually loaded travel in
     /// the snapshot, and a reload that discovers a new one publishes a
-    /// `ResourcesUpdated` event carrying it.
+    /// `ResourceGenerationUpdated` event carrying it.
     ///
-    /// This is deliberately not folded into the capability projection. The
-    /// reload below changes no executable capability at all — it adds an
-    /// `AGENTS.md` — so a client watching only `CapabilityUpdated` would
-    /// still believe no project instructions were loaded.
+    /// This is deliberately not folded into the capability view. The reload
+    /// below changes no executable capability at all — it adds an
+    /// `AGENTS.md` — so a client that read only the capability half of the
+    /// event would still believe no project instructions were loaded.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn resource_reload_publishes_the_loaded_project_context_files() {
         let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
@@ -4246,10 +4316,13 @@ mod tests {
             .expect("the reload succeeds");
 
         let events = receive_until(&subscription, |event| {
-            matches!(event.event, RuntimeClientEvent::ResourcesUpdated { .. })
+            matches!(
+                event.event,
+                RuntimeClientEvent::ResourceGenerationUpdated { .. }
+            )
         })
         .await;
-        let Some(RuntimeClientEvent::ResourcesUpdated { resources }) =
+        let Some(RuntimeClientEvent::ResourceGenerationUpdated { resources, .. }) =
             events.last().map(|event| &event.event)
         else {
             panic!("the resource update event is published: {events:?}");
@@ -6651,10 +6724,13 @@ mod tests {
         assert_eq!(
             events
                 .iter()
-                .filter(|event| matches!(event.event, RuntimeClientEvent::CapabilityUpdated { .. }))
+                .filter(|event| matches!(
+                    event.event,
+                    RuntimeClientEvent::ResourceGenerationUpdated { .. }
+                ))
                 .count(),
             1,
-            "the post-activation capability commit is published exactly once"
+            "the post-activation resource generation is published exactly once"
         );
         assert_eq!(
             events

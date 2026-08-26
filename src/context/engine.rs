@@ -122,22 +122,21 @@ pub struct CompactionBudgets {
     pub summary_output_budget: u32,
     /// The frozen summary invocation's effective input limit: the largest
     /// selected span estimate one summary request may carry.
-    pub summary_input_limit: u64,
-    /// Whether the summary request is tokenized by the same model as the
-    /// primary request, so a measurement of one is a measurement of the
-    /// other.
     ///
-    /// This is what decides whether an [`EstimateCorrection`] measured on a
-    /// rejected *primary* request may also scale
-    /// [`Self::summary_input_limit`]. An explicit summary model is a
-    /// different model, frequently on a different provider, with its own
-    /// tokenizer and its own window: the primary's estimation error says
-    /// nothing about it, and applying that ratio would shrink a budget that
-    /// was never proven wrong. When the summary model *is* the primary
-    /// model, the ratio is a property of the one tokenizer both requests
-    /// pass through, and refusing to reuse it would knowingly aim the
-    /// summary request at a budget already measured as too optimistic.
-    pub summary_shares_primary_tokenizer: bool,
+    /// This budget is never scaled by an [`EstimateCorrection`]. A
+    /// correction is the ratio between one *primary* request's estimate and
+    /// what the provider counted for that same request — a measurement of
+    /// that request, not a calibration of a tokenizer. The two requests do
+    /// not carry the same material: the summary request has no tools, no
+    /// Agent Status, no Skill catalog, and no provider continuation, and a
+    /// stored continuation alone can put six figures of provider-counted
+    /// input behind the primary request that the summary request will never
+    /// send. Reusing the ratio would shrink a summary budget on evidence
+    /// about a different request — possibly to `CannotFit` — even when both
+    /// requests go to the same model. A summary request that really is too
+    /// large is rejected by the summary model, and the bounded shrink loop
+    /// around this plan replans against *that* measurement.
+    pub summary_input_limit: u64,
 }
 
 impl CompactionBudgets {
@@ -147,13 +146,11 @@ impl CompactionBudgets {
         primary_output_budget: u32,
         summary_output_budget: u32,
         summary_input_limit: u64,
-        summary_shares_primary_tokenizer: bool,
     ) -> Self {
         Self {
             primary_output_budget,
             summary_output_budget,
             summary_input_limit,
-            summary_shares_primary_tokenizer,
         }
     }
 }
@@ -552,20 +549,14 @@ impl ContextEngine {
         constraints: &CompactionConstraints<'_>,
     ) -> Result<CompactionPlan, ContextError> {
         let mut soft_limit = self.soft_input_limit(budgets.primary_output_budget)?;
-        let mut summary_input_limit = budgets.summary_input_limit;
+        let summary_input_limit = budgets.summary_input_limit;
         if let Some(correction) = constraints.estimate_correction {
+            // The correction constrains the request it was measured on and
+            // nothing else. It came from one rejected primary request, so
+            // it bounds the next primary request; see
+            // `CompactionBudgets::summary_input_limit` for why it never
+            // travels to the summary request, same model or not.
             soft_limit = correction.apply(soft_limit);
-            // The correction is a measurement of one model's tokenizer
-            // taken on one rejected request. It travels only as far as that
-            // measurement is evidence: the primary request always, and the
-            // summary request only when the summary goes to the same model.
-            // A distinct summary model has its own window and its own
-            // estimation error; when that request is itself too large the
-            // summary model says so, and the shrink loop around this plan
-            // replans against *that* measurement.
-            if budgets.summary_shares_primary_tokenizer {
-                summary_input_limit = correction.apply(summary_input_limit);
-            }
         }
         let (active, index) = state
             .structure()

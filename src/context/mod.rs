@@ -184,16 +184,10 @@ impl ContextRuntime {
                     ),
                 )
             })?;
-        // Whether one measurement of the primary request is evidence about
-        // the summary request: same provider, same model identity, same
-        // protocol means one tokenizer and one window behind both.
-        let summary_shares_primary_tokenizer = summary.model_ref() == model.primary().model_ref()
-            && summary.protocol() == model.primary().protocol();
         let compaction_budgets = CompactionBudgets::new(
             model.primary().max_output_tokens(),
             summary.max_output_tokens(),
             summary_input_limit,
-            summary_shares_primary_tokenizer,
         );
         Ok(Self {
             engine,
