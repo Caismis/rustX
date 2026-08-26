@@ -149,12 +149,12 @@ async fn a_committed_batch_settles_the_list_on_its_own_published_snapshot() {
     assert_eq!(canonical.tasks.len(), 1);
     assert_eq!(canonical.tasks[0].subject, "Write the parser");
     assert_eq!(
-        fixture.runtime.todos().committed(),
+        fixture.runtime.todo_snapshot(),
         canonical,
         "the conversation's list is exactly the list its history published"
     );
     assert!(
-        !fixture.runtime.todos().has_staged(),
+        !support::todo::has_staged(&fixture),
         "a committed batch leaves nothing provisional behind"
     );
 }
@@ -174,7 +174,7 @@ async fn later_calls_of_one_batch_see_what_earlier_ones_staged() {
     .await;
     assert!(matches!(audit.outcome, AttemptOutcome::Completed { .. }));
 
-    let committed = fixture.runtime.todos().committed();
+    let committed = fixture.runtime.todo_snapshot();
     assert_eq!(
         committed
             .tasks
@@ -201,7 +201,7 @@ async fn later_calls_of_one_batch_see_what_earlier_ones_staged() {
 #[tokio::test]
 async fn a_batch_that_never_becomes_canonical_leaves_the_list_untouched() {
     let fixture = common::native_fixture();
-    let before = fixture.runtime.todos().committed();
+    let before = fixture.runtime.todo_snapshot();
     assert_eq!(before, TodoSnapshot::empty());
 
     let audit = run(
@@ -223,12 +223,12 @@ async fn a_batch_that_never_becomes_canonical_leaves_the_list_untouched() {
         "no tool result became canonical, so no list was ever published"
     );
     assert_eq!(
-        fixture.runtime.todos().committed(),
+        fixture.runtime.todo_snapshot(),
         before,
         "the authority a restart would rebuild is the authority this process holds"
     );
     assert!(
-        !fixture.runtime.todos().has_staged(),
+        !support::todo::has_staged(&fixture),
         "the failed batch's provisional list was discarded, not left to leak into the next one"
     );
 }
@@ -378,7 +378,7 @@ async fn the_projection_follows_a_committed_todo_result() {
     assert_eq!(snapshot.todos.tasks[0].subject, "Write the parser");
     assert_eq!(
         snapshot.todos,
-        fixture.runtime.tool_runtime().todos().committed(),
+        fixture.runtime.tool_runtime().todo_snapshot(),
         "the client projection and the runtime authority are one derivation"
     );
 }
@@ -397,30 +397,27 @@ async fn the_projection_follows_a_committed_todo_result() {
 /// result ever published, and the next restart would lose them again.
 #[tokio::test]
 async fn a_stage_no_result_published_is_never_promoted_by_a_later_batch() {
-    let mut fixture = common::native_fixture();
+    let mut plane = support::todo::TodoPlane::open();
     std::fs::write(
-        fixture.runtime.workspace().root().join("read.txt"),
+        plane.fixture.runtime.workspace().root().join("read.txt"),
         "hello\n",
     )
     .expect("fixture file");
 
-    let stranded = common::run_tool(
-        &fixture,
-        "todo",
-        serde_json::json!({ "action": "create", "subject": "Written outside a batch" }),
-    )
-    .await;
+    let stranded = plane
+        .run(serde_json::json!({ "action": "create", "subject": "Written outside a batch" }))
+        .await;
     assert_eq!(
         stranded.status,
         rustx::tools::types::ToolExecutionStatus::Success
     );
     assert!(
-        fixture.runtime.todos().has_staged(),
+        plane.has_staged(),
         "the executor staged a list nobody is going to commit"
     );
 
     let audit = run(
-        &fixture,
+        &plane.fixture,
         &[support::fake::ScriptedCall {
             id: "call-read",
             tool_id: "tool-read",
@@ -435,21 +432,21 @@ async fn a_stage_no_result_published_is_never_promoted_by_a_later_batch() {
         "the batch published no list"
     );
     assert_eq!(
-        fixture.runtime.todos().committed(),
+        plane.committed(),
         TodoSnapshot::empty(),
         "so the batch installed none"
     );
     assert!(
-        fixture.runtime.todos().has_staged(),
+        plane.has_staged(),
         "the stage belongs to the batch that wrote it: the batch that ran \
          beside it neither inherited it nor promoted it"
     );
 
     // And when the batch that owns it ends without committing, the stage
     // goes with it.
-    fixture.abandon_todo_batch();
-    assert!(!fixture.runtime.todos().has_staged());
-    assert_eq!(fixture.runtime.todos().committed(), TodoSnapshot::empty());
+    plane.abandon();
+    assert!(!plane.has_staged());
+    assert_eq!(plane.committed(), TodoSnapshot::empty());
 }
 
 /// Two batches cannot hold the list at once, and the one that cannot have it
@@ -463,19 +460,16 @@ async fn a_stage_no_result_published_is_never_promoted_by_a_later_batch() {
 /// silently absorbed somebody else's staged tasks.
 #[tokio::test]
 async fn a_batch_that_cannot_hold_the_list_publishes_none() {
-    let fixture = common::native_fixture();
-    let held = common::run_tool(
-        &fixture,
-        "todo",
-        serde_json::json!({ "action": "create", "subject": "Held by another batch" }),
-    )
-    .await;
+    let plane = support::todo::TodoPlane::open();
+    let held = plane
+        .run(serde_json::json!({ "action": "create", "subject": "Held by another batch" }))
+        .await;
     assert_eq!(
         held.status,
         rustx::tools::types::ToolExecutionStatus::Success
     );
 
-    let audit = run(&fixture, &[create("call-todo-a", "Write the parser")]).await;
+    let audit = run(&plane.fixture, &[create("call-todo-a", "Write the parser")]).await;
     assert!(matches!(audit.outcome, AttemptOutcome::Completed { .. }));
 
     let refused = audit
@@ -500,9 +494,109 @@ async fn a_batch_that_cannot_hold_the_list_publishes_none() {
         "a rejected call publishes no list"
     );
     assert_eq!(
-        fixture.runtime.todos().committed(),
+        plane.committed(),
         TodoSnapshot::empty(),
         "and the authority never moved"
+    );
+}
+
+/// A compaction retires the `todo` result from the Surface, and the list
+/// survives it.
+///
+/// This is the third of the three survivals Issue #127 asks for — restart,
+/// resume, compaction — and it is the one that is a property of two
+/// subsystems rather than one. The Ledger is append-only and compaction is a
+/// *Surface* rewrite: it appends a summary and replaces an active span, so
+/// the committed `todo` result stops being model-visible while staying
+/// exactly where it was. Because the list is rebuilt from `load_canonical`
+/// rather than from the Surface, that is enough — but "enough" here is a
+/// conclusion drawn from two modules, so it is pinned end to end instead.
+#[tokio::test]
+async fn a_committed_list_survives_the_compaction_that_retires_its_result() {
+    use rustx::durable::{CompactionCommitInput, ConversationStore};
+    use rustx::message::content::TextBlock;
+    use rustx::runtime::{TokenMeasurement, TokenMeasurementSource};
+
+    let fixture = common::native_fixture();
+    let audit = run(&fixture, &[create("call-todo-a", "Write the parser")]).await;
+    assert!(matches!(audit.outcome, AttemptOutcome::Completed { .. }));
+    let committed = fixture.runtime.todo_snapshot();
+    assert_eq!(committed.tasks.len(), 1);
+
+    let store = fixture.store.as_ref();
+    let head = store.load_head().expect("head");
+    let active = head.active_message_ids.clone();
+    let (first, last) = (
+        active.first().expect("an active span").clone(),
+        active.last().expect("an active span").clone(),
+    );
+    let todo_result_id = audit
+        .messages()
+        .iter()
+        .find_map(|message| match message {
+            MessageBlock::Tool(tool) if tool.tool_id.as_str() == TODO_TOOL_ID => {
+                Some(tool.id.clone())
+            }
+            _ => None,
+        })
+        .expect("the batch committed a todo result");
+    assert!(
+        active.contains(&todo_result_id),
+        "the result is model-visible before the compaction"
+    );
+
+    store
+        .commit_compaction(CompactionCommitInput {
+            summary: UserMessageBlock {
+                id: MessageId::new("message-todo-compaction-summary"),
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: "earlier work, summarized".to_owned(),
+                })],
+                source: UserSource::Runtime,
+                kind: rustx::message::types::InboundKind::CompactionSummary,
+                timestamp: None,
+            },
+            span: rustx::conversation::SurfaceSpan::new(first, last),
+            expected_revision: head.revision,
+            tokens_before: TokenMeasurement {
+                input_tokens: 64,
+                source: TokenMeasurementSource::Estimated,
+            },
+            estimated_tokens_after: 8,
+            attempt_id: None,
+            turn_id: None,
+            timestamp: chrono::Utc::now(),
+        })
+        .expect("compaction");
+
+    let compacted = store.load_head().expect("head after compaction");
+    assert!(
+        !compacted.active_message_ids.contains(&todo_result_id),
+        "the result the list came from is no longer model-visible"
+    );
+
+    // The process that opens this conversation next sees only the compacted
+    // Surface, and still opens on the list the conversation committed.
+    let dir = tempfile::tempdir().expect("temporary workspace");
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let artifacts = dir.path().join("artifacts");
+    std::fs::create_dir_all(&artifacts).expect("artifacts");
+    let reopened = rustx::tools::runtime::ConversationToolRuntime::from_config(
+        fixture.runtime.conversation_id().clone(),
+        rustx::tools::runtime::ConversationRuntimeConfig {
+            durable_binding: Some(rustx::durable::ConversationStoreBinding::new(Arc::clone(
+                &fixture.store,
+            )
+                as Arc<dyn ConversationStore>)),
+            ..rustx::tools::runtime::ConversationRuntimeConfig::new(&workspace, artifacts)
+        },
+    )
+    .expect("a runtime over the compacted conversation");
+    assert_eq!(
+        reopened.todo_snapshot(),
+        committed,
+        "compaction retires a result from the Surface; it never removes it from the Ledger"
     );
 }
 
@@ -554,7 +648,7 @@ async fn every_committed_list_survives_the_restart_that_reads_it_back() {
         "a rejected call publishes no list, because it mutated nothing"
     );
 
-    let committed = fixture.runtime.todos().committed();
+    let committed = fixture.runtime.todo_snapshot();
     assert_eq!(committed.tasks.len(), 1);
     assert_eq!(committed.tasks[0].subject, "Write the parser");
     committed

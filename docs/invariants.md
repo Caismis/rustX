@@ -663,6 +663,24 @@ authority, not the timing:
   blocks published is unconditional, because canonical history is the
   authority; the settlement additionally says whether the batch still held the
   list, so the unreachable case cannot pass as an ordinary success.
+- **the authority does not leave the crate.** The list, its batch, its writer,
+  and the seam that binds a writer to an invocation are all crate-private.
+  Settling a batch is a *claim about the Ledger* — that canonical history
+  already carries the list being installed — and only the Agent Loop can make
+  it truthfully, because only it holds the durable batch commit the claim
+  refers to. A consumer that could open a batch, stage a list, and settle it
+  against blocks of its own making would move the committed list without
+  moving the Ledger, and the next `todo` call would publish that divergence
+  into canonical history as though it had always been there. What a consumer
+  gets instead is the derived list: `ConversationToolRuntime::todo_snapshot`
+  and `RuntimeClientSnapshot.todos`, both of which read and neither of which
+  claims.
+
+The list survives a restart, a Session resume, and a compaction, and the third
+is a property of two subsystems rather than one: compaction appends a summary
+and replaces an active *Surface* span, while the Ledger is append-only and the
+rebuild reads `load_canonical`. So a compacted `todo` result stops being
+model-visible and stays exactly where the rebuild looks for it.
 
 The rebuild fails closed. A newest successful `todo` result whose payload is
 missing, undecodable, or violates the list's own invariants refuses

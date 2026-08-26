@@ -157,15 +157,15 @@ impl<'a> ToolExecutionContext<'a> {
     /// Binds this invocation to the task list of the `ToolResult` batch it
     /// belongs to.
     ///
-    /// Public, unlike the Questionnaire seam above, because it escalates
-    /// nothing: a [`TodoWriter`] can only be obtained from a
-    /// [`TodoBatch`](crate::tools::todo::TodoBatch), which can only be
-    /// obtained from the list itself. What it *does* enforce is that the
-    /// authority is named — a caller that dispatches the `todo` tool without
-    /// a batch of its own gets an executor that refuses to write, rather than
-    /// one that writes into whatever batch happens to be open.
+    /// Crate-private, exactly like the Questionnaire seam above. A
+    /// [`TodoWriter`] is reachable only from a
+    /// [`TodoBatch`](crate::tools::todo::TodoBatch), and a batch is the right
+    /// to *settle* the conversation's list — to assert that canonical history
+    /// already carries the list being installed. That assertion belongs to
+    /// the one place that commits the batch, so neither the writer nor the
+    /// seam that binds it leaves this crate.
     #[must_use]
-    pub fn with_todos(mut self, todos: TodoWriter) -> Self {
+    pub(crate) fn with_todos(mut self, todos: TodoWriter) -> Self {
         self.todos = Some(todos);
         self
     }

@@ -455,9 +455,28 @@ impl ConversationToolRuntime {
     ///
     /// One conversation owns one list, bound at construction like every
     /// other conversation-owned resource here.
+    ///
+    /// Crate-private, and deliberately: the value this returns carries the
+    /// authority to open a batch and to *settle* one, and settling is the
+    /// claim that canonical history already carries the list being
+    /// installed. Only the Agent Loop is in a position to make that claim,
+    /// because only it holds the durable batch commit the claim refers to.
+    /// A consumer that wants to read the list uses
+    /// [`Self::todo_snapshot`], which carries no such authority.
     #[must_use]
-    pub fn todos(&self) -> &ConversationTodoList {
+    pub(crate) fn todos(&self) -> &ConversationTodoList {
         &self.todos
+    }
+
+    /// The conversation's committed task list.
+    ///
+    /// The authoritative list as canonical history left it: what a restart
+    /// would rebuild, and what the Runtime Client projection carries. A
+    /// batch in flight is invisible here, because a mutation nothing has
+    /// committed is not yet part of the conversation.
+    #[must_use]
+    pub fn todo_snapshot(&self) -> crate::tools::todo::TodoSnapshot {
+        self.todos.committed()
     }
 
     /// Returns the full durable authority composed for this tool runtime.

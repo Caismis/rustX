@@ -1821,7 +1821,7 @@ impl RuntimeInner {
         // is a derivation of canonical tool results, and it moves only when
         // one of those commits. Reading the committed list inside the same
         // freeze keeps the seed and the live stream on one cut.
-        let todos = self.tool_runtime.todos().committed();
+        let todos = self.tool_runtime.todo_snapshot();
         self.interaction.install_observer(observer.clone());
         // ---- T1: the mailbox (frozen: an inactive conversation refuses
         //          inbound) ----

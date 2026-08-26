@@ -19,6 +19,7 @@ pub(crate) mod fake;
 pub(crate) mod model;
 pub(crate) mod runtime_client_conformance;
 pub(crate) mod runtime_client_fixture;
+pub(crate) mod todo;
 
 /// The immutable attempt model snapshot of a loop suite.
 ///

@@ -1995,6 +1995,15 @@ batch would publish, and one batch's stage is unreadable to every other.
 Settlement reports whether the batch still held the list, so the case the
 exclusivity exists to prevent cannot pass as a quiet success.
 
+None of that authority is exported. The list, the batch, the writer, and
+the context seam that binds a writer to an invocation are crate-private,
+because settling a batch asserts that canonical history already carries
+the list being installed and only the loop that commits the batch can
+assert it. The published surface is the derived list —
+`ConversationToolRuntime::todo_snapshot` and
+`RuntimeClientSnapshot.todos` — plus the rules for reading a list out of
+canonical history (`published_snapshot`, `TodoSnapshot::validate`).
+
 Every mutation is also checked against the rule a rebuild applies before
 it is staged, so the authority cannot publish a list it could not read
 back, and a rebuild that finds the newest committed result unusable fails

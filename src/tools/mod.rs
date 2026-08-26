@@ -53,11 +53,17 @@ pub use schema::{
     is_reserved_property, resolve_invocation_metadata, validate_business_arguments,
     validate_canonical_schema, validate_execution_metadata_contract,
 };
+// The task list is split at the authority boundary rather than exported as
+// one surface. What a consumer may hold is the *derived* list and the rules
+// for reading one out of canonical history; what mutates or settles it is
+// the Agent Loop's, because settlement is the claim that the Ledger already
+// carries the list being installed, and nothing outside the loop can make
+// that claim truthfully.
 pub use todo::{
-    ConversationTodoList, TODO_TOOL_ID, TodoBatch, TodoChange, TodoCreate, TodoMutationError,
-    TodoRebuildError, TodoSettlement, TodoSnapshot, TodoSnapshotError, TodoStatus, TodoTask,
-    TodoUpdate, TodoWriter, forbidden_control, metadata_control, published_snapshot,
+    TODO_TOOL_ID, TodoRebuildError, TodoSnapshot, TodoSnapshotError, TodoStatus, TodoTask,
+    forbidden_control, metadata_control, published_snapshot,
 };
+
 pub use types::{
     ManagedOutputContinuation, ModelToolDefinition, ToolApprovalPolicy, ToolCall, ToolCallStart,
     ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,

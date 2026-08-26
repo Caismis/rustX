@@ -560,7 +560,7 @@ impl TodoSnapshot {
 /// list is validated before it is written, so a rejected call leaves the
 /// state exactly as it was.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TodoMutationError {
+pub(crate) enum TodoMutationError {
     /// A task was left without a non-blank subject.
     BlankSubject,
     /// No task carries the requested id.
@@ -646,7 +646,7 @@ impl std::error::Error for TodoMutationError {}
 
 /// The fields one `create` supplies.
 #[derive(Debug, Clone, Default)]
-pub struct TodoCreate {
+pub(crate) struct TodoCreate {
     /// The imperative one-line subject. Required and non-blank.
     pub subject: String,
     /// Optional long-form detail.
@@ -667,7 +667,7 @@ pub struct TodoCreate {
 /// patch, never a whole-record replacement, so two updates of different
 /// fields cannot undo each other.
 #[derive(Debug, Clone, Default)]
-pub struct TodoChange {
+pub(crate) struct TodoChange {
     /// A new subject.
     pub subject: Option<String>,
     /// A new long-form detail.
@@ -704,7 +704,7 @@ impl TodoChange {
 
 /// What one accepted `update` actually did.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TodoUpdate {
+pub(crate) struct TodoUpdate {
     /// The task after the update.
     pub task: TodoTask,
     /// The status the task held before the update, when it changed.
@@ -720,8 +720,38 @@ pub struct TodoUpdate {
 /// Cloning shares the list: the clone handed to the tool registration and
 /// the handle the composition keeps are the same authority, exactly as with
 /// the conversation's background registry.
+///
+/// # Why this is not public
+///
+/// Holding the list is holding the right to *settle* it, and settling is a
+/// claim about the Ledger: that canonical history already carries the list
+/// being installed. Only the Agent Loop can make that claim truthfully,
+/// because only it holds the durable batch commit the claim refers to. A
+/// consumer that could open a batch, stage a list, and settle it against
+/// blocks of its own making would move the committed list without moving the
+/// Ledger — and the next `todo` call would publish that divergence into
+/// canonical history as if it had always been there.
+///
+/// So the list, its batch, its writer, and the seam that binds a writer to
+/// an invocation are all crate-private. What a consumer gets is
+/// [`ConversationToolRuntime::todo_snapshot`], which reads and cannot claim:
+///
+/// ```compile_fail
+/// # use rustx::tools::runtime::ConversationToolRuntime;
+/// // Fails as E0624, "method `todos` is private": the sequence below is
+/// // unreachable from outside this crate, which is the whole guarantee.
+/// fn settle_without_committing(runtime: &ConversationToolRuntime) {
+///     let batch = runtime.todos().open_batch().expect("a batch");
+///     batch.settle(&[]);
+/// }
+/// fn main() {
+///     let _ = settle_without_committing;
+/// }
+/// ```
+///
+/// [`ConversationToolRuntime::todo_snapshot`]: crate::tools::runtime::ConversationToolRuntime::todo_snapshot
 #[derive(Clone)]
-pub struct ConversationTodoList {
+pub(crate) struct ConversationTodoList {
     conversation_id: ConversationId,
     inner: Arc<Mutex<TodoListState>>,
 }
@@ -766,6 +796,7 @@ impl TodoListState {
 
     /// The list an observer sees: the in-flight one when a batch is
     /// mid-flight, the committed one otherwise. Never a write path.
+    #[cfg(test)]
     fn visible(&self) -> &TodoSnapshot {
         self.staged
             .as_ref()
@@ -795,7 +826,7 @@ impl TodoListState {
 /// history describes it.
 #[must_use = "an opened batch settles the list or discards it"]
 #[derive(Debug)]
-pub struct TodoBatch {
+pub(crate) struct TodoBatch {
     list: ConversationTodoList,
     id: u64,
 }
@@ -806,7 +837,7 @@ pub struct TodoBatch {
 /// in-memory list and canonical history cannot disagree, and a settlement
 /// that quietly did nothing is exactly how they would.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TodoSettlement {
+pub(crate) enum TodoSettlement {
     /// The batch's own canonical results published a list, and it is now the
     /// authority.
     Installed,
@@ -867,7 +898,17 @@ impl TodoBatch {
     }
 
     /// Drops this batch's provisional list, leaving the authority untouched.
-    pub fn discard(self) {}
+    ///
+    /// Production never needs to say this: every non-commit exit of the Agent
+    /// Loop drops the token, and [`Drop`] does exactly this. It exists so a
+    /// test can state the discard as the thing under test rather than as a
+    /// scope ending.
+    #[cfg(test)]
+    pub fn discard(self) {
+        // The drop *is* the discard: `Drop` clears this batch's stage and
+        // releases the list. Saying it explicitly is the point of the method.
+        drop(self);
+    }
 }
 
 impl Drop for TodoBatch {
@@ -894,18 +935,12 @@ impl Drop for TodoBatch {
 /// executor driven outside that loop receives none and therefore cannot
 /// write.
 #[derive(Debug, Clone)]
-pub struct TodoWriter {
+pub(crate) struct TodoWriter {
     list: ConversationTodoList,
     batch: u64,
 }
 
 impl TodoWriter {
-    /// The conversation this list belongs to.
-    #[must_use]
-    pub fn conversation_id(&self) -> &ConversationId {
-        self.list.conversation_id()
-    }
-
     /// The list this batch sees: the committed list plus whatever this batch
     /// has staged on top of it.
     ///
@@ -1117,6 +1152,11 @@ impl core::fmt::Debug for ConversationTodoList {
 
 impl ConversationTodoList {
     /// Creates the empty list of one conversation.
+    ///
+    /// Test-only: a production list is always [`Self::rebuilt`] from the
+    /// conversation's own canonical history, which yields the empty list for
+    /// a conversation that never tracked tasks.
+    #[cfg(test)]
     #[must_use]
     pub fn new(conversation_id: ConversationId) -> Self {
         Self::over(conversation_id, TodoSnapshot::empty())
@@ -1169,12 +1209,6 @@ impl ConversationTodoList {
         Ok(Self::over(conversation_id, committed))
     }
 
-    /// The conversation this list belongs to.
-    #[must_use]
-    pub const fn conversation_id(&self) -> &ConversationId {
-        &self.conversation_id
-    }
-
     /// What an observer of this list currently sees: the in-flight list
     /// while a batch is running, the committed list otherwise.
     ///
@@ -1182,6 +1216,10 @@ impl ConversationTodoList {
     /// caller that needs the conversation's durable truth — a client
     /// projection, a bootstrap seed — uses [`Self::committed`], and a caller
     /// that needs to *mutate* uses the [`TodoWriter`] of its own batch.
+    ///
+    /// Test-only, because outside a test nothing has a reason to observe a
+    /// list mid-batch: the runtime's own readers want the committed list.
+    #[cfg(test)]
     #[must_use]
     pub fn snapshot(&self) -> TodoSnapshot {
         self.state().visible().clone()
@@ -1194,6 +1232,11 @@ impl ConversationTodoList {
     }
 
     /// Whether a batch has staged mutations that have not committed yet.
+    ///
+    /// Test-only: it is how a suite states "and nothing provisional was left
+    /// behind", which is a property of the design rather than a fact the
+    /// runtime acts on.
+    #[cfg(test)]
     #[must_use]
     pub fn has_staged(&self) -> bool {
         self.state().staged.is_some()
