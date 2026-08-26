@@ -18,9 +18,11 @@
 //!   also how a client completes a Session switch that required a process
 //!   replacement;
 //! - `--session <session-id>` (optionally `--node <node-id>`) names a
-//!   persisted Session and publishes that selection as active before the
-//!   first runtime is composed — the same catalog transition `/resume`
-//!   commits, moved ahead of composition.
+//!   persisted Session and makes that selection active — the same catalog
+//!   transition `/resume` commits. The selection is planned before the
+//!   runtime is composed and published together with it, in one catalog
+//!   transaction, so a launch that cannot compose the Session it named
+//!   leaves the active selection untouched.
 //!
 //! The two are mutually exclusive: a launch either continues whatever was
 //! last active or names its destination, never both. Choosing a Session

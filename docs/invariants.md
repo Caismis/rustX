@@ -962,9 +962,11 @@ that a live child produced an Interrupted physical result.
   the root Session, and the root Session is built as an unpublished plan:
   `catalog.json` is written by the one startup catalog transaction, after
   composition, recovery, and host binding have succeeded. A failed first
-  launch leaves the runtime root exactly as it found it — no catalog, no
-  Session containing an invalid model, and no resumable row for a process
-  that never started. Existing Session models are
+  launch changes no published catalog state — no catalog, no Session
+  containing an invalid model, and no resumable row for a process that never
+  started. The destination conversation database may already be seeded; a
+  conversation the catalog does not name is neither selectable nor
+  resumable, so it is an inert file rather than published state. Existing Session models are
   validated independently and are never replaced by the current default.
 - **Model ownership is split deliberately.** The current runtime model is
   the default for a brand-new Session. An explicitly selected Session model

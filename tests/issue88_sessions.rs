@@ -865,8 +865,9 @@ async fn a_failed_empty_launch_publishes_no_session() {
 /// started, and the next launch continues into it.
 ///
 /// So the first catalog document is a plan like any other, committed in the
-/// same startup transaction. A failed first launch leaves the runtime root
-/// as it found it.
+/// same startup transaction. A failed first launch leaves no published
+/// catalog state behind — only the inert seeded database, which nothing
+/// names and nothing can reach.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_failed_first_launch_publishes_no_catalog() {
     let root = tempfile::tempdir().expect("temp root");

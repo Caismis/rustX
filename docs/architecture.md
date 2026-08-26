@@ -1353,9 +1353,13 @@ Key contracts:
   existing `ModelAdapter` boundary. A summary model rejecting that request as
   oversized replans the compaction against a halved summary input budget
   (bounded and strictly decreasing) instead of failing, and a compaction
-  recovering from a primary context overflow scales both the soft input limit
-  and the summary input limit by the measured `EstimateCorrection` for the
-  rejected request. It is constructed from the attempt's
+  recovering from a primary context overflow scales the soft input limit — and
+  only that limit — by the measured `EstimateCorrection` for the rejected
+  request. The correction never crosses into the summary input limit, same
+  summary model or not: it measures one primary request, whose deviation can
+  come from the continuation, the tool schemas, or the effective system
+  prompt, none of which this request carries. The summary budget is bounded
+  by the summary model's own rejection. It is constructed from the attempt's
   *frozen summary policy*, never from an independently injected summarizer:
   in `session` mode that is the attempt's own primary invocation, in
   `explicit` mode a separately resolved catalog model. The context plane's

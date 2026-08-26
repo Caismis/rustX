@@ -157,8 +157,9 @@ pub enum StartupSession {
     /// Bind the Session/node the catalog publishes as active.
     ContinueActive,
     /// Bind the named persisted Session — and the named lineage node when
-    /// one is given — publishing that selection as active before the first
-    /// runtime is composed.
+    /// one is given. The selection is *planned* before the runtime is
+    /// composed and published with it: a launch that cannot compose the
+    /// Session it named leaves the active selection where it found it.
     Select {
         /// The persisted Session to bind.
         session: SessionId,
@@ -907,8 +908,13 @@ impl LocalSessionProduct {
     ///
     /// The startup Session is an empty one unless
     /// [`LocalRuntimePaths::startup_session`] asks for the catalog's
-    /// published active selection or names a persisted Session, which is
-    /// published as the active selection before composition proceeds.
+    /// published active selection or names a persisted Session. Whichever
+    /// it is, the catalog transition is planned first and committed once,
+    /// after composition and host binding have succeeded, so a launch that
+    /// fails changes no published catalog state at all — including a first
+    /// launch, which publishes no catalog. The destination conversation
+    /// database may be seeded before that commit; a conversation the
+    /// catalog does not name is neither selectable nor resumable.
     ///
     /// # Errors
     ///
@@ -934,7 +940,9 @@ impl LocalSessionProduct {
         // nothing yet. `catalog.json` is written by the one startup
         // transaction below, together with whatever else this launch
         // decided — so a first launch that fails to compose leaves a
-        // runtime root with no catalog at all, exactly as it found it.
+        // runtime root with no catalog at all. The seeded conversation
+        // database it leaves behind is not published state: nothing names
+        // it, so it is neither selectable nor resumable.
         let catalog = if let Some(catalog) = SessionCatalog::open_existing(&paths.runtime_root)? {
             catalog
         } else {
@@ -948,8 +956,8 @@ impl LocalSessionProduct {
         // rows.
         //
         // A named Session takes the catalog transition `/resume` takes,
-        // moved ahead of composition. It is *planned* here and committed at
-        // the end: composing the destination is what can still fail — a
+        // decided ahead of composition rather than published ahead of it.
+        // It is *planned* here and committed at the end: composing the destination is what can still fail — a
         // Session whose recorded model no longer exists in `models.jsonc`,
         // a database that will not open — and a launch that fails must not
         // leave the active selection somewhere the user never asked for.
