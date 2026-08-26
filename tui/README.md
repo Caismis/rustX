@@ -162,6 +162,7 @@ compact footer carries the durable Session metadata and live status instead.
 | `presentation/projection.ts` | the ephemeral render cache and bounded transcript page | canonical history, authority of any kind |
 | `presentation/tools.ts` | the `ToolCallId` correlation used for display | tool lifecycle, which it only reads |
 | `presentation/todos.ts` | reading the runtime's task-list projection and folding newly committed `todo` results into it | task identity, status, and dependencies, which the runtime owns |
+| `sanitize.ts` | the one rule for what externally-derived text may be handed to a terminal | what any of that text *means* |
 | `commands/` | slash-command parsing, dispatch to canonical operations | parallel runtime semantics |
 | `ui/components/` | the semantic presentation grammar | every fact it displays |
 | `ui/preferences.ts` | reasoning visibility and expanded cards | anything the runtime owns |

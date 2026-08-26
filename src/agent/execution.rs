@@ -2622,24 +2622,23 @@ impl<'a> AgentExecution<'a> {
     /// it.
     ///
     /// A `todo` call mutates only *staged* list state
-    /// ([`crate::tools::todo::ConversationTodoList`]), so the in-memory list
-    /// is settled by exactly the same event that makes the batch's snapshots
-    /// durable: the atomic `ToolResult` batch commit. Every other way out of
-    /// the batch — a durable failure while announcing a call, a rejected
-    /// canonical append, cancellation that still commits — discards the
-    /// staged list here, so the authority a later rebuild reads back from
-    /// canonical history and the authority this process holds can never
-    /// disagree.
+    /// ([`crate::tools::todo::ConversationTodoList`]), scoped to the
+    /// [`TodoBatch`] opened here, so the in-memory list is settled by exactly
+    /// the same event that makes the batch's snapshots durable: the atomic
+    /// `ToolResult` batch commit. What it installs is what *this* batch's own
+    /// canonical results published, never whatever happened to be staged, and
+    /// every other way out — a durable failure while announcing a call, a
+    /// rejected canonical append, a panic — drops the token and discards the
+    /// batch's provisional list. The authority a later rebuild reads back
+    /// from canonical history and the authority this process holds therefore
+    /// cannot disagree.
     async fn execute_tools(
         &mut self,
         calls: &[ToolCall],
         preflight: Vec<PreflightOutcome>,
     ) -> Result<Vec<SettledCall>, CanonicalCommitError> {
-        let settled = self.execute_tools_staged(calls, preflight).await;
-        if settled.is_err() {
-            self.tool_runtime.todos().discard_staged();
-        }
-        settled
+        let batch = self.tool_runtime.todos().open_batch();
+        self.execute_tools_staged(calls, preflight, batch).await
     }
 
     /// The batch itself: schedule, settle, and commit every call.
@@ -2648,6 +2647,7 @@ impl<'a> AgentExecution<'a> {
         &mut self,
         calls: &[ToolCall],
         preflight: Vec<PreflightOutcome>,
+        todos: crate::tools::todo::TodoBatch,
     ) -> Result<Vec<SettledCall>, CanonicalCommitError> {
         let mut slots: Vec<CallSlot> = calls
             .iter()
@@ -2852,8 +2852,9 @@ impl<'a> AgentExecution<'a> {
         self.commit_tool_result_batch(&blocks)?;
         // The batch is durable, so the snapshots its `todo` results carry
         // are durable: this is the one point where the conversation's list
-        // may move, and it moves to exactly what canonical history now says.
-        self.tool_runtime.todos().commit_staged();
+        // may move, and it moves to exactly what these committed blocks
+        // published — never to a stage this batch did not write.
+        todos.settle(&blocks);
         let settled = result_slots
             .into_iter()
             .map(|(batch_position, slot, result)| SettledCall {

@@ -129,7 +129,7 @@ impl TodoExecutor {
             .as_ref()
             .is_none_or(|subject| subject.trim().is_empty())
         {
-            return failed_result(crate::tools::todo::TodoMutationError::BlankSubject.to_string());
+            return failed_result("subject required for create");
         }
         match self.todos.create(input.create()) {
             Ok((task, snapshot)) => settled(

@@ -31,7 +31,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::tools::native::input::decode;
-use crate::tools::todo::{TodoChange, TodoCreate, TodoStatus, forbidden_control};
+use crate::tools::todo::{TodoChange, TodoCreate, TodoStatus, forbidden_control, metadata_control};
 
 /// The requested operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
@@ -153,6 +153,18 @@ impl TodoInput {
                     character as u32
                 ));
             }
+        }
+        // Metadata is nested and both halves of it are rendered: `get`
+        // prints `metadata.<key>: <value>`, so a key is drawn exactly as
+        // literally as a subject is. Keys and every string anywhere inside a
+        // value obey the same one-line rule.
+        if let Some(metadata) = &self.metadata
+            && let Some(character) = metadata_control(metadata)
+        {
+            return Err(format!(
+                "metadata may not contain the control character U+{:04X} in a key or a value",
+                character as u32
+            ));
         }
         Ok(())
     }

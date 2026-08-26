@@ -359,6 +359,89 @@ async fn an_executor_driven_call_publishes_a_list_without_moving_the_authority()
     assert_eq!(fixture.runtime.todos().snapshot(), TodoSnapshot::empty());
 }
 
+/// A subject that survives an `update` is a subject a rebuild accepts.
+///
+/// Blanking one out passed the schema's `minLength` — whitespace is
+/// characters — and the control-character rule, so the call settled and
+/// published a snapshot the next restart refused to read back.
+#[tokio::test]
+async fn a_subject_cannot_be_blanked_out_by_an_update() {
+    let fixture = native_fixture();
+    create(&fixture, "Write the parser").await;
+    let blanked = run_tool(
+        &fixture,
+        "todo",
+        serde_json::json!({ "action": "update", "id": 1, "subject": "   " }),
+    )
+    .await;
+    assert_eq!(error(&blanked), "a task subject cannot be blank");
+    assert_eq!(
+        fixture
+            .runtime
+            .todos()
+            .snapshot()
+            .task(1)
+            .expect("kept")
+            .subject,
+        "Write the parser",
+        "a rejected update leaves the task exactly as it was"
+    );
+
+    let trimmed = run_tool(
+        &fixture,
+        "todo",
+        serde_json::json!({ "action": "update", "id": 1, "subject": "  Write the lexer  " }),
+    )
+    .await;
+    assert_eq!(summary(&trimmed), "Updated #1");
+    published(&trimmed)
+        .validate()
+        .expect("every published list is one a rebuild can adopt");
+}
+
+/// Metadata is nested and both halves of it are rendered: `get` prints
+/// `metadata.<key>: <value>`, so a key reaches a terminal exactly as
+/// literally as a subject does.
+#[tokio::test]
+async fn metadata_keys_and_values_obey_the_same_text_rule() {
+    let fixture = native_fixture();
+    for metadata in [
+        serde_json::json!({ "own\u{1b}]0;owned\u{7}er": "me" }),
+        serde_json::json!({ "owner": "me\u{202e}dangerous" }),
+        serde_json::json!({ "owner": { "nested": "line\nbreak" } }),
+        serde_json::json!({ "owner": ["fine", "tab\there"] }),
+    ] {
+        let rejected = run_tool(
+            &fixture,
+            "todo",
+            serde_json::json!({ "action": "create", "subject": "Ship", "metadata": metadata }),
+        )
+        .await;
+        assert!(
+            error(&rejected).starts_with("metadata may not contain the control character"),
+            "{}",
+            error(&rejected)
+        );
+    }
+    assert_eq!(
+        fixture.runtime.todos().snapshot(),
+        TodoSnapshot::empty(),
+        "no rejected call wrote anything"
+    );
+
+    let accepted = run_tool(
+        &fixture,
+        "todo",
+        serde_json::json!({
+            "action": "create",
+            "subject": "Ship",
+            "metadata": { "owner": "me", "size": 3 },
+        }),
+    )
+    .await;
+    assert_eq!(accepted.status, ToolExecutionStatus::Success);
+}
+
 /// A new tool runtime over existing conversation history opens on the list
 /// that history last committed — the property that makes the list survive a
 /// restart, a resume, and a compaction without any storage of its own.

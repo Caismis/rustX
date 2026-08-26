@@ -54,9 +54,9 @@ pub use schema::{
     validate_canonical_schema, validate_execution_metadata_contract,
 };
 pub use todo::{
-    ConversationTodoList, TODO_TOOL_ID, TodoChange, TodoCreate, TodoMutationError,
+    ConversationTodoList, TODO_TOOL_ID, TodoBatch, TodoChange, TodoCreate, TodoMutationError,
     TodoRebuildError, TodoSnapshot, TodoSnapshotError, TodoStatus, TodoTask, TodoUpdate,
-    forbidden_control, published_snapshot,
+    forbidden_control, metadata_control, published_snapshot,
 };
 pub use types::{
     ManagedOutputContinuation, ModelToolDefinition, ToolApprovalPolicy, ToolCall, ToolCallStart,

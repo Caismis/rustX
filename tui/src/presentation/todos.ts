@@ -40,6 +40,7 @@ import type {
   TodoTask,
   ToolExecutionResult,
 } from "../protocol/types.ts";
+import { sanitizeField } from "../sanitize.ts";
 import type { PresentationState } from "./state.ts";
 
 export type { TodoSnapshot, TodoStatus, TodoTask };
@@ -139,7 +140,7 @@ function publishedSnapshot(
  * them into a terminal. The runtime rejects control characters where the task
  * is created, so a well-behaved runtime never sends one; this is the second
  * half of that boundary, on the side that actually holds the terminal.
- * Whatever arrives, {@link sanitize} guarantees the two properties the
+ * Whatever arrives, {@link sanitizeField} guarantees the two properties the
  * panel's layout depends on:
  *
  * - one task is one physical row, because no single-line field can contain a
@@ -196,7 +197,7 @@ function parseTask(value: unknown): TodoTask | undefined {
   // comparing equal to the one the runtime published.
   const task: TodoTask = {
     id: candidate.id,
-    subject: sanitize(candidate.subject),
+    subject: sanitizeField(candidate.subject),
     status: candidate.status as TodoStatus,
   };
   // `description` is long-form prose that no bounded row ever draws, so it
@@ -214,27 +215,6 @@ function parseTask(value: unknown): TodoTask | undefined {
   return task;
 }
 
-/**
- * The characters no rendered task field may carry: the C0 range (line
- * breaks, tabs, and `ESC`, which introduces every CSI and OSC sequence),
- * `DEL`, the C1 range, and the Unicode bidi controls.
- */
-const FORBIDDEN = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
-
-/** The same set minus the line break, for the one long-form field. */
-const FORBIDDEN_MULTILINE = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
-
-/**
- * One field, reduced to text a terminal row can hold.
- *
- * Each offending character becomes U+FFFD rather than disappearing, so a
- * reader sees that something was removed instead of silently reading
- * doctored text.
- */
-export function sanitize(value: string, multiline = false): string {
-  return value.replace(multiline ? FORBIDDEN_MULTILINE : FORBIDDEN, "\ufffd");
-}
-
 function optionalString(value: unknown, multiline = false): string | undefined {
-  return typeof value === "string" ? sanitize(value, multiline) : undefined;
+  return typeof value === "string" ? sanitizeField(value, multiline) : undefined;
 }

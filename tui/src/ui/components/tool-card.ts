@@ -88,6 +88,7 @@ import {
   SUBJECT_BUDGET,
   SUMMARY_BUDGET,
 } from "../preferences.ts";
+import { sanitizeLine } from "../../sanitize.ts";
 import { type BackgroundRole, role, style } from "../theme.ts";
 import {
   type ToolCallPresentation,
@@ -154,7 +155,7 @@ export function renderToolCard(
       `${role.chrome("↳")} ${statusGlyph(tool.lifecycle)} ${header(call, context)}${statusSuffix(tool.lifecycle)}`,
     );
     pushResult(lines, renderer, tool, args, context);
-    return lines.join("\n");
+    return drawable(lines);
   }
 
   // The `call` part carries no lifecycle suffix on purpose. Its result is
@@ -172,7 +173,29 @@ export function renderToolCard(
   if (part === "full") {
     pushResult(lines, renderer, tool, args, context);
   }
-  return lines.join("\n");
+  return drawable(lines);
+}
+
+/**
+ * The card's one rendering boundary.
+ *
+ * Everything above this point composes lines out of two externally-derived
+ * sources — the model's own tool arguments and the tool's own output — and
+ * neither is validated for *this* terminal. The call band is the sharper
+ * case: it is drawn from arguments while the assistant message is still
+ * streaming, so a call the runtime will reject has already been printed by
+ * the time it is rejected, and no amount of input validation downstream can
+ * unprint it.
+ *
+ * So the card sanitizes what it hands the renderer, once, here, for every
+ * tool that has a renderer and every tool that never will. The styling this
+ * client emitted survives; a control character that arrived in content does
+ * not. Because no surviving line can contain a line break, the number of
+ * physical rows a card draws is exactly the number of lines it built — which
+ * is what every band budget above already assumed.
+ */
+function drawable(lines: string[]): string {
+  return lines.map(sanitizeLine).join("\n");
 }
 
 /**

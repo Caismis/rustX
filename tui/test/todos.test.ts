@@ -22,12 +22,17 @@ import {
   type TodoSnapshot,
   type TodoTask,
   progress,
-  sanitize,
   selectTodos,
 } from "../src/presentation/todos.ts";
+import { sanitizeField, sanitizeLine } from "../src/sanitize.ts";
 import type { MessageBlock, ToolExecutionResult } from "../src/protocol/types.ts";
 import { plainText } from "../src/ui/theme.ts";
 import { rendererFor } from "../src/ui/components/tool-renderers.ts";
+import { renderToolCard } from "../src/ui/components/tool-card.ts";
+import {
+  DEFAULT_PREVIEW_CHARS,
+  DEFAULT_PREVIEW_LINES,
+} from "../src/ui/preferences.ts";
 import {
   renderTodoInspection,
   renderTodoPanel,
@@ -255,7 +260,7 @@ describe("task text a terminal must not be handed", () => {
     const panel = renderTodoPanel(selectTodos(state), { columns: 80 });
     assert.ok(!plainText(panel).includes(ESC), "no ESC survives sanitization");
     assert.equal(
-      sanitize(`a${ESC}b`),
+      sanitizeField(`a${ESC}b`),
       `a${String.fromCharCode(0xfffd)}b`,
       "a removed character leaves a visible mark rather than vanishing",
     );
@@ -263,12 +268,92 @@ describe("task text a terminal must not be handed", () => {
 
   it("strips bidi controls that would reverse what the reader sees", () => {
     const RLO = String.fromCharCode(0x202e);
-    assert.equal(sanitize(`ship${RLO}dangerous`), `ship${String.fromCharCode(0xfffd)}dangerous`);
+    assert.equal(sanitizeField(`ship${RLO}dangerous`), `ship${String.fromCharCode(0xfffd)}dangerous`);
   });
 
   it("keeps line breaks in the one long-form field", () => {
     const paragraph = `first${String.fromCharCode(10)}second`;
-    assert.equal(sanitize(paragraph, true), paragraph);
+    assert.equal(sanitizeField(paragraph, true), paragraph);
+  });
+});
+
+describe("what the tool card may hand a terminal", () => {
+  const ESC = String.fromCharCode(27);
+  const BEL = String.fromCharCode(7);
+  const LF = String.fromCharCode(10);
+  const RLO = String.fromCharCode(0x202e);
+  const cardContext = {
+    expanded: false,
+    budget: { maxLines: DEFAULT_PREVIEW_LINES, maxChars: DEFAULT_PREVIEW_CHARS },
+  };
+
+  function todoCard(args: unknown, result?: ToolExecutionResult): string {
+    return renderToolCard(
+      {
+        callId: "call-todo",
+        toolId: TODO_TOOL_ID,
+        name: "todo",
+        argumentsText: JSON.stringify(args),
+        lifecycle:
+          result === undefined ? { type: "assembled" } : { type: "settled", result },
+        committed: result !== undefined,
+      },
+      cardContext,
+    );
+  }
+
+  /**
+   * The call band is drawn from the model's own arguments while the
+   * assistant message is still streaming — before any executor, and
+   * therefore before any rejection, has seen them. Input validation cannot
+   * unprint what was already printed, so the card is the boundary.
+   */
+  it("draws a rejected call's arguments without handing them to the terminal", () => {
+    const card = todoCard({
+      action: `create${LF}spoofed`,
+      subject: `${ESC}[2J${ESC}]0;owned${BEL}safe${LF}second line`,
+      status: `pending${RLO}gnidnep`,
+    });
+    assert.ok(!plainText(card).includes(ESC), "no ESC reaches the terminal");
+    assert.ok(!plainText(card).includes(RLO), "no bidi override reaches the terminal");
+    assert.equal(
+      card.split(LF).length,
+      1,
+      "a newline in an argument cannot buy the call band a second row",
+    );
+  });
+
+  /**
+   * Metadata is nested, and `get` renders `metadata.<key>: <value>`, so a
+   * key is drawn as literally as a subject is. The runtime rejects a key
+   * that carries a control character; the card is the second half of that
+   * boundary, on the side that holds the terminal.
+   */
+  it("draws a result summary without handing it to the terminal", () => {
+    const card = todoCard(
+      { action: "get", id: 1 },
+      {
+        status: { type: "success" },
+        content: [
+          {
+            type: "text",
+            text: `[pending] #1 Ship${LF}metadata.${ESC}]0;owned${BEL}key: ${RLO}value`,
+          },
+        ],
+        duration_ms: 0,
+        artifacts: [],
+      },
+    );
+    const plain = plainText(card);
+    assert.ok(!plain.includes(ESC));
+    assert.ok(!plain.includes(BEL));
+    assert.ok(!plain.includes(RLO));
+  });
+
+  it("keeps the styling this client emitted", () => {
+    const card = todoCard({ action: "create", subject: "Write the parser" });
+    assert.notEqual(card, plainText(card), "the card is still styled");
+    assert.match(plainText(card), /Todo\s+create Write the parser/);
   });
 });
 

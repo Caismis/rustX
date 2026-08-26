@@ -585,13 +585,27 @@ tombstoned id, a self-block, and an edge that would close a cycle in the
 exactly as it was. Reverse `blocks` edges are derived from the other tasks'
 `blocked_by` sets and never stored.
 
-Task text is the one place model output reaches a terminal unescaped, so the
-tool's input contract rejects control characters in `subject`, `active_form`,
-`owner`, and `description` — the C0 and C1 ranges, `DEL`, and the Unicode bidi
-controls — before any list state is touched. `description` is long-form prose
-that no bounded row draws and keeps line breaks; nothing else may contain one.
-A single-line field is therefore one physical client row, and no escape
-sequence a model wrote can reach a terminal.
+A subject is trimmed and must not be blank, on `update` exactly as on
+`create`. More generally the authority validates every candidate list against
+the rule a rebuild applies *before* staging it, so no accepted call can
+publish a snapshot the next restart would refuse to read back.
+
+Task text is model-written and a client draws it, so the tool's input contract
+rejects control characters — the C0 and C1 ranges, `DEL`, and the Unicode bidi
+controls — in `subject`, `active_form`, `owner`, `description`, and in metadata
+keys and every string inside a metadata value, before any list state is
+touched. `description` is long-form prose that no bounded row draws and keeps
+line breaks; nothing else may contain one, so a single-line field is one
+physical client row.
+
+Input validation is not the whole boundary, because a client draws things the
+runtime never validated: a tool *call* is rendered from the model's own
+arguments while the assistant message is still streaming, before any executor
+has seen them, so a call that will be rejected has already been drawn. A
+client therefore sanitizes at its own rendering boundary as well — the styling
+it emitted itself survives, and nothing a model wrote can move the cursor,
+repaint the screen, retitle the window, reverse reading order, or buy itself a
+second physical row.
 
 Every *settled* call publishes the complete post-call snapshot as the
 structured content of its own canonical tool result; a rejected call is an
@@ -605,19 +619,26 @@ registers no `todo` tool, so a child can neither read nor overwrite its
 parent's list.
 
 That equivalence requires the in-memory list never to run ahead of the Ledger,
-so a `todo` call mutates *staged* state and the Agent Loop installs it at the
-one atomic `ToolResult` batch commit. Later calls of the same batch read what
-earlier ones staged; every exit that is not that commit discards the staged
-list. A batch that never becomes canonical therefore leaves the list exactly
-as canonical history describes it, and an executor driven outside the Agent
-Loop moves no authority at all.
+so a `todo` call mutates *staged* state scoped to the batch the Agent Loop
+opens before the batch runs. Settling installs the newest list that batch's
+**own committed results** published, never whatever happens to be staged, and
+opening a batch drops any provisional state left behind by something that did
+not commit. Later calls of one batch read what earlier ones staged; every exit
+that is not the commit discards them. So a batch that never becomes canonical
+leaves the list exactly as canonical history describes it, an executor driven
+outside the Agent Loop moves no authority at all, and a stage that executor
+left behind can be discarded but never promoted by an unrelated batch.
 
 The rebuild fails closed. A newest successful `todo` result whose payload is
-missing, undecodable, or violates the list's own invariants — a duplicate or
-unallocated id, a blank subject, a dangling, self-referential, or cyclic
-dependency, a control character in a text field — refuses construction rather
-than reaching back to an older snapshot, which would revive tasks the
-conversation has already completed, tombstoned, or cleared.
+missing, undecodable, or violates the list's own invariants refuses
+construction rather than reaching back to an older snapshot, which would
+revive tasks the conversation has already completed, tombstoned, or cleared.
+The invariants are exactly what a sequence of mutations can produce: the
+generation is dense and ordered — ids `1..next_id-1` in creation order, with
+`next_id` one past the last, because `delete` tombstones in place and `clear`
+starts a new generation at 1 — every subject is non-blank, every dependency
+resolves, is not self-referential, is normalized, and closes no cycle, and no
+text field or metadata entry carries a control character.
 
 The runtime derives the same list over the whole Ledger and carries it in
 `RuntimeClientSnapshot.todos`; a client renders that projection and folds each

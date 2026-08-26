@@ -205,6 +205,30 @@ pub fn forbidden_control(value: &str, multiline: bool) -> Option<char> {
     })
 }
 
+/// The first character a task's metadata may not carry, key or value.
+///
+/// Metadata is model-written and the `get` reply renders it, so it obeys the
+/// same rule as every other task text — it is simply nested, so keys and
+/// every string anywhere inside a value are checked.
+#[must_use]
+pub fn metadata_control(metadata: &BTreeMap<String, serde_json::Value>) -> Option<char> {
+    metadata
+        .iter()
+        .find_map(|(key, value)| forbidden_control(key, false).or_else(|| json_control(value)))
+}
+
+/// The first forbidden character in any string `value` contains.
+fn json_control(value: &serde_json::Value) -> Option<char> {
+    match value {
+        serde_json::Value::String(text) => forbidden_control(text, false),
+        serde_json::Value::Array(items) => items.iter().find_map(json_control),
+        serde_json::Value::Object(fields) => fields.iter().find_map(|(key, nested)| {
+            forbidden_control(key, false).or_else(|| json_control(nested))
+        }),
+        _ => None,
+    }
+}
+
 /// A published list that no sequence of mutations could have produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TodoSnapshotError {
@@ -218,6 +242,24 @@ pub enum TodoSnapshotError {
         id: u64,
         /// The allocator's next id.
         next_id: u64,
+    },
+    /// The tasks are not the dense, ordered generation every sequence of
+    /// mutations produces.
+    OutOfCreationOrder {
+        /// Where the task sits in the list.
+        position: usize,
+        /// The id it carries.
+        id: u64,
+        /// The id creation order requires there.
+        expected: u64,
+    },
+    /// The allocator is ahead of the tasks it allocated: ids were handed out
+    /// that the list does not carry, which no mutation can do.
+    AllocatorAhead {
+        /// The allocator's next id.
+        next_id: u64,
+        /// How many tasks the list carries.
+        tasks: usize,
     },
     /// A task has no subject.
     BlankSubject(u64),
@@ -254,6 +296,18 @@ impl core::fmt::Display for TodoSnapshotError {
             Self::UnallocatedId { id, next_id } => {
                 write!(f, "#{id} was never allocated (next_id is {next_id})")
             }
+            Self::OutOfCreationOrder {
+                position,
+                id,
+                expected,
+            } => write!(
+                f,
+                "#{id} sits at position {position}, where creation order requires #{expected}"
+            ),
+            Self::AllocatorAhead { next_id, tasks } => write!(
+                f,
+                "next_id {next_id} is ahead of the {tasks} task(s) the list carries"
+            ),
             Self::BlankSubject(id) => write!(f, "#{id} has no subject"),
             Self::ControlCharacter {
                 id,
@@ -363,7 +417,7 @@ impl TodoSnapshot {
             return Err(TodoSnapshotError::UnusableAllocator);
         }
         let mut seen = HashSet::with_capacity(self.tasks.len());
-        for task in &self.tasks {
+        for (position, task) in self.tasks.iter().enumerate() {
             if !seen.insert(task.id) {
                 return Err(TodoSnapshotError::DuplicateId(task.id));
             }
@@ -371,6 +425,20 @@ impl TodoSnapshot {
                 return Err(TodoSnapshotError::UnallocatedId {
                     id: task.id,
                     next_id: self.next_id,
+                });
+            }
+            // The generation is dense and ordered, and there is no mutation
+            // that could make it otherwise: ids are handed out one at a time
+            // in creation order, `delete` tombstones in place rather than
+            // removing, and `clear` starts a whole new generation at 1. A
+            // gap, a reordering, or an allocator ahead of the tasks it
+            // allocated is therefore a record no history could have produced.
+            let expected = position as u64 + 1;
+            if task.id != expected {
+                return Err(TodoSnapshotError::OutOfCreationOrder {
+                    position,
+                    id: task.id,
+                    expected,
                 });
             }
             if task.subject.trim().is_empty() {
@@ -385,6 +453,21 @@ impl TodoSnapshot {
                     });
                 }
             }
+            if let Some(metadata) = &task.metadata
+                && let Some(character) = metadata_control(metadata)
+            {
+                return Err(TodoSnapshotError::ControlCharacter {
+                    id: task.id,
+                    field: "metadata",
+                    codepoint: character as u32,
+                });
+            }
+        }
+        if self.next_id != self.tasks.len() as u64 + 1 {
+            return Err(TodoSnapshotError::AllocatorAhead {
+                next_id: self.next_id,
+                tasks: self.tasks.len(),
+            });
         }
         for task in &self.tasks {
             for blocker in &task.blocked_by {
@@ -459,7 +542,7 @@ impl TodoSnapshot {
 /// state exactly as it was.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TodoMutationError {
-    /// `create` was called without a non-blank subject.
+    /// A task was left without a non-blank subject.
     BlankSubject,
     /// No task carries the requested id.
     UnknownTask(u64),
@@ -492,12 +575,18 @@ pub enum TodoMutationError {
     },
     /// `delete` was called on a tombstone.
     AlreadyDeleted(u64),
+    /// The id allocator has no id left to hand out.
+    AllocatorExhausted,
+    /// The mutation would produce a list that could not be published and
+    /// read back — the authority refuses to stage what a later rebuild
+    /// would refuse to adopt.
+    Unpublishable(TodoSnapshotError),
 }
 
 impl core::fmt::Display for TodoMutationError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::BlankSubject => write!(f, "subject required for create"),
+            Self::BlankSubject => write!(f, "a task subject cannot be blank"),
             Self::UnknownTask(id) => write!(f, "#{id} not found"),
             Self::UnknownDependency { field, id } => write!(f, "{field}: #{id} not found"),
             Self::DeletedDependency { field, id } => write!(f, "{field}: #{id} is deleted"),
@@ -515,6 +604,11 @@ impl core::fmt::Display for TodoMutationError {
             ),
             Self::IllegalTransition { from, to } => write!(f, "illegal transition {from} → {to}"),
             Self::AlreadyDeleted(id) => write!(f, "#{id} is already deleted"),
+            Self::AllocatorExhausted => write!(f, "the task id allocator is exhausted"),
+            Self::Unpublishable(error) => write!(
+                f,
+                "the resulting list could not be read back after a restart: {error}"
+            ),
         }
     }
 }
@@ -607,16 +701,78 @@ pub struct ConversationTodoList {
 ///
 /// `staged` is `None` exactly when nothing is in flight, so the common case
 /// costs no clone and the authority is never a copy of itself.
+///
+/// `open` names the batch the staged list belongs to. Provisional state is
+/// never anonymous: a batch installs only what its *own* canonical results
+/// published, so a stage left behind by anything else can be discarded but
+/// never promoted.
 #[derive(Debug)]
 struct TodoListState {
     committed: TodoSnapshot,
     staged: Option<TodoSnapshot>,
+    open: Option<u64>,
+    next_batch: u64,
 }
 
 impl TodoListState {
     /// The list every read and every mutation of an in-flight batch sees.
     fn working(&self) -> &TodoSnapshot {
         self.staged.as_ref().unwrap_or(&self.committed)
+    }
+}
+
+/// The right to settle one `ToolResult` batch's provisional list.
+///
+/// Opened by the Agent Loop before a batch runs and consumed when that batch
+/// becomes canonical. Two properties make the token worth its existence:
+///
+/// - a batch starts from the *committed* authority, so a stage left behind by
+///   something that never committed cannot be read, extended, or inherited;
+/// - settling installs what the batch's own committed results published, not
+///   whatever happens to be staged, so an unrelated batch can never promote a
+///   list no canonical result carries.
+///
+/// Dropping the token without settling discards the batch's provisional list,
+/// which makes every early return of the Agent Loop — a durable failure, a
+/// rejected append, a panic — leave the authority exactly as canonical
+/// history describes it.
+#[must_use = "an opened batch settles the list or discards it"]
+#[derive(Debug)]
+pub struct TodoBatch {
+    list: ConversationTodoList,
+    id: u64,
+}
+
+impl TodoBatch {
+    /// Installs the list this batch's own canonical results published.
+    ///
+    /// `blocks` is the exact `ToolResult` batch that just became canonical.
+    /// The newest `todo` result in it *is* the list now; a batch that
+    /// committed no `todo` result moves nothing, whatever was staged.
+    pub fn settle(self, blocks: &[MessageBlock]) {
+        let list = self.list.clone();
+        let mut state = list.state();
+        if state.open != Some(self.id) {
+            return;
+        }
+        state.open = None;
+        state.staged = None;
+        if let Some(Ok(published)) = blocks.iter().rev().find_map(published_snapshot) {
+            state.committed = published;
+        }
+    }
+
+    /// Drops this batch's provisional list, leaving the authority untouched.
+    pub fn discard(self) {}
+}
+
+impl Drop for TodoBatch {
+    fn drop(&mut self) {
+        let mut state = self.list.state();
+        if state.open == Some(self.id) {
+            state.open = None;
+            state.staged = None;
+        }
     }
 }
 
@@ -644,6 +800,8 @@ impl ConversationTodoList {
             inner: Arc::new(Mutex::new(TodoListState {
                 committed,
                 staged: None,
+                open: None,
+                next_batch: 1,
             })),
         }
     }
@@ -705,16 +863,21 @@ impl ConversationTodoList {
         self.state().staged.is_some()
     }
 
-    /// Installs the staged list as the conversation's authority.
+    /// Opens one `ToolResult` batch over this list.
     ///
-    /// Called by the Agent Loop at the one point the whole `ToolResult`
-    /// batch became canonical — which is the point the snapshots those
-    /// results carry became durable. A batch that staged nothing moves
-    /// nothing.
-    pub fn commit_staged(&self) {
+    /// The new batch starts from the committed authority: any provisional
+    /// state left behind by something that never committed is dropped here,
+    /// so a batch can neither read nor inherit it. See [`TodoBatch`].
+    pub fn open_batch(&self) -> TodoBatch {
         let mut state = self.state();
-        if let Some(staged) = state.staged.take() {
-            state.committed = staged;
+        let id = state.next_batch;
+        state.next_batch = state.next_batch.saturating_add(1);
+        state.open = Some(id);
+        state.staged = None;
+        drop(state);
+        TodoBatch {
+            list: self.clone(),
+            id,
         }
     }
 
@@ -751,10 +914,12 @@ impl ConversationTodoList {
             owner: spec.owner,
             metadata: spec.metadata.filter(|metadata| !metadata.is_empty()),
         };
-        next.next_id = next.next_id.saturating_add(1);
+        next.next_id = next
+            .next_id
+            .checked_add(1)
+            .ok_or(TodoMutationError::AllocatorExhausted)?;
         next.tasks.push(task.clone());
-        state.staged = Some(next.clone());
-        Ok((task, next))
+        Ok((task, stage(&mut state, next)?))
     }
 
     /// Applies one patch to one task.
@@ -793,6 +958,13 @@ impl ConversationTodoList {
             updated.status = status;
         }
         if let Some(subject) = change.subject {
+            // The same rule `create` applies, for the same reason: a task
+            // with no subject is a row a client cannot draw and a snapshot a
+            // rebuild refuses, so it must never become a published list.
+            let subject = subject.trim().to_owned();
+            if subject.is_empty() {
+                return Err(TodoMutationError::BlankSubject);
+            }
             updated.subject = subject;
         }
         if let Some(description) = change.description {
@@ -829,14 +1001,13 @@ impl ConversationTodoList {
         let unchanged = updated == current;
         let previous_status = (updated.status != current.status).then_some(current.status);
         next.tasks[position] = updated.clone();
-        state.staged = Some(next.clone());
         Ok((
             TodoUpdate {
                 task: updated,
                 previous_status,
                 unchanged,
             },
-            next,
+            stage(&mut state, next)?,
         ))
     }
 
@@ -862,8 +1033,7 @@ impl ConversationTodoList {
         }
         next.tasks[position].status = TodoStatus::Deleted;
         let task = next.tasks[position].clone();
-        state.staged = Some(next.clone());
-        Ok((task, next))
+        Ok((task, stage(&mut state, next)?))
     }
 
     /// Drops every task and resets the id allocator.
@@ -876,6 +1046,7 @@ impl ConversationTodoList {
         let dropped = state.working().tasks.len();
         let emptied = TodoSnapshot::empty();
         state.staged = Some(emptied.clone());
+        drop(state);
         (dropped, emptied)
     }
 
@@ -884,6 +1055,19 @@ impl ConversationTodoList {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+}
+
+/// Stages one candidate list, but only if it is one a rebuild could adopt.
+///
+/// Every mutation goes through here, so the authority never holds — and
+/// never publishes — a list that [`TodoSnapshot::validate`] would refuse.
+/// Without this the two halves of the durability story could drift: a call
+/// could succeed, commit its snapshot, and leave the next restart unable to
+/// rebuild the very list it just wrote.
+fn stage(state: &mut TodoListState, next: TodoSnapshot) -> Result<TodoSnapshot, TodoMutationError> {
+    next.validate().map_err(TodoMutationError::Unpublishable)?;
+    state.staged = Some(next.clone());
+    Ok(next)
 }
 
 /// The list one canonical message publishes, when it publishes one.
@@ -1314,6 +1498,7 @@ mod tests {
     #[test]
     fn a_mutation_is_staged_until_the_batch_that_carries_it_commits() {
         let todos = list();
+        let batch = todos.open_batch();
         todos.create(subject("Write the parser")).expect("create");
         assert!(todos.has_staged());
         assert_eq!(
@@ -1333,26 +1518,88 @@ mod tests {
 
         let staged = todos.snapshot();
         assert_eq!(staged.tasks.len(), 2);
-        todos.commit_staged();
+        batch.settle(&[todo_result(&staged)]);
         assert_eq!(todos.committed(), staged);
         assert!(!todos.has_staged());
-        todos.commit_staged();
-        assert_eq!(todos.committed(), staged, "committing twice moves nothing");
+    }
+
+    /// A batch installs what its own canonical results published, so a stage
+    /// nothing committed cannot ride out on an unrelated batch.
+    ///
+    /// This is the executor-driven case: a caller holding the public tool
+    /// registry runs `todo` outside any batch, which publishes a snapshot
+    /// nobody commits. The next batch to settle carries no `todo` result at
+    /// all, and must leave the authority exactly where history left it.
+    #[test]
+    fn an_unrelated_batch_cannot_promote_a_stage_no_result_published() {
+        let todos = list();
+        todos
+            .create(subject("Written outside a batch"))
+            .expect("create");
+        assert!(todos.has_staged());
+
+        let batch = todos.open_batch();
+        assert!(
+            !todos.has_staged(),
+            "a batch starts from the committed authority, never from a stranded stage"
+        );
+        assert_eq!(todos.snapshot(), TodoSnapshot::empty());
+
+        // The batch commits an ordinary non-`todo` result.
+        batch.settle(&[MessageBlock::Tool(ToolMessageBlock {
+            id: MessageId::new("message-bash"),
+            tool_call_id: ToolCallId::new("call-bash"),
+            tool_id: ToolId::new("tool-bash"),
+            result: ToolExecutionResult {
+                status: ToolExecutionStatus::Success,
+                content: vec![ToolResultContent::Text(TextBlock {
+                    text: "ok".to_owned(),
+                })],
+                duration_ms: 0,
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+                managed_output: None,
+            },
+        })]);
+        assert_eq!(
+            todos.committed(),
+            TodoSnapshot::empty(),
+            "no committed result published a list, so no list was installed"
+        );
+        assert!(!todos.has_staged());
+    }
+
+    /// A settled batch installs its newest published list even if a later
+    /// mutation staged something else after it.
+    #[test]
+    fn a_batch_installs_the_newest_list_its_own_results_published() {
+        let todos = list();
+        let batch = todos.open_batch();
+        todos.create(subject("First")).expect("create");
+        let first = todos.snapshot();
+        todos.create(subject("Second")).expect("create");
+        let second = todos.snapshot();
+        batch.settle(&[todo_result(&first), todo_result(&second)]);
+        assert_eq!(todos.committed(), second);
     }
 
     #[test]
-    fn a_discarded_batch_leaves_the_committed_list_exactly_as_it_was() {
+    fn a_dropped_batch_leaves_the_committed_list_exactly_as_it_was() {
         let todos = list();
+        let first = todos.open_batch();
         todos.create(subject("Write the parser")).expect("create");
-        todos.commit_staged();
+        first.settle(&[todo_result(&todos.snapshot())]);
         let committed = todos.committed();
 
+        let doomed = todos.open_batch();
         todos.create(subject("Write the tests")).expect("create");
         todos.delete(1).expect("tombstone");
         let (_, cleared) = todos.clear();
         assert_eq!(cleared, TodoSnapshot::empty());
 
-        todos.discard_staged();
+        // The Agent Loop's every non-commit exit, in one line.
+        drop(doomed);
         assert!(!todos.has_staged());
         assert_eq!(todos.committed(), committed);
         assert_eq!(
@@ -1360,19 +1607,14 @@ mod tests {
             committed,
             "with nothing staged, the working list is the committed one"
         );
-        todos.discard_staged();
-        assert_eq!(
-            todos.committed(),
-            committed,
-            "discarding twice drops nothing"
-        );
     }
 
     #[test]
     fn a_rejected_mutation_stages_nothing() {
         let todos = list();
+        let batch = todos.open_batch();
         todos.create(subject("Write the parser")).expect("create");
-        todos.commit_staged();
+        batch.settle(&[todo_result(&todos.snapshot())]);
         assert!(!todos.has_staged());
 
         todos
@@ -1382,6 +1624,72 @@ mod tests {
             !todos.has_staged(),
             "a rejected call leaves no provisional list to commit or discard"
         );
+    }
+
+    /// `update` obeys the same subject rule `create` does.
+    ///
+    /// It did not, and the gap was publishable: a blank subject passed the
+    /// schema's `minLength` (whitespace is characters) and the control-
+    /// character rule, so the call succeeded and committed a snapshot that
+    /// the next restart refused to rebuild.
+    #[test]
+    fn an_update_may_not_blank_out_a_subject() {
+        let todos = list();
+        let (task, _) = todos.create(subject("Write the parser")).expect("create");
+        assert_eq!(
+            todos
+                .update(
+                    task.id,
+                    TodoChange {
+                        subject: Some("   ".to_owned()),
+                        ..TodoChange::default()
+                    },
+                )
+                .expect_err("a blank subject"),
+            TodoMutationError::BlankSubject
+        );
+        assert_eq!(
+            todos.snapshot().task(1).expect("kept").subject,
+            "Write the parser"
+        );
+
+        let (updated, snapshot) = todos
+            .update(
+                task.id,
+                TodoChange {
+                    subject: Some("  Write the lexer  ".to_owned()),
+                    ..TodoChange::default()
+                },
+            )
+            .expect("update");
+        assert_eq!(
+            updated.task.subject, "Write the lexer",
+            "trimmed exactly like create"
+        );
+        snapshot
+            .validate()
+            .expect("a published list is always one a rebuild can adopt");
+    }
+
+    /// Every mutation is checked against the rule a rebuild applies, so the
+    /// authority can never publish a list it could not read back.
+    #[test]
+    fn a_mutation_that_could_not_be_read_back_is_refused() {
+        let todos = list();
+        let (task, snapshot) = todos.create(subject("Write the parser")).expect("create");
+        snapshot.validate().expect("valid");
+        for blank in ["", "  ", "\u{2028}  "] {
+            todos
+                .update(
+                    task.id,
+                    TodoChange {
+                        subject: Some(blank.to_owned()),
+                        ..TodoChange::default()
+                    },
+                )
+                .expect_err("unpublishable");
+        }
+        assert_eq!(todos.snapshot(), snapshot, "and nothing was written");
     }
 
     #[test]
@@ -1416,6 +1724,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // one table of rejected records
     fn a_published_list_that_no_mutation_could_have_produced_is_refused() {
         let task = |id: u64, subject: &str| TodoTask {
             id,
@@ -1481,6 +1790,69 @@ mod tests {
                     id: 1,
                     field: "subject",
                     codepoint: 0x000a,
+                },
+            ),
+            (
+                TodoSnapshot {
+                    tasks: vec![TodoTask {
+                        metadata: Some(
+                            [("owner\u{1b}]0;owned".to_owned(), serde_json::json!("me"))]
+                                .into_iter()
+                                .collect(),
+                        ),
+                        ..task(1, "a")
+                    }],
+                    next_id: 2,
+                },
+                TodoSnapshotError::ControlCharacter {
+                    id: 1,
+                    field: "metadata",
+                    codepoint: 0x001b,
+                },
+            ),
+            // The generation is dense and ordered. None of these is a list
+            // any sequence of mutations could have left behind, and each one
+            // would hand a rebuilt conversation ids that name nothing.
+            (
+                TodoSnapshot {
+                    tasks: Vec::new(),
+                    next_id: 9,
+                },
+                TodoSnapshotError::AllocatorAhead {
+                    next_id: 9,
+                    tasks: 0,
+                },
+            ),
+            (
+                TodoSnapshot {
+                    tasks: vec![task(1, "a"), task(3, "c")],
+                    next_id: 4,
+                },
+                TodoSnapshotError::OutOfCreationOrder {
+                    position: 1,
+                    id: 3,
+                    expected: 2,
+                },
+            ),
+            (
+                TodoSnapshot {
+                    tasks: vec![task(2, "b"), task(1, "a")],
+                    next_id: 3,
+                },
+                TodoSnapshotError::OutOfCreationOrder {
+                    position: 0,
+                    id: 2,
+                    expected: 1,
+                },
+            ),
+            (
+                TodoSnapshot {
+                    tasks: vec![task(1, "a"), task(2, "b")],
+                    next_id: 9,
+                },
+                TodoSnapshotError::AllocatorAhead {
+                    next_id: 9,
+                    tasks: 2,
                 },
             ),
         ];

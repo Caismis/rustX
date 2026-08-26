@@ -1975,11 +1975,16 @@ survives a process restart, a Session resume, and a compaction exactly as
 far as the conversation history that carries it does.
 
 That is only true while the in-memory list cannot run ahead of the
-Ledger, so a `todo` call writes *staged* state and the Agent Loop
-installs it at the one atomic `ToolResult` batch commit — the same event
-that makes the published snapshots durable. Later calls of one batch read
-what earlier ones staged; a batch that never becomes canonical discards
-them. A rebuild that finds the newest committed result unusable fails
+Ledger, so a `todo` call writes *staged* state scoped to a `TodoBatch`
+the Agent Loop opens before the batch runs. Settling installs what that
+batch's own canonical results published — not whatever is staged — so a
+stage nothing committed can be discarded but never promoted, and a batch
+always starts from the committed authority rather than inheriting one.
+Later calls of one batch read what earlier ones staged; dropping the
+token, which is what every non-commit exit does, discards them. Every
+mutation is also checked against the rule a rebuild applies before it is
+staged, so the authority cannot publish a list it could not read back,
+and a rebuild that finds the newest committed result unusable fails
 construction rather than adopting an older, already superseded list.
 
 The runtime runs the same derivation over the whole Ledger and carries

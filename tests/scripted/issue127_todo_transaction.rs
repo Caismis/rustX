@@ -382,3 +382,150 @@ async fn the_projection_follows_a_committed_todo_result() {
         "the client projection and the runtime authority are one derivation"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The stage belongs to one batch
+// ---------------------------------------------------------------------------
+
+/// A stage no canonical result published cannot ride out on a later batch.
+///
+/// A caller holding the public tool registry can run `todo` outside any
+/// batch — this fixture is one — and that call publishes a snapshot nobody
+/// commits. The next batch to settle carries no `todo` result at all, so it
+/// must install nothing: promoting the stranded stage would leave the process
+/// holding tasks that no committed result ever published, and the next
+/// restart would lose them again.
+#[tokio::test]
+async fn a_stage_no_result_published_is_never_promoted_by_a_later_batch() {
+    let fixture = common::native_fixture();
+    std::fs::write(
+        fixture.runtime.workspace().root().join("read.txt"),
+        "hello\n",
+    )
+    .expect("fixture file");
+
+    let stranded = common::run_tool(
+        &fixture,
+        "todo",
+        serde_json::json!({ "action": "create", "subject": "Written outside a batch" }),
+    )
+    .await;
+    assert_eq!(
+        stranded.status,
+        rustx::tools::types::ToolExecutionStatus::Success
+    );
+    assert!(
+        fixture.runtime.todos().has_staged(),
+        "the executor staged a list nobody is going to commit"
+    );
+
+    let audit = run(
+        &fixture,
+        &[support::fake::ScriptedCall {
+            id: "call-read",
+            tool_id: "tool-read",
+            name: "read",
+            arguments: serde_json::json!({ "path": "read.txt" }),
+        }],
+    )
+    .await;
+    assert!(matches!(audit.outcome, AttemptOutcome::Completed { .. }));
+    assert!(
+        canonical_list(&audit).is_none(),
+        "the batch published no list"
+    );
+    assert_eq!(
+        fixture.runtime.todos().committed(),
+        TodoSnapshot::empty(),
+        "so the batch installed none"
+    );
+    assert!(
+        !fixture.runtime.todos().has_staged(),
+        "and the stranded stage was dropped when the batch opened"
+    );
+}
+
+/// Every list this conversation commits is one a restart can read back.
+///
+/// The batch below settles one accepted `create` and one rejected `update`
+/// that tries to blank the subject out. A blank subject is not a shape the
+/// schema rejects — whitespace is characters — so before it was refused, the
+/// call settled successfully, published its snapshot, and left the next
+/// process unable to rebuild the very list it had just committed.
+#[tokio::test]
+async fn every_committed_list_survives_the_restart_that_reads_it_back() {
+    let fixture = common::native_fixture();
+    let audit = run(
+        &fixture,
+        &[
+            create("call-todo-create", "Write the parser"),
+            support::fake::ScriptedCall {
+                id: "call-todo-blank",
+                tool_id: TODO_TOOL_ID,
+                name: "todo",
+                arguments: serde_json::json!({
+                    "action": "update",
+                    "id": 1,
+                    "subject": "   ",
+                }),
+            },
+        ],
+    )
+    .await;
+    assert!(matches!(audit.outcome, AttemptOutcome::Completed { .. }));
+
+    let results: Vec<&rustx::message::types::ToolMessageBlock> = audit
+        .messages()
+        .iter()
+        .filter_map(|message| match message {
+            MessageBlock::Tool(tool) if tool.tool_id.as_str() == TODO_TOOL_ID => Some(tool),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results.len(), 2, "both calls settled canonically");
+    assert!(matches!(
+        &results[1].result.status,
+        rustx::tools::types::ToolExecutionStatus::Failed { error }
+            if error == "a task subject cannot be blank"
+    ));
+    assert!(
+        results[1].result.content.is_empty(),
+        "a rejected call publishes no list, because it mutated nothing"
+    );
+
+    let committed = fixture.runtime.todos().committed();
+    assert_eq!(committed.tasks.len(), 1);
+    assert_eq!(committed.tasks[0].subject, "Write the parser");
+    committed
+        .validate()
+        .expect("the committed list is one a rebuild accepts");
+
+    // The restart: a brand-new tool runtime over exactly this conversation's
+    // canonical history must open on exactly this list.
+    let dir = tempfile::tempdir().expect("temporary conversation");
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    std::fs::create_dir_all(dir.path().join("artifacts")).expect("artifacts");
+    let conversation_id = ConversationId::new("conv-todo-restart");
+    let store = std::sync::Arc::new(
+        rustx::durable::SqliteConversationStore::open(
+            conversation_id.clone(),
+            &dir.path().join("artifacts/conversation.sqlite"),
+        )
+        .expect("durable store"),
+    );
+    rustx::durable::ConversationStore::initialize(store.as_ref(), audit.messages())
+        .expect("seed the lineage");
+    let restarted = rustx::tools::runtime::ConversationToolRuntime::from_config(
+        conversation_id,
+        rustx::tools::runtime::ConversationRuntimeConfig {
+            durable_binding: Some(rustx::durable::ConversationStoreBinding::new(store)),
+            ..rustx::tools::runtime::ConversationRuntimeConfig::new(
+                &workspace,
+                dir.path().join("artifacts"),
+            )
+        },
+    )
+    .expect("the restarted runtime rebuilds the list it committed");
+    assert_eq!(restarted.todos().committed(), committed);
+}
