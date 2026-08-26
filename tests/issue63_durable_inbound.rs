@@ -10,7 +10,7 @@
 
 use chrono::{DateTime, TimeZone, Utc};
 use rustx::durable::{
-    AcceptedInbound, ConversationStore, ConversationStoreError, InboundDraft,
+    AcceptedInbound, ConversationStore, ConversationStoreError, InboundDraft, LineageSeed,
     SqliteConversationStore,
 };
 use rustx::message::content::TextBlock;
@@ -491,6 +491,119 @@ fn initialize_verifies_the_initial_history() {
     assert!(matches!(
         mismatch,
         Err(ConversationStoreError::InitialHistoryMismatch)
+    ));
+}
+
+/// A seeded lineage's two halves land in their two durable homes.
+///
+/// `initialize_lineage` is the seam a Session clone/fork/tree uses, and its
+/// whole reason for existing is that a conversation's canonical history and
+/// its Surface projection are not the same set of facts. The seed below is a
+/// compacted source's shape — a summary that is the *newest* Ledger row and
+/// the *only* active one, over facts it retired — and the assertions are that
+/// the Ledger keeps all of it, the Surface shows only what was asked for, and
+/// the Surface order is the seed's rather than the Ledger's.
+#[test]
+fn a_seeded_lineage_keeps_canonical_facts_its_surface_does_not_show() {
+    let user = |id: &str, text: &str| {
+        MessageBlock::User(rustx::message::types::UserMessageBlock {
+            id: MessageId::new(id),
+            content: text_blocks(text),
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+        })
+    };
+    let summary = MessageBlock::User(rustx::message::types::UserMessageBlock {
+        id: MessageId::new("msg-summary"),
+        content: text_blocks("earlier work, summarized"),
+        source: UserSource::Runtime,
+        kind: InboundKind::CompactionSummary,
+        timestamp: None,
+    });
+    let dir = tempdir().expect("temp dir");
+    let path = dir.path().join("seeded.db");
+    // Ledger order: the retired facts, then the summary that replaced them.
+    let canonical = vec![
+        user("msg-retired-a", "A"),
+        user("msg-retired-b", "B"),
+        summary.clone(),
+        user("msg-live", "C"),
+    ];
+    // Surface order: the summary first, exactly as the source shows it.
+    let seed = LineageSeed::projected(
+        canonical.clone(),
+        vec![MessageId::new("msg-summary"), MessageId::new("msg-live")],
+    )
+    .expect("a Surface subset of the seeded Ledger");
+
+    let store =
+        SqliteConversationStore::open(ConversationId::new("conv-seeded"), &path).expect("open");
+    store.initialize_lineage(&seed).expect("seed the lineage");
+
+    assert_eq!(
+        store.load_canonical().expect("canonical"),
+        canonical,
+        "the Ledger keeps every seeded fact, retired ones included"
+    );
+    let head = store.load_head().expect("head");
+    assert_eq!(
+        head.active_message_ids,
+        vec![MessageId::new("msg-summary"), MessageId::new("msg-live")],
+        "the Surface shows the seeded projection, in the seeded order"
+    );
+    assert_eq!(
+        store
+            .load_surface_snapshot(head.revision)
+            .expect("surface snapshot"),
+        vec![summary, user("msg-live", "C")],
+        "and materializes to those messages"
+    );
+
+    // Reopening re-supplies the canonical half. The projection is durable
+    // state the store already holds, so there is nothing to contradict.
+    drop(store);
+    let reopened =
+        SqliteConversationStore::open(ConversationId::new("conv-seeded"), &path).expect("reopen");
+    assert_eq!(
+        reopened
+            .load_bootstrap_history()
+            .expect("bootstrap history"),
+        canonical
+    );
+    reopened
+        .initialize(&canonical)
+        .expect("the canonical half is the bootstrap identity");
+    assert_eq!(
+        reopened
+            .load_head()
+            .expect("head after reopen")
+            .active_message_ids,
+        vec![MessageId::new("msg-summary"), MessageId::new("msg-live")],
+        "reopening does not put retired facts back on the Surface"
+    );
+}
+
+/// A seed whose Surface does not resolve against its own Ledger is refused.
+#[test]
+fn a_seeded_surface_must_name_facts_the_seeded_ledger_carries() {
+    let live = MessageBlock::User(rustx::message::types::UserMessageBlock {
+        id: MessageId::new("msg-live"),
+        content: text_blocks("C"),
+        source: UserSource::Human,
+        kind: InboundKind::Message,
+        timestamp: None,
+    });
+    assert!(matches!(
+        LineageSeed::projected(vec![live.clone()], vec![MessageId::new("msg-absent")]),
+        Err(ConversationStoreError::InvalidReference(_))
+    ));
+    assert!(matches!(
+        LineageSeed::projected(
+            vec![live],
+            vec![MessageId::new("msg-live"), MessageId::new("msg-live")],
+        ),
+        Err(ConversationStoreError::InvalidReference(_))
     ));
 }
 

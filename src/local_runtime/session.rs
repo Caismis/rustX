@@ -36,7 +36,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::conversation::{SurfaceRevision, message_id_of};
-use crate::durable::{ConversationStore, ConversationStoreError, SqliteConversationStore};
+use crate::durable::{
+    ConversationStore, ConversationStoreError, LineageSeed, SqliteConversationStore,
+};
 use crate::message::types::{
     AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, ToolMessageBlock,
     UserContentBlock, UserMessageBlock,
@@ -225,7 +227,27 @@ pub struct SessionUserMessageBoundary {
     pub message: UserMessageBlock,
 }
 
-/// A source snapshot selected from one immutable durable Surface revision.
+/// A source lineage selected at one immutable durable Surface revision.
+///
+/// A lineage copy needs both halves of what the source conversation is at
+/// the selected cut, because they are not the same set of facts:
+///
+/// ```text
+/// messages    what the model sees there   -- the Surface at that revision
+/// canonical   what the conversation is    -- the Ledger, retired facts included
+/// ```
+///
+/// Compaction is the transition that separates them. It retires results from
+/// the Surface and leaves them canonical, so conversation-owned state derived
+/// from canonical history — the task list is the first, and will not be the
+/// last — outlives its own model-visible record. A snapshot carrying only
+/// `messages` would make a copy of a compacted conversation mean something
+/// different from a copy of the same conversation one moment earlier, which
+/// is a lineage semantics that changes behind the user's back.
+///
+/// `canonical` is the source Ledger as read; the *cut* is taken by the
+/// `prepare_*` that uses this snapshot, from the Surface prefix it selected,
+/// so a fact committed after the selected revision is never inherited.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HistoricalConversationSnapshot {
     /// Source `ConversationId`.
@@ -234,6 +256,9 @@ pub struct HistoricalConversationSnapshot {
     pub surface_revision: SurfaceRevision,
     /// Canonical messages active at that revision, in Surface order.
     pub messages: Vec<MessageBlock>,
+    /// The source's durable canonical history, in Ledger commit order. A
+    /// superset of `messages`.
+    pub canonical: Vec<MessageBlock>,
 }
 
 /// A private, already-seeded destination waiting for catalog publication.
@@ -493,7 +518,11 @@ impl SessionCatalog {
         let node_id = SessionNodeId::new("node-1");
         let conversation_id = ConversationId::new("conversation-1");
         let database_path = conversation_database_path(&root, &session_id, &conversation_id);
-        initialize_database(&database_path, &conversation_id, &[])?;
+        initialize_database(
+            &database_path,
+            &conversation_id,
+            &LineageSeed::history(Vec::new()),
+        )?;
         let now = Utc::now();
         let node = SessionNode {
             id: node_id.clone(),
@@ -885,19 +914,29 @@ impl SessionCatalog {
         seed: &[MessageBlock],
     ) -> Result<PreparedLineage, SessionError> {
         let (session_id, node_id, conversation_id) = self.allocate_ids();
-        self.prepare_session_with_ids(template, session_id, node_id, conversation_id, seed)
+        self.prepare_session_with_ids(
+            template,
+            session_id,
+            node_id,
+            conversation_id,
+            &LineageSeed::history(seed.to_vec()),
+        )
     }
 
     /// Prepares a clone from the exact source revision selected by the
     /// caller. The source revision and source message bodies are immutable
     /// inputs to this preparation.
+    ///
+    /// The clone inherits the source's complete semantic state at that cut,
+    /// not only what the Surface still shows there: see
+    /// [`HistoricalConversationSnapshot`] and [`lineage_cut`].
     pub(crate) fn prepare_clone_session(
         &self,
         template: &SessionPersistentState,
         source: &HistoricalConversationSnapshot,
     ) -> Result<PreparedLineage, SessionError> {
         let (session_id, node_id, conversation_id) = self.allocate_ids();
-        let seed = remap_seed(&conversation_id, &source.messages)?;
+        let seed = lineage_cut(&conversation_id, source, &source.messages)?;
         self.prepare_session_with_ids(template, session_id, node_id, conversation_id, &seed)
     }
 
@@ -932,7 +971,7 @@ impl SessionCatalog {
         };
         let editor_content = text_only_editor_content(user)?;
         let (session_id, node_id, conversation_id) = self.allocate_ids();
-        let seed = remap_seed(&conversation_id, &source.messages[..index])?;
+        let seed = lineage_cut(&conversation_id, source, &source.messages[..index])?;
         let prepared =
             self.prepare_session_with_ids(template, session_id, node_id, conversation_id, &seed)?;
         Ok((prepared, editor_content))
@@ -992,7 +1031,7 @@ impl SessionCatalog {
             }
             node_ordinal = node_ordinal.saturating_add(1);
         };
-        let seed = remap_seed(&conversation_id, &source.messages[..index])?;
+        let seed = lineage_cut(&conversation_id, source, &source.messages[..index])?;
         initialize_database(&database_path, &conversation_id, &seed)?;
         Ok((
             PreparedLineage {
@@ -1012,7 +1051,7 @@ impl SessionCatalog {
         session_id: SessionId,
         node_id: SessionNodeId,
         conversation_id: ConversationId,
-        seed: &[MessageBlock],
+        seed: &LineageSeed,
     ) -> Result<PreparedLineage, SessionError> {
         let database_path = conversation_database_path(&self.root, &session_id, &conversation_id);
         initialize_database(&database_path, &conversation_id, seed)?;
@@ -1372,13 +1411,67 @@ fn text_only_editor_content(
     Ok(user.content.clone())
 }
 
+/// Cuts one source lineage at the Surface prefix a `prepare_*` selected, and
+/// reconstructs it as a destination-owned [`LineageSeed`].
+///
+/// The cut is the whole point. `prefix` names what the destination's Surface
+/// will show, and the canonical cut is every source Ledger row up to and
+/// including the newest one that prefix reaches. That rule has the two
+/// properties a lineage copy needs:
+///
+/// - it inherits canonical facts the source's Surface no longer shows. A
+///   compaction retires a `todo` result and leaves its summary on the
+///   Surface; the summary is a *later* Ledger row than the result, so cutting
+///   at the summary carries the retired result along and the destination
+///   rebuilds the same conversation state the source has. Cloning before and
+///   after a compaction therefore produce the same conversation;
+/// - it excludes everything committed after the selected revision. The cut is
+///   taken from the selected prefix rather than from the current Ledger end,
+///   so a turn that commits while a fork is being prepared is not silently
+///   inherited by it.
+///
+/// A `prefix` that reaches nothing (a fork at the very first user message)
+/// cuts to the empty lineage, which is exactly the fresh conversation such a
+/// fork means.
+fn lineage_cut(
+    destination: &ConversationId,
+    source: &HistoricalConversationSnapshot,
+    prefix: &[MessageBlock],
+) -> Result<LineageSeed, SessionError> {
+    let position = |id: &MessageId| {
+        source
+            .canonical
+            .iter()
+            .position(|message| message_id_of(message) == *id)
+            .ok_or_else(|| SessionError::Seed {
+                detail: format!("the source Surface names {id}, which its Ledger does not carry"),
+            })
+    };
+    let mut end = 0usize;
+    for message in prefix {
+        end = end.max(position(&message_id_of(message))? + 1);
+    }
+    remap_seed(
+        destination,
+        &source.canonical[..end],
+        &prefix.iter().map(message_id_of).collect::<Vec<_>>(),
+    )
+}
+
 /// Reconstructs a destination seed with destination-owned message and tool
 /// identities. Runtime lifecycle identities are not present in this input and
 /// therefore cannot leak into the destination.
+///
+/// `canonical` is the destination's whole Ledger cut and `surface` names the
+/// subset of it the destination shows, so the one identity map remaps both:
+/// a Surface message and the retired message it depends on receive
+/// destination identities that still agree.
 pub(crate) fn remap_seed(
     destination: &ConversationId,
-    messages: &[MessageBlock],
-) -> Result<Vec<MessageBlock>, SessionError> {
+    canonical: &[MessageBlock],
+    surface: &[MessageId],
+) -> Result<LineageSeed, SessionError> {
+    let messages = canonical;
     let mut message_ids = BTreeMap::new();
     let mut call_ids = BTreeMap::new();
     for (index, message) in messages.iter().enumerate() {
@@ -1407,10 +1500,26 @@ pub(crate) fn remap_seed(
         }
     }
 
-    messages
+    let canonical = messages
         .iter()
         .map(|message| remap_message(message, &message_ids, &call_ids))
-        .collect()
+        .collect::<Result<Vec<_>, SessionError>>()?;
+    let surface = surface
+        .iter()
+        .map(|id| {
+            message_ids
+                .get(id)
+                .cloned()
+                .ok_or_else(|| SessionError::Seed {
+                    detail: format!(
+                        "the seeded Surface names {id}, which the seeded Ledger does not carry"
+                    ),
+                })
+        })
+        .collect::<Result<Vec<_>, SessionError>>()?;
+    LineageSeed::projected(canonical, surface).map_err(|error| SessionError::Seed {
+        detail: error.to_string(),
+    })
 }
 
 fn remap_message(
@@ -1664,7 +1773,7 @@ fn conversation_database_path(
 fn initialize_database(
     path: &Path,
     conversation_id: &ConversationId,
-    seed: &[MessageBlock],
+    seed: &LineageSeed,
 ) -> Result<(), SessionError> {
     let parent = path.parent().ok_or_else(|| SessionError::Io {
         path: path.to_path_buf(),
@@ -1676,7 +1785,7 @@ fn initialize_database(
     })?;
     let store = SqliteConversationStore::open(conversation_id.clone(), path)
         .map_err(SessionError::Store)?;
-    store.initialize(seed).map_err(SessionError::Store)
+    store.initialize_lineage(seed).map_err(SessionError::Store)
 }
 
 fn atomic_write(
@@ -2020,6 +2129,23 @@ mod tests {
         .expect("conversation store")
     }
 
+    /// The source lineage as the supervisor reads it: the Surface at the
+    /// selected revision *and* the canonical history it was projected from.
+    fn lineage_at(
+        store: &SqliteConversationStore,
+        conversation_id: &ConversationId,
+        revision: SurfaceRevision,
+    ) -> HistoricalConversationSnapshot {
+        HistoricalConversationSnapshot {
+            conversation_id: conversation_id.clone(),
+            surface_revision: revision,
+            messages: store
+                .load_surface_snapshot(revision)
+                .expect("historical Surface"),
+            canonical: store.load_canonical().expect("source canonical history"),
+        }
+    }
+
     /// The "unused Session" predicate startup reuses is exactly one `New`
     /// root node whose conversation has no canonical history. Any committed
     /// message disqualifies the Session, and so does a branch node — even a
@@ -2060,13 +2186,7 @@ mod tests {
         // conversation empty, while the Session itself is anything but.
         let source_store = store_for(&catalog, &source_session, &source_conversation);
         let revision = source_store.load_head().expect("source head").revision;
-        let source = HistoricalConversationSnapshot {
-            conversation_id: source_conversation,
-            surface_revision: revision,
-            messages: source_store
-                .load_surface_snapshot(revision)
-                .expect("historical source"),
-        };
+        let source = lineage_at(&source_store, &source_conversation, revision);
         let (prepared, _) = catalog
             .prepare_tree_node_at_user_message(
                 &source_session,
@@ -2334,13 +2454,7 @@ mod tests {
         let (source_conversation, source_session, source_node) = append_history(&catalog, &history);
         let source_store = store_for(&catalog, &source_session, &source_conversation);
         let revision = source_store.load_head().expect("source head").revision;
-        let source = HistoricalConversationSnapshot {
-            conversation_id: source_conversation,
-            surface_revision: revision,
-            messages: source_store
-                .load_surface_snapshot(revision)
-                .expect("historical source"),
-        };
+        let source = lineage_at(&source_store, &source_conversation, revision);
         let (prepared, _) = catalog
             .prepare_tree_node_at_user_message(
                 &source_session,
@@ -2556,13 +2670,7 @@ mod tests {
         let (source_conversation, source_session, source_node) = append_history(&catalog, &history);
         let source_store = store_for(&catalog, &source_session, &source_conversation);
         let selected_revision = source_store.load_head().expect("source head").revision;
-        let source_snapshot = HistoricalConversationSnapshot {
-            conversation_id: source_conversation.clone(),
-            surface_revision: selected_revision,
-            messages: source_store
-                .load_surface_snapshot(selected_revision)
-                .expect("historical source snapshot"),
-        };
+        let source_snapshot = lineage_at(&source_store, &source_conversation, selected_revision);
 
         let prepared = catalog
             .prepare_clone_session(&state(), &source_snapshot)
@@ -2648,13 +2756,7 @@ mod tests {
         let (source_conversation, source_session, source_node) = append_history(&catalog, &history);
         let source_store = store_for(&catalog, &source_session, &source_conversation);
         let revision = source_store.load_head().expect("source head").revision;
-        let source = HistoricalConversationSnapshot {
-            conversation_id: source_conversation,
-            surface_revision: revision,
-            messages: source_store
-                .load_surface_snapshot(revision)
-                .expect("source snapshot"),
-        };
+        let source = lineage_at(&source_store, &source_conversation, revision);
 
         let clone = catalog
             .prepare_clone_session(&state(), &source)
@@ -2743,13 +2845,7 @@ mod tests {
                 timestamp: Utc.with_ymd_and_hms(2026, 8, 21, 12, 0, 0).unwrap(),
             })
             .expect("real compaction commit");
-        let retained = HistoricalConversationSnapshot {
-            conversation_id: source_conversation,
-            surface_revision: retained_revision,
-            messages: source_store
-                .load_surface_snapshot(retained_revision)
-                .expect("retained pre-compaction Surface"),
-        };
+        let retained = lineage_at(&source_store, &source_conversation, retained_revision);
         assert_eq!(retained.messages.len(), history.len());
 
         let prepared_clone = catalog
@@ -2782,6 +2878,254 @@ mod tests {
         );
     }
 
+    /// A `todo` result committed by the source, exactly as the native tool
+    /// publishes one: the complete post-mutation list as the result's
+    /// structured content.
+    fn todo_result(id: &str, call: &str, subject: &str) -> MessageBlock {
+        MessageBlock::Tool(ToolMessageBlock {
+            id: MessageId::new(id),
+            tool_call_id: ToolCallId::new(call),
+            tool_id: ToolId::new(crate::tools::todo::TODO_TOOL_ID),
+            result: ToolExecutionResult {
+                status: ToolExecutionStatus::Success,
+                content: vec![crate::tools::types::ToolResultContent::Json {
+                    value: serde_json::json!({
+                        "tasks": [{
+                            "id": 1,
+                            "subject": subject,
+                            "status": "pending",
+                            "blocked_by": [],
+                        }],
+                        "next_id": 2,
+                    }),
+                }],
+                duration_ms: 1,
+                exit_code: Some(0),
+                artifacts: Vec::new(),
+                truncation: None,
+                managed_output: None,
+            },
+        })
+    }
+
+    /// The assistant turn that called `todo`.
+    fn todo_call(id: &str, call: &str) -> MessageBlock {
+        MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new(id),
+            content: vec![AssistantContentBlock::ToolCall(ToolCall {
+                id: ToolCallId::new(call),
+                tool_id: ToolId::new(crate::tools::todo::TODO_TOOL_ID),
+                name: "todo".to_owned(),
+                arguments: serde_json::json!({"action": "create", "subject": "Write the parser"}),
+            })],
+        })
+    }
+
+    /// What a lineage's conversation-owned task list rebuilds to, read the
+    /// way a runtime opening that lineage reads it.
+    fn todo_list_of(store: &SqliteConversationStore) -> crate::tools::todo::TodoSnapshot {
+        crate::tools::todo::ConversationTodoList::rebuilt(
+            store.conversation_id().clone(),
+            &store
+                .load_canonical()
+                .expect("destination canonical history"),
+        )
+        .expect("the destination rebuilds a usable list")
+        .committed()
+    }
+
+    /// A copy of a conversation means the same thing whether or not the
+    /// source has been compacted since.
+    ///
+    /// This is the lineage invariant, stated on the first piece of
+    /// conversation state that is *derived from canonical history* rather
+    /// than read off the Surface: the task list. Compaction retires the
+    /// `todo` result from the Surface and leaves it canonical, so the source
+    /// still has its list — and a copy seeded from the Surface alone would
+    /// not. The two clones below bracket exactly that transition, and the
+    /// assertion is that they agree with each other and with the source.
+    ///
+    /// The property is deliberately not "the clone inherits the list". It is
+    /// that *compaction is invisible to lineage semantics*: it changes the
+    /// context projection, never what copying the conversation means. Any
+    /// later conversation-owned state derived from canonical history inherits
+    /// that guarantee from the seed rather than having to restate it.
+    #[test]
+    fn a_clone_means_the_same_before_and_after_the_compaction_that_retires_its_facts() {
+        let (_directory, catalog, _config) = open_catalog();
+        let history = vec![
+            user("source-user-a", "A"),
+            todo_call("source-todo-call", "call-todo"),
+            todo_result("source-todo-result", "call-todo", "Write the parser"),
+            user("source-user-c", "C"),
+        ];
+        let (source_conversation, source_session, _source_node) =
+            append_history(&catalog, &history);
+        let source_store = store_for(&catalog, &source_session, &source_conversation);
+        let expected = todo_list_of(&source_store);
+        assert_eq!(expected.tasks.len(), 1, "the source committed one task");
+
+        // The clone taken while the `todo` result is still model-visible.
+        let before = lineage_at(
+            &source_store,
+            &source_conversation,
+            source_store.load_head().expect("source head").revision,
+        );
+        let clone_before = catalog
+            .prepare_clone_session(&state(), &before)
+            .expect("clone before compaction");
+
+        // The compaction retires the whole span the result lives in.
+        let head = source_store.load_head().expect("source head");
+        source_store
+            .commit_compaction(CompactionCommitInput {
+                summary: UserMessageBlock {
+                    id: MessageId::new("source-compaction-summary"),
+                    content: vec![text("earlier work, summarized")],
+                    source: UserSource::Runtime,
+                    kind: InboundKind::CompactionSummary,
+                    timestamp: None,
+                },
+                span: SurfaceSpan::new(
+                    MessageId::new("source-user-a"),
+                    MessageId::new("source-todo-result"),
+                ),
+                expected_revision: head.revision,
+                tokens_before: TokenMeasurement {
+                    input_tokens: 64,
+                    source: TokenMeasurementSource::Estimated,
+                },
+                estimated_tokens_after: 32,
+                attempt_id: None,
+                turn_id: None,
+                timestamp: Utc.with_ymd_and_hms(2026, 8, 26, 12, 0, 0).unwrap(),
+            })
+            .expect("real compaction commit");
+        let compacted = source_store.load_head().expect("compacted head");
+        assert!(
+            !compacted
+                .active_message_ids
+                .contains(&MessageId::new("source-todo-result")),
+            "the fact the list is derived from is no longer model-visible"
+        );
+        assert_eq!(
+            todo_list_of(&source_store),
+            expected,
+            "the source itself still has the list it committed"
+        );
+
+        // The clone taken from the compacted head.
+        let after = lineage_at(&source_store, &source_conversation, compacted.revision);
+        let clone_after = catalog
+            .prepare_clone_session(&state(), &after)
+            .expect("clone after compaction");
+
+        let before_store = store_for(
+            &catalog,
+            &clone_before.session_id,
+            &clone_before.conversation_id,
+        );
+        let after_store = store_for(
+            &catalog,
+            &clone_after.session_id,
+            &clone_after.conversation_id,
+        );
+        assert_eq!(
+            todo_list_of(&before_store),
+            todo_list_of(&after_store),
+            "a compaction between two clones cannot change what cloning means"
+        );
+        assert_eq!(
+            todo_list_of(&after_store),
+            expected,
+            "the clone carries the conversation state the source has, not the \
+             subset its Surface still shows"
+        );
+
+        // The inherited fact is inherited as the source holds it: canonical,
+        // and not model-visible. A destination that put the retired result
+        // back on its Surface would be re-showing context the source already
+        // summarized away.
+        let after_head = after_store.load_head().expect("clone head");
+        assert_eq!(
+            after_head.active_message_ids.len(),
+            after.messages.len(),
+            "the clone shows exactly the Surface it was cloned from"
+        );
+        assert!(
+            after_store.load_canonical().expect("clone canonical").len()
+                > after_head.active_message_ids.len(),
+            "and still carries the canonical facts that Surface no longer shows"
+        );
+    }
+
+    /// The same invariant on the other lineage constructor: a fork cuts the
+    /// canonical history at the boundary it selected, and inherits the
+    /// retired facts below that cut.
+    #[test]
+    fn a_fork_inherits_the_canonical_state_of_the_boundary_it_cuts_at() {
+        let (_directory, catalog, _config) = open_catalog();
+        let history = vec![
+            user("source-user-a", "A"),
+            todo_call("source-todo-call", "call-todo"),
+            todo_result("source-todo-result", "call-todo", "Write the parser"),
+            user("source-user-c", "C"),
+        ];
+        let (source_conversation, source_session, _source_node) =
+            append_history(&catalog, &history);
+        let source_store = store_for(&catalog, &source_session, &source_conversation);
+        let expected = todo_list_of(&source_store);
+
+        let head = source_store.load_head().expect("source head");
+        source_store
+            .commit_compaction(CompactionCommitInput {
+                summary: UserMessageBlock {
+                    id: MessageId::new("source-compaction-summary"),
+                    content: vec![text("earlier work, summarized")],
+                    source: UserSource::Runtime,
+                    kind: InboundKind::CompactionSummary,
+                    timestamp: None,
+                },
+                span: SurfaceSpan::new(
+                    MessageId::new("source-user-a"),
+                    MessageId::new("source-todo-result"),
+                ),
+                expected_revision: head.revision,
+                tokens_before: TokenMeasurement {
+                    input_tokens: 64,
+                    source: TokenMeasurementSource::Estimated,
+                },
+                estimated_tokens_after: 32,
+                attempt_id: None,
+                turn_id: None,
+                timestamp: Utc.with_ymd_and_hms(2026, 8, 26, 12, 0, 0).unwrap(),
+            })
+            .expect("real compaction commit");
+
+        let compacted = source_store.load_head().expect("compacted head");
+        let source = lineage_at(&source_store, &source_conversation, compacted.revision);
+        let (prepared, editor_content) = catalog
+            .prepare_fork_session(&state(), &source, &MessageId::new("source-user-c"))
+            .expect("fork at the surviving boundary");
+        assert_eq!(editor_content, vec![text("C")]);
+
+        let fork_store = store_for(&catalog, &prepared.session_id, &prepared.conversation_id);
+        assert_eq!(
+            todo_list_of(&fork_store),
+            expected,
+            "the fork inherits the conversation state in effect at its boundary"
+        );
+        assert_eq!(
+            fork_store
+                .load_head()
+                .expect("fork head")
+                .active_message_ids
+                .len(),
+            1,
+            "and shows only the summary the source's Surface shows before that boundary"
+        );
+    }
+
     #[test]
     fn fork_seeds_before_user_and_returns_uncommitted_prompt() {
         let (_directory, catalog, _config) = open_catalog();
@@ -2790,13 +3134,7 @@ mod tests {
             append_history(&catalog, &history);
         let source_store = store_for(&catalog, &source_session, &source_conversation);
         let revision = source_store.load_head().expect("source head").revision;
-        let source = HistoricalConversationSnapshot {
-            conversation_id: source_conversation,
-            surface_revision: revision,
-            messages: source_store
-                .load_surface_snapshot(revision)
-                .expect("historical source"),
-        };
+        let source = lineage_at(&source_store, &source_conversation, revision);
 
         let mut current_session_intent = state();
         current_session_intent.model.model =
@@ -2852,13 +3190,7 @@ mod tests {
             append_history(&catalog, &history);
         let source_store = store_for(&catalog, &source_session, &source_conversation);
         let revision = source_store.load_head().expect("source head").revision;
-        let source = HistoricalConversationSnapshot {
-            conversation_id: source_conversation,
-            surface_revision: revision,
-            messages: source_store
-                .load_surface_snapshot(revision)
-                .expect("historical source"),
-        };
+        let source = lineage_at(&source_store, &source_conversation, revision);
 
         let (prepared, editor_content) = catalog
             .prepare_fork_session(&state(), &source, &MessageId::new("source-user-c"))
@@ -2887,13 +3219,7 @@ mod tests {
         let (source_conversation, source_session, source_node) = append_history(&catalog, &history);
         let source_store = store_for(&catalog, &source_session, &source_conversation);
         let revision = source_store.load_head().expect("source head").revision;
-        let source = HistoricalConversationSnapshot {
-            conversation_id: source_conversation.clone(),
-            surface_revision: revision,
-            messages: source_store
-                .load_surface_snapshot(revision)
-                .expect("historical source"),
-        };
+        let source = lineage_at(&source_store, &source_conversation, revision);
 
         let before_failed = catalog.snapshot(&source_session).expect("source snapshot");
         let failed = catalog
@@ -2985,13 +3311,7 @@ mod tests {
         let (source_conversation, source_session, source_node) = append_history(&catalog, &history);
         let source_store = store_for(&catalog, &source_session, &source_conversation);
         let revision = source_store.load_head().expect("source head").revision;
-        let source = HistoricalConversationSnapshot {
-            conversation_id: source_conversation.clone(),
-            surface_revision: revision,
-            messages: source_store
-                .load_surface_snapshot(revision)
-                .expect("historical source"),
-        };
+        let source = lineage_at(&source_store, &source_conversation, revision);
 
         let (prepared_a, _) = catalog
             .prepare_tree_node_at_user_message(

@@ -515,10 +515,17 @@ fn current_head(
     let (surface_revision, messages) = runtime
         .historical_head_snapshot()
         .map_err(SessionSupervisorError::Store)?;
+    // Both halves of the source lineage, never only the model-visible one:
+    // the Surface at the selected revision, and the canonical history that
+    // revision was projected from. See `HistoricalConversationSnapshot`.
+    let canonical = runtime
+        .historical_canonical_history()
+        .map_err(SessionSupervisorError::Store)?;
     Ok(HistoricalConversationSnapshot {
         conversation_id: runtime.conversation_id().clone(),
         surface_revision,
         messages,
+        canonical,
     })
 }
 
@@ -530,10 +537,14 @@ fn historical_snapshot(
     let messages = runtime
         .historical_surface_snapshot(surface_revision)
         .map_err(SessionSupervisorError::Store)?;
+    let canonical = runtime
+        .historical_canonical_history()
+        .map_err(SessionSupervisorError::Store)?;
     Ok(HistoricalConversationSnapshot {
         conversation_id: runtime.conversation_id().clone(),
         surface_revision,
         messages,
+        canonical,
     })
 }
 

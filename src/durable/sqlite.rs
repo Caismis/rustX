@@ -51,8 +51,8 @@ use crate::runtime::process_death;
 
 use super::inbox::{
     AcceptedInbound, CanonicalMessagePage, CompactionCommitInput, ConversationStore,
-    ConversationStoreError, DurableConversationHead, EventPage, InboundDraft, PendingBatch,
-    PendingInboundItem, RequestSnapshotPage, SurfaceUserMessageBoundary,
+    ConversationStoreError, DurableConversationHead, EventPage, InboundDraft, LineageSeed,
+    PendingBatch, PendingInboundItem, RequestSnapshotPage, SurfaceUserMessageBoundary,
     SurfaceUserMessageBoundaryPage, TRANSCRIPT_PAGE_LIMIT_MAX, TranscriptCommitReceipt,
     TranscriptCursor, TranscriptEntry, TranscriptItem, TranscriptPage,
 };
@@ -756,7 +756,8 @@ impl ConversationStore for SqliteConversationStore {
         load_pending_rows(&connection)
     }
 
-    fn initialize(&self, messages: &[MessageBlock]) -> Result<(), ConversationStoreError> {
+    fn initialize_lineage(&self, seed: &LineageSeed) -> Result<(), ConversationStoreError> {
+        let messages = seed.canonical();
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -785,8 +786,32 @@ impl ConversationStore for SqliteConversationStore {
                 ));
             }
             ensure_surface_head(&transaction)?;
+            // The two parts of the seed go to their two durable homes, in two
+            // passes rather than one, because they are not the same order:
+            // the Ledger is written in canonical commit order, and a
+            // compaction summary the source produced *last* is the fact its
+            // Surface shows *first*. Fusing the passes would force one order
+            // on both and reproduce neither.
             for message in messages {
-                append_message_and_surface(&transaction, message)?;
+                append_seeded_ledger_message(&transaction, message)?;
+            }
+            let mut active: Vec<MessageId> = Vec::with_capacity(seed.surface().len());
+            let mut revision = SurfaceRevision::INITIAL;
+            for id in seed.surface() {
+                revision = revision.next();
+                append_surface_op(
+                    &transaction,
+                    revision,
+                    0,
+                    &SurfaceOp::Append {
+                        message_id: id.clone(),
+                    },
+                )?;
+                active.push(id.clone());
+            }
+            if !active.is_empty() {
+                update_surface_head(&transaction, revision, 0, &active)?;
+                update_checkpoint(&transaction, revision, 0, &active)?;
             }
             transaction
                 .execute(
@@ -3694,6 +3719,23 @@ fn append_message_and_surface(
     message: &MessageBlock,
 ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
     append_message_and_surface_internal(transaction, message, None)
+}
+
+/// Appends one seeded canonical message to the Ledger alone.
+///
+/// A lineage seed is not a sequence of live transitions being replayed: it is
+/// the destination's *bootstrap*, written inside the one initialization
+/// transaction. So the Surface is established separately from the seed's own
+/// Surface order, and a compaction summary is an ordinary canonical row here
+/// rather than a transition that must arrive through `commit_compaction` --
+/// the summary's compaction already happened, in the source lineage, and
+/// re-performing it in the destination would rewrite a Surface that does not
+/// yet exist.
+fn append_seeded_ledger_message(
+    transaction: &Transaction<'_>,
+    message: &MessageBlock,
+) -> Result<(), ConversationStoreError> {
+    append_message_ledger(transaction, message, None).map(|_| ())
 }
 
 fn append_adopted_message_and_surface(

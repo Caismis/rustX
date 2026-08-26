@@ -682,6 +682,10 @@ and replaces an active *Surface* span, while the Ledger is append-only and the
 rebuild reads `load_canonical`. So a compacted `todo` result stops being
 model-visible and stays exactly where the rebuild looks for it.
 
+It survives a Session clone, fork, and tree branch for the same reason, and
+that took making the reason true of Session lineage as well — see **A lineage
+copy is a copy of the conversation, not of its Surface** below.
+
 The rebuild fails closed. A newest successful `todo` result whose payload is
 missing, undecodable, or violates the list's own invariants refuses
 construction rather than reaching back to an older snapshot, which would
@@ -4206,8 +4210,11 @@ Session a transition has just switched to.
 The native replacement sequence has these ordered points:
 
 1. Source preparation selects an exact retained `SurfaceRevision` (or current
-   head) and materializes the immutable seed. The source can mutate after this
-   read without changing the prepared destination.
+   head) and materializes the immutable seed — **both halves of it**, the
+   Surface at that revision and the canonical history it was projected from
+   (see *A lineage copy is a copy of the conversation, not of its Surface*).
+   The source can mutate after this read without changing the prepared
+   destination.
 2. The old runtime reaches semantic quiescence only when
    `ConversationRuntime::shutdown().await` returns successfully. Until that
    happens, no replacement Session/node selection may become catalog-visible.
@@ -4275,6 +4282,57 @@ canonical image or file block is rejected at native seed preparation rather
 than being silently rewritten as `[image]` or `[file]`; the typed payload
 remains a block list so a structured editor can be added by a later
 architecture decision.
+
+### A lineage copy is a copy of the conversation, not of its Surface
+
+`/clone`, `/fork`, and `/tree` seed a destination lineage with a
+`LineageSeed`, which has two distinguishable parts:
+
+```text
+canonical   the source Ledger cut the destination inherits, in commit order
+surface     the subset of it active on the destination Surface, in Surface order
+```
+
+The two parts exist because compaction separates them. Compaction is a
+*Surface* rewrite over an append-only Ledger: it retires an active span and
+leaves every retired fact canonical. Conversation state derived from canonical
+history therefore outlives its own model-visible record — the task list is the
+first such state and will not be the last. A seed carrying only the Surface
+would drop exactly those retired facts, so cloning a conversation before a
+compaction and cloning it after would produce destinations that mean different
+things, with no user-visible cause. The invariant is the negative one:
+
+> **A compaction changes the context projection, never what copying the
+> conversation means.**
+
+The cut is taken from the Surface prefix the operation selected: every source
+Ledger row up to and including the newest one that prefix reaches. That rule
+carries both properties a copy needs. It inherits retired facts, because a
+compaction summary is a *later* Ledger row than the facts it retired, so
+cutting at the summary carries them along. And it excludes everything
+committed after the selected revision, because the cut is bounded by the
+prefix rather than by the current Ledger end — a turn that commits while a
+fork is being prepared is not silently inherited by it. A prefix that reaches
+nothing (a fork at the very first user message) cuts to the empty lineage,
+which is what such a fork means.
+
+Inherited canonical facts are inherited as the source holds them: durable,
+readable by anything that rebuilds state from canonical history, and **not**
+model-visible. The destination's Surface is exactly the prefix that was
+selected, so a clone never re-shows context the source already summarized
+away. Destination identities are remapped through one map covering both parts,
+so a Surface message and a retired message it depends on still agree — which
+is also why a `ToolResult` whose `Assistant` tool call was retired by
+compaction now seeds correctly instead of failing identity resolution.
+
+`ConversationStore::initialize_lineage` is the one durable seam that writes
+such a seed, and it writes the two parts in two passes because they are not in
+the same order: the Ledger in canonical commit order, the Surface in Surface
+order. A compaction summary the source produced *last* is the fact its Surface
+shows *first*, and one pass could reproduce only one of those. Reopening
+re-supplies the canonical part alone, which is the bootstrap identity the
+store verifies; the projection is durable state the store already holds, not
+an input a reopen could contradict.
 
 ### Bounded native projections
 

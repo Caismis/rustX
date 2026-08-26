@@ -24,9 +24,18 @@
 //! client renders the same list by reading the same fact from the
 //! transcript it already holds.
 //!
-//! The consequence is that the list follows the conversation. Resuming,
-//! forking, or cloning a Session reopens the durable history that carries
-//! the snapshot, and a conversation that never called `todo` has no list.
+//! The consequence is that the list follows the conversation. Resuming a
+//! Session reopens the durable history that carries the snapshot, and a
+//! conversation that never called `todo` has no list.
+//!
+//! Cloning, forking, and branching a Session follow it too, but that is a
+//! property of *Session lineage*, not of this module: a lineage copy is
+//! seeded with the source's canonical history cut, not only with the Surface
+//! projection of it, so a `todo` result a compaction has already retired is
+//! still inherited. This module states no requirement on that seam beyond
+//! the one it already states on the Ledger — see
+//! [`crate::durable::LineageSeed`]. Nothing keyed on `todo` exists in the
+//! Session layer, and nothing needs to.
 //!
 //! # Session isolation
 //!

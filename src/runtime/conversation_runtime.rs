@@ -4117,6 +4117,30 @@ impl ConversationRuntime {
         Ok((head.revision, messages))
     }
 
+    /// Reads this conversation's complete durable canonical history, in
+    /// Ledger commit order.
+    ///
+    /// This is the other half of a lineage copy. A Surface snapshot says what
+    /// the model can currently see; this says what the conversation durably
+    /// *is*, retired facts included. The two differ exactly when a compaction
+    /// has run, and a copy that carried only the first half would inherit a
+    /// compacted conversation's meaning and an uncompacted one's meaning
+    /// differently — see [`crate::durable::LineageSeed`].
+    ///
+    /// The read races nothing it needs: every canonical row is immutable once
+    /// committed, and the caller cuts this history at the exact Surface
+    /// revision it selected, so facts committed afterwards are excluded by
+    /// the cut rather than by the timing of this read.
+    ///
+    /// # Errors
+    ///
+    /// Returns the durable store error when canonical history cannot be read.
+    pub fn historical_canonical_history(
+        &self,
+    ) -> Result<Vec<MessageBlock>, ConversationStoreError> {
+        self.inner.store.load_canonical()
+    }
+
     /// Reconstructs one retained provider-neutral request from its durable
     /// snapshot, exact historical Surface revision, and keyed Ledger bodies.
     ///
