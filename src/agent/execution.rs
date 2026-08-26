@@ -2867,18 +2867,13 @@ impl<'a> AgentExecution<'a> {
         // may move, and it moves to exactly what these committed blocks
         // published — never to a stage this batch did not write.
         //
-        // The settlement is inspected rather than discarded. `Superseded`
-        // means something took the list away from the batch that was about to
-        // publish it, which the exclusivity of `open_batch` exists to make
-        // unreachable; the committed snapshot is installed either way, so
-        // canonical history still wins, but the anomaly is never silent.
+        // Settling is the whole decision: the batch installs what its own
+        // committed results published, or moves nothing when they published
+        // none. There is no third outcome to branch on and no failure to
+        // report — a batch that reaches here still holds the list it opened,
+        // which is what makes `open_batch`'s exclusivity worth having.
         if let Some(todos) = todos {
-            let settlement = todos.settle(&blocks);
-            debug_assert_ne!(
-                settlement,
-                crate::tools::todo::TodoSettlement::Superseded,
-                "the batch that committed these results is the batch that opened the list",
-            );
+            todos.settle(&blocks);
         }
         let settled = result_slots
             .into_iter()

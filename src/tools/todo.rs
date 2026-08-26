@@ -842,9 +842,11 @@ pub(crate) struct TodoBatch {
 
 /// What settling one batch did to the authority.
 ///
-/// Returned rather than swallowed: the whole point of the token is that the
-/// in-memory list and canonical history cannot disagree, and a settlement
-/// that quietly did nothing is exactly how they would.
+/// The two outcomes are the two things a committed batch can mean, and
+/// nothing else: there is no "the list was taken away from me" outcome,
+/// because [`ConversationTodoList::open_batch`] refuses to hand the list to a
+/// second batch and only this token's settlement or drop releases it. A batch
+/// that reaches settlement therefore still holds what it opened.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TodoSettlement {
     /// The batch's own canonical results published a list, and it is now the
@@ -852,13 +854,6 @@ pub(crate) enum TodoSettlement {
     Installed,
     /// The batch committed no `todo` result, so the authority did not move.
     Unchanged,
-    /// The batch no longer held the list when it settled. The canonical list
-    /// its own results published was still installed — canonical history is
-    /// the authority, and refusing to install it is what would leave the
-    /// process behind the Ledger — but something had already taken the list
-    /// away from this batch, which the exclusivity of [`TodoBatch`] is meant
-    /// to make impossible.
-    Superseded,
 }
 
 impl TodoBatch {
@@ -883,15 +878,22 @@ impl TodoBatch {
     pub fn settle(self, blocks: &[MessageBlock]) -> TodoSettlement {
         let list = self.list.clone();
         let mut state = list.state();
-        let owned = state.open == Some(self.id);
-        if owned {
-            state.open = None;
-            state.staged = None;
-        }
-        // Canonical history is the authority, so what these committed blocks
-        // published is installed whether or not the token still owned the
-        // stage. A settlement that skipped this step would leave the process
-        // holding a list the Ledger has already superseded.
+        // Releasing what this token holds, not claiming something that might
+        // have moved: a live `TodoBatch` *is* the open batch, because
+        // `open_batch` refuses while one is open and only settling or
+        // dropping this token releases it. The assertion states that
+        // invariant where it would be violated rather than defending against
+        // a state the type makes unreachable.
+        debug_assert_eq!(
+            state.open,
+            Some(self.id),
+            "the batch that settles a committed result batch is the batch that opened it",
+        );
+        state.open = None;
+        state.staged = None;
+        // Canonical history is the authority: the list becomes exactly what
+        // these committed blocks published, never whatever this batch
+        // happened to stage.
         let moved = if let Some(Ok(published)) = blocks.iter().rev().find_map(published_snapshot) {
             state.committed = published;
             true
@@ -899,10 +901,10 @@ impl TodoBatch {
             false
         };
         drop(state);
-        match (owned, moved) {
-            (false, _) => TodoSettlement::Superseded,
-            (true, true) => TodoSettlement::Installed,
-            (true, false) => TodoSettlement::Unchanged,
+        if moved {
+            TodoSettlement::Installed
+        } else {
+            TodoSettlement::Unchanged
         }
     }
 

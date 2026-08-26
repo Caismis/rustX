@@ -659,10 +659,13 @@ authority, not the timing:
   provisional state some other batch would then commit as its own. A stage such
   a caller does own is invisible to every other batch: it can neither be read,
   extended, inherited, nor promoted.
-- **settlement is reported, never silent.** Installing what the committed
-  blocks published is unconditional, because canonical history is the
-  authority; the settlement additionally says whether the batch still held the
-  list, so the unreachable case cannot pass as an ordinary success.
+- **settlement says what the batch meant, and nothing else.** The list becomes
+  exactly what the batch's own committed blocks published, or does not move
+  when they published none — canonical history is the authority, never the
+  stage. There is deliberately no third outcome for "the list was taken away":
+  a live batch *is* the open batch, so a batch that reaches settlement still
+  holds what it opened, and that is asserted where it would be violated rather
+  than carried as a state the caller has to branch on.
 - **the authority does not leave the crate.** The list, its batch, its writer,
   and the seam that binds a writer to an invocation are all crate-private.
   Settling a batch is a *claim about the Ledger* — that canonical history

@@ -1996,8 +1996,10 @@ receives the writer per invocation, the way `ask_user` receives its
 Questionnaire requester — so a dispatch outside the Agent Loop is refused
 as an ordinary failed ToolResult rather than staging a list some other
 batch would publish, and one batch's stage is unreadable to every other.
-Settlement reports whether the batch still held the list, so the case the
-exclusivity exists to prevent cannot pass as a quiet success.
+Settlement reports only what the batch meant — the list became what its
+committed results published, or it did not move — because a live batch *is*
+the open batch, so "the list was taken away" is not an outcome a caller has
+to branch on.
 
 None of that authority is exported. The list, the batch, the writer, and
 the context seam that binds a writer to an invocation are crate-private,
