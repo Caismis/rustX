@@ -3647,7 +3647,7 @@ mod tests {
         // An attached client watching the event stream from the baseline
         // cut, exactly as an incremental consumer would.
         let (attachment, _) = host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         // Fold everything the composition produced, so the queue holds the
         // reload's observations and nothing else.
@@ -4290,7 +4290,7 @@ mod tests {
         let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
         let (attachment, _) = fixture
             .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let (initial, cursor) = fixture.host.snapshot().expect("snapshot");
         assert!(
