@@ -91,6 +91,41 @@ function assertBounded(lines: string[], width: number, height: number): void {
   );
 }
 
+type PreviewPage = {
+  lines: string[];
+  numbers: number[];
+  first: number;
+  last: number;
+  total: number;
+};
+
+function previewPage(view: QuestionnaireOverlay, width: number): PreviewPage {
+  const lines = view.render(width).map(plainText);
+  const status = lines.find((line) => line.includes("lines "));
+  const match = status?.match(/lines (\d+)-(\d+) of (\d+)/);
+  assert.ok(match, "the visible preview must expose its bounded line range");
+  const numbers = lines.flatMap((line) =>
+    [...line.matchAll(/preview-(\d{3})/g)].map((found) => Number(found[1])),
+  );
+  assert.ok(numbers.length > 0, "the visible page must contain preview content");
+  const first = Number(match[1]);
+  const last = Number(match[2]);
+  const total = Number(match[3]);
+  assert.equal(first, numbers[0]! + 1, "preview status must start at the first visible line");
+  assert.equal(last, numbers[numbers.length - 1]! + 1, "preview status must end at the last visible line");
+  assert.equal(last - first + 1, numbers.length, "preview content must be contiguous");
+  for (const [index, number] of numbers.entries()) {
+    assert.equal(number, first - 1 + index, "preview lines must not have gaps");
+  }
+  return { lines, numbers, first, last, total };
+}
+
+function assertFocusedOption(page: PreviewPage, label: string): void {
+  const focused = page.lines.filter((line) => line.includes("›"));
+  assert.equal(focused.length, 1, "exactly one focus marker must remain visible");
+  assert.ok(focused[0]!.includes(label), `focused row should identify ${label}`);
+}
+
 describe("QuestionnaireOverlay", () => {
   it("preserves a single selection while switching tabs and submits in question order", () => {
     let submitted: QuestionnaireResponse | undefined;
@@ -448,5 +483,127 @@ describe("QuestionnaireOverlay", () => {
       assert.match(plainText(review.join("\n")), /Review \/ submit/);
       assert.match(plainText(review.join("\n")), /› .*Submit/);
     }
+  });
+
+  it("makes every numbered preview line reachable without page gaps", () => {
+    const preview = Array.from(
+      { length: 100 },
+      (_, index) => `preview-${String(index).padStart(3, "0")}`,
+    ).join("\n");
+
+    for (const width of [120, 56]) {
+      const view = singleOverlay(
+        singleQuestionnaire({
+          question: "Which numbered preview should be inspected?",
+          header: "Preview",
+          options: [
+            { label: "First option", description: "The initially focused option.", preview },
+            { label: "Second option", description: "Another preview-bearing option.", preview },
+          ],
+          multi_select: false,
+        }),
+        () => {},
+      );
+      view.setViewportHeight(14);
+
+      let current = previewPage(view, width);
+      const visited = new Set<number>();
+      for (let page = 0; page < 100; page += 1) {
+        assertBounded(current.lines, width, 14);
+        assertFocusedOption(current, "First option");
+        current.numbers.forEach((number) => visited.add(number));
+
+        const before = current.lines;
+        view.handleInput("\u001b[6~");
+        const next = previewPage(view, width);
+        if (next.lines.every((line, index) => line === before[index]) && next.lines.length === before.length) {
+          break;
+        }
+        assert.ok(next.first > current.first, "PageDown must advance until the end");
+        assert.ok(
+          next.first <= current.last + 1,
+          "PageDown must not skip a preview line between pages",
+        );
+        current = next;
+      }
+
+      assert.equal(current.numbers.at(-1), 99, "the final preview line must be visible");
+      assert.equal(visited.size, 100, "the union of visited pages must contain every line");
+      for (let number = 0; number < 100; number += 1) {
+        assert.ok(visited.has(number), `preview-${String(number).padStart(3, "0")} must be reachable`);
+      }
+
+      const atEnd = view.render(width);
+      view.handleInput("\u001b[6~");
+      assert.deepEqual(view.render(width), atEnd, "PageDown at the end must be idempotent");
+
+      for (let page = 0; page < 100; page += 1) {
+        const before = previewPage(view, width);
+        view.handleInput("\u001b[5~");
+        const previous = previewPage(view, width);
+        if (previous.lines.every((line, index) => line === before.lines[index]) && previous.lines.length === before.lines.length) {
+          break;
+        }
+        assert.ok(
+          previous.last + 1 >= before.first,
+          "PageUp must not skip backward over a preview line",
+        );
+        assert.ok(previous.first < before.first, "PageUp must move toward the beginning");
+        current = previous;
+      }
+      assert.equal(current.numbers[0], 0, "repeated PageUp must return to the first line");
+      const atBeginning = view.render(width);
+      view.handleInput("\u001b[5~");
+      assert.deepEqual(view.render(width), atBeginning, "PageUp at the beginning must be idempotent");
+    }
+  });
+
+  it("accounts for a wrapped wide intro and reconciles preview paging across resize", () => {
+    const preview = Array.from(
+      { length: 100 },
+      (_, index) => `preview-${String(index).padStart(3, "0")}`,
+    ).join("\n");
+    const view = singleOverlay(
+      singleQuestionnaire({
+        question: ("A long wrapped question intro ".repeat(200)).slice(0, 4096),
+        header: "Preview",
+        options: [
+          { label: "First option", description: "The initially focused option.", preview },
+          { label: "Second option", description: "Another preview-bearing option.", preview },
+        ],
+        multi_select: false,
+      }),
+      () => {},
+    );
+    view.setViewportHeight(14);
+
+    const initialWide = previewPage(view, 120);
+    assertBounded(initialWide.lines, 120, 14);
+    assertFocusedOption(initialWide, "First option");
+    view.handleInput("\u001b[6~");
+    const pagedWide = previewPage(view, 120);
+    assertBounded(pagedWide.lines, 120, 14);
+    assertFocusedOption(pagedWide, "First option");
+
+    const pagedNarrow = previewPage(view, 56);
+    assertBounded(pagedNarrow.lines, 56, 14);
+    assertFocusedOption(pagedNarrow, "First option");
+    view.handleInput("\u001b[5~");
+    const backWide = previewPage(view, 120);
+    assertBounded(backWide.lines, 120, 14);
+    assertFocusedOption(backWide, "First option");
+    assert.equal(backWide.numbers[0], 0, "PageUp after resizing must reach the first line");
+
+    view.handleInput("\u001b[6~");
+    view.handleInput("\u001b[B");
+    const second = previewPage(view, 120);
+    assertBounded(second.lines, 120, 14);
+    assertFocusedOption(second, "Second option");
+    assert.equal(second.numbers[0], 0, "changing focus must reset preview paging");
+
+    view.handleInput("\t");
+    const review = view.render(120).map(plainText);
+    assertBounded(review, 120, 14);
+    assert.ok(review.some((line) => line.includes("›") && line.includes("Submit")));
   });
 });

@@ -240,21 +240,37 @@ export class QuestionnaireOverlay implements Component {
       const gutter = 1;
       const leftWidth = Math.max(1, Math.floor((width - gutter) * 0.52));
       const rightWidth = Math.max(1, width - gutter - leftWidth);
-      const left = this.#renderQuestionRows(question, leftWidth);
+      // Reserve the intro rows before allocating the split-pane viewport.
+      // When the question itself is taller than the available body, keep its
+      // beginning visible and give the panes the remaining bounded space.
+      const minimumPaneHeight = Math.min(3, viewportHeight);
+      const introHeight = Math.min(
+        intro.length,
+        Math.max(0, viewportHeight - minimumPaneHeight),
+      );
+      const visibleIntro = intro.slice(0, introHeight);
+      const paneHeight = Math.max(1, viewportHeight - visibleIntro.length);
+      const rows = this.#renderQuestionRows(question, leftWidth);
+      const left = clipToFocus(
+        rows.lines,
+        rows.focusLine,
+        paneHeight,
+      );
       const right = this.#renderPreview(
         preview,
         rightWidth,
-        Math.max(1, viewportHeight - 2),
+        Math.max(1, paneHeight - 2),
       );
-      const count = Math.max(left.lines.length, right.length);
+      const visibleRight = right.slice(0, paneHeight);
+      const count = Math.max(left.lines.length, visibleRight.length);
       const combined = Array.from({ length: count }, (_, index) => {
         const leftLine = padLine(left.lines[index] ?? "", leftWidth);
-        const rightLine = fitLine(right[index] ?? "", rightWidth);
+        const rightLine = fitLine(visibleRight[index] ?? "", rightWidth);
         return `${leftLine} ${rightLine}`;
       });
       return clipToFocus(
-        [...intro, ...combined],
-        intro.length + left.focusLine,
+        [...visibleIntro, ...combined],
+        visibleIntro.length + left.focusLine,
         viewportHeight,
       );
     }
