@@ -341,10 +341,11 @@ async fn text_a_terminal_row_cannot_hold_is_rejected_before_anything_is_written(
 /// moves where the Agent Loop commits the batch, never inside an executor.
 /// A registry-driven call — this fixture, or any caller holding the public
 /// executor — therefore publishes a snapshot without ever moving the list a
-/// restart would rebuild.
+/// restart would rebuild, and abandoning the batch takes that snapshot with
+/// it.
 #[tokio::test]
 async fn an_executor_driven_call_publishes_a_list_without_moving_the_authority() {
-    let fixture = native_fixture();
+    let mut fixture = native_fixture();
     let created = create(&fixture, "Write the parser").await;
     assert_eq!(published(&created).tasks.len(), 1);
     assert_eq!(
@@ -354,9 +355,42 @@ async fn an_executor_driven_call_publishes_a_list_without_moving_the_authority()
     );
     assert!(fixture.runtime.todos().has_staged());
 
-    fixture.runtime.todos().discard_staged();
+    fixture.abandon_todo_batch();
     assert!(!fixture.runtime.todos().has_staged());
     assert_eq!(fixture.runtime.todos().snapshot(), TodoSnapshot::empty());
+}
+
+/// A `todo` call that belongs to no batch writes nothing.
+///
+/// The authority is the batch that publishes the mutation, so a dispatch
+/// with no batch behind it is refused rather than served from whatever
+/// provisional state happens to exist. That is what keeps a call driven
+/// beside the Agent Loop out of the snapshot the loop is about to commit.
+#[tokio::test]
+async fn a_call_that_belongs_to_no_batch_is_refused() {
+    let mut fixture = native_fixture();
+    create(&fixture, "Write the parser").await;
+    fixture.abandon_todo_batch();
+
+    for action in [
+        serde_json::json!({ "action": "create", "subject": "Written outside a batch" }),
+        serde_json::json!({ "action": "update", "id": 1, "status": "completed" }),
+        serde_json::json!({ "action": "list" }),
+        serde_json::json!({ "action": "clear" }),
+    ] {
+        let refused = run_tool(&fixture, "todo", action.clone()).await;
+        assert!(
+            error(&refused).starts_with("the task list is not open for this call"),
+            "{action}: {}",
+            error(&refused)
+        );
+    }
+    assert_eq!(
+        fixture.runtime.todos().committed(),
+        TodoSnapshot::empty(),
+        "a refused call moves neither the authority nor a stage"
+    );
+    assert!(!fixture.runtime.todos().has_staged());
 }
 
 /// A subject that survives an `update` is a subject a rebuild accepts.

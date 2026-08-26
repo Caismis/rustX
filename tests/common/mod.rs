@@ -869,6 +869,15 @@ pub struct NativeFixture {
     /// Tool/runtime code receives only the mailbox capability; the test
     /// harness passes this handle explicitly at the execution boundary.
     pub store: Arc<rustx::durable::SqliteConversationStore>,
+    /// The `ToolResult` batch the directly driven `todo` calls belong to.
+    ///
+    /// The conversation's task list is written only through the batch that
+    /// publishes the mutation, so a fixture that drives executors directly
+    /// stands in for the Agent Loop and opens one — at exactly the point the
+    /// loop would, the first `todo` call. Until then the list is free, so a
+    /// test that drives the real Agent Loop over this same runtime still
+    /// opens its own batch.
+    todos: std::sync::Mutex<FixtureTodoBatch>,
     /// The temporary directory owner, declared LAST: struct fields drop in
     /// declaration order, so the runtime and every handle obtained from it
     /// drop before the directory is removed.
@@ -876,11 +885,51 @@ pub struct NativeFixture {
     _dir: tempfile::TempDir,
 }
 
+/// The fixture's stand-in for the Agent Loop's task-list batch.
+enum FixtureTodoBatch {
+    /// No `todo` call has been dispatched yet, so the list is untouched.
+    Unopened,
+    /// The batch every `todo` call of this fixture writes through.
+    Open(rustx::tools::todo::TodoBatch),
+    /// The batch ended without committing anything, the way every
+    /// non-commit exit of the Agent Loop does. Nothing reopens it: a later
+    /// call is a call that belongs to no batch.
+    Abandoned,
+}
+
 impl NativeFixture {
     /// The temporary directory backing this fixture.
     #[must_use]
     pub fn dir(&self) -> &tempfile::TempDir {
         &self._dir
+    }
+
+    /// The batch-scoped task-list authority of this fixture's `todo` calls,
+    /// opening the batch on first use.
+    #[must_use]
+    pub fn todo_writer(&self) -> Option<rustx::tools::todo::TodoWriter> {
+        let mut slot = self
+            .todos
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let (FixtureTodoBatch::Unopened, Some(batch)) =
+            (&*slot, self.runtime.todos().open_batch())
+        {
+            *slot = FixtureTodoBatch::Open(batch);
+        }
+        match &*slot {
+            FixtureTodoBatch::Open(batch) => Some(batch.writer()),
+            _ => None,
+        }
+    }
+
+    /// Ends the batch without committing anything, exactly as every
+    /// non-commit exit of the Agent Loop does.
+    pub fn abandon_todo_batch(&mut self) {
+        *self
+            .todos
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = FixtureTodoBatch::Abandoned;
     }
 }
 
@@ -956,7 +1005,6 @@ pub fn native_fixture_with(
         rustx::tools::native::NativeToolResources {
             background: runtime.background().clone(),
             subagents: None,
-            todos: runtime.todos().clone(),
         },
         policies,
     )
@@ -968,6 +1016,7 @@ pub fn native_fixture_with(
         registry,
         mailbox,
         store,
+        todos: std::sync::Mutex::new(FixtureTodoBatch::Unopened),
     }
 }
 
@@ -1021,6 +1070,13 @@ pub async fn run_tool_with_cancellation(
         fixture.runtime.tool_output(),
         fixture.runtime.environment(),
     );
+    // Only the `todo` tool has a list to write, and opening a batch for
+    // anything else would take the list away from a test that drives the
+    // real Agent Loop over this runtime.
+    let context = match (name, fixture.todo_writer()) {
+        ("todo", Some(todos)) => context.with_todos(todos),
+        _ => context,
+    };
     executor.execute(prepared.invocation, context).await
 }
 
@@ -1064,6 +1120,13 @@ pub async fn run_tool(
         fixture.runtime.tool_output(),
         fixture.runtime.environment(),
     );
+    // Only the `todo` tool has a list to write, and opening a batch for
+    // anything else would take the list away from a test that drives the
+    // real Agent Loop over this runtime.
+    let context = match (name, fixture.todo_writer()) {
+        ("todo", Some(todos)) => context.with_todos(todos),
+        _ => context,
+    };
     executor.execute(prepared.invocation, context).await
 }
 

@@ -1975,16 +1975,29 @@ survives a process restart, a Session resume, and a compaction exactly as
 far as the conversation history that carries it does.
 
 That is only true while the in-memory list cannot run ahead of the
-Ledger, so a `todo` call writes *staged* state scoped to a `TodoBatch`
+Ledger, so a `todo` call writes *staged* state owned by a `TodoBatch`
 the Agent Loop opens before the batch runs. Settling installs what that
 batch's own canonical results published — not whatever is staged — so a
 stage nothing committed can be discarded but never promoted, and a batch
 always starts from the committed authority rather than inheriting one.
 Later calls of one batch read what earlier ones staged; dropping the
-token, which is what every non-commit exit does, discards them. Every
-mutation is also checked against the rule a rebuild applies before it is
-staged, so the authority cannot publish a list it could not read back,
-and a rebuild that finds the newest committed result unusable fails
+token, which is what every non-commit exit does, discards them.
+
+The batch is the *only* mutation authority, and it is exclusive. A second
+`open_batch` is refused while one is open, because silently replacing the
+running batch would leave it committing results and then settling a list
+it no longer owned. Mutations are made through the `TodoWriter` that
+batch hands its own invocations — the `todo` executor holds no list and
+receives the writer per invocation, the way `ask_user` receives its
+Questionnaire requester — so a dispatch outside the Agent Loop is refused
+as an ordinary failed ToolResult rather than staging a list some other
+batch would publish, and one batch's stage is unreadable to every other.
+Settlement reports whether the batch still held the list, so the case the
+exclusivity exists to prevent cannot pass as a quiet success.
+
+Every mutation is also checked against the rule a rebuild applies before
+it is staged, so the authority cannot publish a list it could not read
+back, and a rebuild that finds the newest committed result unusable fails
 construction rather than adopting an older, already superseded list.
 
 The runtime runs the same derivation over the whole Ledger and carries

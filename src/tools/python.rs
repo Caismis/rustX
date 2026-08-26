@@ -3048,6 +3048,7 @@ mod tests {
                 tool_output: tool_runtime.tool_output(),
                 environment: tool_runtime.environment(),
                 questionnaire_requester: None,
+                todos: None,
             },
         )
         .await

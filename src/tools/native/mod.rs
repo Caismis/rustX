@@ -93,10 +93,6 @@ pub struct NativeToolResources {
     /// means the intrinsic is not registered at all, so recursive
     /// delegation is absent by construction.
     pub subagents: Option<crate::runtime::subagent::SubagentRegistry>,
-    /// The conversation-owned task list used by the `todo` tool. It is the
-    /// conversation's own list: a child runtime composes its own resources
-    /// and therefore never reaches this one.
-    pub todos: crate::tools::todo::ConversationTodoList,
 }
 
 /// The concrete, bounded per-tool policy configuration of the six ordinary
@@ -193,7 +189,6 @@ pub(crate) fn native_tool_registrations(
     let NativeToolResources {
         background,
         subagents,
-        todos,
     } = resources;
     let mut registrations = vec![
         background_task::registration(background),
@@ -204,7 +199,7 @@ pub(crate) fn native_tool_registrations(
         glob::registration(policies.glob),
         grep::registration(policies.grep),
         bash::registration(policies.bash),
-        todo::registration(todos),
+        todo::registration(),
     ];
     // The `subagent` intrinsic exists only in a runtime that owns a
     // subagent registry (never inside a child runtime).

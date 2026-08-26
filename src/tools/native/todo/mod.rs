@@ -6,10 +6,21 @@
 //! { "action": "list" }
 //! ```
 //!
-//! The tool is a thin adapter over the conversation-owned
-//! [`ConversationTodoList`]: it owns the model-facing argument contract and
+//! The tool is a thin adapter over the conversation-owned task list
+//! ([`ConversationTodoList`]): it owns the model-facing argument contract and
 //! the prose of the reply, while task identity, the status machine, and the
 //! dependency graph belong to that authority.
+//!
+//! # The authority arrives with the call, not with the registration
+//!
+//! A mutation belongs to the `ToolResult` batch that publishes it, so the
+//! executor holds no list of its own: it writes through the [`TodoWriter`]
+//! the Agent Loop bound to this invocation's batch. A dispatch with no such
+//! writer — a directly driven executor, anything outside a batch — is
+//! refused, which is why no unowned mutation can end up inside another
+//! batch's committed snapshot.
+//!
+//! [`ConversationTodoList`]: crate::tools::todo::ConversationTodoList
 //!
 //! # Every result carries the whole list
 //!
@@ -39,7 +50,7 @@ use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, input_schema};
 use crate::tools::native::support::failed_result;
 use crate::tools::todo::{
-    ConversationTodoList, TODO_TOOL_ID, TodoSnapshot, TodoStatus, TodoTask, TodoUpdate,
+    TODO_TOOL_ID, TodoMutationError, TodoSnapshot, TodoStatus, TodoTask, TodoUpdate, TodoWriter,
 };
 use crate::tools::types::{
     ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
@@ -60,8 +71,8 @@ pub const NAME: &str = "todo";
 /// mutations of one list would make the published snapshots race, and there
 /// is nothing here for a human to approve.
 #[must_use]
-pub(super) fn registration(todos: ConversationTodoList) -> NativeToolRegistration {
-    NativeToolRegistration::new(definition(), std::sync::Arc::new(TodoExecutor { todos }))
+pub(super) fn registration() -> NativeToolRegistration {
+    NativeToolRegistration::new(definition(), std::sync::Arc::new(TodoExecutor))
 }
 
 fn definition() -> ToolDefinition {
@@ -91,19 +102,30 @@ fn definition() -> ToolDefinition {
     }
 }
 
-struct TodoExecutor {
-    todos: ConversationTodoList,
-}
+/// The executor holds no list.
+///
+/// The authority arrives per invocation, from the `ToolResult` batch that
+/// will publish the mutation: a registration-owned handle would let any
+/// dispatch of this tool — a directly driven executor, a second batch — write
+/// provisional state that some other batch then commits as its own.
+struct TodoExecutor;
 
 impl ToolExecutor for TodoExecutor {
     fn execute<'a>(
         &'a self,
         invocation: ToolInvocation,
-        _context: ToolExecutionContext<'a>,
+        context: ToolExecutionContext<'a>,
     ) -> BoxFuture<'a, ToolExecutionResult> {
         Box::pin(async move {
+            let Some(todos) = context.todos().cloned() else {
+                // Not a rejection of the arguments: this dispatch has no
+                // batch to publish a list, so there is no list to act on.
+                // Failing here is what keeps an unowned mutation from
+                // becoming some other batch's committed snapshot.
+                return failed_result(TodoMutationError::BatchClosed.to_string());
+            };
             match TodoInput::parse(&invocation.arguments) {
-                Ok(input) => self.dispatch(input),
+                Ok(input) => Self::dispatch(&todos, input),
                 Err(error) => failed_result(error),
             }
         })
@@ -112,18 +134,18 @@ impl ToolExecutor for TodoExecutor {
 
 impl TodoExecutor {
     /// Performs one action and renders its reply.
-    fn dispatch(&self, input: TodoInput) -> ToolExecutionResult {
+    fn dispatch(todos: &TodoWriter, input: TodoInput) -> ToolExecutionResult {
         match input.action {
-            TodoAction::Create => self.create(input),
-            TodoAction::Update => self.update(input),
-            TodoAction::List => self.list(&input),
-            TodoAction::Get => self.get(&input),
-            TodoAction::Delete => self.delete(&input),
-            TodoAction::Clear => self.clear(),
+            TodoAction::Create => Self::create(todos, input),
+            TodoAction::Update => Self::update(todos, input),
+            TodoAction::List => Self::list(todos, &input),
+            TodoAction::Get => Self::get(todos, &input),
+            TodoAction::Delete => Self::delete(todos, &input),
+            TodoAction::Clear => Self::clear(todos),
         }
     }
 
-    fn create(&self, input: TodoInput) -> ToolExecutionResult {
+    fn create(todos: &TodoWriter, input: TodoInput) -> ToolExecutionResult {
         if input
             .subject
             .as_ref()
@@ -131,7 +153,7 @@ impl TodoExecutor {
         {
             return failed_result("subject required for create");
         }
-        match self.todos.create(input.create()) {
+        match todos.create(input.create()) {
             Ok((task, snapshot)) => settled(
                 format!("Created #{}: {} ({})", task.id, task.subject, task.status),
                 &snapshot,
@@ -140,18 +162,21 @@ impl TodoExecutor {
         }
     }
 
-    fn update(&self, input: TodoInput) -> ToolExecutionResult {
+    fn update(todos: &TodoWriter, input: TodoInput) -> ToolExecutionResult {
         let Some(id) = input.id else {
             return failed_result("id required for update");
         };
-        match self.todos.update(id, input.change()) {
+        match todos.update(id, input.change()) {
             Ok((update, snapshot)) => settled(describe_update(&update), &snapshot),
             Err(error) => failed_result(error.to_string()),
         }
     }
 
-    fn list(&self, input: &TodoInput) -> ToolExecutionResult {
-        let snapshot = self.todos.snapshot();
+    fn list(todos: &TodoWriter, input: &TodoInput) -> ToolExecutionResult {
+        let snapshot = match todos.snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(error) => return failed_result(error.to_string()),
+        };
         let filter = input.status.map(TodoStatus::from);
         let rows: Vec<String> = snapshot
             .tasks
@@ -170,11 +195,14 @@ impl TodoExecutor {
         settled(text, &snapshot)
     }
 
-    fn get(&self, input: &TodoInput) -> ToolExecutionResult {
+    fn get(todos: &TodoWriter, input: &TodoInput) -> ToolExecutionResult {
         let Some(id) = input.id else {
             return failed_result("id required for get");
         };
-        let snapshot = self.todos.snapshot();
+        let snapshot = match todos.snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(error) => return failed_result(error.to_string()),
+        };
         let Some(task) = snapshot.task(id) else {
             return failed_result(
                 crate::tools::todo::TodoMutationError::UnknownTask(id).to_string(),
@@ -183,11 +211,11 @@ impl TodoExecutor {
         settled(render_detail(task, &snapshot.blocks(id)), &snapshot)
     }
 
-    fn delete(&self, input: &TodoInput) -> ToolExecutionResult {
+    fn delete(todos: &TodoWriter, input: &TodoInput) -> ToolExecutionResult {
         let Some(id) = input.id else {
             return failed_result("id required for delete");
         };
-        match self.todos.delete(id) {
+        match todos.delete(id) {
             Ok((task, snapshot)) => {
                 settled(format!("Deleted #{}: {}", task.id, task.subject), &snapshot)
             }
@@ -195,10 +223,14 @@ impl TodoExecutor {
         }
     }
 
-    fn clear(&self) -> ToolExecutionResult {
-        let (dropped, snapshot) = self.todos.clear();
-        let plural = if dropped == 1 { "task" } else { "tasks" };
-        settled(format!("Cleared {dropped} {plural}"), &snapshot)
+    fn clear(todos: &TodoWriter) -> ToolExecutionResult {
+        match todos.clear() {
+            Ok((dropped, snapshot)) => {
+                let plural = if dropped == 1 { "task" } else { "tasks" };
+                settled(format!("Cleared {dropped} {plural}"), &snapshot)
+            }
+            Err(error) => failed_result(error.to_string()),
+        }
     }
 }
 

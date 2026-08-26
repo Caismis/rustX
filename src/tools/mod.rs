@@ -55,8 +55,8 @@ pub use schema::{
 };
 pub use todo::{
     ConversationTodoList, TODO_TOOL_ID, TodoBatch, TodoChange, TodoCreate, TodoMutationError,
-    TodoRebuildError, TodoSnapshot, TodoSnapshotError, TodoStatus, TodoTask, TodoUpdate,
-    forbidden_control, metadata_control, published_snapshot,
+    TodoRebuildError, TodoSettlement, TodoSnapshot, TodoSnapshotError, TodoStatus, TodoTask,
+    TodoUpdate, TodoWriter, forbidden_control, metadata_control, published_snapshot,
 };
 pub use types::{
     ManagedOutputContinuation, ModelToolDefinition, ToolApprovalPolicy, ToolCall, ToolCallStart,

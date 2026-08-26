@@ -281,7 +281,6 @@ fn native_tools_preserve_legal_execution_policies_and_fixed_background_task_poli
             NativeToolResources {
                 background: runtime.background().clone(),
                 subagents: None,
-                todos: runtime.todos().clone(),
             },
             NativeToolPolicies::uniform(ToolInvocationPolicy::new(
                 execution,
@@ -390,7 +389,6 @@ fn independent_native_execution_policies_coexist_in_one_registry() {
         NativeToolResources {
             background: runtime.background().clone(),
             subagents: None,
-            todos: runtime.todos().clone(),
         },
         policies,
     )

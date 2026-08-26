@@ -493,7 +493,6 @@ impl LocalConversationCore {
         let native_resources = NativeToolResources {
             background: tool_runtime.background().clone(),
             subagents: Some(subagents.clone()),
-            todos: tool_runtime.todos().clone(),
         };
         register_native_tools(
             &mut base_registry,

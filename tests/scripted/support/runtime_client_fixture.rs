@@ -273,7 +273,6 @@ impl RuntimeClientFixtureBuilder {
                 rustx::tools::NativeToolResources {
                     background: tool_runtime.background().clone(),
                     subagents: None,
-                    todos: tool_runtime.todos().clone(),
                 },
                 rustx::tools::NativeToolPolicies::default(),
             )

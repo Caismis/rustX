@@ -387,17 +387,17 @@ async fn the_projection_follows_a_committed_todo_result() {
 // The stage belongs to one batch
 // ---------------------------------------------------------------------------
 
-/// A stage no canonical result published cannot ride out on a later batch.
+/// A stage no canonical result published cannot ride out on a later batch —
+/// and cannot be read, extended, or inherited by one either.
 ///
-/// A caller holding the public tool registry can run `todo` outside any
-/// batch — this fixture is one — and that call publishes a snapshot nobody
-/// commits. The next batch to settle carries no `todo` result at all, so it
-/// must install nothing: promoting the stranded stage would leave the process
-/// holding tasks that no committed result ever published, and the next
-/// restart would lose them again.
+/// A caller holding the public tool registry can run `todo` outside the Agent
+/// Loop — this fixture is one — and that call stages a list nobody is going
+/// to commit. The batch that runs beside it must install nothing: promoting
+/// the stranded stage would leave the process holding tasks that no committed
+/// result ever published, and the next restart would lose them again.
 #[tokio::test]
 async fn a_stage_no_result_published_is_never_promoted_by_a_later_batch() {
-    let fixture = common::native_fixture();
+    let mut fixture = common::native_fixture();
     std::fs::write(
         fixture.runtime.workspace().root().join("read.txt"),
         "hello\n",
@@ -440,8 +440,69 @@ async fn a_stage_no_result_published_is_never_promoted_by_a_later_batch() {
         "so the batch installed none"
     );
     assert!(
-        !fixture.runtime.todos().has_staged(),
-        "and the stranded stage was dropped when the batch opened"
+        fixture.runtime.todos().has_staged(),
+        "the stage belongs to the batch that wrote it: the batch that ran \
+         beside it neither inherited it nor promoted it"
+    );
+
+    // And when the batch that owns it ends without committing, the stage
+    // goes with it.
+    fixture.abandon_todo_batch();
+    assert!(!fixture.runtime.todos().has_staged());
+    assert_eq!(fixture.runtime.todos().committed(), TodoSnapshot::empty());
+}
+
+/// Two batches cannot hold the list at once, and the one that cannot have it
+/// writes nothing.
+///
+/// This is the overlapping-batch case stated end to end: something outside
+/// the Agent Loop is already holding the list when a batch runs. The batch's
+/// `todo` call settles as an ordinary rejected result, its canonical history
+/// carries no list, and the authority never moves — instead of the batch
+/// mutating a list it has no right to publish, or publishing a snapshot that
+/// silently absorbed somebody else's staged tasks.
+#[tokio::test]
+async fn a_batch_that_cannot_hold_the_list_publishes_none() {
+    let fixture = common::native_fixture();
+    let held = common::run_tool(
+        &fixture,
+        "todo",
+        serde_json::json!({ "action": "create", "subject": "Held by another batch" }),
+    )
+    .await;
+    assert_eq!(
+        held.status,
+        rustx::tools::types::ToolExecutionStatus::Success
+    );
+
+    let audit = run(&fixture, &[create("call-todo-a", "Write the parser")]).await;
+    assert!(matches!(audit.outcome, AttemptOutcome::Completed { .. }));
+
+    let refused = audit
+        .messages()
+        .iter()
+        .find_map(|message| match message {
+            MessageBlock::Tool(tool) if tool.tool_id.as_str() == TODO_TOOL_ID => {
+                Some(tool.result.clone())
+            }
+            _ => None,
+        })
+        .expect("the batch committed a todo result");
+    match &refused.status {
+        rustx::tools::types::ToolExecutionStatus::Failed { error } => assert!(
+            error.starts_with("the task list is not open for this call"),
+            "{error}"
+        ),
+        status => panic!("expected a rejected call, got {status:?}"),
+    }
+    assert!(
+        canonical_list(&audit).is_none(),
+        "a rejected call publishes no list"
+    );
+    assert_eq!(
+        fixture.runtime.todos().committed(),
+        TodoSnapshot::empty(),
+        "and the authority never moved"
     );
 }
 

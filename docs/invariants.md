@@ -619,15 +619,34 @@ registers no `todo` tool, so a child can neither read nor overwrite its
 parent's list.
 
 That equivalence requires the in-memory list never to run ahead of the Ledger,
-so a `todo` call mutates *staged* state scoped to the batch the Agent Loop
-opens before the batch runs. Settling installs the newest list that batch's
-**own committed results** published, never whatever happens to be staged, and
-opening a batch drops any provisional state left behind by something that did
-not commit. Later calls of one batch read what earlier ones staged; every exit
-that is not the commit discards them. So a batch that never becomes canonical
-leaves the list exactly as canonical history describes it, an executor driven
-outside the Agent Loop moves no authority at all, and a stage that executor
-left behind can be discarded but never promoted by an unrelated batch.
+so a `todo` call mutates *staged* state owned by the batch the Agent Loop opens
+before the batch runs. Settling installs the newest list that batch's **own
+committed results** published, never whatever happens to be staged, and opening
+a batch drops any provisional state left behind by something that did not
+commit. Later calls of one batch read what earlier ones staged; every exit that
+is not the commit discards them. So a batch that never becomes canonical leaves
+the list exactly as canonical history describes it.
+
+Provisional state is owned rather than ambient, and that ownership is the
+authority, not the timing:
+
+- **one batch at a time.** Opening a batch while another holds the list is
+  refused rather than served: silently replacing the open batch would leave the
+  displaced batch still committing its own results and then settling a list it
+  no longer owned. A caller that cannot open a batch runs without one.
+- **no batch, no mutation.** Every mutation goes through the writer its batch
+  hands its own invocations, and a writer whose batch has settled, been
+  discarded, or been dropped neither reads nor writes. The `todo` executor
+  holds no list of its own and receives that writer per invocation, so a
+  dispatch outside the Agent Loop — a directly driven executor, a detached
+  execution — is refused as an ordinary failed ToolResult instead of writing
+  provisional state some other batch would then commit as its own. A stage such
+  a caller does own is invisible to every other batch: it can neither be read,
+  extended, inherited, nor promoted.
+- **settlement is reported, never silent.** Installing what the committed
+  blocks published is unconditional, because canonical history is the
+  authority; the settlement additionally says whether the batch still held the
+  list, so the unreachable case cannot pass as an ordinary success.
 
 The rebuild fails closed. A newest successful `todo` result whose payload is
 missing, undecodable, or violates the list's own invariants refuses

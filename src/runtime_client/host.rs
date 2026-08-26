@@ -2207,7 +2207,6 @@ mod tests {
                 crate::tools::NativeToolResources {
                     background: tool_runtime.background().clone(),
                     subagents: None,
-                    todos: tool_runtime.todos().clone(),
                 },
                 crate::tools::NativeToolPolicies::default(),
             )
@@ -5576,7 +5575,6 @@ mod tests {
                 crate::tools::NativeToolResources {
                     background: tool_runtime.background().clone(),
                     subagents: None,
-                    todos: tool_runtime.todos().clone(),
                 },
                 crate::tools::NativeToolPolicies::default(),
             )

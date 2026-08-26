@@ -53,9 +53,16 @@
 //! where the whole `ToolResult` batch became canonical, and discards it on
 //! every other exit. So a batch that fails to commit — a durable failure, a
 //! rejected append, a poisoned attempt — leaves the conversation's list
-//! exactly as canonical history describes it, and an executor driven
-//! outside that loop mutates nothing that anyone can observe as the
-//! authority.
+//! exactly as canonical history describes it.
+//!
+//! Provisional state is owned, not ambient. [`ConversationTodoList::open_batch`]
+//! hands out one [`TodoBatch`] at a time and refuses to take the list away
+//! from a batch that already holds it; every mutation goes through the
+//! [`TodoWriter`] that batch hands its own executors, and a writer whose
+//! batch is closed writes nothing. So an executor driven outside the Agent
+//! Loop has no writer and mutates nothing, and one driven *beside* a running
+//! batch cannot slip a task into a list that batch is about to publish as
+//! its own.
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -581,6 +588,11 @@ pub enum TodoMutationError {
     /// read back — the authority refuses to stage what a later rebuild
     /// would refuse to adopt.
     Unpublishable(TodoSnapshotError),
+    /// The writing batch no longer holds the list: it has already settled,
+    /// was discarded, or never opened. Provisional state belongs to the
+    /// batch that will publish it, so a mutation with no such batch behind
+    /// it writes nothing at all.
+    BatchClosed,
 }
 
 impl core::fmt::Display for TodoMutationError {
@@ -608,6 +620,11 @@ impl core::fmt::Display for TodoMutationError {
             Self::Unpublishable(error) => write!(
                 f,
                 "the resulting list could not be read back after a restart: {error}"
+            ),
+            Self::BatchClosed => write!(
+                f,
+                "the task list is not open for this call: a task list mutation belongs to the \
+                 tool-result batch that publishes it"
             ),
         }
     }
@@ -702,35 +719,63 @@ pub struct ConversationTodoList {
 /// `staged` is `None` exactly when nothing is in flight, so the common case
 /// costs no clone and the authority is never a copy of itself.
 ///
-/// `open` names the batch the staged list belongs to. Provisional state is
-/// never anonymous: a batch installs only what its *own* canonical results
-/// published, so a stage left behind by anything else can be discarded but
-/// never promoted.
+/// Provisional state is never anonymous. `open` names the one batch that may
+/// write, and the stage itself carries the batch that wrote it, so the two
+/// questions a stage has to answer — *may this caller write?* and *whose list
+/// is this?* — are both answered by data rather than by timing.
 #[derive(Debug)]
 struct TodoListState {
     committed: TodoSnapshot,
-    staged: Option<TodoSnapshot>,
+    staged: Option<StagedTodos>,
     open: Option<u64>,
     next_batch: u64,
 }
 
+/// One batch's provisional list, tagged with the batch that wrote it.
+#[derive(Debug)]
+struct StagedTodos {
+    batch: u64,
+    snapshot: TodoSnapshot,
+}
+
 impl TodoListState {
-    /// The list every read and every mutation of an in-flight batch sees.
-    fn working(&self) -> &TodoSnapshot {
-        self.staged.as_ref().unwrap_or(&self.committed)
+    /// The list `batch` reads and writes: its own stage, or the committed
+    /// authority when it has staged nothing yet.
+    ///
+    /// A stage that belongs to another batch is invisible here rather than
+    /// inherited, so no caller can read — or build on — provisional state it
+    /// does not own.
+    fn working_for(&self, batch: u64) -> &TodoSnapshot {
+        match &self.staged {
+            Some(staged) if staged.batch == batch => &staged.snapshot,
+            _ => &self.committed,
+        }
+    }
+
+    /// The list an observer sees: the in-flight one when a batch is
+    /// mid-flight, the committed one otherwise. Never a write path.
+    fn visible(&self) -> &TodoSnapshot {
+        self.staged
+            .as_ref()
+            .map_or(&self.committed, |staged| &staged.snapshot)
     }
 }
 
-/// The right to settle one `ToolResult` batch's provisional list.
+/// The right to write and settle one `ToolResult` batch's provisional list.
 ///
 /// Opened by the Agent Loop before a batch runs and consumed when that batch
-/// becomes canonical. Two properties make the token worth its existence:
+/// becomes canonical. Three properties make the token worth its existence:
 ///
-/// - a batch starts from the *committed* authority, so a stage left behind by
-///   something that never committed cannot be read, extended, or inherited;
+/// - it is **exclusive**: a batch cannot be opened while another one is open,
+///   so a second caller can never silently replace the batch that is running
+///   and leave that batch unable to settle what it committed;
+/// - it is the **only** way to mutate the list: every mutation goes through
+///   the [`TodoWriter`] this token hands out, and a writer whose batch is no
+///   longer open is refused. A caller with no batch identity cannot write
+///   provisional state that a batch would then publish as its own;
 /// - settling installs what the batch's own committed results published, not
-///   whatever happens to be staged, so an unrelated batch can never promote a
-///   list no canonical result carries.
+///   whatever happens to be staged, so a batch that committed no `todo`
+///   result moves nothing.
 ///
 /// Dropping the token without settling discards the batch's provisional list,
 /// which makes every early return of the Agent Loop — a durable failure, a
@@ -743,22 +788,69 @@ pub struct TodoBatch {
     id: u64,
 }
 
+/// What settling one batch did to the authority.
+///
+/// Returned rather than swallowed: the whole point of the token is that the
+/// in-memory list and canonical history cannot disagree, and a settlement
+/// that quietly did nothing is exactly how they would.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TodoSettlement {
+    /// The batch's own canonical results published a list, and it is now the
+    /// authority.
+    Installed,
+    /// The batch committed no `todo` result, so the authority did not move.
+    Unchanged,
+    /// The batch no longer held the list when it settled. The canonical list
+    /// its own results published was still installed — canonical history is
+    /// the authority, and refusing to install it is what would leave the
+    /// process behind the Ledger — but something had already taken the list
+    /// away from this batch, which the exclusivity of [`TodoBatch`] is meant
+    /// to make impossible.
+    Superseded,
+}
+
 impl TodoBatch {
+    /// The batch-scoped mutation authority handed to this batch's executors.
+    ///
+    /// Cloning a writer shares the batch: two calls of one batch write one
+    /// provisional list, which is exactly what makes a later call of the
+    /// batch read what an earlier one did.
+    #[must_use]
+    pub fn writer(&self) -> TodoWriter {
+        TodoWriter {
+            list: self.list.clone(),
+            batch: self.id,
+        }
+    }
+
     /// Installs the list this batch's own canonical results published.
     ///
     /// `blocks` is the exact `ToolResult` batch that just became canonical.
     /// The newest `todo` result in it *is* the list now; a batch that
     /// committed no `todo` result moves nothing, whatever was staged.
-    pub fn settle(self, blocks: &[MessageBlock]) {
+    pub fn settle(self, blocks: &[MessageBlock]) -> TodoSettlement {
         let list = self.list.clone();
         let mut state = list.state();
-        if state.open != Some(self.id) {
-            return;
+        let owned = state.open == Some(self.id);
+        if owned {
+            state.open = None;
+            state.staged = None;
         }
-        state.open = None;
-        state.staged = None;
-        if let Some(Ok(published)) = blocks.iter().rev().find_map(published_snapshot) {
+        // Canonical history is the authority, so what these committed blocks
+        // published is installed whether or not the token still owned the
+        // stage. A settlement that skipped this step would leave the process
+        // holding a list the Ledger has already superseded.
+        let moved = if let Some(Ok(published)) = blocks.iter().rev().find_map(published_snapshot) {
             state.committed = published;
+            true
+        } else {
+            false
+        };
+        drop(state);
+        match (owned, moved) {
+            (false, _) => TodoSettlement::Superseded,
+            (true, true) => TodoSettlement::Installed,
+            (true, false) => TodoSettlement::Unchanged,
         }
     }
 
@@ -776,130 +868,67 @@ impl Drop for TodoBatch {
     }
 }
 
-impl core::fmt::Debug for ConversationTodoList {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("ConversationTodoList")
-            .field("conversation_id", &self.conversation_id)
-            .finish_non_exhaustive()
-    }
+/// The mutation authority of one `ToolResult` batch.
+///
+/// Every `todo` mutation needs one, and a writer names the batch it belongs
+/// to, so provisional state is written by an identified owner and read back
+/// only by that owner. A writer whose batch has settled, been discarded, or
+/// been dropped mutates nothing: it is refused with
+/// [`TodoMutationError::BatchClosed`] rather than falling back to the
+/// authority.
+///
+/// The Agent Loop hands one to the executors of the batch it opened
+/// ([`crate::tools::executor::ToolExecutionContext::with_todos`]); an
+/// executor driven outside that loop receives none and therefore cannot
+/// write.
+#[derive(Debug, Clone)]
+pub struct TodoWriter {
+    list: ConversationTodoList,
+    batch: u64,
 }
 
-impl ConversationTodoList {
-    /// Creates the empty list of one conversation.
+impl TodoWriter {
+    /// The conversation this list belongs to.
     #[must_use]
-    pub fn new(conversation_id: ConversationId) -> Self {
-        Self::over(conversation_id, TodoSnapshot::empty())
+    pub fn conversation_id(&self) -> &ConversationId {
+        self.list.conversation_id()
     }
 
-    /// Creates the list of one conversation over an already committed
-    /// snapshot, with nothing staged.
-    #[must_use]
-    pub fn over(conversation_id: ConversationId, committed: TodoSnapshot) -> Self {
-        Self {
-            conversation_id,
-            inner: Arc::new(Mutex::new(TodoListState {
-                committed,
-                staged: None,
-                open: None,
-                next_batch: 1,
-            })),
-        }
-    }
-
-    /// Rebuilds one conversation's list from its canonical history.
+    /// The list this batch sees: the committed list plus whatever this batch
+    /// has staged on top of it.
     ///
-    /// The snapshot the **newest** successful `todo` result published *is*
-    /// the list: later results supersede earlier ones completely, so
-    /// replaying the whole history is unnecessary and a partially
-    /// reconstructed list is impossible. History that contains no such
-    /// result yields the empty list, which is exactly what a conversation
-    /// that never tracked tasks should have.
+    /// Deliberately the *working* list rather than the authority, so a second
+    /// `todo` call in one batch reads what the first one did — and never what
+    /// some other batch did.
     ///
     /// # Errors
     ///
-    /// Returns [`TodoRebuildError`] when that newest result carries no
-    /// usable list. The rebuild fails closed rather than reaching further
-    /// back: an older snapshot is a list this conversation has already
-    /// superseded, and adopting it would revive tasks that were completed,
-    /// tombstoned, or cleared.
-    pub fn rebuilt(
-        conversation_id: ConversationId,
-        history: &[MessageBlock],
-    ) -> Result<Self, TodoRebuildError> {
-        let committed = match last_snapshot(history) {
-            Some(result) => result?,
-            None => TodoSnapshot::empty(),
-        };
-        Ok(Self::over(conversation_id, committed))
-    }
-
-    /// The conversation this list belongs to.
-    #[must_use]
-    pub const fn conversation_id(&self) -> &ConversationId {
-        &self.conversation_id
-    }
-
-    /// The list every `todo` call of the current batch sees: the committed
-    /// list plus whatever that batch has staged on top of it.
-    ///
-    /// This is deliberately the *working* list rather than the authority,
-    /// so a second `todo` call in one batch reads what the first one did.
-    /// Readers that need the conversation's durable truth — a client
-    /// projection, a bootstrap seed — use [`Self::committed`].
-    #[must_use]
-    pub fn snapshot(&self) -> TodoSnapshot {
-        self.state().working().clone()
-    }
-
-    /// The authoritative list: exactly what canonical history committed.
-    #[must_use]
-    pub fn committed(&self) -> TodoSnapshot {
-        self.state().committed.clone()
-    }
-
-    /// Whether a batch has staged mutations that have not committed yet.
-    #[must_use]
-    pub fn has_staged(&self) -> bool {
-        self.state().staged.is_some()
-    }
-
-    /// Opens one `ToolResult` batch over this list.
-    ///
-    /// The new batch starts from the committed authority: any provisional
-    /// state left behind by something that never committed is dropped here,
-    /// so a batch can neither read nor inherit it. See [`TodoBatch`].
-    pub fn open_batch(&self) -> TodoBatch {
-        let mut state = self.state();
-        let id = state.next_batch;
-        state.next_batch = state.next_batch.saturating_add(1);
-        state.open = Some(id);
-        state.staged = None;
-        drop(state);
-        TodoBatch {
-            list: self.clone(),
-            id,
-        }
-    }
-
-    /// Drops every staged mutation, leaving the committed list untouched.
-    pub fn discard_staged(&self) {
-        self.state().staged = None;
+    /// Returns [`TodoMutationError::BatchClosed`] when this batch no longer
+    /// holds the list. A closed batch reads nothing rather than reading the
+    /// authority, so a stale writer cannot publish a list as if it were its
+    /// own.
+    pub fn snapshot(&self) -> Result<TodoSnapshot, TodoMutationError> {
+        let state = self.list.state();
+        self.guard(&state)?;
+        Ok(state.working_for(self.batch).clone())
     }
 
     /// Adds one task in `pending` and returns it with the new snapshot.
     ///
     /// # Errors
     ///
-    /// Returns the rejection of a blank subject or of an initial dependency
-    /// that is unknown or tombstoned. Nothing is written when the call is
-    /// rejected, so the id allocator does not advance either.
+    /// Returns the rejection of a closed batch, of a blank subject, or of an
+    /// initial dependency that is unknown or tombstoned. Nothing is written
+    /// when the call is rejected, so the id allocator does not advance
+    /// either.
     pub fn create(&self, spec: TodoCreate) -> Result<(TodoTask, TodoSnapshot), TodoMutationError> {
         let subject = spec.subject.trim().to_owned();
         if subject.is_empty() {
             return Err(TodoMutationError::BlankSubject);
         }
-        let mut state = self.state();
-        let mut next = state.working().clone();
+        let mut state = self.list.state();
+        self.guard(&state)?;
+        let mut next = state.working_for(self.batch).clone();
         let blocked_by = normalize_ids(spec.blocked_by);
         for id in &blocked_by {
             check_dependency(&next, "blocked_by", *id)?;
@@ -919,17 +948,17 @@ impl ConversationTodoList {
             .checked_add(1)
             .ok_or(TodoMutationError::AllocatorExhausted)?;
         next.tasks.push(task.clone());
-        Ok((task, stage(&mut state, next)?))
+        Ok((task, stage(&mut state, self.batch, next)?))
     }
 
     /// Applies one patch to one task.
     ///
     /// # Errors
     ///
-    /// Returns the rejection of an unknown task, an empty patch, an illegal
-    /// status transition, or a dependency edge that is unknown, tombstoned,
-    /// self-referential, or cyclic. Validation completes before anything is
-    /// written.
+    /// Returns the rejection of a closed batch, an unknown task, an empty
+    /// patch, an illegal status transition, or a dependency edge that is
+    /// unknown, tombstoned, self-referential, or cyclic. Validation completes
+    /// before anything is written.
     pub fn update(
         &self,
         id: u64,
@@ -938,8 +967,9 @@ impl ConversationTodoList {
         if change.is_empty() {
             return Err(TodoMutationError::EmptyUpdate);
         }
-        let mut state = self.state();
-        let mut next = state.working().clone();
+        let mut state = self.list.state();
+        self.guard(&state)?;
+        let mut next = state.working_for(self.batch).clone();
         let position = next
             .tasks
             .iter()
@@ -1007,7 +1037,7 @@ impl ConversationTodoList {
                 previous_status,
                 unchanged,
             },
-            stage(&mut state, next)?,
+            stage(&mut state, self.batch, next)?,
         ))
     }
 
@@ -1018,11 +1048,12 @@ impl ConversationTodoList {
     ///
     /// # Errors
     ///
-    /// Returns the rejection of an unknown task or of a task that is
-    /// already tombstoned.
+    /// Returns the rejection of a closed batch, of an unknown task, or of a
+    /// task that is already tombstoned.
     pub fn delete(&self, id: u64) -> Result<(TodoTask, TodoSnapshot), TodoMutationError> {
-        let mut state = self.state();
-        let mut next = state.working().clone();
+        let mut state = self.list.state();
+        self.guard(&state)?;
+        let mut next = state.working_for(self.batch).clone();
         let position = next
             .tasks
             .iter()
@@ -1033,21 +1064,162 @@ impl ConversationTodoList {
         }
         next.tasks[position].status = TodoStatus::Deleted;
         let task = next.tasks[position].clone();
-        Ok((task, stage(&mut state, next)?))
+        Ok((task, stage(&mut state, self.batch, next)?))
     }
 
     /// Drops every task and resets the id allocator.
     ///
     /// Returns how many tasks were dropped together with the emptied
     /// snapshot.
-    #[must_use]
-    pub fn clear(&self) -> (usize, TodoSnapshot) {
-        let mut state = self.state();
-        let dropped = state.working().tasks.len();
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TodoMutationError::BatchClosed`] when this batch no longer
+    /// holds the list.
+    pub fn clear(&self) -> Result<(usize, TodoSnapshot), TodoMutationError> {
+        let mut state = self.list.state();
+        self.guard(&state)?;
+        let dropped = state.working_for(self.batch).tasks.len();
         let emptied = TodoSnapshot::empty();
-        state.staged = Some(emptied.clone());
+        Ok((dropped, stage(&mut state, self.batch, emptied)?))
+    }
+
+    /// Refuses every write and every read of a batch that no longer holds
+    /// the list.
+    fn guard(&self, state: &TodoListState) -> Result<(), TodoMutationError> {
+        if state.open == Some(self.batch) {
+            Ok(())
+        } else {
+            Err(TodoMutationError::BatchClosed)
+        }
+    }
+}
+
+impl core::fmt::Debug for ConversationTodoList {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ConversationTodoList")
+            .field("conversation_id", &self.conversation_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ConversationTodoList {
+    /// Creates the empty list of one conversation.
+    #[must_use]
+    pub fn new(conversation_id: ConversationId) -> Self {
+        Self::over(conversation_id, TodoSnapshot::empty())
+    }
+
+    /// Creates the list of one conversation over an already committed
+    /// snapshot, with nothing staged.
+    ///
+    /// Deliberately private. `committed` becomes the authority without
+    /// passing [`TodoSnapshot::validate`], so the only two callers are the
+    /// ones that cannot carry an unusable list: [`Self::new`], whose
+    /// snapshot is empty, and [`Self::rebuilt`], which validates what it
+    /// read from canonical history first.
+    fn over(conversation_id: ConversationId, committed: TodoSnapshot) -> Self {
+        Self {
+            conversation_id,
+            inner: Arc::new(Mutex::new(TodoListState {
+                committed,
+                staged: None,
+                open: None,
+                next_batch: 1,
+            })),
+        }
+    }
+
+    /// Rebuilds one conversation's list from its canonical history.
+    ///
+    /// The snapshot the **newest** successful `todo` result published *is*
+    /// the list: later results supersede earlier ones completely, so
+    /// replaying the whole history is unnecessary and a partially
+    /// reconstructed list is impossible. History that contains no such
+    /// result yields the empty list, which is exactly what a conversation
+    /// that never tracked tasks should have.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TodoRebuildError`] when that newest result carries no
+    /// usable list. The rebuild fails closed rather than reaching further
+    /// back: an older snapshot is a list this conversation has already
+    /// superseded, and adopting it would revive tasks that were completed,
+    /// tombstoned, or cleared.
+    pub fn rebuilt(
+        conversation_id: ConversationId,
+        history: &[MessageBlock],
+    ) -> Result<Self, TodoRebuildError> {
+        let committed = match last_snapshot(history) {
+            Some(result) => result?,
+            None => TodoSnapshot::empty(),
+        };
+        Ok(Self::over(conversation_id, committed))
+    }
+
+    /// The conversation this list belongs to.
+    #[must_use]
+    pub const fn conversation_id(&self) -> &ConversationId {
+        &self.conversation_id
+    }
+
+    /// What an observer of this list currently sees: the in-flight list
+    /// while a batch is running, the committed list otherwise.
+    ///
+    /// This is a read, not a write path, and it is nobody's authority: a
+    /// caller that needs the conversation's durable truth — a client
+    /// projection, a bootstrap seed — uses [`Self::committed`], and a caller
+    /// that needs to *mutate* uses the [`TodoWriter`] of its own batch.
+    #[must_use]
+    pub fn snapshot(&self) -> TodoSnapshot {
+        self.state().visible().clone()
+    }
+
+    /// The authoritative list: exactly what canonical history committed.
+    #[must_use]
+    pub fn committed(&self) -> TodoSnapshot {
+        self.state().committed.clone()
+    }
+
+    /// Whether a batch has staged mutations that have not committed yet.
+    #[must_use]
+    pub fn has_staged(&self) -> bool {
+        self.state().staged.is_some()
+    }
+
+    /// Opens one `ToolResult` batch over this list, when one may be opened.
+    ///
+    /// The new batch starts from the committed authority: any provisional
+    /// state left behind by something that never committed is dropped here,
+    /// so a batch can neither read nor inherit it. See [`TodoBatch`].
+    ///
+    /// Returns `None` rather than taking the list away from a batch that
+    /// already holds it. Silently replacing the open batch is the one way
+    /// this type could let canonical history and the in-memory list
+    /// disagree: the replaced batch would still commit its results, and its
+    /// settlement would then find a list it no longer owns. A caller that
+    /// cannot open a batch runs without one — its `todo` calls are refused,
+    /// and the authority is untouched — which is the failure this list is
+    /// designed to have.
+    ///
+    /// `None` is also returned in the unreachable case of an exhausted batch
+    /// allocator, for the same reason: a reused batch id is an identity that
+    /// no longer identifies.
+    #[must_use]
+    pub fn open_batch(&self) -> Option<TodoBatch> {
+        let mut state = self.state();
+        if state.open.is_some() {
+            return None;
+        }
+        let id = state.next_batch;
+        state.next_batch = state.next_batch.checked_add(1)?;
+        state.open = Some(id);
+        state.staged = None;
         drop(state);
-        (dropped, emptied)
+        Some(TodoBatch {
+            list: self.clone(),
+            id,
+        })
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, TodoListState> {
@@ -1064,9 +1236,16 @@ impl ConversationTodoList {
 /// Without this the two halves of the durability story could drift: a call
 /// could succeed, commit its snapshot, and leave the next restart unable to
 /// rebuild the very list it just wrote.
-fn stage(state: &mut TodoListState, next: TodoSnapshot) -> Result<TodoSnapshot, TodoMutationError> {
+fn stage(
+    state: &mut TodoListState,
+    batch: u64,
+    next: TodoSnapshot,
+) -> Result<TodoSnapshot, TodoMutationError> {
     next.validate().map_err(TodoMutationError::Unpublishable)?;
-    state.staged = Some(next.clone());
+    state.staged = Some(StagedTodos {
+        batch,
+        snapshot: next.clone(),
+    });
     Ok(next)
 }
 
@@ -1179,8 +1358,9 @@ fn merge_metadata(
 #[cfg(test)]
 mod tests {
     use super::{
-        ConversationTodoList, TODO_TOOL_ID, TodoChange, TodoCreate, TodoMutationError,
-        TodoRebuildError, TodoSnapshot, TodoSnapshotError, TodoStatus, TodoTask, forbidden_control,
+        ConversationTodoList, TODO_TOOL_ID, TodoBatch, TodoChange, TodoCreate, TodoMutationError,
+        TodoRebuildError, TodoSettlement, TodoSnapshot, TodoSnapshotError, TodoStatus, TodoTask,
+        TodoWriter, forbidden_control,
     };
     use crate::message::content::TextBlock;
     use crate::message::types::{MessageBlock, ToolMessageBlock};
@@ -1189,6 +1369,24 @@ mod tests {
 
     fn list() -> ConversationTodoList {
         ConversationTodoList::new(ConversationId::new("conv-todo"))
+    }
+
+    /// A list, the one batch open over it, and that batch's writer.
+    ///
+    /// Every mutation below goes through a writer because in the runtime
+    /// every mutation does: provisional state belongs to the batch that will
+    /// publish it, and there is no other way to write it.
+    fn open() -> (ConversationTodoList, TodoBatch, TodoWriter) {
+        let list = list();
+        let batch = list.open_batch().expect("a fresh list opens one batch");
+        let writer = batch.writer();
+        (list, batch, writer)
+    }
+
+    /// The batch-scoped working list, for the many tests that only care what
+    /// the mutation did.
+    fn working(todos: &TodoWriter) -> TodoSnapshot {
+        todos.snapshot().expect("the batch is open")
     }
 
     fn subject(subject: &str) -> TodoCreate {
@@ -1207,7 +1405,7 @@ mod tests {
 
     #[test]
     fn ids_are_assigned_in_creation_order_and_start_pending() {
-        let todos = list();
+        let (_list, _batch, todos) = open();
         let (first, _) = todos.create(subject("Write the parser")).expect("create");
         let (second, snapshot) = todos.create(subject("Write the tests")).expect("create");
         assert_eq!((first.id, second.id), (1, 2));
@@ -1217,17 +1415,17 @@ mod tests {
 
     #[test]
     fn a_blank_subject_creates_nothing() {
-        let todos = list();
+        let (_list, _batch, todos) = open();
         assert_eq!(
             todos.create(subject("   ")).expect_err("blank subject"),
             TodoMutationError::BlankSubject
         );
-        assert_eq!(todos.snapshot(), TodoSnapshot::empty());
+        assert_eq!(working(&todos), TodoSnapshot::empty());
     }
 
     #[test]
     fn completed_work_may_only_be_tombstoned() {
-        let todos = list();
+        let (_list, _batch, todos) = open();
         let (task, _) = todos.create(subject("Write the parser")).expect("create");
         todos
             .update(task.id, status(TodoStatus::Completed))
@@ -1249,7 +1447,7 @@ mod tests {
 
     #[test]
     fn re_issuing_the_same_update_is_reported_as_a_no_op() {
-        let todos = list();
+        let (_list, _batch, todos) = open();
         let (task, _) = todos.create(subject("Write the parser")).expect("create");
         let (first, _) = todos
             .update(task.id, status(TodoStatus::InProgress))
@@ -1265,7 +1463,7 @@ mod tests {
 
     #[test]
     fn an_update_without_a_mutable_field_is_rejected() {
-        let todos = list();
+        let (_list, _batch, todos) = open();
         let (task, _) = todos.create(subject("Write the parser")).expect("create");
         assert_eq!(
             todos
@@ -1277,7 +1475,7 @@ mod tests {
 
     #[test]
     fn dependency_edges_are_validated_before_anything_is_written() {
-        let todos = list();
+        let (_list, _batch, todos) = open();
         let (first, _) = todos.create(subject("Write the parser")).expect("create");
         let (second, _) = todos.create(subject("Write the tests")).expect("create");
 
@@ -1295,7 +1493,7 @@ mod tests {
             }
         );
         assert_eq!(
-            todos.snapshot().next_id,
+            working(&todos).next_id,
             3,
             "a rejected create does not consume an id"
         );
@@ -1335,7 +1533,7 @@ mod tests {
             TodoMutationError::DependencyCycle
         );
         assert_eq!(
-            todos.snapshot().task(first.id).expect("first").blocked_by,
+            working(&todos).task(first.id).expect("first").blocked_by,
             Vec::<u64>::new(),
             "the rejected edge was never written"
         );
@@ -1343,7 +1541,7 @@ mod tests {
 
     #[test]
     fn a_tombstone_stays_referenceable_but_cannot_be_a_new_dependency() {
-        let todos = list();
+        let (_list, _batch, todos) = open();
         let (first, _) = todos.create(subject("Write the parser")).expect("create");
         let (second, _) = todos.create(subject("Write the tests")).expect("create");
         todos
@@ -1357,7 +1555,7 @@ mod tests {
             .expect("second waits on first");
         todos.delete(first.id).expect("tombstone");
 
-        let snapshot = todos.snapshot();
+        let snapshot = working(&todos);
         assert_eq!(
             snapshot.task(second.id).expect("second").blocked_by,
             vec![first.id],
@@ -1389,7 +1587,7 @@ mod tests {
 
     #[test]
     fn metadata_merges_key_by_key_and_null_removes_a_key() {
-        let todos = list();
+        let (_list, _batch, todos) = open();
         let (task, _) = todos.create(subject("Write the parser")).expect("create");
         let patch = |pairs: &[(&str, serde_json::Value)]| TodoChange {
             metadata: Some(
@@ -1427,10 +1625,10 @@ mod tests {
 
     #[test]
     fn clear_drops_every_task_and_restarts_the_id_allocator() {
-        let todos = list();
+        let (_list, _batch, todos) = open();
         todos.create(subject("Write the parser")).expect("create");
         todos.create(subject("Write the tests")).expect("create");
-        let (dropped, snapshot) = todos.clear();
+        let (dropped, snapshot) = todos.clear().expect("clear");
         assert_eq!(dropped, 2);
         assert_eq!(snapshot, TodoSnapshot::empty());
         let (task, _) = todos.create(subject("Start over")).expect("create");
@@ -1439,7 +1637,7 @@ mod tests {
 
     #[test]
     fn progress_counts_live_tasks_only() {
-        let todos = list();
+        let (_list, _batch, todos) = open();
         let (first, _) = todos.create(subject("Write the parser")).expect("create");
         let (second, _) = todos.create(subject("Write the tests")).expect("create");
         todos.create(subject("Ship")).expect("create");
@@ -1447,7 +1645,7 @@ mod tests {
             .update(first.id, status(TodoStatus::Completed))
             .expect("complete");
         todos.delete(second.id).expect("tombstone");
-        assert_eq!(todos.snapshot().progress(), (1, 2));
+        assert_eq!(working(&todos).progress(), (1, 2));
     }
 
     fn todo_result(snapshot: &TodoSnapshot) -> MessageBlock {
@@ -1476,38 +1674,38 @@ mod tests {
 
     #[test]
     fn the_list_is_rebuilt_from_the_last_committed_snapshot() {
-        let todos = list();
+        let (_list, _batch, todos) = open();
         todos.create(subject("Write the parser")).expect("create");
-        let first = todos.snapshot();
+        let first = working(&todos);
         let (task, _) = todos.create(subject("Write the tests")).expect("create");
         todos
             .update(task.id, status(TodoStatus::InProgress))
             .expect("start");
-        let latest = todos.snapshot();
+        let latest = working(&todos);
 
         let history = vec![todo_result(&first), todo_result(&latest)];
         let rebuilt = ConversationTodoList::rebuilt(ConversationId::new("conv-todo"), &history)
             .expect("rebuild");
-        assert_eq!(rebuilt.snapshot(), latest);
+        assert_eq!(rebuilt.committed(), latest);
 
         // The rebuilt list keeps allocating where the conversation left off.
-        let (next, _) = rebuilt.create(subject("Ship")).expect("create");
+        let batch = rebuilt.open_batch().expect("a rebuilt list opens a batch");
+        let (next, _) = batch.writer().create(subject("Ship")).expect("create");
         assert_eq!(next.id, 3);
     }
 
     #[test]
     fn a_mutation_is_staged_until_the_batch_that_carries_it_commits() {
-        let todos = list();
-        let batch = todos.open_batch();
+        let (list, batch, todos) = open();
         todos.create(subject("Write the parser")).expect("create");
-        assert!(todos.has_staged());
+        assert!(list.has_staged());
         assert_eq!(
-            todos.committed(),
+            list.committed(),
             TodoSnapshot::empty(),
             "the authority does not move before the result is durable"
         );
         assert_eq!(
-            todos.snapshot().tasks.len(),
+            working(&todos).tasks.len(),
             1,
             "the batch itself reads what it has staged"
         );
@@ -1516,112 +1714,198 @@ mod tests {
         let (second, _) = todos.create(subject("Write the tests")).expect("create");
         assert_eq!(second.id, 2);
 
-        let staged = todos.snapshot();
+        let staged = working(&todos);
         assert_eq!(staged.tasks.len(), 2);
-        batch.settle(&[todo_result(&staged)]);
-        assert_eq!(todos.committed(), staged);
-        assert!(!todos.has_staged());
+        assert_eq!(
+            batch.settle(&[todo_result(&staged)]),
+            TodoSettlement::Installed
+        );
+        assert_eq!(list.committed(), staged);
+        assert!(!list.has_staged());
+        assert_eq!(
+            todos
+                .create(subject("Too late"))
+                .expect_err("settled batch"),
+            TodoMutationError::BatchClosed,
+            "a writer whose batch has settled writes nothing"
+        );
     }
 
-    /// A batch installs what its own canonical results published, so a stage
-    /// nothing committed cannot ride out on an unrelated batch.
+    /// One batch at a time, and the running one keeps its list.
     ///
-    /// This is the executor-driven case: a caller holding the public tool
-    /// registry runs `todo` outside any batch, which publishes a snapshot
-    /// nobody commits. The next batch to settle carries no `todo` result at
-    /// all, and must leave the authority exactly where history left it.
+    /// Overlapping opens are the one way this type could let canonical
+    /// history and the in-memory list disagree: the displaced batch would
+    /// still commit its own results, and its settlement would then find a
+    /// list it no longer owned.
     #[test]
-    fn an_unrelated_batch_cannot_promote_a_stage_no_result_published() {
-        let todos = list();
-        todos
-            .create(subject("Written outside a batch"))
-            .expect("create");
-        assert!(todos.has_staged());
+    fn a_second_batch_cannot_take_the_list_from_the_one_that_holds_it() {
+        let (list, first, todos) = open();
+        todos.create(subject("Write the parser")).expect("create");
 
-        let batch = todos.open_batch();
         assert!(
-            !todos.has_staged(),
-            "a batch starts from the committed authority, never from a stranded stage"
+            list.open_batch().is_none(),
+            "a batch already holds the list"
         );
-        assert_eq!(todos.snapshot(), TodoSnapshot::empty());
-
-        // The batch commits an ordinary non-`todo` result.
-        batch.settle(&[MessageBlock::Tool(ToolMessageBlock {
-            id: MessageId::new("message-bash"),
-            tool_call_id: ToolCallId::new("call-bash"),
-            tool_id: ToolId::new("tool-bash"),
-            result: ToolExecutionResult {
-                status: ToolExecutionStatus::Success,
-                content: vec![ToolResultContent::Text(TextBlock {
-                    text: "ok".to_owned(),
-                })],
-                duration_ms: 0,
-                exit_code: None,
-                artifacts: Vec::new(),
-                truncation: None,
-                managed_output: None,
-            },
-        })]);
         assert_eq!(
-            todos.committed(),
+            working(&todos).tasks.len(),
+            1,
+            "the refused open left the running batch's list exactly as it was"
+        );
+
+        let staged = working(&todos);
+        assert_eq!(
+            first.settle(&[todo_result(&staged)]),
+            TodoSettlement::Installed,
+            "the batch that committed the results is still the batch that owns the list"
+        );
+        assert_eq!(list.committed(), staged);
+
+        let second = list
+            .open_batch()
+            .expect("the settled batch released the list");
+        let (next, _) = second
+            .writer()
+            .create(subject("Write the tests"))
+            .expect("create");
+        assert_eq!(next.id, 2, "the next batch composes on the committed list");
+    }
+
+    /// A stranded stage is neither readable nor writable by anyone else.
+    ///
+    /// This is the executor-driven case: something holding the public tool
+    /// registry runs `todo` outside any batch. It has no writer, so there is
+    /// nothing to strand — and the batch that runs next commits a list it
+    /// built itself.
+    #[test]
+    fn a_call_that_owns_no_batch_writes_nothing_at_all() {
+        let list = list();
+        let orphan = {
+            let batch = list.open_batch().expect("open");
+            let writer = batch.writer();
+            batch.discard();
+            writer
+        };
+        assert_eq!(
+            orphan
+                .create(subject("Written outside a batch"))
+                .expect_err("no batch"),
+            TodoMutationError::BatchClosed
+        );
+        assert!(!list.has_staged());
+
+        let batch = list.open_batch().expect("open");
+        assert_eq!(
+            orphan
+                .create(subject("Written beside a running batch"))
+                .expect_err("not this batch"),
+            TodoMutationError::BatchClosed,
+            "a stale writer cannot insert a task into the batch that is running"
+        );
+        assert_eq!(
+            orphan.snapshot().expect_err("not this batch"),
+            TodoMutationError::BatchClosed,
+            "nor read the list of the batch that is running"
+        );
+        let todos = batch.writer();
+        let (task, _) = todos.create(subject("Write the parser")).expect("create");
+        assert_eq!(task.id, 1, "no stranded write moved the allocator");
+        assert_eq!(
+            working(&todos).tasks.len(),
+            1,
+            "the running batch publishes only what the running batch wrote"
+        );
+
+        // The batch commits an ordinary non-`todo` result: nothing it
+        // committed published a list, so the authority does not move.
+        assert_eq!(
+            batch.settle(&[MessageBlock::Tool(ToolMessageBlock {
+                id: MessageId::new("message-bash"),
+                tool_call_id: ToolCallId::new("call-bash"),
+                tool_id: ToolId::new("tool-bash"),
+                result: ToolExecutionResult {
+                    status: ToolExecutionStatus::Success,
+                    content: vec![ToolResultContent::Text(TextBlock {
+                        text: "ok".to_owned(),
+                    })],
+                    duration_ms: 0,
+                    exit_code: None,
+                    artifacts: Vec::new(),
+                    truncation: None,
+                    managed_output: None,
+                },
+            })]),
+            TodoSettlement::Unchanged
+        );
+        assert_eq!(
+            list.committed(),
             TodoSnapshot::empty(),
             "no committed result published a list, so no list was installed"
         );
-        assert!(!todos.has_staged());
+        assert!(!list.has_staged());
     }
 
     /// A settled batch installs its newest published list even if a later
     /// mutation staged something else after it.
     #[test]
     fn a_batch_installs_the_newest_list_its_own_results_published() {
-        let todos = list();
-        let batch = todos.open_batch();
+        let (list, batch, todos) = open();
         todos.create(subject("First")).expect("create");
-        let first = todos.snapshot();
+        let first = working(&todos);
         todos.create(subject("Second")).expect("create");
-        let second = todos.snapshot();
-        batch.settle(&[todo_result(&first), todo_result(&second)]);
-        assert_eq!(todos.committed(), second);
+        let second = working(&todos);
+        assert_eq!(
+            batch.settle(&[todo_result(&first), todo_result(&second)]),
+            TodoSettlement::Installed
+        );
+        assert_eq!(list.committed(), second);
     }
 
     #[test]
     fn a_dropped_batch_leaves_the_committed_list_exactly_as_it_was() {
-        let todos = list();
-        let first = todos.open_batch();
+        let (list, first, todos) = open();
         todos.create(subject("Write the parser")).expect("create");
-        first.settle(&[todo_result(&todos.snapshot())]);
-        let committed = todos.committed();
+        first.settle(&[todo_result(&working(&todos))]);
+        let committed = list.committed();
 
-        let doomed = todos.open_batch();
-        todos.create(subject("Write the tests")).expect("create");
-        todos.delete(1).expect("tombstone");
-        let (_, cleared) = todos.clear();
+        let doomed = list.open_batch().expect("open");
+        let doomed_writer = doomed.writer();
+        doomed_writer
+            .create(subject("Write the tests"))
+            .expect("create");
+        doomed_writer.delete(1).expect("tombstone");
+        let (_, cleared) = doomed_writer.clear().expect("clear");
         assert_eq!(cleared, TodoSnapshot::empty());
 
         // The Agent Loop's every non-commit exit, in one line.
         drop(doomed);
-        assert!(!todos.has_staged());
-        assert_eq!(todos.committed(), committed);
+        assert!(!list.has_staged());
+        assert_eq!(list.committed(), committed);
         assert_eq!(
-            todos.snapshot(),
+            list.snapshot(),
             committed,
-            "with nothing staged, the working list is the committed one"
+            "with nothing staged, the observable list is the committed one"
+        );
+        assert_eq!(
+            doomed_writer.snapshot().expect_err("the batch is gone"),
+            TodoMutationError::BatchClosed,
+            "the writer of a dropped batch reads nothing, least of all the authority"
         );
     }
 
     #[test]
     fn a_rejected_mutation_stages_nothing() {
-        let todos = list();
-        let batch = todos.open_batch();
+        let (list, batch, todos) = open();
         todos.create(subject("Write the parser")).expect("create");
-        batch.settle(&[todo_result(&todos.snapshot())]);
-        assert!(!todos.has_staged());
+        batch.settle(&[todo_result(&working(&todos))]);
+        assert!(!list.has_staged());
 
+        let batch = list.open_batch().expect("open");
+        let todos = batch.writer();
         todos
             .update(9, status(TodoStatus::Completed))
             .expect_err("unknown task");
         assert!(
-            !todos.has_staged(),
+            !list.has_staged(),
             "a rejected call leaves no provisional list to commit or discard"
         );
     }
@@ -1634,7 +1918,7 @@ mod tests {
     /// the next restart refused to rebuild.
     #[test]
     fn an_update_may_not_blank_out_a_subject() {
-        let todos = list();
+        let (_list, _batch, todos) = open();
         let (task, _) = todos.create(subject("Write the parser")).expect("create");
         assert_eq!(
             todos
@@ -1649,7 +1933,7 @@ mod tests {
             TodoMutationError::BlankSubject
         );
         assert_eq!(
-            todos.snapshot().task(1).expect("kept").subject,
+            working(&todos).task(1).expect("kept").subject,
             "Write the parser"
         );
 
@@ -1675,7 +1959,7 @@ mod tests {
     /// authority can never publish a list it could not read back.
     #[test]
     fn a_mutation_that_could_not_be_read_back_is_refused() {
-        let todos = list();
+        let (_list, _batch, todos) = open();
         let (task, snapshot) = todos.create(subject("Write the parser")).expect("create");
         snapshot.validate().expect("valid");
         for blank in ["", "  ", "\u{2028}  "] {
@@ -1689,7 +1973,7 @@ mod tests {
                 )
                 .expect_err("unpublishable");
         }
-        assert_eq!(todos.snapshot(), snapshot, "and nothing was written");
+        assert_eq!(working(&todos), snapshot, "and nothing was written");
     }
 
     #[test]
@@ -1880,9 +2164,9 @@ mod tests {
     /// model completed, tombstoned, or cleared.
     #[test]
     fn an_unusable_newest_snapshot_fails_the_rebuild_instead_of_reviving_an_older_one() {
-        let todos = list();
+        let (_list, _batch, todos) = open();
         todos.create(subject("Write the parser")).expect("create");
-        let superseded = todos.snapshot();
+        let superseded = working(&todos);
 
         let mut malformed = todo_result(&TodoSnapshot::empty());
         let MessageBlock::Tool(tool) = &mut malformed else {
