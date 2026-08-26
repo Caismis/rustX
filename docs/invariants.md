@@ -564,6 +564,153 @@ attempt-cancelled settlement. A decline succeeds as
 `{"cancelled":true,"answers":[]}`; attempt cancellation and provider
 unavailability remain distinct runtime/tool outcomes.
 
+### The conversation task list and `todo`
+
+`todo` is one ordinary foreground, sequential, approval-never Tool over the
+conversation-owned `ConversationTodoList`. Task ids are allocated in creation
+order from `next_id` and are unique within the current list generation;
+`clear` resets the allocator, so an id names one task for as long as the list
+it belongs to lives, not for as long as the conversation does. A rejected call
+allocates nothing. Status transitions are `pending <-> in_progress`, either to
+`completed`, and any status to `deleted`; `completed` may only become
+`deleted`, and `deleted` is terminal. A transition to the current status is
+accepted and reported as a no-op. `delete` tombstones a task and never
+removes it, so historical `blocked_by` references still resolve; tombstones
+are hidden from `list` unless `include_deleted` is set, and are never counted
+in `done/total`.
+
+Dependency edges are validated before the list is written: an unknown id, a
+tombstoned id, a self-block, and an edge that would close a cycle in the
+`blocked_by` graph are all rejected, and a rejected call leaves the list
+exactly as it was. Reverse `blocks` edges are derived from the other tasks'
+`blocked_by` sets and never stored.
+
+A subject is trimmed and must not be blank, on `update` exactly as on
+`create`. More generally the authority validates every candidate list against
+the rule a rebuild applies *before* staging it, so no accepted call can
+publish a snapshot the next restart would refuse to read back.
+
+Task text is model-written and a client draws it, so the tool's input contract
+rejects control characters — the C0 and C1 ranges, `DEL`, and the Unicode bidi
+controls — in `subject`, `active_form`, `owner`, `description`, and in metadata
+keys and every string inside a metadata value, before any list state is
+touched. "The bidi controls" means Unicode's `Bidi_Control` property in full,
+runtime and client alike: `U+061C`, `U+200E`, `U+200F`, `U+202A`–`U+202E`,
+`U+2066`–`U+2069`. `U+061C` is named because it is the one a rule states
+without meaning to omit — it is `Cf` rather than a control character, so it
+passes anything written in terms of "control character", and it lives in the
+Arabic block rather than beside the other eleven. `description` is long-form prose that no bounded row draws and keeps
+line breaks; nothing else may contain one, so a single-line field is one
+physical client row.
+
+Input validation is not the whole boundary, because a client draws things the
+runtime never validated: a tool *call* is rendered from the model's own
+arguments while the assistant message is still streaming, before any executor
+has seen them, so a call that will be rejected has already been drawn. A
+client therefore sanitizes at its own rendering boundary as well — nothing a
+model or a tool wrote can move the cursor, repaint the screen, retitle the
+window, reverse reading order, or buy itself a second physical row.
+
+Where that reduction happens is part of the invariant. Untrusted text is
+reduced **before** it is styled, at the boundary where it enters the
+presentation layer: published argument text, the values that text parses into,
+and every string of a committed result. Once a row has been assembled out of
+styled fragments, an `ESC` the client's own theme emitted and an `ESC` that
+arrived in content are the same bytes, so a filter applied to the finished line
+that spares "the client's own styling" spares a model-written `ESC[8m` too —
+conceal, a forged colour, a reset theme. Argument *text* and parsed argument
+*values* are reduced separately, because `"\u001b"` is six harmless characters
+in published JSON and one `ESC` after parsing. What remains on the assembled
+line is a layout backstop: one built line is one physical row.
+
+Every *settled* call publishes the complete post-call snapshot as the
+structured content of its own canonical tool result; a rejected call is an
+ordinary failed ToolResult carrying the specific reason and publishes no
+snapshot. That published snapshot is the only durable record of the list:
+`ConversationToolRuntime` construction rebuilds the list from the **newest**
+such snapshot in canonical history, so a restart, a Session resume, and a
+compaction preserve exactly what the conversation still carries. There is no
+sidecar file, no separate durability path, and no migration. A subagent child
+registers no `todo` tool, so a child can neither read nor overwrite its
+parent's list.
+
+That equivalence requires the in-memory list never to run ahead of the Ledger,
+so a `todo` call mutates *staged* state owned by the batch the Agent Loop opens
+before the batch runs. Settling installs the newest list that batch's **own
+committed results** published, never whatever happens to be staged, and opening
+a batch drops any provisional state left behind by something that did not
+commit. Later calls of one batch read what earlier ones staged; every exit that
+is not the commit discards them. So a batch that never becomes canonical leaves
+the list exactly as canonical history describes it.
+
+Provisional state is owned rather than ambient, and that ownership is the
+authority, not the timing:
+
+- **one batch at a time.** Opening a batch while another holds the list is
+  refused rather than served: silently replacing the open batch would leave the
+  displaced batch still committing its own results and then settling a list it
+  no longer owned. A caller that cannot open a batch runs without one.
+- **no batch, no mutation.** Every mutation goes through the writer its batch
+  hands its own invocations, and a writer whose batch has settled, been
+  discarded, or been dropped neither reads nor writes. The `todo` executor
+  holds no list of its own and receives that writer per invocation, so a
+  dispatch outside the Agent Loop — a directly driven executor, a detached
+  execution — is refused as an ordinary failed ToolResult instead of writing
+  provisional state some other batch would then commit as its own. A stage such
+  a caller does own is invisible to every other batch: it can neither be read,
+  extended, inherited, nor promoted.
+- **settlement says what the batch meant, and nothing else.** The list becomes
+  exactly what the batch's own committed blocks published, or does not move
+  when they published none — canonical history is the authority, never the
+  stage. There is deliberately no third outcome for "the list was taken away":
+  a live batch *is* the open batch, so a batch that reaches settlement still
+  holds what it opened, and that is asserted where it would be violated rather
+  than carried as a state the caller has to branch on.
+- **the authority does not leave the crate.** The list, its batch, its writer,
+  and the seam that binds a writer to an invocation are all crate-private.
+  Settling a batch is a *claim about the Ledger* — that canonical history
+  already carries the list being installed — and only the Agent Loop can make
+  it truthfully, because only it holds the durable batch commit the claim
+  refers to. A consumer that could open a batch, stage a list, and settle it
+  against blocks of its own making would move the committed list without
+  moving the Ledger, and the next `todo` call would publish that divergence
+  into canonical history as though it had always been there. What a consumer
+  gets instead is the derived list: `ConversationToolRuntime::todo_snapshot`
+  and `RuntimeClientSnapshot.todos`, both of which read and neither of which
+  claims.
+
+The list survives a restart, a Session resume, and a compaction, and the third
+is a property of two subsystems rather than one: compaction appends a summary
+and replaces an active *Surface* span, while the Ledger is append-only and the
+rebuild reads `load_canonical`. So a compacted `todo` result stops being
+model-visible and stays exactly where the rebuild looks for it.
+
+It survives a Session clone, fork, and tree branch for the same reason, and
+that took making the reason true of Session lineage as well — see **A lineage
+copy is a copy of the conversation, not of its Surface** below.
+
+The rebuild fails closed. A newest successful `todo` result whose payload is
+missing, undecodable, or violates the list's own invariants refuses
+construction rather than reaching back to an older snapshot, which would
+revive tasks the conversation has already completed, tombstoned, or cleared.
+The invariants are exactly what a sequence of mutations can produce: the
+generation is dense and ordered — ids `1..next_id-1` in creation order, with
+`next_id` one past the last, because `delete` tombstones in place and `clear`
+starts a new generation at 1 — every subject is non-blank, every dependency
+resolves, is not self-referential, is normalized, and closes no cycle, and no
+text field or metadata entry carries a control character.
+
+The runtime derives the same list over the whole Ledger and carries it in
+`RuntimeClientSnapshot.todos`; a client renders that projection and folds each
+newly committed `todo` result into it. A client must not scan its own
+transcript for the list, because it holds only a bounded newest page: a
+conversation that committed a page or more of messages since its last `todo`
+result would otherwise appear to have no list at all. The TUI keys the fold on
+the runtime's own `ToolId`, never on tool name or JSON shape, and stores no
+task state of its own: a fresh authoritative snapshot reproduces the panel
+exactly. The panel is bounded and drops completed rows before unfinished ones,
+always naming what it hid; `/todos` prints the complete list.
+
 ### Runtime Client and TUI projection
 
 The Runtime Client carries native interaction facts through typed
@@ -4066,8 +4213,12 @@ Session a transition has just switched to.
 The native replacement sequence has these ordered points:
 
 1. Source preparation selects an exact retained `SurfaceRevision` (or current
-   head) and materializes the immutable seed. The source can mutate after this
-   read without changing the prepared destination.
+   head) and materializes the immutable seed — **all three parts of it**, the
+   Surface at that revision, the canonical history it was projected from, and
+   the retained Surface operations that projected it (see *A lineage copy is a
+   copy of the conversation, not of its Surface*).
+   The source can mutate after this read without changing the prepared
+   destination.
 2. The old runtime reaches semantic quiescence only when
    `ConversationRuntime::shutdown().await` returns successfully. Until that
    happens, no replacement Session/node selection may become catalog-visible.
@@ -4135,6 +4286,128 @@ canonical image or file block is rejected at native seed preparation rather
 than being silently rewritten as `[image]` or `[file]`; the typed payload
 remains a block list so a structured editor can be added by a later
 architecture decision.
+
+### A lineage copy is a copy of the conversation, not of its Surface
+
+`/clone`, `/fork`, and `/tree` seed a destination lineage with a
+`LineageSeed`, which has two distinguishable parts:
+
+```text
+canonical        the source Ledger cut the destination inherits, in commit order
+surface history  the retained Surface operations that project that cut, in
+                 revision order
+```
+
+The two parts exist because compaction separates them. Compaction is a
+*Surface* rewrite over an append-only Ledger: it retires an active span and
+leaves every retired fact canonical. Conversation state derived from canonical
+history therefore outlives its own model-visible record — the task list is the
+first such state and will not be the last. A seed carrying only the Surface
+would drop exactly those retired facts, so cloning a conversation before a
+compaction and cloning it after would produce destinations that mean different
+things, with no user-visible cause. The first invariant is the negative one:
+
+> **A compaction changes the context projection, never what copying the
+> conversation means.**
+
+The second half of the seed is the *history*, not merely the final active set,
+and it is what makes copying survive the operations that follow it. A copy is
+not a terminal object: the user forks and branches the copy afterwards, and
+`/fork` and `/tree` read the copy's own retained operation log to find their
+boundaries. Compaction makes Surface order and Ledger order disagree — the
+summary is the newest canonical row and the oldest active one — so a copy
+rebuilt from the final projection alone, one append per active message, would
+record a history in which the summary predates a user message it actually
+postdates. That copy shows the right Surface and branches at the wrong places.
+So the invariant is stated on the composition:
+
+> **Copying a lineage is closed under the lineage operations that follow it: a
+> fork or branch taken on the copy, at a boundary the copy itself reports,
+> means what the same operation taken on the source means.**
+
+The cut is taken over that history. One forward replay of the source's
+operations through the selected revision decides two things at once:
+
+- which operations the destination inherits. An operation is dropped when it
+  introduces an excluded identity: an `Append` of a message committed at or
+  after the selected boundary, or a `Replace` whose span holds anything
+  already excluded — a summary of work at or after the boundary is itself work
+  at or after the boundary. A `Replace` whose span lies entirely below the
+  boundary is inherited, so a compaction the source already performed over the
+  copied prefix stays performed. A clone selects no boundary and so excludes
+  nothing;
+- which canonical rows the destination inherits: exactly those the retained
+  operations name. That is the closure the destination's Surface needs — a
+  retained summary drags along the facts it retired — and it is why a
+  compaction that retired a `todo` result carries the result into the
+  destination while leaving it off the destination's Surface.
+
+Both properties a copy needs fall out of that. Retired facts are inherited,
+and everything committed after the selected revision is excluded, because the
+bound comes from the selected history rather than from the current Ledger end
+— a turn that commits while a fork is being prepared is not silently inherited
+by it. A boundary that excludes everything (a fork at the very first user
+message) retains no operation and cuts to the empty lineage, which is what
+such a fork means.
+
+Inherited canonical facts are inherited as the source holds them: durable,
+readable by anything that rebuilds state from canonical history, and **not**
+model-visible. A clone never re-shows context the source already summarized
+away. Destination identities are remapped through one map covering both parts,
+so a retained `Replace` and the retired messages it names still agree — which
+is also why a `ToolResult` whose `Assistant` tool call was retired by
+compaction now seeds correctly instead of failing identity resolution.
+
+`ConversationStore::initialize_lineage` is the one durable seam that writes
+such a seed. It writes the canonical part in Ledger commit order and then
+replays the seeded history as the destination's own retained operation log
+from revision 1, inheriting the compaction generation those operations record.
+Flattening the history into one append per active message would produce the
+same Surface and a history that never happened, and the destination's own
+branch points would then be artefacts of the copy rather than facts of the
+source. Reopening re-supplies the canonical part alone, which is the bootstrap
+identity the store verifies; the history is durable state the store already
+holds, not an input a reopen could contradict.
+`ConversationStore::load_surface_history` is the matching read: it is the
+provenance half a `prepare_*` selects, alongside the Surface snapshot and the
+canonical history.
+
+`LineageSeed` is the public durable authority both halves are admitted
+through, so it is checked against what durable transitions can *reach*, not
+merely against what replays. Every transition that adds a canonical row adds
+it together with the one Surface operation that introduces it, inside one
+transaction: an ordinary commit appends the message it committed, and a
+compaction appends its summary to the Ledger and replaces a span with that
+same summary. The two orders the seed carries are therefore not independent:
+
+> **The canonical identities in Ledger order are exactly the identities the
+> seeded history introduces in revision order, one for one.**
+
+Requiring that equality is what closes the two gaps a replay check alone
+leaves open, and both are gaps a *durable authority* must not have. A
+canonical row no operation ever introduces replays perfectly and is still
+unreachable — it would be conversation state with no Surface provenance at
+all, invisible to the boundaries a later fork of the destination reads, and
+fully visible to everything that rebuilds from canonical history, the task
+list included. A Ledger ordered against its own history replays perfectly
+too, while recording commits in an order no sequence of transitions produced.
+Each Surface operation introduces exactly one identity — `Append` its message,
+`Replace` its replacement — which is what makes the pairing checkable without
+any new vocabulary.
+
+The promise this section states is a change of *meaning* at a fixed record
+layout, so the persisted `SESSION_CATALOG_SCHEMA_VERSION` moves with it —
+version 4 is the first catalog whose `Clone` and `Fork` origins promise a
+destination that retained its source's operation history. A version-3 catalog
+decodes cleanly and carries the same fields and the same origin records; its
+destinations were seeded by flattening the source Surface, so their recorded
+branch points are artefacts of the copy. Nothing at the record level tells the
+two apart, which is exactly why the version and not an inspection is the gate:
+opening an older catalog here would branch a lineage this document already
+considers wrong as though its boundaries were the source's. The reader refuses
+it. No migration is offered, because a version-3 destination's real provenance
+was discarded when it was seeded and cannot be reconstructed from what it
+kept.
 
 ### Bounded native projections
 

@@ -51,8 +51,8 @@ use crate::runtime::process_death;
 
 use super::inbox::{
     AcceptedInbound, CanonicalMessagePage, CompactionCommitInput, ConversationStore,
-    ConversationStoreError, DurableConversationHead, EventPage, InboundDraft, PendingBatch,
-    PendingInboundItem, RequestSnapshotPage, SurfaceUserMessageBoundary,
+    ConversationStoreError, DurableConversationHead, EventPage, InboundDraft, LineageSeed,
+    PendingBatch, PendingInboundItem, RequestSnapshotPage, SurfaceUserMessageBoundary,
     SurfaceUserMessageBoundaryPage, TRANSCRIPT_PAGE_LIMIT_MAX, TranscriptCommitReceipt,
     TranscriptCursor, TranscriptEntry, TranscriptItem, TranscriptPage,
 };
@@ -756,7 +756,8 @@ impl ConversationStore for SqliteConversationStore {
         load_pending_rows(&connection)
     }
 
-    fn initialize(&self, messages: &[MessageBlock]) -> Result<(), ConversationStoreError> {
+    fn initialize_lineage(&self, seed: &LineageSeed) -> Result<(), ConversationStoreError> {
+        let messages = seed.canonical();
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -785,8 +786,38 @@ impl ConversationStore for SqliteConversationStore {
                 ));
             }
             ensure_surface_head(&transaction)?;
+            // The two parts of the seed go to their two durable homes, in two
+            // passes rather than one, because they are not the same order:
+            // the Ledger is written in canonical commit order, and a
+            // compaction summary the source produced *last* is the fact its
+            // Surface shows *first*. Fusing the passes would force one order
+            // on both and reproduce neither.
             for message in messages {
-                append_message_and_surface(&transaction, message)?;
+                append_seeded_ledger_message(&transaction, message)?;
+            }
+            // The seed's Surface history becomes this lineage's own retained
+            // operation log, replayed from revision 1. Flattening it into one
+            // append per active message would produce the same Surface and a
+            // different history, and a later fork or tree of *this* lineage
+            // reads the history: its branch points would then be this copy's
+            // artefacts rather than the source's real ones.
+            let mut active: Vec<MessageId> = Vec::new();
+            let mut revision = SurfaceRevision::INITIAL;
+            let mut generation = 0_u64;
+            for operation in seed.surface_history() {
+                revision = revision.next();
+                if matches!(operation, SurfaceOp::Replace { .. }) {
+                    generation = generation
+                        .checked_add(1)
+                        .ok_or_else(|| storage("seeded compaction generation is exhausted"))?;
+                }
+                validate_surface_operation_references(&transaction, operation)?;
+                append_surface_op(&transaction, revision, generation, operation)?;
+                apply_surface_op(&mut active, operation)?;
+            }
+            if revision != SurfaceRevision::INITIAL {
+                update_surface_head(&transaction, revision, generation, &active)?;
+                update_checkpoint(&transaction, revision, generation, &active)?;
             }
             transaction
                 .execute(
@@ -846,6 +877,14 @@ impl ConversationStore for SqliteConversationStore {
     ) -> Result<Vec<MessageBlock>, ConversationStoreError> {
         let connection = self.lock()?;
         ids.iter().map(|id| load_message(&connection, id)).collect()
+    }
+
+    fn load_surface_history(
+        &self,
+        through: SurfaceRevision,
+    ) -> Result<Vec<SurfaceOp>, ConversationStoreError> {
+        let connection = self.lock()?;
+        load_surface_history(&connection, through)
     }
 
     fn reconstruct_surface(
@@ -3696,6 +3735,23 @@ fn append_message_and_surface(
     append_message_and_surface_internal(transaction, message, None)
 }
 
+/// Appends one seeded canonical message to the Ledger alone.
+///
+/// A lineage seed is not a sequence of live transitions being replayed: it is
+/// the destination's *bootstrap*, written inside the one initialization
+/// transaction. So the Surface is established separately from the seed's own
+/// Surface order, and a compaction summary is an ordinary canonical row here
+/// rather than a transition that must arrive through `commit_compaction` --
+/// the summary's compaction already happened, in the source lineage, and
+/// re-performing it in the destination would rewrite a Surface that does not
+/// yet exist.
+fn append_seeded_ledger_message(
+    transaction: &Transaction<'_>,
+    message: &MessageBlock,
+) -> Result<(), ConversationStoreError> {
+    append_message_ledger(transaction, message, None).map(|_| ())
+}
+
 fn append_adopted_message_and_surface(
     transaction: &Transaction<'_>,
     message: &MessageBlock,
@@ -4349,7 +4405,7 @@ fn load_user_message_boundaries_page_internal(
             SurfaceOp::Append { message_id } => Some(message_id.clone()),
             SurfaceOp::Replace { .. } => None,
         };
-        apply_surface_op(&mut active, operation)?;
+        apply_surface_op(&mut active, &operation)?;
         if let Some(message_id) = appended_message_id
             && let Some(MessageBlock::User(user)) = ledger.get(&message_id)
             && user.kind == InboundKind::Message
@@ -4450,9 +4506,29 @@ fn reconstruct_surface(
     connection: &Connection,
     revision: SurfaceRevision,
 ) -> Result<Vec<MessageId>, ConversationStoreError> {
+    Ok(replay_surface_history(connection, revision)?.0)
+}
+
+/// Reads the retained operations through `revision`, validating the same
+/// contiguity, generation, and reference invariants a reconstruction does,
+/// and returns both the Surface they denote and the operations themselves.
+///
+/// The operations are the half a lineage copy needs: they are what a later
+/// fork or tree of the copy reads when it looks for its own branch points.
+fn load_surface_history(
+    connection: &Connection,
+    through: SurfaceRevision,
+) -> Result<Vec<SurfaceOp>, ConversationStoreError> {
+    Ok(replay_surface_history(connection, through)?.1)
+}
+
+fn replay_surface_history(
+    connection: &Connection,
+    revision: SurfaceRevision,
+) -> Result<(Vec<MessageId>, Vec<SurfaceOp>), ConversationStoreError> {
     let Some((head_revision, _, _)) = read_surface_head(connection)? else {
         if revision == SurfaceRevision::INITIAL {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
         return Err(ConversationStoreError::InvalidReference(format!(
             "Surface revision {revision} has no durable head"
@@ -4465,6 +4541,7 @@ fn reconstruct_surface(
         )));
     }
     let mut active = Vec::new();
+    let mut history = Vec::new();
     let mut statement = connection
         .prepare(
             "SELECT revision,compaction_generation,op_json
@@ -4507,7 +4584,8 @@ fn reconstruct_surface(
             ));
         }
         expected_generation = next_generation;
-        apply_surface_op(&mut active, operation)?;
+        apply_surface_op(&mut active, &operation)?;
+        history.push(operation);
         expected_revision = expected_revision
             .checked_add(1)
             .ok_or_else(|| storage("Surface revision is exhausted"))?;
@@ -4528,7 +4606,7 @@ fn reconstruct_surface(
             "Surface revision {revision} has a non-contiguous operation history"
         )));
     }
-    Ok(active)
+    Ok((active, history))
 }
 
 fn validate_surface_operation_references(
@@ -4581,43 +4659,16 @@ fn validate_surface_revision(
     Ok(())
 }
 
+/// The one definition of what a Surface operation means lives in
+/// `conversation::surface`; this is the durable domain's error wrapper for
+/// it, so a reconstruction here and a seed validation there can never
+/// disagree about the Surface an operation log denotes.
 fn apply_surface_op(
     active: &mut Vec<MessageId>,
-    operation: SurfaceOp,
+    operation: &SurfaceOp,
 ) -> Result<(), ConversationStoreError> {
-    match operation {
-        SurfaceOp::Append { message_id } => {
-            if active.contains(&message_id) {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "Surface Append repeats active message {message_id}"
-                )));
-            }
-            active.push(message_id);
-        }
-        SurfaceOp::Replace {
-            start,
-            end,
-            replacement,
-        } => {
-            let from = active.iter().position(|id| id == &start).ok_or_else(|| {
-                ConversationStoreError::InvalidReference(format!(
-                    "Surface Replace start {start} is not active"
-                ))
-            })?;
-            let to = active.iter().position(|id| id == &end).ok_or_else(|| {
-                ConversationStoreError::InvalidReference(format!(
-                    "Surface Replace end {end} is not active"
-                ))
-            })?;
-            if to < from || active.contains(&replacement) {
-                return Err(ConversationStoreError::InvalidReference(
-                    "Surface Replace has an invalid span or active replacement".to_owned(),
-                ));
-            }
-            active.splice(from..=to, [replacement]);
-        }
-    }
-    Ok(())
+    crate::conversation::apply_surface_op(active, operation)
+        .map_err(ConversationStoreError::InvalidReference)
 }
 
 fn span_indices(

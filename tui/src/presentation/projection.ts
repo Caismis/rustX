@@ -40,6 +40,7 @@ import {
   isHiddenContextMessage,
   validateTranscriptCursorContract,
 } from "../protocol/types.ts";
+import { parseSnapshot, publishedTodos } from "./todos.ts";
 import type {
   AttemptPresentation,
   PresentationState,
@@ -64,6 +65,7 @@ export function emptyPresentationState(
     capabilities: { revision: 0, tools: [], skills: [] },
     resources: { revision: 0, context_files: [], agent_profile: false },
     sessionModel,
+    todos: undefined,
     runtimeShutdown: false,
     effectiveApprovalMode: "policy",
     pendingApprovalMode: undefined,
@@ -149,6 +151,11 @@ export function replaceFromSnapshot(
       context_files: [],
       agent_profile: false,
     },
+    // The runtime derives the list from the whole Ledger, so this is the
+    // one repair path for it too: an attach, a resume, and a reload after
+    // compaction all open on exactly the list canonical history holds,
+    // however far back the last `todo` result now sits.
+    todos: parseSnapshot(snapshot.todos) ?? { tasks: [], next_id: 1 },
     sessionModel: snapshot.model,
     runtimeShutdown: snapshot.shutting_down,
     effectiveApprovalMode: snapshot.effective_approval_mode,
@@ -483,6 +490,13 @@ export function reduce(
         attemptId: event.attempt_id,
         message: event.message,
       });
+      // A committed `todo` result *is* the list moving, so the panel follows
+      // it live without waiting for the next snapshot — the same derivation
+      // the runtime runs over the same fact.
+      const todos = publishedTodos(event.message);
+      if (todos !== undefined) {
+        next.todos = todos;
+      }
       return next;
     }
 

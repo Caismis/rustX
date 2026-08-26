@@ -2618,12 +2618,45 @@ impl<'a> AgentExecution<'a> {
     /// the committed facts, in canonical call order. They are the only input
     /// of the tool-result observation pass, which runs strictly after this
     /// function returns and therefore cannot influence structural settlement.
-    #[allow(clippy::too_many_lines)] // one coherent scheduling/commit pipeline
+    /// Executes one batch and settles the conversation-owned task list with
+    /// it.
+    ///
+    /// A `todo` call mutates only *staged* list state
+    /// ([`crate::tools::todo::ConversationTodoList`]), owned by the
+    /// [`TodoBatch`] opened here and reachable only through the writer this
+    /// batch hands its own invocations. So the in-memory list is settled by
+    /// exactly the same event that makes the batch's snapshots durable: the
+    /// atomic `ToolResult` batch commit. What it installs is what *this*
+    /// batch's own canonical results published, never whatever happened to be
+    /// staged, and every other way out — a durable failure while announcing a
+    /// call, a rejected canonical append, a panic — drops the token and
+    /// discards the batch's provisional list. The authority a later rebuild
+    /// reads back from canonical history and the authority this process holds
+    /// therefore cannot disagree.
+    ///
+    /// The list refuses to hand out a second concurrent batch. A batch that
+    /// cannot open one runs without a writer: its `todo` calls settle as
+    /// ordinary rejected results and the list stays exactly where canonical
+    /// history left it. That is the correct failure — the alternative is a
+    /// batch mutating a list it cannot publish.
     async fn execute_tools(
         &mut self,
         calls: &[ToolCall],
         preflight: Vec<PreflightOutcome>,
     ) -> Result<Vec<SettledCall>, CanonicalCommitError> {
+        let batch = self.tool_runtime.todos().open_batch();
+        self.execute_tools_staged(calls, preflight, batch).await
+    }
+
+    /// The batch itself: schedule, settle, and commit every call.
+    #[allow(clippy::too_many_lines)] // one coherent scheduling/commit pipeline
+    async fn execute_tools_staged(
+        &mut self,
+        calls: &[ToolCall],
+        preflight: Vec<PreflightOutcome>,
+        todos: Option<crate::tools::todo::TodoBatch>,
+    ) -> Result<Vec<SettledCall>, CanonicalCommitError> {
+        let todo_writer = todos.as_ref().map(crate::tools::todo::TodoBatch::writer);
         let mut slots: Vec<CallSlot> = calls
             .iter()
             .cloned()
@@ -2687,7 +2720,9 @@ impl<'a> AgentExecution<'a> {
                             .expect("unsettled slots are preflighted")
                             .invocation
                             .clone();
-                        let (_, result, progress) = self.run_single_call(index, invocation).await;
+                        let (_, result, progress) = self
+                            .run_single_call(index, invocation, todo_writer.clone())
+                            .await;
                         slots[index].result = Some(result);
                         slots[index].progress = progress;
                     }
@@ -2731,9 +2766,11 @@ impl<'a> AgentExecution<'a> {
                                 .expect("unsettled slots are preflighted")
                                 .invocation
                                 .clone();
-                            futures.push(Box::pin(
-                                self.run_single_call(index + slot_index, invocation),
-                            ));
+                            futures.push(Box::pin(self.run_single_call(
+                                index + slot_index,
+                                invocation,
+                                todo_writer.clone(),
+                            )));
                         }
                     }
                     let mut remaining = futures.len();
@@ -2825,6 +2862,19 @@ impl<'a> AgentExecution<'a> {
             result_slots.push((batch_position, slot, result));
         }
         self.commit_tool_result_batch(&blocks)?;
+        // The batch is durable, so the snapshots its `todo` results carry
+        // are durable: this is the one point where the conversation's list
+        // may move, and it moves to exactly what these committed blocks
+        // published — never to a stage this batch did not write.
+        //
+        // Settling is the whole decision: the batch installs what its own
+        // committed results published, or moves nothing when they published
+        // none. There is no third outcome to branch on and no failure to
+        // report — a batch that reaches here still holds the list it opened,
+        // which is what makes `open_batch`'s exclusivity worth having.
+        if let Some(todos) = todos {
+            todos.settle(&blocks);
+        }
         let settled = result_slots
             .into_iter()
             .map(|(batch_position, slot, result)| SettledCall {
@@ -3155,9 +3205,13 @@ impl<'a> AgentExecution<'a> {
         &self,
         call_index: usize,
         invocation: ToolInvocation,
+        todos: Option<crate::tools::todo::TodoWriter>,
     ) -> (usize, ToolExecutionResult, Vec<RuntimeEvent>) {
         let (result, progress) = match invocation.mode {
-            ToolInvocationMode::Foreground => self.run_foreground(&invocation).await,
+            ToolInvocationMode::Foreground => self.run_foreground(&invocation, todos).await,
+            // A detached execution outlives this batch, so it is handed no
+            // task-list authority: nothing it does can land in the snapshot
+            // this batch is about to commit.
             ToolInvocationMode::Background => (self.dispatch_background(&invocation), Vec::new()),
         };
         (call_index, result, progress)
@@ -3186,6 +3240,7 @@ impl<'a> AgentExecution<'a> {
     async fn run_foreground(
         &self,
         invocation: &ToolInvocation,
+        todos: Option<crate::tools::todo::TodoWriter>,
     ) -> (ToolExecutionResult, Vec<RuntimeEvent>) {
         let executor = self.tool_registry().executor(&invocation.tool_id);
         let buffer =
@@ -3206,6 +3261,13 @@ impl<'a> AgentExecution<'a> {
             self.turn,
         ) {
             Some(requester) => context.with_questionnaire_requester(requester),
+            None => context,
+        };
+        // The task-list authority of *this* batch, named rather than
+        // ambient: an invocation that is not part of a batch never receives
+        // one, and therefore never writes provisional list state.
+        let context = match todos {
+            Some(todos) => context.with_todos(todos),
             None => context,
         };
         let future = executor.execute(invocation.clone(), context);

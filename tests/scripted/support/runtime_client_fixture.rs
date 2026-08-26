@@ -60,6 +60,7 @@ impl RuntimeClientFixture {
             replay_limit: None,
             composer: AgentStatusComposer::default(),
             initial_messages: Vec::new(),
+            durable_history: Vec::new(),
             workspace_fixtures: Vec::new(),
             mcp_servers: std::collections::BTreeMap::new(),
             native_tools: false,
@@ -109,6 +110,7 @@ pub struct RuntimeClientFixtureBuilder {
     composer: AgentStatusComposer,
     /// Pre-existing canonical history.
     initial_messages: Vec<MessageBlock>,
+    durable_history: Vec<MessageBlock>,
     /// Workspace content written before capability preparation.
     workspace_fixtures: Vec<WorkspaceFixture>,
     /// MCP servers the capability coordinator connects.
@@ -173,6 +175,19 @@ impl RuntimeClientFixtureBuilder {
 
     /// Seeds pre-existing canonical history.
     #[must_use]
+    /// Seeds the conversation's durable lineage *before* the tool runtime is
+    /// composed, exactly as reopening an existing conversation does.
+    ///
+    /// `initial_messages` alone is not the same thing: the tool runtime — and
+    /// with it the conversation's task list — is constructed over the store
+    /// before the runtime writes that bootstrap history, so a list rebuilt
+    /// from history needs the history to already be there.
+    pub fn durable_history(mut self, messages: Vec<MessageBlock>) -> Self {
+        self.durable_history = messages.clone();
+        self.initial_messages = messages;
+        self
+    }
+
     pub fn initial_messages(mut self, messages: Vec<MessageBlock>) -> Self {
         self.initial_messages = messages;
         self
@@ -233,6 +248,17 @@ impl RuntimeClientFixtureBuilder {
         std::fs::create_dir_all(&workspace_root).expect("workspace root");
         for write in self.workspace_fixtures {
             write(&workspace_root);
+        }
+        if !self.durable_history.is_empty() {
+            let artifacts = workspace.path().join("artifacts");
+            std::fs::create_dir_all(&artifacts).expect("artifact root");
+            let store = rustx::durable::SqliteConversationStore::open(
+                ConversationId::new(&self.conversation),
+                &artifacts.join("conversation.sqlite"),
+            )
+            .expect("durable lineage");
+            rustx::durable::ConversationStore::initialize(&store, &self.durable_history)
+                .expect("seed the durable lineage");
         }
         let tool_runtime = rustx::tools::runtime::ConversationToolRuntime::new(
             ConversationId::new(&self.conversation),

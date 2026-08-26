@@ -94,6 +94,7 @@ describe("command registry", () => {
         "/tree",
         "/tools",
         "/skills",
+        "/todos",
         "/status",
         "/compact",
         "/reload",

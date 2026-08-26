@@ -36,6 +36,7 @@ use crate::tools::schema::{
     EXECUTION_MODE_FIELD, SchemaError, compile_model_definition, resolve_invocation_metadata,
     validate_business_arguments, validate_canonical_schema, validate_execution_metadata_contract,
 };
+use crate::tools::todo::TodoWriter;
 use crate::tools::types::{
     ModelToolDefinition, ToolApprovalPolicy, ToolCall, ToolConcurrencyPolicy, ToolDefinition,
     ToolExecutionResult, ToolInvocation, ToolOrigin, ToolProgress,
@@ -109,6 +110,18 @@ pub struct ToolExecutionContext<'a> {
     /// [`ExecutionCancellation`], while the native `ask_user` path receives a
     /// runtime-bound requester through an internal construction seam.
     pub(crate) questionnaire_requester: Option<QuestionnaireRequester>,
+    /// The task-list authority of the `ToolResult` batch this invocation
+    /// belongs to, when it belongs to one.
+    ///
+    /// The conversation's task list is mutated by exactly the batch that
+    /// publishes the mutation, so the authority is attempt-bound rather than
+    /// registered: the Agent Loop opens one [`TodoBatch`] per batch and hands
+    /// its writer to that batch's invocations. An invocation with no writer —
+    /// a detached execution, a directly driven executor — cannot write
+    /// provisional list state at all.
+    ///
+    /// [`TodoBatch`]: crate::tools::todo::TodoBatch
+    pub(crate) todos: Option<TodoWriter>,
 }
 
 impl<'a> ToolExecutionContext<'a> {
@@ -137,7 +150,31 @@ impl<'a> ToolExecutionContext<'a> {
             tool_output,
             environment,
             questionnaire_requester: None,
+            todos: None,
         }
+    }
+
+    /// Binds this invocation to the task list of the `ToolResult` batch it
+    /// belongs to.
+    ///
+    /// Crate-private, exactly like the Questionnaire seam above. A
+    /// [`TodoWriter`] is reachable only from a
+    /// [`TodoBatch`](crate::tools::todo::TodoBatch), and a batch is the right
+    /// to *settle* the conversation's list — to assert that canonical history
+    /// already carries the list being installed. That assertion belongs to
+    /// the one place that commits the batch, so neither the writer nor the
+    /// seam that binds it leaves this crate.
+    #[must_use]
+    pub(crate) fn with_todos(mut self, todos: TodoWriter) -> Self {
+        self.todos = Some(todos);
+        self
+    }
+
+    /// Returns the batch-scoped task-list authority to the native `todo`
+    /// implementation. Crate-private for the same reason the tool itself is
+    /// native: no external executor mutates conversation-owned state.
+    pub(crate) fn todos(&self) -> Option<&TodoWriter> {
+        self.todos.as_ref()
     }
 
     /// Adds the one runtime-bound native Questionnaire requester.
@@ -1482,6 +1519,7 @@ mod tests {
             tool_output: &tool_output,
             environment: &ToolEnvironment::new(),
             questionnaire_requester: None,
+            todos: None,
         };
         let executor = registry.executor(&prepared.invocation.tool_id);
         let _result = executor

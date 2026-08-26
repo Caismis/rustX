@@ -94,6 +94,7 @@ fn default_tools() -> Vec<String> {
         "grep",
         "bash",
         "subagent",
+        "todo",
     ]
     .into_iter()
     .map(str::to_owned)
@@ -251,9 +252,9 @@ pub struct ContextPolicyDocument {
 /// The per-tool execution, concurrency, and approval policies of the native
 /// tool plane.
 ///
-/// The runtime intrinsics `background_task` and `ask_user` are deliberately
-/// outside this set: their fixed foreground-only, sequential, approval-never
-/// policies are enforced by the registry itself.
+/// `background_task`, `ask_user`, and `todo` are deliberately outside this
+/// set: they own fixed foreground-only, sequential, approval-never policies,
+/// and the registry enforces the intrinsic ones itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 pub struct NativeToolPoliciesDocument {

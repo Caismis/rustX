@@ -36,7 +36,9 @@ import {
   toolsByOrigin,
   unavailableInputModalities,
 } from "../presentation/selectors.ts";
+import { selectTodos } from "../presentation/todos.ts";
 import type { PresentationState } from "../presentation/state.ts";
+import { renderTodoInspection } from "../ui/components/todos.ts";
 import { COMMANDS, parseCommandLine } from "./registry.ts";
 import type {
   ApprovalDecision,
@@ -218,6 +220,8 @@ export class CommandDispatcher {
           return inspect("Tools", renderTools(state));
         case "/skills":
           return inspect("Skills", renderSkills(state));
+        case "/todos":
+          return inspect("Todos", renderTodoInspection(selectTodos(state)));
         case "/status":
           return inspect("Runtime status", renderStatus(state));
         case "/compact":

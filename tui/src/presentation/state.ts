@@ -42,6 +42,7 @@ import type {
   InteractionSubject,
   PublicationAudit,
   SessionModelView,
+  TodoSnapshot,
   ToolCallId,
   ToolId,
 } from "../protocol/types.ts";
@@ -165,6 +166,11 @@ export interface PresentationState {
   sessionModel: SessionModelView;
   /** True once runtime drain begins; shutdown responses complete at quiescence. */
   runtimeShutdown: boolean;
+  /**
+   * The conversation's task list, as the runtime derived it from canonical
+   * history. `undefined` only before the first snapshot arrives.
+   */
+  todos?: TodoSnapshot;
   /** Runtime-authoritative ApprovalMode control state. */
   effectiveApprovalMode: ApprovalMode;
   pendingApprovalMode?: ApprovalMode;

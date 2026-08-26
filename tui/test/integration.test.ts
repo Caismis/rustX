@@ -301,6 +301,7 @@ describe("real rustx child integration", { skip: SKIP }, () => {
       "/model show",
       "/tools",
       "/skills",
+      "/todos",
       "/status",
       "/debug",
     ]) {

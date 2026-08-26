@@ -568,6 +568,42 @@ const writeRenderer: ToolPresentationRenderer = {
 };
 
 /**
+ * The task list.
+ *
+ * Every settled `todo` result carries the complete list as structured JSON so
+ * the panel above the editor can be derived from it. Drawing that JSON in the
+ * transcript as well would print the whole plan twice on every call, so the
+ * card shows the runtime's own one-line summary of what the call did and
+ * leaves the list to the panel.
+ */
+const todoRenderer: ToolPresentationRenderer = {
+  renderCall(args) {
+    const fields = record(args);
+    const action = text(fields?.["action"]);
+    if (action === undefined) {
+      return undefined;
+    }
+    const id = count(fields?.["id"]);
+    const subject = text(fields?.["subject"]);
+    const status = text(fields?.["status"]);
+    const parts = [
+      id === undefined ? undefined : `#${id}`,
+      subject,
+      status === undefined ? undefined : `→ ${status}`,
+    ].filter((part): part is string => part !== undefined);
+    return {
+      title: "Todo",
+      subject: `${style.yellow(action)}${parts.length === 0 ? "" : ` ${parts.join(" ")}`}`,
+      detail: [],
+    };
+  },
+  renderResult(result, _args) {
+    const body = resultText(result);
+    return body.length === 0 ? undefined : { summary: body, detail: [] };
+  },
+};
+
+/**
  * The renderer registry.
  *
  * Small on purpose. A tool without an entry is not degraded — it renders
@@ -582,6 +618,7 @@ const RENDERERS: ReadonlyMap<ToolId, ToolPresentationRenderer> = new Map([
   ["tool-glob", globRenderer],
   ["tool-edit", editRenderer],
   ["tool-write", writeRenderer],
+  ["tool-todo", todoRenderer],
 ]);
 
 /** The renderer for one tool identity, or the generic one. */

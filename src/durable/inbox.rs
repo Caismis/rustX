@@ -13,7 +13,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::conversation::{SurfaceRevision, SurfaceSpan};
+use crate::conversation::{SurfaceOp, SurfaceRevision, SurfaceSpan};
 use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use crate::message::types::{
     InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
@@ -186,6 +186,193 @@ pub fn inbound_adoption_event(
         turn_id: None,
         timestamp: Utc::now(),
         event: RuntimeEvent::InboundTurnAdopted { message_ids },
+    }
+}
+
+/// The complete durable seed of one new conversation lineage.
+///
+/// A lineage is seeded with two distinguishable parts, because what a
+/// conversation durably *means*, what the model currently *sees*, and how it
+/// came to see that are not the same set of facts:
+///
+/// ```text
+/// canonical        the Ledger cut the destination inherits, in commit order
+/// surface history  the Surface operations that produced the destination's
+///                  Surface from that Ledger, in revision order
+/// ```
+///
+/// Compaction is what makes the two differ. It retires facts from the
+/// Surface while leaving them canonical, so a seed carrying only the Surface
+/// would silently drop every conversation-owned fact a compaction had
+/// already retired — and a copy of a compacted conversation would then mean
+/// something different from a copy of the same conversation taken one moment
+/// earlier.
+///
+/// The seed carries the *operations*, not merely the final active set, for
+/// the same reason one step further out. A final active set records which
+/// messages the Surface shows; it cannot record why. Seeding
+/// `[summary, C]` as two appends and seeding it as "append `C`, then replace
+/// the earlier span with `summary`" produce the same Surface and two
+/// different histories — and a fork or tree taken later *on the copy* reads
+/// that history, not the final set. Only the second reproduces the source's
+/// branch points, so only the second makes copying closed under the lineage
+/// operations that follow it: a fork of a copy at a copied boundary means
+/// what a fork of the source at the same boundary means.
+///
+/// A seed whose history is one `Append` per canonical message in Ledger
+/// order is the ordinary case ([`LineageSeed::history`]), and it is what
+/// every conversation that has never been compacted produces.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LineageSeed {
+    canonical: Vec<MessageBlock>,
+    surface_history: Vec<SurfaceOp>,
+    surface: Vec<MessageId>,
+}
+
+impl LineageSeed {
+    /// The seed of a lineage whose whole canonical history is also its
+    /// Surface: nothing was ever retired, so every operation is an append
+    /// and the two parts coincide.
+    #[must_use]
+    pub fn history(canonical: Vec<MessageBlock>) -> Self {
+        let surface: Vec<MessageId> = canonical
+            .iter()
+            .map(crate::conversation::message_id_of)
+            .collect();
+        let surface_history = surface
+            .iter()
+            .map(|message_id| SurfaceOp::Append {
+                message_id: message_id.clone(),
+            })
+            .collect();
+        Self {
+            canonical,
+            surface_history,
+            surface,
+        }
+    }
+
+    /// The seed of a lineage that inherits a Surface *history*, and so
+    /// inherits canonical facts its Surface no longer shows together with
+    /// the operations that retired them.
+    ///
+    /// The seed is checked against what durable transitions can actually
+    /// reach, not merely against what replays. Every transition that adds a
+    /// canonical row adds it together with the one Surface operation that
+    /// introduces it, inside one transaction: an ordinary commit appends the
+    /// message it committed, and a compaction appends its summary to the
+    /// Ledger and replaces a span with that same summary. So the two orders
+    /// this type carries are not independent — the canonical identities in
+    /// Ledger order are exactly the identities the history introduces in
+    /// revision order, one for one.
+    ///
+    /// Requiring that equality is what closes the two gaps a replay check
+    /// alone leaves open. A canonical row no operation ever introduces
+    /// replays fine and is still unreachable: it would be a conversation-owned
+    /// fact with no Surface provenance at all, invisible to the history the
+    /// destination's own forks read, yet fully visible to everything that
+    /// rebuilds state from canonical history — the task list included. And a
+    /// Ledger ordered against its own history replays fine too, while
+    /// recording commits in an order no sequence of transitions produced.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConversationStoreError::InvalidReference`] when the history
+    /// names an identity `canonical` does not carry, does not replay against
+    /// an initially empty Surface, replaces a span with a message that is not
+    /// a `User(Runtime / CompactionSummary)`, or introduces identities that
+    /// are not the seeded Ledger in its own order. None is a state any
+    /// sequence of durable transitions could reach, and a store that accepted
+    /// one would hold a Surface history it could never reconstruct.
+    pub fn replayed(
+        canonical: Vec<MessageBlock>,
+        surface_history: Vec<SurfaceOp>,
+    ) -> Result<Self, ConversationStoreError> {
+        let known: std::collections::BTreeMap<MessageId, &MessageBlock> = canonical
+            .iter()
+            .map(|message| (crate::conversation::message_id_of(message), message))
+            .collect();
+        let mut surface: Vec<MessageId> = Vec::new();
+        for operation in &surface_history {
+            for id in operation.message_ids() {
+                if !known.contains_key(id) {
+                    return Err(ConversationStoreError::InvalidReference(format!(
+                        "the seeded Surface history names {id}, which the seeded Ledger does \
+                         not carry"
+                    )));
+                }
+            }
+            if let SurfaceOp::Replace { replacement, .. } = operation {
+                let is_summary = matches!(
+                    known.get(replacement),
+                    Some(MessageBlock::User(user))
+                        if user.source == UserSource::Runtime
+                            && user.kind == InboundKind::CompactionSummary
+                );
+                if !is_summary {
+                    return Err(ConversationStoreError::InvalidReference(format!(
+                        "the seeded Surface Replace replacement {replacement} is not a \
+                         User(Runtime / CompactionSummary) message"
+                    )));
+                }
+            }
+            crate::conversation::apply_surface_op(&mut surface, operation)
+                .map_err(ConversationStoreError::InvalidReference)?;
+        }
+        // The provenance pairing: one operation per canonical row, in the
+        // Ledger's own order.
+        let introduced: Vec<&MessageId> =
+            surface_history.iter().map(SurfaceOp::introduces).collect();
+        let committed: Vec<MessageId> = canonical
+            .iter()
+            .map(crate::conversation::message_id_of)
+            .collect();
+        if introduced.len() != committed.len()
+            || introduced
+                .iter()
+                .zip(&committed)
+                .any(|(introduced, committed)| *introduced != committed)
+        {
+            let render = |ids: &[&MessageId]| {
+                ids.iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "the seeded Surface history introduces [{}], which is not the seeded \
+                 Ledger [{}] in commit order; a reachable lineage introduces each \
+                 canonical row with exactly one operation, in the order the Ledger \
+                 carries it",
+                render(&introduced),
+                render(&committed.iter().collect::<Vec<_>>())
+            )));
+        }
+        Ok(Self {
+            canonical,
+            surface_history,
+            surface,
+        })
+    }
+
+    /// The seeded Ledger cut, in canonical commit order.
+    #[must_use]
+    pub fn canonical(&self) -> &[MessageBlock] {
+        &self.canonical
+    }
+
+    /// The seeded Surface operation history, in revision order. Replaying it
+    /// from an empty Surface yields [`Self::surface`].
+    #[must_use]
+    pub fn surface_history(&self) -> &[SurfaceOp] {
+        &self.surface_history
+    }
+
+    /// The Surface the seeded history denotes, in Surface order. Always a
+    /// subset of [`Self::canonical`].
+    #[must_use]
+    pub fn surface(&self) -> &[MessageId] {
+        &self.surface
     }
 }
 
@@ -753,25 +940,52 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// Returns [`ConversationStoreError::Storage`] on a backend read failure.
     fn load_pending(&self) -> Result<Vec<PendingInboundItem>, ConversationStoreError>;
 
-    /// Initializes the durable Ledger and Surface from one immutable bootstrap
-    /// history and establishes its exact immutable bootstrap identity.
-    /// Reopening verifies the original identity instead of inferring it from
-    /// current rows. The first call atomically commits the initial messages
-    /// and the identity; every later call must re-supply the exact original
-    /// history. An explicitly empty initial history is valid and remains
-    /// distinguishable from an uninitialized store.
+    /// Initializes the durable Ledger and Surface from one immutable
+    /// [`LineageSeed`] and establishes its exact immutable bootstrap
+    /// identity. Reopening verifies the original identity instead of
+    /// inferring it from current rows. The first call atomically commits the
+    /// seed and the identity; every later call must re-supply the exact
+    /// original canonical history. An explicitly empty seed is valid and
+    /// remains distinguishable from an uninitialized store.
+    ///
+    /// The seed's two parts are written to their two durable homes: every
+    /// canonical message becomes a Ledger row in the given order, and the
+    /// seed's Surface history becomes this lineage's own retained operation
+    /// log, replayed from revision 1. A canonical fact the seed's history
+    /// retires is therefore inherited exactly as a compaction leaves it in
+    /// the source — durable, readable, not model-visible, and still carrying
+    /// the operation that retired it, so this lineage's own historical
+    /// branch points are the ones its source had.
     ///
     /// # Errors
     ///
     /// Returns [`ConversationStoreError::InitialHistoryMismatch`] when the
-    /// re-supplied history differs, and [`ConversationStoreError::Storage`]
-    /// when the initialization transaction fails or a canonical Ledger exists
-    /// without its bootstrap identity.
-    fn initialize(&self, messages: &[MessageBlock]) -> Result<(), ConversationStoreError>;
+    /// re-supplied canonical history differs, and
+    /// [`ConversationStoreError::Storage`] when the initialization
+    /// transaction fails or a canonical Ledger exists without its bootstrap
+    /// identity.
+    fn initialize_lineage(&self, seed: &LineageSeed) -> Result<(), ConversationStoreError>;
+
+    /// Initializes a lineage whose whole canonical history is also its
+    /// Surface.
+    ///
+    /// This is the shape every uncompacted bootstrap has, and it is what a
+    /// store opened over a fresh conversation re-supplies on every reopen.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`ConversationStore::initialize_lineage`].
+    fn initialize(&self, messages: &[MessageBlock]) -> Result<(), ConversationStoreError> {
+        self.initialize_lineage(&LineageSeed::history(messages.to_vec()))
+    }
 
     /// Loads the immutable bootstrap history originally supplied to
-    /// [`ConversationStore::initialize`]. Reopening a lineage must validate
-    /// against this prefix, not against its later canonical transcript.
+    /// [`ConversationStore::initialize_lineage`] — its canonical part, which
+    /// is the half the bootstrap identity is taken over. Reopening a lineage
+    /// must validate against this prefix, not against its later canonical
+    /// transcript, and not against the Surface projection the seed also
+    /// carried: that projection is durable state the store already holds, so
+    /// a reopen has nothing to re-supply and nothing to contradict.
     fn load_bootstrap_history(&self) -> Result<Vec<MessageBlock>, ConversationStoreError> {
         self.load_canonical()
     }
@@ -783,6 +997,24 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// Resolves the requested `MessageIds` through keyed Ledger reads.
     fn load_messages(&self, ids: &[MessageId])
     -> Result<Vec<MessageBlock>, ConversationStoreError>;
+
+    /// Reads the retained Surface operations through `through`, in revision
+    /// order, exactly as they were committed.
+    ///
+    /// This is the provenance half of a lineage copy. A Surface snapshot says
+    /// which messages are active; this says how they became active, which is
+    /// what a later fork or tree of the copy reads when it looks for its own
+    /// branch points. See [`LineageSeed`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConversationStoreError::InvalidReference`] when `through` is
+    /// not a retained revision, and [`ConversationStoreError::Storage`] on a
+    /// backend read failure.
+    fn load_surface_history(
+        &self,
+        through: SurfaceRevision,
+    ) -> Result<Vec<SurfaceOp>, ConversationStoreError>;
 
     /// Reconstructs one exact historical Surface revision from immutable
     /// Surface operations.

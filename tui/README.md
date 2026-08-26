@@ -161,6 +161,8 @@ compact footer carries the durable Session metadata and live status instead.
 | `runtime/attachment.ts` | attach, snapshot install, subscribe, resync repair, shutdown | agent/session semantics |
 | `presentation/projection.ts` | the ephemeral render cache and bounded transcript page | canonical history, authority of any kind |
 | `presentation/tools.ts` | the `ToolCallId` correlation used for display | tool lifecycle, which it only reads |
+| `presentation/todos.ts` | reading the runtime's task-list projection and folding newly committed `todo` results into it | task identity, status, and dependencies, which the runtime owns |
+| `sanitize.ts` | the one rule for what externally-derived text may be handed to a terminal | what any of that text *means* |
 | `commands/` | slash-command parsing, dispatch to canonical operations | parallel runtime semantics |
 | `ui/components/` | the semantic presentation grammar | every fact it displays |
 | `ui/preferences.ts` | reasoning visibility and expanded cards | anything the runtime owns |
@@ -178,6 +180,7 @@ surfaces are Runtime Client facts or canonical conversation history.
 | **Picker** | Existing focused selectors and approval interactions remain overlays with their existing selection and focus semantics. |
 | **Transient** | One current item, owned by the app. New feedback replaces old feedback; any input acknowledges it, and attachment/session replacement clears it. Producers keep the payload compact enough for the three-line bound; a defensive overflow is marked explicitly, and no wall-clock timer is used. |
 | **Local scrollback** | Deliberately not implemented. These client events have no honest interleaving point with runtime conversation history, so they use the finite transient surface instead of a second local event store. |
+| **Task panel** | The task list the runtime published, drawn between the conversation and the editor because it answers a question the reader has while typing the next message. It is derived from the runtime's own snapshot projection and the committed `todo` results observed since, holds no state of its own, is bounded so a long plan cannot push the conversation off screen, and disappears entirely when the list is empty. Task text is sanitized before it is drawn, so one task is always one physical row and no model-written escape sequence reaches the terminal. |
 | **Preference** | Reasoning visibility and expansion choices stay in client display preferences and never become runtime messages. |
 | **Control** | Canonical commands still go through the Runtime Client. Their short acknowledgement is transient; runtime status and settlement remain authoritative runtime projection. |
 | **Quit** | Shutdown is a control intent. Lifecycle failures are committed in a final Pi frame before the TUI stops, and are never turned into fake transcript messages. |
@@ -186,7 +189,7 @@ The command-to-surface classification is:
 
 | Command | Final surface |
 | --- | --- |
-| `/help`, `/session`, `/tools`, `/skills`, `/status`, `/debug` | inspection |
+| `/help`, `/session`, `/tools`, `/skills`, `/todos`, `/status`, `/debug` | inspection |
 | `/model show` | inspection |
 | `/model` and `/model list` | picker; the selection result is transient |
 | `/resume` | picker; a direct session id is a control operation with transient result |
@@ -272,6 +275,8 @@ does not implement a parallel Session system.
 - `/tools` — show the runtime-published Active Tools and the Available but
   inactive Tools separately.
 - `/skills` — show the active Skill catalog.
+- `/todos` — print the complete task list the agent is tracking, grouped by
+  status. The panel above the editor shows the same list, bounded.
 - `/status` — show the runtime-composed Agent Status and diagnostics.
 
 ### Control and presentation
@@ -298,7 +303,8 @@ Each either renders projection state, changes a client display preference, or
 invokes exactly one canonical Runtime Client operation. `/model` opens the
 searchable selector over `model_catalog_get` and applies a choice through
 `model_set`, while `/model show` renders the projection's own model view;
-`/tools` and `/skills` read the capability projection; `/status` prints the
+`/tools`, `/skills`, and `/todos` read the projection the client already
+holds; `/status` prints the
 runtime's own Agent Status rendering; `/compact` invokes one
 `compact_context` operation and waits for its durable terminal result;
 `/debug` shows bounded diagnostics and

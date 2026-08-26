@@ -1817,6 +1817,11 @@ impl RuntimeInner {
         // live projection fact. Installing the observer here means all later
         // pending/settled transitions enter the one observation queue.
         let pending_interactions = self.interaction.pending_snapshot();
+        // The list is not a live subsystem with an observer of its own: it
+        // is a derivation of canonical tool results, and it moves only when
+        // one of those commits. Reading the committed list inside the same
+        // freeze keeps the seed and the live stream on one cut.
+        let todos = self.tool_runtime.todo_snapshot();
         self.interaction.install_observer(observer.clone());
         // ---- T1: the mailbox (frozen: an inactive conversation refuses
         //          inbound) ----
@@ -1860,6 +1865,7 @@ impl RuntimeInner {
             background,
             subagents,
             pending_interactions,
+            todos,
             capabilities,
             capability_availability,
             resources,
@@ -4060,6 +4066,27 @@ impl ConversationRuntime {
         self.inner.store.load_surface_snapshot(revision)
     }
 
+    /// Reads the retained Surface operations through the selected revision,
+    /// in revision order.
+    ///
+    /// This is the third part of a lineage copy. A Surface snapshot says what
+    /// the model can see and the canonical history says what the conversation
+    /// is; this says how the one became the other. A copy that dropped it
+    /// would show the right Surface over a history that never happened, and
+    /// the copy's *own* fork and tree boundaries are read out of that history
+    /// — see [`crate::durable::LineageSeed`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the durable store error when the selected revision is not
+    /// retained or its operation history cannot be read.
+    pub fn historical_surface_history(
+        &self,
+        through: SurfaceRevision,
+    ) -> Result<Vec<crate::conversation::SurfaceOp>, ConversationStoreError> {
+        self.inner.store.load_surface_history(through)
+    }
+
     /// Reads the first retained Surface revision for each ordinary inbound
     /// user message through the selected revision. This is the native Session
     /// boundary read and avoids replaying and materializing every revision.
@@ -4109,6 +4136,30 @@ impl ConversationRuntime {
         let head = self.inner.store.load_head()?;
         let messages = self.inner.store.load_surface_snapshot(head.revision)?;
         Ok((head.revision, messages))
+    }
+
+    /// Reads this conversation's complete durable canonical history, in
+    /// Ledger commit order.
+    ///
+    /// This is the other half of a lineage copy. A Surface snapshot says what
+    /// the model can currently see; this says what the conversation durably
+    /// *is*, retired facts included. The two differ exactly when a compaction
+    /// has run, and a copy that carried only the first half would inherit a
+    /// compacted conversation's meaning and an uncompacted one's meaning
+    /// differently — see [`crate::durable::LineageSeed`].
+    ///
+    /// The read races nothing it needs: every canonical row is immutable once
+    /// committed, and the caller cuts this history at the exact Surface
+    /// revision it selected, so facts committed afterwards are excluded by
+    /// the cut rather than by the timing of this read.
+    ///
+    /// # Errors
+    ///
+    /// Returns the durable store error when canonical history cannot be read.
+    pub fn historical_canonical_history(
+        &self,
+    ) -> Result<Vec<MessageBlock>, ConversationStoreError> {
+        self.inner.store.load_canonical()
     }
 
     /// Reconstructs one retained provider-neutral request from its durable
@@ -4343,6 +4394,14 @@ pub(crate) struct RuntimeBootstrapSnapshot {
     pub resources: Arc<crate::runtime::resources::RuntimeResourceSnapshot>,
     /// Live process-owned native interactions at the bootstrap cut.
     pub pending_interactions: Vec<crate::runtime::interaction::InteractionRequest>,
+    /// The conversation's committed task list at the cut.
+    ///
+    /// The tool runtime rebuilt it from the whole canonical history at
+    /// construction, so seeding it here is what lets a client that holds
+    /// only the newest transcript page still show the current list. Every
+    /// later change arrives as an ordinary committed `todo` result on the
+    /// live observation stream.
+    pub todos: crate::tools::todo::TodoSnapshot,
 }
 
 /// The accepted identity of one submitted inbound message.

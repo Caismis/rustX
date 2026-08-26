@@ -334,6 +334,7 @@ mod tests {
                     tool_output: &tool_output,
                     environment: &environment,
                     questionnaire_requester: None,
+                    todos: None,
                 },
             )
         };

@@ -4,7 +4,8 @@
 //! validating [`ToolRegistry`], the [`ToolExecutor`] boundary, the JSON
 //! Schema validation and the model-facing schema compiler, the workspace
 //! boundary, the managed tool-output store, the artifact store, the explicit
-//! tool environment, and the conversation-owned background registry. Native,
+//! tool environment, the conversation-owned background registry, and the
+//! conversation-owned task list. Native,
 //! MCP, and Python executor implementations share exactly this contract.
 //! Native Read/Write/Edit/Grep/Glob use the workspace root as their cwd and
 //! accept ordinary absolute host paths. The locator remains the runtime's
@@ -24,6 +25,7 @@ pub(crate) mod output;
 pub mod python;
 pub mod runtime;
 pub mod schema;
+pub mod todo;
 pub mod types;
 pub mod workspace;
 
@@ -51,6 +53,17 @@ pub use schema::{
     is_reserved_property, resolve_invocation_metadata, validate_business_arguments,
     validate_canonical_schema, validate_execution_metadata_contract,
 };
+// The task list is split at the authority boundary rather than exported as
+// one surface. What a consumer may hold is the *derived* list and the rules
+// for reading one out of canonical history; what mutates or settles it is
+// the Agent Loop's, because settlement is the claim that the Ledger already
+// carries the list being installed, and nothing outside the loop can make
+// that claim truthfully.
+pub use todo::{
+    TODO_TOOL_ID, TodoRebuildError, TodoSnapshot, TodoSnapshotError, TodoStatus, TodoTask,
+    forbidden_control, metadata_control, published_snapshot,
+};
+
 pub use types::{
     ManagedOutputContinuation, ModelToolDefinition, ToolApprovalPolicy, ToolCall, ToolCallStart,
     ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,

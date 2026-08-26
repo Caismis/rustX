@@ -2658,6 +2658,7 @@ mod mcp_race_tests {
                 tool_output: runtime_bundle.tool_output(),
                 environment: runtime_bundle.environment(),
                 questionnaire_requester: None,
+                todos: None,
             },
         )
         .await;

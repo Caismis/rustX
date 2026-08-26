@@ -21,7 +21,7 @@ use rustx::tools::types::{
 };
 use std::sync::Arc;
 
-const NATIVE_TOOL_NAMES: [&str; 8] = [
+const NATIVE_TOOL_NAMES: [&str; 9] = [
     "read",
     "write",
     "edit",
@@ -30,6 +30,7 @@ const NATIVE_TOOL_NAMES: [&str; 8] = [
     "bash",
     "background_task",
     "ask_user",
+    "todo",
 ];
 
 fn definition(fixture: &common::NativeFixture, name: &str) -> rustx::tools::types::ToolDefinition {

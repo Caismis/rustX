@@ -860,12 +860,19 @@ runtime/subagent/          SubagentRegistry (conversation-owned one-shot
                            task as sole process owner, cancel/escalation,
                            exactly-once terminal publication), the bounded
                            framed control IPC, and process supervision
+tools/todo.rs              ConversationTodoList: the conversation-owned task
+                           list (id allocation, status machine, blocked_by
+                           graph validation), staged per ToolResult batch
+                           and rebuilt at construction from the newest
+                           snapshot the conversation's own canonical
+                           `todo` results committed
 tools/runtime.rs           ConversationToolRuntime: the per-conversation
-                           bundle of workspace, artifacts, environment, and
-                           background registry handed to AgentExecution
+                           bundle of workspace, artifacts, environment,
+                           background registry, and task list handed to
+                           AgentExecution
 tools/native/             the native tool plane: one module per native
                            capability (read/, write/, edit/, glob/, grep/,
-                           bash/, background_task/), each owning its name,
+                           bash/, background_task/, todo/), each owning its name,
                            description, typed input contract, generated
                            schema, executor, and private helpers;
                            registration.rs owns the NativeToolRegistration
@@ -1955,6 +1962,70 @@ point, a cancel-vs-completion linearization rule, bounded latest progress
 snapshots, and exactly-once terminal inbound mailbox publication
 (`background-exec_N-terminal`). The `background_task` intrinsic
 (foreground-only, sequential) provides `status` and idempotent `cancel`.
+
+The bundle also owns the conversation's `ConversationTodoList`: the task
+list the native `todo` tool mutates. It is deliberately *not* a second
+persistence path. Every settled `todo` call publishes the complete
+post-call snapshot as the structured content of its own canonical tool
+result, so the durable record of the list is ordinary conversation
+history; `ConversationToolRuntime` construction rebuilds the list by
+taking the newest such snapshot from the canonical Ledger, and a rejected
+call publishes nothing because it mutated nothing. A list therefore
+survives a process restart, a Session resume, and a compaction exactly as
+far as the conversation history that carries it does — and survives a
+Session clone, fork, and tree branch because a lineage copy copies that
+canonical history and the Surface operations that project it, not only
+the current projection (see *A lineage copy is a copy of the conversation,
+not of its Surface* in `docs/invariants.md`, and `durable::LineageSeed`).
+
+That is only true while the in-memory list cannot run ahead of the
+Ledger, so a `todo` call writes *staged* state owned by a `TodoBatch`
+the Agent Loop opens before the batch runs. Settling installs what that
+batch's own canonical results published — not whatever is staged — so a
+stage nothing committed can be discarded but never promoted, and a batch
+always starts from the committed authority rather than inheriting one.
+Later calls of one batch read what earlier ones staged; dropping the
+token, which is what every non-commit exit does, discards them.
+
+The batch is the *only* mutation authority, and it is exclusive. A second
+`open_batch` is refused while one is open, because silently replacing the
+running batch would leave it committing results and then settling a list
+it no longer owned. Mutations are made through the `TodoWriter` that
+batch hands its own invocations — the `todo` executor holds no list and
+receives the writer per invocation, the way `ask_user` receives its
+Questionnaire requester — so a dispatch outside the Agent Loop is refused
+as an ordinary failed ToolResult rather than staging a list some other
+batch would publish, and one batch's stage is unreadable to every other.
+Settlement reports only what the batch meant — the list became what its
+committed results published, or it did not move — because a live batch *is*
+the open batch, so "the list was taken away" is not an outcome a caller has
+to branch on.
+
+None of that authority is exported. The list, the batch, the writer, and
+the context seam that binds a writer to an invocation are crate-private,
+because settling a batch asserts that canonical history already carries
+the list being installed and only the loop that commits the batch can
+assert it. The published surface is the derived list —
+`ConversationToolRuntime::todo_snapshot` and
+`RuntimeClientSnapshot.todos` — plus the rules for reading a list out of
+canonical history (`published_snapshot`, `TodoSnapshot::validate`).
+
+Every mutation is also checked against the rule a rebuild applies before
+it is staged, so the authority cannot publish a list it could not read
+back, and a rebuild that finds the newest committed result unusable fails
+construction rather than adopting an older, already superseded list.
+
+The runtime runs the same derivation over the whole Ledger and carries
+the result in `RuntimeClientSnapshot.todos`, so a reference client
+reconstructs the list from the runtime's own projection plus the
+committed results it observes live — never by scanning the bounded
+transcript page it happens to hold, and without any client-side task
+state. The tool is fixed foreground-only, sequential,
+approval-never: one list cannot be mutated by a detached execution, two
+concurrent mutations would publish racing snapshots, and there is nothing
+in a task list for a human to approve. A subagent child composes the
+read-only `explore` profile and has no `todo` registration at all, so
+session isolation of the list is structural rather than a check.
 
 The dispatch ownership commit is the background linearization point: the
 registry synchronization boundary is acquired first and the final

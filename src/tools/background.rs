@@ -1828,6 +1828,10 @@ impl ConversationBackgroundRegistry {
                 tool_output: &resources.tool_output,
                 environment: &environment,
                 questionnaire_requester: None,
+                // A detached execution belongs to no `ToolResult` batch, so
+                // it carries no task-list authority: it cannot stage a list
+                // that some later batch would commit as its own.
+                todos: None,
             };
             let result = executor.execute(invocation, context).await;
             registry.settle_terminal(&execution_id, &result);
@@ -3625,6 +3629,7 @@ mod tests {
                     tool_output: &tool_output,
                     environment: &ToolEnvironment::new(),
                     questionnaire_requester: None,
+                    todos: None,
                 },
             )
             .await;
@@ -3666,6 +3671,7 @@ mod tests {
                     tool_output: &tool_output,
                     environment: &ToolEnvironment::new(),
                     questionnaire_requester: None,
+                    todos: None,
                 },
             )
             .await;
