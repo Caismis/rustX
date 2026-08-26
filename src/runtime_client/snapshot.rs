@@ -41,6 +41,7 @@ use crate::runtime::inbound::InboundSequence;
 use crate::runtime::interaction::InteractionRequest;
 use crate::runtime::types::{ApprovalMode, TokenMeasurement};
 use crate::tools::background::BackgroundLifecycle;
+use crate::tools::todo::TodoSnapshot;
 use crate::tools::types::{
     ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionResult, ToolOrigin, ToolProgress,
     ToolReplayPolicy,
@@ -150,6 +151,28 @@ pub struct RuntimeClientSnapshot {
     /// No credential, adapter object, provider HTTP client, or
     /// synchronization identity appears here.
     pub model: SessionModelView,
+    /// The conversation's task list, as of the newest committed `todo`
+    /// result.
+    ///
+    /// This is a **projection of canonical history, not a second
+    /// authority**: the runtime derives it from exactly the tool results the
+    /// Ledger holds, the same fact the runtime's own
+    /// [`ConversationTodoList`] is rebuilt from, so the two can never
+    /// disagree.
+    ///
+    /// It is carried here rather than left for a client to scan out of the
+    /// transcript because a client holds only a bounded newest page of that
+    /// transcript. A conversation that committed a page or more of messages
+    /// after its last `todo` result would otherwise attach with no list at
+    /// all, and would appear to have none until the reader happened to page
+    /// far enough back — while the runtime, reading the whole Ledger, still
+    /// had one.
+    ///
+    /// A conversation that never called `todo` carries the empty list.
+    ///
+    /// [`ConversationTodoList`]: crate::tools::todo::ConversationTodoList
+    #[serde(default)]
+    pub todos: TodoSnapshot,
 }
 
 /// One bounded newest-or-older page of derived transcript history.

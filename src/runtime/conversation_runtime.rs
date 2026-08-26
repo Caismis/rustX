@@ -1817,6 +1817,11 @@ impl RuntimeInner {
         // live projection fact. Installing the observer here means all later
         // pending/settled transitions enter the one observation queue.
         let pending_interactions = self.interaction.pending_snapshot();
+        // The list is not a live subsystem with an observer of its own: it
+        // is a derivation of canonical tool results, and it moves only when
+        // one of those commits. Reading the committed list inside the same
+        // freeze keeps the seed and the live stream on one cut.
+        let todos = self.tool_runtime.todos().committed();
         self.interaction.install_observer(observer.clone());
         // ---- T1: the mailbox (frozen: an inactive conversation refuses
         //          inbound) ----
@@ -1860,6 +1865,7 @@ impl RuntimeInner {
             background,
             subagents,
             pending_interactions,
+            todos,
             capabilities,
             capability_availability,
             resources,
@@ -4343,6 +4349,14 @@ pub(crate) struct RuntimeBootstrapSnapshot {
     pub resources: Arc<crate::runtime::resources::RuntimeResourceSnapshot>,
     /// Live process-owned native interactions at the bootstrap cut.
     pub pending_interactions: Vec<crate::runtime::interaction::InteractionRequest>,
+    /// The conversation's committed task list at the cut.
+    ///
+    /// The tool runtime rebuilt it from the whole canonical history at
+    /// construction, so seeding it here is what lets a client that holds
+    /// only the newest transcript page still show the current list. Every
+    /// later change arrives as an ordinary committed `todo` result on the
+    /// live observation stream.
+    pub todos: crate::tools::todo::TodoSnapshot,
 }
 
 /// The accepted identity of one submitted inbound message.

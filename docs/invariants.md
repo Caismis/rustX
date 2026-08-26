@@ -567,9 +567,11 @@ unavailability remain distinct runtime/tool outcomes.
 ### The conversation task list and `todo`
 
 `todo` is one ordinary foreground, sequential, approval-never Tool over the
-conversation-owned `ConversationTodoList`. Task ids are conversation-unique
-and allocated in creation order from `next_id`; a rejected call allocates
-nothing. Status transitions are `pending <-> in_progress`, either to
+conversation-owned `ConversationTodoList`. Task ids are allocated in creation
+order from `next_id` and are unique within the current list generation;
+`clear` resets the allocator, so an id names one task for as long as the list
+it belongs to lives, not for as long as the conversation does. A rejected call
+allocates nothing. Status transitions are `pending <-> in_progress`, either to
 `completed`, and any status to `deleted`; `completed` may only become
 `deleted`, and `deleted` is terminal. A transition to the current status is
 accepted and reported as a no-op. `delete` tombstones a task and never
@@ -583,19 +585,47 @@ tombstoned id, a self-block, and an edge that would close a cycle in the
 exactly as it was. Reverse `blocks` edges are derived from the other tasks'
 `blocked_by` sets and never stored.
 
+Task text is the one place model output reaches a terminal unescaped, so the
+tool's input contract rejects control characters in `subject`, `active_form`,
+`owner`, and `description` — the C0 and C1 ranges, `DEL`, and the Unicode bidi
+controls — before any list state is touched. `description` is long-form prose
+that no bounded row draws and keeps line breaks; nothing else may contain one.
+A single-line field is therefore one physical client row, and no escape
+sequence a model wrote can reach a terminal.
+
 Every *settled* call publishes the complete post-call snapshot as the
 structured content of its own canonical tool result; a rejected call is an
 ordinary failed ToolResult carrying the specific reason and publishes no
 snapshot. That published snapshot is the only durable record of the list:
-`ConversationToolRuntime` construction rebuilds the list from the last such
-snapshot in canonical history, so a restart, a Session resume, and a
+`ConversationToolRuntime` construction rebuilds the list from the **newest**
+such snapshot in canonical history, so a restart, a Session resume, and a
 compaction preserve exactly what the conversation still carries. There is no
 sidecar file, no separate durability path, and no migration. A subagent child
 registers no `todo` tool, so a child can neither read nor overwrite its
 parent's list.
 
-The TUI derives its task panel and `/todos` from the same canonical fact by
-the runtime's own `ToolId`, never by tool name or JSON shape, and stores no
+That equivalence requires the in-memory list never to run ahead of the Ledger,
+so a `todo` call mutates *staged* state and the Agent Loop installs it at the
+one atomic `ToolResult` batch commit. Later calls of the same batch read what
+earlier ones staged; every exit that is not that commit discards the staged
+list. A batch that never becomes canonical therefore leaves the list exactly
+as canonical history describes it, and an executor driven outside the Agent
+Loop moves no authority at all.
+
+The rebuild fails closed. A newest successful `todo` result whose payload is
+missing, undecodable, or violates the list's own invariants — a duplicate or
+unallocated id, a blank subject, a dangling, self-referential, or cyclic
+dependency, a control character in a text field — refuses construction rather
+than reaching back to an older snapshot, which would revive tasks the
+conversation has already completed, tombstoned, or cleared.
+
+The runtime derives the same list over the whole Ledger and carries it in
+`RuntimeClientSnapshot.todos`; a client renders that projection and folds each
+newly committed `todo` result into it. A client must not scan its own
+transcript for the list, because it holds only a bounded newest page: a
+conversation that committed a page or more of messages since its last `todo`
+result would otherwise appear to have no list at all. The TUI keys the fold on
+the runtime's own `ToolId`, never on tool name or JSON shape, and stores no
 task state of its own: a fresh authoritative snapshot reproduces the panel
 exactly. The panel is bounded and drops completed rows before unfinished ones,
 always naming what it hid; `/todos` prints the complete list.

@@ -2618,8 +2618,33 @@ impl<'a> AgentExecution<'a> {
     /// the committed facts, in canonical call order. They are the only input
     /// of the tool-result observation pass, which runs strictly after this
     /// function returns and therefore cannot influence structural settlement.
-    #[allow(clippy::too_many_lines)] // one coherent scheduling/commit pipeline
+    /// Executes one batch and settles the conversation-owned task list with
+    /// it.
+    ///
+    /// A `todo` call mutates only *staged* list state
+    /// ([`crate::tools::todo::ConversationTodoList`]), so the in-memory list
+    /// is settled by exactly the same event that makes the batch's snapshots
+    /// durable: the atomic `ToolResult` batch commit. Every other way out of
+    /// the batch — a durable failure while announcing a call, a rejected
+    /// canonical append, cancellation that still commits — discards the
+    /// staged list here, so the authority a later rebuild reads back from
+    /// canonical history and the authority this process holds can never
+    /// disagree.
     async fn execute_tools(
+        &mut self,
+        calls: &[ToolCall],
+        preflight: Vec<PreflightOutcome>,
+    ) -> Result<Vec<SettledCall>, CanonicalCommitError> {
+        let settled = self.execute_tools_staged(calls, preflight).await;
+        if settled.is_err() {
+            self.tool_runtime.todos().discard_staged();
+        }
+        settled
+    }
+
+    /// The batch itself: schedule, settle, and commit every call.
+    #[allow(clippy::too_many_lines)] // one coherent scheduling/commit pipeline
+    async fn execute_tools_staged(
         &mut self,
         calls: &[ToolCall],
         preflight: Vec<PreflightOutcome>,
@@ -2825,6 +2850,10 @@ impl<'a> AgentExecution<'a> {
             result_slots.push((batch_position, slot, result));
         }
         self.commit_tool_result_batch(&blocks)?;
+        // The batch is durable, so the snapshots its `todo` results carry
+        // are durable: this is the one point where the conversation's list
+        // may move, and it moves to exactly what canonical history now says.
+        self.tool_runtime.todos().commit_staged();
         let settled = result_slots
             .into_iter()
             .map(|(batch_position, slot, result)| SettledCall {

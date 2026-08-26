@@ -232,6 +232,7 @@ impl RuntimeClientProjection {
                 capabilities: initial_capabilities,
                 resources: super::snapshot::RuntimeClientResourcesView::default(),
                 model: initial_model,
+                todos: crate::tools::todo::TodoSnapshot::empty(),
             },
             replay: VecDeque::new(),
             replay_limit,
@@ -297,6 +298,7 @@ impl RuntimeClientProjection {
             upsert_subagent(&mut self.snapshot.subagents, subagent_view(existing));
         }
         self.snapshot.resources = resources_view(&seed.resources);
+        self.snapshot.todos = seed.todos.clone();
         // An inactive runtime has never admitted an attempt, composed an
         // Agent Status, or compacted, so `attempt`, `status`, and
         // `context` keep their empty initial values by construction.
@@ -341,6 +343,15 @@ impl RuntimeClientProjection {
                     && let Some(attempt) = &mut self.snapshot.attempt
                 {
                     attempt.in_flight = None;
+                }
+                // The task list is derived from canonical results, exactly
+                // as the runtime's own list is: a committed `todo` result
+                // *is* the list moving. A result whose payload does not
+                // decode is left out rather than allowed to replace a good
+                // list with a broken one — the runtime writes these, so an
+                // undecodable one is a defect, not a list.
+                if let Some(Ok(todos)) = crate::tools::todo::published_snapshot(&block) {
+                    self.snapshot.todos = todos;
                 }
                 self.snapshot.messages.push(block.clone());
                 vec![RuntimeClientEvent::MessageCommitted {

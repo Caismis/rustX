@@ -282,6 +282,83 @@ async fn tombstones_are_hidden_from_the_list_but_never_removed() {
     assert_eq!(summary(&empty), "No tasks");
 }
 
+/// Task text is drawn by a terminal client, so the tool is where model
+/// output stops being arbitrary bytes: a control character is rejected at
+/// the input contract, before any list state is touched.
+#[tokio::test]
+async fn text_a_terminal_row_cannot_hold_is_rejected_before_anything_is_written() {
+    let fixture = native_fixture();
+    let spoofed = run_tool(
+        &fixture,
+        "todo",
+        serde_json::json!({ "action": "create", "subject": "safe\nspoofed" }),
+    )
+    .await;
+    assert_eq!(
+        error(&spoofed),
+        "subject may not contain the control character U+000A, and it is one line",
+    );
+    assert_eq!(
+        fixture.runtime.todos().snapshot(),
+        TodoSnapshot::empty(),
+        "a rejected call writes nothing at all"
+    );
+
+    for (field, value) in [
+        ("subject", "\u{1b}[31mred"),
+        ("active_form", "writing\tfast"),
+        ("owner", "me\r"),
+        ("subject", "ship\u{202e}suofegnad"),
+    ] {
+        let rejected = run_tool(
+            &fixture,
+            "todo",
+            serde_json::json!({ "action": "create", "subject": "Ship", field: value }),
+        )
+        .await;
+        assert!(
+            error(&rejected).starts_with(&format!("{field} may not contain the control character")),
+            "{field}: {}",
+            error(&rejected)
+        );
+    }
+
+    // The one long-form field keeps its line breaks, and nothing else.
+    let described = run_tool(
+        &fixture,
+        "todo",
+        serde_json::json!({
+            "action": "create",
+            "subject": "Ship",
+            "description": "first\nsecond",
+        }),
+    )
+    .await;
+    assert_eq!(described.status, ToolExecutionStatus::Success);
+}
+
+/// The tool mutates only provisional state: the conversation's authority
+/// moves where the Agent Loop commits the batch, never inside an executor.
+/// A registry-driven call — this fixture, or any caller holding the public
+/// executor — therefore publishes a snapshot without ever moving the list a
+/// restart would rebuild.
+#[tokio::test]
+async fn an_executor_driven_call_publishes_a_list_without_moving_the_authority() {
+    let fixture = native_fixture();
+    let created = create(&fixture, "Write the parser").await;
+    assert_eq!(published(&created).tasks.len(), 1);
+    assert_eq!(
+        fixture.runtime.todos().committed(),
+        TodoSnapshot::empty(),
+        "nothing canonical was published, so the authority did not move"
+    );
+    assert!(fixture.runtime.todos().has_staged());
+
+    fixture.runtime.todos().discard_staged();
+    assert!(!fixture.runtime.todos().has_staged());
+    assert_eq!(fixture.runtime.todos().snapshot(), TodoSnapshot::empty());
+}
+
 /// A new tool runtime over existing conversation history opens on the list
 /// that history last committed — the property that makes the list survive a
 /// restart, a resume, and a compaction without any storage of its own.

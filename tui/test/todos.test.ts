@@ -1,22 +1,28 @@
 /**
  * The task list, derived and drawn.
  *
- * The panel is a pure function of the transcript, so every case here builds
- * canonical tool results and asserts what the reader sees. Nothing in the
- * client stores a task, and nothing here simulates one.
+ * The panel is a pure function of the runtime's own derivation of canonical
+ * `todo` results — the snapshot carries it, and a committed result moves it.
+ * Every case here drives one of those two paths and asserts what the reader
+ * sees. Nothing in the client stores a task, and nothing here simulates one.
  */
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { COMMANDS } from "../src/commands/registry.ts";
-import { emptyPresentationState } from "../src/presentation/projection.ts";
+import {
+  emptyPresentationState,
+  reduce,
+  replaceFromSnapshot,
+} from "../src/presentation/projection.ts";
 import type { PresentationState } from "../src/presentation/state.ts";
 import {
   TODO_TOOL_ID,
   type TodoSnapshot,
   type TodoTask,
   progress,
+  sanitize,
   selectTodos,
 } from "../src/presentation/todos.ts";
 import type { MessageBlock, ToolExecutionResult } from "../src/protocol/types.ts";
@@ -27,7 +33,10 @@ import {
   renderTodoPanel,
 } from "../src/ui/components/todos.ts";
 import {
+  assistantMessage,
+  runtimeCursor,
   sessionModel,
+  snapshot as clientSnapshot,
   toolMessage,
   toolResult,
   transcriptCursor,
@@ -50,54 +59,103 @@ function todoResult(snapshot: TodoSnapshot, summary = "Updated #1"): ToolExecuti
   });
 }
 
-function stateWith(...messages: MessageBlock[]): PresentationState {
-  const state = emptyPresentationState(sessionModel("alpha/model-a"));
-  state.transcript = messages.map((message, index) => ({
-    kind: "committed" as const,
-    key: `entry-${index}`,
-    messageId: message.id,
-    cursor: transcriptCursor(index),
-    message,
-  }));
-  return state;
+/** The state a client holds after attaching to `todos`, with `messages` loaded. */
+function attached(
+  todos: TodoSnapshot | undefined,
+  messages: MessageBlock[] = [],
+): PresentationState {
+  return replaceFromSnapshot(
+    clientSnapshot({ messages, todos }),
+    runtimeCursor(1),
+  );
+}
+
+/** One committed message, folded through the real reducer. */
+function committed(
+  state: PresentationState,
+  message: MessageBlock,
+  cursor: number,
+): PresentationState {
+  return reduce(state, {
+    cursor: runtimeCursor(cursor),
+    event: {
+      type: "message_committed",
+      message,
+      transcript_cursor: transcriptCursor(cursor),
+    },
+  });
 }
 
 describe("the derived task list", () => {
-  it("is the newest list any settled todo result published", () => {
-    const first = snapshotOf([task(1, "Write the parser")]);
+  it("is the list the runtime derived, whatever the loaded transcript holds", () => {
     const latest = snapshotOf([
       task(1, "Write the parser", { status: "completed" }),
       task(2, "Write the tests", { status: "in_progress" }),
     ]);
-    const state = stateWith(
-      toolMessage("m1", "c1", TODO_TOOL_ID, todoResult(first)),
+    assert.deepEqual(selectTodos(attached(latest)), latest);
+    assert.deepEqual(progress(latest), { done: 1, total: 2 });
+  });
+
+  /**
+   * The regression the transcript scan could not survive.
+   *
+   * A client is seeded with a bounded newest page of transcript. Once enough
+   * messages commit after the last `todo` result, that result is no longer on
+   * the page — and a client that derived the list by scanning what it holds
+   * showed no list at all, while the runtime still had one.
+   */
+  it("survives a fresh attach whose transcript page has scrolled past the result", () => {
+    const list = snapshotOf([task(1, "Write the parser", { status: "in_progress" })]);
+    const since = Array.from({ length: 65 }, (_, index) =>
+      assistantMessage(`message-${index}`, `after ${index}`),
+    );
+    const state = attached(list, since);
+    assert.ok(
+      !state.transcript.some(
+        (entry) => entry.kind === "committed" && entry.message.role === "tool",
+      ),
+      "the page really does not contain the todo result any more",
+    );
+    assert.deepEqual(selectTodos(state), list, "the runtime's list is still the list");
+  });
+
+  it("follows a committed todo result live", () => {
+    const first = snapshotOf([task(1, "Write the parser")]);
+    const latest = snapshotOf([
+      task(1, "Write the parser", { status: "completed" }),
+      task(2, "Write the tests"),
+    ]);
+    let state = attached(first);
+    state = committed(
+      state,
       toolMessage("m2", "c2", TODO_TOOL_ID, todoResult(latest)),
+      2,
     );
     assert.deepEqual(selectTodos(state), latest);
-    assert.deepEqual(progress(latest), { done: 1, total: 2 });
   });
 
   it("ignores results of other tools and rejected todo calls", () => {
     const published = snapshotOf([task(1, "Write the parser")]);
-    const rejected = toolMessage(
-      "m3",
-      "c3",
-      TODO_TOOL_ID,
-      toolResult({
-        status: { type: "failed", error: "#9 not found" },
-        content: [],
-      }),
+    let state = attached(published);
+    state = committed(
+      state,
+      toolMessage(
+        "m2",
+        "c2",
+        "tool-bash",
+        todoResult(snapshotOf([task(7, "Not a task list")])),
+      ),
+      2,
     );
-    const otherTool = toolMessage(
-      "m2",
-      "c2",
-      "tool-bash",
-      todoResult(snapshotOf([task(7, "Not a task list")])),
-    );
-    const state = stateWith(
-      toolMessage("m1", "c1", TODO_TOOL_ID, todoResult(published)),
-      otherTool,
-      rejected,
+    state = committed(
+      state,
+      toolMessage(
+        "m3",
+        "c3",
+        TODO_TOOL_ID,
+        toolResult({ status: { type: "failed", error: "#9 not found" }, content: [] }),
+      ),
+      3,
     );
     assert.deepEqual(
       selectTodos(state),
@@ -106,23 +164,111 @@ describe("the derived task list", () => {
     );
   });
 
-  it("ignores a malformed payload instead of drawing it", () => {
-    const state = stateWith(
+  it("keeps the good list when a payload is malformed", () => {
+    const published = snapshotOf([task(1, "Write the parser")]);
+    let state = attached(published);
+    state = committed(
+      state,
       toolMessage(
-        "m1",
-        "c1",
+        "m2",
+        "c2",
         TODO_TOOL_ID,
         toolResult({
           content: [{ type: "json", value: { tasks: [{ id: "one" }], next_id: 2 } }],
         }),
       ),
+      2,
     );
-    assert.equal(selectTodos(state), undefined);
+    assert.deepEqual(
+      selectTodos(state),
+      published,
+      "an undrawable payload is ignored, never promoted over a good list",
+    );
+    assert.deepEqual(
+      selectTodos(attached(undefined)),
+      { tasks: [], next_id: 1 },
+      "a snapshot that carries no list at all is the empty list, not a guess",
+    );
   });
 
-  it("is absent, not empty, when the conversation never used the tool", () => {
-    assert.equal(selectTodos(stateWith()), undefined);
+  it("is empty, not absent, when the conversation never used the tool", () => {
+    assert.deepEqual(selectTodos(attached({ tasks: [], next_id: 1 })), {
+      tasks: [],
+      next_id: 1,
+    });
+    assert.equal(
+      selectTodos(emptyPresentationState(sessionModel("alpha/model-a"))),
+      undefined,
+      "only a client that has not attached yet has no list",
+    );
     assert.equal(selectTodos(undefined), undefined);
+  });
+});
+
+describe("task text a terminal must not be handed", () => {
+  const ESC = String.fromCharCode(27);
+
+  it("keeps every field to one line, whatever the payload says", () => {
+    const state = attached({
+      tasks: [
+        {
+          id: 1,
+          subject: `safe${String.fromCharCode(10)}spoofed`,
+          status: "in_progress",
+          active_form: `writing${String.fromCharCode(9)}fast`,
+          owner: `me${String.fromCharCode(13)}`,
+        },
+      ],
+      next_id: 2,
+    });
+    const list = selectTodos(state);
+    const subject = list?.tasks[0]?.subject ?? "";
+    assert.ok(!/[\n\r\t]/.test(subject), subject);
+    assert.ok(!/[\n\r\t]/.test(list?.tasks[0]?.active_form ?? ""));
+    assert.ok(!/[\n\r\t]/.test(list?.tasks[0]?.owner ?? ""));
+  });
+
+  it("bounds the panel in physical rows, not in tasks", () => {
+    const tasks = Array.from({ length: 6 }, (_, index) =>
+      task(index + 1, `line${String.fromCharCode(10)}break ${index}`),
+    );
+    const state = attached({ tasks, next_id: 7 });
+    const panel = renderTodoPanel(selectTodos(state), { columns: 80, rows: 3 });
+    assert.equal(
+      plainText(panel).split(String.fromCharCode(10)).length,
+      3,
+      "a newline in a subject cannot buy a task a second row",
+    );
+  });
+
+  it("never lets an escape sequence through to the terminal", () => {
+    const state = attached({
+      tasks: [
+        {
+          id: 1,
+          subject: `${ESC}[31mred${ESC}[0m${ESC}]0;retitled${String.fromCharCode(7)}`,
+          status: "pending",
+        },
+      ],
+      next_id: 2,
+    });
+    const panel = renderTodoPanel(selectTodos(state), { columns: 80 });
+    assert.ok(!plainText(panel).includes(ESC), "no ESC survives sanitization");
+    assert.equal(
+      sanitize(`a${ESC}b`),
+      `a${String.fromCharCode(0xfffd)}b`,
+      "a removed character leaves a visible mark rather than vanishing",
+    );
+  });
+
+  it("strips bidi controls that would reverse what the reader sees", () => {
+    const RLO = String.fromCharCode(0x202e);
+    assert.equal(sanitize(`ship${RLO}dangerous`), `ship${String.fromCharCode(0xfffd)}dangerous`);
+  });
+
+  it("keeps line breaks in the one long-form field", () => {
+    const paragraph = `first${String.fromCharCode(10)}second`;
+    assert.equal(sanitize(paragraph, true), paragraph);
   });
 });
 

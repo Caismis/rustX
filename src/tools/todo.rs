@@ -35,6 +35,27 @@
 //! tool plane. A subagent child composes the read-only `explore` profile and
 //! has no `todo` registration at all, so a child can neither read nor
 //! overwrite its parent's list — the isolation is structural, not a check.
+//!
+//! # A mutation is provisional until its own result is durable
+//!
+//! Publishing the snapshot as a canonical tool result is what makes the
+//! result the list's only durable record — which is only true if the
+//! in-memory list never runs ahead of it. A mutation therefore writes a
+//! *staged* list, not the authority:
+//!
+//! ```text
+//! todo call        -> staged   (later calls of the same batch read it)
+//! batch committed  -> staged becomes committed
+//! batch failed     -> staged is dropped, committed is untouched
+//! ```
+//!
+//! The Agent Loop owns both endings: it installs the staged list exactly
+//! where the whole `ToolResult` batch became canonical, and discards it on
+//! every other exit. So a batch that fails to commit — a durable failure, a
+//! rejected append, a poisoned attempt — leaves the conversation's list
+//! exactly as canonical history describes it, and an executor driven
+//! outside that loop mutates nothing that anyone can observe as the
+//! authority.
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -102,8 +123,13 @@ impl core::fmt::Display for TodoStatus {
 
 /// One task of the conversation's list.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TodoTask {
-    /// The conversation-unique task id.
+    /// The task id, unique within the current list generation.
+    ///
+    /// `clear` resets the allocator, so an id names one task for as long as
+    /// the list it belongs to lives — not for as long as the conversation
+    /// does.
     pub id: u64,
     /// The imperative one-line subject.
     pub subject: String,
@@ -127,17 +153,188 @@ pub struct TodoTask {
     pub metadata: Option<BTreeMap<String, serde_json::Value>>,
 }
 
+impl TodoTask {
+    /// Every model-written text field, with whether it may span lines.
+    ///
+    /// The single-line fields are the ones a client draws as one row of a
+    /// bounded panel; `description` is long-form prose that only the
+    /// model-facing `get` reply ever renders.
+    fn text_fields(&self) -> impl Iterator<Item = (&'static str, &str, bool)> {
+        [
+            Some(("subject", self.subject.as_str(), false)),
+            self.active_form
+                .as_deref()
+                .map(|value| ("active_form", value, false)),
+            self.owner.as_deref().map(|value| ("owner", value, false)),
+            self.description
+                .as_deref()
+                .map(|value| ("description", value, true)),
+        ]
+        .into_iter()
+        .flatten()
+    }
+}
+
+/// The first character of `value` that a task text field may not carry, if
+/// any.
+///
+/// The list is written by a model and drawn by a terminal client, so the
+/// text of a task is the one place where model output reaches a terminal
+/// unescaped. Two distinct hazards live in the same character classes and
+/// are refused together:
+///
+/// - **layout**: a newline, a carriage return, or a tab makes one task
+///   occupy more than the one physical row a bounded panel budgeted for it,
+///   so enough of them push the conversation off the screen no matter what
+///   the panel's row budget says;
+/// - **control**: `ESC`-introduced CSI/OSC sequences, the C1 range, and the
+///   bidi overrides can repaint colours, move the cursor, retitle the
+///   window, or reverse the reading order of text around them.
+///
+/// `multiline` keeps `\n` legal for the one field whose whole purpose is
+/// long-form prose, and it never reaches a bounded panel row.
+#[must_use]
+pub fn forbidden_control(value: &str, multiline: bool) -> Option<char> {
+    value.chars().find(|character| {
+        if multiline && *character == '\n' {
+            return false;
+        }
+        character.is_control()
+            || matches!(character,
+                '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+    })
+}
+
+/// A published list that no sequence of mutations could have produced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TodoSnapshotError {
+    /// The id allocator cannot name a task.
+    UnusableAllocator,
+    /// Two tasks share one id.
+    DuplicateId(u64),
+    /// A task carries an id the allocator never handed out.
+    UnallocatedId {
+        /// The task's id.
+        id: u64,
+        /// The allocator's next id.
+        next_id: u64,
+    },
+    /// A task has no subject.
+    BlankSubject(u64),
+    /// A text field carries a character a client may not draw.
+    ControlCharacter {
+        /// The task that carries it.
+        id: u64,
+        /// The field that carries it.
+        field: &'static str,
+        /// The offending scalar value.
+        codepoint: u32,
+    },
+    /// A task waits on itself.
+    SelfBlock(u64),
+    /// A task waits on an id no task carries.
+    UnknownDependency {
+        /// The waiting task.
+        id: u64,
+        /// The id it waits on.
+        blocker: u64,
+    },
+    /// A dependency set is not the ascending, deduplicated form every
+    /// mutation writes.
+    UnnormalizedDependencies(u64),
+    /// The dependency graph contains a cycle through this task.
+    DependencyCycle(u64),
+}
+
+impl core::fmt::Display for TodoSnapshotError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::UnusableAllocator => write!(f, "next_id 0 can never name a task"),
+            Self::DuplicateId(id) => write!(f, "#{id} appears twice"),
+            Self::UnallocatedId { id, next_id } => {
+                write!(f, "#{id} was never allocated (next_id is {next_id})")
+            }
+            Self::BlankSubject(id) => write!(f, "#{id} has no subject"),
+            Self::ControlCharacter {
+                id,
+                field,
+                codepoint,
+            } => write!(
+                f,
+                "#{id} {field} carries the control character U+{codepoint:04X}"
+            ),
+            Self::SelfBlock(id) => write!(f, "#{id} waits on itself"),
+            Self::UnknownDependency { id, blocker } => {
+                write!(f, "#{id} waits on #{blocker}, which no task carries")
+            }
+            Self::UnnormalizedDependencies(id) => {
+                write!(f, "#{id} blocked_by is not ascending and deduplicated")
+            }
+            Self::DependencyCycle(id) => write!(f, "#{id} closes a cycle in the blocked_by graph"),
+        }
+    }
+}
+
+impl std::error::Error for TodoSnapshotError {}
+
+/// Why a conversation's list could not be rebuilt from its own history.
+///
+/// Every variant describes the **newest** successful `todo` result, which
+/// is the only record that can be the list. Rebuilding never falls back to
+/// an older snapshot: an older one is a list the conversation has already
+/// moved on from, so adopting it would resurrect tasks that were completed,
+/// tombstoned, or cleared. Refusing is the only answer that cannot silently
+/// serve a false list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TodoRebuildError {
+    /// The result settled successfully but published no structured list.
+    Missing,
+    /// The published list could not be decoded.
+    Undecodable(String),
+    /// The published list decoded but violates the list's own invariants.
+    Invalid(TodoSnapshotError),
+}
+
+impl core::fmt::Display for TodoRebuildError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "the newest committed todo result does not carry a usable list: "
+        )?;
+        match self {
+            Self::Missing => write!(f, "it published no structured list"),
+            Self::Undecodable(error) => write!(f, "{error}"),
+            Self::Invalid(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for TodoRebuildError {}
+
 /// The complete state of one conversation's list.
 ///
 /// This is the persistence format: it is what a successful mutation
 /// publishes, and it is what [`ConversationTodoList::rebuilt`] reads back.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TodoSnapshot {
     /// Every task, tombstones included, in creation order.
     #[serde(default)]
     pub tasks: Vec<TodoTask>,
     /// The id the next created task will receive.
     pub next_id: u64,
+}
+
+/// The default list is the *empty* list, allocator included.
+///
+/// Deriving this would produce `next_id: 0`, which is not a list any
+/// mutation could ever have produced: the first created task would take id
+/// `0` and the second would take `1`, so a defaulted list and a real one
+/// would not even name tasks the same way.
+impl Default for TodoSnapshot {
+    fn default() -> Self {
+        Self::empty()
+    }
 }
 
 impl TodoSnapshot {
@@ -148,6 +345,67 @@ impl TodoSnapshot {
             tasks: Vec::new(),
             next_id: 1,
         }
+    }
+
+    /// Checks every invariant a list produced by these mutations holds.
+    ///
+    /// Decoding proves the *shape* of a published snapshot; this proves its
+    /// *meaning*. It is what a rebuild runs before adopting a snapshot from
+    /// canonical history, so a record that no sequence of mutations could
+    /// have produced is refused rather than served as the conversation's
+    /// list.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first violated invariant.
+    pub fn validate(&self) -> Result<(), TodoSnapshotError> {
+        if self.next_id == 0 {
+            return Err(TodoSnapshotError::UnusableAllocator);
+        }
+        let mut seen = HashSet::with_capacity(self.tasks.len());
+        for task in &self.tasks {
+            if !seen.insert(task.id) {
+                return Err(TodoSnapshotError::DuplicateId(task.id));
+            }
+            if task.id == 0 || task.id >= self.next_id {
+                return Err(TodoSnapshotError::UnallocatedId {
+                    id: task.id,
+                    next_id: self.next_id,
+                });
+            }
+            if task.subject.trim().is_empty() {
+                return Err(TodoSnapshotError::BlankSubject(task.id));
+            }
+            for (field, value, multiline) in task.text_fields() {
+                if let Some(character) = forbidden_control(value, multiline) {
+                    return Err(TodoSnapshotError::ControlCharacter {
+                        id: task.id,
+                        field,
+                        codepoint: character as u32,
+                    });
+                }
+            }
+        }
+        for task in &self.tasks {
+            for blocker in &task.blocked_by {
+                if *blocker == task.id {
+                    return Err(TodoSnapshotError::SelfBlock(task.id));
+                }
+                if !seen.contains(blocker) {
+                    return Err(TodoSnapshotError::UnknownDependency {
+                        id: task.id,
+                        blocker: *blocker,
+                    });
+                }
+            }
+            if task.blocked_by.windows(2).any(|pair| pair[0] >= pair[1]) {
+                return Err(TodoSnapshotError::UnnormalizedDependencies(task.id));
+            }
+            if closes_cycle(self, task) {
+                return Err(TodoSnapshotError::DependencyCycle(task.id));
+            }
+        }
+        Ok(())
     }
 
     /// The task with `id`, tombstones included.
@@ -342,7 +600,24 @@ pub struct TodoUpdate {
 #[derive(Clone)]
 pub struct ConversationTodoList {
     conversation_id: ConversationId,
-    inner: Arc<Mutex<TodoSnapshot>>,
+    inner: Arc<Mutex<TodoListState>>,
+}
+
+/// The committed list and the provisional one built on top of it.
+///
+/// `staged` is `None` exactly when nothing is in flight, so the common case
+/// costs no clone and the authority is never a copy of itself.
+#[derive(Debug)]
+struct TodoListState {
+    committed: TodoSnapshot,
+    staged: Option<TodoSnapshot>,
+}
+
+impl TodoListState {
+    /// The list every read and every mutation of an in-flight batch sees.
+    fn working(&self) -> &TodoSnapshot {
+        self.staged.as_ref().unwrap_or(&self.committed)
+    }
 }
 
 impl core::fmt::Debug for ConversationTodoList {
@@ -357,27 +632,47 @@ impl ConversationTodoList {
     /// Creates the empty list of one conversation.
     #[must_use]
     pub fn new(conversation_id: ConversationId) -> Self {
+        Self::over(conversation_id, TodoSnapshot::empty())
+    }
+
+    /// Creates the list of one conversation over an already committed
+    /// snapshot, with nothing staged.
+    #[must_use]
+    pub fn over(conversation_id: ConversationId, committed: TodoSnapshot) -> Self {
         Self {
             conversation_id,
-            inner: Arc::new(Mutex::new(TodoSnapshot::empty())),
+            inner: Arc::new(Mutex::new(TodoListState {
+                committed,
+                staged: None,
+            })),
         }
     }
 
     /// Rebuilds one conversation's list from its canonical history.
     ///
-    /// The last snapshot a successful `todo` result ever committed *is* the
-    /// list: later results supersede earlier ones completely, so replaying
-    /// the whole history is unnecessary and a partially reconstructed list
-    /// is impossible. History that contains no such result yields the empty
-    /// list, which is exactly what a conversation that never tracked tasks
-    /// should have.
-    #[must_use]
-    pub fn rebuilt(conversation_id: ConversationId, history: &[MessageBlock]) -> Self {
-        let snapshot = last_snapshot(history).unwrap_or_else(TodoSnapshot::empty);
-        Self {
-            conversation_id,
-            inner: Arc::new(Mutex::new(snapshot)),
-        }
+    /// The snapshot the **newest** successful `todo` result published *is*
+    /// the list: later results supersede earlier ones completely, so
+    /// replaying the whole history is unnecessary and a partially
+    /// reconstructed list is impossible. History that contains no such
+    /// result yields the empty list, which is exactly what a conversation
+    /// that never tracked tasks should have.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TodoRebuildError`] when that newest result carries no
+    /// usable list. The rebuild fails closed rather than reaching further
+    /// back: an older snapshot is a list this conversation has already
+    /// superseded, and adopting it would revive tasks that were completed,
+    /// tombstoned, or cleared.
+    pub fn rebuilt(
+        conversation_id: ConversationId,
+        history: &[MessageBlock],
+    ) -> Result<Self, TodoRebuildError> {
+        let committed = match last_snapshot(history) {
+            Some(result) => result?,
+            None => TodoSnapshot::empty(),
+        };
+        Ok(Self::over(conversation_id, committed))
     }
 
     /// The conversation this list belongs to.
@@ -386,10 +681,46 @@ impl ConversationTodoList {
         &self.conversation_id
     }
 
-    /// The current complete state.
+    /// The list every `todo` call of the current batch sees: the committed
+    /// list plus whatever that batch has staged on top of it.
+    ///
+    /// This is deliberately the *working* list rather than the authority,
+    /// so a second `todo` call in one batch reads what the first one did.
+    /// Readers that need the conversation's durable truth — a client
+    /// projection, a bootstrap seed — use [`Self::committed`].
     #[must_use]
     pub fn snapshot(&self) -> TodoSnapshot {
-        self.state().clone()
+        self.state().working().clone()
+    }
+
+    /// The authoritative list: exactly what canonical history committed.
+    #[must_use]
+    pub fn committed(&self) -> TodoSnapshot {
+        self.state().committed.clone()
+    }
+
+    /// Whether a batch has staged mutations that have not committed yet.
+    #[must_use]
+    pub fn has_staged(&self) -> bool {
+        self.state().staged.is_some()
+    }
+
+    /// Installs the staged list as the conversation's authority.
+    ///
+    /// Called by the Agent Loop at the one point the whole `ToolResult`
+    /// batch became canonical — which is the point the snapshots those
+    /// results carry became durable. A batch that staged nothing moves
+    /// nothing.
+    pub fn commit_staged(&self) {
+        let mut state = self.state();
+        if let Some(staged) = state.staged.take() {
+            state.committed = staged;
+        }
+    }
+
+    /// Drops every staged mutation, leaving the committed list untouched.
+    pub fn discard_staged(&self) {
+        self.state().staged = None;
     }
 
     /// Adds one task in `pending` and returns it with the new snapshot.
@@ -405,12 +736,13 @@ impl ConversationTodoList {
             return Err(TodoMutationError::BlankSubject);
         }
         let mut state = self.state();
+        let mut next = state.working().clone();
         let blocked_by = normalize_ids(spec.blocked_by);
         for id in &blocked_by {
-            check_dependency(&state, "blocked_by", *id)?;
+            check_dependency(&next, "blocked_by", *id)?;
         }
         let task = TodoTask {
-            id: state.next_id,
+            id: next.next_id,
             subject,
             description: spec.description,
             active_form: spec.active_form,
@@ -419,9 +751,10 @@ impl ConversationTodoList {
             owner: spec.owner,
             metadata: spec.metadata.filter(|metadata| !metadata.is_empty()),
         };
-        state.next_id = state.next_id.saturating_add(1);
-        state.tasks.push(task.clone());
-        Ok((task, state.clone()))
+        next.next_id = next.next_id.saturating_add(1);
+        next.tasks.push(task.clone());
+        state.staged = Some(next.clone());
+        Ok((task, next))
     }
 
     /// Applies one patch to one task.
@@ -441,12 +774,13 @@ impl ConversationTodoList {
             return Err(TodoMutationError::EmptyUpdate);
         }
         let mut state = self.state();
-        let position = state
+        let mut next = state.working().clone();
+        let position = next
             .tasks
             .iter()
             .position(|task| task.id == id)
             .ok_or(TodoMutationError::UnknownTask(id))?;
-        let current = state.tasks[position].clone();
+        let current = next.tasks[position].clone();
 
         let mut updated = current.clone();
         if let Some(status) = change.status {
@@ -477,7 +811,7 @@ impl ConversationTodoList {
             if *added == id {
                 return Err(TodoMutationError::SelfBlock(id));
             }
-            check_dependency(&state, "add_blocked_by", *added)?;
+            check_dependency(&next, "add_blocked_by", *added)?;
         }
         let mut blocked_by: Vec<u64> = updated
             .blocked_by
@@ -488,20 +822,21 @@ impl ConversationTodoList {
             .collect();
         blocked_by = normalize_ids(blocked_by);
         updated.blocked_by = blocked_by;
-        if !change.add_blocked_by.is_empty() && closes_cycle(&state, &updated) {
+        if !change.add_blocked_by.is_empty() && closes_cycle(&next, &updated) {
             return Err(TodoMutationError::DependencyCycle);
         }
 
         let unchanged = updated == current;
         let previous_status = (updated.status != current.status).then_some(current.status);
-        state.tasks[position] = updated.clone();
+        next.tasks[position] = updated.clone();
+        state.staged = Some(next.clone());
         Ok((
             TodoUpdate {
                 task: updated,
                 previous_status,
                 unchanged,
             },
-            state.clone(),
+            next,
         ))
     }
 
@@ -516,17 +851,19 @@ impl ConversationTodoList {
     /// already tombstoned.
     pub fn delete(&self, id: u64) -> Result<(TodoTask, TodoSnapshot), TodoMutationError> {
         let mut state = self.state();
-        let position = state
+        let mut next = state.working().clone();
+        let position = next
             .tasks
             .iter()
             .position(|task| task.id == id)
             .ok_or(TodoMutationError::UnknownTask(id))?;
-        if state.tasks[position].status == TodoStatus::Deleted {
+        if next.tasks[position].status == TodoStatus::Deleted {
             return Err(TodoMutationError::AlreadyDeleted(id));
         }
-        state.tasks[position].status = TodoStatus::Deleted;
-        let task = state.tasks[position].clone();
-        Ok((task, state.clone()))
+        next.tasks[position].status = TodoStatus::Deleted;
+        let task = next.tasks[position].clone();
+        state.staged = Some(next.clone());
+        Ok((task, next))
     }
 
     /// Drops every task and resets the id allocator.
@@ -536,46 +873,67 @@ impl ConversationTodoList {
     #[must_use]
     pub fn clear(&self) -> (usize, TodoSnapshot) {
         let mut state = self.state();
-        let dropped = state.tasks.len();
-        *state = TodoSnapshot::empty();
-        (dropped, state.clone())
+        let dropped = state.working().tasks.len();
+        let emptied = TodoSnapshot::empty();
+        state.staged = Some(emptied.clone());
+        (dropped, emptied)
     }
 
-    /// Replaces the whole list with `snapshot`.
-    ///
-    /// The one writer that does not go through the mutation semantics: it
-    /// exists so a runtime that already holds a committed snapshot can adopt
-    /// it verbatim.
-    pub fn adopt(&self, snapshot: TodoSnapshot) {
-        *self.state() = snapshot;
-    }
-
-    fn state(&self) -> std::sync::MutexGuard<'_, TodoSnapshot> {
+    fn state(&self) -> std::sync::MutexGuard<'_, TodoListState> {
         self.inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
-/// The last complete snapshot committed by a successful `todo` result.
-fn last_snapshot(history: &[MessageBlock]) -> Option<TodoSnapshot> {
-    let todo = ToolId::new(TODO_TOOL_ID);
-    history
+/// The list one canonical message publishes, when it publishes one.
+///
+/// `None` means "this message is not a settled `todo` result": another
+/// tool, or a rejected call, which publishes nothing and therefore never
+/// replaces the list. `Some(Err(..))` means it *is* the record the list
+/// must come from and that record is unusable — never a reason to look at
+/// an older one.
+#[must_use]
+pub fn published_snapshot(
+    message: &MessageBlock,
+) -> Option<Result<TodoSnapshot, TodoRebuildError>> {
+    let MessageBlock::Tool(tool) = message else {
+        return None;
+    };
+    if tool.tool_id != ToolId::new(TODO_TOOL_ID)
+        || tool.result.status != ToolExecutionStatus::Success
+    {
+        return None;
+    }
+    let Some(value) = tool
+        .result
+        .content
         .iter()
-        .rev()
-        .filter_map(|message| match message {
-            MessageBlock::Tool(tool) if tool.tool_id == todo => Some(&tool.result),
+        .find_map(|content| match content {
+            ToolResultContent::Json { value } => Some(value),
             _ => None,
         })
-        .filter(|result| result.status == ToolExecutionStatus::Success)
-        .find_map(|result| {
-            result.content.iter().find_map(|content| match content {
-                ToolResultContent::Json { value } => {
-                    serde_json::from_value::<TodoSnapshot>(value.clone()).ok()
-                }
-                _ => None,
-            })
-        })
+    else {
+        return Some(Err(TodoRebuildError::Missing));
+    };
+    Some(decode_snapshot(value))
+}
+
+/// Decodes and validates one published list, strictly.
+fn decode_snapshot(value: &serde_json::Value) -> Result<TodoSnapshot, TodoRebuildError> {
+    let snapshot: TodoSnapshot = serde_json::from_value(value.clone())
+        .map_err(|error| TodoRebuildError::Undecodable(error.to_string()))?;
+    snapshot.validate().map_err(TodoRebuildError::Invalid)?;
+    Ok(snapshot)
+}
+
+/// The list the newest successful `todo` result of `history` published.
+///
+/// The search stops at that result whatever it contains: it is the only
+/// record that can be the list, so an unusable one is an error rather than
+/// a reason to keep walking backwards into a superseded list.
+fn last_snapshot(history: &[MessageBlock]) -> Option<Result<TodoSnapshot, TodoRebuildError>> {
+    history.iter().rev().find_map(published_snapshot)
 }
 
 /// Rejects a dependency that names no task or names a tombstone.
@@ -638,7 +996,7 @@ fn merge_metadata(
 mod tests {
     use super::{
         ConversationTodoList, TODO_TOOL_ID, TodoChange, TodoCreate, TodoMutationError,
-        TodoSnapshot, TodoStatus,
+        TodoRebuildError, TodoSnapshot, TodoSnapshotError, TodoStatus, TodoTask, forbidden_control,
     };
     use crate::message::content::TextBlock;
     use crate::message::types::{MessageBlock, ToolMessageBlock};
@@ -944,12 +1302,247 @@ mod tests {
         let latest = todos.snapshot();
 
         let history = vec![todo_result(&first), todo_result(&latest)];
-        let rebuilt = ConversationTodoList::rebuilt(ConversationId::new("conv-todo"), &history);
+        let rebuilt = ConversationTodoList::rebuilt(ConversationId::new("conv-todo"), &history)
+            .expect("rebuild");
         assert_eq!(rebuilt.snapshot(), latest);
 
         // The rebuilt list keeps allocating where the conversation left off.
         let (next, _) = rebuilt.create(subject("Ship")).expect("create");
         assert_eq!(next.id, 3);
+    }
+
+    #[test]
+    fn a_mutation_is_staged_until_the_batch_that_carries_it_commits() {
+        let todos = list();
+        todos.create(subject("Write the parser")).expect("create");
+        assert!(todos.has_staged());
+        assert_eq!(
+            todos.committed(),
+            TodoSnapshot::empty(),
+            "the authority does not move before the result is durable"
+        );
+        assert_eq!(
+            todos.snapshot().tasks.len(),
+            1,
+            "the batch itself reads what it has staged"
+        );
+
+        // A second call of the same batch composes on the staged list.
+        let (second, _) = todos.create(subject("Write the tests")).expect("create");
+        assert_eq!(second.id, 2);
+
+        let staged = todos.snapshot();
+        assert_eq!(staged.tasks.len(), 2);
+        todos.commit_staged();
+        assert_eq!(todos.committed(), staged);
+        assert!(!todos.has_staged());
+        todos.commit_staged();
+        assert_eq!(todos.committed(), staged, "committing twice moves nothing");
+    }
+
+    #[test]
+    fn a_discarded_batch_leaves_the_committed_list_exactly_as_it_was() {
+        let todos = list();
+        todos.create(subject("Write the parser")).expect("create");
+        todos.commit_staged();
+        let committed = todos.committed();
+
+        todos.create(subject("Write the tests")).expect("create");
+        todos.delete(1).expect("tombstone");
+        let (_, cleared) = todos.clear();
+        assert_eq!(cleared, TodoSnapshot::empty());
+
+        todos.discard_staged();
+        assert!(!todos.has_staged());
+        assert_eq!(todos.committed(), committed);
+        assert_eq!(
+            todos.snapshot(),
+            committed,
+            "with nothing staged, the working list is the committed one"
+        );
+        todos.discard_staged();
+        assert_eq!(
+            todos.committed(),
+            committed,
+            "discarding twice drops nothing"
+        );
+    }
+
+    #[test]
+    fn a_rejected_mutation_stages_nothing() {
+        let todos = list();
+        todos.create(subject("Write the parser")).expect("create");
+        todos.commit_staged();
+        assert!(!todos.has_staged());
+
+        todos
+            .update(9, status(TodoStatus::Completed))
+            .expect_err("unknown task");
+        assert!(
+            !todos.has_staged(),
+            "a rejected call leaves no provisional list to commit or discard"
+        );
+    }
+
+    #[test]
+    fn every_character_a_terminal_row_cannot_hold_is_named() {
+        for character in [
+            '\n', '\r', '\t', '\u{1b}', '\u{7f}', '\u{9b}', '\u{202e}', '\u{2066}',
+        ] {
+            assert_eq!(
+                forbidden_control(&format!("ship{character}now"), false),
+                Some(character),
+                "U+{:04X} is not a character one panel row may carry",
+                character as u32
+            );
+        }
+        assert_eq!(forbidden_control("ship it — now", false), None);
+        assert_eq!(
+            forbidden_control("first\nsecond", true),
+            None,
+            "the long-form field keeps its line breaks"
+        );
+        assert_eq!(
+            forbidden_control("first\tsecond", true),
+            Some('\t'),
+            "and nothing else"
+        );
+    }
+
+    #[test]
+    fn the_default_list_is_the_empty_list_allocator_included() {
+        assert_eq!(TodoSnapshot::default(), TodoSnapshot::empty());
+        assert_eq!(TodoSnapshot::default().next_id, 1);
+    }
+
+    #[test]
+    fn a_published_list_that_no_mutation_could_have_produced_is_refused() {
+        let task = |id: u64, subject: &str| TodoTask {
+            id,
+            subject: subject.to_owned(),
+            description: None,
+            active_form: None,
+            status: TodoStatus::Pending,
+            blocked_by: Vec::new(),
+            owner: None,
+            metadata: None,
+        };
+        let invalid = [
+            (
+                TodoSnapshot {
+                    tasks: vec![task(1, "a"), task(1, "b")],
+                    next_id: 2,
+                },
+                TodoSnapshotError::DuplicateId(1),
+            ),
+            (
+                TodoSnapshot {
+                    tasks: vec![task(7, "a")],
+                    next_id: 2,
+                },
+                TodoSnapshotError::UnallocatedId { id: 7, next_id: 2 },
+            ),
+            (
+                TodoSnapshot {
+                    tasks: vec![task(1, "   ")],
+                    next_id: 2,
+                },
+                TodoSnapshotError::BlankSubject(1),
+            ),
+            (
+                TodoSnapshot {
+                    tasks: vec![TodoTask {
+                        blocked_by: vec![1],
+                        ..task(1, "a")
+                    }],
+                    next_id: 2,
+                },
+                TodoSnapshotError::SelfBlock(1),
+            ),
+            (
+                TodoSnapshot {
+                    tasks: vec![TodoTask {
+                        blocked_by: vec![4],
+                        ..task(1, "a")
+                    }],
+                    next_id: 2,
+                },
+                TodoSnapshotError::UnknownDependency { id: 1, blocker: 4 },
+            ),
+            (
+                TodoSnapshot {
+                    tasks: vec![TodoTask {
+                        subject: "safe\nspoofed".to_owned(),
+                        ..task(1, "a")
+                    }],
+                    next_id: 2,
+                },
+                TodoSnapshotError::ControlCharacter {
+                    id: 1,
+                    field: "subject",
+                    codepoint: 0x000a,
+                },
+            ),
+        ];
+        for (snapshot, expected) in invalid {
+            assert_eq!(snapshot.validate().expect_err("invalid"), expected);
+        }
+        assert!(
+            TodoSnapshot {
+                tasks: vec![
+                    task(1, "a"),
+                    TodoTask {
+                        blocked_by: vec![1],
+                        ..task(2, "b")
+                    },
+                ],
+                next_id: 3,
+            }
+            .validate()
+            .is_ok()
+        );
+    }
+
+    /// A rebuild never reaches past an unusable record into a list the
+    /// conversation has already superseded — that would revive tasks the
+    /// model completed, tombstoned, or cleared.
+    #[test]
+    fn an_unusable_newest_snapshot_fails_the_rebuild_instead_of_reviving_an_older_one() {
+        let todos = list();
+        todos.create(subject("Write the parser")).expect("create");
+        let superseded = todos.snapshot();
+
+        let mut malformed = todo_result(&TodoSnapshot::empty());
+        let MessageBlock::Tool(tool) = &mut malformed else {
+            panic!("a tool result");
+        };
+        tool.result.content = vec![ToolResultContent::Json {
+            value: serde_json::json!({ "tasks": [{ "id": 1 }], "next_id": 2 }),
+        }];
+
+        let history = vec![todo_result(&superseded), malformed];
+        let error = ConversationTodoList::rebuilt(ConversationId::new("conv-todo"), &history)
+            .expect_err("the newest record is unusable");
+        assert!(
+            matches!(error, TodoRebuildError::Undecodable(_)),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn a_successful_result_without_a_list_is_a_rebuild_failure_not_an_empty_list() {
+        let mut missing = todo_result(&TodoSnapshot::empty());
+        let MessageBlock::Tool(tool) = &mut missing else {
+            panic!("a tool result");
+        };
+        tool.result.content = vec![ToolResultContent::Text(TextBlock {
+            text: "Created #1".to_owned(),
+        })];
+        assert_eq!(
+            ConversationTodoList::rebuilt(ConversationId::new("conv-todo"), &[missing])
+                .expect_err("no list"),
+            TodoRebuildError::Missing
+        );
     }
 
     #[test]
@@ -972,7 +1565,8 @@ mod tests {
                     managed_output: None,
                 },
             })],
-        );
+        )
+        .expect("rebuild");
         assert_eq!(rebuilt.snapshot(), TodoSnapshot::empty());
     }
 }

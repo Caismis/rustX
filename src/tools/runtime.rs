@@ -107,6 +107,11 @@ pub enum ConversationRuntimeError {
     },
     /// The durable conversation store could not be opened.
     DurableConversation(String),
+    /// The conversation's task list cannot be rebuilt from its own
+    /// canonical history: the newest committed `todo` result carries no
+    /// usable list. Construction fails closed rather than opening on a
+    /// list the conversation has already superseded.
+    TodoList(crate::tools::todo::TodoRebuildError),
     /// The configured durable binding belongs to another conversation.
     DurableConversationMismatch {
         /// The conversation the runtime is being constructed for.
@@ -148,6 +153,7 @@ impl core::fmt::Display for ConversationRuntimeError {
                 f,
                 "the durable conversation store could not be opened: {message}",
             ),
+            Self::TodoList(error) => write!(f, "{error}"),
             Self::DurableConversationMismatch { expected, actual } => write!(
                 f,
                 "the durable binding belongs to conversation {actual}, but this tool runtime belongs to {expected}",
@@ -427,7 +433,8 @@ impl ConversationToolRuntime {
                 .map_err(|error| {
                     ConversationRuntimeError::DurableConversation(error.to_string())
                 })?,
-        );
+        )
+        .map_err(ConversationRuntimeError::TodoList)?;
         Ok(Self {
             conversation_id,
             workspace,

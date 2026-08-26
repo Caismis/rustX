@@ -862,9 +862,10 @@ runtime/subagent/          SubagentRegistry (conversation-owned one-shot
                            framed control IPC, and process supervision
 tools/todo.rs              ConversationTodoList: the conversation-owned task
                            list (id allocation, status machine, blocked_by
-                           graph validation) rebuilt at construction from
-                           the last snapshot the conversation's own
-                           canonical `todo` results committed
+                           graph validation), staged per ToolResult batch
+                           and rebuilt at construction from the newest
+                           snapshot the conversation's own canonical
+                           `todo` results committed
 tools/runtime.rs           ConversationToolRuntime: the per-conversation
                            bundle of workspace, artifacts, environment,
                            background registry, and task list handed to
@@ -1968,12 +1969,25 @@ persistence path. Every settled `todo` call publishes the complete
 post-call snapshot as the structured content of its own canonical tool
 result, so the durable record of the list is ordinary conversation
 history; `ConversationToolRuntime` construction rebuilds the list by
-taking the last such snapshot from the canonical Ledger, and a rejected
+taking the newest such snapshot from the canonical Ledger, and a rejected
 call publishes nothing because it mutated nothing. A list therefore
 survives a process restart, a Session resume, and a compaction exactly as
-far as the conversation history that carries it does, and a reference
-client reconstructs the same list from the same fact without any
-client-side task state. The tool is fixed foreground-only, sequential,
+far as the conversation history that carries it does.
+
+That is only true while the in-memory list cannot run ahead of the
+Ledger, so a `todo` call writes *staged* state and the Agent Loop
+installs it at the one atomic `ToolResult` batch commit — the same event
+that makes the published snapshots durable. Later calls of one batch read
+what earlier ones staged; a batch that never becomes canonical discards
+them. A rebuild that finds the newest committed result unusable fails
+construction rather than adopting an older, already superseded list.
+
+The runtime runs the same derivation over the whole Ledger and carries
+the result in `RuntimeClientSnapshot.todos`, so a reference client
+reconstructs the list from the runtime's own projection plus the
+committed results it observes live — never by scanning the bounded
+transcript page it happens to hold, and without any client-side task
+state. The tool is fixed foreground-only, sequential,
 approval-never: one list cannot be mutated by a detached execution, two
 concurrent mutations would publish racing snapshots, and there is nothing
 in a task list for a human to approve. A subagent child composes the

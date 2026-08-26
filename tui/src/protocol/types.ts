@@ -830,6 +830,27 @@ export interface RuntimeClientContextView {
   latest_compaction?: RuntimeClientCompactionView;
 }
 
+/** The lifecycle status of one task, exactly as the runtime spells it. */
+export type TodoStatus = "pending" | "in_progress" | "completed" | "deleted";
+
+/** One task of the conversation's list. */
+export interface TodoTask {
+  id: number;
+  subject: string;
+  description?: string;
+  active_form?: string;
+  status: TodoStatus;
+  blocked_by?: number[];
+  owner?: string;
+  metadata?: Record<string, unknown>;
+}
+
+/** The complete task list of one conversation. */
+export interface TodoSnapshot {
+  tasks: TodoTask[];
+  next_id: number;
+}
+
 export interface RuntimeClientSnapshot {
   conversation_id: ConversationId;
   shutting_down: boolean;
@@ -852,6 +873,16 @@ export interface RuntimeClientSnapshot {
   resources?: RuntimeClientResourcesView;
   /** The session's *desired* model. Never the running attempt's model. */
   model: SessionModelView;
+  /**
+   * The conversation's task list as of the newest committed `todo` result.
+   *
+   * The runtime derives this from the whole canonical history, which is why
+   * the client does not scan its own transcript for it: the client holds
+   * only a bounded newest page, so a conversation that committed a page or
+   * more of messages after its last `todo` result would attach with no list
+   * while the runtime still had one.
+   */
+  todos?: TodoSnapshot;
 }
 
 export type RuntimeClientTranscriptItem =

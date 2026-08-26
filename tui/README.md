@@ -161,7 +161,7 @@ compact footer carries the durable Session metadata and live status instead.
 | `runtime/attachment.ts` | attach, snapshot install, subscribe, resync repair, shutdown | agent/session semantics |
 | `presentation/projection.ts` | the ephemeral render cache and bounded transcript page | canonical history, authority of any kind |
 | `presentation/tools.ts` | the `ToolCallId` correlation used for display | tool lifecycle, which it only reads |
-| `presentation/todos.ts` | selecting the newest published task list out of the transcript | task identity, status, and dependencies, which the runtime owns |
+| `presentation/todos.ts` | reading the runtime's task-list projection and folding newly committed `todo` results into it | task identity, status, and dependencies, which the runtime owns |
 | `commands/` | slash-command parsing, dispatch to canonical operations | parallel runtime semantics |
 | `ui/components/` | the semantic presentation grammar | every fact it displays |
 | `ui/preferences.ts` | reasoning visibility and expanded cards | anything the runtime owns |
@@ -179,7 +179,7 @@ surfaces are Runtime Client facts or canonical conversation history.
 | **Picker** | Existing focused selectors and approval interactions remain overlays with their existing selection and focus semantics. |
 | **Transient** | One current item, owned by the app. New feedback replaces old feedback; any input acknowledges it, and attachment/session replacement clears it. Producers keep the payload compact enough for the three-line bound; a defensive overflow is marked explicitly, and no wall-clock timer is used. |
 | **Local scrollback** | Deliberately not implemented. These client events have no honest interleaving point with runtime conversation history, so they use the finite transient surface instead of a second local event store. |
-| **Task panel** | The task list the runtime published, drawn between the conversation and the editor because it answers a question the reader has while typing the next message. It is derived from the transcript, holds no state of its own, is bounded so a long plan cannot push the conversation off screen, and disappears entirely when the list is empty. |
+| **Task panel** | The task list the runtime published, drawn between the conversation and the editor because it answers a question the reader has while typing the next message. It is derived from the runtime's own snapshot projection and the committed `todo` results observed since, holds no state of its own, is bounded so a long plan cannot push the conversation off screen, and disappears entirely when the list is empty. Task text is sanitized before it is drawn, so one task is always one physical row and no model-written escape sequence reaches the terminal. |
 | **Preference** | Reasoning visibility and expansion choices stay in client display preferences and never become runtime messages. |
 | **Control** | Canonical commands still go through the Runtime Client. Their short acknowledgement is transient; runtime status and settlement remain authoritative runtime projection. |
 | **Quit** | Shutdown is a control intent. Lifecycle failures are committed in a final Pi frame before the TUI stops, and are never turned into fake transcript messages. |

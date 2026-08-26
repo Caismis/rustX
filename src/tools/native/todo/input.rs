@@ -9,6 +9,21 @@
 //! lives in the tool, not in the schema: a rejected `update` must be able to
 //! explain that it needed a mutable field, and a schema-level rejection
 //! cannot say that.
+//!
+//! # This is the trust boundary for the text of a task
+//!
+//! A task's text is written by a model and later drawn by a terminal
+//! client, so this module is where that text stops being arbitrary bytes. A
+//! length bound alone does not make a task one row: a single `\n` in a
+//! subject makes one task occupy two physical lines, and enough of them
+//! overflow a panel whose whole contract is that it is bounded. `ESC`,
+//! the C1 range, and the bidi overrides are worse than layout — they
+//! repaint, move the cursor, retitle the window, or reverse the reading
+//! order of the text around them.
+//!
+//! Every text field is therefore checked here, before any list state is
+//! touched, and a violation is an ordinary rejected call naming the exact
+//! character. Nothing downstream has to escape what can never be stored.
 
 use std::collections::BTreeMap;
 
@@ -16,7 +31,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::tools::native::input::decode;
-use crate::tools::todo::{TodoChange, TodoCreate, TodoStatus};
+use crate::tools::todo::{TodoChange, TodoCreate, TodoStatus, forbidden_control};
 
 /// The requested operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
@@ -108,7 +123,38 @@ impl TodoInput {
     /// Returns the deterministic rejection message of the first input
     /// contract violation.
     pub(super) fn parse(arguments: &serde_json::Value) -> Result<Self, String> {
-        decode(super::NAME, arguments)
+        let input: Self = decode(super::NAME, arguments)?;
+        input.validate()?;
+        Ok(input)
+    }
+
+    /// Rejects text a bounded client row could not draw as itself.
+    ///
+    /// `description` is the one long-form field and is never a panel row,
+    /// so line breaks stay legal there and nowhere else.
+    fn validate(&self) -> Result<(), String> {
+        for (field, value, multiline) in [
+            ("subject", self.subject.as_deref(), false),
+            ("active_form", self.active_form.as_deref(), false),
+            ("owner", self.owner.as_deref(), false),
+            ("description", self.description.as_deref(), true),
+        ] {
+            let Some(value) = value else {
+                continue;
+            };
+            if let Some(character) = forbidden_control(value, multiline) {
+                let allowance = if multiline {
+                    " (a line break is the only one allowed there)"
+                } else {
+                    ", and it is one line"
+                };
+                return Err(format!(
+                    "{field} may not contain the control character U+{:04X}{allowance}",
+                    character as u32
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// The `create` specification this invocation describes.
