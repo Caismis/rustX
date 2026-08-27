@@ -493,15 +493,14 @@ impl std::error::Error for ConversationRuntimeError {}
 /// each attempt derives its [`ContextRuntime`] from this policy plus that
 /// attempt's immutable model snapshot. No window captured at process start
 /// can survive a session model change.
-#[derive(Clone)]
 pub struct ConversationContextConfig {
     /// The current runtime context policy captured by this composition.
     pub policy: SessionContextPolicy,
     /// The deterministic token estimator.
     pub estimator: Arc<dyn TokenEstimator>,
     /// The launch-scoped Agent Status engine template. Each admitted attempt
-    /// clones it, which gives that attempt fresh quarantine state while
-    /// retaining the configured clock/module semantics.
+    /// constructs a fresh engine from it, retaining the configured clock/module
+    /// semantics while keeping quarantine state attempt-local.
     pub status_engine: AgentStatusEngine,
 }
 
@@ -1580,7 +1579,7 @@ impl RuntimeInner {
         ContextRuntime::for_attempt_with_assembly(
             self.context.policy,
             Arc::clone(&self.context.estimator),
-            self.context.status_engine.clone(),
+            self.context.status_engine.for_attempt(),
             assembly,
             model,
         )
@@ -5376,6 +5375,7 @@ mod tests {
         skill_discovery: crate::skills::SkillDiscoveryConfig,
         estimator: Arc<dyn TokenEstimator>,
         policy: crate::context::SessionContextPolicy,
+        status_engine: AgentStatusEngine,
         initial_messages: Vec<MessageBlock>,
         project_context_files: Vec<crate::runtime::ProjectContextFile>,
         agent_profile: Option<String>,
@@ -5397,6 +5397,7 @@ mod tests {
                     keep_recent_tokens: 0,
                     summary_output_cap: None,
                 },
+                status_engine: AgentStatusEngine::default(),
                 initial_messages: Vec::new(),
                 project_context_files: Vec::new(),
                 agent_profile: None,
@@ -5471,7 +5472,7 @@ mod tests {
             context: ConversationContextConfig {
                 policy: options.policy,
                 estimator: options.estimator,
-                status_engine: AgentStatusEngine::default(),
+                status_engine: options.status_engine,
             },
             tool_runtime,
             resources,
@@ -6282,6 +6283,76 @@ mod tests {
         assert_eq!(
             request_snapshots(&fixture.runtime.request_history()).len(),
             1
+        );
+    }
+
+    /// A quarantine belongs to one attempt, not to the conversation's
+    /// launch-scoped status template. The first real runtime attempt loses
+    /// its Time contribution to a deterministic capture failure; the next
+    /// attempt is constructed through the coordinator's normal path and
+    /// retries Time with a fresh engine.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn runtime_constructs_a_fresh_status_engine_for_each_attempt() {
+        let seam = crate::context::AgentStatusTestSeam::new();
+        seam.fail_capture_once(crate::context::AgentStatusModuleId::Time);
+        let status_engine = AgentStatusEngine::default().with_test_seam(seam.clone());
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (runtime, model) = headless_runtime_with_options(
+            &dir,
+            vec![one_turn_script(), one_turn_script()],
+            None,
+            None,
+            HeadlessRuntimeOptions {
+                status_engine,
+                ..HeadlessRuntimeOptions::default()
+            },
+        )
+        .await;
+        runtime.activate();
+
+        runtime
+            .submit_inbound(text_content("first attempt"))
+            .expect("first inbound accepted");
+        let first_ledger = await_settled_ledger(&runtime).await;
+        assert_eq!(
+            seam.capture_count(crate::context::AgentStatusModuleId::Time),
+            1,
+            "the first attempt captures Time once before quarantining it"
+        );
+        assert!(
+            first_ledger.iter().all(|message| !matches!(
+                message,
+                MessageBlock::User(user)
+                    if user.kind == InboundKind::Context(
+                        crate::message::types::ContextKind::AgentStatus
+                    )
+            )),
+            "the failed module contributes no status message"
+        );
+
+        runtime
+            .submit_inbound(text_content("second attempt"))
+            .expect("second inbound accepted");
+        let second_ledger = await_settled_ledger(&runtime).await;
+        assert_eq!(
+            seam.capture_count(crate::context::AgentStatusModuleId::Time),
+            2,
+            "a new runtime attempt retries the previously quarantined module"
+        );
+        assert!(
+            second_ledger.iter().any(|message| matches!(
+                message,
+                MessageBlock::User(user)
+                    if user.kind == InboundKind::Context(
+                        crate::message::types::ContextKind::AgentStatus
+                    )
+            )),
+            "the retried Time module contributes through the normal runtime path"
+        );
+        assert_eq!(
+            model.requests().len(),
+            2,
+            "one provider request per attempt"
         );
     }
 
