@@ -5303,7 +5303,7 @@ mod tests {
     /// synchronization below is exact, so this only turns a defect that
     /// breaks the ordering into a failure instead of a hang.
     async fn within_liveness_guard<F: std::future::Future>(label: &str, future: F) -> F::Output {
-        tokio::time::timeout(std::time::Duration::from_secs(60), future)
+        tokio::time::timeout(std::time::Duration::from_mins(1), future)
             .await
             .unwrap_or_else(|_| panic!("liveness guard exceeded while waiting for {label}"))
     }
@@ -8799,7 +8799,7 @@ mod tests {
 
         background_executor.release.notify_one();
         background.wait_until_settled(&execution_id).await;
-        tokio::time::timeout(std::time::Duration::from_secs(60), old_close.wait_entered())
+        tokio::time::timeout(std::time::Duration::from_mins(1), old_close.wait_entered())
             .await
             .expect("A closes after the background owner settles");
         old_close.release();
@@ -12006,7 +12006,7 @@ mod tests {
         let executor: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(executor);
         let execution_id = commit_background(&runtime, &executor, "call-owned-bg");
         tokio::time::timeout(
-            std::time::Duration::from_secs(120),
+            std::time::Duration::from_mins(2),
             started.wait_for(|is_started| *is_started),
         )
         .await
@@ -12174,7 +12174,7 @@ mod tests {
         // record from Starting to Running immediately before executor start.
         // Wait on that explicit watch rather than sampling a scheduler race.
         tokio::time::timeout(
-            std::time::Duration::from_secs(120),
+            std::time::Duration::from_mins(2),
             started.wait_for(|is_started| *is_started),
         )
         .await
@@ -12272,7 +12272,7 @@ mod tests {
             panic!("accepted");
         };
         tokio::time::timeout(
-            std::time::Duration::from_secs(120),
+            std::time::Duration::from_mins(2),
             started.wait_for(|is_started| *is_started),
         )
         .await

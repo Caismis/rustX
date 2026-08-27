@@ -50,7 +50,7 @@ use super::{CHILD_TEST, ROOT_ENV, SCENARIO_ENV};
 /// assertion is anchored to a durable boundary or a control rendezvous. This
 /// bound exists only so a broken harness fails loudly instead of hanging a CI
 /// worker.
-pub(crate) const LIVENESS: std::time::Duration = std::time::Duration::from_secs(120);
+pub(crate) const LIVENESS: std::time::Duration = std::time::Duration::from_mins(2);
 
 /// The conversation lineage every child of this suite composes.
 pub(crate) const CONVERSATION: &str = "conversation-fnd06";

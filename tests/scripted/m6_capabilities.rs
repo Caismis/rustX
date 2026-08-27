@@ -1581,7 +1581,7 @@ async fn background_execution_retains_its_dispatching_environment() {
 
 async fn wait_for_terminal(conversation: &Conversation, execution_id: &ToolExecutionId) {
     tokio::time::timeout(
-        std::time::Duration::from_secs(120),
+        std::time::Duration::from_mins(2),
         conversation.background.wait_until_terminal(execution_id),
     )
     .await
@@ -1594,7 +1594,7 @@ async fn await_background_started(
     description: &'static str,
 ) {
     tokio::time::timeout(
-        std::time::Duration::from_secs(120),
+        std::time::Duration::from_mins(2),
         started.wait_for(|is_started| *is_started),
     )
     .await

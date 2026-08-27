@@ -41,7 +41,7 @@ use support::model::{FixtureModel, MappedAdapterFactory, fixture_catalog};
 
 /// The outer liveness guard: waiting is exact (watch channels and the
 /// observation stream), so this only bounds a pathological stall.
-const LIVENESS: std::time::Duration = std::time::Duration::from_secs(120);
+const LIVENESS: std::time::Duration = std::time::Duration::from_mins(2);
 
 /// The three fixture providers of this file.
 const ALPHA: &str = "alpha";

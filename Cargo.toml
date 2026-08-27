@@ -2,7 +2,11 @@
 name = "rustx"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+# 1.92 is the effective MSRV of the released `xberg` document decoders
+# (Issue #48): xberg 1.0.14 declares 1.91, but its PDF backend chain
+# (pdf_oxide 0.3.77 → hayro-jpeg2000 0.4.0, pulled in unconditionally
+# through pdf_oxide's `rendering` feature) requires 1.92.
+rust-version = "1.92"
 license = "MIT"
 description = "A standalone Rust execution runtime for durable, tool-using LLM agents."
 repository = "https://github.com/Caismis/rustX"
@@ -73,6 +77,21 @@ schemars = "1"
 # The M8 durability backend (Issue #63 / #11). `bundled` compiles the SQLite
 # amalgamation so no system libsqlite3 is required on any CI platform.
 rusqlite = { version = "0.32", features = ["bundled"] }
+# The parser-only document decode backend behind native Read (Issue #48).
+# rustX owns the supported-format whitelist (`.pdf`, `.docx`, `.xlsx`,
+# `.pptx`), the path contract, and all extraction policy; xberg only decodes.
+# Defaults are disabled and only the three format features plus the async
+# runtime are enabled: no `ocr`/`ocr-pipeline` (Tesseract/ONNX/ML), no
+# `tree-sitter`, no embeddings/NER/summarization/chunking, no `archives`,
+# no `url-ingestion`, no server/API/MCP surface ever compiles into rustX.
+# `disable_ocr: true` is also set at runtime; a scanned PDF therefore can
+# never fall back to OCR.
+xberg = { version = "1.0.14", default-features = false, features = [
+    "pdf",
+    "excel",
+    "office",
+    "tokio-runtime",
+] }
 
 [lints.rust]
 # The runtime process-supervision capability and the per-invocation Bash

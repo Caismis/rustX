@@ -73,7 +73,7 @@ use support::runtime_client_fixture::RuntimeClientFixture;
 
 /// The outer liveness guard: waiting is exact (watch channels and the
 /// observation stream), so this only bounds a pathological stall.
-const LIVENESS: Duration = Duration::from_secs(120);
+const LIVENESS: Duration = Duration::from_mins(2);
 
 /// A fixed deterministic status clock.
 #[derive(Debug, Clone, Copy)]

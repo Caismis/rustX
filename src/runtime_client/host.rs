@@ -2088,7 +2088,7 @@ mod tests {
     /// release and start orderings are established by watch state; this is
     /// fail-fast containment for a broken fixture or registry invariant, not
     /// a synchronization primitive.
-    const BACKGROUND_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_secs(120);
+    const BACKGROUND_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_mins(2);
 
     async fn await_background_started(
         started: &mut watch::Receiver<bool>,
@@ -2386,7 +2386,7 @@ mod tests {
     /// scheduling delay a loaded runner can produce, and it is a whole-call
     /// budget rather than a per-event bound — a single scheduling stall can
     /// never fail a correct run.
-    const STREAM_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_secs(120);
+    const STREAM_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_mins(2);
 
     /// Receives events until the predicate matches.
     async fn receive_until(
@@ -2764,7 +2764,7 @@ mod tests {
     /// Waits until the runtime owns the conversation state again and its
     /// Message Ledger equals the expected records.
     async fn await_canonical_history(host: &RuntimeClientHost, expected: &[MessageBlock]) {
-        tokio::time::timeout(std::time::Duration::from_secs(120), async {
+        tokio::time::timeout(std::time::Duration::from_mins(2), async {
             loop {
                 if host.host_ledger().as_deref() == Some(expected) {
                     return;
@@ -2778,7 +2778,7 @@ mod tests {
 
     /// Waits for the durable request-fact read to expose the expected count.
     async fn await_request_history_len(host: &RuntimeClientHost, expected: usize) {
-        tokio::time::timeout(std::time::Duration::from_secs(120), async {
+        tokio::time::timeout(std::time::Duration::from_mins(2), async {
             loop {
                 if request_snapshots(&host.request_history()).len() == expected {
                     return;
@@ -2797,7 +2797,7 @@ mod tests {
     async fn await_adapter_request_count(adapter: &GatedAdapter, expected: usize) {
         let mut count = adapter.request_count();
         tokio::time::timeout(
-            std::time::Duration::from_secs(120),
+            std::time::Duration::from_mins(2),
             count.wait_for(|actual| *actual >= expected),
         )
         .await
@@ -2818,7 +2818,7 @@ mod tests {
             .expect("boundary turn accepted")
             .message_id;
         await_adapter_request_count(adapter, 1).await;
-        tokio::time::timeout(std::time::Duration::from_secs(120), async {
+        tokio::time::timeout(std::time::Duration::from_mins(2), async {
             loop {
                 let (revision, messages) = runtime
                     .historical_head_snapshot()

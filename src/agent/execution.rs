@@ -6983,7 +6983,7 @@ mod tests {
     /// so a genuine regression fails with a message instead of hanging a
     /// CI job, and it is deliberately far larger than any scheduling delay
     /// a loaded runner can produce.
-    const LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_secs(120);
+    const LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_mins(2);
 
     /// Exact deterministic proof for the background terminal inbound.
     ///

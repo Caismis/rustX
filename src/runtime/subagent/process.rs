@@ -46,7 +46,7 @@ use super::ipc::{
 /// stage is then torn down. This is a supervision policy bound, never a
 /// test synchronization mechanism.
 #[cfg(not(test))]
-const STARTUP_LIVENESS: Duration = Duration::from_secs(60);
+const STARTUP_LIVENESS: Duration = Duration::from_mins(1);
 #[cfg(test)]
 const STARTUP_LIVENESS: Duration = Duration::from_secs(5);
 

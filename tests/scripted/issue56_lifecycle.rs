@@ -588,7 +588,7 @@ struct GatedToolHandle {
     invocations: Arc<Mutex<Vec<ToolInvocation>>>,
 }
 
-const GATED_TOOL_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_secs(120);
+const GATED_TOOL_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_mins(2);
 
 impl GatedToolHandle {
     async fn await_started(&mut self) {

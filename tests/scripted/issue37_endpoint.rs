@@ -281,11 +281,10 @@ async fn a_full_session_needs_no_out_of_band_semantic_operation() {
     let mut settled = false;
     while !settled {
         // Liveness guard only: the notification wait itself is exact.
-        let frame =
-            tokio::time::timeout(std::time::Duration::from_secs(120), adapter.notification())
-                .await
-                .expect("the notification stream must not stall")
-                .expect("the subscription stays open");
+        let frame = tokio::time::timeout(std::time::Duration::from_mins(2), adapter.notification())
+            .await
+            .expect("the notification stream must not stall")
+            .expect("the subscription stays open");
         expected += 1;
         assert_eq!(frame["cursor"].as_u64(), Some(expected));
         assert!(
