@@ -272,10 +272,13 @@ pub(super) fn decode_document(target: &Path, format: DocumentFormat) -> Result<S
             target.display()
         ));
     }
-    // The physical-finish fact: the blocking decode is done with xberg and
-    // is returning its result.
+    // The decode-completion fact: the xberg/document decode body reached
+    // its successful completion point and is returning its result. (This
+    // hook observes decode-body completion only; the executor's
+    // `decode.await` is what establishes blocking-task physical
+    // settlement.)
     #[cfg(test)]
-    decode_hooks::record_finish(target);
+    decode_hooks::record_decode_completed(target);
     Ok(content.to_owned())
 }
 
@@ -294,10 +297,10 @@ pub(super) mod decode_hooks {
     struct Hook {
         watch: PathBuf,
         starts: Arc<AtomicUsize>,
-        finishes: Arc<AtomicUsize>,
+        completions: Arc<AtomicUsize>,
         gate: Mutex<Option<mpsc::Receiver<()>>>,
         started: Mutex<Option<oneshot::Sender<()>>>,
-        finished: Mutex<Option<oneshot::Sender<()>>>,
+        completed: Mutex<Option<oneshot::Sender<()>>>,
     }
 
     static HOOK: Mutex<Option<Hook>> = Mutex::new(None);
@@ -312,14 +315,14 @@ pub(super) mod decode_hooks {
 
     static SESSION: Mutex<()> = Mutex::new(());
 
-    /// The installed hook: start/finish counters, start/finish rendezvous
-    /// receivers, and — for gated installs — the release handle.
+    /// The installed hook: start/completion counters, start/completion
+    /// rendezvous receivers, and — for gated installs — the release handle.
     /// Uninstalling on drop keeps other tests unaffected.
     pub struct Installed {
         starts: Arc<AtomicUsize>,
-        finishes: Arc<AtomicUsize>,
+        completions: Arc<AtomicUsize>,
         started: Option<oneshot::Receiver<()>>,
-        finished: Option<oneshot::Receiver<()>>,
+        completed: Option<oneshot::Receiver<()>>,
         release: Option<mpsc::Sender<()>>,
     }
 
@@ -329,9 +332,10 @@ pub(super) mod decode_hooks {
             self.starts.load(Ordering::SeqCst)
         }
 
-        /// How many times the watched decoder physically finished.
-        pub fn finished_count(&self) -> usize {
-            self.finishes.load(Ordering::SeqCst)
+        /// How many times the watched decode body reached its successful
+        /// completion point.
+        pub fn completed_count(&self) -> usize {
+            self.completions.load(Ordering::SeqCst)
         }
 
         /// Resolves when the watched decoder has recorded its start.
@@ -341,16 +345,16 @@ pub(super) mod decode_hooks {
             }
         }
 
-        /// Whether the watched decoder has already physically finished.
-        pub fn physically_finished(&mut self) -> bool {
-            self.finished
+        /// Whether the watched decode body has already completed.
+        pub fn decode_completed(&mut self) -> bool {
+            self.completed
                 .as_mut()
                 .is_some_and(|receiver| receiver.try_recv().is_ok())
         }
 
-        /// Resolves when the watched decoder has physically finished.
-        pub async fn wait_physically_finished(&mut self) {
-            if let Some(receiver) = self.finished.take() {
+        /// Resolves when the watched decode body has completed.
+        pub async fn wait_decode_completed(&mut self) {
+            if let Some(receiver) = self.completed.take() {
                 let _ = receiver.await;
             }
         }
@@ -371,16 +375,16 @@ pub(super) mod decode_hooks {
         }
     }
 
-    /// Installs start/finish counters for the watched document.
+    /// Installs start/completion counters for the watched document.
     pub fn install(watch: &Path) -> Installed {
         install_inner(watch, false)
     }
 
-    /// Installs start/finish counters for the watched document plus a gate:
-    /// the decoder blocks right after recording its start until
-    /// [`Installed::release`] is called. The start and finish edges are
-    /// deterministic rendezvous points ([`Installed::wait_started`],
-    /// [`Installed::wait_physically_finished`]).
+    /// Installs start/completion counters for the watched document plus a
+    /// gate: the decoder blocks right after recording its start until
+    /// [`Installed::release`] is called. The start and completion edges
+    /// are deterministic rendezvous points ([`Installed::wait_started`],
+    /// [`Installed::wait_decode_completed`]).
     pub fn install_gated(watch: &Path) -> Installed {
         install_inner(watch, true)
     }
@@ -393,14 +397,14 @@ pub(super) mod decode_hooks {
             (None, None)
         };
         let (started_sender, started_receiver) = oneshot::channel();
-        let (finished_sender, finished_receiver) = oneshot::channel();
+        let (completed_sender, completed_receiver) = oneshot::channel();
         let starts = Arc::new(AtomicUsize::new(0));
-        let finishes = Arc::new(AtomicUsize::new(0));
+        let completions = Arc::new(AtomicUsize::new(0));
         let installed = Installed {
             starts: Arc::clone(&starts),
-            finishes: Arc::clone(&finishes),
+            completions: Arc::clone(&completions),
             started: Some(started_receiver),
-            finished: Some(finished_receiver),
+            completed: Some(completed_receiver),
             release,
         };
         *HOOK
@@ -408,10 +412,10 @@ pub(super) mod decode_hooks {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Hook {
             watch: watch.to_path_buf(),
             starts,
-            finishes,
+            completions,
             gate: Mutex::new(gate),
             started: Mutex::new(Some(started_sender)),
-            finished: Mutex::new(Some(finished_sender)),
+            completed: Mutex::new(Some(completed_sender)),
         });
         installed
     }
@@ -452,10 +456,13 @@ pub(super) mod decode_hooks {
         }
     }
 
-    /// Called by the decoder right before it returns its result: counts and
-    /// signals the physical-finish fact for the installed hook watching
-    /// this exact path.
-    pub fn record_finish(target: &Path) {
+    /// Called by the decoder right before it returns its result: counts
+    /// and signals decode completion for the installed hook watching this
+    /// exact path. This records that the decode body reached its
+    /// successful completion point; it says nothing about the Tokio
+    /// blocking task's own settlement, which the production executor
+    /// establishes with its `decode.await`.
+    pub fn record_decode_completed(target: &Path) {
         let mut hook_guard = HOOK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -465,9 +472,9 @@ pub(super) mod decode_hooks {
         if hook.watch != target {
             return;
         }
-        hook.finishes.fetch_add(1, Ordering::SeqCst);
+        hook.completions.fetch_add(1, Ordering::SeqCst);
         if let Some(sender) = hook
-            .finished
+            .completed
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()

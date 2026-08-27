@@ -1108,9 +1108,12 @@ mod tests {
 
     /// Cancellation observed after decode admission: Read stays pending at
     /// the exact cut where cancellation is observable and the admitted
-    /// blocking decode is still physically blocked, waits for that same
-    /// task to physically settle, discards its successful semantic result,
-    /// and settles as the normalized cancelled result.
+    /// blocking decode is still physically blocked, waits for that decode
+    /// body to complete before settling, discards its successful semantic
+    /// result, and settles as the normalized cancelled result. (Blocking-
+    /// task physical settlement itself is established by the production
+    /// executor's `decode.await`; this test proves Read cannot settle
+    /// before that await has done its job.)
     ///
     /// The synchronization is fully deterministic (rendezvous edges and
     /// explicit probes, no sleeps): an implementation that returned
@@ -1163,14 +1166,14 @@ mod tests {
             "Read must not settle while the admitted blocking decode is still physically running: {probed:?}"
         );
 
-        // 6. The decoder has not physically finished yet.
-        assert!(!hook.physically_finished());
+        // 6. The decode body has not completed yet.
+        assert!(!hook.decode_completed());
 
-        // 7–8. Release the gate, then rendezvous on the decoder's physical
-        //       completion. Without the physical-settlement await this
-        //       rendezvous would race an already-settled (abandoned) tool.
+        // 7–8. Release the gate, then rendezvous on decode completion.
+        //       Without the executor's settlement await this rendezvous
+        //       would race an already-settled (abandoned) tool.
         hook.release();
-        hook.wait_physically_finished().await;
+        hook.wait_decode_completed().await;
 
         // 9. Read settles as the normalized cancelled result: the decode's
         //    success is discarded.
@@ -1182,8 +1185,8 @@ mod tests {
             }
         );
 
-        // 10. Exactly one admission and exactly one physical finish.
+        // 10. Exactly one admission and exactly one decode completion.
         assert_eq!(hook.starts(), 1);
-        assert_eq!(hook.finished_count(), 1);
+        assert_eq!(hook.completed_count(), 1);
     }
 }
