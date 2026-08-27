@@ -621,6 +621,7 @@ async fn explicit_summary_mode_is_resolved_once_and_frozen_at_admission() {
                     error: rustx::model::ModelError {
                         kind: rustx::model::ModelErrorKind::ContextWindowExceeded,
                         message: "too long".to_owned(),
+                        retry_disposition: rustx::model::error::ModelRetryDisposition::Never,
                         retry_after_ms: None,
                         provider_code: None,
                         context_overflow: None,

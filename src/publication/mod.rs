@@ -39,9 +39,10 @@
 //!
 //! [`PublicationCoalescer`] owns the bounded deterministic flush policy. When
 //! the first payload enters an empty buffer it owns one absolute deadline;
-//! later provider events never reset it. The same [`PublicationClock`] owns
+//! later provider events never reset it. The runtime [`MonotonicClock`] owns
 //! the wake-up mechanism, so deterministic tests use
-//! [`ManualPublicationClock`] and never a sleep.
+//! [`ManualMonotonicClock`](crate::runtime::ManualMonotonicClock) and never a
+//! sleep.
 //!
 //! # Three mutually exclusive settlements
 //!
@@ -88,10 +89,7 @@
 pub mod coalescer;
 pub mod frame;
 
-pub use coalescer::{
-    CoalescePolicy, ManualPublicationClock, PublicationClock, PublicationCoalescer,
-    SystemPublicationClock,
-};
+pub use coalescer::{CoalescePolicy, PublicationCoalescer};
 pub use frame::{
     PublicationAudit, PublicationAuditBlock, PublicationAuditKind, PublicationFrame,
     PublicationPayload, PublicationSettlement, PublicationStreamRecord, PublicationStreamStart,

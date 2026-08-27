@@ -510,8 +510,8 @@ async fn fallback_block_is_unsupported() {
     assert_terminal_failed(&events, &ModelErrorKind::Unsupported);
     assert_eq!(
         events.len(),
-        3,
-        "Started, TextDelta, Failed — nothing after the terminal event: {}",
+        4,
+        "Started, TextDelta, UsageUpdate, Failed — nothing after the terminal event: {}",
         describe_events(&events)
     );
     assert!(

@@ -772,7 +772,7 @@ projection/control only. There is no full transcript, `ConversationRecord`,
 request-message copy, generic repository, or client recovery cache.
 
 M8 introduced development schema version 1. The current store gate is schema
-version 12; incompatible files fail explicitly at open. There is no migration
+version 13; incompatible files fail explicitly at open. There is no migration
 framework, legacy reader, fallback, or dual write.
 File-backed SQLite uses WAL, `synchronous=FULL`, foreign keys, and a busy
 timeout. Commit is the local durability linearization point.
@@ -820,7 +820,8 @@ fail-closed behavior, and registry-owned background terminal settlement.
 The temporary #63 compaction-surface fail-close seam and the inbound-only
 store façade are superseded by atomic Surface revisions and the unified
 ConversationStore. Startup recovery over that evidence is M9a (Issue #12,
-below); replay/resend policy and retry orchestration remain open.
+below); startup never resends a request. Live bounded model retry orchestration
+is owned by the Agent Loop under Issue #134.
 
 ## Milestone 9 — Recovery, cancellation, and runtime supervision
 
@@ -1186,13 +1187,14 @@ the live path and the durable path cannot drift and a future PostgreSQL
 backend reuses the same contract.
 
 The durable event vocabulary changed incompatibly, so
-`SQLITE_SCHEMA_VERSION` is now 12. Version 10 froze the structured
+`SQLITE_SCHEMA_VERSION` is now 13. Version 10 froze the structured
 Questionnaire interaction audit vocabulary introduced by Issue #126; version
 11 added typed Agent Status generation metadata to canonical status messages;
-final version 12 adds canonical-message-coupled Agent Status emission facts,
+version 12 added canonical-message-coupled Agent Status emission facts,
 bounded Todo latest-emission heads, and the Todo-specific durable progress
-sequence. Version 11 and every older development database are rejected at
-open. There is no migration and no compatibility layer.
+sequence. Version 13 adds per-request retry correlation and failed-request
+usage. Version 12 and every older development database are rejected at open.
+There is no migration and no compatibility layer.
 
 Exit criteria (met): durable-before-prompt proved inside the publication
 callback; `requested < settled(approved) < ToolExecutionStarted` proved on

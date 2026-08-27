@@ -24,8 +24,9 @@ pub struct RequestIdentity {
     pub attempt_id: AttemptId,
     /// The logical turn/step within that attempt.
     pub turn: TurnId,
-    /// Zero for the first request of the step; one for the bounded overflow
-    /// retry.
+    /// The shared monotonically increasing actual-request ordinal within the
+    /// logical model step. Zero is the initial request; transient and
+    /// context-overflow recovery requests share the same sequence.
     pub retry_number: u32,
 }
 
@@ -71,7 +72,10 @@ impl RequestIdentity {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentStatusStart {
-    /// The exact canonical Agent Status User message committed by the start.
+    /// The exact canonical Agent Status User message for the admitted
+    /// generation. The initial request commits it; a transient retry carries
+    /// the same metadata when the message remains active on the current
+    /// Surface.
     pub message_id: MessageId,
     /// Emissions represented by that one status generation.
     #[serde(default)]

@@ -386,6 +386,7 @@ struct RequestSnapshot {
     context_generation: ContextGeneration,
     continuation: Option<ProviderContinuationState>,
     request_context_ids: Vec<MessageId>,
+    agent_status: Option<AgentStatusStart>,
 }
 ~~~
 
@@ -651,7 +652,8 @@ one staged primary step
 
 Assembly, Agent Status capture/evaluation, Skill snapshot rendering,
 extension invocation, logical ordering, contributor generation, and staging
-happen once. The retry reuses the staged ContextGeneration and the canonical
+happen once for a logical primary step. Transient retries reuse the staged
+ContextGeneration and the canonical
 context facts committed at the first start, including the one
 canonical-message-bound Agent Status emission settlement. It never reinvokes
 contributors, rereads Todo authority, reevaluates the opportunity set, or
@@ -679,10 +681,21 @@ accepted dynamic-context generation, so preserving fresh inbound never causes
 assembly to run again.
 
 Compaction may change the exact SurfaceRevision, projected messages,
-continuation compatibility, and therefore the retry request identity. The
-retry gets retry_number = 1; the original request remains independently
-reconstructable from its own snapshot and surface revision. If the provider
-overflows again, the bounded retry budget is exhausted.
+continuation compatibility, and therefore the next actual request identity.
+The Agent Loop allocates the next shared `retry_number` across both transient
+and overflow recovery; it is not assumed to be `1`. The original request
+remains independently reconstructable from its own snapshot and surface
+revision. If the provider overflows again, the bounded overflow budget is
+exhausted.
+
+Transient model recovery is not owned by the Context Engine. The Agent Loop
+settles the failed publication, waits on its runtime monotonic backoff clock,
+and replays the already admitted frozen request state through the ordinary
+request-start frontier. No fresh context admission, contributor evaluation,
+Agent Status generation, or mailbox drain occurs during that replay. A
+transient retry after successful compaction uses the post-compaction Surface
+and continuation boundary; it cannot reuse pre-compaction observed-input
+evidence when the structural anchor is incompatible.
 
 The overflow regression uses a deterministic fake adapter and the closed
 Agent Status capture/evaluate counter. Its compaction candidate would cross

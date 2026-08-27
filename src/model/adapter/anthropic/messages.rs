@@ -34,7 +34,7 @@ use crate::tools::types::{ToolCall, ToolCallStart};
 use super::config::AnthropicAdapterConfig;
 use super::mapping::{
     is_refusal, map_finish_reason, normalize_http_error, normalize_usage, resolve_tool,
-    translate_request,
+    stream_retry_disposition, translate_request,
 };
 use super::wire::{WireEvent, WireUsage, parse_event};
 
@@ -270,6 +270,11 @@ async fn open_stream(
             OpeningOutcome::Failed(ModelError {
                 kind,
                 message: reqwest_error.to_string(),
+                retry_disposition: if reqwest_error.is_timeout() || reqwest_error.is_connect() {
+                    crate::model::error::ModelRetryDisposition::Transient
+                } else {
+                    crate::model::error::ModelRetryDisposition::Never
+                },
                 retry_after_ms: None,
                 provider_code: None,
                 context_overflow: None,
@@ -288,23 +293,20 @@ async fn streaming_pull(
 ) {
     while pending.is_empty() {
         let item = tokio::select! {
-            item = stream.next() => item,
+            biased;
             () = cancellation.cancelled() => {
-                pending.push_back(ModelEvent::Failed {
-                    error: cancelled_error(),
-                });
+                pending.extend(normalizer.failure_events(cancelled_error()));
                 break;
             }
+            item = stream.next() => item,
         };
         match item {
             Some(Ok(event)) => match normalizer.push_event(&event.data) {
                 Ok(events) => pending.extend(events),
-                Err(error) => pending.push_back(ModelEvent::Failed { error }),
+                Err(error) => pending.extend(normalizer.failure_events(error)),
             },
             Some(Err(error)) => {
-                pending.push_back(ModelEvent::Failed {
-                    error: sse_failure(&error),
-                });
+                pending.extend(normalizer.failure_events(sse_failure(&error)));
                 break;
             }
             None => {
@@ -312,7 +314,7 @@ async fn streaming_pull(
                 // already emitted a terminal event this is a failure.
                 match normalizer.finish() {
                     Ok(events) => pending.extend(events),
-                    Err(error) => pending.push_back(ModelEvent::Failed { error }),
+                    Err(error) => pending.extend(normalizer.failure_events(error)),
                 }
                 break;
             }
@@ -331,6 +333,7 @@ fn cancelled_error() -> ModelError {
     ModelError {
         kind: ModelErrorKind::Cancelled,
         message: "model invocation cancelled".to_owned(),
+        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
@@ -341,6 +344,14 @@ fn sse_failure(error: &eventsource_stream::EventStreamError<reqwest::Error>) -> 
     ModelError {
         kind: ModelErrorKind::Transport,
         message: format!("Anthropic SSE stream failed: {error}"),
+        retry_disposition: match error {
+            eventsource_stream::EventStreamError::Transport(source)
+                if source.is_timeout() || source.is_connect() =>
+            {
+                crate::model::error::ModelRetryDisposition::Transient
+            }
+            _ => crate::model::error::ModelRetryDisposition::Never,
+        },
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
@@ -470,6 +481,11 @@ impl AnthropicStreamNormalizer {
                     ));
                 }
                 self.message_start_usage = message.usage;
+                // Keep the provider's early cumulative snapshot available for
+                // a later failure, but do not add a visible UsageUpdate to a
+                // successful stream that will carry the same snapshot in its
+                // terminal Completed event. `failure_events` publishes this
+                // evidence immediately before Failed when it matters.
                 Ok(Vec::new())
             }
             WireEvent::ContentBlockStart { index, block } => {
@@ -484,16 +500,39 @@ impl AnthropicStreamNormalizer {
                 usage,
                 stop_details,
             } => {
+                let has_stop_reason = delta.reason.is_some();
                 if let Some(stop_reason) = delta.reason {
                     self.stop_reason = Some(stop_reason);
                 }
                 if stop_details.is_some() {
                     self.stop_details = stop_details;
                 }
-                if usage.is_some() {
+                let has_new_usage = usage.as_ref().is_some_and(usage_has_evidence);
+                if has_new_usage {
                     self.latest_usage = usage;
                 }
-                Ok(Vec::new())
+                // A message delta with a stop reason is immediately followed
+                // by the successful terminal event, so the terminal snapshot
+                // is sufficient. A cumulative snapshot without a stop reason
+                // may be the last trustworthy evidence before a later stream
+                // failure and is surfaced as an update now.
+                if has_stop_reason || !has_new_usage {
+                    Ok(Vec::new())
+                } else {
+                    Ok(self
+                        .latest_usage
+                        .as_ref()
+                        .filter(|usage| usage_has_evidence(usage))
+                        .map(|usage| {
+                            vec![ModelEvent::UsageUpdate {
+                                usage: normalize_usage(
+                                    self.message_start_usage.as_ref(),
+                                    Some(usage),
+                                ),
+                            }]
+                        })
+                        .unwrap_or_default())
+                }
             }
             WireEvent::MessageStop => self.terminal(),
             WireEvent::Ping | WireEvent::Unknown => Ok(Vec::new()),
@@ -511,6 +550,10 @@ impl AnthropicStreamNormalizer {
                             .map(|t| format!(" ({t})"))
                             .unwrap_or_default(),
                         error.message.as_deref().unwrap_or("unknown")
+                    ),
+                    retry_disposition: stream_retry_disposition(
+                        provider_code.as_deref(),
+                        error.message.as_deref(),
                     ),
                     retry_after_ms: None,
                     provider_code,
@@ -955,17 +998,14 @@ impl AnthropicStreamNormalizer {
             provider_error("provider stream reached message_stop without a stop reason".to_owned())
         })?;
         if is_context_window_error("", Some(&stop_reason)) {
-            return Ok(vec![ModelEvent::Failed {
-                error: ModelError {
-                    kind: ModelErrorKind::ContextWindowExceeded,
-                    message: format!(
-                        "provider terminated Anthropic generation with {stop_reason:?}"
-                    ),
-                    retry_after_ms: None,
-                    provider_code: Some(stop_reason),
-                    context_overflow: None,
-                },
-            }]);
+            return Ok(self.failure_events(ModelError {
+                kind: ModelErrorKind::ContextWindowExceeded,
+                message: format!("provider terminated Anthropic generation with {stop_reason:?}"),
+                retry_disposition: crate::model::error::ModelRetryDisposition::Never,
+                retry_after_ms: None,
+                provider_code: Some(stop_reason),
+                context_overflow: None,
+            }));
         }
         let mut events = Vec::new();
         if is_refusal(Some(&stop_reason))
@@ -997,6 +1037,26 @@ impl AnthropicStreamNormalizer {
         )
     }
 
+    /// Returns the latest provider usage evidence immediately before a
+    /// terminal failure. A failed request must retain the trustworthy
+    /// cumulative snapshot it observed, while successful streams keep their
+    /// existing single terminal usage event.
+    fn failure_events(&self, error: ModelError) -> Vec<ModelEvent> {
+        let mut events = Vec::new();
+        if let Some(usage) = self
+            .latest_usage
+            .as_ref()
+            .or(self.message_start_usage.as_ref())
+            .filter(|usage| usage_has_evidence(usage))
+        {
+            events.push(ModelEvent::UsageUpdate {
+                usage: normalize_usage(self.message_start_usage.as_ref(), Some(usage)),
+            });
+        }
+        events.push(ModelEvent::Failed { error });
+        events
+    }
+
     /// Stream ended without a terminal event: normalized failure.
     fn finish(&mut self) -> Result<Vec<ModelEvent>, ModelError> {
         if self.terminal_emitted {
@@ -1008,10 +1068,23 @@ impl AnthropicStreamNormalizer {
     }
 }
 
+fn usage_has_evidence(usage: &WireUsage) -> bool {
+    usage.input_tokens.is_some()
+        || usage.output_tokens.is_some()
+        || usage.cache_read_input_tokens.is_some()
+        || usage.cache_creation_input_tokens.is_some()
+        || usage
+            .output_tokens_details
+            .as_ref()
+            .and_then(|details| details.thinking_tokens)
+            .is_some()
+}
+
 fn provider_error(message: String) -> ModelError {
     ModelError {
         kind: ModelErrorKind::ProviderError,
         message,
+        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
@@ -1043,6 +1116,7 @@ fn unsupported(message: impl Into<String>) -> ModelError {
     ModelError {
         kind: ModelErrorKind::Unsupported,
         message,
+        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,

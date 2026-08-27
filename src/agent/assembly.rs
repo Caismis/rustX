@@ -154,6 +154,14 @@ impl ModelEventAssembler {
         }
     }
 
+    /// Returns the latest cumulative usage snapshot observed for this exact
+    /// provider request. Snapshots are replaced, never summed, so a failure
+    /// can retain trustworthy usage without fabricating a terminal total.
+    #[must_use]
+    pub fn latest_usage(&self) -> Option<ModelUsage> {
+        self.usage.clone()
+    }
+
     /// Appends a text delta to its block.
     fn push_text(
         &mut self,
@@ -663,6 +671,7 @@ mod tests {
                 error: ModelError {
                     kind: ModelErrorKind::Timeout,
                     message: "boom".to_owned(),
+                    retry_disposition: crate::model::error::ModelRetryDisposition::Never,
                     retry_after_ms: None,
                     provider_code: None,
                     context_overflow: None,

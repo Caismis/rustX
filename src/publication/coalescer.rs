@@ -8,7 +8,7 @@
 //! - **maximum bytes** — buffered committed-for-release bytes reached the
 //!   threshold;
 //! - **maximum latency** — the oldest buffered payload owns one absolute
-//!   deadline, measured through an injected [`PublicationClock`]; later
+//!   deadline, measured through an injected [`MonotonicClock`]; later
 //!   payloads never reset or extend that deadline;
 //! - **structural boundary** — a tool-call proposal start or completion is
 //!   released as its own observable transition;
@@ -21,12 +21,10 @@
 
 use std::fmt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
 
 use futures_util::future::BoxFuture;
-use tokio::sync::watch;
 
+use crate::runtime::MonotonicClock;
 use crate::runtime::identity::{MessageId, PublicationStreamId};
 
 use super::frame::{PublicationFrame, PublicationPayload};
@@ -59,135 +57,12 @@ impl Default for CoalescePolicy {
     }
 }
 
-/// The monotonic clock the latency policy reads.
-///
-/// Latency flushing is the only time-dependent part of publication. Injecting
-/// the clock keeps it deterministic: tests advance a
-/// [`ManualPublicationClock`] explicitly and never sleep to make a flush
-/// happen.
-pub trait PublicationClock: Send + Sync + fmt::Debug {
-    /// Monotonic milliseconds since an arbitrary fixed origin.
-    fn now_millis(&self) -> u64;
-
-    /// Wakes at an absolute deadline in this clock's same monotonic domain.
-    ///
-    /// The coalescer owns the deadline; the clock owns the wake-up mechanism.
-    /// This keeps production timers and deterministic test clocks from
-    /// disagreeing about how much latency remains.
-    fn wait_until_millis(&self, deadline_millis: u64) -> BoxFuture<'static, ()>;
-}
-
-/// The production monotonic clock.
-#[derive(Debug)]
-pub struct SystemPublicationClock {
-    origin: tokio::time::Instant,
-}
-
-impl SystemPublicationClock {
-    /// Creates a clock whose origin is now.
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            origin: tokio::time::Instant::now(),
-        }
-    }
-}
-
-impl Default for SystemPublicationClock {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl PublicationClock for SystemPublicationClock {
-    fn now_millis(&self) -> u64 {
-        u64::try_from(self.origin.elapsed().as_millis()).unwrap_or(u64::MAX)
-    }
-
-    fn wait_until_millis(&self, deadline_millis: u64) -> BoxFuture<'static, ()> {
-        let remaining = deadline_millis.saturating_sub(self.now_millis());
-        Box::pin(async move {
-            if remaining > 0 {
-                tokio::time::sleep(Duration::from_millis(remaining)).await;
-            }
-        })
-    }
-}
-
-/// A manually advanced clock for deterministic latency regressions.
-///
-/// This is a test seam in the same sense as
-/// [`RecordingEventSink`](crate::events::RecordingEventSink): it is an
-/// explicit deterministic control point, never a second production clock.
-#[derive(Debug)]
-pub struct ManualPublicationClock {
-    millis: Arc<AtomicU64>,
-    wake: watch::Sender<u64>,
-}
-
-impl Default for ManualPublicationClock {
-    fn default() -> Self {
-        let (wake, _receiver) = watch::channel(0);
-        Self {
-            millis: Arc::new(AtomicU64::new(0)),
-            wake,
-        }
-    }
-}
-
-impl ManualPublicationClock {
-    /// Creates a clock parked at zero.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Advances the clock by `millis`.
-    pub fn advance(&self, millis: u64) {
-        let mut current = self.millis.load(Ordering::SeqCst);
-        loop {
-            let next = current.saturating_add(millis);
-            match self
-                .millis
-                .compare_exchange(current, next, Ordering::SeqCst, Ordering::SeqCst)
-            {
-                Ok(_) => {
-                    self.wake.send_replace(next);
-                    break;
-                }
-                Err(observed) => current = observed,
-            }
-        }
-    }
-}
-
-impl PublicationClock for ManualPublicationClock {
-    fn now_millis(&self) -> u64 {
-        self.millis.load(Ordering::SeqCst)
-    }
-
-    fn wait_until_millis(&self, deadline_millis: u64) -> BoxFuture<'static, ()> {
-        let millis = Arc::clone(&self.millis);
-        let mut wake = self.wake.subscribe();
-        Box::pin(async move {
-            loop {
-                if millis.load(Ordering::SeqCst) >= deadline_millis {
-                    return;
-                }
-                if wake.changed().await.is_err() {
-                    return;
-                }
-            }
-        })
-    }
-}
-
 /// The in-memory coalescer of one publication stream.
 pub struct PublicationCoalescer {
     stream_id: PublicationStreamId,
     message_id: MessageId,
     policy: CoalescePolicy,
-    clock: Arc<dyn PublicationClock>,
+    clock: Arc<dyn MonotonicClock>,
     next_sequence: u64,
     pending: Vec<PublicationPayload>,
     pending_bytes: usize,
@@ -213,7 +88,7 @@ impl PublicationCoalescer {
         stream_id: PublicationStreamId,
         message_id: MessageId,
         policy: CoalescePolicy,
-        clock: Arc<dyn PublicationClock>,
+        clock: Arc<dyn MonotonicClock>,
     ) -> Self {
         Self {
             stream_id,
@@ -357,21 +232,22 @@ impl PublicationCoalescer {
 mod tests {
     use std::sync::Arc;
 
-    use super::{CoalescePolicy, ManualPublicationClock, PublicationClock, PublicationCoalescer};
+    use super::{CoalescePolicy, PublicationCoalescer};
     use crate::message::types::ContentBlockIndex;
     use crate::publication::frame::PublicationPayload;
     use crate::runtime::identity::{MessageId, PublicationStreamId, ToolCallId, ToolId};
+    use crate::runtime::{ManualMonotonicClock, MonotonicClock};
     use crate::tools::types::ToolCallStart;
 
     fn coalescer(
         policy: CoalescePolicy,
-        clock: &Arc<ManualPublicationClock>,
+        clock: &Arc<ManualMonotonicClock>,
     ) -> PublicationCoalescer {
         PublicationCoalescer::new(
             PublicationStreamId::new("stream-1"),
             MessageId::new("message-1"),
             policy,
-            Arc::clone(clock) as Arc<dyn super::PublicationClock>,
+            Arc::clone(clock) as Arc<dyn MonotonicClock>,
         )
     }
 
@@ -386,7 +262,7 @@ mod tests {
     /// under the byte threshold.
     #[test]
     fn byte_threshold_coalesces_many_deltas_into_few_frames() {
-        let clock = Arc::new(ManualPublicationClock::new());
+        let clock = Arc::new(ManualMonotonicClock::new());
         let mut coalescer = coalescer(
             CoalescePolicy {
                 max_bytes: 16,
@@ -412,7 +288,7 @@ mod tests {
     /// wall-clock time is required and none is consulted.
     #[test]
     fn latency_flush_is_deterministic_under_a_manual_clock() {
-        let clock = Arc::new(ManualPublicationClock::new());
+        let clock = Arc::new(ManualMonotonicClock::new());
         let mut coalescer = coalescer(
             CoalescePolicy {
                 max_bytes: 4_096,
@@ -440,7 +316,7 @@ mod tests {
     /// payload joins that buffer without extending the original budget.
     #[test]
     fn oldest_payload_deadline_is_not_reset_by_later_payloads() {
-        let clock = Arc::new(ManualPublicationClock::new());
+        let clock = Arc::new(ManualMonotonicClock::new());
         let mut coalescer = coalescer(
             CoalescePolicy {
                 max_bytes: usize::MAX,
@@ -467,7 +343,7 @@ mod tests {
     /// entry into the now-empty buffer.
     #[test]
     fn latency_deadline_restarts_only_after_a_successful_drain() {
-        let clock = Arc::new(ManualPublicationClock::new());
+        let clock = Arc::new(ManualMonotonicClock::new());
         let mut coalescer = coalescer(
             CoalescePolicy {
                 max_bytes: usize::MAX,
@@ -489,7 +365,7 @@ mod tests {
     /// maximum.
     #[test]
     fn latency_deadline_handles_zero_and_saturating_arithmetic() {
-        let clock = Arc::new(ManualPublicationClock::new());
+        let clock = Arc::new(ManualMonotonicClock::new());
         let mut immediate = coalescer(
             CoalescePolicy {
                 max_bytes: usize::MAX,
@@ -521,7 +397,7 @@ mod tests {
     /// absolute-deadline future without a wall-clock sleep.
     #[tokio::test]
     async fn manual_clock_wakes_an_absolute_deadline_future() {
-        let clock = Arc::new(ManualPublicationClock::new());
+        let clock = Arc::new(ManualMonotonicClock::new());
         let wait = clock.wait_until_millis(50);
         let clock_for_task = Arc::clone(&clock);
         let task = tokio::spawn(async move {
@@ -540,7 +416,7 @@ mod tests {
     /// and is never merged into the surrounding text.
     #[test]
     fn structural_boundary_forces_its_own_frame() {
-        let clock = Arc::new(ManualPublicationClock::new());
+        let clock = Arc::new(ManualMonotonicClock::new());
         let mut coalescer = coalescer(
             CoalescePolicy {
                 max_bytes: 4_096,
@@ -573,7 +449,7 @@ mod tests {
     /// there is some, a terminal-only frame when there is not.
     #[test]
     fn terminal_flush_always_produces_a_frame() {
-        let clock = Arc::new(ManualPublicationClock::new());
+        let clock = Arc::new(ManualMonotonicClock::new());
         let mut empty = coalescer(CoalescePolicy::default(), &clock);
         let frames = empty.take_terminal_frames();
         assert_eq!(frames.len(), 1);

@@ -45,6 +45,9 @@ pub(crate) mod interactive_process;
 #[doc(hidden)]
 #[cfg(unix)]
 pub mod interactive_supervisor;
+/// Runtime-owned monotonic elapsed time for deterministic policy deadlines.
+/// This is separate from the UTC [`RuntimeClock`] timestamp boundary.
+pub mod monotonic;
 /// Non-Unix interactive supervisor entry points are intentionally unavailable
 /// because the runtime's process-unit implementation uses Unix process
 /// groups and Unix-domain control sockets.
@@ -145,6 +148,7 @@ pub use interaction::{
     QuestionnaireAnswer, QuestionnaireAnswerEntry, QuestionnaireDeclined, QuestionnaireResponse,
     QuestionnaireSpecification, QuestionnaireSubmission, SingleOptionAnswer,
 };
+pub use monotonic::{ManualMonotonicClock, MonotonicClock, SystemMonotonicClock};
 pub use recovery::{
     AttemptRecoveryClass, BackgroundEvidence, BackgroundRecoveryClass, KnownModelOutcome,
     RecoveryError, RecoveryEvidence, RecoveryPlan, RecoveryReconciliation, RecoveryReport,

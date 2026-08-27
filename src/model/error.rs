@@ -3,10 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Error classes the runtime distinguishes for retry/termination decisions.
-///
-/// Retry logic itself is a later milestone; M1 defines the typed classes and
-/// the normalized diagnostic data retry code will need. Provider SDK error
-/// structs never cross this boundary.
+/// Provider SDK error structs never cross this boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelErrorKind {
@@ -28,6 +25,21 @@ pub enum ModelErrorKind {
     Cancelled,
     /// The requested capability or protocol is unsupported.
     Unsupported,
+}
+
+/// The adapter's evidence-based retry classification for one normalized
+/// provider failure.
+///
+/// The Agent Loop owns the retry budget and scheduling. Adapters own the
+/// provider-specific decision that a failure is safe to retry and provide any
+/// provider-supplied delay separately in [`ModelError::retry_after_ms`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelRetryDisposition {
+    /// The failure is terminal for this request.
+    Never,
+    /// The failure is eligible for the bounded Agent-Loop retry budget.
+    Transient,
 }
 
 /// The typed provider measurements of one rejected oversized request.
@@ -72,6 +84,9 @@ pub struct ModelError {
     pub kind: ModelErrorKind,
     /// Human-readable diagnostic message.
     pub message: String,
+    /// Adapter-owned evidence classification. Delay is intentionally a
+    /// separate field so there is exactly one source of `retry_after_ms`.
+    pub retry_disposition: ModelRetryDisposition,
     /// Provider-requested retry delay, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_after_ms: Option<u64>,
@@ -292,7 +307,10 @@ fn last_number(text: &str) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ModelError, ModelErrorKind, context_overflow_report, is_context_window_error};
+    use super::{
+        ModelError, ModelErrorKind, ModelRetryDisposition, context_overflow_report,
+        is_context_window_error,
+    };
 
     /// Model errors round-trip with stable kind discriminators.
     #[test]
@@ -300,6 +318,7 @@ mod tests {
         let error = ModelError {
             kind: ModelErrorKind::RateLimit,
             message: "requests per minute exceeded".to_owned(),
+            retry_disposition: ModelRetryDisposition::Transient,
             retry_after_ms: Some(1_500),
             provider_code: Some("rate_limit_exceeded".to_owned()),
             context_overflow: None,

@@ -238,9 +238,18 @@ async fn cancellation_in_flight_openai_chat() {
     assert!(matches!(second, Some(ModelEvent::TextDelta { .. })));
     // Cancel while the provider stream is actually in flight.
     cancellation.cancel();
-    let terminal = tokio::time::timeout(Duration::from_secs(5), stream.next())
+    let usage_or_terminal = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await
         .expect("terminal within timeout");
+    let terminal = match usage_or_terminal {
+        Some(ModelEvent::UsageUpdate { usage }) => {
+            assert_eq!(usage.input_tokens, 5);
+            tokio::time::timeout(Duration::from_secs(5), stream.next())
+                .await
+                .expect("terminal after usage update")
+        }
+        other => other,
+    };
     assert!(matches!(
         terminal,
         Some(ModelEvent::Failed { error }) if error.kind == ModelErrorKind::Cancelled
@@ -283,9 +292,18 @@ async fn cancellation_in_flight_anthropic() {
         .expect("text delta within timeout");
     assert!(matches!(delta, Some(ModelEvent::TextDelta { .. })));
     cancellation.cancel();
-    let terminal = tokio::time::timeout(Duration::from_secs(5), stream.next())
+    let usage_or_terminal = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await
         .expect("terminal within timeout");
+    let terminal = match usage_or_terminal {
+        Some(ModelEvent::UsageUpdate { usage }) => {
+            assert_eq!(usage.input_tokens, 5);
+            tokio::time::timeout(Duration::from_secs(5), stream.next())
+                .await
+                .expect("terminal after usage update")
+        }
+        other => other,
+    };
     assert!(matches!(
         terminal,
         Some(ModelEvent::Failed { error }) if error.kind == ModelErrorKind::Cancelled
@@ -385,6 +403,7 @@ async fn cancellation_while_headers_delayed_anthropic() {
             error: rustx::model::ModelError {
                 kind: ModelErrorKind::Cancelled,
                 message: "model invocation cancelled".to_owned(),
+                retry_disposition: rustx::model::error::ModelRetryDisposition::Never,
                 retry_after_ms: None,
                 provider_code: None,
                 context_overflow: None,
@@ -438,6 +457,7 @@ async fn cancellation_while_headers_delayed_openai_chat() {
             error: rustx::model::ModelError {
                 kind: ModelErrorKind::Cancelled,
                 message: "model invocation cancelled".to_owned(),
+                retry_disposition: rustx::model::error::ModelRetryDisposition::Never,
                 retry_after_ms: None,
                 provider_code: None,
                 context_overflow: None,
@@ -491,6 +511,7 @@ async fn cancellation_while_headers_delayed_openai_responses() {
             error: rustx::model::ModelError {
                 kind: ModelErrorKind::Cancelled,
                 message: "model invocation cancelled".to_owned(),
+                retry_disposition: rustx::model::error::ModelRetryDisposition::Never,
                 retry_after_ms: None,
                 provider_code: None,
                 context_overflow: None,

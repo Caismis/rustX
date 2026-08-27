@@ -1252,7 +1252,8 @@ pub trait ConversationStore: Send + Sync + 'static {
     ///
     /// This is the one durable request-start transition of every actual
     /// primary model request — the first turn, every tool→model
-    /// continuation, every recovered continuation, and every overflow retry.
+    /// continuation, every recovered continuation, every transient retry, and
+    /// every overflow retry.
     /// A successful commit is the durable fact that the model request
     /// started; a failure commits none of the inputs. The Agent Loop
     /// arbitrates cancellation against exactly this commit, so a

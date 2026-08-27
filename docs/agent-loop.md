@@ -35,9 +35,48 @@ The loop (`src/agent`) executes one attempt to its single terminal outcome:
   (Issue #12, M9b): staging without durable effect, then the fused durable
   start commit under the attempt's start gate
 - frozen `RequestSnapshot` creation and structural reconstruction checking
+- logical model-step retry orchestration: one admitted/frozen logical step may
+  own several actual provider requests, while every request crosses the
+  ordinary durable start frontier
 - the two typed lifecycle interception seams of Issue #56 (`PreStepPolicy`
   and `ToolResultObserver`), the deferred context buffer they feed, and the
   split between lifecycle *timing* and semantic *ownership*
+
+### Logical model steps and actual requests (Issue #134)
+
+A logical primary model step has one Context Assembly/admission generation and
+one frozen request state. It may contain the initial provider request and
+bounded recovery requests, each with its own `RequestIdentity`, shared
+`RequestIdentity.retry_number`, `RequestId`, provisional Assistant
+`MessageId`, `RequestSnapshot`, `ModelRequestStarted` fact, publication stream,
+provider outcome, and publication settlement. The Agent Loop owns this state
+machine and its retry budgets; adapters only normalize provider evidence into
+`ModelRetryDisposition` and an optional `retry_after_ms`.
+
+Transient recovery replays the frozen state through the normal
+stage/finalize/cancellation-arbitration/durable-start/reconstruct/adapter
+frontier. It does not reassemble dynamic context, resample Agent Status,
+consume `FreshInbound`, rerun contributors, or admit mailbox arrivals. The
+shared actual-request ordinal is collision-free across transient retries and
+context-overflow recovery. Overflow remains a distinct Context Engine
+procedure: estimator correction, compaction, fit validation, and then a new
+frozen post-compaction state within the same logical step. A later transient
+retry always uses that post-compaction state.
+
+The transient budget is three retries (four actual primary requests including
+the initial request); the overflow budget remains one, so the additive primary
+bound is five. Default transient backoff is 2, 4, and 8 seconds, with an
+adapter-provided retry hint taking precedence and capped at 60 seconds. Both
+publication latency and retry deadlines use the runtime-owned monotonic clock;
+tests inject a manually advanced clock.
+
+Every failed request settles its publication stream before another request can
+start. Partial text, reasoning, refusal, usage, and proposed tool calls remain
+durable audit evidence, but are noncanonical and have no Tool Plane authority.
+Only the successfully completed request can commit the canonical Assistant.
+`ModelRequestFailed.usage` retains the latest trustworthy cumulative usage
+snapshot observed before that exact request failed; absent evidence remains
+`None`.
 
 Execution semantics are explicit: an `ExecutionStateMachine`
 (`Idle → RunningModel → WaitingForTool → RunningModel → Completed`, with
@@ -450,13 +489,13 @@ defines for a pending `ContextContributor` future. The policy cannot
 convert cancellation into success, restart the turn, trigger a provider
 retry, or force continuation.
 
-An overflow retry reuses the already staged `ContextGeneration` and never
-re-enters assembly, so the policy is evaluated exactly once per primary
-step. The retry itself passes through the same start arbitration with an
-empty staged context; the compaction between the overflow and the retry is
-an independent durable commit whose candidates are evaluated through the
-same `TokenEstimator` over the exact hypothetical post-compaction request —
-the retained Surface plus the staged (not yet committed) request-scoped
+Every recovery request reuses the accepted Context Assembly generation and
+never re-enters assembly, so the policy is evaluated exactly once per logical
+primary step. The request itself passes through the same start arbitration with
+an empty staged context. Context-overflow recovery additionally performs an
+independent durable compaction commit whose candidates are evaluated through
+the same `TokenEstimator` over the exact hypothetical post-compaction request
+— the retained Surface plus the staged (not yet committed) request-scoped
 context overlay (`CompactionConstraints::staged_request_context`) plus the
 Effective System Prompt plus tools — never as a scalar token reservation.
 
@@ -896,7 +935,7 @@ The latency policy is an oldest-payload bound, not a quiet-period debounce.
 When the first payload enters an empty coalescer, it creates one absolute
 monotonic deadline. Later provider events use only the remaining budget and
 cannot restart or extend it; a quiet provider is woken by that deadline. The
-coalescer owns both the deadline and the `PublicationClock` wake future, so
+coalescer owns both the deadline and the runtime monotonic-clock wake future, so
 the Agent Loop does not maintain a second time domain. Byte, structural,
 terminal, failure, and cancellation boundaries still follow their normal
 precedence, and a successful drain is the only point that permits a new
@@ -924,16 +963,18 @@ open and it terminalizes as an audit whose kind the durable store derives from
 the P/U evidence. Canonical acceptance and audit terminalization can therefore
 never both happen for one stream.
 
-An overflow retry starts a second provider request inside one turn. The
-abandoned request's stream never reached canonical acceptance, so the Agent
-Loop commits its audit before any retry preparation or second provider start:
+Each recovery retry starts a new actual provider request inside one logical
+turn. The abandoned request's stream never reached canonical acceptance, so the
+Agent Loop commits its audit before any retry preparation or next provider
+start. This ordering applies to both transient replay and the distinct
+overflow compact-and-retry path:
 
 ```text
-first request ends with recoverable ContextWindowExceeded
+actual request ends with a recoverable failure
     ↓
 terminalize old publication as Incomplete (must COMMIT)
-    ↓ only after success
-compact / prepare retry
+    ↓ only after success; transient waits on the monotonic deadline
+prepare frozen retry, or compact then prepare the post-compaction retry
     ↓
 durably start retry Request Snapshot + ModelRequestStarted
     ↓
@@ -968,9 +1009,13 @@ Loop order is therefore a necessary sequencing rule, not the only protection.
 ## 5. Usage
 
 `ModelRequestCompleted.usage` reports the canonical final usage of the
-turn: the terminal `Completed.usage` when present, otherwise the latest
-`UsageUpdate`, otherwise `None`. Cumulative snapshots are never summed and
-missing counters are never fabricated.
+completed request: terminal `Completed.usage` when present, otherwise the
+latest `UsageUpdate`, otherwise `None`. `ModelRequestFailed.usage` reports the
+latest trustworthy cumulative `UsageUpdate` observed before that exact
+request failed, or `None` when no such evidence exists. Cumulative snapshots
+from one request are never summed, missing counters are never fabricated, and
+failed requests retain their own usage evidence for any higher-level
+per-request accounting.
 
 ## 6. Terminal state guarantee
 

@@ -69,6 +69,7 @@ pub fn validate_request(
             message: "the effective model capabilities do not include tool calls; \
                       tool definitions are never sent to a text-only model"
                 .to_owned(),
+            retry_disposition: crate::model::error::ModelRetryDisposition::Never,
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
@@ -144,6 +145,7 @@ fn invalid_request(message: String) -> ModelError {
     ModelError {
         kind: ModelErrorKind::InvalidRequest,
         message,
+        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,

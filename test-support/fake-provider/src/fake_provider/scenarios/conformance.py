@@ -211,7 +211,7 @@ def skill_read_turn() -> Scenario:
 
 
 def provider_http_error() -> Scenario:
-    """A deterministic provider failure with no retry and no extra turn."""
+    """A deterministic permanent provider failure with no retry or extra turn."""
     return Scenario(
         "provider_http_error",
         Step(
@@ -221,12 +221,12 @@ def provider_http_error() -> Scenario:
                 body_contains=(TURN_ONE,),
             ),
             HttpError(
-                500,
+                400,
                 {
                     "error": {
-                        "message": "the scripted provider is unavailable",
-                        "type": "server_error",
-                        "code": "internal_error",
+                        "message": "the scripted request is invalid",
+                        "type": "invalid_request_error",
+                        "code": "invalid_request",
                     }
                 },
             ),

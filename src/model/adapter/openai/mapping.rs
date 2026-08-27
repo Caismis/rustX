@@ -7,7 +7,9 @@ use async_openai::types::chat::CompletionUsage;
 #[cfg(test)]
 use async_openai::types::chat::FinishReason;
 
-use crate::model::error::{ModelError, ModelErrorKind, is_context_window_error};
+use crate::model::error::{
+    ModelError, ModelErrorKind, ModelRetryDisposition, is_context_window_error,
+};
 use crate::model::finish::ModelFinishReason;
 use crate::model::types::{ModelUsage, UsageDetails};
 use crate::runtime::identity::ToolId;
@@ -24,7 +26,8 @@ pub(crate) fn normalize_error(error: OpenAIError) -> ModelError {
             400 => context_or_invalid(&failure.message, failure.provider_code.as_deref()),
             401 | 403 => auth(failure),
             404 => invalid_or_unsupported(failure),
-            408 | 409 => timeout(failure),
+            408 => timeout(failure),
+            409 => provider_error(failure),
             429 => rate_limit(failure),
             _ if is_context_window_error(&failure.message, failure.provider_code.as_deref()) => {
                 context_window(failure)
@@ -36,6 +39,7 @@ pub(crate) fn normalize_error(error: OpenAIError) -> ModelError {
 }
 
 /// Normalizes one SDK-variant error that carried no HTTP failure of its own.
+#[allow(clippy::too_many_lines)] // preserve one exhaustive SDK error normalization boundary
 fn normalize_sdk_error(error: OpenAIError) -> ModelError {
     match error {
         OpenAIError::Reqwest(reqwest_error) => {
@@ -48,6 +52,11 @@ fn normalize_sdk_error(error: OpenAIError) -> ModelError {
             ModelError {
                 kind,
                 message,
+                retry_disposition: if reqwest_error.is_timeout() || reqwest_error.is_connect() {
+                    crate::model::error::ModelRetryDisposition::Transient
+                } else {
+                    crate::model::error::ModelRetryDisposition::Never
+                },
                 retry_after_ms: None,
                 provider_code: None,
                 context_overflow: None,
@@ -64,15 +73,23 @@ fn normalize_sdk_error(error: OpenAIError) -> ModelError {
                 400 => context_or_invalid_kind(&message, provider_code.as_deref()),
                 401 | 403 => ModelErrorKind::Authentication,
                 429 => ModelErrorKind::RateLimit,
-                408 | 409 => ModelErrorKind::Timeout,
+                408 => ModelErrorKind::Timeout,
+                409 => ModelErrorKind::ProviderError,
                 _ if is_context_window_error(&message, provider_code.as_deref()) => {
                     ModelErrorKind::ContextWindowExceeded
                 }
                 _ => ModelErrorKind::ProviderError,
             };
+            let retry_disposition = sdk_status_disposition(
+                api_error.status_code.as_u16(),
+                provider_code.as_deref(),
+                &message,
+                &kind,
+            );
             ModelError {
                 kind,
                 message,
+                retry_disposition,
                 retry_after_ms: None,
                 provider_code,
                 context_overflow: None,
@@ -82,6 +99,7 @@ fn normalize_sdk_error(error: OpenAIError) -> ModelError {
         OpenAIError::InvalidArgument(message) => ModelError {
             kind: ModelErrorKind::InvalidRequest,
             message,
+            retry_disposition: crate::model::error::ModelRetryDisposition::Never,
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
@@ -89,6 +107,14 @@ fn normalize_sdk_error(error: OpenAIError) -> ModelError {
         OpenAIError::StreamError(stream_error) => ModelError {
             kind: ModelErrorKind::ProviderError,
             message: stream_error.to_string(),
+            retry_disposition: match stream_error.as_ref() {
+                async_openai::error::StreamError::EventStream(message)
+                    if message.starts_with("Transport error:") =>
+                {
+                    crate::model::error::ModelRetryDisposition::Transient
+                }
+                _ => crate::model::error::ModelRetryDisposition::Never,
+            },
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
@@ -96,6 +122,12 @@ fn normalize_sdk_error(error: OpenAIError) -> ModelError {
         OpenAIError::Boxed(boxed) => ModelError {
             kind: ModelErrorKind::ProviderError,
             message: boxed.to_string(),
+            retry_disposition: boxed
+                .downcast_ref::<reqwest::Error>()
+                .filter(|error| error.is_timeout() || error.is_connect())
+                .map_or(crate::model::error::ModelRetryDisposition::Never, |_| {
+                    crate::model::error::ModelRetryDisposition::Transient
+                }),
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
@@ -105,6 +137,7 @@ fn normalize_sdk_error(error: OpenAIError) -> ModelError {
                 ModelError {
                     kind: ModelErrorKind::ProviderError,
                     message: "stream terminated by [DONE]".to_owned(),
+                    retry_disposition: crate::model::error::ModelRetryDisposition::Never,
                     retry_after_ms: None,
                     provider_code: None,
                     context_overflow: None,
@@ -113,6 +146,7 @@ fn normalize_sdk_error(error: OpenAIError) -> ModelError {
                 ModelError {
                     kind: ModelErrorKind::ProviderError,
                     message: format!("malformed provider stream payload: {content}"),
+                    retry_disposition: crate::model::error::ModelRetryDisposition::Never,
                     retry_after_ms: None,
                     provider_code: None,
                     context_overflow: None,
@@ -122,6 +156,7 @@ fn normalize_sdk_error(error: OpenAIError) -> ModelError {
         OpenAIError::FileSaveError(message) | OpenAIError::FileReadError(message) => ModelError {
             kind: ModelErrorKind::Transport,
             message,
+            retry_disposition: crate::model::error::ModelRetryDisposition::Never,
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
@@ -137,6 +172,7 @@ fn context_or_invalid(message: &str, provider_code: Option<&str>) -> ModelError 
             ModelErrorKind::InvalidRequest
         },
         message: message.to_owned(),
+        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
         retry_after_ms: None,
         provider_code: provider_code.map(str::to_owned),
         context_overflow: None,
@@ -156,6 +192,7 @@ fn context_window(failure: &super::client::HttpFailure) -> ModelError {
     ModelError {
         kind: ModelErrorKind::ContextWindowExceeded,
         message: failure.message.clone(),
+        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
         retry_after_ms: failure.retry_after_ms,
         provider_code: failure.provider_code.clone(),
         context_overflow: None,
@@ -167,6 +204,7 @@ fn auth(failure: &super::client::HttpFailure) -> ModelError {
     ModelError {
         kind: ModelErrorKind::Authentication,
         message: failure.message.clone(),
+        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
         retry_after_ms: failure.retry_after_ms,
         provider_code: failure.provider_code.clone(),
         context_overflow: None,
@@ -177,6 +215,7 @@ fn invalid_or_unsupported(failure: &super::client::HttpFailure) -> ModelError {
     ModelError {
         kind: ModelErrorKind::InvalidRequest,
         message: failure.message.clone(),
+        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
         retry_after_ms: failure.retry_after_ms,
         provider_code: failure.provider_code.clone(),
         context_overflow: None,
@@ -187,6 +226,16 @@ fn timeout(failure: &super::client::HttpFailure) -> ModelError {
     ModelError {
         kind: ModelErrorKind::Timeout,
         message: failure.message.clone(),
+        retry_disposition: if failure.status == reqwest::StatusCode::REQUEST_TIMEOUT
+            || failure
+                .provider_code
+                .as_deref()
+                .is_some_and(|code| code.eq_ignore_ascii_case("timeout"))
+        {
+            crate::model::error::ModelRetryDisposition::Transient
+        } else {
+            crate::model::error::ModelRetryDisposition::Never
+        },
         retry_after_ms: failure.retry_after_ms,
         provider_code: failure.provider_code.clone(),
         context_overflow: None,
@@ -197,6 +246,12 @@ fn rate_limit(failure: &super::client::HttpFailure) -> ModelError {
     ModelError {
         kind: ModelErrorKind::RateLimit,
         message: failure.message.clone(),
+        retry_disposition: if is_permanent_quota(failure.provider_code.as_deref(), &failure.message)
+        {
+            crate::model::error::ModelRetryDisposition::Never
+        } else {
+            crate::model::error::ModelRetryDisposition::Transient
+        },
         retry_after_ms: failure.retry_after_ms,
         provider_code: failure.provider_code.clone(),
         context_overflow: None,
@@ -207,9 +262,157 @@ fn provider_error(failure: &super::client::HttpFailure) -> ModelError {
     ModelError {
         kind: ModelErrorKind::ProviderError,
         message: failure.message.clone(),
+        retry_disposition: if !is_permanent_quota(
+            failure.provider_code.as_deref(),
+            &failure.message,
+        ) && (retryable_server_status(failure.status)
+            || explicitly_retryable_provider_code(failure.provider_code.as_deref()))
+        {
+            crate::model::error::ModelRetryDisposition::Transient
+        } else {
+            crate::model::error::ModelRetryDisposition::Never
+        },
         retry_after_ms: failure.retry_after_ms,
         provider_code: failure.provider_code.clone(),
         context_overflow: None,
+    }
+}
+
+/// Statuses that are explicit provider/server availability evidence. A
+/// generic `ProviderError` is not retryable merely because it came from a
+/// transport or an HTTP response.
+pub(crate) fn retryable_server_status(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 500 | 502 | 503 | 504 | 529)
+}
+
+/// Provider error codes that explicitly describe temporary availability or
+/// throttling. Codes are normalized here so the Agent Loop never interprets
+/// provider strings itself.
+pub(crate) fn explicitly_retryable_provider_code(code: Option<&str>) -> bool {
+    code.map(str::to_ascii_lowercase).is_some_and(|code| {
+        matches!(
+            code.as_str(),
+            "rate_limit_exceeded"
+                | "rate_limit_error"
+                | "upstream_rate_limited"
+                | "server_error"
+                | "internal_server_error"
+                | "internal_error"
+                | "service_unavailable"
+                | "temporarily_unavailable"
+                | "upstream_error"
+                | "upstream_timeout"
+                | "overloaded"
+                | "overloaded_error"
+                | "network_error"
+                | "insufficient_system_resource"
+        )
+    })
+}
+
+/// Codes and messages that prove a rate-limit response is permanent quota or
+/// billing exhaustion rather than temporary throttling.
+pub(crate) fn is_permanent_quota(code: Option<&str>, message: &str) -> bool {
+    let code = code.map(str::to_ascii_lowercase);
+    let message = message.to_ascii_lowercase();
+    code.as_deref().is_some_and(|code| {
+        matches!(
+            code,
+            "insufficient_quota"
+                | "quota_exceeded"
+                | "billing_hard_limit_reached"
+                | "billing_not_active"
+                | "payment_required"
+                | "account_deactivated"
+        )
+    }) || message.contains("insufficient quota")
+        || message.contains("quota exceeded")
+        || message.contains("billing")
+        || message.contains("payment required")
+}
+
+fn sdk_status_disposition(
+    status: u16,
+    provider_code: Option<&str>,
+    message: &str,
+    kind: &ModelErrorKind,
+) -> ModelRetryDisposition {
+    match kind {
+        ModelErrorKind::RateLimit => {
+            if is_permanent_quota(provider_code, message) || status != 429 {
+                ModelRetryDisposition::Never
+            } else {
+                ModelRetryDisposition::Transient
+            }
+        }
+        ModelErrorKind::Timeout => {
+            if status == 408
+                || provider_code.is_some_and(|code| code.eq_ignore_ascii_case("timeout"))
+            {
+                ModelRetryDisposition::Transient
+            } else {
+                ModelRetryDisposition::Never
+            }
+        }
+        ModelErrorKind::ProviderError => {
+            if !is_permanent_quota(provider_code, message)
+                && (retryable_server_status(
+                    reqwest::StatusCode::from_u16(status).unwrap_or_default(),
+                ) || explicitly_retryable_provider_code(provider_code))
+            {
+                ModelRetryDisposition::Transient
+            } else {
+                ModelRetryDisposition::Never
+            }
+        }
+        ModelErrorKind::InvalidRequest
+        | ModelErrorKind::Authentication
+        | ModelErrorKind::Unsupported
+        | ModelErrorKind::ContextWindowExceeded
+        | ModelErrorKind::Cancelled
+        | ModelErrorKind::Transport => ModelRetryDisposition::Never,
+    }
+}
+
+/// Normalizes in-band OpenAI-compatible stream error evidence. The adapter
+/// receives structured fields from the wire event; a provider-looking
+/// cancellation code is not runtime cancellation and stays non-retryable.
+pub(crate) fn stream_retry_disposition(
+    error_type: Option<&str>,
+    provider_code: Option<&str>,
+    numeric_code: Option<u64>,
+    message: &str,
+) -> ModelRetryDisposition {
+    if is_permanent_quota(provider_code.or(error_type), message) {
+        return ModelRetryDisposition::Never;
+    }
+    if matches!(numeric_code, Some(408))
+        || error_type.is_some_and(|code| code.eq_ignore_ascii_case("timeout"))
+        || provider_code.is_some_and(|code| code.eq_ignore_ascii_case("timeout"))
+        || matches!(error_type, Some("408"))
+        || matches!(provider_code, Some("408"))
+    {
+        return ModelRetryDisposition::Transient;
+    }
+    if numeric_code == Some(429)
+        || matches!(
+            error_type,
+            Some("429" | "rate_limit_exceeded" | "rate_limit_error")
+        )
+        || matches!(
+            provider_code,
+            Some("429" | "rate_limit_exceeded" | "rate_limit_error")
+        )
+    {
+        return ModelRetryDisposition::Transient;
+    }
+    if numeric_code.is_some_and(|code| matches!(code, 500 | 502 | 503 | 504 | 529))
+        || explicitly_retryable_provider_code(provider_code)
+        || explicitly_retryable_provider_code(error_type)
+    {
+        ModelRetryDisposition::Transient
+    } else {
+        ModelRetryDisposition::Never
     }
 }
 
@@ -292,6 +495,7 @@ pub(crate) fn resolve_tool(
         None => Err(ModelError {
             kind: ModelErrorKind::InvalidRequest,
             message: format!("model called unknown tool name {name:?}"),
+            retry_disposition: crate::model::error::ModelRetryDisposition::Never,
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
@@ -301,10 +505,82 @@ pub(crate) fn resolve_tool(
 
 #[cfg(test)]
 mod tests {
-    use super::{map_chat_finish_reason, map_sdk_chat_finish_reason, normalize_error};
-    use crate::model::error::{ModelError, ModelErrorKind, is_context_window_error};
+    use super::{
+        explicitly_retryable_provider_code, is_permanent_quota, map_chat_finish_reason,
+        map_sdk_chat_finish_reason, normalize_error, provider_error, rate_limit,
+        stream_retry_disposition,
+    };
+    use crate::model::adapter::openai::client::HttpFailure;
+    use crate::model::error::{
+        ModelError, ModelErrorKind, ModelRetryDisposition, is_context_window_error,
+    };
     use crate::model::finish::ModelFinishReason;
     use async_openai::types::chat::FinishReason;
+
+    fn http_failure(status: u16, provider_code: Option<&str>, message: &str) -> HttpFailure {
+        HttpFailure {
+            status: reqwest::StatusCode::from_u16(status).expect("valid test status"),
+            retry_after_ms: None,
+            message: message.to_owned(),
+            provider_code: provider_code.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn provider_retry_classification_requires_retryable_evidence() {
+        assert_eq!(
+            provider_error(&http_failure(500, None, "server unavailable")).retry_disposition,
+            ModelRetryDisposition::Transient
+        );
+        assert_eq!(
+            provider_error(&http_failure(409, None, "conflict")).retry_disposition,
+            ModelRetryDisposition::Never
+        );
+        assert_eq!(
+            rate_limit(&http_failure(429, Some("rate_limit_exceeded"), "slow down"))
+                .retry_disposition,
+            ModelRetryDisposition::Transient
+        );
+        assert_eq!(
+            rate_limit(&http_failure(
+                429,
+                Some("insufficient_quota"),
+                "quota exhausted"
+            ))
+            .retry_disposition,
+            ModelRetryDisposition::Never
+        );
+        assert_eq!(
+            super::timeout(&http_failure(408, None, "request timed out")).retry_disposition,
+            ModelRetryDisposition::Transient
+        );
+        assert_eq!(
+            super::context_window(&http_failure(
+                400,
+                Some("context_length_exceeded"),
+                "context window exceeded",
+            ))
+            .retry_disposition,
+            ModelRetryDisposition::Never
+        );
+        assert!(explicitly_retryable_provider_code(Some("overloaded")));
+        assert!(is_permanent_quota(
+            Some("billing_hard_limit_reached"),
+            "billing"
+        ));
+    }
+
+    #[test]
+    fn provider_looking_cancellation_is_not_runtime_cancellation() {
+        assert_eq!(
+            stream_retry_disposition(Some("cancelled"), Some("cancelled"), None, "cancelled"),
+            ModelRetryDisposition::Never
+        );
+        assert_ne!(
+            provider_error(&http_failure(500, Some("cancelled"), "cancelled")).kind,
+            ModelErrorKind::Cancelled
+        );
+    }
 
     #[test]
     fn chat_finish_reason_mapping_is_exhaustive() {

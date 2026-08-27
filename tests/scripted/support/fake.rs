@@ -157,6 +157,7 @@ impl FakeModel {
                     error: ModelError {
                         kind: ModelErrorKind::ProviderError,
                         message: "fake model script exhausted".to_owned(),
+                        retry_disposition: rustx::model::error::ModelRetryDisposition::Never,
                         retry_after_ms: None,
                         provider_code: None,
                         context_overflow: None,
@@ -213,6 +214,8 @@ impl ModelAdapter for FakeModel {
                                     error: ModelError {
                                         kind: ModelErrorKind::Cancelled,
                                         message: "fake model cancelled".to_owned(),
+                                        retry_disposition:
+                                            rustx::model::error::ModelRetryDisposition::Never,
                                         retry_after_ms: None,
                                         provider_code: None,
                                         context_overflow: None,

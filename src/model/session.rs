@@ -18,9 +18,10 @@
 //! > affects only future attempts.
 //!
 //! After admission every model turn of the attempt — every tool→model
-//! continuation, every context-overflow retry, every proactive-compaction
-//! continuation, and every compaction summary — uses the same immutable
-//! snapshot. It never reads live mutable session model state again.
+//! continuation, every transient or context-overflow retry, every
+//! proactive-compaction continuation, and every compaction summary — uses the
+//! same immutable snapshot. It never reads live mutable session model state
+//! again.
 //!
 //! # Summary policy
 //!

@@ -5,7 +5,9 @@ use reqwest::{StatusCode, header::HeaderMap};
 
 use crate::message::types::{AssistantContentBlock, MessageBlock, UserContentBlock};
 use crate::model::adapter::validation::ValidatedTools;
-use crate::model::error::{ModelError, ModelErrorKind, is_context_window_error};
+use crate::model::error::{
+    ModelError, ModelErrorKind, ModelRetryDisposition, is_context_window_error,
+};
 use crate::model::finish::ModelFinishReason;
 use crate::model::invocation::finalize_provider_request;
 use crate::model::types::{ModelProtocol, ModelUsage, UsageDetails};
@@ -122,21 +124,121 @@ pub(crate) fn normalize_http_error(
         }
         401 | 403 => ModelErrorKind::Authentication,
         404 => ModelErrorKind::InvalidRequest,
-        408 | 409 => ModelErrorKind::Timeout,
+        408 => ModelErrorKind::Timeout,
+        409 => ModelErrorKind::ProviderError,
         429 => ModelErrorKind::RateLimit,
         _ if is_context_window_error(&message, provider_code.as_deref()) => {
             ModelErrorKind::ContextWindowExceeded
         }
         _ => ModelErrorKind::ProviderError,
     };
+    let retry_disposition =
+        http_retry_disposition(status, provider_code.as_deref(), &message, &kind);
     ModelError {
         kind,
         message,
+        retry_disposition,
         retry_after_ms,
         provider_code,
         context_overflow: None,
     }
     .normalized()
+}
+
+fn http_retry_disposition(
+    status: StatusCode,
+    provider_code: Option<&str>,
+    message: &str,
+    kind: &ModelErrorKind,
+) -> ModelRetryDisposition {
+    match kind {
+        ModelErrorKind::RateLimit => {
+            if is_permanent_quota(provider_code, message) || status != StatusCode::TOO_MANY_REQUESTS
+            {
+                ModelRetryDisposition::Never
+            } else {
+                ModelRetryDisposition::Transient
+            }
+        }
+        ModelErrorKind::Timeout => (status == StatusCode::REQUEST_TIMEOUT)
+            .then_some(())
+            .map_or(ModelRetryDisposition::Never, |()| {
+                ModelRetryDisposition::Transient
+            }),
+        ModelErrorKind::ProviderError => {
+            if !is_permanent_quota(provider_code, message)
+                && (retryable_server_status(status) || explicitly_retryable_code(provider_code))
+            {
+                ModelRetryDisposition::Transient
+            } else {
+                ModelRetryDisposition::Never
+            }
+        }
+        ModelErrorKind::InvalidRequest
+        | ModelErrorKind::Authentication
+        | ModelErrorKind::Unsupported
+        | ModelErrorKind::ContextWindowExceeded
+        | ModelErrorKind::Cancelled
+        | ModelErrorKind::Transport => ModelRetryDisposition::Never,
+    }
+}
+
+fn retryable_server_status(status: StatusCode) -> bool {
+    matches!(status.as_u16(), 500 | 502 | 503 | 504 | 529)
+}
+
+fn explicitly_retryable_code(code: Option<&str>) -> bool {
+    code.map(str::to_ascii_lowercase).is_some_and(|code| {
+        matches!(
+            code.as_str(),
+            "rate_limit_error"
+                | "rate_limit_exceeded"
+                | "overloaded_error"
+                | "server_error"
+                | "internal_server_error"
+                | "service_unavailable"
+                | "temporarily_unavailable"
+                | "upstream_error"
+        )
+    })
+}
+
+fn is_permanent_quota(code: Option<&str>, message: &str) -> bool {
+    let code = code.map(str::to_ascii_lowercase);
+    let message = message.to_ascii_lowercase();
+    code.as_deref().is_some_and(|code| {
+        matches!(
+            code,
+            "insufficient_quota"
+                | "quota_exceeded"
+                | "billing_hard_limit_reached"
+                | "billing_not_active"
+                | "payment_required"
+        )
+    }) || message.contains("insufficient quota")
+        || message.contains("quota exceeded")
+        || message.contains("billing")
+        || message.contains("payment required")
+}
+
+/// Classifies structured Anthropic stream error evidence. A wire error that
+/// merely resembles cancellation is not runtime-owned cancellation and is
+/// never converted to `ModelErrorKind::Cancelled` by this helper.
+pub(crate) fn stream_retry_disposition(
+    error_type: Option<&str>,
+    message: Option<&str>,
+) -> ModelRetryDisposition {
+    let message = message.unwrap_or_default();
+    if is_permanent_quota(error_type, message) {
+        return ModelRetryDisposition::Never;
+    }
+    if matches!(error_type, Some("rate_limit_error" | "rate_limit_exceeded")) {
+        return ModelRetryDisposition::Transient;
+    }
+    if explicitly_retryable_code(error_type) {
+        return ModelRetryDisposition::Transient;
+    }
+    ModelRetryDisposition::Never
 }
 
 fn parse_error_body(body: &[u8]) -> (Option<String>, Option<String>) {
@@ -230,6 +332,7 @@ pub(crate) fn translate_request(
             message: "the effective model capabilities do not include tool calls; \
                       tool definitions are never sent to a text-only model"
                 .to_owned(),
+            retry_disposition: crate::model::error::ModelRetryDisposition::Never,
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
@@ -248,6 +351,7 @@ pub(crate) fn translate_request(
     let value = serde_json::to_value(&wire).map_err(|error| ModelError {
         kind: ModelErrorKind::InvalidRequest,
         message: format!("failed to serialize the Anthropic request: {error}"),
+        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
@@ -340,6 +444,7 @@ fn translate_messages(
         return Err(ModelError {
             kind: ModelErrorKind::InvalidRequest,
             message: "an Anthropic Messages request requires at least one message".to_owned(),
+            retry_disposition: crate::model::error::ModelRetryDisposition::Never,
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
@@ -506,6 +611,7 @@ fn invalid_request(message: &str) -> ModelError {
     ModelError {
         kind: ModelErrorKind::InvalidRequest,
         message: message.to_owned(),
+        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
@@ -516,6 +622,7 @@ fn unsupported(message: &str) -> ModelError {
     ModelError {
         kind: ModelErrorKind::Unsupported,
         message: message.to_owned(),
+        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
@@ -588,8 +695,8 @@ mod questionnaire_schema_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{map_finish_reason, normalize_http_error};
-    use crate::model::error::ModelErrorKind;
+    use super::{map_finish_reason, normalize_http_error, stream_retry_disposition};
+    use crate::model::error::{ModelErrorKind, ModelRetryDisposition};
     use crate::model::finish::ModelFinishReason;
 
     /// The adapter — not the agent loop — recovers the provider's own
@@ -621,6 +728,56 @@ mod tests {
         );
         assert_eq!(error.kind, ModelErrorKind::RateLimit);
         assert_eq!(error.context_overflow, None);
+    }
+
+    #[test]
+    fn provider_retry_classification_requires_retryable_evidence() {
+        let headers = reqwest::header::HeaderMap::new();
+        let server = normalize_http_error(
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            &headers,
+            br#"{"error":{"type":"api_error","message":"temporarily unavailable"}}"#,
+        );
+        assert_eq!(server.retry_disposition, ModelRetryDisposition::Transient);
+
+        let conflict = normalize_http_error(
+            reqwest::StatusCode::CONFLICT,
+            &headers,
+            br#"{"error":{"type":"api_error","message":"conflict"}}"#,
+        );
+        assert_eq!(conflict.retry_disposition, ModelRetryDisposition::Never);
+
+        let throttled = normalize_http_error(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            &headers,
+            br#"{"error":{"type":"rate_limit_error","message":"slow down"}}"#,
+        );
+        assert_eq!(
+            throttled.retry_disposition,
+            ModelRetryDisposition::Transient
+        );
+
+        let quota = normalize_http_error(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            &headers,
+            br#"{"error":{"type":"rate_limit_error","message":"billing hard limit reached"}}"#,
+        );
+        assert_eq!(quota.retry_disposition, ModelRetryDisposition::Never);
+
+        let invalid = normalize_http_error(
+            reqwest::StatusCode::BAD_REQUEST,
+            &headers,
+            br#"{"error":{"type":"invalid_request_error","message":"bad input"}}"#,
+        );
+        assert_eq!(invalid.retry_disposition, ModelRetryDisposition::Never);
+    }
+
+    #[test]
+    fn provider_looking_cancellation_is_not_runtime_cancellation() {
+        assert_eq!(
+            stream_retry_disposition(Some("request_cancelled"), Some("cancelled")),
+            ModelRetryDisposition::Never
+        );
     }
 
     #[test]

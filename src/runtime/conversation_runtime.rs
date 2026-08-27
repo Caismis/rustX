@@ -7614,6 +7614,7 @@ mod tests {
                 error: ModelError {
                     kind: ModelErrorKind::ContextWindowExceeded,
                     message: "context window exceeded".to_owned(),
+                    retry_disposition: crate::model::error::ModelRetryDisposition::Never,
                     retry_after_ms: None,
                     provider_code: None,
                     context_overflow: None,
@@ -12910,6 +12911,7 @@ mod tests {
                 error: crate::model::error::ModelError {
                     kind: crate::model::error::ModelErrorKind::Cancelled,
                     message: "provider settled cancellation".to_owned(),
+                    retry_disposition: crate::model::error::ModelRetryDisposition::Never,
                     retry_after_ms: None,
                     provider_code: None,
                     context_overflow: None,
@@ -14956,6 +14958,7 @@ mod tests {
                 error: crate::model::error::ModelError {
                     kind: crate::model::error::ModelErrorKind::Cancelled,
                     message: "provider settled cancellation".to_owned(),
+                    retry_disposition: crate::model::error::ModelRetryDisposition::Never,
                     retry_after_ms: None,
                     provider_code: None,
                     context_overflow: None,

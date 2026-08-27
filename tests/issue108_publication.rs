@@ -2486,10 +2486,12 @@ fn publication_generation_rejections_are_side_effect_free() {
             error: rustx::model::ModelError {
                 kind: rustx::model::ModelErrorKind::ProviderError,
                 message: "contradictory".to_owned(),
+                retry_disposition: rustx::model::error::ModelRetryDisposition::Never,
                 retry_after_ms: None,
                 provider_code: None,
                 context_overflow: None,
             },
+            usage: None,
         },
     ));
     assert!(matches!(
