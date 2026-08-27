@@ -275,6 +275,9 @@ pub struct SessionUserMessageBoundary {
 /// `canonical` is the source Ledger as read; the *cut* is taken by the
 /// `prepare_*` that uses this snapshot, from the boundary it selected, so a
 /// fact committed after the selected revision is never inherited.
+/// This is a lineage input, not a complete execution snapshot: it excludes
+/// attempt/request identities, Event Journal facts, `RequestSnapshots`,
+/// Pending Inbound, and execution-derived Todo reminder progress or heads.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HistoricalConversationSnapshot {
     /// Source `ConversationId`.
@@ -957,8 +960,11 @@ impl SessionCatalog {
     /// caller. The source revision and source message bodies are immutable
     /// inputs to this preparation.
     ///
-    /// The clone inherits the source's complete semantic state at that cut,
-    /// not only what the Surface still shows there: see
+    /// The clone preserves the canonical conversation/domain state in effect
+    /// at that cut and the Surface provenance needed for later lineage
+    /// operations. It creates a new `ConversationId` and therefore a fresh
+    /// execution epoch: attempt-, request-, Event-Journal-, and
+    /// execution-derived reminder/cooldown state are not inherited. See
     /// [`HistoricalConversationSnapshot`] and [`lineage_cut`].
     pub(crate) fn prepare_clone_session(
         &self,
@@ -1447,6 +1453,9 @@ fn text_only_editor_content(
 /// operation history*, not over its final Surface projection. `boundary` is
 /// the user message the destination stops before — `None` for a clone, which
 /// stops before nothing.
+/// The resulting seed contains only canonical conversation/domain state and
+/// Surface provenance; the destination's new `ConversationId` starts a fresh
+/// execution epoch rather than inheriting source execution or reminder state.
 ///
 /// One forward replay of the source history decides two things at once:
 ///
@@ -2128,16 +2137,23 @@ mod tests {
         CatalogCommitError, HistoricalConversationSnapshot, PreparedLineage, SessionCatalog,
         SessionError, SessionId, SessionNodeOrigin, SessionPersistentState,
     };
+    use crate::context::assembly::ContextGeneration;
     use crate::conversation::{SurfaceRevision, SurfaceSpan};
     use crate::durable::{CompactionCommitInput, ConversationStore, SqliteConversationStore};
     use crate::local_runtime::CurrentRuntimeConfig;
     use crate::message::content::TextBlock;
     use crate::message::types::{
-        AgentStatusGenerationMetadata, AgentStatusModuleId, AssistantContentBlock,
-        AssistantMessageBlock, ContextKind, InboundKind, MessageBlock, ToolMessageBlock,
-        UserContentBlock, UserMessageBlock, UserSource,
+        AgentStatusEmission, AgentStatusGenerationMetadata, AgentStatusModuleId,
+        AssistantContentBlock, AssistantMessageBlock, ContextKind, InboundKind, MessageBlock,
+        ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
-    use crate::runtime::identity::{ConversationId, MessageId, ToolCallId, ToolId};
+    use crate::model::catalog::{ModelCapabilities, ModelCompat};
+    use crate::model::invocation::{ModelInvocationConfig, RequestParams};
+    use crate::model::snapshot::{AgentStatusStart, RequestIdentity, RequestSnapshot};
+    use crate::model::types::ModelProtocol;
+    use crate::runtime::identity::{
+        AttemptId, CapabilityRevision, ConversationId, MessageId, ToolCallId, ToolId, TurnId,
+    };
     use crate::runtime::types::{TokenMeasurement, TokenMeasurementSource};
     use crate::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus};
     use chrono::{TimeZone, Utc};
@@ -2189,6 +2205,65 @@ mod tests {
             )),
             timestamp: None,
         })
+    }
+
+    fn todo_status(id: &str) -> MessageBlock {
+        MessageBlock::User(UserMessageBlock {
+            id: MessageId::new(id),
+            content: vec![text("Todo status")],
+            source: UserSource::Runtime,
+            kind: InboundKind::Context(ContextKind::AgentStatus(
+                AgentStatusGenerationMetadata::new(
+                    chrono::DateTime::from_timestamp(0, 0).expect("timestamp"),
+                    vec![AgentStatusModuleId::Todo],
+                )
+                .expect("valid Agent Status metadata"),
+            )),
+            timestamp: None,
+        })
+    }
+
+    fn todo_status_start_snapshot(
+        revision: SurfaceRevision,
+        message_id: MessageId,
+        emission: AgentStatusEmission,
+    ) -> RequestSnapshot {
+        let identity = RequestIdentity {
+            attempt_id: AttemptId::new("clone-source-attempt"),
+            turn: TurnId::new("clone-source-turn"),
+            retry_number: 0,
+        };
+        let mut snapshot = RequestSnapshot::new(
+            identity,
+            revision,
+            "frozen".to_owned(),
+            Vec::new(),
+            crate::runtime::RuntimeResourceRevision::new(1),
+            ModelInvocationConfig {
+                model: "provider/model".to_owned(),
+                protocol: ModelProtocol::OpenAiChatCompletions,
+                max_output_tokens: 128,
+                request_params: RequestParams::new(),
+                capabilities: ModelCapabilities::text_only(true, true),
+                compat: ModelCompat::default(),
+            },
+            1024,
+            None,
+            false,
+            Vec::new(),
+            CapabilityRevision::new(1),
+            ContextGeneration {
+                id: 1,
+                contributors: Vec::new(),
+            },
+            None,
+            vec![message_id.clone()],
+        );
+        snapshot.agent_status = Some(AgentStatusStart {
+            message_id,
+            emissions: vec![emission],
+        });
+        snapshot
     }
 
     fn source_history() -> Vec<MessageBlock> {
@@ -2954,6 +3029,81 @@ mod tests {
         assert_eq!(destination.id, destination_session);
         assert_eq!(destination.active_conversation_id, destination_conversation);
         assert_ne!(source_conversation, destination.active_conversation_id);
+    }
+
+    #[test]
+    fn clone_preserves_todo_state_but_starts_a_fresh_execution_epoch() {
+        let (_directory, catalog, _config) = open_catalog();
+        let history = vec![
+            user("source-user-a", "A"),
+            todo_call("source-todo-call", "call-todo"),
+            todo_result("source-todo-result", "call-todo", "Write the parser"),
+        ];
+        let (source_conversation, source_session, _source_node) =
+            append_history(&catalog, &history);
+        let source_store = store_for(&catalog, &source_session, &source_conversation);
+        let expected_todo = todo_list_of(&source_store);
+        let status_id = MessageId::new("source-todo-status");
+        let status = todo_status(status_id.as_str());
+        let emission = AgentStatusEmission {
+            module_id: AgentStatusModuleId::Todo,
+            key: "active_actionable".to_owned(),
+            fingerprint: "source-todo-fingerprint".to_owned(),
+        };
+        let snapshot = todo_status_start_snapshot(
+            source_store
+                .load_head()
+                .expect("source head")
+                .revision
+                .next(),
+            status_id.clone(),
+            emission,
+        );
+        source_store
+            .commit_model_turn_start(
+                &[status],
+                &snapshot,
+                Utc.with_ymd_and_hms(2026, 8, 27, 6, 1, 0).unwrap(),
+            )
+            .expect("source status start");
+        assert_eq!(source_store.current_todo_progress().unwrap(), 1);
+        assert!(
+            source_store
+                .latest_agent_status_emission(AgentStatusModuleId::Todo, "active_actionable")
+                .unwrap()
+                .is_some()
+        );
+
+        let source_revision = source_store.load_head().expect("source head").revision;
+        let source = lineage_at(&source_store, &source_conversation, source_revision);
+        let prepared = catalog
+            .prepare_clone_session(&state(), &source)
+            .expect("prepare clone");
+        let destination_store =
+            store_for(&catalog, &prepared.session_id, &prepared.conversation_id);
+
+        assert_eq!(todo_list_of(&destination_store), expected_todo);
+        assert_eq!(destination_store.current_todo_progress().unwrap(), 0);
+        assert!(
+            destination_store
+                .latest_agent_status_emission(AgentStatusModuleId::Todo, "active_actionable")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            destination_store
+                .read_events(None, 64)
+                .unwrap()
+                .events
+                .is_empty()
+        );
+        assert!(
+            destination_store
+                .read_request_snapshots(None, 64)
+                .unwrap()
+                .snapshots
+                .is_empty()
+        );
     }
 
     #[test]

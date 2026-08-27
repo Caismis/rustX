@@ -222,7 +222,7 @@ pub fn inbound_adoption_event(
     }
 }
 
-/// The complete durable seed of one new conversation lineage.
+/// The canonical lineage seed of one new conversation lineage.
 ///
 /// A lineage is seeded with two distinguishable parts, because what a
 /// conversation durably *means*, what the model currently *sees*, and how it
@@ -254,7 +254,10 @@ pub fn inbound_adoption_event(
 ///
 /// A seed whose history is one `Append` per canonical message in Ledger
 /// order is the ordinary case ([`LineageSeed::history`]), and it is what
-/// every conversation that has never been compacted produces.
+/// every conversation that has never been compacted produces. The seed is
+/// intentionally limited to canonical/domain messages and Surface
+/// provenance; execution facts remain owned by the source `ConversationId`
+/// and are not copied into the destination.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LineageSeed {
     canonical: Vec<MessageBlock>,
