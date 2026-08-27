@@ -34,12 +34,11 @@
 use super::{common, support};
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use rustx::context::{
-    AgentStatusClock, AgentStatusComposer, AgentStatusFact, AgentStatusRenderContext,
-    AgentStatusSectionId, AgentStatusSectionProvider, ContextError, SessionContextPolicy,
+    AgentStatusClock, AgentStatusConfig, AgentStatusEngine, AgentStatusModuleId,
+    SessionContextPolicy,
 };
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
@@ -88,37 +87,12 @@ impl AgentStatusClock for FixedStatusClock {
     }
 }
 
-/// An Agent Status extension provider whose rendered value counts its own
-/// invocations, so a test proves exactly how many times status was composed:
-/// once per fresh-inbound step, never on an overflow retry.
-struct CountingStatusProvider {
-    calls: Arc<AtomicU64>,
-}
-
-impl AgentStatusSectionProvider for CountingStatusProvider {
-    fn section_id(&self) -> AgentStatusSectionId {
-        AgentStatusSectionId::new("issue27-probe")
-    }
-
-    fn section(
-        &self,
-        _context: &AgentStatusRenderContext,
-    ) -> Result<Option<Vec<AgentStatusFact>>, ContextError> {
-        let sample = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
-        Ok(Some(vec![AgentStatusFact {
-            label: "probe".to_owned(),
-            value: format!("sample-{sample}"),
-        }]))
-    }
-}
-
-/// Builds the status composer carrying the counting probe provider.
-fn counting_composer(calls: Arc<AtomicU64>) -> AgentStatusComposer {
-    let mut composer = AgentStatusComposer::new(Arc::new(FixedStatusClock));
-    composer
-        .register(Arc::new(CountingStatusProvider { calls }))
-        .expect("the probe section id is free");
-    composer
+/// Builds the closed status engine with its deterministic in-crate counting
+/// seam. The seam is shared through attempt-template clones, while quarantine
+/// itself remains attempt-local.
+fn counting_status_engine(seam: rustx::context::AgentStatusTestSeam) -> AgentStatusEngine {
+    AgentStatusEngine::new(AgentStatusConfig::default(), Arc::new(FixedStatusClock))
+        .with_test_seam(seam)
 }
 
 /// Receives from the observation stream until the predicate matches.
@@ -403,7 +377,7 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     )
     .expect("the session model resolves");
 
-    let status_calls = Arc::new(AtomicU64::new(0));
+    let status_seam = rustx::context::AgentStatusTestSeam::new();
     let fixture = RuntimeClientFixture::builder("conv-27-proactive")
         .session_model(session_model)
         .context_policy(SessionContextPolicy {
@@ -411,7 +385,7 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
             keep_recent_tokens: 0,
             summary_output_cap: None,
         })
-        .composer(counting_composer(status_calls.clone()))
+        .status_engine(counting_status_engine(status_seam.clone()))
         .build()
         .await;
     let host = &fixture.host;
@@ -465,7 +439,7 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     // rebuilt surfaces [sum, inbound, status].
     let r1_wire = wire(&requests[0].messages);
     assert!(r1_wire.contains("turn one"));
-    assert!(r1_wire.contains("sample-1"));
+    assert!(r1_wire.contains("Current time:"));
     assert_eq!(compaction_summaries(&requests[0].messages), 0);
 
     assert_eq!(requests[2].messages.len(), 3, "[sum1, in2, st2]");
@@ -477,11 +451,7 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
         "the retired filler never appears in a rebuilt request"
     );
     assert!(r2_wire.contains("turn two"));
-    assert!(r2_wire.contains("sample-2"));
-    assert!(
-        !r2_wire.contains("sample-1"),
-        "the retired status fact stays retired"
-    );
+    assert!(r2_wire.contains("Current time:"));
 
     assert_eq!(requests[4].messages.len(), 3, "[sum2, in3, st3]");
     assert_eq!(compaction_summaries(&requests[4].messages), 1);
@@ -493,10 +463,8 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     );
     assert!(!r3_wire.contains("FILLER-ONE-MARKER"));
     assert!(!r3_wire.contains("FILLER-TWO-MARKER"));
-    assert!(!r3_wire.contains("sample-1"));
-    assert!(!r3_wire.contains("sample-2"));
     assert!(r3_wire.contains("turn three"));
-    assert!(r3_wire.contains("sample-3"));
+    assert!(r3_wire.contains("Current time:"));
 
     // Three distinct frozen snapshots with strictly advancing Surface
     // revisions, one per attempt, never a retry.
@@ -564,7 +532,7 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     );
     assert!(ledger_wire.contains("FILLER-TWO-MARKER"));
     assert!(ledger_wire.contains("SUMMARY-ONE covers filler one"));
-    assert!(ledger_wire.contains("sample-1"));
+    assert!(ledger_wire.contains("Current time:"));
 
     // The external projection reports exactly two committed compactions in
     // generation order, attributed to the attempts that committed them.
@@ -602,8 +570,18 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
         2
     );
 
-    // Status was composed exactly once per fresh-inbound step.
-    assert_eq!(status_calls.load(Ordering::SeqCst), 3);
+    // The closed engine captured and evaluated exactly once per
+    // fresh-inbound step; no overflow or summary path reran it.
+    assert_eq!(status_seam.capture_count(AgentStatusModuleId::Time), 3);
+    assert_eq!(status_seam.evaluate_count(AgentStatusModuleId::Time), 3);
+    assert_eq!(
+        status_seam.capture_count(AgentStatusModuleId::Background),
+        3
+    );
+    assert_eq!(
+        status_seam.evaluate_count(AgentStatusModuleId::Background),
+        3
+    );
 
     // The session model was never contaminated by summary traffic.
     let view = fixture.runtime.model_view();
@@ -700,7 +678,7 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
         // Attempt 3 turn 1 retry.
         turn_text("recovered after two".to_owned()),
     ]));
-    let status_calls = Arc::new(AtomicU64::new(0));
+    let status_seam = rustx::context::AgentStatusTestSeam::new();
     let mut tools = ToolRegistry::new();
     FakeTool::new(
         common::tool("alpha", "tool-alpha"),
@@ -712,7 +690,7 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
         .session_model(scripted_session_model(
             adapter.clone() as Arc<dyn ModelAdapter>
         ))
-        .composer(counting_composer(status_calls.clone()))
+        .status_engine(counting_status_engine(status_seam.clone()))
         .build()
         .await;
     let host = &fixture.host;
@@ -801,7 +779,7 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
     assert!(!retry_three.contains("call-1"));
     assert!(!retry_three.contains("TOOL-RESULT-OK"));
     assert!(retry_three.contains("turn three"));
-    assert!(retry_three.contains("sample-3"));
+    assert!(retry_three.contains("Current time:"));
 
     // Six frozen snapshots: att1×1, att2×3 (tool turn + overflow + retry),
     // att3×2 (overflow + retry).
@@ -821,7 +799,7 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
     assert_eq!(snapshots[5].identity.retry_number, 1);
 
     // Each overflow pair is one turn: the retry reuses the admitted context
-    // generation (contributors never re-ran) but rebuilds from its own
+    // generation (modules never recaptured or reevaluated) but rebuilds from its own
     // post-compaction Surface revision.
     assert_eq!(snapshots[2].identity.turn, snapshots[3].identity.turn);
     assert_eq!(
@@ -907,9 +885,18 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
     let (snapshot, _) = host.snapshot().expect("snapshot");
     assert_eq!(snapshot.context.compaction_count, 2);
 
-    // Status composition ran exactly once per fresh-inbound step; the
-    // post-tool turn and both retries composed nothing.
-    assert_eq!(status_calls.load(Ordering::SeqCst), 3);
+    // Status capture/evaluation ran exactly once per fresh-inbound step; the
+    // post-tool turn and both retries did nothing.
+    assert_eq!(status_seam.capture_count(AgentStatusModuleId::Time), 3);
+    assert_eq!(status_seam.evaluate_count(AgentStatusModuleId::Time), 3);
+    assert_eq!(
+        status_seam.capture_count(AgentStatusModuleId::Background),
+        3
+    );
+    assert_eq!(
+        status_seam.evaluate_count(AgentStatusModuleId::Background),
+        3
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -2,8 +2,9 @@
 //!
 //! This is deliberately a current-runtime input, never durable Session state.
 //! It is read for every process start, including resume, so changing MCP,
-//! Skill, Tool, environment, context, timezone, or agent settings takes
-//! effect without rewriting the Session catalog.
+//! Skill, Tool, environment, context, Agent Status, or agent settings takes
+//! effect without rewriting the Session catalog. Resource reload does not
+//! reread this launch-scoped document.
 //!
 //! Unknown fields are rejected everywhere. A typo must fail startup loudly
 //! rather than silently changing runtime semantics.
@@ -11,10 +12,9 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
-use crate::context::SessionContextPolicy;
+use crate::context::{AgentStatusConfig, SessionContextPolicy};
 use crate::model::session::SessionModelConfig;
 use crate::runtime::ApprovalMode;
 use crate::runtime::identity::{AgentId, McpServerId};
@@ -24,7 +24,7 @@ use crate::tools::native::NativeToolPolicies;
 use crate::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy, ToolInvocationPolicy};
 
 /// The only current runtime configuration schema version this runtime accepts.
-pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 2;
+pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 3;
 
 /// The explicit current runtime/project configuration.
 ///
@@ -46,10 +46,9 @@ pub struct CurrentRuntimeConfig {
     /// configuration, never Session history.
     #[serde(default)]
     pub approval_mode: ApprovalMode,
-    /// The current IANA timezone used by the temporal Agent Status
-    /// section. The process/system local timezone is never consulted.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timezone: Option<Tz>,
+    /// The launch-scoped Agent Status module configuration.
+    #[serde(default)]
+    pub agent_status: AgentStatusConfig,
     /// The current runtime context policy.
     pub context: ContextPolicyDocument,
     /// The ecosystem-compatible named MCP server map, keyed by server
@@ -571,6 +570,9 @@ mod tests {
         let config = CurrentRuntimeConfig::from_jsonc_slice(MINIMAL.as_bytes()).expect("valid");
         assert_eq!(config.approval_mode, crate::runtime::ApprovalMode::Policy);
         assert_eq!(config.context_policy().reserve_tokens, 1024);
+        assert!(config.agent_status.time.enabled);
+        assert!(config.agent_status.background.enabled);
+        assert_eq!(config.agent_status.time.timezone, None);
         assert!(config.mcp_bindings().expect("bindings").is_empty());
         assert!(
             config
@@ -605,6 +607,35 @@ mod tests {
             "context": {"reserveTokens": 0, "keepRecentTokens": 0},
             "futureKnob": true
         }"#;
+        assert!(matches!(
+            CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect_err("must fail"),
+            CurrentRuntimeConfigError::Syntax { .. }
+        ));
+    }
+
+    /// Schema v3 owns timezone under the Time status module; the obsolete
+    /// top-level field is rejected rather than silently ignored.
+    #[test]
+    fn top_level_timezone_is_rejected() {
+        let json = MINIMAL.replace(
+            r#""agentId": "agent-a""#,
+            r#""agentId": "agent-a", "timezone": "UTC""#,
+        );
+        assert!(matches!(
+            CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect_err("must fail"),
+            CurrentRuntimeConfigError::Syntax { .. }
+        ));
+    }
+
+    /// The strongly typed Agent Status subtree keeps the global strict-field
+    /// contract: unknown module knobs fail at launch rather than being
+    /// ignored.
+    #[test]
+    fn unknown_agent_status_fields_are_rejected() {
+        let json = MINIMAL.replace(
+            r#""agentId": "agent-a""#,
+            r#""agentId": "agent-a", "agentStatus": {"time": {"future": true}}""#,
+        );
         assert!(matches!(
             CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect_err("must fail"),
             CurrentRuntimeConfigError::Syntax { .. }

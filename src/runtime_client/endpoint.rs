@@ -1,8 +1,8 @@
 //! The Runtime Client semantic endpoint: the transport-neutral protocol
-//! entry point of Runtime Client Protocol v2.
+//! entry point of Runtime Client Protocol v3.
 //!
 //! [`RuntimeClientEndpoint`] is the boundary every transport wraps. It
-//! accepts *every* v2 request — including `initialize` — and returns the
+//! accepts *every* v3 request — including `initialize` — and returns the
 //! correlated response, so protocol semantics live here and nowhere else.
 //!
 //! # What a transport is
@@ -94,7 +94,7 @@ impl RuntimeClientEndpoint {
         }
     }
 
-    /// Handles one Runtime Client Protocol v2 request and returns its
+    /// Handles one Runtime Client Protocol v3 request and returns its
     /// correlated response.
     ///
     /// The request id is echoed exactly, so responses correlate under

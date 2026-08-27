@@ -16,7 +16,7 @@
 //! the ConversationInboundMailbox active-process relationship
 //! ConversationToolRuntime / ConversationBackgroundRegistry
 //! CapabilityCoordinator
-//! context/request assembly dependencies (policy, estimator, status composer)
+//! context/request assembly dependencies (policy, estimator, Agent Status engine)
 //! the lifecycle/drain authority
 //! attempt settlement handoff back into conversation state
 //! ```
@@ -286,8 +286,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
-use chrono_tz::Tz;
-
 use crate::agent::cancellation::AgentCancellation;
 use crate::agent::observer::{AgentExecutionObserver, AgentStatusObservation};
 use crate::agent::{AgentExecution, AgentExecutionRequest};
@@ -297,7 +295,7 @@ use crate::context::compaction::{
 };
 use crate::context::tokens::TokenEstimator;
 use crate::context::{
-    AgentStatusComposer, CompactionConstraints, ContextError, ContextErrorKind, ContextRuntime,
+    AgentStatusEngine, CompactionConstraints, ContextError, ContextErrorKind, ContextRuntime,
     NativeContextInput, SessionContextPolicy, render_effective_system_prompt,
 };
 use crate::conversation::ConversationState;
@@ -481,9 +479,10 @@ impl std::error::Error for ConversationRuntimeError {}
 /// The shared context-plane pieces of one conversation runtime.
 ///
 /// These are the **composition-owned static** pieces: the token estimator, the
-/// Agent Status composer, and the current runtime context policy (reserve tokens,
+/// Agent Status engine template, and the current runtime context policy (reserve tokens,
 /// keep-recent target, summary output cap). They persist across attempts,
-/// and the model path and the Runtime Client projection share one composer.
+/// and the model path and the Runtime Client projection share one accepted
+/// Agent Status generation.
 ///
 /// There is deliberately no separate summary store: compaction lineage is
 /// derived from the immutable Conversation Surface history owned by the
@@ -500,9 +499,10 @@ pub struct ConversationContextConfig {
     pub policy: SessionContextPolicy,
     /// The deterministic token estimator.
     pub estimator: Arc<dyn TokenEstimator>,
-    /// The Agent Status composer shared by the model path and the Runtime
-    /// Client projection.
-    pub status_composer: AgentStatusComposer,
+    /// The launch-scoped Agent Status engine template. Each admitted attempt
+    /// clones it, which gives that attempt fresh quarantine state while
+    /// retaining the configured clock/module semantics.
+    pub status_engine: AgentStatusEngine,
 }
 
 /// The construction-time configuration of one conversation runtime.
@@ -525,8 +525,6 @@ pub struct RuntimeConversationConfig {
     /// snapshots of it; a client updates it through `model_set`; nothing
     /// else in the process resolves a provider binding.
     pub model: SessionModelState,
-    /// The per-conversation IANA timezone, when known.
-    pub timezone: Option<Tz>,
     /// The launch-scoped runtime approval mode.
     pub approval_mode: ApprovalMode,
     /// The shared context-plane pieces.
@@ -1094,7 +1092,6 @@ impl Gate {
 pub(crate) struct RuntimeInner {
     conversation_id: ConversationId,
     agent_id: AgentId,
-    timezone: Option<Tz>,
     context: ConversationContextConfig,
     tool_runtime: ConversationToolRuntime,
     mailbox: ConversationInboundMailbox,
@@ -1583,7 +1580,7 @@ impl RuntimeInner {
         ContextRuntime::for_attempt_with_assembly(
             self.context.policy,
             Arc::clone(&self.context.estimator),
-            self.context.status_composer.clone(),
+            self.context.status_engine.clone(),
             assembly,
             model,
         )
@@ -1963,7 +1960,6 @@ impl RuntimeInner {
                 Some(fresh) => InitialTurnTrigger::FreshInbound(fresh),
                 None => InitialTurnTrigger::Continuation,
             },
-            timezone: self.timezone,
             model,
         };
         let lifecycle = crate::agent::AttemptLifecycle::inert()
@@ -2956,7 +2952,6 @@ impl ConversationRuntime {
         let inner = Arc::new(RuntimeInner {
             conversation_id,
             agent_id: config.agent_id,
-            timezone: config.timezone,
             context: config.context,
             tool_runtime: config.tool_runtime,
             mailbox,
@@ -3113,12 +3108,6 @@ impl ConversationRuntime {
         &self.inner.agent_id
     }
 
-    /// The current runtime timezone used by status and temporal context.
-    #[must_use]
-    pub fn timezone(&self) -> Option<chrono_tz::Tz> {
-        self.inner.timezone
-    }
-
     /// The one conversation tool runtime of this runtime.
     #[must_use]
     pub fn tool_runtime(&self) -> &ConversationToolRuntime {
@@ -3127,8 +3116,8 @@ impl ConversationRuntime {
 
     /// The shared current-runtime context plane of this composition.
     ///
-    /// The context policy, the token estimator, and the Agent Status
-    /// composer persist across attempts; each attempt derives its
+    /// The context policy, the token estimator, and the Agent Status engine
+    /// template persist across attempts; each attempt derives its
     /// [`ContextRuntime`](crate::context::ContextRuntime) from this plane
     /// plus that attempt's frozen model snapshot.
     #[must_use]
@@ -3202,7 +3191,7 @@ impl ConversationRuntime {
     /// Claims the one-time Runtime Client binding of the tool runtime and of
     /// the capability coordinator.
     ///
-    /// Protocol v2 binds one runtime identity to at most one Runtime Client
+    /// Protocol v3 binds one runtime identity to at most one Runtime Client
     /// adapter for that identity's lifetime, so cloning a runtime never
     /// yields a second bindable identity and dropping the bound adapter
     /// never makes it bindable again. Reconnect replaces the attachment,
@@ -5052,7 +5041,7 @@ mod tests {
         AgentCancellation, LifecycleError, PreToolDecision, PreToolPolicy, PreToolView,
     };
     use crate::context::{
-        AgentStatusComposer, ClosureTokenEstimator, ContextError, ContextErrorKind,
+        AgentStatusEngine, ClosureTokenEstimator, ContextError, ContextErrorKind,
         DefaultTokenEstimator, TokenEstimator,
     };
     use crate::conversation::SurfaceSpan;
@@ -5478,12 +5467,11 @@ mod tests {
         let config = RuntimeConversationConfig {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter),
-            timezone: None,
             approval_mode: ApprovalMode::Policy,
             context: ConversationContextConfig {
                 policy: options.policy,
                 estimator: options.estimator,
-                status_composer: AgentStatusComposer::default(),
+                status_engine: AgentStatusEngine::default(),
             },
             tool_runtime,
             resources,
@@ -5556,7 +5544,6 @@ mod tests {
         let config = RuntimeConversationConfig {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter),
-            timezone: None,
             approval_mode: ApprovalMode::Policy,
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
@@ -5565,7 +5552,7 @@ mod tests {
                     summary_output_cap: None,
                 },
                 estimator,
-                status_composer: AgentStatusComposer::default(),
+                status_engine: AgentStatusEngine::default(),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -5639,7 +5626,7 @@ mod tests {
                         serde_json::from_value(serde_json::json!("local/model"))
                             .expect("model reference"),
                     ),
-                    timezone: None,
+                    agent_status: crate::context::AgentStatusConfig::default(),
                     context: crate::context::SessionContextPolicy {
                         reserve_tokens: 0,
                         keep_recent_tokens: 0,
@@ -5654,7 +5641,6 @@ mod tests {
         let config = RuntimeConversationConfig {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter),
-            timezone: None,
             approval_mode: ApprovalMode::Policy,
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
@@ -5663,7 +5649,7 @@ mod tests {
                     summary_output_cap: None,
                 },
                 estimator: Arc::new(DefaultTokenEstimator),
-                status_composer: AgentStatusComposer::default(),
+                status_engine: AgentStatusEngine::default(),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -5748,7 +5734,7 @@ mod tests {
                         serde_json::from_value(serde_json::json!("local/model"))
                             .expect("model reference"),
                     ),
-                    timezone: None,
+                    agent_status: crate::context::AgentStatusConfig::default(),
                     context: crate::context::SessionContextPolicy {
                         reserve_tokens: 0,
                         keep_recent_tokens: 0,
@@ -5763,7 +5749,6 @@ mod tests {
         let config = RuntimeConversationConfig {
             agent_id: runtime_agent.clone(),
             model: scripted_session_model(adapter),
-            timezone: None,
             approval_mode: ApprovalMode::Policy,
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
@@ -5772,7 +5757,7 @@ mod tests {
                     summary_output_cap: None,
                 },
                 estimator: Arc::new(DefaultTokenEstimator),
-                status_composer: AgentStatusComposer::default(),
+                status_engine: AgentStatusEngine::default(),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -9248,7 +9233,6 @@ mod tests {
         let error = ConversationRuntime::new(RuntimeConversationConfig {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(Arc::new(FakeModel::new(Vec::new()))),
-            timezone: None,
             approval_mode: ApprovalMode::Policy,
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
@@ -9257,7 +9241,7 @@ mod tests {
                     summary_output_cap: None,
                 },
                 estimator: Arc::new(DefaultTokenEstimator),
-                status_composer: AgentStatusComposer::default(),
+                status_engine: AgentStatusEngine::default(),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -9309,7 +9293,6 @@ mod tests {
         let error = ConversationRuntime::new(RuntimeConversationConfig {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(Arc::new(FakeModel::new(Vec::new()))),
-            timezone: None,
             approval_mode: ApprovalMode::Policy,
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
@@ -9318,7 +9301,7 @@ mod tests {
                     summary_output_cap: None,
                 },
                 estimator: Arc::new(DefaultTokenEstimator),
-                status_composer: AgentStatusComposer::default(),
+                status_engine: AgentStatusEngine::default(),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -14073,7 +14056,6 @@ mod tests {
         let config = RuntimeConversationConfig {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter),
-            timezone: None,
             approval_mode: ApprovalMode::Policy,
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
@@ -14082,7 +14064,7 @@ mod tests {
                     summary_output_cap: None,
                 },
                 estimator,
-                status_composer: AgentStatusComposer::default(),
+                status_engine: AgentStatusEngine::default(),
             },
             tool_runtime,
             resources: test_resources(&coordinator),

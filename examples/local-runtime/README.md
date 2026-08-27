@@ -34,7 +34,7 @@ examples/local-runtime/
 | Path | Owner and purpose |
 | --- | --- |
 | `models.jsonc` | The runtime's provider/model authority: endpoint, credential source, model limits, capabilities, opaque request parameters, reasoning profiles, and protocol compatibility. |
-| `rustx.jsonc` | The current runtime/project configuration: default model for new Sessions, context/timezone, native-tool policy and activation, MCP sources, Skill roots, and authorized environment. |
+| `rustx.jsonc` | The current runtime/project configuration: default model for new Sessions, context, launch-scoped Agent Status modules/timezone, native-tool policy and activation, MCP sources, Skill roots, and authorized environment. |
 | `workspace/` | The authoritative execution cwd and conventional project/source tree, including Skills and editable custom Python tool packages. Relative native file-tool paths resolve here. This is not a general filesystem sandbox for Read/Write/Edit/Grep/Glob. |
 | `workspace/.agents/tools/*` | Automatically discovered custom Python tool source packages; there is no separate registration entry in `rustx.jsonc`. |
 | `.rustx/` (`runtime-root`) | Runtime-owned generated artifacts, immutable Python tool versions, environments, and Session storage. Keep it disjoint from `workspace/`; it is a separate ownership domain, not a promise that every file under it is unreachable through every filesystem mechanism. |
@@ -174,7 +174,7 @@ questionnaire interaction through the runtime-owned `InteractionCoordinator`.
 The client always offers bounded custom text; the model does not send
 `allow_free_text` or author an `Other` option. A decline is a successful tool
 result, while attempt cancellation and provider unavailability remain distinct.
-The local process speaks Runtime Client Protocol v2 only, and its SQLite
+The local process speaks Runtime Client Protocol v3 only, and its SQLite
 conversation store accepts schema version 10 only; Protocol v1 and durable
 schema v9 (and older development schemas) are rejected rather than migrated.
 
@@ -332,7 +332,7 @@ configuration guide.
 
 ## Run it from the repository root
 
-The Rust binary speaks Runtime Client Protocol v2 JSONL on stdout, so a human
+The Rust binary speaks Runtime Client Protocol v3 JSONL on stdout, so a human
 normally uses it through `rustx-tui`. The reference TUI reconstructs pending
 questionnaires from the authoritative snapshot, delegates custom-answer
 editing (including bracketed paste and Unicode cursor behavior) to Pi-TUI's

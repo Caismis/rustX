@@ -10,7 +10,7 @@
 // `runtime-root` and is never overwritten by this file.
 {
   // The only runtime configuration schema version this runtime accepts.
-  "schemaVersion": 2,
+  "schemaVersion": 3,
 
   // The agent identity recorded on this conversation's attempts and
   // inherited by its subagents. Any non-empty name.
@@ -54,9 +54,18 @@
   // It is never restored from Session history.
   "approvalMode": "policy",
 
-  // The IANA timezone of the temporal Agent Status section. The process and
-  // system local timezone are never consulted. Omit for UTC.
-  "timezone": "Asia/Shanghai",
+  // Optional, launch-scoped Agent Status modules. Omitting this block enables
+  // both built-in modules. Time owns its optional IANA timezone; omit it for
+  // UTC. Resource reload never rereads this launch configuration.
+  "agentStatus": {
+    "time": {
+      "enabled": true,
+      "timezone": "Asia/Tokyo",
+    },
+    "background": {
+      "enabled": true,
+    },
+  },
 
   // Context policy. The context *window* is not here: it belongs to the
   // selected model and is taken from that attempt's model snapshot.

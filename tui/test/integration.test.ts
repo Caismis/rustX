@@ -6,7 +6,7 @@
  *   -> RuntimeClientConnection      (real JSONL framing)
  *   -> ChildRuntimeProcess          (real OS process)
  *   -> rustx --models ... --config ... --workspace ... --runtime-root ...
- *   -> real Runtime Client Protocol v2
+ *   -> real Runtime Client Protocol v3
  *   -> real local runtime composition (#42)
  * ```
  *
@@ -98,7 +98,7 @@ function modelsJson(baseUrl: string): string {
 }
 
 const RUNTIME_CONFIG_JSON = JSON.stringify({
-  schemaVersion: 2,
+  schemaVersion: 3,
   agentId: "agent-tui-integration",
   model: { model: "fixture/integration-model" },
   context: { reserveTokens: 1024, keepRecentTokens: 8192 },
@@ -516,7 +516,7 @@ describe("real rustx structured ask_user questionnaire", { skip: SKIP }, () => {
 // ---------------------------------------------------------------------------
 
 const COMPACTION_RUNTIME_CONFIG_JSON = JSON.stringify({
-  schemaVersion: 2,
+  schemaVersion: 3,
   agentId: "agent-tui-compaction",
   model: { model: "fixture/integration-model" },
   // Both compaction budgets carry the reserve, so the shared limit is

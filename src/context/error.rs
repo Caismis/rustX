@@ -63,10 +63,6 @@ pub enum ContextErrorKind {
     SummaryInputTooLarge,
     /// Summary generation was cancelled.
     Cancelled,
-    /// Agent Status composition failed: an extension section provider
-    /// reported an error. The failure is propagated as a context-preparation
-    /// failure; it is never silently downgraded to an absent section.
-    StatusFailed,
     /// An unexpected internal context failure.
     Internal,
 }

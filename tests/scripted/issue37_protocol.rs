@@ -1,4 +1,4 @@
-//! Issue #37: Runtime Client Protocol v2 wire-contract tests.
+//! Issue #37: Runtime Client Protocol v3 wire-contract tests.
 //!
 //! These tests exercise the protocol boundary exclusively through the
 //! public Runtime Client surface: deterministic serialization of every
@@ -98,8 +98,8 @@ fn protocol_envelopes_round_trip_deterministically() {
 fn protocol_errors_round_trip_with_stable_categories() {
     let cases = [
         RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 2,
-            requested: 2,
+            supported: 3,
+            requested: 3,
         },
         RuntimeClientError::AttachmentInUse {
             existing_attachment_id: rustx::runtime_client::AttachmentId::new("attachment-1"),
@@ -157,13 +157,13 @@ fn questionnaire() -> QuestionnaireSpecification {
 }
 
 #[test]
-fn v2_questionnaire_pending_response_decline_and_settlement_round_trip() {
+fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
     let questionnaire = questionnaire();
-    let interaction_id = InteractionId::new("interaction-questionnaire-v2");
+    let interaction_id = InteractionId::new("interaction-questionnaire-v3");
     let request = InteractionRequest {
         id: interaction_id.clone(),
-        conversation_id: ConversationId::new("conv-questionnaire-v2"),
-        attempt_id: AttemptId::new("attempt-questionnaire-v2"),
+        conversation_id: ConversationId::new("conv-questionnaire-v3"),
+        attempt_id: AttemptId::new("attempt-questionnaire-v3"),
         turn: 1,
         kind: InteractionKind::Questionnaire {
             questionnaire: questionnaire.clone(),
@@ -256,12 +256,12 @@ fn v2_questionnaire_pending_response_decline_and_settlement_round_trip() {
     let old_question_response = serde_json::json!({
         "method": "interaction_respond",
         "id": 30,
-        "interaction_id": "interaction-questionnaire-v2",
+        "interaction_id": "interaction-questionnaire-v3",
         "response": {"type": "question", "answer": "pasted text"}
     });
     assert!(
         serde_json::from_value::<RuntimeClientRequest>(old_question_response).is_err(),
-        "the obsolete Question response is not a v2 response"
+        "the obsolete Question response is not a valid response"
     );
 }
 
@@ -339,7 +339,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         incompatible,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 2,
+            supported: 3,
             requested: 7,
         })
     ));
@@ -347,7 +347,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     // The initialize method cannot re-initialize an admitted attachment.
     let reinit = attachment.handle_request(RuntimeClientRequest::Initialize {
         id: request_id(9),
-        protocol_version: 2,
+        protocol_version: 3,
     });
     assert!(matches!(
         reinit.error,

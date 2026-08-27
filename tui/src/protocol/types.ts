@@ -1,5 +1,5 @@
 /**
- * Runtime Client Protocol v2 — the TypeScript mirror of the wire contract.
+ * Runtime Client Protocol v3 — the TypeScript mirror of the wire contract.
  *
  * These declarations describe the JSON rustX already speaks. They are a
  * *transcription* of the Rust types in `src/runtime_client/`, never a second
@@ -11,7 +11,7 @@
  * - nothing in this file interprets a value. `requestParams` stays opaque
  *   provider-owned JSON, capability sets are read as published, and tool
  *   arguments/results are carried, not parsed for meaning;
- * - Runtime Client Protocol v2 event discriminators are a closed vocabulary at
+ * - Runtime Client Protocol v3 event discriminators are a closed vocabulary at
  *   the connection boundary: an unknown event is a protocol error, not a
  *   presentation fact; other open values remain opaque or are checked at
  *   their owning boundary.
@@ -23,7 +23,7 @@
  * camelCase.
  */
 
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 2;
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 3;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -698,11 +698,6 @@ export interface RuntimeClientSubagent {
   detail?: string;
 }
 
-export interface RuntimeClientStatusFact {
-  label: string;
-  value: string;
-}
-
 export type RuntimeClientStatusSection =
   | {
       type: "temporal";
@@ -713,14 +708,23 @@ export type RuntimeClientStatusSection =
   | {
       type: "background_executions";
       executions: RuntimeClientBackgroundExecution[];
-    }
-  | { type: "facts"; facts: RuntimeClientStatusFact[] };
+      omitted_count: number;
+    };
+
+export interface FreshInboundStatusOpportunityView {
+  target_message_id: MessageId;
+}
+
+export interface AgentStatusOpportunityView {
+  fresh_inbound: FreshInboundStatusOpportunityView;
+}
 
 export interface AgentStatusView {
   attempt_id: AttemptId;
   turn: number;
-  target_message_id: MessageId;
-  sections?: RuntimeClientStatusSection[];
+  status_message_id: MessageId;
+  opportunities: AgentStatusOpportunityView;
+  sections: RuntimeClientStatusSection[];
   /** The canonical rendering, derived from the same composition as sections. */
   rendered: string;
 }
@@ -1132,7 +1136,6 @@ export type RuntimeClientEvent =
       type: "agent_status_composed";
       attempt_id: AttemptId;
       turn: number;
-      target_message_id: MessageId;
       status: AgentStatusView;
     }
   | {
@@ -1489,11 +1492,11 @@ export type RuntimeClientOutboundRecord =
   | RuntimeClientProtocolEvent;
 
 /**
- * Checks only the discriminator of one Runtime Client Protocol v2 event.
+ * Checks only the discriminator of one Runtime Client Protocol v3 event.
  *
  * The connection owns structural protocol validation, so this deliberately
  * does not validate the event payload. Once this returns true, the reducer
- * may receive the event as a known v2 fact.
+ * may receive the event as a known v3 fact.
  */
 export function isKnownRuntimeClientEvent(
   value: unknown,
@@ -1545,7 +1548,7 @@ export function isKnownRuntimeClientEvent(
 /**
  * Classifies one decoded outbound record.
  *
- * A known notification carries a cursor and a known v2 event discriminator.
+ * A known notification carries a cursor and a known v3 event discriminator.
  * Malformed or future event-shaped records are handled separately by the
  * connection so they cannot fall through as responses.
  */

@@ -60,9 +60,8 @@
 //!
 //! The context path is mandatory: every normal `AgentExecution` is
 //! constructed with a [`ContextRuntime`], and there is exactly one normal
-//! execution model — no no-context/unbounded mode and no Agent Status
-//! disable flag. Agent Status is composed whenever a pending
-//! [`FreshInboundTurn`] exists and is consumed by the first successful model
+//! execution model — no no-context/unbounded mode. Agent Status is an optional
+//! `FreshInbound` enrichment and is consumed by the first successful model
 //! invocation that observes it. The conversation inbound mailbox is owned by
 //! the conversation tool runtime: the loop drains exactly
 //! `tool_runtime.mailbox()` at every safe boundary, so background terminal
@@ -81,8 +80,9 @@ use crate::context::error::{ContextError, ContextErrorKind};
 use crate::context::projection::ContextProjection;
 use crate::context::tokens::{ObservedAnchor, ProviderObservedInput};
 use crate::context::{
-    AcceptedContext, ContextRuntime, ContributorInputSnapshot, DeferredContextProposal,
-    MAX_DEFERRED_CONTEXT_PROPOSALS, MAX_PROPOSALS_PER_CONTRIBUTOR, render_effective_system_prompt,
+    AcceptedContext, AgentStatusOpportunitySet, ContextRuntime, ContributorInputSnapshot,
+    DeferredContextProposal, FreshInboundStatusOpportunity, MAX_DEFERRED_CONTEXT_PROPOSALS,
+    MAX_PROPOSALS_PER_CONTRIBUTOR, render_agent_status, render_effective_system_prompt,
     validate_user_message_proposal,
 };
 use crate::conversation::{ConversationError, ConversationState, PreparedCanonicalCommit};
@@ -130,7 +130,6 @@ use super::observer::{AgentExecutionObserver, AgentStatusObservation};
 use super::state::{ExecutionState, ExecutionStateMachine};
 
 use chrono::{DateTime, Utc};
-use chrono_tz::Tz;
 
 /// The bounded M4 retry policy for `ContextWindowExceeded`.
 ///
@@ -161,14 +160,8 @@ pub struct AgentExecutionRequest {
     ///
     /// Fresh inbound identity is explicit execution state, never inferred
     /// from message role or history shape. [`InitialTurnTrigger::FreshInbound`]
-    /// makes Agent Status and fresh-inbound validation mandatory; omitting a
-    /// status or a fresh turn is impossible, so the trigger can never
-    /// silently suppress Agent Status.
+    /// makes the `FreshInbound` Agent Status opportunity eligible.
     pub initial_turn_trigger: InitialTurnTrigger,
-    /// The per-execution/conversation IANA timezone metadata used by the
-    /// temporal Agent Status section, when known. The process/system local
-    /// timezone is never consulted.
-    pub timezone: Option<Tz>,
     /// The one immutable model ownership object of the attempt.
     ///
     /// The loop receives exactly this instead of independent
@@ -309,7 +302,7 @@ pub struct AgentExecution<'a> {
     continuation_owner: Option<MessageId>,
     /// The pending fresh inbound turn: `Some` until a successful model
     /// invocation has observed it. One pending fresh inbound turn produces
-    /// at most one Agent Status snapshot per request preparation.
+    /// at most one Agent Status generation.
     pending_fresh_inbound: Option<FreshInboundTurn>,
     context_runtime: ContextRuntime,
     /// The transient accepted context for the current admitted primary step.
@@ -488,6 +481,17 @@ struct PreparedModelTurn {
     /// estimate that was proven wrong, and the pair (estimate, provider
     /// count) is the correction the recovery compaction plans with.
     estimated_input: u64,
+    /// The status observation whose canonical message is included in this
+    /// prepared context, when this is a `FreshInbound` turn.
+    status_observation: Option<AgentStatusObservation>,
+}
+
+/// The accepted status generation retained across staging and overflow
+/// compaction/retry. It is not recomputed while this primary step remains in
+/// flight.
+struct AgentStatusGeneration {
+    opportunities: AgentStatusOpportunitySet,
+    status: crate::context::status::AgentStatus,
 }
 
 /// The intermediate staged view of one model turn: scratch conversation,
@@ -584,9 +588,9 @@ impl<'a> AgentExecution<'a> {
     ///
     /// The context runtime is required: there is exactly one normal
     /// execution model — canonical history is always projected through the
-    /// context engine, and Agent Status is composed whenever a pending fresh
-    /// inbound turn exists. There is no no-context mode and no Agent Status
-    /// disable flag.
+    /// context engine. A pending `FreshInbound` turn offers the optional
+    /// Agent Status opportunity; disabled or empty modules simply contribute
+    /// no status message. There is no no-context mode.
     ///
     /// The [`AttemptLifecycle`] is required for the same reason: the loop
     /// always evaluates exactly one pre-step policy and always runs exactly
@@ -803,8 +807,7 @@ impl<'a> AgentExecution<'a> {
             // The attempt's explicit fresh inbound trigger is pending until
             // the first successful model invocation observes it. A pure
             // continuation attempt has no pending trigger: the trigger makes
-            // the execution mode explicit, so Agent Status can never be
-            // silently suppressed.
+            // the execution mode explicit.
             self.pending_fresh_inbound = match &self.request.initial_turn_trigger {
                 InitialTurnTrigger::FreshInbound(fresh) => Some(fresh.clone()),
                 InitialTurnTrigger::Continuation => None,
@@ -1410,7 +1413,7 @@ impl<'a> AgentExecution<'a> {
             )
             .await?;
         }
-        let status = match self.compose_status() {
+        let status_generation = match self.compose_status() {
             Ok(status) => status,
             Err(error) => return Err(Self::context_failure_terminal(&error)),
         };
@@ -1426,7 +1429,9 @@ impl<'a> AgentExecution<'a> {
         // privileged committer role and cannot bypass the policy below.
         let deferred = core::mem::take(&mut self.deferred_context);
         let mut native = self.context_runtime.native_system.clone();
-        native.agent_status = status;
+        native.agent_status = status_generation
+            .as_ref()
+            .map(|generation| render_agent_status(&generation.status));
         let accepted = self
             .context_runtime
             .assembly
@@ -1527,25 +1532,25 @@ impl<'a> AgentExecution<'a> {
                 )));
             }
         }
-        self.finalize_model_turn(&staged_context, staged)
+        self.finalize_model_turn(&staged_context, staged, status_generation)
     }
 
-    /// Composes the Agent Status value of the pending fresh inbound
-    /// turn, sampling the runtime clock exactly once.
+    /// Prepares the Agent Status generation of the pending `FreshInbound`
+    /// opportunity.
     ///
     /// With no pending fresh inbound turn there is no Agent Status. With a
     /// pending turn, the turn is validated against canonical history and the
     /// final message's persisted timestamp drives `inbound_message_time`;
-    /// the composer produces the structured sections and the canonical
+    /// the closed engine produces the structured sections and the canonical
     /// renderer produces the bounded text that Context Assembly admits as a
-    /// canonical Runtime context fact.
+    /// canonical Runtime context fact. The structured observation is deferred
+    /// until the model-turn-start commit wins.
     ///
     /// # Errors
     ///
     /// Returns a context error for a fresh-inbound contract violation
-    /// (`MalformedHistory`) or a failing status section provider
-    /// (`StatusFailed`).
-    fn compose_status(&self) -> Result<Option<String>, ContextError> {
+    /// (`MalformedHistory`). Module failures are isolated by the engine.
+    fn compose_status(&mut self) -> Result<Option<AgentStatusGeneration>, ContextError> {
         let Some(fresh) = &self.pending_fresh_inbound else {
             return Ok(None);
         };
@@ -1567,21 +1572,20 @@ impl<'a> AgentExecution<'a> {
                 ),
             )
         })?;
-        let context = crate::context::status::AgentStatusRenderContext {
-            inbound_message_time,
-            timezone: self.request.timezone,
-            background: self.tool_runtime.background().active_snapshot(),
+        let opportunities = AgentStatusOpportunitySet {
+            fresh_inbound: Some(FreshInboundStatusOpportunity {
+                target_message_id,
+                inbound_message_time,
+            }),
         };
-        let status = self.context_runtime.status_composer.compose(&context)?;
-        if let Some(observer) = self.observer {
-            observer.observe_status(&AgentStatusObservation {
-                attempt_id: self.request.attempt_id.clone(),
-                turn: self.turn,
-                target_message_id: target_message_id.clone(),
-                status: status.clone(),
-            });
-        }
-        Ok(Some(crate::context::status::render_agent_status(&status)))
+        Ok(self
+            .context_runtime
+            .status_engine
+            .prepare(&opportunities, self.tool_runtime.background())
+            .map(|status| AgentStatusGeneration {
+                opportunities,
+                status,
+            }))
     }
 
     /// The persisted timestamp of one committed inbound message.
@@ -1697,6 +1701,7 @@ impl<'a> AgentExecution<'a> {
         &mut self,
         staged_context: &[MessageBlock],
         staged: StagedModelTurn,
+        status_generation: Option<AgentStatusGeneration>,
     ) -> Result<PreparedModelTurn, Terminal> {
         let mut context = Vec::with_capacity(staged_context.len());
         for block in staged_context {
@@ -1719,6 +1724,35 @@ impl<'a> AgentExecution<'a> {
             &staged.request.invocation,
             staged.request.continuation.as_ref(),
         );
+        let status_observation = match status_generation {
+            Some(generation) => {
+                let status_message_id = staged_context.iter().find_map(|block| match block {
+                    MessageBlock::User(user)
+                        if user.kind
+                            == crate::message::types::InboundKind::Context(
+                                crate::message::types::ContextKind::AgentStatus,
+                            ) =>
+                    {
+                        Some(user.id.clone())
+                    }
+                    _ => None,
+                });
+                let Some(status_message_id) = status_message_id else {
+                    return Err(Self::context_failure_terminal(&ContextError::new(
+                        ContextErrorKind::Internal,
+                        "the accepted Agent Status generation has no staged Agent Status message",
+                    )));
+                };
+                Some(AgentStatusObservation {
+                    attempt_id: self.request.attempt_id.clone(),
+                    turn: self.turn,
+                    status_message_id,
+                    opportunities: generation.opportunities,
+                    status: generation.status,
+                })
+            }
+            None => None,
+        };
         Ok(PreparedModelTurn {
             context,
             snapshot: staged.snapshot,
@@ -1727,6 +1761,7 @@ impl<'a> AgentExecution<'a> {
             anchor,
             request_identity,
             estimated_input: staged.projection.estimated_input.input_tokens,
+            status_observation,
         })
     }
 
@@ -1755,6 +1790,7 @@ impl<'a> AgentExecution<'a> {
     ///   (Issue #63): no provider invocation, no start fact, no partial
     ///   request-owned state, and the coordinator learns the durable
     ///   failure kind.
+    #[allow(clippy::too_many_lines)]
     fn start_model_turn(&mut self, prepared: PreparedModelTurn) -> Result<ModelRequest, Terminal> {
         #[cfg(test)]
         if let Some(pause) = self
@@ -1814,6 +1850,7 @@ impl<'a> AgentExecution<'a> {
         // infallibly (validated at preparation, still exact), the start fact
         // is recorded, and only after this point may the provider be
         // invoked.
+        let status_observation = prepared.status_observation.clone();
         for commit in prepared.context {
             let block = commit.message().clone();
             self.conversation.install_prepared(commit);
@@ -1823,6 +1860,15 @@ impl<'a> AgentExecution<'a> {
                 // cursor and never create a semantic user echo.
                 observer.observe_committed(&self.request.attempt_id, &block, None);
             }
+        }
+        // The status projection is a projection of the canonical message, not
+        // of a merely prepared context value. Publish it only after the
+        // status message's committed observation, while preserving the
+        // existing cancellation/start linearization point above.
+        if let Some(observer) = self.observer
+            && let Some(status_observation) = status_observation.as_ref()
+        {
+            observer.observe_status(status_observation);
         }
         self.record_persisted_event(started);
         self.last_request_fingerprint = Some(prepared.fingerprint);
@@ -2098,9 +2144,9 @@ impl<'a> AgentExecution<'a> {
     /// The `AttemptFailed` terminal of a context-plane failure that occurred
     /// while preparing model context **before any compaction began**: an
     /// invalid pending fresh-inbound state discovered during status
-    /// composition or projection preparation, a failing Agent Status section
-    /// provider, or a projection preparation failure that is not itself a
-    /// compaction operation. These are never mislabeled as compaction
+    /// preparation or projection preparation that is not itself a compaction
+    /// operation. Agent Status module failures are isolated by the closed
+    /// engine before this boundary. These are never mislabeled as compaction
     /// failures: [`RuntimeError::ContextCompactionFailed`] is reserved for an
     /// actual proactive compaction pipeline failure.
     fn context_failure_terminal(error: &ContextError) -> Terminal {
@@ -2469,7 +2515,7 @@ impl<'a> AgentExecution<'a> {
             Ok(staged) => staged,
             Err(terminal) => return Err(terminal),
         };
-        let prepared = match self.finalize_model_turn(&[], staged) {
+        let prepared = match self.finalize_model_turn(&[], staged, None) {
             Ok(prepared) => prepared,
             Err(terminal) => return Err(terminal),
         };
@@ -4447,6 +4493,8 @@ mod tests {
     #[derive(Default)]
     struct RecordingObserver {
         events: Mutex<Vec<RuntimeEvent>>,
+        committed: Mutex<Vec<MessageBlock>>,
+        statuses: Mutex<Vec<AgentStatusObservation>>,
         /// The released publication frames, in release order. Every frame
         /// here is already durably committed for release.
         frames: Mutex<Vec<PublicationFrame>>,
@@ -4466,12 +4514,21 @@ mod tests {
         fn observe_committed(
             &self,
             _attempt_id: &AttemptId,
-            _block: &MessageBlock,
+            block: &MessageBlock,
             _transcript_cursor: Option<crate::durable::TranscriptCursor>,
         ) {
+            self.committed
+                .lock()
+                .expect("observer committed lock")
+                .push(block.clone());
         }
 
-        fn observe_status(&self, _observation: &AgentStatusObservation) {}
+        fn observe_status(&self, observation: &AgentStatusObservation) {
+            self.statuses
+                .lock()
+                .expect("observer status lock")
+                .push(observation.clone());
+        }
 
         fn observe_publication_opened(
             &self,
@@ -4588,7 +4645,6 @@ mod tests {
             attempt_id: AttemptId::new("attempt-1"),
             conversation: ConversationState::new(),
             initial_turn_trigger: InitialTurnTrigger::Continuation,
-            timezone: None,
             model: scripted_session_model(adapter).snapshot(),
         }
     }
@@ -4604,7 +4660,7 @@ mod tests {
                 summary_output_cap: None,
             },
             Arc::new(crate::context::DefaultTokenEstimator),
-            crate::context::AgentStatusComposer::default(),
+            crate::context::AgentStatusEngine::default(),
             &request(adapter).model,
         )
         .expect("valid context runtime")
@@ -5449,6 +5505,90 @@ mod tests {
         );
     }
 
+    /// Issue #129: a `FreshInbound` status prepared before the start gate is
+    /// provisional. If cancellation wins that gate, neither its canonical
+    /// User context message nor its structured observation is published.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancellation_before_model_start_publishes_no_agent_status() {
+        let adapter = Arc::new(ScriptedAdapter::new(vec![vec![ModelEvent::Completed {
+            finish_reason: ModelFinishReason::Stop,
+            usage: None,
+        }]]));
+        let mut request = request(&adapter);
+        let inbound = inbound_message("fresh-1", "fresh input");
+        request.conversation = ConversationState::from_messages(vec![MessageBlock::User(inbound)])
+            .expect("canonical inbound history");
+        request.initial_turn_trigger = InitialTurnTrigger::FreshInbound(
+            crate::runtime::inbound::FreshInboundTurn::new(vec![MessageId::new("fresh-1")])
+                .expect("fresh trigger"),
+        );
+        let runtime = runtime(&adapter);
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let (pause, pre_start, _) = StartBoundaryPause::install(true, false);
+        let mut pre_start = pre_start.expect("pre-start phase installed");
+        let controller_cancellation = cancellation.clone();
+        let controller = tokio::spawn(async move {
+            pre_start.await_park(1).await;
+            controller_cancellation.cancel();
+            assert!(controller_cancellation.is_cancelled());
+            pre_start.release();
+        });
+        let tool_runtime = tool_runtime("conv-1");
+        let (_dir, _coordinator, lease) =
+            capability_lease(ToolRegistry::new(), &tool_runtime).await;
+        let observer = RecordingObserver::default();
+        let mut execution = AgentExecution::new(
+            request,
+            lease,
+            &cancellation,
+            runtime,
+            &tool_runtime,
+            crate::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime");
+        execution.install_start_boundary_pause(pause);
+        execution.observe(&observer);
+        let result = execution.run().await;
+        controller.await.expect("cancellation controller");
+
+        assert!(matches!(
+            result.outcome,
+            AttemptOutcome::Cancelled {
+                reason: CancellationReason::UserRequested
+            }
+        ));
+        assert_eq!(adapter.request_count(), 0, "the model never started");
+        assert!(
+            observer
+                .committed
+                .lock()
+                .expect("observer committed lock")
+                .iter()
+                .all(|block| !matches!(
+                    block,
+                    MessageBlock::User(user)
+                        if user.kind == InboundKind::Context(ContextKind::AgentStatus)
+                )),
+            "the provisional status message never became canonical"
+        );
+        assert!(
+            observer
+                .statuses
+                .lock()
+                .expect("observer status lock")
+                .is_empty(),
+            "structured status is published only after model-turn start commit"
+        );
+        assert!(
+            result.messages().iter().all(|block| !matches!(
+                block,
+                MessageBlock::User(user)
+                    if user.kind == InboundKind::Context(ContextKind::AgentStatus)
+            )),
+            "canonical history contains no Agent Status message"
+        );
+    }
+
     /// Issue #12 (M9b): the exact arbitration race, start winner. The
     /// execution is parked **inside** the arbitration — the start gate is
     /// held, the cancellation check has passed, and the durable commit is
@@ -5570,7 +5710,7 @@ mod tests {
                 summary_output_cap: None,
             },
             Arc::new(crate::context::DefaultTokenEstimator),
-            crate::context::AgentStatusComposer::default(),
+            crate::context::AgentStatusEngine::default(),
             assembly,
             &request.model,
         )
@@ -5867,7 +6007,7 @@ mod tests {
                 summary_output_cap: None,
             },
             Arc::new(crate::context::DefaultTokenEstimator),
-            crate::context::AgentStatusComposer::default(),
+            crate::context::AgentStatusEngine::default(),
             assembly,
             &request.model,
         )
@@ -5963,7 +6103,6 @@ mod tests {
             attempt_id: AttemptId::new("attempt-1"),
             conversation: ConversationState::new(),
             initial_turn_trigger: InitialTurnTrigger::Continuation,
-            timezone: None,
             model: scripted_session_model(adapter.clone()).snapshot(),
         }
     }
@@ -5977,7 +6116,7 @@ mod tests {
                 summary_output_cap: None,
             },
             Arc::new(crate::context::DefaultTokenEstimator),
-            crate::context::AgentStatusComposer::default(),
+            crate::context::AgentStatusEngine::default(),
             &request_dyn(adapter).model,
         )
         .expect("valid context runtime")
@@ -6017,7 +6156,7 @@ mod tests {
                 summary_output_cap: None,
             },
             Arc::new(crate::context::DefaultTokenEstimator),
-            crate::context::AgentStatusComposer::default(),
+            crate::context::AgentStatusEngine::default(),
             assembly,
             &request.model,
         )

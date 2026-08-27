@@ -39,6 +39,7 @@ chrono-tz = { version = "0.10", features = ["serde"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net", "io-util", "io-std", "process"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 futures-util = "0.3"
+tracing = "0.1"
 async-openai = { version = "0.41", default-features = true, features = ["chat-completion", "responses", "middleware", "byot"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
 eventsource-stream = "0.2"

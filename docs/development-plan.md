@@ -123,18 +123,16 @@ Implemented in PR #21 (see [`docs/context-engine.md`](context-engine.md)):
 - Continuation invalidation after successful incompatible Surface replacement;
   explicit failure when the continuation-owning turn cannot be retired under
   the bounded #54 System rule
-- Mandatory Agent Status input: explicit `FreshInboundTurn` identity
-  with a mandatory canonical-order validation and an explicit
-  `InitialTurnTrigger` (fresh inbound vs pure continuation), structured
-  section composition with reserved ids and registration-frozen section
-  identities, the mandatory temporal section (clock + IANA timezone), the
-  canonical deterministic renderer over structured extension facts, the
-  canonical Runtime context UserMessageBlock admitted through Context
-  Assembly, full canonical token accounting, fresh-inbound compaction
-  protection, and a
-  `ContextPreparationFailed`/`ContextCompactionFailed` failure distinction
+- Optional FreshInbound Agent Status input: explicit `FreshInboundTurn`
+  identity with canonical-order validation and an explicit
+  `InitialTurnTrigger` (fresh inbound vs pure continuation), closed
+  compile-time Time/Background modules with frozen capture/evaluate snapshots,
+  code-owned typed payload validation, bounded semantic sections, whole-section
+  UTF-8-byte admission, canonical Runtime context UserMessageBlock admission
+  through Context Assembly, full canonical token accounting, fresh-inbound
+  compaction protection, and attempt-scoped module quarantine
 - Agent Status integration with Issue #22 inbound batching: one drained
-  batch becomes one fresh inbound turn with exactly one admitted status fact
+  batch becomes one fresh inbound turn with at most one optional status fact
   targeting the final message
 - Deterministic Issue #27 repeated-compaction validation through the final
   runtime path, the real provider adapter/HTTP-SSE boundary, and the real
@@ -1088,7 +1086,7 @@ tool-start capability. The real ConversationRuntime shutdown path proves that
 pending-map removal is not waiter or attempt settlement: Quiescent waits for
 the waiter handoff, projection callback, AgentExecution, and attempt task.
 
-Runtime Client v2 carries `interaction_respond`, typed acceptance/errors,
+Runtime Client v3 carries `interaction_respond`, typed acceptance/errors,
 pending/settled events, and `snapshot.pending_interactions`. It also projects
 authoritative effective and pending ApprovalMode state and accepts mode
 changes through runtime control. The TUI remains a projection/client: it
@@ -1311,7 +1309,7 @@ the repeated terminal payload.
 
 Capabilities are deny-by-construction: the child composes the base tool
 plane only (v1 profile `explore`: Read/Glob/Grep) and has no `subagent`
-tool, so recursion is impossible by construction. Runtime Client v2 carries
+tool, so recursion is impossible by construction. Runtime Client v3 carries
 `subagent_status`, `subagent_cancel`, the `SubagentUpdated` event, and
 `snapshot.subagents`; the TUI renders the same projection.
 

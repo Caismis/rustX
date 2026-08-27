@@ -452,7 +452,7 @@ mod tests {
     use super::*;
     use crate::agent::execution::test_sync::StartBoundaryPause;
     use crate::capabilities::{CapabilityCoordinator, CapabilityCoordinatorConfig};
-    use crate::context::{AgentStatusComposer, DefaultTokenEstimator, SessionContextPolicy};
+    use crate::context::{AgentStatusEngine, DefaultTokenEstimator, SessionContextPolicy};
     use crate::model::adapter::ModelAdapter;
     use crate::runtime::conversation_runtime::{
         ConversationContextConfig, ConversationRuntime, CoordinatorProbe, Gate,
@@ -497,7 +497,6 @@ mod tests {
             RuntimeConversationConfig {
                 agent_id: AgentId::new("agent-child"),
                 model: scripted_session_model(adapter),
-                timezone: None,
                 approval_mode: crate::runtime::ApprovalMode::Policy,
                 context: ConversationContextConfig {
                     policy: SessionContextPolicy {
@@ -506,7 +505,7 @@ mod tests {
                         summary_output_cap: None,
                     },
                     estimator: Arc::new(DefaultTokenEstimator),
-                    status_composer: AgentStatusComposer::default(),
+                    status_engine: AgentStatusEngine::default(),
                 },
                 tool_runtime,
                 resources: Arc::new(crate::runtime::RuntimeResourceSnapshot::new(

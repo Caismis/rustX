@@ -153,19 +153,20 @@ pub enum InitialTurnTrigger {
 - `FreshInbound(fresh)`: the model has not yet observed the referenced
   inbound turn. Validation against canonical history is mandatory (including
   strictly increasing canonical order — the runtime never sorts or
-  reinterprets caller-supplied order), Agent Status is mandatory, and
-  fresh-inbound compaction protection applies. The trigger stays pending
-  until one successful model invocation observes it: a provider
-  `ContextWindowExceeded` overflow does not consume it, while a successful
-  `ToolCalls` response does.
+  reinterprets caller-supplied order), fresh-inbound compaction protection
+  applies, and the turn offers the optional FreshInbound Agent Status
+  opportunity. The trigger stays pending until one successful model
+  invocation observes it: a provider `ContextWindowExceeded` overflow does
+  not consume it, while a successful `ToolCalls` response does.
 - `Continuation`: there is intentionally no new inbound user turn for the
   first model invocation, so no Agent Status is attached. This is the
   explicit expression of a pure continuation, never a configuration switch
   for disabling status on inbound messages.
 
-There is no `disable_status`, no optional status mode, and no legacy
-no-context execution path: Agent Status can never be silently suppressed by
-omitting an optional field.
+There is no legacy no-context execution path: Agent Status is optional
+enrichment inside the normal Context Assembly path, and disabling all
+launch-scoped status modules produces no status message or structured status
+observation.
 
 The first successfully completed model invocation consumes the fresh
 trigger (including a successful `ToolCalls` response: the model has already
@@ -176,10 +177,11 @@ and admits it through Context Assembly as a canonical Runtime context fact.
 A `ContextWindowExceeded` overflow does not consume the trigger and the
 retry reuses the already accepted context generation; it does not resample,
 reinvoke contributors, or append duplicate context. A foreground-tool-only
-continuation with no new drain carries no Agent Status. A failure while
-composing or preparing that status is a context preparation failure
-(`AttemptFailed(Runtime(ContextPreparationFailed))`), never a compaction
-failure.
+continuation with no new drain carries no Agent Status. Time and Background
+are compile-time-owned modules: each captures once into a finite immutable
+snapshot and evaluates only that snapshot. Module capture/evaluation/payload
+failures are attempt-scoped quarantine events; they omit that module and do
+not fail preparation, alter request count, or create a continuation.
 
 ## 4.2 Context Assembly and model-turn start
 
@@ -1189,7 +1191,7 @@ Event Journal    = execution facts
   exposes either the complete pending batch or the complete canonical
   adoption; the process-local batch is never the authority.
 - The whole drained batch becomes one `FreshInboundTurn`, so the next model
-  request receives exactly one Agent Status snapshot. `inbound_message_time`
+  request gets at most one Agent Status generation. `inbound_message_time`
   is the persisted timestamp of the final batch item in inbound sequence
   order (the highest-sequence item), never `min`/`max` of producer wall
   clocks, the drain time, or current time; producer timestamps may be

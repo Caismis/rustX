@@ -106,7 +106,7 @@ use crate::capabilities::{
     CapabilityCoordinator, CapabilityCoordinatorConfig, CapabilityResourceInputs,
     ToolActivationPolicy,
 };
-use crate::context::{DefaultTokenEstimator, TokenEstimator};
+use crate::context::{AgentStatusEngine, DefaultTokenEstimator, TokenEstimator};
 use crate::model::catalog::{
     CredentialEnvironment, ModelCatalog, ModelCatalogError, ProcessCredentialEnvironment,
 };
@@ -483,7 +483,7 @@ impl LocalConversationCore {
                     workspace: paths.workspace.clone(),
                     runtime_root: artifacts_root.clone(),
                     model: session_state.model.clone(),
-                    timezone: runtime_config.timezone,
+                    agent_status: runtime_config.agent_status.clone(),
                     context: runtime_config.context_policy(),
                 },
                 max_active: 4,
@@ -602,12 +602,14 @@ impl LocalConversationCore {
         let runtime = ConversationRuntime::new(RuntimeConversationConfig {
             agent_id: runtime_config.agent_id.clone(),
             model,
-            timezone: runtime_config.timezone,
             approval_mode: runtime_config.approval_mode,
             context: ConversationContextConfig {
                 policy: runtime_config.context_policy(),
                 estimator: Arc::clone(&dependencies.estimator),
-                status_composer: crate::context::AgentStatusComposer::default(),
+                status_engine: AgentStatusEngine::new(
+                    runtime_config.agent_status.clone(),
+                    Arc::new(crate::context::SystemClock),
+                ),
             },
             tool_runtime: tool_runtime.clone(),
             capability: capability.clone(),
@@ -745,12 +747,14 @@ impl LocalConversationCore {
         let runtime = ConversationRuntime::new(RuntimeConversationConfig {
             agent_id: spec.child_agent_id.clone(),
             model,
-            timezone: spec.timezone,
             approval_mode: crate::runtime::ApprovalMode::Policy,
             context: ConversationContextConfig {
                 policy: spec.context,
                 estimator: Arc::clone(&dependencies.estimator),
-                status_composer: crate::context::AgentStatusComposer::default(),
+                status_engine: AgentStatusEngine::new(
+                    spec.agent_status.clone(),
+                    Arc::new(crate::context::SystemClock),
+                ),
             },
             tool_runtime: tool_runtime.clone(),
             capability: capability.clone(),

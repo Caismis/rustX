@@ -97,10 +97,13 @@ fn config_json(
         serde_json::json!({})
     };
     serde_json::json!({
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "agentId": "agent-issue96",
         "model": {"model": model},
-        "timezone": timezone,
+        "agentStatus": {
+            "time": {"enabled": true, "timezone": timezone},
+            "background": {"enabled": true}
+        },
         "context": {"reserveTokens": reserve_tokens, "keepRecentTokens": 4096},
         "defaultTools": default_tools,
         "skills": [skills_root],
@@ -217,7 +220,15 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         "local/model-b"
     );
     assert_eq!(runtime.context_config().policy.reserve_tokens, 22);
-    assert_eq!(runtime.timezone(), Some(chrono_tz::Asia::Shanghai));
+    assert_eq!(
+        runtime
+            .context_config()
+            .status_engine
+            .config()
+            .time
+            .timezone,
+        Some(chrono_tz::Asia::Shanghai)
+    );
     assert_eq!(
         runtime.tool_runtime().environment().authorized_entries(),
         &[("ISSUE96_CURRENT".to_owned(), "v2".to_owned())]
@@ -433,7 +444,7 @@ async fn commented_configuration_documents_compose_a_runtime() {
     std::fs::write(
         &config_path,
         r#"{
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "agentId": "agent-issue96",
   // The default model of a brand-new Session.
   "model": {"model": "local/model-a"},
@@ -476,7 +487,7 @@ async fn relaxations_beyond_jsonc_still_fail_composition() {
     std::fs::write(
         &config_path,
         r#"{
-  schemaVersion: 2,
+  schemaVersion: 3,
   'agentId': 'agent-issue96',
   "model": {"model": "local/model-a"},
   "context": {"reserveTokens": 11, "keepRecentTokens": 4096}

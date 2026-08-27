@@ -105,6 +105,12 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
     assert_eq!(config.context.reserve_tokens, 4_096);
     assert_eq!(config.context.keep_recent_tokens, 12_000);
     assert_eq!(config.context.summary_output_cap, Some(1_024));
+    assert!(config.agent_status.time.enabled);
+    assert_eq!(
+        config.agent_status.time.timezone,
+        Some(chrono_tz::Asia::Tokyo)
+    );
+    assert!(config.agent_status.background.enabled);
     assert!(config.mcp_servers.is_empty());
     assert!(config.mcp_tool_policies.is_empty());
     assert_eq!(config.environment["RUSTX_EXAMPLE_MODE"], "local-runtime");

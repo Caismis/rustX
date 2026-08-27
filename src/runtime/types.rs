@@ -750,10 +750,11 @@ pub enum RuntimeError {
     },
     /// Context preparation failed while building the model context of a
     /// request **before any compaction started**: an invalid pending
-    /// fresh-inbound state discovered during projection/status preparation,
-    /// a failing Agent Status section provider, or a projection preparation
-    /// failure that is not itself a compaction operation. This is never
-    /// mislabeled as a compaction failure.
+    /// fresh-inbound state discovered during projection/status preparation or
+    /// a projection preparation failure that is not itself a compaction
+    /// operation. Optional Agent Status module failures are isolated before
+    /// this boundary and do not produce this error. This is never mislabeled
+    /// as a compaction failure.
     ContextPreparationFailed {
         /// Human-readable diagnostic message.
         message: String,
@@ -928,7 +929,7 @@ mod tests {
             ),
             (
                 RuntimeError::ContextPreparationFailed {
-                    message: "status provider failed".to_owned(),
+                    message: "invalid fresh-inbound status preparation".to_owned(),
                 },
                 "context_preparation_failed",
             ),

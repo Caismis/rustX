@@ -780,7 +780,8 @@ describe("presentation projection", () => {
     const status = {
       attempt_id: "a1",
       turn: 1,
-      target_message_id: "m1",
+      status_message_id: "status-1",
+      opportunities: { fresh_inbound: { target_message_id: "m1" } },
       sections: [
         {
           type: "temporal" as const,
@@ -796,7 +797,6 @@ describe("presentation projection", () => {
         type: "agent_status_composed",
         attempt_id: "a1",
         turn: 1,
-        target_message_id: "m1",
         status,
       },
     ]);
@@ -871,7 +871,7 @@ describe("presentation projection", () => {
           cursor: runtimeCursor(42),
           event: { type: "future_variant" } as unknown as RuntimeClientEvent,
         }),
-      /unreachable Runtime Client Protocol v2 event/,
+      /unreachable Runtime Client Protocol v3 event/,
     );
   });
 

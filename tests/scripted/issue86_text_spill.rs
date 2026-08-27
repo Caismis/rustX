@@ -331,7 +331,7 @@ async fn adopted_textual_terminal_inbound_reaches_the_provider_for_a_text_only_m
             summary_output_cap: None,
         },
         Arc::new(rustx::context::DefaultTokenEstimator),
-        rustx::context::AgentStatusComposer::default(),
+        rustx::context::AgentStatusEngine::default(),
         &model,
     )
     .expect("context runtime");
@@ -353,7 +353,6 @@ async fn adopted_textual_terminal_inbound_reaches_the_provider_for_a_text_only_m
             ])
             .expect("bootstrap conversation"),
             initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
-            timezone: None,
             model,
         },
         capability.into_lease(),
@@ -494,7 +493,7 @@ async fn the_background_live_output_path_reaches_the_provider_before_completion(
             summary_output_cap: None,
         },
         Arc::new(rustx::context::DefaultTokenEstimator),
-        rustx::context::AgentStatusComposer::default(),
+        rustx::context::AgentStatusEngine::default(),
         &model,
     )
     .expect("context runtime");
@@ -516,7 +515,6 @@ async fn the_background_live_output_path_reaches_the_provider_before_completion(
             ])
             .expect("bootstrap conversation"),
             initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
-            timezone: None,
             model,
         },
         capability.into_lease(),
@@ -669,7 +667,7 @@ async fn a_genuine_file_block_is_still_rejected_locally_for_a_text_only_model() 
             summary_output_cap: None,
         },
         Arc::new(rustx::context::DefaultTokenEstimator),
-        rustx::context::AgentStatusComposer::default(),
+        rustx::context::AgentStatusEngine::default(),
         &model,
     )
     .expect("context runtime");
@@ -699,7 +697,6 @@ async fn a_genuine_file_block_is_still_rejected_locally_for_a_text_only_model() 
             ])
             .expect("bootstrap conversation"),
             initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
-            timezone: None,
             model,
         },
         capability.into_lease(),

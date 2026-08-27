@@ -891,7 +891,8 @@ describe("CommandDispatcher", () => {
         status: {
           attempt_id: "a1",
           turn: 2,
-          target_message_id: "m1",
+          status_message_id: "status-1",
+          opportunities: { fresh_inbound: { target_message_id: "m1" } },
           sections: [],
           rendered,
         },

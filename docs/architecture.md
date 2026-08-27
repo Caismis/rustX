@@ -658,7 +658,7 @@ underneath the waiter. Only after settlement and attempt completion may a
 reload publish a new generation, and that generation affects a later admitted
 attempt only.
 
-Runtime Client v2 carries the same semantic plane through
+Runtime Client v3 carries the same semantic plane through
 `interaction_respond`, typed acceptance/errors, `interaction_pending` and
 `interaction_settled` events, and `snapshot.pending_interactions`. Snapshot
 plus cursor and subscribe-after-cursor retain the existing repair invariant.
@@ -1462,45 +1462,38 @@ Key contracts:
   is process-local executable authority, not durable compaction state;
   compaction never reloads it. Explicit reload and cold recreation remain
   separate lifecycle boundaries.
-- Agent Status is sampled from authoritative runtime facts and admitted as a
-  canonical `UserSource::Runtime` context message with
-  `InboundKind::Context(ContextKind::AgentStatus)`. It is rendered by the
-  native composer before assembly, participates in normal history,
-  projection, token accounting, and Surface revisioning, and is never
-  reinjected by an adapter. Identical rendered bytes at distinct admitted
-  steps receive distinct canonical identities.
+- Agent Status is an optional FreshInbound enrichment sampled from
+  authoritative runtime facts and admitted as a canonical
+  `UserSource::Runtime` context message with
+  `InboundKind::Context(ContextKind::AgentStatus)`. The closed engine owns
+  compile-time Time and Background modules in semantic source order, captures
+  finite immutable snapshots, evaluates them once, validates their typed
+  payload mapping, and applies module-local plus global whole-section bounds.
+  It participates in normal history, projection, token accounting, and
+  Surface revisioning, and is never reinjected by an adapter. Identical
+  rendered bytes at distinct admitted steps receive distinct canonical
+  identities. If no module contributes, no empty status message is emitted.
 - The initial-turn trigger is an explicit execution mode, never an `Option`
   used as a status switch: `AgentExecutionRequest` carries one
-  `InitialTurnTrigger` — `FreshInbound(FreshInboundTurn)` makes validation,
-  Agent Status, and fresh-inbound compaction protection mandatory and keeps
-  the trigger pending until one successful model invocation observes it;
-  `Continuation` expresses an intentional pure continuation with no new
-  inbound turn and therefore no Agent Status on the first request. There is
-  no `disable_status`, no optional status mode, and no legacy no-context
-  execution path.
+  `InitialTurnTrigger` — `FreshInbound(FreshInboundTurn)` makes validation and
+  fresh-inbound compaction protection mandatory and offers the optional Agent
+  Status opportunity; `Continuation` expresses an intentional pure
+  continuation with no new inbound turn and therefore no Agent Status on the
+  first request. There is no legacy no-context execution path. FreshInbound
+  is the only production status opportunity in this slice, and one logical
+  primary step owns at most one generation.
 - A `FreshInboundTurn` is ordered according to canonical history/inbound
   sequence: `validate_against` requires the referenced messages to occur in
   strictly increasing canonical position in `message_ids` order
   (`OutOfCanonicalOrder` otherwise); the runtime never sorts or reinterprets
   a caller-supplied turn order.
-- A provider's section identity is captured at registration and frozen as
-  runtime-owned metadata: `section_id()` is called exactly once, validated
-  against reserved and duplicate ids, and never queried again; composition,
-  ordering, diagnostics, and provider listing all use the stored identity, so
-  a stateful provider can never shadow a reserved id or mutate into a
-  duplicate.
-- Extension providers contribute structured runtime facts
-  (`AgentStatusFact` label/value pairs) only: the provider result type
-  cannot express built-in section variants, so built-in section semantics
-  are runtime-owned and can only be constructed by the Agent Status
-  composer/runtime. The canonical context renderer owns labels, separators,
-  and layout, and providers never hand over pre-rendered footer lines.
-- Context failure semantics are separated at the attempt boundary: failures
-  that occur while preparing model context **before compaction starts**
-  (invalid pending fresh-inbound state, a failing status provider, a
-  projection preparation failure) classify as
-  `RuntimeError::ContextPreparationFailed`, while an actual proactive
-  compaction pipeline failure keeps `RuntimeError::ContextCompactionFailed`.
+- There is no provider registration seam. The engine validates the
+  rustX-owned `Time <-> Temporal` and `Background <-> BackgroundExecution`
+  mapping, and a capture, evaluation, or validation failure quarantines only
+  that module for the rest of the attempt. Surviving modules continue;
+  quarantine is not persisted and a new attempt retries the module. These
+  optional failures never become a context-preparation failure or alter model
+  request count.
   An overflow whose recovery compaction fails still preserves the normalized
   `ContextWindowExceeded` as the final model failure with the compaction
   diagnostic carried by `CompactionFailed`.
@@ -1584,8 +1577,8 @@ with a `ContextRuntime`, a `ConversationToolRuntime`, and an attempt
 capability lease
 (`AgentExecution::new(request, adapter, capability, cancellation,
 context_runtime, tool_runtime)`); the no-context compatibility path,
-`with_context_runtime`, and any capability-free constructor are gone, and
-there is no Agent Status disable flag.
+`with_context_runtime`, and any capability-free constructor are gone. Agent
+Status remains optional enrichment inside the normal context path.
 See `docs/context-engine.md` for the full boundary description.
 
 #### Issue #55 request reconstruction contract
@@ -2056,9 +2049,11 @@ coalesced observations never cross the durable commit point. Background
 progress retains only the latest bounded snapshot per execution record.
 
 Agent Status owns the runtime `background_execution` built-in section: the
-executing attempt samples a read-only active snapshot from the background
-registry, the composer builds the section (never an extension provider),
-and the renderer shows active executions only in allocation order.
+executing attempt captures one read-only active snapshot from the background
+registry, the closed Background module bounds and evaluates it, and the
+renderer shows retained active executions in allocation order with an
+`omitted_count` when necessary. Time and Background are compile-time-owned
+modules; there is no extension provider registration seam.
 
 The native tool plane implements Read, Write, Edit, Glob, Grep, and Bash as
 ordinary registrations under the concrete bounded `NativeToolPolicies`
@@ -2991,7 +2986,7 @@ environment, finite timeout, bounded diagnostics, and no generic
 
 The outermost layer exposes the runtime to humans and other systems:
 
-- Runtime Client Protocol v2 (semantic client boundary)
+- Runtime Client Protocol v3 (semantic client boundary)
 - Local interactive CLI
 - Runtime command interface
 - HTTP control interface
@@ -3000,7 +2995,7 @@ The outermost layer exposes the runtime to humans and other systems:
 
 AG-UI is an output projection, not the internal durable event model.
 
-#### Runtime Client Protocol v2 implementation (Issue #37)
+#### Runtime Client Protocol v3 implementation (Issue #37)
 
 Issue #37 implements the one external semantic normalization boundary in
 `src/runtime_client`:
@@ -3015,7 +3010,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-      Runtime Client Protocol v2
+      Runtime Client Protocol v3
 ```
 
 The governing invariant is that all authoritative execution and
@@ -3085,7 +3080,7 @@ runtime_client/attachment.rs   RuntimeAttachment: at-most-one attachment,
                                event subscription delivery
 runtime_client/endpoint.rs     RuntimeClientEndpoint: the transport-neutral
                                semantic entry point that dispatches every
-                               v2 request, `initialize` included
+                               v3 request, `initialize` included
 runtime_client/transport/      byte-stream adapters beneath the semantic
                                layer (Issue #38); `stdio.rs` is the strict
                                stdio/JSONL transport
@@ -3123,7 +3118,7 @@ Runtime Client is a projection/control/attachment adapter over it.
 
 - **The semantic endpoint owns `initialize`.** `RuntimeClientEndpoint` is
   the boundary a transport wraps. It starts unattached and accepts every
-  v2 request; `initialize` performs version negotiation, single-attachment
+  v3 request; `initialize` performs version negotiation, single-attachment
   admission, `AttachmentId` allocation, and the linearized initial
   snapshot, storing the resulting attachment. Non-`initialize` requests
   before that are `not_attached`; a successful `detach` (or dropping the
@@ -3510,7 +3505,7 @@ Runtime Client is a projection/control/attachment adapter over it.
   compaction start, failure, and committed completion project with optional
   attempt attribution and update the shared context read model. Internal
   `RuntimeEvent` evolution therefore cannot silently break Runtime Client
-  Protocol v2.
+  Protocol v3.
 - **Streaming repair.** The snapshot carries an in-flight Assistant output
   view (accumulated blocks) and foreground tool views keyed by the
   logical tool-call identity, so a client repairing after `resync`
@@ -3545,7 +3540,7 @@ Runtime Client is a projection/control/attachment adapter over it.
   subscribe, and subscription polls) then fails with
   `projection_exhausted`. A read never hands back a model that silently
   stopped folding authoritative transitions.
-- **Attachment lifecycle.** Protocol v2 admits at most one active
+- **Attachment lifecycle.** Protocol v3 admits at most one active
   attachment: the first attach succeeds, a second fails with
   `attachment_in_use` and never evicts the first, detach (explicit or
   RAII drop) releases ownership, reconnects receive a fresh attachment
@@ -3626,20 +3621,20 @@ Runtime Client is a projection/control/attachment adapter over it.
   the capability set. Available
   and active Tools are distinct fields, and provider requests use only the
   active field.
-- **Agent Status projection: composed exactly once.** One request
-  preparation calls `AgentStatusComposer::compose` exactly once
-  (`AgentExecution::compose_status`), sampling the clock once and
-  invoking each registered provider once. That one structured `AgentStatus`
-  value fans out to two core-owned destinations: `render_agent_status`
-  produces the canonical Runtime context UserMessageBlock for Context
-  Assembly, and the same structured value is handed to `observe_status` for
-  the Runtime Client projection. The client path never calls `compose` again
-  — not even through a cloned composer sharing the same clock and providers
-  — and never parses the rendered prompt text to recover structure.
+- **Agent Status projection: one frozen generation.** One FreshInbound
+  preparation traverses the closed engine's source-owned `Time -> Background`
+  modules once. Each interested module captures one finite immutable snapshot
+  and evaluates it once; the accepted typed sections feed both
+  `render_agent_status` for the canonical Runtime context UserMessageBlock
+  and, after successful model-turn-start commit, `observe_status` for the
+  Runtime Client projection. Overflow retry reuses the generation, and the
+  client path never recomposes or parses rendered context text. A module
+  failure is quarantined for the current attempt and does not fail
+  preparation.
 - **Protocol envelope.** A transport-neutral JSON-RPC-style envelope:
   `request(id, method + typed params)`, `response(id, result | error)`,
   and `event(cursor + typed payload)` with no request ids on
-  notifications. Every v2 method is client-initiated
+  notifications. Every v3 method is client-initiated
   (`initialize`, `submit_inbound`, `cancel_current_attempt`,
   `snapshot_get`, `subscribe_events`, `capability_get`,
   `background_status`, `background_cancel`, `detach`, `shutdown`).
@@ -3665,7 +3660,7 @@ rustX Runtime
 Runtime Client projection
       |
       v
-Runtime Client Protocol v2        semantic; Issue #37
+Runtime Client Protocol v3        semantic; Issue #37
       |
       v
 transport adapters                framing only; src/runtime_client/transport
@@ -3711,10 +3706,10 @@ means adding a sibling module there; no semantic module moves.
   string stays in one record and multiline pretty-printed JSON is not
   supported. CRLF input is accepted by removing exactly one `\r` before
   the terminating LF; no other whitespace is touched.
-- **Malformed and oversized input is transport-fatal.** Protocol v2 has
+- **Malformed and oversized input is transport-fatal.** Protocol v3 has
   no uncorrelated error envelope, and a malformed frame may not even
   carry a request id, so the transport invents none. Any complete
-  in-bound-size record that does not deserialize to the exact v2 request
+  in-bound-size record that does not deserialize to the exact v3 request
   type — malformed JSON, unknown method, unknown field, wrong parameter
   type, empty or whitespace-only record — ends the session with a
   framing error, applies nothing, and writes no protocol record. An
@@ -3732,7 +3727,7 @@ means adding a sibling module there; no semantic module moves.
   background execution, and capability state continue under their own
   owners, and no projection lock is held across any transport await.
 - **Active-subscription lag closes the transport.** After a stall the
-  subscription may fall behind the bounded replay ring. Protocol v2 has
+  subscription may fall behind the bounded replay ring. Protocol v3 has
   no uncorrelated stream-error record, so the session ends with a typed
   local `SubscriptionLagged` error carrying the cursor information and
   the client repairs from an authoritative snapshot after reconnecting.
@@ -3869,15 +3864,15 @@ nodes, ConversationId lineage, durable history, and intentionally
 Session-local choices. Its persisted state currently contains only the
 selected `SessionModelConfig`. It does not contain a copy of the current
 runtime/project configuration. In particular, MCP definitions, Tool or Skill
-activation, Skill roots/resources, environment, context policy, timezone,
-agent settings, and future capability-source settings are launch-scoped
-inputs.
+activation, Skill roots/resources, environment, context policy, Agent Status
+settings (including the Time timezone), agent settings, and future
+capability-source settings are launch-scoped inputs.
 
 `--config <rustx.jsonc>` and project resources are read and validated once on
 every process start before ordinary request admission. Composition combines that current
 `CurrentRuntimeConfig` with the selected Session state and active node. A
 resume therefore loads a fresh Runtime Resource Snapshot with current
-project/MCP/Skill/Tool/context/timezone/environment settings, while the
+project/MCP/Skill/Tool/context/Agent Status/timezone/environment settings, while the
 selected Session model remains durable. A new Session
 uses the current runtime model default; clone/fork/tree operations copy only
 the intentionally Session-local state.
@@ -4374,7 +4369,7 @@ Representative current runtime/project configuration:
 
 ```jsonc
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "agentId": "agent-default",
   "model": {
     "model": "gateway/reasoner",
@@ -4387,7 +4382,10 @@ Representative current runtime/project configuration:
       "requestParams": { "temperature": 0.1 }
     }
   },
-  "timezone": "Europe/Paris",
+  "agentStatus": {
+    "time": { "enabled": true, "timezone": "Europe/Paris" },
+    "background": { "enabled": true }
+  },
   "context": {
     "reserveTokens": 16384,
     "keepRecentTokens": 20000,
@@ -4485,7 +4483,7 @@ beside it:
 rustX Runtime semantics
         |
         v
-Runtime Client Protocol v2
+Runtime Client Protocol v3
         |
         v
 rustX TypeScript projection

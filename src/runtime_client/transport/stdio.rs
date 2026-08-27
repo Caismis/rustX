@@ -36,12 +36,12 @@
 //!
 //! No semantic operation runs before every preceding framing and
 //! deserialization check succeeded. Any complete in-bound-size record that
-//! does not deserialize to the exact v2 request type — malformed JSON,
+//! does not deserialize to the exact v3 request type — malformed JSON,
 //! unknown method, unknown field, wrong parameter type, empty record,
 //! whitespace-only record — is transport-fatal: the session returns a
 //! framing error, the endpoint is dropped (RAII detach), no fabricated
 //! protocol record is written, and no semantic request is applied. Protocol
-//! v2 has no uncorrelated error envelope, and this transport does not
+//! v3 has no uncorrelated error envelope, and this transport does not
 //! invent one.
 //!
 //! # Session shape
@@ -90,7 +90,7 @@ use super::super::types::{RuntimeClientCursor, RuntimeClientRequest};
 
 /// The maximum size in bytes of one JSONL protocol record.
 ///
-/// The same v2 limit applies in both directions. It bounds the JSON payload
+/// The same v3 limit applies in both directions. It bounds the JSON payload
 /// of one record: the terminating LF is not counted, and a trailing CR is
 /// counted when CRLF was used on input.
 ///
@@ -151,7 +151,7 @@ pub enum StdioFramingError {
         bytes: usize,
     },
     /// A complete in-bound-size record did not deserialize to the exact
-    /// Runtime Client Protocol v2 request type.
+    /// Runtime Client Protocol v3 request type.
     MalformedRecord {
         /// The decoder's human-readable detail.
         message: String,
@@ -172,7 +172,7 @@ impl core::fmt::Display for StdioFramingError {
                 "the input stream ended with a {bytes}-byte record that has no terminating newline"
             ),
             Self::MalformedRecord { message } => {
-                write!(f, "an inbound record is not a valid v2 request: {message}")
+                write!(f, "an inbound record is not a valid v3 request: {message}")
             }
         }
     }
@@ -208,7 +208,7 @@ pub enum StdioTransportError {
         limit: usize,
     },
     /// The active subscription fell behind the bounded replay ring while
-    /// the transport was stalled. Protocol v2 has no uncorrelated
+    /// the transport was stalled. Protocol v3 has no uncorrelated
     /// stream-error record, so the session terminates and the client
     /// repairs from an authoritative snapshot after reconnecting.
     SubscriptionLagged {
@@ -331,7 +331,7 @@ enum SessionStep {
 ///
 /// The record limit is a parameter so the in-crate framing tests can drive
 /// the exact boundary behavior without allocating multi-megabyte fixtures;
-/// the public API exposes only the frozen v2 limit.
+/// the public API exposes only the frozen v3 limit.
 async fn serve<R, W>(
     endpoint: RuntimeClientEndpoint,
     reader: R,
@@ -418,7 +418,7 @@ where
     }
 }
 
-/// Decodes one complete in-bound-size record to the exact v2 request type.
+/// Decodes one complete in-bound-size record to the exact v3 request type.
 fn decode_request(record: &[u8]) -> Result<RuntimeClientRequest, StdioTransportError> {
     serde_json::from_slice(record).map_err(|error| {
         StdioTransportError::Framing(StdioFramingError::MalformedRecord {
@@ -798,7 +798,7 @@ mod tests {
             &b"not json"[..],
             &br#"{"method":"future_method","id":1}"#[..],
             &br#"{"method":"snapshot_get","id":1,"extra":true}"#[..],
-            &br#"{"method":"initialize","id":"one","protocol_version":2}"#[..],
+            &br#"{"method":"initialize","id":"one","protocol_version":3}"#[..],
             &br"[]"[..],
         ] {
             assert!(

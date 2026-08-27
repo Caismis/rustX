@@ -18,36 +18,35 @@
 //! the loop appends it to canonical history; it is never a competing
 //! authority, only an observation of the authoritative commit.
 //!
-//! Agent Status composition is observed through the exact composed
-//! [`AgentStatusObservation`]: the observation carries the one structured
-//! [`AgentStatus`] the composer produced with its single clock sample, so a
-//! client projection can never cause a second composition with a different
-//! clock instant.
+//! Agent Status is observed only after the canonical model-turn-start commit:
+//! the observation carries the exact accepted generation and its committed
+//! status-message identity, so a client projection can never observe a
+//! prepared-but-cancelled status or cause a second composition.
 //!
 //! This module defines the seam only; it owns no state and no consumer.
 
-use crate::context::status::AgentStatus;
+use crate::context::status::{AgentStatus, AgentStatusOpportunitySet};
 use crate::durable::TranscriptCursor;
 use crate::events::types::RuntimeEvent;
 use crate::message::types::MessageBlock;
 use crate::publication::{PublicationAudit, PublicationFrame, PublicationStreamStart};
-use crate::runtime::identity::{AttemptId, MessageId};
+use crate::runtime::identity::AttemptId;
 
-/// The structured Agent Status observation of one request preparation.
+/// The structured Agent Status observation of one committed model turn.
 ///
-/// The observed status is the exact composed value of the current request
-/// preparation (one clock sample, one extension-provider invocation set):
-/// the canonical rendered context fact consumed by the model request is
-/// derived from this same value, so model-path and client-path status can
-/// never diverge through a second composition.
+/// The observed status is the exact accepted value admitted as the canonical
+/// Agent Status User context message. It is emitted after model-turn-start
+/// arbitration and after that message's `observe_committed` callback.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentStatusObservation {
     /// The attempt that composed the status.
     pub attempt_id: AttemptId,
     /// The turn number of the model request being prepared.
     pub turn: u32,
-    /// The canonical inbound message the status targets.
-    pub target_message_id: MessageId,
+    /// The canonical Agent Status User message described by this observation.
+    pub status_message_id: crate::runtime::identity::MessageId,
+    /// The opportunity set that made this generation eligible.
+    pub opportunities: AgentStatusOpportunitySet,
     /// The one composed structured status.
     pub status: AgentStatus,
 }

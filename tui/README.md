@@ -1,7 +1,7 @@
 # `rustx-tui`
 
 The rustX reference terminal client: a Pi-TUI presentation layer over Runtime
-Client Protocol v2.
+Client Protocol v3.
 
 ## The one architectural rule
 
@@ -124,7 +124,7 @@ active even when these controls disable optional tools.
 
 ```text
 spawn rustx
-        -> initialize(v2)
+        -> initialize(v3)
   -> authoritative snapshot + cursor
   -> install the presentation projection
   -> subscribe_events(after cursor)
