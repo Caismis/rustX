@@ -41,11 +41,11 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 12 is the only accepted schema; version 11 and every older
+schema version 13 is the only accepted schema; version 12 and every older
 development schema fail explicitly at open and are not migrated. Version 10
 froze the structured Questionnaire interaction audit vocabulary introduced by
 Issue #126. Version 11 froze the structured Agent Status generation
-descriptor introduced by Issue #131. Final version 12 adds the complete
+descriptor introduced by Issue #131. Version 12 added the complete
 canonical-message-coupled Agent Status emission facts, bounded latest-emission
 heads, and the Todo-specific durable progress sequence. The review-only
 intermediate schema history was never a supported format.
@@ -60,9 +60,10 @@ state. M8 stores the evidence; M9a (Issue #12) adds the startup recovery that
 classifies and reconciles it (see [Recovery](#recovery)), and M9b adds the
 model-turn cancellation-vs-start arbitration (see
 [Context assembly, admission, and Agent Status](#context-assembly-admission-and-agent-status)
-and `docs/agent-loop.md`). Replay/resend
-policy and retry orchestration remain open; M9c supervision/quiescence is
-delivered in the runtime coordinator section below.
+and `docs/agent-loop.md`). Startup recovery never resends an ambiguous or
+known request; live retry orchestration is owned by the bounded Agent Loop
+state machine described below. M9c supervision/quiescence is delivered in the
+runtime coordinator section below.
 
 `lifecycle_state` makes terminality structural: an attempt, turn, or detached
 background execution can receive at most one terminal fact, and no later fact
@@ -223,6 +224,33 @@ stream and normally commits exactly one terminal `RuntimeEvent`:
   duplicated tool-call deltas, unfinished tool calls at the terminal) are
   explicit contract-violation failures, never silently accepted.
 
+- A logical primary model step may contain several actual provider requests.
+  Context admission happens once and freezes the request semantics; every
+  actual request then receives its own `RequestIdentity`, shared
+  `retry_number`, `RequestId`, provisional Assistant identity, snapshot,
+  durable start fact, publication stream, provider outcome, and settlement.
+  The Agent Loop owns transient retry scheduling, cancellation arbitration,
+  publication settlement, and exhaustion. Adapters only normalize
+  provider-specific evidence to `ModelRetryDisposition` and `retry_after_ms`.
+  A transient retry replays the frozen state and never reassembles live
+  context, consumes new `FreshInbound`, regenerates Agent Status, or reruns
+  contributors. Context overflow remains a distinct estimator-correction and
+  compaction boundary that establishes a new post-compaction frozen state.
+
+- The one shared actual-request ordinal is collision-free across transient and
+  overflow recovery. There are at most three transient retries and one
+  overflow retry per logical step (at most five primary requests total).
+  Transient backoff is 2, 4, and 8 seconds, or the adapter's capped
+  `retry_after_ms` hint, using the runtime monotonic clock. No jitter or
+  summarizer retry is part of this contract.
+
+- A failed request's partial publication settles as durable noncanonical audit
+  evidence before another request starts. Failed proposed Tool Calls never
+  acquire Tool Plane authority. Only the successfully completed actual request
+  can commit the canonical Assistant. Its failed predecessor contributes only
+  its latest trustworthy pre-failure cumulative usage snapshot, if any, to
+  per-request accounting; no missing usage is estimated or synthesized.
+
 - Continuation is canonical conversation state: the next model request
   carries the deterministic context projection of the committed history
   plus the opaque provider continuation state the previous turn reported,
@@ -258,10 +286,12 @@ stream and normally commits exactly one terminal `RuntimeEvent`:
   is always a terminal cancellation outcome, never completion, and no
   continuation starts after cancellation is observed.
 
-- `ModelRequestCompleted.usage` reports the canonical final usage: the
-  terminal `Completed.usage` when present, otherwise the latest
-  `UsageUpdate`, otherwise `None`. Cumulative usage snapshots are never
-  summed and missing counters are never fabricated.
+- `ModelRequestCompleted.usage` reports the completed request's canonical
+  final usage: terminal `Completed.usage`, otherwise the latest `UsageUpdate`,
+  otherwise `None`. `ModelRequestFailed.usage` reports the latest trustworthy
+  cumulative `UsageUpdate` observed before that exact request failed, or
+  `None`. Snapshots from one request are never summed, and missing provider
+  evidence is never fabricated.
 
 - Given identical model events, identical tools, identical input, and
   identical cancellation conditions, the loop produces an identical
@@ -3468,7 +3498,7 @@ on maximum bytes, a structural boundary (a tool-call proposal start or
 completion), or the stream terminal. When the first payload enters an empty
 buffer, it owns one absolute monotonic deadline `oldest_pending_time +
 max_latency`; later provider events do not reset or extend it. The coalescer
-owns the deadline and the same `PublicationClock` owns the wake-up mechanism,
+owns the deadline and the runtime monotonic clock owns the wake-up mechanism,
 so a quiet provider is released at the deadline without a provider event and
 no new full-duration debounce timer can postpone it. Nothing is released
 before its staging transaction commits.
@@ -3978,7 +4008,8 @@ contracts and provider protocols. These invariants are frozen by M2:
 - **One immutable attempt model snapshot.** The snapshot is taken at the same
   admission linearization boundary that publishes the attempt. Every model
   turn of the attempt — the first request, every tool→model continuation,
-  every context-overflow retry, every proactive-compaction continuation, and
+  every transient retry, every context-overflow retry, every
+  proactive-compaction continuation, and
   every compaction summary — uses it and never reads live mutable session
   model state again.
 

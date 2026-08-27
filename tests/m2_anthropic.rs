@@ -13,7 +13,7 @@ use rustx::message::types::{ContentBlockIndex, MessageBlock};
 use rustx::model::finish::ModelFinishReason;
 use rustx::model::{
     AnthropicAdapterConfig, AnthropicMessagesAdapter, ModelErrorKind, ModelEvent, ModelProtocol,
-    ModelRequest, ModelUsage,
+    ModelRequest, ModelRetryDisposition, ModelUsage,
 };
 use rustx::runtime::continuation::{AnthropicContinuation, ProviderContinuationState};
 use rustx::runtime::identity::ToolCallId;
@@ -510,8 +510,8 @@ async fn fallback_block_is_unsupported() {
     assert_terminal_failed(&events, &ModelErrorKind::Unsupported);
     assert_eq!(
         events.len(),
-        3,
-        "Started, TextDelta, Failed — nothing after the terminal event: {}",
+        4,
+        "Started, TextDelta, UsageUpdate, Failed — nothing after the terminal event: {}",
         describe_events(&events)
     );
     assert!(
@@ -911,10 +911,60 @@ async fn malformed_tool_json_fails() {
     })
     .await;
     let events = collect_events(&adapter(&server), request_with_tools("Broken")).await;
-    assert_terminal_failed(&events, &ModelErrorKind::ProviderError);
+    let ModelEvent::Failed { error } = events.last().expect("terminal") else {
+        panic!("expected Failed");
+    };
+    assert_eq!(error.kind, ModelErrorKind::ProviderError);
+    assert_eq!(error.retry_disposition, ModelRetryDisposition::Never);
 }
 
-/// An interrupted SSE stream is a normalized transport failure.
+/// A successful HTTP response can still fail while its SSE body is being
+/// consumed. The truncated response has already emitted valid Anthropic
+/// output, so the adapter must preserve that evidence and classify the
+/// response-body transport failure as transient.
+#[tokio::test]
+async fn response_body_disconnect_is_retryable_transport() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        let mut reply = sse_fixture("anthropic", "interrupted.sse");
+        let body_len = reply
+            .chunks
+            .iter()
+            .map(|chunk| chunk.bytes.len())
+            .sum::<usize>();
+        // The fixture server closes the HTTP/1.1 connection after writing the
+        // body. A larger Content-Length makes that close an incomplete body,
+        // which reqwest reports through response.bytes_stream() as a typed
+        // body transport error.
+        reply
+            .headers
+            .push(("Content-Length".to_owned(), (body_len + 1).to_string()));
+        reply
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi"),
+    )
+    .await;
+
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ModelEvent::TextDelta { text, .. } if text == "Cut short"
+    )));
+    let ModelEvent::Failed { error } = events.last().expect("terminal") else {
+        panic!("expected Failed");
+    };
+    assert_eq!(error.kind, ModelErrorKind::Transport);
+    assert_eq!(error.retry_disposition, ModelRetryDisposition::Transient);
+    assert_eq!(
+        server.attempt_count(),
+        1,
+        "one successful HTTP-level attempt"
+    );
+}
+
+/// A clean SSE EOF before `message_stop` is a provider protocol failure, not
+/// typed transport evidence.
 #[tokio::test]
 async fn interrupted_stream_fails() {
     let server =
@@ -925,7 +975,15 @@ async fn interrupted_stream_fails() {
         simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi"),
     )
     .await;
-    assert_terminal_failed(&events, &ModelErrorKind::ProviderError);
+    let ModelEvent::Failed { error } = events.last().expect("terminal") else {
+        panic!("expected Failed");
+    };
+    assert_eq!(error.kind, ModelErrorKind::ProviderError);
+    assert_eq!(
+        error.retry_disposition,
+        ModelRetryDisposition::Never,
+        "a clean SSE EOF without transport evidence is a protocol failure"
+    );
 }
 
 /// `message_stop` without a stop reason is a provider protocol violation.

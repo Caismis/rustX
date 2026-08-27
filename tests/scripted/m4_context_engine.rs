@@ -253,6 +253,7 @@ fn fail(kind: rustx::model::ModelErrorKind, message: &str) -> ModelEvent {
         error: rustx::model::ModelError {
             kind,
             message: message.to_owned(),
+            retry_disposition: rustx::model::error::ModelRetryDisposition::Never,
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
@@ -271,6 +272,7 @@ fn overflow_error() -> rustx::model::ModelError {
     rustx::model::ModelError {
         kind: rustx::model::ModelErrorKind::ContextWindowExceeded,
         message: "context window exceeded".to_owned(),
+        retry_disposition: rustx::model::error::ModelRetryDisposition::Never,
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
@@ -3158,6 +3160,7 @@ async fn overflow_compact_and_retry_succeeds() {
         RuntimeEvent::ModelRequestFailed {
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             error: overflow_error(),
+            usage: None,
         },
         RuntimeEvent::CompactionStarted,
         RuntimeEvent::CompactionCompleted {
@@ -3168,7 +3171,8 @@ async fn overflow_compact_and_retry_succeeds() {
             estimated_tokens_after: compaction_estimated_after,
         },
         RuntimeEvent::ModelRetryScheduled {
-            attempt_number: 1,
+            failed_request_id: RequestId::new("request:9:attempt-1:1:1:0"),
+            retry_number: 1,
             retry_delay_ms: None,
         },
         RuntimeEvent::ModelRequestStarted {
@@ -4251,6 +4255,7 @@ async fn compaction_failure_after_overflow_preserves_the_overflow() {
         RuntimeEvent::ModelRequestFailed {
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             error: overflow_error(),
+            usage: None,
         },
         RuntimeEvent::CompactionStarted,
         RuntimeEvent::CompactionFailed {

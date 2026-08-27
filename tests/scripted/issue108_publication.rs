@@ -11,7 +11,7 @@
 //!
 //! Everything time-dependent is decided by an explicitly installed
 //! [`CoalescePolicy`] and a manually advanced
-//! [`ManualPublicationClock`](rustx::publication::ManualPublicationClock).
+//! [`ManualMonotonicClock`](rustx::runtime::ManualMonotonicClock).
 //! No sleep proves any invariant here: a byte threshold, a structural
 //! boundary, an advanced fake clock, or the stream terminal is what makes a
 //! flush happen.
@@ -35,11 +35,11 @@ use rustx::message::types::{
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
 use rustx::publication::{
-    CoalescePolicy, ManualPublicationClock, PublicationAuditBlock, PublicationAuditKind,
-    PublicationClock, PublicationPayload,
+    CoalescePolicy, PublicationAuditBlock, PublicationAuditKind, PublicationPayload,
 };
 use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolCallId, ToolId};
 use rustx::runtime::types::{CancellationReason, RuntimeClock};
+use rustx::runtime::{ManualMonotonicClock, MonotonicClock};
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::{ToolCall, ToolCallStart};
 use support::fake::{FakeModel, FakeStep, fake_model};
@@ -90,7 +90,7 @@ fn context_runtime(model: &Arc<FakeModel>) -> rustx::context::ContextRuntime {
 /// The outcome of one scripted publication run.
 struct Run {
     audit: common::DurableExecutionAudit,
-    clock: Arc<ManualPublicationClock>,
+    clock: Arc<ManualMonotonicClock>,
     publication_opened: Vec<rustx::publication::PublicationStreamStart>,
     publication_trace: Vec<common::PublicationObservation>,
 }
@@ -132,7 +132,7 @@ async fn run_with(
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let publication = common::RecordingPublicationObserver::default();
-    let clock = Arc::new(ManualPublicationClock::new());
+    let clock = Arc::new(ManualMonotonicClock::new());
     let mut execution = AgentExecution::new(
         request(conversation, model),
         capability.into_lease(),
@@ -142,7 +142,7 @@ async fn run_with(
         rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime");
-    execution.install_publication_policy(policy, Arc::clone(&clock) as Arc<dyn PublicationClock>);
+    execution.install_publication_policy(policy, Arc::clone(&clock) as Arc<dyn MonotonicClock>);
     execution.observe(&publication);
     let result = execution.run().await;
     let publication_opened = publication.opened();
@@ -324,7 +324,7 @@ async fn chatty_provider_cannot_postpone_the_oldest_publication_deadline() {
     let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let publication = common::RecordingPublicationObserver::default();
-    let clock = Arc::new(ManualPublicationClock::new());
+    let clock = Arc::new(ManualMonotonicClock::new());
     let mut execution = AgentExecution::new(
         request("conv-latency-chatty", &model),
         capability.into_lease(),
@@ -339,7 +339,7 @@ async fn chatty_provider_cannot_postpone_the_oldest_publication_deadline() {
             max_bytes: usize::MAX,
             max_latency_millis: 50,
         },
-        Arc::clone(&clock) as Arc<dyn PublicationClock>,
+        Arc::clone(&clock) as Arc<dyn MonotonicClock>,
     );
     execution.observe(&publication);
     let execution = execution.run();
@@ -407,7 +407,7 @@ async fn quiet_provider_is_woken_by_the_publication_deadline() {
     let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let publication = common::RecordingPublicationObserver::default();
-    let clock = Arc::new(ManualPublicationClock::new());
+    let clock = Arc::new(ManualMonotonicClock::new());
     let mut execution = AgentExecution::new(
         request("conv-latency-quiet", &model),
         capability.into_lease(),
@@ -422,7 +422,7 @@ async fn quiet_provider_is_woken_by_the_publication_deadline() {
             max_bytes: usize::MAX,
             max_latency_millis: 50,
         },
-        Arc::clone(&clock) as Arc<dyn PublicationClock>,
+        Arc::clone(&clock) as Arc<dyn MonotonicClock>,
     );
     execution.observe(&publication);
     let execution = execution.run();
@@ -855,6 +855,7 @@ async fn failed_overflow_audit_blocks_the_retry_request() {
                 error: rustx::model::ModelError {
                     kind: rustx::model::ModelErrorKind::ContextWindowExceeded,
                     message: "context window exceeded".to_owned(),
+                    retry_disposition: rustx::model::error::ModelRetryDisposition::Never,
                     retry_after_ms: None,
                     provider_code: None,
                     context_overflow: None,

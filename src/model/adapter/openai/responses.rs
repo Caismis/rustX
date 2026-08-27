@@ -21,7 +21,9 @@ use crate::message::types::{AssistantContentBlock, MessageBlock};
 use crate::model::adapter::block_index::BlockAllocator;
 use crate::model::adapter::openai::client::build_client;
 use crate::model::adapter::openai::config::OpenAiAdapterConfig;
-use crate::model::adapter::openai::mapping::{normalize_error, resolve_tool};
+use crate::model::adapter::openai::mapping::{
+    normalize_error, resolve_tool, stream_retry_disposition,
+};
 use crate::model::adapter::traits::{
     ModelAdapter, ModelEventStream, model_event_stream_of_failure,
 };
@@ -253,6 +255,7 @@ fn cancelled_error() -> ModelError {
     ModelError {
         kind: ModelErrorKind::Cancelled,
         message: "model invocation cancelled".to_owned(),
+        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
@@ -986,6 +989,7 @@ impl ResponsesNormalizer {
                 return Err(ModelError {
                     kind: ModelErrorKind::ContextWindowExceeded,
                     message: format!("provider reported incomplete response reason {reason:?}"),
+                    retry_disposition: crate::model::error::ModelRetryDisposition::Never,
                     retry_after_ms: None,
                     provider_code: Some(reason.to_owned()),
                     context_overflow: None,
@@ -1490,6 +1494,7 @@ fn provider_error(message: String) -> ModelError {
     ModelError {
         kind: ModelErrorKind::ProviderError,
         message,
+        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
@@ -1544,6 +1549,12 @@ fn responses_stream_error(event: &serde_json::Value) -> ModelError {
     ModelError {
         kind,
         message: message.to_owned(),
+        retry_disposition: stream_retry_disposition(
+            error_type,
+            code,
+            code.and_then(|value| value.parse().ok()),
+            message,
+        ),
         retry_after_ms: None,
         provider_code: provider_code.map(str::to_owned),
         context_overflow: None,
@@ -1555,6 +1566,7 @@ fn invalid_request(message: &str) -> ModelError {
     ModelError {
         kind: ModelErrorKind::InvalidRequest,
         message: message.to_owned(),
+        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
@@ -1566,6 +1578,7 @@ fn unsupported(message: impl Into<String>) -> ModelError {
     ModelError {
         kind: ModelErrorKind::Unsupported,
         message,
+        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,

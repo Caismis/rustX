@@ -1088,10 +1088,12 @@ fn failed_model_request_before_terminal_is_not_retried() {
                     error: rustx::model::error::ModelError {
                         kind: rustx::model::error::ModelErrorKind::ProviderError,
                         message: "durable provider failure".to_owned(),
+                        retry_disposition: rustx::model::error::ModelRetryDisposition::Never,
                         retry_after_ms: None,
                         provider_code: None,
                         context_overflow: None,
                     },
+                    usage: None,
                 },
             ))
             .expect("request failed");

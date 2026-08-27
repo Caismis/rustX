@@ -173,7 +173,8 @@ impl AgentCancellation {
     ///
     /// The Agent Loop calls this exactly once per actual model request —
     /// the first turn, every tool→model continuation, every recovered
-    /// continuation, and every context-overflow retry — with the durable
+    /// continuation, every transient retry, and every context-overflow retry
+    /// — with the durable
     /// request-start commit as `commit`. The gate is held across the check
     /// and the commit, so exactly one of cancellation and the durable start
     /// commit can linearize first:

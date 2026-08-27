@@ -103,8 +103,8 @@ use crate::model::session::AttemptModelSnapshot;
 use crate::model::snapshot::{AgentStatusStart, RequestIdentity, RequestSnapshot};
 use crate::model::types::{ModelRequest, ModelUsage};
 use crate::publication::{
-    CoalescePolicy, PublicationClock, PublicationCoalescer, PublicationFrame, PublicationPayload,
-    PublicationStreamStart, SystemPublicationClock,
+    CoalescePolicy, PublicationCoalescer, PublicationFrame, PublicationPayload,
+    PublicationStreamStart,
 };
 use crate::runtime::continuation::ProviderContinuationState;
 use crate::runtime::identity::{
@@ -114,6 +114,7 @@ use crate::runtime::identity::{
 use crate::runtime::inbound::{FreshInboundTurn, InitialTurnTrigger, MailboxError};
 use crate::runtime::interaction::{ApprovalDecision, InteractionOutcome, InteractionResponse};
 use crate::runtime::types::{CancellationReason, RuntimeError};
+use crate::runtime::{MonotonicClock, SystemMonotonicClock};
 use crate::tools::background::BackgroundDispatchOutcome;
 use crate::tools::executor::{
     PreflightOutcome, PreparedInvocation, ProgressReporter, ToolExecutionContext, ToolRegistry,
@@ -135,12 +136,36 @@ use super::state::{ExecutionState, ExecutionStateMachine};
 
 use chrono::Utc;
 
-/// The bounded M4 retry policy for `ContextWindowExceeded`.
+/// The bounded M4 recovery budget for `ContextWindowExceeded`.
 ///
-/// This is the only retry policy the loop implements: one compaction, one
-/// retry. No generic backoff, rate-limit, timeout, transport, or provider
-/// fallback retry exists.
+/// Context-overflow recovery is semantic compaction, not generic transient
+/// retry. It remains one recovery opportunity per logical model step, while
+/// both recovery paths share the actual-request ordinal owned by the Agent
+/// Loop.
 pub const MAX_CONTEXT_OVERFLOW_RETRIES_PER_MODEL_TURN: u32 = 1;
+
+/// The maximum number of adapter-classified transient retries in one logical
+/// model step.
+pub const MAX_TRANSIENT_MODEL_RETRIES_PER_LOGICAL_STEP: u32 = 3;
+
+/// The upper bound for an adapter-provided retry delay.
+pub const MAX_MODEL_RETRY_DELAY_MS: u64 = 60_000;
+
+/// Computes one deterministic transient retry delay. The ordinal passed here
+/// is the count of the transient retry (one-based), not the shared actual
+/// request ordinal, because an overflow recovery may occur between transient
+/// attempts without resetting this exponential sequence.
+#[must_use]
+fn transient_retry_delay_ms(retry_count: u32, retry_after_ms: Option<u64>) -> u64 {
+    retry_after_ms.map_or_else(
+        || {
+            2_000_u64
+                .saturating_mul(1_u64 << retry_count.saturating_sub(1).min(2))
+                .min(MAX_MODEL_RETRY_DELAY_MS)
+        },
+        |hint| hint.min(MAX_MODEL_RETRY_DELAY_MS),
+    )
+}
 
 /// Everything the loop needs to know about one attempt.
 #[derive(Debug, PartialEq)]
@@ -313,10 +338,14 @@ pub struct AgentExecution<'a> {
     /// preparation and is never persisted or reconstructed.
     pending_post_tool_batch: Option<PostToolBatchStatusOpportunity>,
     context_runtime: ContextRuntime,
-    /// The transient accepted context for the current admitted primary step.
-    /// It is retained across an overflow compaction/retry and discarded only
-    /// when the next primary step begins.
+    /// The transient accepted context for the current admitted logical model
+    /// step. It is retained across every actual-request retry and discarded
+    /// only when the next logical step begins.
     accepted_context: Option<AcceptedContext>,
+    /// The Agent Status start metadata admitted for the current logical model
+    /// step. Actual-request retries copy this value into their own snapshots
+    /// without regenerating or re-emitting the status.
+    frozen_agent_status: Option<AgentStatusStart>,
     /// The one required immutable lifecycle configuration of the attempt.
     /// It carries the attempt's single pre-step policy owner and its
     /// identity-registered tool-result observers; the inert configuration is
@@ -369,7 +398,7 @@ pub struct AgentExecution<'a> {
     /// The bounded publication policy of the attempt.
     publication_policy: CoalescePolicy,
     /// The monotonic clock the publication latency policy reads.
-    publication_clock: std::sync::Arc<dyn PublicationClock>,
+    monotonic_clock: std::sync::Arc<dyn MonotonicClock>,
     /// The open, not-yet-settled publication stream of the in-flight model
     /// request. Exactly one stream is open at a time: a stream settles — as
     /// canonical, unaccepted, or incomplete — before the next one opens.
@@ -403,6 +432,12 @@ pub struct AgentExecution<'a> {
     /// gate, so a concurrent cancellation provably blocks behind it.
     #[cfg(test)]
     start_boundary_pause: std::sync::Mutex<Option<test_sync::StartBoundaryPause>>,
+    /// Test-only control point after `ModelRetryScheduled` commits and after
+    /// the retry deadline is captured, before the monotonic backoff wait
+    /// begins. It makes the cancellation/backoff ordering observable without
+    /// sleeping.
+    #[cfg(test)]
+    retry_backoff_pause: std::sync::Mutex<Option<test_sync::RetryBackoffPause>>,
     /// Test-only control point after a foreground tool-start fact and before
     /// the next sibling's start frontier advances. This makes cancellation
     /// during a parallel batch deterministic without changing production
@@ -463,13 +498,22 @@ enum StreamTerminal {
 /// assembler holding the provisional stream content, and the stream
 /// terminal.
 ///
-/// The three pieces travel together: an overflow retry replaces the whole
+/// The three pieces travel together: a recovery retry replaces the whole
 /// invocation, so provisional output and tool calls of the failed request
 /// are never committed under the retry's message identity.
 struct ModelInvocation {
     message_id: MessageId,
     assembler: ModelEventAssembler,
     terminal: StreamTerminal,
+}
+
+/// One actual model request after it crossed the durable request-start
+/// frontier. The request and provisional Assistant identity are kept
+/// together so publication can never be attributed to a different actual
+/// request generation.
+struct StartedModelTurn {
+    request: ModelRequest,
+    message_id: MessageId,
 }
 
 /// The fully prepared, not-yet-started model turn (Issue #12, M9b).
@@ -772,6 +816,7 @@ impl<'a> AgentExecution<'a> {
             pending_post_tool_batch: None,
             context_runtime,
             accepted_context: None,
+            frozen_agent_status: None,
             lifecycle,
             deferred_context: Vec::new(),
             context_generation_serial: 0,
@@ -783,7 +828,7 @@ impl<'a> AgentExecution<'a> {
             last_request_estimated_input: None,
             last_request_id: None,
             publication_policy: CoalescePolicy::default(),
-            publication_clock: std::sync::Arc::new(SystemPublicationClock::new()),
+            monotonic_clock: std::sync::Arc::new(SystemMonotonicClock::new()),
             publication: None,
             publication_settlement_failed: false,
             observer: None,
@@ -791,6 +836,8 @@ impl<'a> AgentExecution<'a> {
             continuation_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
             start_boundary_pause: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            retry_backoff_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
             tool_start_pause: std::sync::Mutex::new(None),
             turn: 0,
@@ -821,10 +868,10 @@ impl<'a> AgentExecution<'a> {
     pub(crate) fn install_publication_policy(
         &mut self,
         policy: CoalescePolicy,
-        clock: std::sync::Arc<dyn PublicationClock>,
+        clock: std::sync::Arc<dyn MonotonicClock>,
     ) {
         self.publication_policy = policy;
-        self.publication_clock = clock;
+        self.monotonic_clock = clock;
     }
 
     /// Installs the test-only start-boundary pause (Issue #12, M9b
@@ -835,6 +882,15 @@ impl<'a> AgentExecution<'a> {
             .start_boundary_pause
             .lock()
             .expect("start boundary pause lock") = Some(pause);
+    }
+
+    /// Installs the deterministic retry-backoff synchronization hook.
+    #[cfg(test)]
+    pub(crate) fn install_retry_backoff_pause(&mut self, pause: test_sync::RetryBackoffPause) {
+        *self
+            .retry_backoff_pause
+            .lock()
+            .expect("retry backoff pause lock") = Some(pause);
     }
 
     /// Installs the test-only foreground tool-start pause for one attempt.
@@ -971,18 +1027,15 @@ impl<'a> AgentExecution<'a> {
 
     /// Executes one turn: one model request, its tool calls, and their
     /// results. Returns the terminal outcome when the attempt settled.
+    #[allow(clippy::too_many_lines)] // one explicit logical-step retry state machine
     async fn run_turn_body(&mut self) -> Option<Terminal> {
         self.turn += 1;
-        // A new primary step gets one fresh assembly generation. An overflow
-        // retry stays inside this function and therefore retains the accepted
-        // context below.
+        // A new logical primary step gets one fresh assembly generation. Every
+        // actual request of that step — initial, transient retry, or
+        // post-compaction retry — consumes the one shared request ordinal
+        // below. Retries never re-enter dynamic context admission.
         self.accepted_context = None;
-        let assistant_message_id = RequestIdentity {
-            attempt_id: self.request.attempt_id.clone(),
-            turn: TurnId::new(self.turn.to_string()),
-            retry_number: 0,
-        }
-        .provisional_message_id();
+        self.frozen_agent_status = None;
         self.emit(RuntimeEvent::TurnStarted);
         if let Some(message) = self.durable_failure.clone() {
             return Some(Terminal::Failed {
@@ -992,72 +1045,109 @@ impl<'a> AgentExecution<'a> {
             });
         }
 
-        let prepared = match self.prepare_model_turn().await {
+        let mut next_request_ordinal = 0_u32;
+        let mut transient_retries = 0_u32;
+        let mut overflow_retries = 0_u32;
+        let prepared = match self.prepare_model_turn(next_request_ordinal).await {
             Ok(prepared) => prepared,
             Err(terminal) => return Some(terminal),
         };
-        // The one cancellation-vs-start arbitration of this model turn:
-        // the provider is invoked only after the durable start commit won.
-        let request = match self.start_model_turn(prepared) {
-            Ok(request) => request,
+        let started = match self.start_actual_model_request(prepared, &mut next_request_ordinal) {
+            Ok(started) => started,
             Err(terminal) => return Some(terminal),
         };
-        let mut invocation = match self
-            .consume_invocation(request, &assistant_message_id)
-            .await
-        {
+        let mut invocation = match self.consume_invocation(started).await {
             Ok(invocation) => invocation,
             Err(terminal) => return Some(terminal),
         };
 
-        // M4 bounded compact-and-retry: a recoverable context overflow does
-        // not settle the attempt. The execution state remains an active
-        // model-running state; no state-machine settlement and no attempt
-        // terminal event are produced between the overflow and the retry.
-        //
-        // The retry budget is per model turn: `overflow_retries` is
-        // turn-local, so every turn is entitled to its own
-        // `MAX_CONTEXT_OVERFLOW_RETRIES_PER_MODEL_TURN` retries and the
-        // budget never persists across turns. The retry path is single-shot:
-        // a retry that overflows again settles the attempt, so there is no
-        // second retry inside any individual turn.
-        let overflow_retries: u32 = 0;
-        if let StreamTerminal::Failed { error } = &invocation.terminal
-            && error.kind == ModelErrorKind::ContextWindowExceeded
-            && overflow_retries < MAX_CONTEXT_OVERFLOW_RETRIES_PER_MODEL_TURN
-        {
-            let retry_number = overflow_retries + 1;
-            let overflow_error = error.clone();
-            match self
-                .retry_after_overflow(&overflow_error, retry_number)
-                .await
-            {
-                Ok(retry_invocation) => {
-                    // The successful retry replaces the complete invocation:
-                    // the provisional identity, the assembler (and therefore
-                    // the provisional content and tool calls of the failed
-                    // request), and the terminal.
-                    invocation = retry_invocation;
-                }
-                Err(terminal) => return Some(terminal),
-            }
-        }
-
-        match invocation.terminal {
-            StreamTerminal::Failed { error } => Some(Terminal::Failed {
-                failure: AttemptFailure::Model { error },
-            }),
-            StreamTerminal::Completed {
-                finish_reason,
-                usage,
-            } => {
-                self.complete_turn(
-                    invocation.message_id,
+        loop {
+            let ModelInvocation {
+                message_id,
+                assembler,
+                terminal,
+            } = invocation;
+            match terminal {
+                StreamTerminal::Completed {
                     finish_reason,
                     usage,
-                    invocation.assembler,
-                )
-                .await
+                } => {
+                    return self
+                        .complete_turn(message_id, finish_reason, usage, assembler)
+                        .await;
+                }
+                StreamTerminal::Failed { error } => {
+                    let Some(failed_request_id) = self.last_request_id.clone() else {
+                        return Some(Terminal::Failed {
+                            failure: AttemptFailure::Runtime {
+                                error: RuntimeError::ContractViolation {
+                                    message: "a model failure has no started request".to_owned(),
+                                },
+                            },
+                        });
+                    };
+
+                    // Context overflow has its own semantic recovery boundary:
+                    // estimator correction, compaction, fit validation, then
+                    // one new frozen request state. It does not reset or
+                    // consume the generic transient budget.
+                    if error.kind == ModelErrorKind::ContextWindowExceeded
+                        && overflow_retries < MAX_CONTEXT_OVERFLOW_RETRIES_PER_MODEL_TURN
+                    {
+                        overflow_retries += 1;
+                        let retry_number = next_request_ordinal;
+                        match self
+                            .retry_after_overflow(
+                                &error,
+                                &failed_request_id,
+                                retry_number,
+                                &mut next_request_ordinal,
+                            )
+                            .await
+                        {
+                            Ok(retry_invocation) => {
+                                invocation = retry_invocation;
+                                continue;
+                            }
+                            Err(terminal) => return Some(terminal),
+                        }
+                    }
+
+                    if error.kind != ModelErrorKind::ContextWindowExceeded
+                        && error.retry_disposition
+                            == crate::model::error::ModelRetryDisposition::Transient
+                        && transient_retries < MAX_TRANSIENT_MODEL_RETRIES_PER_LOGICAL_STEP
+                    {
+                        transient_retries += 1;
+                        let retry_number = next_request_ordinal;
+                        let retry_delay_ms =
+                            transient_retry_delay_ms(transient_retries, error.retry_after_ms);
+                        if let Err(terminal) = self.schedule_transient_retry(
+                            failed_request_id,
+                            retry_number,
+                            retry_delay_ms,
+                        ) {
+                            return Some(terminal);
+                        }
+                        if let Err(terminal) = self.wait_for_retry_backoff(retry_delay_ms).await {
+                            return Some(terminal);
+                        }
+                        match self
+                            .retry_frozen_model_turn(retry_number, &mut next_request_ordinal)
+                            .await
+                        {
+                            Ok(retry_invocation) => {
+                                invocation = retry_invocation;
+                                continue;
+                            }
+                            Err(terminal) => return Some(terminal),
+                        }
+                    }
+
+                    return Some(Terminal::Failed {
+                        failure: AttemptFailure::Model { error },
+                    });
+                }
             }
         }
     }
@@ -1126,18 +1216,8 @@ impl<'a> AgentExecution<'a> {
         // authoritative for the prefix it covers of every request context
         // that extends it. Both facts travel with the measurement; the
         // engine decides which one applies.
-        if let Some(usage) = &reported_usage
-            && let Some(fingerprint) = self.last_request_fingerprint.take()
-        {
-            self.observed = Some(ProviderObservedInput {
-                fingerprint,
-                input_tokens: usage.input_tokens,
-                anchor: self.last_request_anchor.take(),
-            });
-            // The measurement travels with the request identity it was
-            // taken under, so a later request that changed the invocation
-            // or the provider continuation cannot inherit it.
-            self.observed_request_identity = self.last_request_identity;
+        if let Some(usage) = &reported_usage {
+            self.record_provider_observation(usage);
         }
         self.pending_continuation = turn_assembly.continuation;
         if self.pending_continuation.is_some() {
@@ -1401,7 +1481,7 @@ impl<'a> AgentExecution<'a> {
     /// native context fact for the admitted primary step, together with the
     /// deferred post-tool proposals staged by the previous structurally
     /// settled tool batch. That accepted generation is reused throughout
-    /// proactive compaction and overflow retry.
+    /// transient replay, proactive compaction, and overflow retry.
     ///
     /// The exact structure is:
     ///
@@ -1421,7 +1501,7 @@ impl<'a> AgentExecution<'a> {
     /// canonical context, no Surface advancement, no frozen snapshot, and no
     /// provider request. Nothing request-scoped commits here: the one
     /// cancellation-vs-start arbitration in [`AgentExecution::start_model_turn`]
-    /// decides whether this prepared turn ever starts. An overflow retry
+    /// decides whether this prepared turn ever starts. A recovery request
     /// never re-enters this block: it reuses the already-admitted context
     /// generation, so the policy is evaluated exactly once per primary step.
     ///
@@ -1430,7 +1510,10 @@ impl<'a> AgentExecution<'a> {
     /// arbitration (a cancellation that lands after it is decided by the
     /// start gate, exactly like one landing during assembly).
     #[allow(clippy::too_many_lines)]
-    async fn prepare_model_turn(&mut self) -> Result<PreparedModelTurn, Terminal> {
+    async fn prepare_model_turn(
+        &mut self,
+        request_ordinal: u32,
+    ) -> Result<PreparedModelTurn, Terminal> {
         if let Some(message) = self.durable_failure.clone() {
             return Err(Terminal::Failed {
                 failure: AttemptFailure::Runtime {
@@ -1552,7 +1635,12 @@ impl<'a> AgentExecution<'a> {
         // identities, and in-memory validation only. Nothing commits until
         // the start arbitration wins.
         let staged_context = self.stage_context(accepted)?;
-        let mut staged = self.stage_model_turn(0, &staged_context, status_generation.as_ref())?;
+        let mut staged = self.stage_model_turn(
+            request_ordinal,
+            &staged_context,
+            status_generation.as_ref(),
+            None,
+        )?;
         let budgets = self.compaction_budgets();
         let should_compact = match self
             .context_runtime
@@ -1589,7 +1677,12 @@ impl<'a> AgentExecution<'a> {
             .await?;
             // Restage over the rewritten Surface: the staged context blocks
             // are unchanged, the Surface revision and projection are not.
-            staged = self.stage_model_turn(0, &staged_context, status_generation.as_ref())?;
+            staged = self.stage_model_turn(
+                request_ordinal,
+                &staged_context,
+                status_generation.as_ref(),
+                None,
+            )?;
             if !self
                 .context_runtime
                 .engine
@@ -1688,6 +1781,7 @@ impl<'a> AgentExecution<'a> {
         retry_number: u32,
         staged_context: &[MessageBlock],
         status_generation: Option<&AgentStatusGeneration>,
+        frozen_agent_status: Option<&AgentStatusStart>,
     ) -> Result<StagedModelTurn, Terminal> {
         let active = self.conversation.active_messages().map_err(|error| {
             Self::context_failure_terminal(&ContextError::new(
@@ -1695,6 +1789,11 @@ impl<'a> AgentExecution<'a> {
                 error.to_string(),
             ))
         })?;
+        let frozen_status_is_active = frozen_agent_status.is_some_and(|status| {
+            active
+                .iter()
+                .any(|message| message.id() == &status.message_id)
+        });
         let mut scratch = ConversationState::from_durable_head(
             active,
             self.conversation.active_ids().to_vec(),
@@ -1776,6 +1875,15 @@ impl<'a> AgentExecution<'a> {
                 message_id: status_message_id,
                 emissions: status_generation.emissions.clone(),
             });
+        } else if let Some(frozen_agent_status) = frozen_agent_status
+            // Agent Status is part of the frozen request semantics only while
+            // its canonical context message remains on this request's
+            // Surface. A successful overflow compaction may retire that
+            // message; the post-compaction request must then use the new
+            // Surface as-is, without regenerating the status opportunity.
+            && frozen_status_is_active
+        {
+            snapshot.agent_status = Some(frozen_agent_status.clone());
         }
         Ok(StagedModelTurn {
             projection,
@@ -1862,8 +1970,8 @@ impl<'a> AgentExecution<'a> {
 
     /// The one cancellation-vs-start linearization point of every model
     /// turn (Issue #12, M9b): the first turn, every tool→model
-    /// continuation, every recovered continuation, and every overflow retry
-    /// reach exactly this boundary.
+    /// continuation, every recovered continuation, every transient retry, and
+    /// every overflow retry reach exactly this boundary.
     ///
     /// The attempt's model-turn start gate serializes the cancellation
     /// observation against the durable start commit
@@ -1887,7 +1995,10 @@ impl<'a> AgentExecution<'a> {
     ///   request-owned state, and the coordinator learns the durable
     ///   failure kind.
     #[allow(clippy::too_many_lines)]
-    fn start_model_turn(&mut self, prepared: PreparedModelTurn) -> Result<ModelRequest, Terminal> {
+    fn start_model_turn(
+        &mut self,
+        prepared: PreparedModelTurn,
+    ) -> Result<StartedModelTurn, Terminal> {
         #[cfg(test)]
         if let Some(pause) = self
             .start_boundary_pause
@@ -1947,6 +2058,8 @@ impl<'a> AgentExecution<'a> {
         // is recorded, and only after this point may the provider be
         // invoked.
         let status_observation = prepared.status_observation.clone();
+        self.frozen_agent_status
+            .clone_from(&prepared.snapshot.agent_status);
         for commit in prepared.context {
             let block = commit.message().clone();
             self.conversation.install_prepared(commit);
@@ -2010,7 +2123,27 @@ impl<'a> AgentExecution<'a> {
                 },
             });
         }
-        Ok(prepared.request)
+        Ok(StartedModelTurn {
+            request: prepared.request,
+            message_id: prepared.snapshot.provisional_message_id,
+        })
+    }
+
+    /// Starts one actual request and advances the logical step's shared
+    /// ordinal only after the durable start frontier has succeeded. A
+    /// cancellation that wins before that frontier therefore leaves the
+    /// ordinal available, while every committed request consumes exactly one
+    /// collision-free generation.
+    fn start_actual_model_request(
+        &mut self,
+        prepared: PreparedModelTurn,
+        next_request_ordinal: &mut u32,
+    ) -> Result<StartedModelTurn, Terminal> {
+        let started = self.start_model_turn(prepared)?;
+        *next_request_ordinal = next_request_ordinal
+            .checked_add(1)
+            .expect("actual request ordinal cannot overflow");
+        Ok(started)
     }
 
     /// The provider measurement that is still evidence about the request
@@ -2465,14 +2598,18 @@ impl<'a> AgentExecution<'a> {
         }
     }
 
-    /// Consumes one model invocation: sends the request, assembles the
-    /// provisional stream content under the given provisional identity, and
-    /// returns the complete invocation (identity + assembler + terminal).
+    /// Consumes one started model invocation: sends the exact request that
+    /// crossed the durable start frontier, assembles its provisional stream
+    /// under the identity from that same snapshot, and returns the complete
+    /// invocation (identity + assembler + terminal).
     async fn consume_invocation(
         &mut self,
-        request: ModelRequest,
-        provisional_message_id: &MessageId,
+        started: StartedModelTurn,
     ) -> Result<ModelInvocation, Terminal> {
+        let StartedModelTurn {
+            request,
+            message_id,
+        } = started;
         // The provider binding comes from the attempt's frozen snapshot: the
         // loop never resolves an adapter and never observes a later session
         // model change.
@@ -2484,17 +2621,34 @@ impl<'a> AgentExecution<'a> {
             .stream(request, self.cancellation.model_cancellation());
         let mut assembler = ModelEventAssembler::new();
         let terminal = match self
-            .consume_model_stream(&mut assembler, provisional_message_id, &mut stream)
+            .consume_model_stream(&mut assembler, &message_id, &mut stream)
             .await
         {
             Ok(stream_terminal) => stream_terminal,
             Err(terminal) => return Err(terminal),
         };
         Ok(ModelInvocation {
-            message_id: provisional_message_id.clone(),
+            message_id,
             assembler,
             terminal,
         })
+    }
+
+    /// Replays the currently frozen logical-step semantics for another actual
+    /// request. No Context Assembly, status generation, `FreshInbound`
+    /// admission, contributor evaluation, or live-state sampling occurs here.
+    /// The only changing input is the shared actual-request ordinal.
+    async fn retry_frozen_model_turn(
+        &mut self,
+        request_ordinal: u32,
+        next_request_ordinal: &mut u32,
+    ) -> Result<ModelInvocation, Terminal> {
+        let frozen_agent_status = self.frozen_agent_status.clone();
+        let staged =
+            self.stage_model_turn(request_ordinal, &[], None, frozen_agent_status.as_ref())?;
+        let prepared = self.finalize_model_turn(&[], staged, None)?;
+        let started = self.start_actual_model_request(prepared, next_request_ordinal)?;
+        self.consume_invocation(started).await
     }
 
     /// The bounded compact-and-retry path after a context overflow.
@@ -2521,7 +2675,9 @@ impl<'a> AgentExecution<'a> {
     async fn retry_after_overflow(
         &mut self,
         overflow_error: &ModelError,
+        failed_request_id: &RequestId,
         retry_number: u32,
+        next_request_ordinal: &mut u32,
     ) -> Result<ModelInvocation, Terminal> {
         if self.cancellation.is_cancelled() {
             return Err(Terminal::Cancelled {
@@ -2594,36 +2750,73 @@ impl<'a> AgentExecution<'a> {
         // opaque provider continuation exactly once, inside
         // `perform_compaction`; this path never clears it a second time.
         self.emit(RuntimeEvent::ModelRetryScheduled {
-            attempt_number: retry_number,
+            failed_request_id: failed_request_id.clone(),
+            retry_number,
             retry_delay_ms: None,
         });
         if let Some(terminal) = self.durable_failure_terminal_from_state() {
             return Err(terminal);
         }
-        let retry_message_id = RequestIdentity {
-            attempt_id: self.request.attempt_id.clone(),
-            turn: TurnId::new(self.turn.to_string()),
-            retry_number,
-        }
-        .provisional_message_id();
         // The retry is another actual provider request: it stages no new
         // request-scoped context (the original request's start transaction
         // already committed it), freezes its own Request Snapshot, and
         // passes through the one cancellation-vs-start arbitration exactly
         // like the first request of the turn.
-        let staged = match self.stage_model_turn(retry_number, &[], None) {
-            Ok(staged) => staged,
-            Err(terminal) => return Err(terminal),
-        };
-        let prepared = match self.finalize_model_turn(&[], staged, None) {
-            Ok(prepared) => prepared,
-            Err(terminal) => return Err(terminal),
-        };
-        let request = match self.start_model_turn(prepared) {
-            Ok(request) => request,
-            Err(terminal) => return Err(terminal),
-        };
-        self.consume_invocation(request, &retry_message_id).await
+        self.retry_frozen_model_turn(retry_number, next_request_ordinal)
+            .await
+    }
+
+    /// Settles the failed request's publication before recording a transient
+    /// retry schedule. Failed deltas remain in the durable publication audit;
+    /// no failed stream can stay open while the next request is admitted.
+    fn schedule_transient_retry(
+        &mut self,
+        failed_request_id: RequestId,
+        retry_number: u32,
+        retry_delay_ms: u64,
+    ) -> Result<(), Terminal> {
+        if let Err(error) = self.settle_publication_audit() {
+            return Err(Terminal::Failed {
+                failure: AttemptFailure::Runtime { error },
+            });
+        }
+        if self.cancellation.is_cancelled() {
+            return Err(self.cancelled_terminal());
+        }
+        self.emit(RuntimeEvent::ModelRetryScheduled {
+            failed_request_id,
+            retry_number,
+            retry_delay_ms: Some(retry_delay_ms),
+        });
+        if let Some(terminal) = self.durable_failure_terminal_from_state() {
+            return Err(terminal);
+        }
+        Ok(())
+    }
+
+    /// Waits for a retry deadline in the runtime-owned monotonic clock. The
+    /// cancellation branch is intentionally biased so an already observable
+    /// cancellation wins before the clock can authorize another request.
+    async fn wait_for_retry_backoff(&self, delay_ms: u64) -> Result<(), Terminal> {
+        let deadline = self.monotonic_clock.now_millis().saturating_add(delay_ms);
+        #[cfg(test)]
+        if let Some(pause) = self
+            .retry_backoff_pause
+            .lock()
+            .expect("retry backoff pause lock")
+            .as_ref()
+        {
+            // `schedule_transient_retry` has already committed the schedule;
+            // parking here additionally freezes the absolute deadline before
+            // the test releases the wait, making manual-clock advancement an
+            // exact proof of the delay rather than a timing hint.
+            pause.park();
+        }
+        tokio::select! {
+            biased;
+            () = self.cancellation.cancelled() => Err(self.cancelled_terminal()),
+            () = self.monotonic_clock.wait_until_millis(deadline) => Ok(()),
+        }
     }
 
     /// Consumes one model stream: emits runtime events for non-terminal
@@ -2688,10 +2881,20 @@ impl<'a> AgentExecution<'a> {
                     });
                 }
                 ModelEvent::Failed { error } => {
+                    // A failed request may have emitted one or more
+                    // cumulative usage updates before the provider failure.
+                    // Retain that latest trustworthy snapshot both in the
+                    // request outcome and as compatible ProviderObservedInput
+                    // evidence; never synthesize usage from partial output.
+                    let usage = assembler.latest_usage();
+                    if let Some(usage) = usage.as_ref() {
+                        self.record_provider_observation(usage);
+                    }
                     if let Some(request_id) = self.last_request_id.clone() {
                         self.emit(RuntimeEvent::ModelRequestFailed {
                             request_id,
                             error: error.clone(),
+                            usage,
                         });
                     }
                     if let Some(terminal) = self.durable_failure_terminal_from_state() {
@@ -2734,6 +2937,25 @@ impl<'a> AgentExecution<'a> {
             return Err(terminal);
         }
         Ok(stream_terminal)
+    }
+
+    /// Retains the latest trustworthy provider input measurement for the
+    /// exact actual request that produced it. The context engine may reuse it
+    /// only while its structural anchor and request identity remain
+    /// compatible; no estimate is promoted here.
+    fn record_provider_observation(&mut self, usage: &ModelUsage) {
+        let Some(fingerprint) = self.last_request_fingerprint.take() else {
+            return;
+        };
+        self.observed = Some(ProviderObservedInput {
+            fingerprint,
+            input_tokens: usage.input_tokens,
+            anchor: self.last_request_anchor.take(),
+        });
+        // The measurement travels with the request identity it was taken
+        // under, so a later request that changed invocation or continuation
+        // cannot inherit it.
+        self.observed_request_identity = self.last_request_identity;
     }
 
     /// Executes the turn's tool calls through deterministic scheduling
@@ -3647,7 +3869,7 @@ impl<'a> AgentExecution<'a> {
             start.stream_id.clone(),
             message_id.clone(),
             self.publication_policy,
-            std::sync::Arc::clone(&self.publication_clock),
+            std::sync::Arc::clone(&self.monotonic_clock),
         );
         if let Some(observer) = self.observer {
             observer.observe_publication_opened(&self.request.attempt_id, &start);
@@ -3797,6 +4019,16 @@ impl<'a> AgentExecution<'a> {
     /// Unaccepted (or the reverse) no matter which control-flow exit reached
     /// it. Canonical acceptance of the stream becomes permanently forbidden.
     fn settle_publication_audit(&mut self) -> Result<(), RuntimeError> {
+        // A failed request may have ended before the coalescer's normal byte
+        // or latency boundary. Flush that pending payload first so the audit
+        // retains every partial text/reasoning/refusal/tool proposal that was
+        // already emitted by the provider.
+        if self.has_buffered_publication() {
+            self.flush_publication();
+            if let Some(message) = self.durable_failure.clone() {
+                return Err(RuntimeError::DurableStore { message });
+            }
+        }
         let Some(stream_id) = self
             .publication
             .as_ref()
@@ -4204,6 +4436,41 @@ pub(crate) mod test_sync {
         /// the test releases the execution.
         pub(super) fn park_at_continuation_boundary(&self) {
             self.reached.send_replace(true);
+            let _ = self.release.recv();
+        }
+    }
+
+    /// A test-only control point after a transient `ModelRetryScheduled`
+    /// event is durably committed and after the retry's absolute monotonic
+    /// deadline is captured, before the backoff wait begins. Cancellation can
+    /// therefore be placed between those two linearization points without
+    /// relying on elapsed wall-clock time.
+    #[derive(Debug)]
+    pub(crate) struct RetryBackoffPause {
+        reached: watch::Sender<u32>,
+        release: mpsc::Receiver<()>,
+    }
+
+    impl RetryBackoffPause {
+        /// Creates the pause and its observation/release handles.
+        #[must_use]
+        pub(crate) fn install() -> (Self, watch::Receiver<u32>, mpsc::Sender<()>) {
+            let (reached, reached_rx) = watch::channel(0);
+            let (release_tx, release_rx) = mpsc::channel();
+            (
+                Self {
+                    reached,
+                    release: release_rx,
+                },
+                reached_rx,
+                release_tx,
+            )
+        }
+
+        /// Increments the scheduled-retry count and waits for the
+        /// deterministic test controller to release this backoff.
+        pub(super) fn park(&self) {
+            self.reached.send_modify(|count| *count += 1);
             let _ = self.release.recv();
         }
     }
@@ -5195,6 +5462,7 @@ mod tests {
             error: crate::model::error::ModelError {
                 kind: ModelErrorKind::InvalidRequest,
                 message: "Request exceeds the maximum size of 32 MB".to_owned(),
+                retry_disposition: crate::model::error::ModelRetryDisposition::Never,
                 retry_after_ms: None,
                 provider_code: Some("request_too_large".to_owned()),
                 context_overflow: None,
@@ -6230,6 +6498,7 @@ mod tests {
                     error: crate::model::error::ModelError {
                         kind: ModelErrorKind::Cancelled,
                         message: "cancelled".to_owned(),
+                        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
                         retry_after_ms: None,
                         provider_code: None,
                         context_overflow: None,
@@ -6401,6 +6670,7 @@ mod tests {
             error: crate::model::error::ModelError {
                 kind: ModelErrorKind::ProviderError,
                 message: "provider failed after start".to_owned(),
+                retry_disposition: crate::model::error::ModelRetryDisposition::Never,
                 retry_after_ms: None,
                 provider_code: None,
                 context_overflow: None,

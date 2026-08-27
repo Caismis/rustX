@@ -136,9 +136,13 @@ use super::inbox::{
 /// final suppression format nor the request-snapshot emission binding, so it
 /// is refused.
 ///
-/// A v3/v4/v5/v6/v7/v8/v9/v10/v11 database must fail at store open; there is no
-/// migration or compatibility path.
-pub const SQLITE_SCHEMA_VERSION: i64 = 12;
+/// Version 13 freezes Issue #134's per-request retry correlation and failed
+/// request usage payload. The journal remains envelope-version 1, but an old
+/// store cannot be interpreted under the new request-recovery vocabulary.
+///
+/// A v3/v4/v5/v6/v7/v8/v9/v10/v11/v12 database must fail at store open; there
+/// is no migration or compatibility path.
+pub const SQLITE_SCHEMA_VERSION: i64 = 13;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -586,8 +590,16 @@ impl SqliteConversationStore {
         // makes the resulting value the exact origin of any Todo emission
         // committed below; a failed or cancelled start rolls it back.
         Self::advance_todo_progress_tx(transaction, snapshot)?;
-        let agent_status_emissions =
-            self.insert_agent_status_emissions_tx(transaction, snapshot, timestamp)?;
+        // Agent Status emissions are semantic observations of the logical
+        // step, not one emission per transport attempt. A transient or
+        // overflow retry may carry the same status metadata in its snapshot
+        // when the canonical status message remains on the frozen Surface,
+        // but only the initial request owns the durable emission facts.
+        let agent_status_emissions = if snapshot.identity.retry_number == 0 {
+            self.insert_agent_status_emissions_tx(transaction, snapshot, timestamp)?
+        } else {
+            Vec::new()
+        };
         Ok(ModelTurnStartCommit {
             started: persisted.event,
             agent_status_emissions,
@@ -1341,6 +1353,9 @@ impl ConversationStore for SqliteConversationStore {
                 .commit()
                 .map_err(|error| storage(format!("request start retry commit: {error}")))?;
             return Ok(verified);
+        }
+        if snapshot.identity.retry_number != 0 {
+            verify_frozen_agent_status_tx(&transaction, snapshot)?;
         }
         // The request-scoped canonical context commits first, inside the
         // same transaction as the snapshot and the start fact: a failure
@@ -3286,10 +3301,10 @@ fn validate_agent_status_start(
                 ));
             }
         }
-        Some(agent_status) => {
+        Some(agent_status) if snapshot.identity.retry_number == 0 => {
             let [message] = status_messages.as_slice() else {
                 return Err(ConversationStoreError::InvalidReference(
-                    "a prepared Agent Status start must contain exactly one canonical status message"
+                    "a fresh Agent Status start must contain exactly one canonical status message"
                         .to_owned(),
                 ));
             };
@@ -3304,37 +3319,138 @@ fn validate_agent_status_start(
                         .to_owned(),
                 )
             })?;
-            let mut seen = BTreeSet::new();
-            let mut todo_emissions = 0usize;
-            for emission in &agent_status.emissions {
-                validate_agent_status_emission_shape(emission)?;
-                if emission.module_id != AgentStatusModuleId::Todo {
-                    return Err(ConversationStoreError::InvalidReference(
-                        "only Todo Agent Status emissions have a durable settlement".to_owned(),
-                    ));
-                }
-                todo_emissions = todo_emissions.saturating_add(1);
-                if !metadata.contains(emission.module_id) {
-                    return Err(ConversationStoreError::InvalidReference(format!(
-                        "Agent Status emission module {} is absent from the canonical status metadata",
-                        emission.module_id.as_str()
-                    )));
-                }
-                if !seen.insert((emission.module_id, emission.key.clone())) {
-                    return Err(ConversationStoreError::InvalidReference(format!(
-                        "Agent Status emission key {} is duplicated for module {}",
-                        emission.key,
-                        emission.module_id.as_str()
-                    )));
-                }
-            }
-            let todo_in_metadata = metadata.contains(AgentStatusModuleId::Todo);
-            if todo_in_metadata != (todo_emissions == 1) {
+            validate_agent_status_emissions(agent_status, Some(metadata))?;
+        }
+        Some(agent_status) => {
+            if !status_messages.is_empty() {
                 return Err(ConversationStoreError::InvalidReference(
-                    "Todo Agent Status metadata and its exact emission settlement disagree"
+                    "a retry must reuse the canonical Agent Status message instead of re-emitting it"
                         .to_owned(),
                 ));
             }
+            // The canonical message and its prior emission facts are checked
+            // inside the request-start transaction. This pre-transaction
+            // validation still bounds the retry metadata and rejects a
+            // second non-Todo durable emission before touching the store.
+            validate_agent_status_emissions(agent_status, None)?;
+        }
+    }
+    Ok(())
+}
+
+/// Validates the bounded emission list carried by one Agent Status start.
+/// When `metadata` is present this is a fresh start and the list must match
+/// the exact modules represented by the supplied canonical message. A retry
+/// has no newly supplied message, so its metadata binding is completed by the
+/// transaction that resolves the already-committed canonical message.
+fn validate_agent_status_emissions(
+    agent_status: &crate::model::snapshot::AgentStatusStart,
+    metadata: Option<&crate::message::types::AgentStatusGenerationMetadata>,
+) -> Result<(), ConversationStoreError> {
+    let mut seen = BTreeSet::new();
+    let mut todo_emissions = 0usize;
+    for emission in &agent_status.emissions {
+        validate_agent_status_emission_shape(emission)?;
+        if emission.module_id != AgentStatusModuleId::Todo {
+            return Err(ConversationStoreError::InvalidReference(
+                "only Todo Agent Status emissions have a durable settlement".to_owned(),
+            ));
+        }
+        todo_emissions = todo_emissions.saturating_add(1);
+        if let Some(metadata) = metadata
+            && !metadata.contains(emission.module_id)
+        {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "Agent Status emission module {} is absent from the canonical status metadata",
+                emission.module_id.as_str()
+            )));
+        }
+        if !seen.insert((emission.module_id, emission.key.clone())) {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "Agent Status emission key {} is duplicated for module {}",
+                emission.key,
+                emission.module_id.as_str()
+            )));
+        }
+    }
+    if let Some(metadata) = metadata {
+        let todo_in_metadata = metadata.contains(AgentStatusModuleId::Todo);
+        if todo_in_metadata != (todo_emissions == 1) {
+            return Err(ConversationStoreError::InvalidReference(
+                "Todo Agent Status metadata and its exact emission settlement disagree".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Verifies the status generation reused by a new actual request. The
+/// canonical status message and its Todo emission were committed by the
+/// logical step's initial request; a retry must prove those facts exist on
+/// its frozen Surface without creating another emission under the retry's
+/// request identity.
+fn verify_frozen_agent_status_tx(
+    transaction: &Transaction<'_>,
+    snapshot: &RequestSnapshot,
+) -> Result<(), ConversationStoreError> {
+    let Some(agent_status) = snapshot.agent_status.as_ref() else {
+        return Ok(());
+    };
+    let message = load_message_tx(transaction, &agent_status.message_id)?;
+    if !message.is_agent_status() {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "retry request {} reuses non-Agent-Status message {}",
+            snapshot.request_id, agent_status.message_id
+        )));
+    }
+    let metadata = message.agent_status_metadata().ok_or_else(|| {
+        ConversationStoreError::InvalidReference(format!(
+            "retry request {} reuses an Agent Status message without structured metadata",
+            snapshot.request_id
+        ))
+    })?;
+    validate_agent_status_emissions(agent_status, Some(metadata))?;
+    let active = reconstruct_surface_tx(transaction, snapshot.surface_revision)?;
+    if !active.iter().any(|id| id == &agent_status.message_id) {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "retry request {} does not contain its frozen Agent Status message on the Surface",
+            snapshot.request_id
+        )));
+    }
+    for emission in &agent_status.emissions {
+        let Some(head) = read_agent_status_head_tx(transaction, emission.module_id, &emission.key)?
+        else {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "retry request {} reuses Agent Status emission {} without a durable head",
+                snapshot.request_id, emission.key
+            )));
+        };
+        if head.fingerprint != emission.fingerprint
+            || head.canonical_message_id != agent_status.message_id
+        {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "retry request {} reuses a different durable Agent Status emission {}",
+                snapshot.request_id, emission.key
+            )));
+        }
+        let Some(event) = find_event_at_sequence(transaction, head.event_sequence)? else {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "retry request {} reuses Agent Status emission {} without its event fact",
+                snapshot.request_id, emission.key
+            )));
+        };
+        if !matches!(
+            event.event,
+            RuntimeEvent::AgentStatusEmitted {
+                message_id,
+                emission: ref committed,
+                ..
+            } if message_id == agent_status.message_id && committed == emission
+        ) {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "retry request {} reuses a contradictory Agent Status emission {}",
+                snapshot.request_id, emission.key
+            )));
         }
     }
     Ok(())
@@ -3350,6 +3466,10 @@ fn verify_agent_status_start_tx(
     started: &RuntimeEventEnvelope,
 ) -> Result<Vec<RuntimeEventEnvelope>, ConversationStoreError> {
     validate_agent_status_start(snapshot, context)?;
+    if snapshot.identity.retry_number != 0 {
+        verify_frozen_agent_status_tx(transaction, snapshot)?;
+        return Ok(Vec::new());
+    }
     let Some(agent_status) = snapshot.agent_status.as_ref() else {
         return Ok(Vec::new());
     };
@@ -5840,6 +5960,59 @@ fn validate_event_reference(
             if message.id() != message_id {
                 return Err(ConversationStoreError::InvalidReference(format!(
                     "Agent Status emission message reference {message_id} disagrees with its body"
+                )));
+            }
+        }
+        // A retry schedule is correlated by the failed request identity, not
+        // by event position. It is valid only after that exact actual request
+        // started and durably failed, and its ordinal must be the next shared
+        // actual-request generation of the same logical turn.
+        RuntimeEvent::ModelRetryScheduled {
+            failed_request_id,
+            retry_number,
+            ..
+        } => {
+            let (snapshot, _) = require_started_request_tx(
+                transaction,
+                &envelope.conversation_id,
+                failed_request_id,
+            )?;
+            if envelope.attempt_id.as_ref() != Some(&snapshot.identity.attempt_id)
+                || envelope.turn_id.as_ref() != Some(&snapshot.identity.turn)
+            {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "model retry schedule for {failed_request_id} has a foreign attempt or turn envelope"
+                )));
+            }
+            let expected_retry_number =
+                snapshot
+                    .identity
+                    .retry_number
+                    .checked_add(1)
+                    .ok_or_else(|| {
+                        ConversationStoreError::InvalidReference(
+                            "model request retry ordinal is exhausted".to_owned(),
+                        )
+                    })?;
+            if *retry_number != expected_retry_number {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "retry schedule for {failed_request_id} names ordinal {retry_number}, expected {expected_retry_number}"
+                )));
+            }
+            let Some(outcome) = find_request_outcome_event(transaction, failed_request_id)? else {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "retry schedule for {failed_request_id} has no provider outcome"
+                )));
+            };
+            if !matches!(
+                outcome.event,
+                RuntimeEvent::ModelRequestFailed {
+                    request_id,
+                    ..
+                } if request_id == *failed_request_id
+            ) {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "retry schedule for {failed_request_id} does not follow a failed provider outcome"
                 )));
             }
         }
@@ -8920,14 +9093,18 @@ mod tests {
                     "after-turn-terminal",
                     Some(attempt_id.clone()),
                     RuntimeEvent::ModelRetryScheduled {
-                        attempt_number: 1,
+                        failed_request_id: RequestId::new("request:attempt-events:turn-events:0"),
+                        retry_number: 1,
                         retry_delay_ms: None,
                     },
                 );
                 late.turn_id = Some(TurnId::new("turn-events"));
                 late
             }),
-            Err(ConversationStoreError::TerminalViolation(_))
+            // The event is rejected at the new request-correlation boundary
+            // before lifecycle absorption can be checked: this fixture has
+            // no durable failed request with that identity.
+            Err(ConversationStoreError::InvalidReference(_))
         ));
 
         let terminal = store
@@ -9306,8 +9483,8 @@ mod tests {
         ));
     }
 
-    /// Issue #130 is one clean breaking development-schema transition from
-    /// the merged main schema (v11) to the final Todo/status format (v12).
+    /// Issue #134 is one clean breaking development-schema transition from
+    /// the merged main schema (v11) to the retry-aware event format (v13).
     /// There is no migration path for an earlier development schema.
     #[test]
     fn pre_issue_130_schema_version_is_rejected_explicitly() {
@@ -9330,7 +9507,7 @@ mod tests {
             SqliteConversationStore::open(conversation_id, &path),
             Err(ConversationStoreError::SchemaVersionMismatch {
                 stored: 11,
-                expected: 12
+                expected: SQLITE_SCHEMA_VERSION
             })
         ));
     }

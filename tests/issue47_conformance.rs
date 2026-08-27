@@ -635,8 +635,8 @@ async fn a_real_skill_reaches_the_provider_and_is_read_by_the_real_tool() {
 // Scenario D — a deterministic provider failure
 // ---------------------------------------------------------------------------
 
-/// A provider HTTP failure settles the attempt exactly once as a normalized
-/// model failure, with exactly one provider request: no accidental retry and
+/// A permanent provider HTTP failure settles the attempt exactly once as a
+/// normalized model failure, with exactly one provider request: no retry and
 /// no extra model turn.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_provider_failure_settles_once_without_a_retry() {

@@ -1966,6 +1966,7 @@ mod tests {
                                             error: ModelError {
                                                 kind: ModelErrorKind::Cancelled,
                                                 message: "cancelled while parked".to_owned(),
+                                                retry_disposition: crate::model::error::ModelRetryDisposition::Never,
                                                 retry_after_ms: None,
                                                 provider_code: None,
                                                 context_overflow: None,
@@ -2651,6 +2652,7 @@ mod tests {
     /// retry keeps the pending fresh inbound visible while both request facts
     /// remain reconstructable from their own Surface revisions.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // one durable overflow/retry scenario
     async fn settled_host_retains_distinct_overflow_request_snapshots() {
         let (adapter, fixture) = host_fixture(
             vec![
@@ -2659,6 +2661,7 @@ mod tests {
                     error: ModelError {
                         kind: ModelErrorKind::ContextWindowExceeded,
                         message: "context window exceeded".to_owned(),
+                        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
                         retry_after_ms: None,
                         provider_code: None,
                         context_overflow: None,

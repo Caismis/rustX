@@ -52,6 +52,7 @@ use crate::model::adapter::openai::client::build_client;
 use crate::model::adapter::openai::config::OpenAiAdapterConfig;
 use crate::model::adapter::openai::mapping::{
     map_chat_finish_reason, normalize_chat_usage, normalize_error, resolve_tool,
+    stream_retry_disposition,
 };
 use crate::model::adapter::traits::{
     ModelAdapter, ModelEventStream, model_event_stream_of_failure,
@@ -262,6 +263,7 @@ fn cancelled_error() -> ModelError {
     ModelError {
         kind: ModelErrorKind::Cancelled,
         message: "model invocation cancelled".to_owned(),
+        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
@@ -552,6 +554,7 @@ impl ChatStreamNormalizer {
     }
 
     /// Processes one raw chunk, returning the normalized events.
+    #[allow(clippy::too_many_lines)] // one provider stream chunk state machine
     fn push(&mut self, chunk: &serde_json::Value) -> Result<Vec<ModelEvent>, ModelError> {
         if let Some(error) = chunk.get("error") {
             return Err(chat_stream_error(error));
@@ -574,16 +577,40 @@ impl ChatStreamNormalizer {
         if let Some(base) = &chunk.base_resp
             && base.status_code.is_some_and(|code| code != 0)
         {
+            let message = base
+                .status_msg
+                .clone()
+                .unwrap_or_else(|| "provider reported an unsuccessful base_resp".to_owned());
+            let provider_code = base.status_code.map(|code| code.to_string());
+            let numeric_code = base.status_code.and_then(|code| u64::try_from(code).ok());
+            let kind = match base.status_code {
+                Some(401 | 403) => ModelErrorKind::Authentication,
+                Some(408) => ModelErrorKind::Timeout,
+                Some(429) => ModelErrorKind::RateLimit,
+                _ if is_context_window_error(&message, provider_code.as_deref()) => {
+                    ModelErrorKind::ContextWindowExceeded
+                }
+                Some(400) => ModelErrorKind::InvalidRequest,
+                _ => ModelErrorKind::ProviderError,
+            };
             return Err(ModelError {
-                kind: ModelErrorKind::ProviderError,
-                message: base
-                    .status_msg
-                    .clone()
-                    .unwrap_or_else(|| "provider reported an unsuccessful base_resp".to_owned()),
+                kind: kind.clone(),
+                message,
+                retry_disposition: if kind == ModelErrorKind::ContextWindowExceeded {
+                    crate::model::error::ModelRetryDisposition::Never
+                } else {
+                    stream_retry_disposition(
+                        None,
+                        provider_code.as_deref(),
+                        numeric_code,
+                        base.status_msg.as_deref().unwrap_or_default(),
+                    )
+                },
                 retry_after_ms: None,
-                provider_code: base.status_code.map(|code| code.to_string()),
+                provider_code,
                 context_overflow: None,
-            });
+            }
+            .normalized());
         }
         if chunk.choices.len() > 1 {
             return Err(unsupported(
@@ -623,6 +650,7 @@ impl ChatStreamNormalizer {
                         message: format!(
                             "provider terminated Chat Completions generation with {reason:?}"
                         ),
+                        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
                         retry_after_ms: None,
                         provider_code: Some(reason.clone()),
                         context_overflow: None,
@@ -637,6 +665,14 @@ impl ChatStreamNormalizer {
                         message: format!(
                             "provider terminated Chat Completions generation with {reason:?}"
                         ),
+                        retry_disposition: if matches!(
+                            reason.as_str(),
+                            "network_error" | "insufficient_system_resource"
+                        ) {
+                            crate::model::error::ModelRetryDisposition::Transient
+                        } else {
+                            crate::model::error::ModelRetryDisposition::Never
+                        },
                         retry_after_ms: None,
                         provider_code: Some(reason.clone()),
                         context_overflow: None,
@@ -987,6 +1023,7 @@ fn provider_error(message: String) -> ModelError {
     ModelError {
         kind: ModelErrorKind::ProviderError,
         message,
+        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
@@ -1074,6 +1111,12 @@ fn chat_stream_error(error: &serde_json::Value) -> ModelError {
     ModelError {
         kind,
         message: format!("OpenAI-compatible stream error: {message}"),
+        retry_disposition: stream_retry_disposition(
+            error_type,
+            provider_code,
+            numeric_code,
+            message,
+        ),
         retry_after_ms: None,
         provider_code: provider_code.map(str::to_owned),
         context_overflow: None,
@@ -1123,6 +1166,7 @@ fn translate_request(request: &ModelRequest) -> Result<serde_json::Value, ModelE
     let typed = builder.build().map_err(|e| ModelError {
         kind: ModelErrorKind::InvalidRequest,
         message: format!("failed to build Chat Completions request: {e}"),
+        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
@@ -1130,6 +1174,7 @@ fn translate_request(request: &ModelRequest) -> Result<serde_json::Value, ModelE
     let mut value = serde_json::to_value(&typed).map_err(|e| ModelError {
         kind: ModelErrorKind::InvalidRequest,
         message: format!("failed to serialize the Chat Completions request: {e}"),
+        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
@@ -1140,6 +1185,7 @@ fn translate_request(request: &ModelRequest) -> Result<serde_json::Value, ModelE
         .ok_or_else(|| ModelError {
             kind: ModelErrorKind::InvalidRequest,
             message: "serialized Chat Completions request has no message array".to_owned(),
+            retry_disposition: crate::model::error::ModelRetryDisposition::Never,
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
@@ -1148,6 +1194,7 @@ fn translate_request(request: &ModelRequest) -> Result<serde_json::Value, ModelE
         return Err(ModelError {
             kind: ModelErrorKind::InvalidRequest,
             message: "serialized Chat Completions message count changed unexpectedly".to_owned(),
+            retry_disposition: crate::model::error::ModelRetryDisposition::Never,
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
@@ -1160,6 +1207,7 @@ fn translate_request(request: &ModelRequest) -> Result<serde_json::Value, ModelE
         let object = wire_message.as_object_mut().ok_or_else(|| ModelError {
             kind: ModelErrorKind::InvalidRequest,
             message: "serialized Chat Completions message is not an object".to_owned(),
+            retry_disposition: crate::model::error::ModelRetryDisposition::Never,
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
@@ -1428,6 +1476,7 @@ fn unsupported(message: impl Into<String>) -> ModelError {
     ModelError {
         kind: ModelErrorKind::Unsupported,
         message,
+        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
@@ -1438,6 +1487,7 @@ fn invalid_request(message: &str) -> ModelError {
     ModelError {
         kind: ModelErrorKind::InvalidRequest,
         message: message.to_owned(),
+        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
@@ -1446,7 +1496,9 @@ fn invalid_request(message: &str) -> ModelError {
 
 #[cfg(test)]
 mod tests {
-    use super::translate_tools;
+    use super::{ChatStreamNormalizer, translate_tools};
+    use crate::model::adapter::validation::ValidatedTools;
+    use crate::model::error::{ModelErrorKind, ModelRetryDisposition};
     use crate::tools::types::ModelToolDefinition;
     use serde_json::json;
 
@@ -1498,5 +1550,29 @@ mod tests {
         .expect("Chat Completions tools serialize");
         assert_eq!(encoded[0]["function"]["name"], "ask_user");
         assert_eq!(encoded[0]["function"]["parameters"], schema);
+    }
+
+    #[test]
+    fn chat_base_response_status_uses_structured_retry_evidence() {
+        let mut normalizer = ChatStreamNormalizer::new(ValidatedTools::default());
+        let error = normalizer
+            .push(&json!({
+                "base_resp": {"status_code": 500, "status_msg": "upstream unavailable"}
+            }))
+            .expect_err("a non-zero base response is a provider failure");
+        assert_eq!(error.kind, ModelErrorKind::ProviderError);
+        assert_eq!(
+            error.retry_disposition,
+            ModelRetryDisposition::Transient,
+            "a structured 5xx status is retryable evidence"
+        );
+        assert_eq!(error.provider_code.as_deref(), Some("500"));
+
+        let error = normalizer
+            .push(&json!({
+                "base_resp": {"status_code": 409, "status_msg": "request rejected"}
+            }))
+            .expect_err("a second non-zero base response is a provider failure");
+        assert_eq!(error.retry_disposition, ModelRetryDisposition::Never);
     }
 }

@@ -167,6 +167,7 @@ fn overflow_turn() -> Vec<FakeStep> {
             error: ModelError {
                 kind: ModelErrorKind::ContextWindowExceeded,
                 message: "context window exceeded".to_owned(),
+                retry_disposition: rustx::model::error::ModelRetryDisposition::Never,
                 retry_after_ms: None,
                 provider_code: None,
                 context_overflow: None,
@@ -1075,6 +1076,7 @@ async fn session_summary_mode_freezes_the_attempt_summary_model_against_mid_atte
                 error: ModelError {
                     kind: ModelErrorKind::ContextWindowExceeded,
                     message: "context window exceeded".to_owned(),
+                    retry_disposition: rustx::model::error::ModelRetryDisposition::Never,
                     retry_after_ms: None,
                     provider_code: None,
                     context_overflow: None,

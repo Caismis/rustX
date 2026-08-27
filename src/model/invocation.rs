@@ -233,6 +233,7 @@ pub fn finalize_provider_request(
         return Err(ModelError {
             kind: ModelErrorKind::InvalidRequest,
             message: "a translated provider request must be a JSON object".to_owned(),
+            retry_disposition: crate::model::error::ModelRetryDisposition::Never,
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
@@ -242,6 +243,7 @@ pub fn finalize_provider_request(
         |collision| ModelError {
             kind: ModelErrorKind::InvalidRequest,
             message: collision.to_string(),
+            retry_disposition: crate::model::error::ModelRetryDisposition::Never,
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
@@ -1039,6 +1041,7 @@ pub fn validate_content_modalities(
                     "the effective model capabilities do not support {modality:?} input; \
                      the request is rejected before any provider request"
                 ),
+                retry_disposition: crate::model::error::ModelRetryDisposition::Never,
                 retry_after_ms: None,
                 provider_code: None,
                 context_overflow: None,

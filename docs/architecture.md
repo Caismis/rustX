@@ -30,15 +30,15 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 12. An incompatible database
+The SQLite schema is development schema version 13. An incompatible database
 fails explicitly; there is no migration chain, legacy reader, compatibility
 fallback, dual write, or old storage mode. Version 10 froze the structured
 Questionnaire interaction audit vocabulary introduced by Issue #126. Version
-11 adds the typed Agent Status generation descriptor: its UTC generation
+11 added the typed Agent Status generation descriptor: its UTC generation
 instant and admitted module membership are durable with the canonical status
-message. Final version 12 adds the complete canonical-message-coupled Agent
+message. Version 12 added the complete canonical-message-coupled Agent
 Status emission facts, bounded latest-emission heads, and the Todo-specific
-durable progress sequence. Version 11 and every older development schema are
+durable progress sequence. Version 12 and every older development schema are
 rejected at open; the review-only intermediate schema history is not a
 supported format.
 File-backed stores
@@ -2549,6 +2549,38 @@ Provider SDK and wire types terminate inside the adapter modules
 operates only on the runtime-owned `ModelAdapter` interface and the
 `ModelEvent` stream.
 
+#### Logical model steps and actual requests (Issue #134)
+
+The Agent Loop owns one logical primary model step, which begins with one
+Context Assembly/admission generation and may contain several actual provider
+requests. Every actual request crosses the ordinary stage/finalize,
+cancellation/start-arbitration, durable `RequestSnapshot` +
+`ModelRequestStarted`, reconstruction, and adapter frontier. It has its own
+request and publication identities, outcome, and settlement. The shared
+`RequestIdentity.retry_number` is the single actual-request ordinal across
+transient recovery and context-overflow recovery; it is not an event-position
+inference and there is no speculative next request ID.
+
+Transient recovery replays the frozen admitted request state. It does not
+reassemble live context, sample Agent Status, consume new `FreshInbound`, run
+contributors, or read new mailbox entries. Context overflow remains a separate
+Context Engine recovery boundary: estimator correction, compaction, fit
+validation, and a new post-compaction frozen state. A transient failure after
+compaction replays that post-compaction state. The Agent Loop settles the
+previous publication before scheduling or starting another request. Failed
+partial output is durable noncanonical audit evidence and cannot authorize Tool
+Plane execution; only a successful actual request can commit the canonical
+Assistant.
+
+The transient budget is three retries and the overflow budget is one, for an
+additive maximum of five primary provider requests per logical step. Backoff
+uses the runtime-owned monotonic clock: 2, 4, and 8 seconds, overridden by an
+adapter-normalized `retry_after_ms` hint capped at 60 seconds. Adapter
+normalization supplies `ModelRetryDisposition`; the Agent Loop never decides
+retryability from provider strings or HTTP prose. `ModelRequestFailed.usage`
+retains only the latest trustworthy cumulative pre-failure evidence for that
+request, or `None`.
+
 #### OpenAI adapters (async-openai)
 
 Both OpenAI adapters use the `async-openai` crate for typed request types,
@@ -4913,7 +4945,7 @@ deterministic policy: a maximum byte threshold, a structural boundary (a
 tool-call proposal start or completion), or the stream terminal. When the
 first payload enters an empty buffer, it owns one absolute monotonic deadline
 `oldest_pending_time + max_latency`; later provider events never reset it. The
-coalescer owns that deadline and asks the same `PublicationClock` for the
+coalescer owns that deadline and asks the runtime monotonic clock for the
 wake-up future, so a quiet provider still flushes at the deadline and the
 Agent Loop never starts a fresh full-duration debounce timer. Deterministic
 tests install a manually advanced clock; no wall-clock sleep decides a flush.

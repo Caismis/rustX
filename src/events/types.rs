@@ -232,11 +232,16 @@ pub enum RuntimeEvent {
         request_id: RequestId,
         /// The normalized model error.
         error: ModelError,
+        /// Latest trustworthy cumulative provider usage observed for this
+        /// exact request before failure, when any.
+        usage: Option<ModelUsage>,
     },
     /// A model request was scheduled for retry.
     ModelRetryScheduled {
-        /// Ordinal retry attempt number, starting at 1.
-        attempt_number: u32,
+        /// The exact request whose provider failure caused this schedule.
+        failed_request_id: RequestId,
+        /// The shared next actual primary-request ordinal.
+        retry_number: u32,
         /// Delay before the retry, in milliseconds.
         retry_delay_ms: Option<u64>,
     },
@@ -716,6 +721,7 @@ mod tests {
                     error: ModelError {
                         kind: ModelErrorKind::RateLimit,
                         message: "retries exhausted".to_owned(),
+                        retry_disposition: crate::model::error::ModelRetryDisposition::Transient,
                         retry_after_ms: None,
                         provider_code: None,
                         context_overflow: None,
@@ -882,6 +888,7 @@ mod tests {
         let error = ModelError {
             kind: ModelErrorKind::RateLimit,
             message: "retries exhausted".to_owned(),
+            retry_disposition: crate::model::error::ModelRetryDisposition::Transient,
             retry_after_ms: Some(5_000),
             provider_code: Some("rate_limit_exceeded".to_owned()),
             context_overflow: None,

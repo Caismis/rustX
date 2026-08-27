@@ -2554,13 +2554,16 @@ mod tests {
                 error: ModelError {
                     kind: ModelErrorKind::RateLimit,
                     message: "retry".to_owned(),
+                    retry_disposition: crate::model::error::ModelRetryDisposition::Transient,
                     retry_after_ms: Some(10),
                     provider_code: Some("rate_limit_exceeded".to_owned()),
                     context_overflow: None,
                 },
+                usage: None,
             },
             RuntimeEvent::ModelRetryScheduled {
-                attempt_number: 1,
+                failed_request_id: RequestId::new("request:9:attempt-1:1:1:0"),
+                retry_number: 1,
                 retry_delay_ms: Some(5),
             },
             RuntimeEvent::CompactionStarted,
@@ -2772,6 +2775,7 @@ mod tests {
                     error: ModelError {
                         kind: ModelErrorKind::RateLimit,
                         message: "retries exhausted".to_owned(),
+                        retry_disposition: crate::model::error::ModelRetryDisposition::Transient,
                         retry_after_ms: Some(5_000),
                         provider_code: Some("rate_limit_exceeded".to_owned()),
                         context_overflow: None,

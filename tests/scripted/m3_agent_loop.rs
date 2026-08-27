@@ -207,6 +207,7 @@ fn fail(kind: rustx::model::ModelErrorKind, message: &str) -> ModelEvent {
         error: rustx::model::ModelError {
             kind,
             message: message.to_owned(),
+            retry_disposition: rustx::model::error::ModelRetryDisposition::Never,
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
@@ -350,6 +351,7 @@ async fn model_failure_before_content_fails_attempt() {
     let error = rustx::model::ModelError {
         kind: rustx::model::ModelErrorKind::Timeout,
         message: "timed out".to_owned(),
+        retry_disposition: rustx::model::error::ModelRetryDisposition::Never,
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
@@ -366,6 +368,7 @@ async fn model_failure_before_content_fails_attempt() {
         RuntimeEvent::ModelRequestFailed {
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             error: error.clone(),
+            usage: None,
         },
         RuntimeEvent::AttemptFailed {
             attempt_id: AttemptId::new("attempt-1"),
@@ -381,6 +384,7 @@ async fn model_failure_before_content_fails_attempt() {
                 error: rustx::model::ModelError {
                     kind: rustx::model::ModelErrorKind::Timeout,
                     message: "timed out".to_owned(),
+                    retry_disposition: rustx::model::error::ModelRetryDisposition::Never,
                     retry_after_ms: None,
                     provider_code: None,
                     context_overflow: None,
@@ -395,8 +399,8 @@ async fn model_failure_before_content_fails_attempt() {
     );
 }
 
-/// A model failure after partial content keeps the streamed deltas in the
-/// trace but commits nothing.
+/// A model failure after partial content settles the publication as a durable
+/// non-canonical audit, while committing no Assistant message.
 #[tokio::test]
 async fn model_failure_after_partial_content_commits_nothing() {
     let model = fake(vec![vec![
@@ -411,9 +415,10 @@ async fn model_failure_after_partial_content_commits_nothing() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = run(&model, tools, &cancellation).await;
 
-    assert!(
-        result.publication_frames.is_empty(),
-        "payload still buffered when the stream failed was never committed, so it was never released"
+    assert_eq!(
+        result.released_publication_text(),
+        "partial",
+        "failed partial output remains released as publication evidence"
     );
     let audit = result
         .publication_audits
@@ -424,10 +429,12 @@ async fn model_failure_after_partial_content_commits_nothing() {
         rustx::publication::PublicationAuditKind::Incomplete,
         "publication never reached its own durable terminal"
     );
-    assert!(
-        audit.content.is_empty(),
-        "the audit is an upper bound on what was committed for release, and nothing was"
-    );
+    assert_eq!(audit.content.len(), 1, "the failed text block is audited");
+    assert!(matches!(
+        &audit.content[0],
+        rustx::publication::PublicationAuditBlock::Text { text, .. }
+            if text == "partial"
+    ));
     assert!(
         !result
             .event_history
@@ -1614,6 +1621,7 @@ async fn missing_required_continuation_fails_explicitly() {
                 error: rustx::model::ModelError {
                     kind: rustx::model::ModelErrorKind::Unsupported,
                     message: "required provider continuation state is missing".to_owned(),
+                    retry_disposition: rustx::model::error::ModelRetryDisposition::Never,
                     retry_after_ms: None,
                     provider_code: None,
                     context_overflow: None,
@@ -1688,6 +1696,7 @@ async fn unsupported_capability_stays_terminal_failure() {
                 error: rustx::model::ModelError {
                     kind: rustx::model::ModelErrorKind::Unsupported,
                     message: "server-side fallback blocks are not supported".to_owned(),
+                    retry_disposition: rustx::model::error::ModelRetryDisposition::Never,
                     retry_after_ms: None,
                     provider_code: None,
                     context_overflow: None,
