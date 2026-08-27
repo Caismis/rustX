@@ -23,7 +23,9 @@ use crate::model::adapter::traits::{
     ModelAdapter, ModelEventStream, model_event_stream_of_failure,
 };
 use crate::model::adapter::validation::{ValidatedTools, validate_request};
-use crate::model::error::{ModelError, ModelErrorKind, is_context_window_error};
+use crate::model::error::{
+    ModelError, ModelErrorKind, ModelRetryDisposition, is_context_window_error,
+};
 use crate::model::event::ModelEvent;
 use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage};
 use crate::runtime::cancellation::CancellationSignal;
@@ -345,12 +347,13 @@ fn sse_failure(error: &eventsource_stream::EventStreamError<reqwest::Error>) -> 
         kind: ModelErrorKind::Transport,
         message: format!("Anthropic SSE stream failed: {error}"),
         retry_disposition: match error {
-            eventsource_stream::EventStreamError::Transport(source)
-                if source.is_timeout() || source.is_connect() =>
-            {
-                crate::model::error::ModelRetryDisposition::Transient
-            }
-            _ => crate::model::error::ModelRetryDisposition::Never,
+            // The event stream is created only after `send()` has returned a
+            // successful response. A Transport variant therefore comes from
+            // the already-opened response body stream (including a body
+            // disconnect/reset), not from provider prose or SSE parsing.
+            eventsource_stream::EventStreamError::Transport(_) => ModelRetryDisposition::Transient,
+            eventsource_stream::EventStreamError::Utf8(_)
+            | eventsource_stream::EventStreamError::Parser(_) => ModelRetryDisposition::Never,
         },
         retry_after_ms: None,
         provider_code: None,

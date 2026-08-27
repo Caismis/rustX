@@ -244,6 +244,19 @@ fn transient_failure(message: &str, retry_after_ms: Option<u64>) -> ModelEvent {
     }
 }
 
+fn transient_transport_failure(message: &str, retry_after_ms: Option<u64>) -> ModelEvent {
+    ModelEvent::Failed {
+        error: ModelError {
+            kind: ModelErrorKind::Transport,
+            message: message.to_owned(),
+            retry_disposition: ModelRetryDisposition::Transient,
+            retry_after_ms,
+            provider_code: None,
+            context_overflow: None,
+        },
+    }
+}
+
 fn overflow_failure() -> ModelEvent {
     ModelEvent::Failed {
         error: ModelError {
@@ -863,7 +876,7 @@ async fn failed_partial_publication_settles_before_retry_and_stays_noncanonical(
                 block_index: ContentBlockIndex::new(0),
                 text: "failed partial".to_owned(),
             }),
-            FakeStep::Emit(transient_failure("temporary", Some(0))),
+            FakeStep::Emit(transient_transport_failure("temporary", Some(0))),
         ],
         vec![
             FakeStep::Emit(ModelEvent::Started),
@@ -891,6 +904,33 @@ async fn failed_partial_publication_settles_before_retry_and_stays_noncanonical(
     .await;
     let audit = finish_execution(execution, &tool_runtime, &publication).await;
 
+    assert_eq!(model.requests().len(), 2);
+    assert_eq!(audit.snapshot_history().len(), 2);
+    let r0 = audit.snapshot_history()[0].request_id.clone();
+    let r1 = audit.snapshot_history()[1].request_id.clone();
+    assert_ne!(r0, r1);
+    assert_eq!(
+        audit
+            .snapshot_history()
+            .iter()
+            .map(|snapshot| snapshot.identity.retry_number)
+            .collect::<Vec<_>>(),
+        vec![0, 1]
+    );
+    assert_eq!(
+        retry_schedules(&audit.event_history),
+        vec![(r0.clone(), 1, Some(0))]
+    );
+    assert!(audit.event_history.iter().any(|event| matches!(
+        event,
+        RuntimeEvent::ModelRequestFailed {
+            request_id,
+            error,
+            ..
+        } if request_id == &r0
+            && error.kind == ModelErrorKind::Transport
+            && error.retry_disposition == ModelRetryDisposition::Transient
+    )));
     assert_eq!(publication.audits().len(), 1);
     assert_eq!(
         publication.audits()[0].kind,
@@ -943,10 +983,9 @@ async fn failed_tool_call_proposal_never_executes() {
                 .into_iter()
                 .map(FakeStep::Emit),
         )
-        .chain(std::iter::once(FakeStep::Emit(transient_failure(
-            "temporary",
-            Some(0),
-        ))))
+        .chain(std::iter::once(FakeStep::Emit(
+            transient_transport_failure("temporary", Some(0)),
+        )))
         .collect();
     let model = fake_model(vec![
         first,
