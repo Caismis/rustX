@@ -4,8 +4,19 @@
 //! the execution cwd, returns a contiguous head from the requested offset,
 //! and owns a complete-line 2000-line/50KB projection. The runtime's generic
 //! 64KB safety bound remains a last-resort boundary for other tools.
+//!
+//! Ordinary targets are decoded as faithful UTF-8 text. A closed rustX-owned
+//! whitelist of structured documents (`.pdf`, `.docx`, `.xlsx`, `.pptx`) is
+//! instead decoded through the parser-only xberg backend into deterministic
+//! Markdown (see [`document`]). Both paths converge into the same source →
+//! logical-text boundary: after classification, one shared projection owns
+//! line addressing, slicing, the 2000-line/50KB bounds, continuation
+//! diagnostics, and result semantics.
 
+mod document;
 mod input;
+#[cfg(test)]
+mod testdata;
 
 use futures_util::future::BoxFuture;
 use std::fmt::Write as _;
@@ -31,7 +42,7 @@ pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistrati
         native_definition::<ReadInput>(
             TOOL_ID,
             NAME,
-            "Read a UTF-8 text file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+            "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
             policy,
         ),
         std::sync::Arc::new(ReadTool),
@@ -48,11 +59,11 @@ impl ToolExecutor for ReadTool {
         invocation: ToolInvocation,
         context: ToolExecutionContext<'a>,
     ) -> BoxFuture<'a, ToolExecutionResult> {
-        Box::pin(async move { run_read(&invocation, &context) })
+        Box::pin(async move { run_read(&invocation, &context).await })
     }
 }
 
-fn run_read(
+async fn run_read(
     invocation: &ToolInvocation,
     context: &ToolExecutionContext<'_>,
 ) -> ToolExecutionResult {
@@ -61,18 +72,59 @@ fn run_read(
         Err(error) => return failed_result(error),
     };
     let target = interpret_path(context.workspace.root(), &input.path);
-    let bytes = match std::fs::read(&target) {
-        Ok(bytes) => bytes,
-        Err(error) => return failed_result(format!("cannot read {}: {error}", target.display())),
-    };
-    let original_bytes = bytes.len() as u64;
-    let Ok(text) = String::from_utf8(bytes) else {
-        return failed_result(format!(
-            "{} is not a UTF-8 text file; binary content is never fabricated as text",
-            target.display()
-        ));
-    };
+    match document::classify_source(&target) {
+        document::SourceKind::Document(format) => {
+            // Decoding is materially more expensive than UTF-8 validation,
+            // so it runs on the runtime's blocking-pool boundary instead of
+            // an async reactor thread. There is no separate document
+            // cancellation model: like every executor, the invocation
+            // observes the runtime cancellation through the normal Tool
+            // Plane contract.
+            let decode_target = target.clone();
+            let decoded = tokio::task::spawn_blocking(move || {
+                document::decode_document(&decode_target, format)
+            })
+            .await;
+            let text = match decoded {
+                Ok(Ok(text)) => text,
+                Ok(Err(error)) => return failed_result(error),
+                Err(error) => {
+                    return failed_result(format!(
+                        "cannot decode {}: document decode task failed: {error}",
+                        target.display()
+                    ));
+                }
+            };
+            // The logical text of a document source is its projected
+            // Markdown: `original_bytes` reports the size of the complete
+            // untruncated output, not the size of the compressed binary
+            // source.
+            let original_bytes = text.len() as u64;
+            project_read_text(&text, original_bytes, &input)
+        }
+        document::SourceKind::Text => {
+            let bytes = match std::fs::read(&target) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    return failed_result(format!("cannot read {}: {error}", target.display()));
+                }
+            };
+            let original_bytes = bytes.len() as u64;
+            let Ok(text) = String::from_utf8(bytes) else {
+                return failed_result(format!(
+                    "{} is not a UTF-8 text file; binary content is never fabricated as text",
+                    target.display()
+                ));
+            };
+            project_read_text(&text, original_bytes, &input)
+        }
+    }
+}
 
+/// The one shared Read projection: line addressing, slicing, the
+/// complete-line 2000-line/50KB bounds, continuation diagnostics, and the
+/// result semantics for every source that produced logical text.
+fn project_read_text(text: &str, original_bytes: u64, input: &ReadInput) -> ToolExecutionResult {
     // `split('\n')` intentionally preserves the trailing empty addressable
     // line, matching the model-facing line accounting used by pi. Thus an
     // empty file has one addressable empty line and a final newline creates
@@ -235,7 +287,7 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
-    use super::{NAME, ReadTool};
+    use super::{NAME, ReadTool, document, testdata};
     use crate::runtime::identity::{ConversationId, ToolCallId, ToolId};
     use crate::skills::{SkillDiscovery, SkillDiscoveryConfig, SkillPackageError, SkillSnapshot};
     use crate::tools::artifacts::ArtifactStore;
@@ -243,8 +295,8 @@ mod tests {
     use crate::tools::executor::{ProgressReporter, ToolExecutionContext, ToolExecutor};
     use crate::tools::managed_output::ManagedToolOutput;
     use crate::tools::types::{
-        ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolInvocationPolicy,
-        ToolProgress, ToolResultContent,
+        ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode,
+        ToolInvocationPolicy, ToolProgress, ToolResultContent,
     };
     use crate::tools::workspace::Workspace;
 
@@ -261,6 +313,19 @@ mod tests {
             .description;
         assert!(description.contains("absolute paths are used as host filesystem paths"));
         assert!(!description.contains(".rustx/skills"));
+    }
+
+    #[test]
+    fn description_states_the_document_projection_contract() {
+        let description = super::registration(ToolInvocationPolicy::default())
+            .definition
+            .description;
+        assert!(description.contains("PDF, DOCX, XLSX, or PPTX"));
+        assert!(description.contains("deterministic Markdown"));
+        // The tool schema stays Read-shaped: no document-specific arguments,
+        // no xberg implementation details.
+        assert!(!description.contains("xberg"));
+        assert!(!description.contains("OCR"));
     }
 
     /// A Skill package is an ordinary host directory. Read reaches its
@@ -427,5 +492,500 @@ mod tests {
             error,
             SkillPackageError::UnsupportedSymlink { .. }
         ));
+    }
+
+    // -----------------------------------------------------------------------
+    // Document projection (Issue #48)
+    // -----------------------------------------------------------------------
+
+    /// The committed corpus of deterministic document fixtures.
+    const FIXTURE_ROOT: &str = "tests/fixtures/read/documents";
+
+    /// The absolute host path of one committed fixture. Absolute host
+    /// filesystem paths are the current Read path contract, so the fixtures
+    /// are addressed exactly the way a model would address them.
+    fn fixture_path(relative: &str) -> String {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(FIXTURE_ROOT)
+            .join(relative)
+            .to_str()
+            .expect("fixture path is UTF-8")
+            .to_owned()
+    }
+
+    /// A minimal end-to-end harness: one workspace plus the full
+    /// `ToolExecutionContext`, exactly the native-tool execution boundary.
+    struct TestRead {
+        _directory: tempfile::TempDir,
+        workspace: Workspace,
+        conversation_id: ConversationId,
+        artifacts: ArtifactStore,
+        tool_output: ManagedToolOutput,
+        environment: ToolEnvironment,
+    }
+
+    impl TestRead {
+        fn new() -> Self {
+            let directory = tempfile::tempdir().expect("temporary root");
+            let workspace = Workspace::new(directory.path()).expect("workspace");
+            let conversation_id = ConversationId::new("read-document");
+            let artifacts =
+                ArtifactStore::new(conversation_id.clone(), directory.path().join("artifacts"))
+                    .expect("artifacts");
+            let tool_output = ManagedToolOutput::new(
+                conversation_id.clone(),
+                directory.path().join("tool-output"),
+            )
+            .expect("managed output");
+            Self {
+                _directory: directory,
+                workspace,
+                conversation_id,
+                artifacts,
+                tool_output,
+                environment: ToolEnvironment::new(),
+            }
+        }
+
+        /// Runs one `read` invocation through the real executor boundary.
+        async fn read(&self, call: &str, arguments: serde_json::Value) -> ToolExecutionResult {
+            let progress = NoProgress;
+            let invocation = ToolInvocation {
+                call_id: ToolCallId::new(call),
+                tool_id: ToolId::new(super::TOOL_ID),
+                tool_name: super::NAME.to_owned(),
+                mode: ToolInvocationMode::Foreground,
+                arguments,
+            };
+            let context = ToolExecutionContext {
+                conversation_id: &self.conversation_id,
+                execution_id: None,
+                cancellation: crate::runtime::ExecutionCancellation::detached(
+                    crate::runtime::CancellationSignal::new(),
+                    crate::runtime::types::CancellationReason::UserRequested,
+                ),
+                workspace: &self.workspace,
+                progress: &progress,
+                artifacts: &self.artifacts,
+                tool_output: &self.tool_output,
+                environment: &self.environment,
+                questionnaire_requester: None,
+                todos: None,
+            };
+            ReadTool.execute(invocation, context).await
+        }
+
+        /// Writes `bytes` into the workspace and returns its absolute host
+        /// path spelling.
+        fn write(&self, name: &str, bytes: &[u8]) -> String {
+            let path = self.workspace.root().join(name);
+            std::fs::write(&path, bytes).expect("fixture bytes");
+            path.to_str().expect("workspace path is UTF-8").to_owned()
+        }
+    }
+
+    fn text_of(result: &ToolExecutionResult) -> &str {
+        let Some(ToolResultContent::Text(text)) = result.content.first() else {
+            panic!("Read returned unexpected content: {result:?}");
+        };
+        &text.text
+    }
+
+    fn failure_of(result: ToolExecutionResult) -> String {
+        match result.status {
+            ToolExecutionStatus::Failed { error } => error,
+            other => panic!("expected a failed result, got {other:?}"),
+        }
+    }
+
+    /// The committed binary fixtures are byte-for-byte the output of the
+    /// in-repo generator, so every fixture stays reviewable and
+    /// reproducible.
+    #[test]
+    fn committed_fixture_corpus_matches_the_in_repo_generator() {
+        for (name, bytes) in testdata::corpus() {
+            let committed = std::fs::read(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join(FIXTURE_ROOT)
+                    .join(name),
+            )
+            .unwrap_or_else(|error| panic!("committed fixture {name} is missing: {error}"));
+            assert_eq!(
+                committed, bytes,
+                "fixture {name} diverged from the generator"
+            );
+        }
+    }
+
+    /// Each whitelisted format projects to deterministic Markdown through
+    /// the real tool boundary: a repeated read returns exactly equal
+    /// model-facing text of the ordinary textual Read kind.
+    #[tokio::test]
+    async fn whitelisted_documents_project_deterministic_markdown() {
+        let expected_fragments: &[(&str, &[&str])] = &[
+            (
+                "pdf/small-text.pdf",
+                &["The rustX document projection. Hello from a text-layer PDF."],
+            ),
+            (
+                "docx/small.docx",
+                &[
+                    "## Quarterly Report",
+                    "Revenue grew in every region this quarter.",
+                    "- North America led growth",
+                    "| Region | Revenue |",
+                    "| North | 120 |",
+                ],
+            ),
+            (
+                "xlsx/small.xlsx",
+                &[
+                    "## Summary",
+                    "| Total revenue | 215 |",
+                    "## Data",
+                    "| Region | Q1 |",
+                    "| North | 120 |",
+                ],
+            ),
+            (
+                "pptx/small.pptx",
+                &[
+                    "## Project Kickoff",
+                    "Milestone one lands in March",
+                    "## Budget Review",
+                    "Infrastructure stays flat",
+                ],
+            ),
+        ];
+        let read = TestRead::new();
+        for (fixture, fragments) in expected_fragments {
+            let path = fixture_path(fixture);
+            let first = read
+                .read("first", serde_json::json!({ "path": path }))
+                .await;
+            assert_eq!(first.status, ToolExecutionStatus::Success, "{fixture}");
+            // The model-facing result is an ordinary textual Read result.
+            assert!(matches!(
+                first.content.as_slice(),
+                [ToolResultContent::Text(_)]
+            ));
+            let text = text_of(&first).to_owned();
+            let fragments: &[&str] = fragments;
+            for fragment in fragments {
+                assert!(
+                    text.contains(fragment),
+                    "{fixture}: missing `{fragment}` in:\n{text}"
+                );
+            }
+            let second = read
+                .read("second", serde_json::json!({ "path": path }))
+                .await;
+            assert_eq!(
+                text_of(&second),
+                text,
+                "{fixture} must project deterministically"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn multipage_pdf_preserves_a_useful_page_boundary() {
+        let read = TestRead::new();
+        let result = read
+            .read(
+                "multi",
+                serde_json::json!({ "path": fixture_path("pdf/multi-page-text.pdf") }),
+            )
+            .await;
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+        let text = text_of(&result);
+        let one = text
+            .find("Page one heading. First page body text.")
+            .expect("page one text");
+        let two = text
+            .find("Page two heading. Second page body text.")
+            .expect("page two text");
+        assert!(one < two, "page one must precede page two");
+        // The projector separates the pages with a blank line.
+        assert!(text.contains("body text.\n\nPage two heading."));
+    }
+
+    #[tokio::test]
+    async fn table_heavy_pdf_projects_a_useful_table() {
+        let read = TestRead::new();
+        let result = read
+            .read(
+                "table",
+                serde_json::json!({ "path": fixture_path("pdf/table-heavy.pdf") }),
+            )
+            .await;
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+        let text = text_of(&result);
+        for fragment in [
+            "| Item | Price |",
+            "| --- | --- |",
+            "| Widget | 9.99 |",
+            "| Gadget | 24.50 |",
+        ] {
+            assert!(text.contains(fragment), "missing `{fragment}` in:\n{text}");
+        }
+    }
+
+    /// A scanned (text-less) PDF must fail honestly. OCR and every other
+    /// model-backed inference path are excluded at compile time and
+    /// disabled at runtime, so no text can be fabricated.
+    #[tokio::test]
+    async fn scanned_pdf_fails_explicitly_without_ocr() {
+        let read = TestRead::new();
+        let result = read
+            .read(
+                "scan",
+                serde_json::json!({ "path": fixture_path("pdf/scanned-no-text.pdf") }),
+            )
+            .await;
+        let error = failure_of(result);
+        assert!(
+            error.contains("no extractable text layer"),
+            "unexpected failure: {error}"
+        );
+        assert!(
+            error.contains("never performs OCR"),
+            "unexpected failure: {error}"
+        );
+    }
+
+    /// `offset` and `limit` address the lines of the projected Markdown,
+    /// with the ordinary continuation diagnostics.
+    #[tokio::test]
+    async fn offset_and_limit_address_projected_markdown_lines() {
+        let read = TestRead::new();
+        let path = fixture_path("xlsx/small.xlsx");
+        // The projected workbook has 12 lines: `## Summary`, blank, table,
+        // blank, `## Data`, blank, table.
+        let page = read
+            .read(
+                "page",
+                serde_json::json!({ "path": path, "offset": 3, "limit": 2 }),
+            )
+            .await;
+        assert_eq!(page.status, ToolExecutionStatus::Success);
+        assert_eq!(
+            text_of(&page),
+            "| Metric | Value |\n| --- | --- |\n\n[8 more lines in file. Use offset=5 to continue.]"
+        );
+        // Zero normalizes to one, exactly as for text files.
+        let zero = read
+            .read(
+                "zero",
+                serde_json::json!({ "path": path, "offset": 0, "limit": 1 }),
+            )
+            .await;
+        assert_eq!(
+            text_of(&zero),
+            "## Summary\n\n[11 more lines in file. Use offset=2 to continue.]"
+        );
+        // Offset validation sees the same line accounting as text.
+        let beyond = read
+            .read("beyond", serde_json::json!({ "path": path, "offset": 13 }))
+            .await;
+        assert_eq!(
+            failure_of(beyond),
+            "Offset 13 is beyond end of file (12 lines total)"
+        );
+    }
+
+    /// The 2000 complete-line Read bound applies to projected document
+    /// text, and the continuation offset resumes inside the projection.
+    #[tokio::test]
+    async fn document_projection_honors_the_2000_line_bound() {
+        let read = TestRead::new();
+        let path = read.write("rows.xlsx", &testdata::xlsx_with_rows(2100));
+        let head = read.read("head", serde_json::json!({ "path": path })).await;
+        assert_eq!(head.status, ToolExecutionStatus::Success);
+        let text = text_of(&head);
+        assert_eq!(
+            text.lines().count(),
+            2002,
+            "2000 lines plus the two-line diagnostic"
+        );
+        assert!(text.contains("[Showing lines 1-2000 of 2104. Use offset=2001 to continue.]"));
+        let state = head.truncation.expect("truncation metadata");
+        assert!(state.truncated);
+
+        let tail = read
+            .read("tail", serde_json::json!({ "path": path, "offset": 2001 }))
+            .await;
+        assert_eq!(tail.status, ToolExecutionStatus::Success);
+        assert!(
+            text_of(&tail).starts_with("| row-001997 | x |"),
+            "line 2001 skips the 4 sheet-header lines: {}",
+            text_of(&tail)
+        );
+        assert!(text_of(&tail).ends_with("| row-002100 | x |"));
+    }
+
+    /// The 50KB complete-line Read bound applies to projected document
+    /// text. `original_bytes` reports the size of the complete untruncated
+    /// projection — the logical output — never the compressed source size.
+    #[tokio::test]
+    async fn document_projection_honors_the_50kb_byte_bound_and_honest_original_bytes() {
+        let read = TestRead::new();
+        let path = read.write("notes.docx", &testdata::docx_with_paragraphs(900));
+        let result = read
+            .read("bound", serde_json::json!({ "path": path }))
+            .await;
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+        let text = text_of(&result);
+        assert!(
+            text.contains("(50KB limit). Use offset="),
+            "unexpected: {text}"
+        );
+        let state = result.truncation.expect("truncation metadata");
+        assert!(state.truncated);
+        // The honest logical size: the complete projected Markdown, not the
+        // stored (compressed) .docx bytes. The decode runs on the same
+        // blocking boundary the tool itself uses.
+        let workspace_root = read.workspace.root().to_path_buf();
+        let projected = tokio::task::spawn_blocking(move || {
+            document::decode_document(
+                &workspace_root.join("notes.docx"),
+                document::DocumentFormat::Docx,
+            )
+        })
+        .await
+        .expect("decode task")
+        .expect("full projection");
+        assert_eq!(state.original_bytes, Some(projected.len() as u64));
+        let stored_bytes = std::fs::metadata(read.workspace.root().join("notes.docx"))
+            .expect("fixture")
+            .len();
+        assert_ne!(state.original_bytes, Some(stored_bytes));
+    }
+
+    /// A malformed whitelisted document fails explicitly in exactly the
+    /// decoder its extension selects — never as UTF-8 text (these bytes are
+    /// valid UTF-8, so a text fallback would "succeed") and never through
+    /// another decoder.
+    #[tokio::test]
+    async fn malformed_whitelisted_documents_fail_explicitly() {
+        let read = TestRead::new();
+        let cases: &[(&str, &[u8], &str)] = &[
+            ("broken.pdf", b"this is not a pdf at all", "as PDF"),
+            ("broken.docx", b"this is not a zip at all", "as DOCX"),
+            ("broken.xlsx", b"neither is this", "as XLSX"),
+            ("broken.pptx", b"nor this", "as PPTX"),
+        ];
+        for (name, bytes, label) in cases {
+            let path = read.write(name, bytes);
+            let result = read.read(name, serde_json::json!({ "path": path })).await;
+            let error = failure_of(result);
+            assert!(
+                error.contains(&format!("cannot decode {path} {label}")),
+                "{name}: unexpected failure: {error}"
+            );
+        }
+    }
+
+    /// PDF bytes named `.docx` are decoded only by the DOCX decoder and
+    /// fail there; they are never reinterpreted as PDF or as text.
+    #[tokio::test]
+    async fn mislabeled_documents_are_never_reinterpreted() {
+        let read = TestRead::new();
+        let pdf_bytes = testdata::pdf(&[&["definitely a pdf"]]);
+        let path = read.write("mislabeled.docx", &pdf_bytes);
+        let result = read
+            .read("mislabeled", serde_json::json!({ "path": path }))
+            .await;
+        let error = failure_of(result);
+        assert!(
+            error.contains("cannot decode") && error.contains("as DOCX"),
+            "unexpected failure: {error}"
+        );
+    }
+
+    /// An unsupported binary format stays on the text path and fails as
+    /// binary even though xberg itself could decode the legacy format;
+    /// the whitelist is rustX policy, not xberg capability.
+    #[tokio::test]
+    async fn unsupported_binary_formats_stay_unsupported() {
+        let read = TestRead::new();
+        // An OLE/CFB magic header: the legacy .doc container xberg's office
+        // support can parse, which rustX's whitelist deliberately excludes.
+        let ole2: &[u8] = &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1, 0x00, 0x01];
+        let path = read.write("legacy.doc", ole2);
+        let result = read
+            .read("legacy", serde_json::json!({ "path": path }))
+            .await;
+        let error = failure_of(result);
+        assert!(
+            error.contains("is not a UTF-8 text file"),
+            "unexpected failure: {error}"
+        );
+    }
+
+    /// Document reads and text reads follow the same current path
+    /// interpretation: both accept absolute host filesystem paths outside
+    /// the workspace root.
+    #[tokio::test]
+    async fn document_and_text_reads_share_the_absolute_path_contract() {
+        let read = TestRead::new();
+        // Both fixtures live outside the workspace root (the repo checkout).
+        let outside_docx = fixture_path("docx/small.docx");
+        let outside_txt = fixture_path("pdf/small-text.pdf").replace(".pdf", ".txt");
+        let document = read
+            .read("doc", serde_json::json!({ "path": outside_docx }))
+            .await;
+        assert_eq!(document.status, ToolExecutionStatus::Success);
+        assert!(text_of(&document).contains("## Quarterly Report"));
+
+        // The same contract for an ordinary text file in the same location:
+        // write one next to a fixture, then read it absolutely.
+        let text_path = std::path::Path::new(&outside_txt).to_path_buf();
+        std::fs::write(&text_path, "ordinary text\n").expect("text fixture");
+        let text_read = read
+            .read("txt", serde_json::json!({ "path": outside_txt }))
+            .await;
+        assert_eq!(text_read.status, ToolExecutionStatus::Success);
+        assert_eq!(text_of(&text_read), "ordinary text\n");
+        let _ = std::fs::remove_file(text_path);
+    }
+
+    /// The rustX-owned source-size bound rejects an oversized document
+    /// before any decoder runs, deterministically.
+    #[tokio::test]
+    async fn oversized_document_sources_fail_before_decoding() {
+        let read = TestRead::new();
+        let bound = crate::tools::limits::MAX_DOCUMENT_SOURCE_BYTES;
+        let path = read.write("huge.pdf", &vec![0u8; bound + 1]);
+        let result = read.read("huge", serde_json::json!({ "path": path })).await;
+        let error = failure_of(result);
+        assert!(
+            error.contains(&format!("document reads are bounded to {bound} bytes")),
+            "unexpected failure: {error}"
+        );
+    }
+
+    /// A configured expansion bound fails deterministically: an OOXML
+    /// package with more members than `max_files_in_archive` is rejected
+    /// instead of being parsed uncontrolled.
+    #[tokio::test]
+    async fn archive_member_bound_fails_deterministically() {
+        let read = TestRead::new();
+        let entries: Vec<(&str, String)> = (0..5000)
+            .map(|index| {
+                let name: &'static str =
+                    Box::leak(format!("xl/part{index:05}.xml").into_boxed_str());
+                (name, "<x/>".to_owned())
+            })
+            .collect();
+        let path = read.write("many-members.docx", &testdata::zip(&entries));
+        let result = read
+            .read("members", serde_json::json!({ "path": path }))
+            .await;
+        let error = failure_of(result);
+        assert!(
+            error.contains("cannot decode"),
+            "the bound must reject the package deterministically: {error}"
+        );
     }
 }

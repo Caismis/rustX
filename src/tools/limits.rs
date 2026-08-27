@@ -6,6 +6,13 @@
 
 use std::time::Duration;
 
+/// The maximum bytes of one structured-document source that native Read
+/// hands to its document decoder (Issue #48). This is an extraction-resource
+/// bound, not a model-facing output bound: decoding happens before Read's
+/// 2000-line/50KB projection, so a huge archive-backed document must be
+/// rejected before unbounded parse work starts, not after.
+pub const MAX_DOCUMENT_SOURCE_BYTES: usize = 32 * 1024 * 1024;
+
 /// The maximum model-facing bytes of one tool result payload.
 pub const MAX_MODEL_TOOL_RESULT_BYTES: usize = 64 * 1024;
 
