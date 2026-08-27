@@ -18,10 +18,10 @@ use crate::runtime::interaction::QuestionnaireFacts;
 use crate::runtime::{InteractionOutcome, InteractionResponse};
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, input_schema};
-use crate::tools::native::support::{failed_result, success_json};
+use crate::tools::native::support::{cancelled_result, failed_result, success_json};
 use crate::tools::types::{
     ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
-    ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
+    ToolInvocation, ToolOrigin, ToolReplayPolicy,
 };
 
 /// The canonical model-facing name of the native questionnaire tool.
@@ -177,15 +177,7 @@ impl ToolExecutor for AskUserExecutor {
                 InteractionOutcome::Responded { .. } => {
                     failed_result("ask_user received a mismatched interaction response")
                 }
-                InteractionOutcome::Cancelled { reason } => ToolExecutionResult {
-                    status: ToolExecutionStatus::Cancelled { reason },
-                    content: Vec::new(),
-                    duration_ms: 0,
-                    exit_code: None,
-                    artifacts: Vec::new(),
-                    truncation: None,
-                    managed_output: None,
-                },
+                InteractionOutcome::Cancelled { reason } => cancelled_result(reason),
                 InteractionOutcome::Unavailable => {
                     failed_result("ask_user interaction provider unavailable")
                 }

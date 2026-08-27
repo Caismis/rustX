@@ -24,7 +24,9 @@ use std::fmt::Write as _;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::{MAX_READ_LINES, NATIVE_FILE_TOOL_MAX_BYTES};
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
-use crate::tools::native::support::{failed_result, interpret_path, success_text};
+use crate::tools::native::support::{
+    cancelled_result, failed_result, interpret_path, success_text,
+};
 use crate::tools::types::ToolInvocationPolicy;
 use crate::tools::types::{ToolExecutionResult, ToolInvocation, TruncationState};
 
@@ -74,18 +76,40 @@ async fn run_read(
     let target = interpret_path(context.workspace.root(), &input.path);
     match document::classify_source(&target) {
         document::SourceKind::Document(format) => {
+            // Admission: cancellation observable before the decoder is
+            // admitted means the decode never starts.
+            if context.cancellation.is_cancelled() {
+                return cancelled_result(context.cancellation.reason());
+            }
             // Decoding is materially more expensive than UTF-8 validation,
             // so it runs on the runtime's blocking-pool boundary instead of
-            // an async reactor thread. There is no separate document
-            // cancellation model: like every executor, the invocation
-            // observes the runtime cancellation through the normal Tool
-            // Plane contract.
+            // an async reactor thread. A blocking task cannot be safely
+            // abandoned once started, so cancellation never detaches it:
+            // when cancellation wins after admission, the same join handle
+            // is awaited to physical settlement and the decode's semantic
+            // result is discarded in favor of the normalized cancelled
+            // result. There is no separate document cancellation model: the
+            // invocation observes the runtime cancellation through the
+            // normal Tool Plane contract, with the Agent Loop as the
+            // authority.
             let decode_target = target.clone();
-            let decoded = tokio::task::spawn_blocking(move || {
+            let mut decode = tokio::task::spawn_blocking(move || {
                 document::decode_document(&decode_target, format)
-            })
-            .await;
-            let text = match decoded {
+            });
+            let settled = tokio::select! {
+                biased;
+                // The cancellation authority wins the race, including ties
+                // with a decode that completed in the same wakeup.
+                () = context.cancellation.cancelled() => None,
+                joined = &mut decode => Some(joined),
+            };
+            let Some(joined) = settled else {
+                // Physically settle the blocking decode, discard whatever
+                // it produced, and settle the tool as cancelled.
+                let _ = decode.await;
+                return cancelled_result(context.cancellation.reason());
+            };
+            let text = match joined {
                 Ok(Ok(text)) => text,
                 Ok(Err(error)) => return failed_result(error),
                 Err(error) => {
@@ -522,6 +546,7 @@ mod tests {
         artifacts: ArtifactStore,
         tool_output: ManagedToolOutput,
         environment: ToolEnvironment,
+        progress: NoProgress,
     }
 
     impl TestRead {
@@ -544,12 +569,24 @@ mod tests {
                 artifacts,
                 tool_output,
                 environment: ToolEnvironment::new(),
+                progress: NoProgress,
             }
         }
 
         /// Runs one `read` invocation through the real executor boundary.
         async fn read(&self, call: &str, arguments: serde_json::Value) -> ToolExecutionResult {
-            let progress = NoProgress;
+            let signal = crate::runtime::CancellationSignal::new();
+            self.execute_with_signal(call, arguments, &signal).await
+        }
+
+        /// Builds the executor future with a caller-controlled cancellation
+        /// signal, for tests that must observe intermediate states.
+        fn execute_with_signal<'a>(
+            &'a self,
+            call: &str,
+            arguments: serde_json::Value,
+            signal: &'a crate::runtime::CancellationSignal,
+        ) -> futures_util::future::BoxFuture<'a, ToolExecutionResult> {
             let invocation = ToolInvocation {
                 call_id: ToolCallId::new(call),
                 tool_id: ToolId::new(super::TOOL_ID),
@@ -561,18 +598,18 @@ mod tests {
                 conversation_id: &self.conversation_id,
                 execution_id: None,
                 cancellation: crate::runtime::ExecutionCancellation::detached(
-                    crate::runtime::CancellationSignal::new(),
+                    signal.clone(),
                     crate::runtime::types::CancellationReason::UserRequested,
                 ),
                 workspace: &self.workspace,
-                progress: &progress,
+                progress: &self.progress,
                 artifacts: &self.artifacts,
                 tool_output: &self.tool_output,
                 environment: &self.environment,
                 questionnaire_requester: None,
                 todos: None,
             };
-            ReadTool.execute(invocation, context).await
+            ReadTool.execute(invocation, context)
         }
 
         /// Writes `bytes` into the workspace and returns its absolute host
@@ -925,29 +962,37 @@ mod tests {
 
     /// Document reads and text reads follow the same current path
     /// interpretation: both accept absolute host filesystem paths outside
-    /// the workspace root.
+    /// the workspace root. Both fixtures live in a separate temporary
+    /// directory (tempdir B) while the tool's workspace is another one
+    /// (tempdir A); the repository checkout is never written.
     #[tokio::test]
     async fn document_and_text_reads_share_the_absolute_path_contract() {
         let read = TestRead::new();
-        // Both fixtures live outside the workspace root (the repo checkout).
-        let outside_docx = fixture_path("docx/small.docx");
-        let outside_txt = fixture_path("pdf/small-text.pdf").replace(".pdf", ".txt");
+        let external = tempfile::tempdir().expect("external directory");
+        let document_path = external.path().join("briefing.docx");
+        std::fs::write(&document_path, testdata::docx()).expect("document fixture");
+        let text_path = external.path().join("notes.txt");
+        std::fs::write(&text_path, "ordinary text\n").expect("text fixture");
+
         let document = read
-            .read("doc", serde_json::json!({ "path": outside_docx }))
+            .read(
+                "doc",
+                serde_json::json!({ "path": document_path.to_str().expect("UTF-8 path") }),
+            )
             .await;
         assert_eq!(document.status, ToolExecutionStatus::Success);
         assert!(text_of(&document).contains("## Quarterly Report"));
 
-        // The same contract for an ordinary text file in the same location:
-        // write one next to a fixture, then read it absolutely.
-        let text_path = std::path::Path::new(&outside_txt).to_path_buf();
-        std::fs::write(&text_path, "ordinary text\n").expect("text fixture");
+        // The same contract for an ordinary text file in the same external
+        // location, read through its absolute host path.
         let text_read = read
-            .read("txt", serde_json::json!({ "path": outside_txt }))
+            .read(
+                "txt",
+                serde_json::json!({ "path": text_path.to_str().expect("UTF-8 path") }),
+            )
             .await;
         assert_eq!(text_read.status, ToolExecutionStatus::Success);
         assert_eq!(text_of(&text_read), "ordinary text\n");
-        let _ = std::fs::remove_file(text_path);
     }
 
     /// The rustX-owned source-size bound rejects an oversized document
@@ -965,27 +1010,157 @@ mod tests {
         );
     }
 
-    /// A configured expansion bound fails deterministically: an OOXML
-    /// package with more members than `max_files_in_archive` is rejected
-    /// instead of being parsed uncontrolled.
+    /// Top-level OOXML member accounting: two otherwise equivalent valid
+    /// packages from the same generator differ only in member count, and
+    /// only the one above the decoder's 10_000-member package bound fails —
+    /// with the decoder's own security-limit classification, not an
+    /// unrelated malformed-package error. (The configured
+    /// `max_files_in_archive` guards xberg's standalone archive extractor,
+    /// which rustX never routes to; the OOXML decoders enforce their own
+    /// internal package bound.)
     #[tokio::test]
-    async fn archive_member_bound_fails_deterministically() {
+    async fn archive_member_accounting_rejects_packages_over_the_decoder_bound() {
         let read = TestRead::new();
-        let entries: Vec<(&str, String)> = (0..5000)
-            .map(|index| {
-                let name: &'static str =
-                    Box::leak(format!("xl/part{index:05}.xml").into_boxed_str());
-                (name, "<x/>".to_owned())
-            })
-            .collect();
-        let path = read.write("many-members.docx", &testdata::zip(&entries));
-        let result = read
-            .read("members", serde_json::json!({ "path": path }))
-            .await;
-        let error = failure_of(result);
-        assert!(
-            error.contains("cannot decode"),
-            "the bound must reject the package deterministically: {error}"
+
+        // Below the bound: the equivalent package decodes normally.
+        let under = read.write(
+            "under-members.docx",
+            &testdata::docx_with_member_count(testdata::DOCX_BASE_MEMBERS),
         );
+        let under_result = read
+            .read("under", serde_json::json!({ "path": under }))
+            .await;
+        assert_eq!(under_result.status, ToolExecutionStatus::Success);
+        assert!(text_of(&under_result).contains("member accounting control"));
+
+        // Above the bound: rejected deterministically by the member bound.
+        // xberg 1.0.14 pins its DOCX package bound at 10_000 entries and
+        // reports a stable security-limit failure for it.
+        let over = read.write(
+            "over-members.docx",
+            &testdata::docx_with_member_count(10_001),
+        );
+        let over_result = read.read("over", serde_json::json!({ "path": over })).await;
+        let error = failure_of(over_result);
+        assert!(
+            error.contains("cannot decode") && error.contains("exceeds limit of 10000"),
+            "the member bound, not package malformation, must reject the package: {error}"
+        );
+    }
+
+    /// Recursive embedded-object extraction is structurally disabled
+    /// (`max_archive_depth: 0`): a whitelisted DOCX carrying a real
+    /// embedded object under `word/embeddings/` — the exact prefix xberg's
+    /// recursive path scans — projects only the main body, never content
+    /// found only inside the embedded object.
+    #[tokio::test]
+    async fn embedded_objects_never_reach_the_projection() {
+        let read = TestRead::new();
+        let embedded_pdf = testdata::pdf(&[&["SECRET EMBEDDED PAYLOAD must stay buried"]]);
+        let path = read.write(
+            "embedded.docx",
+            &testdata::docx_with_embedded_object(
+                "<w:p><w:r><w:t>Embedded boundary control</w:t></w:r></w:p>",
+                "payload.pdf",
+                &embedded_pdf,
+            ),
+        );
+        let result = read
+            .read("embedded", serde_json::json!({ "path": path }))
+            .await;
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+        let text = text_of(&result);
+        // Positive control: the main body is projected.
+        assert!(text.contains("Embedded boundary control"));
+        // The invariant: embedded-only content never surfaces.
+        assert!(
+            !text.contains("SECRET EMBEDDED PAYLOAD"),
+            "embedded object content leaked into the projection: {text}"
+        );
+    }
+
+    /// Cancellation observable before decode admission means the blocking
+    /// decoder is never started, and the tool settles as cancelled.
+    // The session guard deliberately spans the awaits: it serializes the
+    // hook-using tests within this single-threaded test runtime.
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn document_decode_is_never_admitted_after_cancellation() {
+        let read = TestRead::new();
+        let path = read.write("pre-cancelled.docx", &testdata::docx());
+        let _session = document::decode_hooks::lock_session();
+        let hook = document::decode_hooks::install(std::path::Path::new(&path));
+
+        let signal = crate::runtime::CancellationSignal::new();
+        signal.cancel();
+        let result = read
+            .execute_with_signal("doc", serde_json::json!({ "path": path }), &signal)
+            .await;
+
+        assert_eq!(
+            result.status,
+            ToolExecutionStatus::Cancelled {
+                reason: crate::runtime::types::CancellationReason::UserRequested,
+            }
+        );
+        assert_eq!(hook.starts(), 0, "a cancelled read must never decode");
+    }
+
+    /// Cancellation observed after decode admission: the same blocking
+    /// task is awaited to physical settlement, its successful semantic
+    /// result is discarded, and the tool settles as cancelled.
+    // The session guard deliberately spans the awaits: it serializes the
+    // hook-using tests within this single-threaded test runtime.
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn document_read_settles_cancelled_after_decode_started() {
+        let read = TestRead::new();
+        // A valid document: the decode, if allowed to finish, would succeed.
+        let path = read.write("gated.docx", &testdata::docx());
+        let _session = document::decode_hooks::lock_session();
+        let mut hook = document::decode_hooks::install_gated(std::path::Path::new(&path));
+
+        let signal = crate::runtime::CancellationSignal::new();
+        let mut read_future =
+            read.execute_with_signal("doc", serde_json::json!({ "path": path }), &signal);
+
+        // Drive the future until the decoder has demonstrably started and
+        // is blocked in the gate. No sleeps: every iteration is a yield.
+        let started = loop {
+            if let std::task::Poll::Ready(early) =
+                std::future::poll_fn(|cx| std::task::Poll::Ready(read_future.as_mut().poll(cx)))
+                    .await
+            {
+                panic!("read settled before the decoder was released: {early:?}");
+            }
+            if hook.starts() >= 1 {
+                break true;
+            }
+            tokio::task::yield_now().await;
+        };
+        assert!(started, "the decoder never started");
+
+        // While the decoder is still physically paused, Read must not
+        // report any semantic result.
+        let probed =
+            std::future::poll_fn(|cx| std::task::Poll::Ready(read_future.as_mut().poll(cx))).await;
+        assert!(
+            probed.is_pending(),
+            "a gated decode must not settle: {probed:?}"
+        );
+
+        // Cancellation wins while the decode is paused; releasing it lets
+        // the decode complete successfully — and the success must be
+        // discarded in favor of the normalized cancelled result.
+        signal.cancel();
+        hook.release();
+        let result = read_future.await;
+        assert_eq!(
+            result.status,
+            ToolExecutionStatus::Cancelled {
+                reason: crate::runtime::types::CancellationReason::UserRequested,
+            }
+        );
+        assert_eq!(hook.starts(), 1);
     }
 }

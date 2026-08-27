@@ -219,10 +219,18 @@ fn crc32(bytes: &[u8]) -> u32 {
 /// Serializes `entries` as a deterministic zip archive with stored
 /// (uncompressed) entries and fixed timestamps.
 pub(super) fn zip(entries: &[(&str, String)]) -> Vec<u8> {
+    let owned: Vec<(String, Vec<u8>)> = entries
+        .iter()
+        .map(|(name, content)| ((*name).to_owned(), content.as_bytes().to_vec()))
+        .collect();
+    zip_binary(&owned)
+}
+
+/// The binary-content form of [`zip`]; the OOXML generators use it directly.
+fn zip_binary(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
     let mut out = Vec::new();
     let mut central = Vec::new();
-    for (name, content) in entries {
-        let data = content.as_bytes();
+    for (name, data) in entries {
         let crc = crc32(data);
         let offset = narrow::<u32>(out.len());
         out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
@@ -272,8 +280,9 @@ pub(super) fn zip(entries: &[(&str, String)]) -> Vec<u8> {
     out
 }
 
-/// Wraps DOCX body XML into a minimal complete package.
-fn docx_package(body: &str) -> Vec<u8> {
+/// The five standard members of the minimal DOCX package, in the order the
+/// zip writer stores them.
+fn docx_base_entries(body: &str) -> Vec<(String, Vec<u8>)> {
     let content_types = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/></Types>"#;
     let rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -286,13 +295,64 @@ fn docx_package(body: &str) -> Vec<u8> {
     );
     let numbering = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/><w:lvlText w:val="*"/></w:lvl></w:abstractNum></w:numbering>"#;
-    zip(&[
-        ("[Content_Types].xml", content_types.to_owned()),
-        ("_rels/.rels", rels.to_owned()),
-        ("word/_rels/document.xml.rels", document_rels.to_owned()),
-        ("word/document.xml", document),
-        ("word/numbering.xml", numbering.to_owned()),
-    ])
+    vec![
+        (
+            "[Content_Types].xml".to_owned(),
+            content_types.as_bytes().to_vec(),
+        ),
+        ("_rels/.rels".to_owned(), rels.as_bytes().to_vec()),
+        (
+            "word/_rels/document.xml.rels".to_owned(),
+            document_rels.as_bytes().to_vec(),
+        ),
+        ("word/document.xml".to_owned(), document.into_bytes()),
+        (
+            "word/numbering.xml".to_owned(),
+            numbering.as_bytes().to_vec(),
+        ),
+    ]
+}
+
+/// The number of members every generated DOCX package carries before any
+/// extra entries are added.
+pub(super) const DOCX_BASE_MEMBERS: usize = 5;
+
+/// Wraps DOCX body XML into a minimal complete package.
+fn docx_package(body: &str) -> Vec<u8> {
+    zip_binary(&docx_base_entries(body))
+}
+
+/// A valid DOCX padded to exactly `members` zip entries with inert filler
+/// parts, for decoder member-accounting boundaries: two calls with
+/// different member counts produce otherwise equivalent packages.
+pub(super) fn docx_with_member_count(members: usize) -> Vec<u8> {
+    let mut entries = docx_base_entries(&docx_paragraph("member accounting control"));
+    assert!(
+        members >= entries.len(),
+        "a generated DOCX carries at least {DOCX_BASE_MEMBERS} members"
+    );
+    while entries.len() < members {
+        let index = entries.len() - DOCX_BASE_MEMBERS;
+        entries.push((format!("word/filler/f{index:06}.xml"), b"<x/>".to_vec()));
+    }
+    zip_binary(&entries)
+}
+
+/// A valid DOCX whose body shows `body` and which additionally carries one
+/// embedded object under `word/embeddings/` — the entry prefix xberg's
+/// recursive embedded-object path scans for, so the payload is a real
+/// embedded object from the decoder's perspective.
+pub(super) fn docx_with_embedded_object(
+    body: &str,
+    embedded_name: &str,
+    embedded: &[u8],
+) -> Vec<u8> {
+    let mut entries = docx_base_entries(body);
+    entries.push((
+        format!("word/embeddings/{embedded_name}"),
+        embedded.to_vec(),
+    ));
+    zip_binary(&entries)
 }
 
 fn docx_paragraph(text: &str) -> String {
