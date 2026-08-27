@@ -729,7 +729,6 @@ fn request(model: &std::sync::Arc<FakeModel>) -> AgentExecutionRequest {
         ])
         .expect("bootstrap conversation"),
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
-        timezone: None,
         model: support::attempt_model(model.clone(), "fake-model"),
     }
 }
@@ -745,7 +744,7 @@ fn runtime(model: &std::sync::Arc<FakeModel>) -> rustx::context::ContextRuntime 
             summary_output_cap: None,
         },
         estimator,
-        rustx::context::AgentStatusComposer::default(),
+        rustx::context::AgentStatusEngine::default(),
         &snapshot,
     )
     .expect("valid context runtime")
@@ -1165,22 +1164,15 @@ fn background_task_is_never_background_dispatchable() {
 // Agent Status background built-in section
 // ---------------------------------------------------------------------------
 
-/// The composer builds the runtime-owned background section in deterministic
-/// section order; the renderer shows ids, tool names, and states without
-/// full output.
+/// The closed engine owns the runtime background section in deterministic
+/// source order; the renderer shows ids, tool names, and states without full
+/// output.
 #[test]
 fn agent_status_background_section_rendering() {
-    use rustx::context::AgentStatusClock;
     use rustx::context::status::{
-        AgentStatusComposer, AgentStatusRenderContext, AgentStatusSectionData, AgentStatusSectionId,
+        AgentStatus, AgentStatusSection, AgentStatusSectionData, AgentStatusSectionId,
+        render_agent_status,
     };
-    struct FixedClock(chrono::DateTime<chrono::Utc>);
-    impl AgentStatusClock for FixedClock {
-        fn now(&self) -> chrono::DateTime<chrono::Utc> {
-            self.0
-        }
-    }
-    let composer = AgentStatusComposer::new(Arc::new(FixedClock(utc("2026-08-09T12:00:00Z"))));
     let background = vec![
         BackgroundExecutionSnapshot {
             execution_id: ToolExecutionId::new("exec_1"),
@@ -1211,12 +1203,25 @@ fn agent_status_background_section_rendering() {
             result: None,
         },
     ];
-    let context = AgentStatusRenderContext {
-        inbound_message_time: utc("2026-08-09T12:00:00Z"),
-        timezone: None,
-        background,
+    let status = AgentStatus {
+        sections: vec![
+            AgentStatusSection {
+                id: AgentStatusSectionId::new("temporal"),
+                data: AgentStatusSectionData::Temporal {
+                    current_time: utc("2026-08-09T12:00:00Z"),
+                    timezone: None,
+                    inbound_message_time: utc("2026-08-09T12:00:00Z"),
+                },
+            },
+            AgentStatusSection {
+                id: AgentStatusSectionId::new("background_execution"),
+                data: AgentStatusSectionData::BackgroundExecution {
+                    executions: background,
+                    omitted_count: 0,
+                },
+            },
+        ],
     };
-    let status = composer.compose(&context).expect("compose");
     let ids: Vec<&str> = status
         .sections
         .iter()
@@ -1228,11 +1233,16 @@ fn agent_status_background_section_rendering() {
         section.id,
         AgentStatusSectionId::new("background_execution")
     );
-    let AgentStatusSectionData::BackgroundExecution { executions } = &section.data else {
+    let AgentStatusSectionData::BackgroundExecution {
+        executions,
+        omitted_count,
+    } = &section.data
+    else {
         panic!("runtime-owned built-in section data");
     };
     assert_eq!(executions.len(), 3);
-    let rendered = rustx::context::status::render_agent_status(&status);
+    assert_eq!(*omitted_count, 0);
+    let rendered = render_agent_status(&status);
     assert!(rendered.contains("Background executions:"));
     assert!(rendered.contains("- exec_1 | bash | starting"));
     assert!(rendered.contains("- exec_2 | bash | running | compiling workspace"));
@@ -1432,6 +1442,13 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
     );
     assert!(!status.contains("exec_1"), "the terminal task is excluded");
     assert!(
+        status.find("Current time:").expect("Time section")
+            < status
+                .find("Background executions:")
+                .expect("Background section"),
+        "semantic module order is Time then Background"
+    );
+    assert!(
         requests[2]
             .messages
             .iter()
@@ -1553,6 +1570,7 @@ fn background_status_accounting() {
                         progress: None,
                         result: None,
                     }],
+                    omitted_count: 0,
                 },
             },
         ],

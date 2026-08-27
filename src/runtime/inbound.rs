@@ -348,15 +348,16 @@ pub struct FreshInboundTurn {
 
 /// The explicit execution trigger of an attempt's first model turn.
 ///
-/// The trigger makes the intended execution mode explicit: there is no
-/// optional status field and no disable flag, so Agent Status can never be
-/// silently suppressed by omitting it.
+/// The trigger makes the intended execution mode explicit. A `FreshInbound`
+/// value offers the optional Agent Status opportunity; it is not a status
+/// compatibility switch or a request to create another turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InitialTurnTrigger {
     /// The attempt's first model invocation observes a fresh inbound turn:
     /// the model has not yet observed the referenced messages. Validation
-    /// against canonical history is mandatory, Agent Status is mandatory,
-    /// fresh-inbound compaction protection applies, and the trigger remains
+    /// against canonical history is mandatory, the optional `FreshInbound`
+    /// Agent Status opportunity is eligible, fresh-inbound compaction
+    /// protection applies, and the trigger remains
     /// pending until one successful model invocation observes it — a
     /// provider overflow failure does not consume it, while a successful
     /// `ToolCalls` response does.

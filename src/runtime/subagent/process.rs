@@ -30,10 +30,9 @@
 use std::process::Stdio;
 use std::time::Duration;
 
-use chrono_tz::Tz;
 use tokio::io::AsyncWriteExt;
 
-use crate::context::SessionContextPolicy;
+use crate::context::{AgentStatusConfig, SessionContextPolicy};
 use crate::model::session::SessionModelConfig;
 use crate::runtime::identity::SubagentId;
 
@@ -83,8 +82,8 @@ pub struct SubagentSpawnPlan {
     pub runtime_root: std::path::PathBuf,
     /// The frozen session model configuration of every child.
     pub model: SessionModelConfig,
-    /// The conversation timezone inherited by the child.
-    pub timezone: Option<Tz>,
+    /// The launch-scoped Agent Status configuration inherited by the child.
+    pub agent_status: AgentStatusConfig,
     /// The session context policy inherited by the child.
     pub context: SessionContextPolicy,
 }
@@ -118,7 +117,7 @@ impl SubagentSpawnPlan {
             persona: profile.persona(),
             models: self.models.clone(),
             model: self.model.clone(),
-            timezone: self.timezone,
+            agent_status: self.agent_status.clone(),
             context: self.context,
             workspace: self.workspace.clone(),
             runtime_root: self.child_runtime_root(subagent_id),

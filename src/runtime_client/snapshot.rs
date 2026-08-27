@@ -1,4 +1,4 @@
-//! The Runtime Client snapshot read model (Runtime Client Protocol v2).
+//! The Runtime Client snapshot read model (Runtime Client Protocol v3).
 //!
 //! [`RuntimeClientSnapshot`] is the one deterministic external read model
 //! of authoritative runtime state. It is a projection, never a second
@@ -61,7 +61,7 @@ pub struct RuntimeDurabilityFailure {
 /// The authoritative Runtime Client snapshot of one conversation runtime.
 ///
 /// Every section is a deterministic projection of one authoritative
-/// runtime owner. The shape belongs to Runtime Client Protocol v2: internal
+/// runtime owner. The shape belongs to Runtime Client Protocol v3: internal
 /// snapshot types are projected into these external DTOs, never exposed
 /// directly.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -680,7 +680,7 @@ pub struct InboundDrainView {
 ///
 /// Projected from the authoritative [`ConversationBackgroundRegistry`]
 /// ([`crate::tools::background::ConversationBackgroundRegistry`]); the
-/// container shape belongs to Runtime Client Protocol v2 while the
+/// container shape belongs to Runtime Client Protocol v3 while the
 /// lifecycle, progress, and result leaf types are stable runtime-owned
 /// value contracts. No internal task handles or process ids ever appear.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -739,10 +739,11 @@ pub struct AgentStatusView {
     pub attempt_id: AttemptId,
     /// The turn number of the request preparation.
     pub turn: u32,
-    /// The canonical inbound message the status targets.
-    pub target_message_id: MessageId,
+    /// The canonical Agent Status User message described by this view.
+    pub status_message_id: MessageId,
+    /// The delivery opportunities that made this generation eligible.
+    pub opportunities: AgentStatusOpportunityView,
     /// The ordered structured sections.
-    #[serde(default)]
     pub sections: Vec<RuntimeClientStatusSection>,
     /// The canonical rendered representation, derived from the same
     /// composition as the sections.
@@ -753,11 +754,11 @@ pub struct AgentStatusView {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeClientStatusSection {
-    /// The mandatory temporal facts.
+    /// The typed Time payload.
     Temporal {
         /// The runtime clock value sampled at composition time.
         current_time: DateTime<Utc>,
-        /// The conversation timezone, when known.
+        /// The Time status timezone, when configured.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timezone: Option<Tz>,
         /// The persisted timestamp of the final message of the fresh
@@ -768,22 +769,28 @@ pub enum RuntimeClientStatusSection {
     BackgroundExecutions {
         /// The active background executions in allocation order.
         executions: Vec<RuntimeClientBackgroundExecution>,
-    },
-    /// An extension section's ordered structured facts.
-    Facts {
-        /// The ordered facts.
-        facts: Vec<RuntimeClientStatusFact>,
+        /// Active executions omitted by the module-local bound.
+        omitted_count: usize,
     },
 }
 
-/// One structured fact of an extension status section.
+/// The external view of the Agent Status opportunity set.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RuntimeClientStatusFact {
-    /// The fact label.
-    pub label: String,
-    /// The fact value.
-    pub value: String,
+pub struct AgentStatusOpportunityView {
+    /// The `FreshInbound` opportunity that produced this status, when one is
+    /// present. Future delivery opportunities can be added alongside it
+    /// without making this member structurally mandatory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fresh_inbound: Option<FreshInboundStatusOpportunityView>,
+}
+
+/// The external view of one `FreshInbound` status opportunity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FreshInboundStatusOpportunityView {
+    /// The inbound message that made status generation eligible.
+    pub target_message_id: MessageId,
 }
 
 /// The deterministic capability projection.

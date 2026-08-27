@@ -33,8 +33,8 @@ use rustx::conversation::{
 use rustx::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
-    AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, InboundKind, MessageBlock,
-    ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+    AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, ContextKind, InboundKind,
+    MessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
@@ -289,7 +289,6 @@ fn request(
         attempt_id: AttemptId::new(attempt),
         conversation: state(initial_messages),
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
-        timezone: None,
         model: support::attempt_model_with_window(
             model.clone(),
             "fake-model",
@@ -395,7 +394,7 @@ fn runtime_with(
     ContextRuntime::with_scripted_summarizer(
         engine(window, reserve, keep_recent, estimator),
         Arc::new(summarizer),
-        rustx::context::AgentStatusComposer::default(),
+        rustx::context::AgentStatusEngine::default(),
         CompactionBudgets::new(1, 1, 1_000_000),
     )
 }
@@ -411,7 +410,7 @@ fn runtime_with_assembly(
     ContextRuntime::with_scripted_summarizer_and_assembly(
         engine(window, reserve, keep_recent, estimator),
         Arc::new(summarizer),
-        rustx::context::AgentStatusComposer::default(),
+        rustx::context::AgentStatusEngine::default(),
         assembly,
         CompactionBudgets::new(1, 1, 1_000_000),
     )
@@ -602,7 +601,7 @@ async fn proactive_compaction_accounts_for_frozen_extension_system_sections() {
     let runtime = ContextRuntime::with_scripted_summarizer_and_assembly(
         engine(250, 0, 100, weighted(100, 10, 0)),
         summarizer.clone(),
-        rustx::context::AgentStatusComposer::default(),
+        rustx::context::AgentStatusEngine::default(),
         assembly,
         CompactionBudgets::new(1, 1, 1_000_000),
     );
@@ -1904,7 +1903,7 @@ async fn summary_model_cannot_fit_leaves_execution_uncommitted() {
     let runtime = ContextRuntime::with_scripted_summarizer(
         engine(500, 0, 0, weighted(10, 10, 0)),
         summarizer.clone(),
-        rustx::context::AgentStatusComposer::default(),
+        rustx::context::AgentStatusEngine::default(),
         CompactionBudgets::new(1, 1, 9),
     );
     let tool_runtime = common::tool_runtime("conv-1");
@@ -1981,7 +1980,7 @@ async fn a_rejected_summary_request_replans_against_a_smaller_budget() {
     let runtime = ContextRuntime::with_scripted_summarizer(
         engine(500, 0, 5, weighted(100, 10, 0)),
         summarizer.clone(),
-        rustx::context::AgentStatusComposer::default(),
+        rustx::context::AgentStatusEngine::default(),
         CompactionBudgets::new(1, 1, 1_000_000),
     );
     let tool_runtime = common::tool_runtime("conv-1");
@@ -4292,27 +4291,8 @@ fn fixed_time() -> chrono::DateTime<chrono::Utc> {
         .with_timezone(&chrono::Utc)
 }
 
-/// A scripted status provider that always fails.
-struct FailingStatusProvider;
-
-impl rustx::context::AgentStatusSectionProvider for FailingStatusProvider {
-    fn section_id(&self) -> rustx::context::AgentStatusSectionId {
-        rustx::context::AgentStatusSectionId::new("broken")
-    }
-
-    fn section(
-        &self,
-        _context: &rustx::context::AgentStatusRenderContext,
-    ) -> Result<Option<Vec<rustx::context::AgentStatusFact>>, ContextError> {
-        Err(ContextError::new(
-            ContextErrorKind::StatusFailed,
-            "test provider exploded",
-        ))
-    }
-}
-
 /// A fresh-inbound request: the first turn carries a pending fresh inbound
-/// turn, so Agent Status composition is mandatory.
+/// turn, so the optional `FreshInbound` Agent Status opportunity is eligible.
 fn fresh_request(
     attempt: &str,
     initial_messages: Vec<MessageBlock>,
@@ -4327,7 +4307,6 @@ fn fresh_request(
             rustx::runtime::inbound::FreshInboundTurn::new(vec![MessageId::new("msg-inbound-1")])
                 .expect("valid fresh turn"),
         ),
-        timezone: None,
         model: support::attempt_model_with_window(model.clone(), "fake-model", 10_000_000, 1),
     }
 }
@@ -4345,13 +4324,12 @@ fn fresh_user(id: &str, text: &str) -> MessageBlock {
     })
 }
 
-/// A deterministic failing Agent Status provider is a context **preparation**
-/// failure, never a compaction failure: no provider request is sent, no
-/// `CompactionStarted` is emitted, the terminal is exactly one
-/// `AttemptFailed`, and the error classifies as
-/// `Runtime(ContextPreparationFailed { .. })`.
+/// A failing Agent Status module is optional context enrichment: it is
+/// quarantined for this attempt, the normal context path continues, and the
+/// provider still receives exactly one request. The failed module emits no
+/// model-visible status and no structured status observation.
 #[tokio::test]
-async fn failing_status_provider_is_preparation_failure_not_compaction() {
+async fn failing_status_module_is_quarantined_not_preparation_failure() {
     let model = fake_model(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(text_delta(0, "ok")),
@@ -4359,10 +4337,13 @@ async fn failing_status_provider_is_preparation_failure_not_compaction() {
     ]]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let mut composer = rustx::context::AgentStatusComposer::new(Arc::new(FixedClock(fixed_time())));
-    composer
-        .register(Arc::new(FailingStatusProvider))
-        .expect("register");
+    let seam = rustx::context::AgentStatusTestSeam::new();
+    seam.fail_evaluate_once(rustx::context::AgentStatusModuleId::Time);
+    let status_engine = rustx::context::AgentStatusEngine::new(
+        rustx::context::AgentStatusConfig::default(),
+        Arc::new(FixedClock(fixed_time())),
+    )
+    .with_test_seam(seam.clone());
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = common::durable_agent_result(
@@ -4377,7 +4358,7 @@ async fn failing_status_provider_is_preparation_failure_not_compaction() {
             rustx::context::ContextRuntime::with_scripted_summarizer(
                 engine(10_000_000, 0, 0, weighted(10, 10, 10)),
                 Arc::new(FakeContextSummarizer::new(Vec::new())),
-                composer,
+                status_engine,
                 CompactionBudgets::new(1, 1, 1_000_000),
             ),
             &tool_runtime,
@@ -4391,13 +4372,34 @@ async fn failing_status_provider_is_preparation_failure_not_compaction() {
 
     assert_eq!(
         model.requests().len(),
-        0,
-        "no provider request may be sent when status composition fails"
+        1,
+        "status failure does not block the model request"
+    );
+    assert!(matches!(result.outcome, AttemptOutcome::Completed { .. }));
+    assert_eq!(
+        seam.capture_count(rustx::context::AgentStatusModuleId::Time),
+        1
+    );
+    assert_eq!(
+        seam.evaluate_count(rustx::context::AgentStatusModuleId::Time),
+        1
+    );
+    assert!(
+        result
+            .conversation
+            .active_messages()
+            .expect("active messages")
+            .iter()
+            .all(|message| !matches!(
+                message,
+                MessageBlock::User(user)
+                    if user.kind == InboundKind::Context(ContextKind::AgentStatus)
+            ))
     );
     let terminals: Vec<&RuntimeEvent> = result
         .event_history
         .iter()
-        .filter(|event| matches!(event, RuntimeEvent::AttemptFailed { .. }))
+        .filter(|event| matches!(event, RuntimeEvent::AttemptCompleted { .. }))
         .collect();
     assert_eq!(terminals.len(), 1, "exactly one terminal event");
     assert_eq!(
@@ -4410,34 +4412,19 @@ async fn failing_status_provider_is_preparation_failure_not_compaction() {
             .event_history
             .iter()
             .all(|event| !matches!(event, RuntimeEvent::CompactionStarted)),
-        "no compaction pipeline may start for a preparation failure"
+        "module failure never starts a compaction pipeline"
     );
-    let RuntimeEvent::AttemptFailed { error, .. } = terminals[0] else {
-        unreachable!("terminal matched above");
-    };
-    let AttemptFailure::Runtime { error } = error else {
-        panic!("the terminal must be a runtime failure, got {error:?}");
-    };
+    assert!(matches!(
+        terminals[0],
+        RuntimeEvent::AttemptCompleted { .. }
+    ));
     assert!(
-        matches!(
-            error,
-            rustx::runtime::types::RuntimeError::ContextPreparationFailed { .. }
-        ),
-        "a status provider failure classifies as context preparation failure"
+        result
+            .event_history
+            .iter()
+            .all(|event| !matches!(event, RuntimeEvent::CompactionStarted)),
+        "module failure never creates an alternate compaction"
     );
-    assert!(
-        !matches!(
-            error,
-            rustx::runtime::types::RuntimeError::ContextCompactionFailed { .. }
-        ),
-        "a status provider failure must never be mislabeled as a compaction failure"
-    );
-    if let rustx::runtime::types::RuntimeError::ContextPreparationFailed { message } = error {
-        assert!(
-            message.contains("broken"),
-            "the diagnostic names the failing provider: {message}"
-        );
-    }
 }
 
 /// An actual proactive compaction pipeline failure still classifies as
@@ -5142,7 +5129,7 @@ async fn model_backed_summarizer_does_not_contaminate_the_execution() {
             summary_output_cap: None,
         },
         weighted(100, 10, 0),
-        rustx::context::AgentStatusComposer::default(),
+        rustx::context::AgentStatusEngine::default(),
         &snapshot,
     )
     .expect("runtime");

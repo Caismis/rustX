@@ -573,12 +573,12 @@ export function reduce(
       return next;
 
     default:
-      // RuntimeClientConnection validates the v2 event vocabulary before an
+      // RuntimeClientConnection validates the v3 event vocabulary before an
       // event reaches this reducer. This branch is unreachable unless a
       // caller bypasses that boundary, and must never advance the cursor.
       const exhaustiveEvent: never = event;
       throw new Error(
-        `unreachable Runtime Client Protocol v2 event: ${String(exhaustiveEvent)}`,
+        `unreachable Runtime Client Protocol v3 event: ${String(exhaustiveEvent)}`,
       );
   }
 }

@@ -87,7 +87,7 @@
 //! mechanics stay internal unless they express a client-relevant semantic
 //! fact. The mapping is defined here, in one place, so internal
 //! `RuntimeEvent` evolution cannot silently break Runtime Client Protocol
-//! v2.
+//! v3.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -96,11 +96,11 @@ use tokio::sync::Notify;
 
 use super::event::{RuntimeClientAttemptFailure, RuntimeClientEvent, RuntimeClientOutcome};
 use super::snapshot::{
-    AgentStatusView, CapabilityView, ForegroundToolExecution, ForegroundToolState,
-    InFlightAssistantMessage, InFlightBlock, InboundDiagnostics, InboundDrainView, InboundItemView,
-    RuntimeClientAttempt, RuntimeClientAttemptPhase, RuntimeClientBackgroundExecution,
-    RuntimeClientCompactionView, RuntimeClientContextView, RuntimeClientSnapshot,
-    RuntimeClientStatusFact, RuntimeClientStatusSection,
+    AgentStatusOpportunityView, AgentStatusView, CapabilityView, ForegroundToolExecution,
+    ForegroundToolState, FreshInboundStatusOpportunityView, InFlightAssistantMessage,
+    InFlightBlock, InboundDiagnostics, InboundDrainView, InboundItemView, RuntimeClientAttempt,
+    RuntimeClientAttemptPhase, RuntimeClientBackgroundExecution, RuntimeClientCompactionView,
+    RuntimeClientContextView, RuntimeClientSnapshot, RuntimeClientStatusSection,
 };
 use super::types::{RuntimeClientCursor, RuntimeClientError, RuntimeClientProtocolEvent};
 use crate::agent::observer::AgentStatusObservation;
@@ -409,7 +409,6 @@ impl RuntimeClientProjection {
                 vec![RuntimeClientEvent::AgentStatusComposed {
                     attempt_id: observation.attempt_id.clone(),
                     turn: observation.turn,
-                    target_message_id: observation.target_message_id.clone(),
                     status: view,
                 }]
             }
@@ -711,7 +710,7 @@ impl RuntimeClientProjection {
     }
 
     /// The explicit `RuntimeEvent` mapping policy of Runtime Client Protocol
-    /// v2.
+    /// v3.
     ///
     /// Classification (see the module documentation):
     ///
@@ -1656,26 +1655,27 @@ pub(crate) fn status_view(observation: &AgentStatusObservation) -> AgentStatusVi
                 timezone: *timezone,
                 inbound_message_time: *inbound_message_time,
             },
-            AgentStatusSectionData::BackgroundExecution { executions } => {
-                RuntimeClientStatusSection::BackgroundExecutions {
-                    executions: executions.iter().map(background_view).collect(),
-                }
-            }
-            AgentStatusSectionData::Facts { facts } => RuntimeClientStatusSection::Facts {
-                facts: facts
-                    .iter()
-                    .map(|fact| RuntimeClientStatusFact {
-                        label: fact.label.clone(),
-                        value: fact.value.clone(),
-                    })
-                    .collect(),
+            AgentStatusSectionData::BackgroundExecution {
+                executions,
+                omitted_count,
+            } => RuntimeClientStatusSection::BackgroundExecutions {
+                executions: executions.iter().map(background_view).collect(),
+                omitted_count: *omitted_count,
             },
         })
         .collect();
+    let fresh_inbound = observation
+        .opportunities
+        .fresh_inbound
+        .as_ref()
+        .map(|fresh| FreshInboundStatusOpportunityView {
+            target_message_id: fresh.target_message_id.clone(),
+        });
     AgentStatusView {
         attempt_id: observation.attempt_id.clone(),
         turn: observation.turn,
-        target_message_id: observation.target_message_id.clone(),
+        status_message_id: observation.status_message_id.clone(),
+        opportunities: AgentStatusOpportunityView { fresh_inbound },
         rendered: render_agent_status(&observation.status),
         sections,
     }
@@ -1688,8 +1688,8 @@ mod tests {
         AgentExecution, AgentExecutionObserver, AgentExecutionRequest, AgentStatusObservation,
     };
     use crate::context::{
-        AgentStatusComposer, CompactionBudgets, ContextEngine, ContextError, ContextErrorKind,
-        ContextRuntime,
+        AgentStatus, AgentStatusEngine, AgentStatusOpportunitySet, CompactionBudgets,
+        ContextEngine, ContextError, ContextErrorKind, ContextRuntime,
     };
     use crate::conversation::ConversationState;
     use crate::events::interaction::{InteractionSettlement, InteractionSubject};
@@ -1718,7 +1718,7 @@ mod tests {
     use crate::runtime::types::{CancellationReason, TokenMeasurement, TokenMeasurementSource};
     use crate::runtime_client::event::{RuntimeClientEvent, RuntimeClientOutcome};
     use crate::runtime_client::snapshot::{
-        ForegroundToolState, InFlightBlock, RuntimeClientAttemptPhase,
+        AgentStatusOpportunityView, ForegroundToolState, InFlightBlock, RuntimeClientAttemptPhase,
         RuntimeClientTranscriptCursor,
     };
     use crate::runtime_client::types::RuntimeClientCursor;
@@ -1815,6 +1815,28 @@ mod tests {
             attempt_id: attempt(),
             event,
         }
+    }
+
+    #[test]
+    fn agent_status_opportunity_view_allows_absent_fresh_inbound() {
+        let observation = AgentStatusObservation {
+            attempt_id: attempt(),
+            turn: 1,
+            status_message_id: MessageId::new("status-1"),
+            opportunities: AgentStatusOpportunitySet::default(),
+            status: AgentStatus {
+                sections: Vec::new(),
+            },
+        };
+
+        let view = super::status_view(&observation);
+        assert!(view.opportunities.fresh_inbound.is_none());
+
+        let encoded = serde_json::to_value(&view.opportunities).expect("serialize opportunity");
+        assert_eq!(encoded, serde_json::json!({}));
+        let decoded: AgentStatusOpportunityView =
+            serde_json::from_value(encoded).expect("deserialize opportunity");
+        assert_eq!(decoded, view.opportunities);
     }
 
     fn collect(
@@ -2057,7 +2079,7 @@ mod tests {
         let runtime = ContextRuntime::with_scripted_summarizer(
             engine,
             Arc::new(FakeContextSummarizer::new(vec![summary_step])),
-            AgentStatusComposer::default(),
+            AgentStatusEngine::default(),
             CompactionBudgets::new(1, 1, 1_000_000),
         );
         let tool_runtime = crate::scripted_suites::common::tool_runtime("projection-order");
@@ -2072,7 +2094,6 @@ mod tests {
             conversation: ConversationState::from_messages(initial_messages.clone())
                 .expect("bootstrap conversation"),
             initial_turn_trigger: InitialTurnTrigger::Continuation,
-            timezone: None,
             model: model_snapshot,
         };
         let cancellation = crate::agent::AgentCancellation::new(CancellationReason::UserRequested);

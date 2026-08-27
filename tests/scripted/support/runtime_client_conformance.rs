@@ -1,4 +1,4 @@
-//! Transport-independent Runtime Client Protocol v2 conformance fixtures
+//! Transport-independent Runtime Client Protocol v3 conformance fixtures
 //! (Issue #38).
 //!
 //! # Why this layer exists
@@ -220,7 +220,7 @@ impl StdioJsonlDriver {
 
     /// Writes one request record: JSON payload plus exactly one LF.
     async fn send(&mut self, request: &RuntimeClientRequest) {
-        let mut record = serde_json::to_vec(request).expect("a v2 request serializes");
+        let mut record = serde_json::to_vec(request).expect("a v3 request serializes");
         record.push(b'\n');
         let stream = self.to_session.as_mut().expect("the session is open");
         stream.write_all(&record).await.expect("write the record");
@@ -1388,19 +1388,26 @@ pub async fn agent_status_is_runtime_owned(factory: &dyn DriverFactory) {
     let composed: Vec<_> = events
         .iter()
         .filter_map(|event| match &event.event {
-            RuntimeClientEvent::AgentStatusComposed {
-                turn,
-                target_message_id,
-                status,
-                ..
-            } => Some((*turn, target_message_id.clone(), status.clone())),
+            RuntimeClientEvent::AgentStatusComposed { turn, status, .. } => Some((
+                *turn,
+                status.status_message_id.clone(),
+                status
+                    .opportunities
+                    .fresh_inbound
+                    .as_ref()
+                    .expect("FreshInbound is populated by the current producer")
+                    .target_message_id
+                    .clone(),
+                status.clone(),
+            )),
             _ => None,
         })
         .collect();
     assert_eq!(composed.len(), 1, "one composition per fresh inbound turn");
-    let (turn, target, status) = &composed[0];
+    let (turn, status_message_id, target, status) = &composed[0];
     assert_eq!(*turn, 1);
     assert_eq!(target, &message_id);
+    assert!(status.opportunities.fresh_inbound.is_some());
     assert!(
         !status.sections.is_empty(),
         "the structured sections are projected, not only the rendering"
@@ -1410,6 +1417,13 @@ pub async fn agent_status_is_runtime_owned(factory: &dyn DriverFactory) {
     // The snapshot carries the same composed observation.
     let (snapshot, _) = snapshot_of(&mut *driver, 4).await;
     assert_eq!(snapshot.status.as_ref(), Some(status));
+    assert!(snapshot.messages.iter().any(|message| {
+        matches!(
+            message,
+            rustx::message::types::MessageBlock::User(user)
+                if user.id == *status_message_id
+        )
+    }));
 }
 
 /// The capability projection carries the revision, the deterministic tool

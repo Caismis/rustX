@@ -66,7 +66,6 @@ fn request(conversation: &str, model: &Arc<FakeModel>) -> AgentExecutionRequest 
         ])
         .expect("bootstrap conversation"),
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
-        timezone: None,
         model: support::attempt_model(model.clone(), "fake-model"),
     }
 }
@@ -82,7 +81,7 @@ fn context_runtime(model: &Arc<FakeModel>) -> rustx::context::ContextRuntime {
             summary_output_cap: None,
         },
         estimator,
-        rustx::context::AgentStatusComposer::default(),
+        rustx::context::AgentStatusEngine::default(),
         &snapshot,
     )
     .expect("valid context runtime")
@@ -978,7 +977,7 @@ struct RuntimeFixture {
 
 async fn runtime_fixture(conversation: &str, model: Arc<FakeModel>) -> RuntimeFixture {
     use rustx::capabilities::{CapabilityCoordinator, CapabilityCoordinatorConfig};
-    use rustx::context::{AgentStatusComposer, DefaultTokenEstimator, TokenEstimator};
+    use rustx::context::{AgentStatusEngine, DefaultTokenEstimator, TokenEstimator};
     use rustx::runtime::conversation_runtime::{
         ConversationContextConfig, ConversationRuntime, RuntimeConversationConfig,
     };
@@ -1009,7 +1008,6 @@ async fn runtime_fixture(conversation: &str, model: Arc<FakeModel>) -> RuntimeFi
     let runtime = ConversationRuntime::new(RuntimeConversationConfig {
         agent_id: AgentId::new("agent-a"),
         model: support::model::scripted_session_model(model),
-        timezone: None,
         approval_mode: rustx::runtime::ApprovalMode::Policy,
         context: ConversationContextConfig {
             policy: rustx::context::SessionContextPolicy {
@@ -1018,7 +1016,7 @@ async fn runtime_fixture(conversation: &str, model: Arc<FakeModel>) -> RuntimeFi
                 summary_output_cap: None,
             },
             estimator,
-            status_composer: AgentStatusComposer::default(),
+            status_engine: AgentStatusEngine::default(),
         },
         tool_runtime: tool_runtime.clone(),
         resources: Arc::new(rustx::runtime::RuntimeResourceSnapshot::new(

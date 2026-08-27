@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use super::model::scripted_session_model;
 use rustx::context::{
-    AgentStatusComposer, DefaultTokenEstimator, SessionContextPolicy, TokenEstimator,
+    AgentStatusEngine, DefaultTokenEstimator, SessionContextPolicy, TokenEstimator,
 };
 use rustx::message::types::MessageBlock;
 use rustx::model::session::SessionModelState;
@@ -58,7 +58,7 @@ impl RuntimeClientFixture {
             model: None,
             base_tools: ToolRegistry::new(),
             replay_limit: None,
-            composer: AgentStatusComposer::default(),
+            status_engine: AgentStatusEngine::default(),
             initial_messages: Vec::new(),
             durable_history: Vec::new(),
             workspace_fixtures: Vec::new(),
@@ -106,8 +106,8 @@ pub struct RuntimeClientFixtureBuilder {
     base_tools: ToolRegistry,
     /// The bounded replay retention, when a test needs a small ring.
     replay_limit: Option<usize>,
-    /// The Agent Status composer.
-    composer: AgentStatusComposer,
+    /// The launch-scoped Agent Status engine template.
+    status_engine: AgentStatusEngine,
     /// Pre-existing canonical history.
     initial_messages: Vec<MessageBlock>,
     durable_history: Vec<MessageBlock>,
@@ -166,10 +166,10 @@ impl RuntimeClientFixtureBuilder {
         self
     }
 
-    /// Replaces the Agent Status composer.
+    /// Replaces the Agent Status engine template.
     #[must_use]
-    pub fn composer(mut self, composer: AgentStatusComposer) -> Self {
-        self.composer = composer;
+    pub fn status_engine(mut self, status_engine: AgentStatusEngine) -> Self {
+        self.status_engine = status_engine;
         self
     }
 
@@ -317,12 +317,11 @@ impl RuntimeClientFixtureBuilder {
         let runtime = ConversationRuntime::new(RuntimeConversationConfig {
             agent_id: AgentId::new("agent-a"),
             model: session_model,
-            timezone: None,
             approval_mode: rustx::runtime::ApprovalMode::Policy,
             context: ConversationContextConfig {
                 policy: self.context_policy,
                 estimator,
-                status_composer: self.composer,
+                status_engine: self.status_engine,
             },
             tool_runtime,
             resources: Arc::new(rustx::runtime::RuntimeResourceSnapshot::new(

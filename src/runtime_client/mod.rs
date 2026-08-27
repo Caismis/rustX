@@ -13,7 +13,7 @@
 //!  RuntimeClientEvent / RuntimeClientSnapshot
 //!                 |
 //!                 v
-//!       Runtime Client Protocol v2
+//!       Runtime Client Protocol v3
 //! ```
 //!
 //! The governing invariant:
@@ -44,13 +44,13 @@
 //! # Ownership summary
 //!
 //! - [`RuntimeClientEndpoint`](endpoint::RuntimeClientEndpoint) is the
-//!   semantic protocol entry point: it dispatches every v2 request,
+//!   semantic protocol entry point: it dispatches every v3 request,
 //!   `initialize` included, so a transport stays a framing adapter and
 //!   never owns negotiation or attachment admission.
 //! - [`RuntimeClientHost`](host::RuntimeClientHost) is the projection +
 //!   control + attachment adapter over the conversation runtime: it owns
 //!   the projection (snapshot read model, cursor allocation, bounded
-//!   replay, subscribers), the one-active-attachment v2 policy, and
+//!   replay, subscribers), the one-active-attachment v3 policy, and
 //!   protocol adaptation. `AgentExecution` remains the attempt settlement
 //!   authority and the conversation runtime remains the admission owner.
 //! - [`RuntimeClientProjection`](projection::RuntimeClientProjection) is
@@ -69,7 +69,7 @@
 //!   model path and the client projection consume the same composed
 //!   observation.
 //!
-//! # Protocol v2 scope
+//! # Protocol v3 scope
 //!
 //! - one active attachment per runtime instance;
 //! - detach is never cancellation;
@@ -113,13 +113,14 @@ pub use host::{
 // the type never lives under the projection read model.
 pub use crate::runtime::request_history::{RequestHistory, RequestHistoryError};
 pub use snapshot::{
-    AgentStatusView, CapabilitySourceDescriptor, CapabilitySourceStateView, CapabilitySourceView,
-    CapabilityView, ForegroundToolExecution, ForegroundToolState, InFlightAssistantMessage,
+    AgentStatusOpportunityView, AgentStatusView, CapabilitySourceDescriptor,
+    CapabilitySourceStateView, CapabilitySourceView, CapabilityView, ForegroundToolExecution,
+    ForegroundToolState, FreshInboundStatusOpportunityView, InFlightAssistantMessage,
     InFlightBlock, InboundDiagnostics, InboundDrainView, InboundItemView, RuntimeClientAttempt,
     RuntimeClientAttemptPhase, RuntimeClientBackgroundExecution, RuntimeClientCompactionView,
     RuntimeClientContextFile, RuntimeClientContextView, RuntimeClientResourcesView,
-    RuntimeClientSkill, RuntimeClientSnapshot, RuntimeClientStatusFact, RuntimeClientStatusSection,
-    RuntimeClientTool, RuntimeClientTranscriptCursor, RuntimeClientTranscriptEntry,
+    RuntimeClientSkill, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTool,
+    RuntimeClientTranscriptCursor, RuntimeClientTranscriptEntry,
     RuntimeClientTranscriptInteractionRequested, RuntimeClientTranscriptInteractionSettled,
     RuntimeClientTranscriptItem, RuntimeClientTranscriptPage, RuntimeDurabilityFailure,
 };

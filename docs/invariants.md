@@ -1103,10 +1103,12 @@ that a live child produced an Interrupted physical result.
 - **Current runtime configuration is recomposed on every launch.**
   `--config <rustx.jsonc>` is parsed and validated before an existing Session
   catalog is opened. MCP definitions, native Tool policy and activation,
-  Skill roots/resources, environment, context policy, timezone, agent
-  settings, approval settings reserved for #100, and future capability
+  Skill roots/resources, environment, context policy, launch-scoped Agent
+  Status module settings (including Time timezone), agent settings, approval settings reserved for #100, and future capability
   sources therefore come from the current launch. A valid old Session can
   never make an invalid current configuration disappear.
+- Resource reload replaces only the process-local Runtime Resource Snapshot;
+  it does not reread `rustx.jsonc` or change Agent Status configuration.
 - **Runtime resources are process-local generations.** Composition discovers
   project instructions, Skill catalog identity/metadata, extension System
   Sections, and extension Tool registrations once and publishes them with one
@@ -1773,11 +1775,12 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   (earliest prefix plus latest), so a misbehaving executor cannot grow the
   transient per-call progress buffer without bound; background progress
   keeps only the latest bounded snapshot per execution record.
-- Agent Status is a read-only projection: the executing attempt samples the
-  active registry snapshot and the runtime-owned `background_execution`
+- Agent Status is a read-only projection: the executing attempt captures the
+  active registry snapshot once and the runtime-owned `background_execution`
   built-in section shows only `Starting`/`Running`/`Cancelling` entries in
-  allocation order; extension providers can never register under the
-  reserved id or construct the built-in variant.
+  allocation order, under explicit count/text bounds. Omitted active entries
+  are reported structurally; no extension provider can register or construct
+  a status section.
 
 ## Native tools and Bash (M5)
 
@@ -2245,8 +2248,8 @@ whitespace-only text fails.
 Runtime observations in the retired span remain historical evidence. A
 summary may say that a task ran earlier and later completed, but summary text
 never reconstructs current Agent Status, background ownership, Tool execution,
-or subagent state. Missing extension Status output is not completion unless
-that extension's explicit contract says so.
+or subagent state. Missing Agent Status output is not completion unless the
+relevant status contract explicitly gives absence that meaning.
 
 The Ledger is immutable historical fact storage; the Surface is the active
 historical representation sent to the primary model; compaction replaces one
@@ -2286,41 +2289,53 @@ message role, history shape, or timestamps:
   message.
 - The first-turn execution mode is an explicit trigger
   (`InitialTurnTrigger::FreshInbound(fresh)` vs `Continuation`), never an
-  `Option` used as a status switch: Agent Status can never be silently
-  suppressed by omitting an optional field, and no `disable_status`,
-  optional status mode, or legacy no-context execution path exists.
-- One pending fresh inbound turn produces at most one Agent Status snapshot
-  per request preparation; the trigger is consumed by the first successful
-  model invocation (including a `ToolCalls` response) and is not consumed by
-  a failed `ContextWindowExceeded` attempt. A foreground-tool-only
-  continuation with no new mailbox drain carries no Agent Status.
+  `Option` used to select status behavior. A FreshInbound turn offers the
+  optional Agent Status opportunity; launch configuration may disable either
+  built-in module, and disabling both produces no status message while the
+  normal Context Assembly path still runs.
+- FreshInbound is the only production Agent Status delivery opportunity in
+  this slice. One logical primary step owns at most one Agent Status
+  generation; the trigger is consumed by the first successful model
+  invocation (including a `ToolCalls` response) and is not consumed by a
+  failed `ContextWindowExceeded` attempt. A foreground-tool-only continuation
+  with no new mailbox drain carries no Agent Status and Agent Status never
+  creates a follow-up turn.
 - `inbound_message_time` is the persisted timestamp of the final message in
   the ordered fresh inbound turn (for a mailbox batch, the highest-sequence
   item); the inbound sequence is the delivery-order authority, never
   `min`/`max` of producer timestamps, the drain time, or current time.
-- Agent Status is structured runtime-owned input before rendering, then
-  follows the normal Context Assembly path as a canonical
-  UserSource::Runtime / InboundKind::Context(ContextKind::AgentStatus)
-  UserMessageBlock. It is committed to the Message Ledger and Surface once
-  at admission; adapters never inject it. Equal rendered bytes at different
-  admitted steps remain distinct facts with distinct MessageIds.
-- A provider's section identity is captured exactly once at registration and
-  frozen as runtime-owned metadata: `section_id()` is never queried again
-  after registration, so post-registration identity changes can never shadow
-  a reserved id or create duplicate registered identities.
-- Extension providers contribute structured runtime facts (`label`/`value`)
-  only, never pre-rendered footer lines and never the internal composed
-  section representation: the provider result type cannot express built-in
-  section variants, so built-in section semantics (currently `Temporal`, and
-  any future built-in variant) are runtime-owned and can only be constructed
-  by the Agent Status composer/runtime. The canonical renderer owns all text
-  formatting.
-- Context failures are classified at the attempt boundary: failures while
-  preparing model context before any compaction starts (invalid pending
-  fresh-inbound state, a failing status provider, a projection preparation
-  failure) are `RuntimeError::ContextPreparationFailed`; only an actual
-  proactive compaction pipeline failure is
-  `RuntimeError::ContextCompactionFailed`.
+- When a module contributes, Agent Status is structured runtime-owned input
+  before rendering, then follows the normal Context Assembly path as a
+  canonical `UserSource::Runtime` /
+  `InboundKind::Context(ContextKind::AgentStatus)` `UserMessageBlock`. It is
+  committed to the Message Ledger and Surface once at model-turn start;
+  adapters never inject it. Equal rendered bytes at different admitted steps
+  remain distinct facts with distinct MessageIds. If no module contributes,
+  there is no empty wrapper/message and no structured status observation.
+- Time and Background are compile-time-owned modules represented by a closed
+  rustX engine in semantic source order `Time -> Background`. There is no
+  provider registration API, dynamic plugin boundary, provider listing, or
+  lexical ordering contract. The engine validates the code-owned typed
+  mapping `Time <-> Temporal` and `Background <-> BackgroundExecution`.
+- Each interested module captures authoritative runtime state once into a
+  finite immutable snapshot, then evaluates only that snapshot plus immutable
+  configuration. Capture, evaluation, and payload-validation failures are
+  isolated to the module and quarantine it for the rest of the current
+  attempt; surviving modules continue. Quarantine is not persisted, and a
+  fresh attempt creates a new engine and retries the module. These optional
+  failures never become `ContextPreparationFailed`, alter provider request
+  count, or create a continuation.
+- Context failures are classified at the attempt boundary: invalid pending
+  fresh-inbound state and projection preparation failures before compaction
+  remain `RuntimeError::ContextPreparationFailed`; only an actual proactive
+  compaction pipeline failure is `RuntimeError::ContextCompactionFailed`.
+- Background applies semantic bounds before rendering: at most 8 active
+  executions are retained, and each dynamic tool/progress text field is at
+  most 256 UTF-8 bytes; omitted active entries are reported structurally.
+  The final Agent Status renderer applies its defensive 4,096 UTF-8-byte cap
+  by admitting whole sections in `Time -> Background` order, re-rendering
+  every retained set and continuing after an omitted section; it never slices
+  wrappers or strings.
 - Fresh inbound that has not been observed by a successful model invocation
   must remain literal in the projection: compaction may never retire it, and
   planning fails explicitly (`CannotFit`) rather than summarizing the
@@ -2338,8 +2353,8 @@ message role, history shape, or timestamps:
   rerunning assembly, and cannot solve generation reuse by dropping the
   constraint.
 - The context path is mandatory: every normal `AgentExecution` carries a
-  `ContextRuntime`; there is no no-context execution mode and no Agent
-  Status disable flag.
+  `ContextRuntime`; there is no no-context execution mode. Agent Status is
+  optional enrichment inside that path.
 
 ### Issue #55 request boundary
 
@@ -2371,6 +2386,13 @@ message role, history shape, or timestamps:
   start-commit failure rolls the whole transaction back, so canonical
   request-scoped User context can never become canonical without its request
   starting.
+- A successful start commit publishes the canonical Agent Status message
+  through `observe_committed` before publishing its structured `observe_status`
+  projection. The structured projection carries the exact committed
+  `status_message_id` and mirrors the internal opportunity set. Its
+  `opportunities.fresh_inbound` member is optional and, when present in the
+  current FreshInbound-only production path, carries the inbound
+  `target_message_id`; cancellation winning before start publishes neither.
 - `ModelRequest.effective_system_prompt` is the sole System authority. It is
   rustX-rendered from ordered native/extension sections; canonical history
   has no System role. Frozen project instructions occupy the
@@ -3119,7 +3141,7 @@ semantic normalization boundary. The frozen invariants:
   a model that silently stopped folding transitions.
 - **Runtime Client protocol versioning is independent from internal
   RuntimeEvent/Event Journal schema versioning.** Version negotiation is
-  explicit at attachment admission; Protocol v2 is the sole supported
+  explicit at attachment admission; Protocol v3 is the sole supported
   version, and Protocol v1 is rejected explicitly.
 - **The semantic layer owns protocol negotiation and attachment
   admission; transports are framing only.** `initialize` is dispatched by
@@ -3209,7 +3231,7 @@ semantic normalization boundary. The frozen invariants:
   no derived message mirror of its own, and deterministic regressions
   verify the projection mirror against the authoritative ledger rather
   than coordinating two histories.
-- **One active attachment.** Protocol v2 admits at most one attachment
+- **One active attachment.** Protocol v3 admits at most one attachment
   per runtime instance; a second attach fails deterministically without
   evicting the first; reconnect receives a fresh attachment identity;
   request ids are attachment-scoped; cursor/replay state belongs to the
@@ -3225,14 +3247,15 @@ semantic normalization boundary. The frozen invariants:
   terminal settlement: the Agent Loop remains the settlement authority,
   and the coordinator holds the exact cancellation trigger the attempt
   task runs against.
-- **One Agent Status composition per request.** For one admitted primary
-  model request that receives Agent Status, `AgentStatusComposer::compose`
-  runs exactly once — one clock sample, one invocation of each registered
-  provider — and that single composed value fans out to both destinations:
-  the canonical Runtime context UserMessageBlock and the Runtime Client
-  projection. The client path never composes again, not even through a
-  cloned composer sharing the same clock and providers, and never parses
-  rendered context text to recover structure.
+- **One Agent Status generation per primary step.** For one FreshInbound
+  opportunity, the closed Agent Status engine traverses its code-owned
+  `Time -> Background` modules once: each interested module captures at most
+  one immutable snapshot and evaluates it at most once. The accepted
+  generation fans out to the canonical Runtime context UserMessageBlock and,
+  only after model-turn-start commit, the Runtime Client projection. Overflow
+  compact-and-retry reuses the same accepted generation; no client path
+  composes again and no projection parses rendered context text to recover
+  structure.
 - **Control responses preserve their settlement contract.** A successful
   `submit_inbound`, `cancel_current_attempt`, or `background_cancel` response
   means the runtime accepted the operation at its semantic commit point, not
@@ -3250,7 +3273,7 @@ endpoint. It frames; it never becomes a second authority.
   until one complete, in-bound-size framed record has successfully
   deserialized to the exact Runtime Client request type. A record that
   violates framing, exceeds the record limit, or fails exact
-  deserialization ends the transport having applied nothing; Protocol v2
+  deserialization ends the transport having applied nothing; Protocol v3
   has no uncorrelated error envelope, so no transport fabricates a
   protocol record for it.
 - **Transport loss is not semantic cancellation.** Runtime Client

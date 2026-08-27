@@ -63,7 +63,6 @@ fn request(attempt: &str, model: &std::sync::Arc<FakeModel>) -> AgentExecutionRe
         ])
         .expect("bootstrap conversation"),
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
-        timezone: None,
         model: support::attempt_model(model.clone(), "fake-model"),
     }
 }
@@ -83,7 +82,7 @@ fn runtime(model: &std::sync::Arc<FakeModel>) -> rustx::context::ContextRuntime 
             summary_output_cap: None,
         },
         estimator,
-        rustx::context::AgentStatusComposer::default(),
+        rustx::context::AgentStatusEngine::default(),
         &snapshot,
     )
     .expect("valid context runtime")

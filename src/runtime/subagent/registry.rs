@@ -1530,7 +1530,7 @@ mod tests {
                 model: crate::model::session::SessionModelConfig::of(
                     serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),
                 ),
-                timezone: None,
+                agent_status: crate::context::AgentStatusConfig::default(),
                 context: SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,

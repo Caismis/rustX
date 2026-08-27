@@ -824,7 +824,6 @@ fn request(conversation_id: ConversationId, model: &Arc<FakeModel>) -> AgentExec
         )])
         .expect("bootstrap conversation"),
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
-        timezone: None,
         model: support::attempt_model(model.clone(), "fake-model"),
     }
 }
@@ -853,7 +852,7 @@ fn context_runtime(model: &Arc<FakeModel>, assembly: ContextAssembly) -> Context
             summary_output_cap: None,
         },
         Arc::new(DefaultTokenEstimator),
-        rustx::context::AgentStatusComposer::default(),
+        rustx::context::AgentStatusEngine::default(),
         assembly,
         &support::attempt_model(model.clone(), "fake-model"),
     )

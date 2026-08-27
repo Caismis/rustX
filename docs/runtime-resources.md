@@ -202,10 +202,11 @@ published.
 
 ## Historical observations and lineage
 
-Agent Status is an append-oriented Context Observation Fact. Multiple status
-observations may remain in their canonical order until normal Surface
-replacement/compaction removes them; old status is never scanned to reconstruct
-live state.
+Agent Status is an optional runtime-sourced canonical User context fact for a
+successful FreshInbound model-turn start. Multiple status messages may remain
+in their canonical order until normal Surface replacement/compaction removes
+them; old status is never scanned to reconstruct live state. A generation that
+loses cancellation-versus-start arbitration is never committed or projected.
 
 Fork, clone, and tree operations project a historical prefix. At a selected
 human User boundary, the selected message and context/status belonging to that

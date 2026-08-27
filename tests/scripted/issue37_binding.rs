@@ -25,7 +25,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use rustx::capabilities::{CapabilityCoordinator, CapabilityCoordinatorConfig};
-use rustx::context::{AgentStatusComposer, DefaultTokenEstimator, TokenEstimator};
+use rustx::context::{AgentStatusEngine, DefaultTokenEstimator, TokenEstimator};
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
 
@@ -98,7 +98,6 @@ fn try_config(
     let conversation_runtime = ConversationRuntime::new(RuntimeConversationConfig {
         agent_id: AgentId::new("agent-a"),
         model: support::model::scripted_session_model(model),
-        timezone: None,
         approval_mode: rustx::runtime::ApprovalMode::Policy,
         context: ConversationContextConfig {
             policy: rustx::context::SessionContextPolicy {
@@ -107,7 +106,7 @@ fn try_config(
                 summary_output_cap: None,
             },
             estimator,
-            status_composer: AgentStatusComposer::default(),
+            status_engine: AgentStatusEngine::default(),
         },
         tool_runtime: runtime,
         resources: Arc::new(rustx::runtime::RuntimeResourceSnapshot::new(

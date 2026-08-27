@@ -10,10 +10,7 @@ use super::{common, support};
 
 use std::sync::Arc;
 
-use rustx::context::{
-    AgentStatusClock, AgentStatusComposer, AgentStatusFact, AgentStatusRenderContext,
-    AgentStatusSectionId, AgentStatusSectionProvider, ContextError,
-};
+use rustx::context::{AgentStatusClock, AgentStatusConfig, AgentStatusEngine, AgentStatusModuleId};
 use rustx::message::types::{ContentBlockIndex, MessageBlock, UserContentBlock};
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
@@ -42,72 +39,8 @@ impl AgentStatusClock for FixedStatusClock {
     }
 }
 
-/// An extension provider recording its facts.
-struct RecordingProvider;
-
-impl AgentStatusSectionProvider for RecordingProvider {
-    fn section_id(&self) -> AgentStatusSectionId {
-        AgentStatusSectionId::new("recording")
-    }
-
-    fn section(
-        &self,
-        _context: &AgentStatusRenderContext,
-    ) -> Result<Option<Vec<AgentStatusFact>>, ContextError> {
-        Ok(Some(vec![AgentStatusFact {
-            label: "extension".to_owned(),
-            value: "fact".to_owned(),
-        }]))
-    }
-}
-
-fn composer() -> AgentStatusComposer {
-    AgentStatusComposer::new(Arc::new(FixedStatusClock))
-}
-
-/// A status clock that counts compositions.
-///
-/// The composer samples its clock exactly once per `compose` invocation, so
-/// this counter *is* the number of Agent Status compositions — regardless of
-/// how many clones of the composer exist.
-#[derive(Debug, Clone, Default)]
-struct CountingStatusClock {
-    compositions: Arc<std::sync::atomic::AtomicUsize>,
-}
-
-impl AgentStatusClock for CountingStatusClock {
-    fn now(&self) -> chrono::DateTime<chrono::Utc> {
-        self.compositions
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        chrono::DateTime::parse_from_rfc3339("2026-08-07T12:00:00Z")
-            .expect("fixed clock")
-            .with_timezone(&chrono::Utc)
-    }
-}
-
-/// An extension provider that counts its invocations: an independent
-/// witness of how many compositions ran.
-struct CountingProvider {
-    invocations: Arc<std::sync::atomic::AtomicUsize>,
-}
-
-impl AgentStatusSectionProvider for CountingProvider {
-    fn section_id(&self) -> AgentStatusSectionId {
-        AgentStatusSectionId::new("counting")
-    }
-
-    fn section(
-        &self,
-        _context: &AgentStatusRenderContext,
-    ) -> Result<Option<Vec<AgentStatusFact>>, ContextError> {
-        let seen = self
-            .invocations
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(Some(vec![AgentStatusFact {
-            label: "composition".to_owned(),
-            value: seen.to_string(),
-        }]))
-    }
+fn status_engine() -> AgentStatusEngine {
+    AgentStatusEngine::new(AgentStatusConfig::default(), Arc::new(FixedStatusClock))
 }
 
 /// Builds a host over one conversation with the given model scripts and
@@ -120,13 +53,13 @@ async fn host(
     conversation: &str,
     model: FakeModel,
     tools: ToolRegistry,
-    composer: AgentStatusComposer,
+    status_engine: AgentStatusEngine,
     replay_limit: Option<usize>,
 ) -> (Arc<FakeModel>, RuntimeClientHost) {
     support::runtime_client_fixture::RuntimeClientFixture::builder(conversation)
         .model(model)
         .tools(tools)
-        .composer(composer)
+        .status_engine(status_engine)
         .replay_limit(replay_limit)
         .build()
         .await
@@ -198,8 +131,14 @@ fn text(text: &str) -> Vec<UserContentBlock> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn submit_idle_admits_and_settles_asynchronously() {
     let model = FakeModel::new(vec![one_turn_stop()]);
-    let (model_handle, host) =
-        host("conv-37-idle", model, ToolRegistry::new(), composer(), None).await;
+    let (model_handle, host) = host(
+        "conv-37-idle",
+        model,
+        ToolRegistry::new(),
+        status_engine(),
+        None,
+    )
+    .await;
     let (attachment, _) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
@@ -280,8 +219,14 @@ async fn submit_while_busy_queues_for_the_next_drain() {
         ],
         one_turn_stop(),
     ]);
-    let (model_handle, host) =
-        host("conv-37-busy", model, ToolRegistry::new(), composer(), None).await;
+    let (model_handle, host) = host(
+        "conv-37-busy",
+        model,
+        ToolRegistry::new(),
+        status_engine(),
+        None,
+    )
+    .await;
     let (attachment, _) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
@@ -351,7 +296,7 @@ async fn cancel_current_attempt_is_acceptance_not_settlement() {
         "conv-37-cancel",
         model,
         ToolRegistry::new(),
-        composer(),
+        status_engine(),
         None,
     )
     .await;
@@ -446,7 +391,7 @@ async fn foreground_tools_project_with_stable_identities() {
     let mut tools = ToolRegistry::new();
     tool_a.register(&mut tools);
     tool_b.register(&mut tools);
-    let (_, host) = host("conv-37-tools", model, tools, composer(), None).await;
+    let (_, host) = host("conv-37-tools", model, tools, status_engine(), None).await;
     let (attachment, _) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
@@ -535,7 +480,7 @@ async fn streaming_repair_from_a_mid_stream_snapshot() {
         "conv-37-repair",
         model,
         ToolRegistry::new(),
-        composer(),
+        status_engine(),
         None,
     )
     .await;
@@ -642,7 +587,7 @@ async fn stalled_subscriber_resyncs_explicitly_and_never_buffers() {
         "conv-37-replay",
         model,
         ToolRegistry::new(),
-        composer(),
+        status_engine(),
         Some(2),
     )
     .await;
@@ -774,13 +719,15 @@ async fn stalled_subscriber_resyncs_explicitly_and_never_buffers() {
 /// path consumes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn agent_status_shares_one_composition() {
-    let mut composer = composer();
-    composer
-        .register(Arc::new(RecordingProvider))
-        .expect("register");
     let model = FakeModel::new(vec![one_turn_stop()]);
-    let (model_handle, host) =
-        host("conv-37-status", model, ToolRegistry::new(), composer, None).await;
+    let (model_handle, host) = host(
+        "conv-37-status",
+        model,
+        ToolRegistry::new(),
+        status_engine(),
+        None,
+    )
+    .await;
     let (attachment, _) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
@@ -830,38 +777,152 @@ async fn agent_status_shares_one_composition() {
         status_view.rendered, model_rendered,
         "client view derives from the same composition as the model path"
     );
-    assert!(status_view.sections.iter().any(|section| matches!(
-        section,
-        rustx::runtime_client::RuntimeClientStatusSection::Facts { facts }
-            if facts.iter().any(|fact| fact.label == "extension" && fact.value == "fact")
-    )));
+    assert!(matches!(
+        status_view.sections.first(),
+        Some(rustx::runtime_client::RuntimeClientStatusSection::Temporal { .. })
+    ));
+    let status_wire = serde_json::to_value(status_view).expect("status view serializes");
+    assert!(
+        status_wire.get("target_message_id").is_none(),
+        "the old ambiguous top-level target identity is removed"
+    );
+    assert_eq!(
+        status_wire["status_message_id"],
+        serde_json::json!(status_view.status_message_id)
+    );
+    assert_eq!(
+        status_wire["opportunities"]["fresh_inbound"]["target_message_id"],
+        serde_json::json!(
+            status_view
+                .opportunities
+                .fresh_inbound
+                .as_ref()
+                .expect("FreshInbound is populated by the current producer")
+                .target_message_id
+        )
+    );
+    assert!(
+        status_view.opportunities.fresh_inbound.is_some(),
+        "the current FreshInbound-only producer still populates its opportunity"
+    );
+    assert!(
+        status_wire["opportunities"]
+            .get("post_tool_batch")
+            .is_none(),
+        "PostToolBatch has no production wire field before it has a producer"
+    );
     let (snapshot, _) = host.snapshot().expect("snapshot");
+    let committed_status = snapshot
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            MessageBlock::User(user)
+                if user.kind
+                    == rustx::message::types::InboundKind::Context(
+                        rustx::message::types::ContextKind::AgentStatus,
+                    ) =>
+            {
+                Some(user)
+            }
+            _ => None,
+        })
+        .expect("canonical status message");
+    assert_eq!(
+        status_view.status_message_id, committed_status.id,
+        "structured status identifies its canonical User context message"
+    );
+    assert!(snapshot.messages.iter().any(|message| {
+        matches!(
+            message,
+            MessageBlock::User(user)
+                if user.id
+                    == status_view
+                        .opportunities
+                        .fresh_inbound
+                        .as_ref()
+                        .expect("FreshInbound is populated by the current producer")
+                        .target_message_id
+        )
+    }));
+    assert!(matches!(
+        status_view.sections.first(),
+        Some(rustx::runtime_client::RuntimeClientStatusSection::Temporal { .. })
+    ));
     assert_eq!(
         snapshot.status.expect("status view").rendered,
         model_rendered
     );
 }
 
+/// Disabling both compile-time-owned modules removes the optional status
+/// message and its structured observation while leaving normal execution and
+/// Context Assembly intact.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn all_agent_status_modules_disabled_emit_no_message_or_observation() {
+    let config = AgentStatusConfig {
+        time: rustx::context::TimeStatusConfig {
+            enabled: false,
+            timezone: None,
+        },
+        background: rustx::context::BackgroundStatusConfig { enabled: false },
+    };
+    let engine = AgentStatusEngine::new(config, Arc::new(FixedStatusClock));
+    let model = FakeModel::new(vec![one_turn_stop()]);
+    let (model_handle, host) = host(
+        "conv-37-status-disabled",
+        model,
+        ToolRegistry::new(),
+        engine,
+        None,
+    )
+    .await;
+    let (attachment, _) = host
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .expect("attach");
+    let subscription = attachment
+        .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(0))
+        .expect("subscribe");
+    attachment.handle_request(RuntimeClientRequest::SubmitInbound {
+        id: rustx::runtime_client::RequestId::new(1),
+        content: text("go"),
+    });
+    let events = receive_until(&subscription, |event| {
+        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    })
+    .await;
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event.event, RuntimeClientEvent::AgentStatusComposed { .. }))
+    );
+    let requests = model_handle.requests();
+    assert_eq!(requests.len(), 1);
+    assert!(!requests[0].messages.iter().any(|message| {
+        matches!(
+            message,
+            MessageBlock::User(user)
+                if user.kind
+                    == rustx::message::types::InboundKind::Context(
+                        rustx::message::types::ContextKind::AgentStatus,
+                    )
+        )
+    }));
+    let (snapshot, _) = host.snapshot().expect("snapshot");
+    assert!(snapshot.status.is_none());
+}
+
 /// Agent Status is composed **exactly once** per model request that
 /// receives it, and both destinations consume that one composition.
 ///
-/// The proof is counting, not structural similarity: the composer samples
-/// its clock once per `compose`, and the registered extension provider is
-/// invoked once per `compose`. Both counters must equal the number of model
-/// requests that carried a canonical Agent Status context fact. If the Runtime Client
-/// path recomposed — even through a cloned composer with the same clock and
-/// providers — the counters would exceed that number.
+/// The proof is counting the closed engine's capture/evaluate seam, not
+/// comparing rendered strings. Both counters must equal the number of fresh
+/// inbound generations, even though the runtime clones an attempt template.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn agent_status_is_composed_exactly_once_per_request() {
-    let clock = CountingStatusClock::default();
-    let compositions = clock.compositions.clone();
-    let invocations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let mut composer = AgentStatusComposer::new(Arc::new(clock));
-    composer
-        .register(Arc::new(CountingProvider {
-            invocations: invocations.clone(),
-        }))
-        .expect("register");
+    let seam = crate::context::AgentStatusTestSeam::new();
+    let status_engine =
+        AgentStatusEngine::new(AgentStatusConfig::default(), Arc::new(FixedStatusClock))
+            .with_test_seam(seam.clone());
 
     // Two model requests in one attempt: a tool-calling turn followed by a
     // stopping turn, so "one composition per request that receives status"
@@ -888,7 +949,8 @@ async fn agent_status_is_composed_exactly_once_per_request() {
     let mut tools = ToolRegistry::new();
     tool.register(&mut tools);
 
-    let (model_handle, host) = host("conv-37-compose-once", model, tools, composer, None).await;
+    let (model_handle, host) =
+        host("conv-37-compose-once", model, tools, status_engine, None).await;
     let (attachment, _) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
@@ -904,8 +966,8 @@ async fn agent_status_is_composed_exactly_once_per_request() {
     })
     .await;
 
-    let composition_count = compositions.load(std::sync::atomic::Ordering::SeqCst);
-    let invoked = invocations.load(std::sync::atomic::Ordering::SeqCst);
+    let captures = seam.capture_count(AgentStatusModuleId::Time);
+    let evaluations = seam.evaluate_count(AgentStatusModuleId::Time);
     let requests = model_handle.requests();
     let mut with_status: Vec<(String, String)> = Vec::new();
     for request in &requests {
@@ -936,13 +998,13 @@ async fn agent_status_is_composed_exactly_once_per_request() {
         "the model path received Agent Status at least once"
     );
     assert_eq!(
-        composition_count,
+        captures,
         with_status.len(),
-        "exactly one composition per model request that receives Agent Status"
+        "exactly one capture per model request that receives Agent Status"
     );
     assert_eq!(
-        invoked, composition_count,
-        "the extension providers ran once per composition, never a second time"
+        evaluations, captures,
+        "each captured generation is evaluated once, never a second time"
     );
 
     // The client observed each composition exactly once, and observing it
@@ -956,7 +1018,7 @@ async fn agent_status_is_composed_exactly_once_per_request() {
         .collect();
     assert_eq!(
         status_events.len(),
-        composition_count,
+        captures,
         "one Runtime Client status event per composition"
     );
     for (client, (_, model)) in status_events.iter().zip(with_status.iter()) {
@@ -973,11 +1035,8 @@ async fn agent_status_is_composed_exactly_once_per_request() {
         snapshot.status.expect("status view").rendered,
         with_status.last().expect("status").1.as_str()
     );
-    assert_eq!(
-        compositions.load(std::sync::atomic::Ordering::SeqCst),
-        composition_count,
-        "reading the snapshot never composes"
-    );
+    assert_eq!(seam.capture_count(AgentStatusModuleId::Time), captures);
+    assert_eq!(seam.evaluate_count(AgentStatusModuleId::Time), evaluations);
 }
 
 /// The capability projection exposes the active revision, deterministic
@@ -1016,7 +1075,7 @@ async fn capability_projection_carries_builtin_tools_and_revision() {
         )
         .expect("register");
     let model = FakeModel::new(Vec::new());
-    let (_, host) = host("conv-37-cap", model, tools, composer(), None).await;
+    let (_, host) = host("conv-37-cap", model, tools, status_engine(), None).await;
     let (attachment, _) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");

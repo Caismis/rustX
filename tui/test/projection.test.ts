@@ -780,7 +780,8 @@ describe("presentation projection", () => {
     const status = {
       attempt_id: "a1",
       turn: 1,
-      target_message_id: "m1",
+      status_message_id: "status-1",
+      opportunities: { fresh_inbound: { target_message_id: "m1" } },
       sections: [
         {
           type: "temporal" as const,
@@ -796,7 +797,6 @@ describe("presentation projection", () => {
         type: "agent_status_composed",
         attempt_id: "a1",
         turn: 1,
-        target_message_id: "m1",
         status,
       },
     ]);
@@ -804,6 +804,28 @@ describe("presentation projection", () => {
     // The rendered form comes from the runtime's own composition.
     assert.equal(state.status?.rendered, status.rendered);
     assert.deepEqual(state.status?.sections, status.sections);
+  });
+
+  it("folds an Agent Status opportunity set without FreshInbound", () => {
+    const status = {
+      attempt_id: "a1",
+      turn: 1,
+      status_message_id: "status-1",
+      opportunities: {},
+      sections: [],
+      rendered: "<system-reminder>\n</system-reminder>",
+    };
+    const state = fold(initial(), [
+      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      {
+        type: "agent_status_composed",
+        attempt_id: "a1",
+        turn: 1,
+        status,
+      },
+    ]);
+
+    assert.equal(state.status?.opportunities.fresh_inbound, undefined);
   });
 
   it("folds a capability revision swap", () => {
@@ -871,7 +893,7 @@ describe("presentation projection", () => {
           cursor: runtimeCursor(42),
           event: { type: "future_variant" } as unknown as RuntimeClientEvent,
         }),
-      /unreachable Runtime Client Protocol v2 event/,
+      /unreachable Runtime Client Protocol v3 event/,
     );
   });
 

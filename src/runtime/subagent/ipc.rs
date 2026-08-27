@@ -33,11 +33,10 @@
 
 use std::path::PathBuf;
 
-use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::context::SessionContextPolicy;
+use crate::context::{AgentStatusConfig, SessionContextPolicy};
 use crate::model::session::SessionModelConfig;
 use crate::runtime::identity::{AgentId, ConversationId, SubagentId};
 
@@ -93,8 +92,8 @@ pub(crate) struct SubagentChildSpec {
     pub models: PathBuf,
     /// The frozen session model configuration of the child.
     pub model: SessionModelConfig,
-    /// The conversation timezone of the child.
-    pub timezone: Option<Tz>,
+    /// The launch-scoped Agent Status configuration of the child.
+    pub agent_status: AgentStatusConfig,
     /// The session context policy of the child.
     pub context: SessionContextPolicy,
     /// The shared (read-only) workspace root.
@@ -383,7 +382,7 @@ mod tests {
             model: SessionModelConfig::of(
                 serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),
             ),
-            timezone: None,
+            agent_status: AgentStatusConfig::default(),
             context: SessionContextPolicy {
                 reserve_tokens: 1,
                 keep_recent_tokens: 2,

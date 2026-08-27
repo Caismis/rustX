@@ -1,5 +1,5 @@
 //! The context plane: deterministic finite context assembly, token
-//! accounting, compaction planning, Agent Status composition, and the
+//! accounting, compaction planning, Agent Status generation, and the
 //! provider-neutral model-context boundary.
 //!
 //! M7.5 (Issue #54) supersedes the M4 projection-only compaction model. The
@@ -27,8 +27,8 @@
 //! No provider SDK or wire type exists in this module: Context Assembly settles
 //! trusted semantic context, the engine projects the Surface, and adapters
 //! receive the final Effective System Prompt.
-//! [`ContextRuntime`] bundles the engine, the summary service, and the Agent
-//! Status composer for `AgentExecution`.
+//! [`ContextRuntime`] bundles the engine, the summary service, and the
+//! attempt-owned Agent Status engine for `AgentExecution`.
 
 pub mod assembly;
 pub(crate) mod compaction;
@@ -58,10 +58,14 @@ pub use engine::{
 };
 pub use error::{ContextError, ContextErrorKind};
 pub use projection::ContextProjection;
+#[cfg(test)]
+pub(crate) use status::AgentStatusTestSeam;
 pub use status::{
-    AgentStatus, AgentStatusClock, AgentStatusComposer, AgentStatusCompositionError,
-    AgentStatusFact, AgentStatusRenderContext, AgentStatusSection, AgentStatusSectionData,
-    AgentStatusSectionId, AgentStatusSectionProvider, SystemClock, render_agent_status,
+    AgentStatus, AgentStatusClock, AgentStatusConfig, AgentStatusEngine, AgentStatusModuleId,
+    AgentStatusOpportunitySet, AgentStatusSection, AgentStatusSectionData, AgentStatusSectionId,
+    BackgroundStatusConfig, FreshInboundStatusOpportunity, GLOBAL_AGENT_STATUS_BYTE_CAP,
+    MAX_BACKGROUND_STATUS_EXECUTIONS, MAX_BACKGROUND_STATUS_TEXT_BYTES, SystemClock,
+    TimeStatusConfig, render_agent_status,
 };
 pub use summarizer::{ContextSummarizer, ModelBackedSummarizer, SummaryModelInput, SummaryRequest};
 pub use tokens::{
@@ -72,7 +76,7 @@ pub use tokens::{
 /// The context runtime bundle handed to an `AgentExecution`.
 ///
 /// The bundle owns the deterministic engine, the summary service, and the
-/// Agent Status composer; `AgentExecution` owns the integration point and
+/// attempt-owned Agent Status engine; `AgentExecution` owns the integration point and
 /// the attempt's [`ConversationState`](crate::conversation::ConversationState).
 /// There is deliberately no separate summary store: compaction lineage is
 /// derived from Conversation Surface history, so no second authority can
@@ -83,10 +87,9 @@ pub struct ContextRuntime {
     pub(crate) engine: ContextEngine,
     /// The provider-neutral summary service.
     pub(crate) summarizer: Arc<dyn ContextSummarizer>,
-    /// The Agent Status composer: the structured status sections and the
-    /// deterministic renderer that produces the canonical Runtime context
-    /// fact. Agent Status is owned by the context plane.
-    pub(crate) status_composer: AgentStatusComposer,
+    /// The attempt-owned closed Agent Status engine. It contains the
+    /// compile-time module set and attempt-scoped quarantine state.
+    pub(crate) status_engine: AgentStatusEngine,
     /// The one rustX-owned finite context-assembly contract. Extensions only
     /// receive immutable invocation snapshots through this value.
     pub(crate) assembly: ContextAssembly,
@@ -118,20 +121,20 @@ impl ContextRuntime {
     pub fn for_attempt(
         policy: SessionContextPolicy,
         estimator: Arc<dyn TokenEstimator>,
-        status_composer: AgentStatusComposer,
+        status_engine: AgentStatusEngine,
         model: &AttemptModelSnapshot,
     ) -> Result<Self, ContextError> {
         Self::for_attempt_with_assembly(
             policy,
             estimator,
-            status_composer,
+            status_engine,
             ContextAssembly::new(),
             model,
         )
     }
 
-    /// Creates a production context runtime with the supplied certified
-    /// contributor registry.
+    /// Creates a production context runtime with the supplied attempt-owned
+    /// Agent Status engine.
     ///
     /// # Errors
     ///
@@ -140,7 +143,7 @@ impl ContextRuntime {
     pub fn for_attempt_with_assembly(
         policy: SessionContextPolicy,
         estimator: Arc<dyn TokenEstimator>,
-        status_composer: AgentStatusComposer,
+        status_engine: AgentStatusEngine,
         assembly: ContextAssembly,
         model: &AttemptModelSnapshot,
     ) -> Result<Self, ContextError> {
@@ -192,7 +195,7 @@ impl ContextRuntime {
         Ok(Self {
             engine,
             summarizer: Arc::new(ModelBackedSummarizer::new(summary)),
-            status_composer,
+            status_engine,
             assembly,
             compaction_budgets,
             native_system: NativeContextInput::default(),
@@ -224,31 +227,31 @@ impl ContextRuntime {
     pub(crate) fn with_scripted_summarizer(
         engine: ContextEngine,
         summarizer: Arc<dyn ContextSummarizer>,
-        status_composer: AgentStatusComposer,
+        status_engine: AgentStatusEngine,
         compaction_budgets: CompactionBudgets,
     ) -> Self {
         Self::with_scripted_summarizer_and_assembly(
             engine,
             summarizer,
-            status_composer,
+            status_engine,
             ContextAssembly::new(),
             compaction_budgets,
         )
     }
 
-    /// Test-only constructor with an explicit contributor registry.
+    /// Test-only constructor with an explicit attempt-owned status engine.
     #[cfg(test)]
     pub(crate) fn with_scripted_summarizer_and_assembly(
         engine: ContextEngine,
         summarizer: Arc<dyn ContextSummarizer>,
-        status_composer: AgentStatusComposer,
+        status_engine: AgentStatusEngine,
         assembly: ContextAssembly,
         compaction_budgets: CompactionBudgets,
     ) -> Self {
         Self {
             engine,
             summarizer,
-            status_composer,
+            status_engine,
             assembly,
             compaction_budgets,
             native_system: NativeContextInput::default(),

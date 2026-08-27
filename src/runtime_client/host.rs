@@ -1,7 +1,7 @@
 //! The Runtime Client host: the projection + control + attachment adapter
 //! over the conversation runtime coordinator (Issue #61).
 //!
-//! [`RuntimeClientHost`] is the Runtime Client boundary of Protocol v2. It
+//! [`RuntimeClientHost`] is the Runtime Client boundary of Protocol v3. It
 //! observes and controls the
 //! [`ConversationRuntime`](crate::runtime::conversation_runtime::ConversationRuntime)
 //! of the same conversation; it does **not** own the conversation runtime:
@@ -21,7 +21,7 @@
 //!
 //! The host owns:
 //!
-//! - the one-active-attachment v2 policy;
+//! - the one-active-attachment v3 policy;
 //! - the Runtime Client projection (snapshot read model, cursor allocation,
 //!   bounded replay, subscribers) and its linearization boundary;
 //! - protocol adaptation: request dispatch, `model_set`/`shutdown`/
@@ -143,7 +143,7 @@ pub enum HostConstructionError {
     /// The conversation runtime identity is already bound to a Runtime
     /// Client host.
     ///
-    /// Protocol v2 binds one runtime identity to at most one
+    /// Protocol v3 binds one runtime identity to at most one
     /// [`RuntimeClientHost`] for that identity's lifetime, so cloning a
     /// runtime never yields a second bindable identity and dropping the
     /// bound host never makes it bindable again. Reconnect replaces the
@@ -248,7 +248,7 @@ pub(crate) struct ClientState {
     /// The Runtime Client projection: snapshot read model, cursor,
     /// bounded replay, subscribers.
     projection: RuntimeClientProjection,
-    /// The at-most-one active attachment of Protocol v2.
+    /// The at-most-one active attachment of Protocol v3.
     attachment: Option<AttachmentState>,
     /// The next attachment identity sequence.
     next_attachment_seq: u64,
@@ -420,7 +420,7 @@ impl ClientInner {
     /// Admits one attachment: the internal primitive behind the
     /// `initialize` protocol method.
     ///
-    /// Protocol v2 allows at most one active attachment; a second
+    /// Protocol v3 allows at most one active attachment; a second
     /// simultaneous attach fails deterministically and never evicts the
     /// first. The returned snapshot and cursor are linearized with the
     /// admission under the one projection synchronization boundary.
@@ -1811,8 +1811,7 @@ mod tests {
 
     use super::{EventDelivery, EventSubscription, RuntimeClientHost, RuntimeClientHostConfig};
     use crate::context::{
-        AgentStatusClock, AgentStatusComposer, AgentStatusFact, AgentStatusRenderContext,
-        AgentStatusSectionId, AgentStatusSectionProvider, ContextError, DefaultTokenEstimator,
+        AgentStatusClock, AgentStatusConfig, AgentStatusEngine, DefaultTokenEstimator,
         TokenEstimator,
     };
     use crate::conversation::SurfaceRevision;
@@ -2141,25 +2140,6 @@ mod tests {
         }
     }
 
-    /// An extension provider recording its facts.
-    struct RecordingProvider;
-
-    impl AgentStatusSectionProvider for RecordingProvider {
-        fn section_id(&self) -> AgentStatusSectionId {
-            AgentStatusSectionId::new("recording")
-        }
-
-        fn section(
-            &self,
-            _context: &AgentStatusRenderContext,
-        ) -> Result<Option<Vec<AgentStatusFact>>, ContextError> {
-            Ok(Some(vec![AgentStatusFact {
-                label: "extension".to_owned(),
-                value: "fact".to_owned(),
-            }]))
-        }
-    }
-
     /// A fixture over one conversation: the conversation runtime
     /// coordinator, its Runtime Client host adapter, and the scripted
     /// adapter driving attempts.
@@ -2175,9 +2155,9 @@ mod tests {
     async fn host_fixture(
         scripts: Vec<Vec<GatedStep>>,
         tools: ToolRegistry,
-        composer: AgentStatusComposer,
+        status_engine: AgentStatusEngine,
     ) -> (Arc<GatedAdapter>, HostFixture) {
-        host_fixture_with_native_tools(scripts, tools, composer, false).await
+        host_fixture_with_native_tools(scripts, tools, status_engine, false).await
     }
 
     /// Builds the conversation runtime + host, optionally activating the
@@ -2187,7 +2167,7 @@ mod tests {
     async fn host_fixture_with_native_tools(
         scripts: Vec<Vec<GatedStep>>,
         mut tools: ToolRegistry,
-        composer: AgentStatusComposer,
+        status_engine: AgentStatusEngine,
         include_native_tools: bool,
     ) -> (Arc<GatedAdapter>, HostFixture) {
         let adapter = Arc::new(GatedAdapter::new(scripts));
@@ -2237,7 +2217,6 @@ mod tests {
         let runtime = ConversationRuntime::new(RuntimeConversationConfig {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter.clone()),
-            timezone: None,
             approval_mode: crate::runtime::ApprovalMode::Policy,
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
@@ -2246,7 +2225,7 @@ mod tests {
                     summary_output_cap: None,
                 },
                 estimator,
-                status_composer: composer,
+                status_engine,
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -2316,7 +2295,6 @@ mod tests {
             RuntimeConversationConfig {
                 agent_id: AgentId::new("agent-a"),
                 model: scripted_session_model(adapter.clone()),
-                timezone: None,
                 approval_mode: crate::runtime::ApprovalMode::Policy,
                 context: ConversationContextConfig {
                     policy: crate::context::SessionContextPolicy {
@@ -2325,7 +2303,7 @@ mod tests {
                         summary_output_cap: None,
                     },
                     estimator,
-                    status_composer: composer(),
+                    status_engine: status_engine(),
                 },
                 tool_runtime,
                 resources: test_resources(&coordinator),
@@ -2357,9 +2335,9 @@ mod tests {
         )
     }
 
-    /// The default status composer over the fixed clock.
-    fn composer() -> AgentStatusComposer {
-        AgentStatusComposer::new(Arc::new(FixedStatusClock))
+    /// The default status engine over the fixed clock.
+    fn status_engine() -> AgentStatusEngine {
+        AgentStatusEngine::new(AgentStatusConfig::default(), Arc::new(FixedStatusClock))
     }
 
     fn inbound_text(id: &str, text: &str) -> UserMessageBlock {
@@ -2438,7 +2416,7 @@ mod tests {
     /// ids are attachment-scoped.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn attachment_lifecycle_and_request_id_scope() {
-        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
         let (first, initialized) = fixture
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
@@ -2481,7 +2459,7 @@ mod tests {
         assert!(matches!(
             bad,
             Err(RuntimeClientError::UnsupportedProtocolVersion {
-                supported: 2,
+                supported: 3,
                 requested: 9,
             })
         ));
@@ -2511,7 +2489,7 @@ mod tests {
     /// Dropping the attachment releases it (RAII detach semantics).
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn dropping_the_attachment_detaches_it() {
-        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
         let (attachment, _) = fixture
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
@@ -2534,7 +2512,7 @@ mod tests {
     /// A detached handle rejects requests deterministically.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn detached_handle_rejects_requests() {
-        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
         let (attachment, _) = fixture
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
@@ -2557,7 +2535,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn submit_when_idle_admits_and_runs_the_attempt() {
         let (adapter, fixture) =
-            host_fixture(vec![one_turn_stop()], ToolRegistry::new(), composer()).await;
+            host_fixture(vec![one_turn_stop()], ToolRegistry::new(), status_engine()).await;
         let (attachment, _) = fixture
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
@@ -2698,7 +2676,7 @@ mod tests {
                 one_turn_stop(),
             ],
             ToolRegistry::new(),
-            composer(),
+            status_engine(),
         )
         .await;
         let (attachment, _) = fixture
@@ -2900,7 +2878,7 @@ mod tests {
                 one_turn_stop(),
             ],
             ToolRegistry::new(),
-            composer(),
+            status_engine(),
         )
         .await;
         let (attachment, _) = fixture
@@ -2994,7 +2972,7 @@ mod tests {
                 }),
             ]],
             ToolRegistry::new(),
-            composer(),
+            status_engine(),
         )
         .await;
         let (attachment, _) = fixture
@@ -3085,7 +3063,7 @@ mod tests {
     /// error.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn cancel_with_no_attempt_fails_typed() {
-        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
         let (attachment, _) = fixture
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
@@ -3115,7 +3093,7 @@ mod tests {
                 }),
             ]],
             ToolRegistry::new(),
-            composer(),
+            status_engine(),
         )
         .await;
         let (attachment, _) = fixture
@@ -3191,7 +3169,7 @@ mod tests {
                 one_turn_stop(),
             ],
             ToolRegistry::new(),
-            composer(),
+            status_engine(),
         )
         .await;
         // Dispatch one detached background execution directly through the
@@ -3317,7 +3295,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn detach_does_not_affect_conversation_or_future_async_admission() {
         let (adapter, fixture) =
-            host_fixture(vec![one_turn_stop()], ToolRegistry::new(), composer()).await;
+            host_fixture(vec![one_turn_stop()], ToolRegistry::new(), status_engine()).await;
         let (attachment, _) = fixture
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
@@ -3428,7 +3406,7 @@ mod tests {
         let (adapter, fixture) = host_fixture(
             vec![script, one_turn_stop(), one_turn_stop()],
             tools,
-            composer(),
+            status_engine(),
         )
         .await;
         let (attachment, _) = fixture
@@ -3636,7 +3614,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_resource_reload_never_exposes_a_half_published_generation() {
         let (_adapter, fixture) =
-            host_fixture_with_native_tools(Vec::new(), ToolRegistry::new(), composer(), true).await;
+            host_fixture_with_native_tools(Vec::new(), ToolRegistry::new(), status_engine(), true)
+                .await;
         let HostFixture {
             _dir: dir,
             host,
@@ -3779,7 +3758,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn releasing_the_last_owner_destroys_the_host_and_exits_the_workers() {
         let (_adapter, fixture) =
-            host_fixture_with_native_tools(Vec::new(), ToolRegistry::new(), composer(), true).await;
+            host_fixture_with_native_tools(Vec::new(), ToolRegistry::new(), status_engine(), true)
+                .await;
         let HostFixture {
             _dir: dir,
             host,
@@ -3906,7 +3886,8 @@ mod tests {
     /// still succeed.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_surviving_subsystem_handle_never_retains_the_host() {
-        let (_adapter, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
+        let (_adapter, fixture) =
+            host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
         let HostFixture {
             _dir: dir,
             host,
@@ -3999,7 +3980,8 @@ mod tests {
     /// attachment slot is released, and a fresh endpoint initializes.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn detach_releases_the_attachment_but_never_the_host() {
-        let (_adapter, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
+        let (_adapter, fixture) =
+            host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
         let weak = fixture.host.weak_inner();
 
         let endpoint = fixture.host.endpoint();
@@ -4204,7 +4186,7 @@ mod tests {
     /// the transition.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn an_availability_only_commit_publishes_a_capability_update_without_a_revision_swap() {
-        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
         let (attachment, _) = fixture
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
@@ -4287,7 +4269,7 @@ mod tests {
     /// event would still believe no project instructions were loaded.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn resource_reload_publishes_the_loaded_project_context_files() {
-        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
         let (attachment, _) = fixture
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
@@ -4541,7 +4523,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn replay_resync_and_cursor_survival() {
         let (_, fixture) =
-            host_fixture(vec![one_turn_stop()], ToolRegistry::new(), composer()).await;
+            host_fixture(vec![one_turn_stop()], ToolRegistry::new(), status_engine()).await;
         let (attachment, _) = fixture
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
@@ -4596,7 +4578,7 @@ mod tests {
     /// stay visible after detach.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn background_lifecycle_projection_and_protocol_cancel() {
-        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
         let (tool, mut started, release) = ParkingBackgroundTool::new();
         let executor: Arc<dyn ToolExecutor> = Arc::new(tool);
         let prepared = fixture
@@ -4680,7 +4662,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn background_survives_attempt_termination() {
         let (_, fixture) =
-            host_fixture(vec![one_turn_stop()], ToolRegistry::new(), composer()).await;
+            host_fixture(vec![one_turn_stop()], ToolRegistry::new(), status_engine()).await;
         let (tool, mut started, release) = ParkingBackgroundTool::new();
         let executor: Arc<dyn ToolExecutor> = Arc::new(tool);
         let prepared = fixture
@@ -4752,14 +4734,11 @@ mod tests {
     /// Agent Status is admitted from the exact same composition the model
     /// path consumes: the client event's rendered text equals the canonical
     /// Runtime context fact sent in the model request.
+    #[allow(clippy::too_many_lines)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn agent_status_projection_shares_one_composition() {
-        let mut composer = composer();
-        composer
-            .register(Arc::new(RecordingProvider))
-            .expect("register provider");
         let (adapter, fixture) =
-            host_fixture(vec![one_turn_stop()], ToolRegistry::new(), composer).await;
+            host_fixture(vec![one_turn_stop()], ToolRegistry::new(), status_engine()).await;
         let (attachment, _) = fixture
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
@@ -4775,6 +4754,31 @@ mod tests {
             matches!(event.event, RuntimeClientEvent::AgentStatusComposed { .. })
         })
         .await;
+        let status_index = events
+            .iter()
+            .position(|event| matches!(event.event, RuntimeClientEvent::AgentStatusComposed { .. }))
+            .expect("status event index");
+        let committed_index = events
+            .iter()
+            .position(|event| {
+                matches!(
+                    &event.event,
+                    RuntimeClientEvent::MessageCommitted { message, .. }
+                        if matches!(
+                            message,
+                            MessageBlock::User(user)
+                                if user.kind
+                                    == crate::message::types::InboundKind::Context(
+                                        crate::message::types::ContextKind::AgentStatus,
+                                    )
+                        )
+                )
+            })
+            .expect("canonical status commit event");
+        assert!(
+            committed_index < status_index,
+            "canonical Agent Status publication precedes structured observation"
+        );
         let status_event = events
             .iter()
             .find_map(|event| match &event.event {
@@ -4815,12 +4819,44 @@ mod tests {
             status_event.rendered, model_rendered,
             "the client view derives from the same composition as the model path"
         );
-        assert!(status_event.sections.iter().any(|section| matches!(
-            section,
-            crate::runtime_client::snapshot::RuntimeClientStatusSection::Facts { facts }
-                if facts.iter().any(|fact| fact.label == "extension" && fact.value == "fact")
-        )));
         let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
+        let committed_status = snapshot
+            .messages
+            .iter()
+            .find_map(|message| match message {
+                MessageBlock::User(user)
+                    if user.kind
+                        == crate::message::types::InboundKind::Context(
+                            crate::message::types::ContextKind::AgentStatus,
+                        ) =>
+                {
+                    Some(user)
+                }
+                _ => None,
+            })
+            .expect("canonical status message");
+        assert_eq!(status_event.status_message_id, committed_status.id);
+        assert!(
+            status_event.opportunities.fresh_inbound.is_some(),
+            "the current FreshInbound-only producer still populates its opportunity"
+        );
+        assert!(snapshot.messages.iter().any(|message| {
+            matches!(
+                message,
+                MessageBlock::User(user)
+                    if user.id
+                        == status_event
+                            .opportunities
+                            .fresh_inbound
+                            .as_ref()
+                            .expect("FreshInbound is populated by the current producer")
+                            .target_message_id
+            )
+        }));
+        assert!(matches!(
+            status_event.sections.first(),
+            Some(crate::runtime_client::snapshot::RuntimeClientStatusSection::Temporal { .. })
+        ));
         assert_eq!(
             snapshot.status.expect("status view").rendered,
             model_rendered
@@ -4829,7 +4865,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn resource_reload_dispatches_through_the_async_runtime_client_control() {
-        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
         let (attachment, _) = fixture
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
@@ -4874,7 +4910,7 @@ mod tests {
                 }),
             ]],
             ToolRegistry::new(),
-            composer(),
+            status_engine(),
         )
         .await;
         let (attachment, _) = fixture
@@ -5246,7 +5282,7 @@ mod tests {
             }),
         ];
         let (adapter, fixture) =
-            host_fixture(vec![script, one_turn_stop()], tools, composer()).await;
+            host_fixture(vec![script, one_turn_stop()], tools, status_engine()).await;
         let (attachment, _) = fixture
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
@@ -5395,7 +5431,7 @@ mod tests {
                 }),
             ]],
             ToolRegistry::new(),
-            composer(),
+            status_engine(),
         )
         .await;
         let (attachment_b, _) = fixture_b
@@ -5474,7 +5510,7 @@ mod tests {
                 }),
             ]],
             ToolRegistry::new(),
-            composer(),
+            status_engine(),
         )
         .await;
         let (attachment, _) = fixture
@@ -5602,7 +5638,6 @@ mod tests {
         let runtime = ConversationRuntime::new(RuntimeConversationConfig {
             agent_id: AgentId::new("agent-a"),
             model: crate::scripted_suites::support::model::scripted_session_model(adapter.clone()),
-            timezone: None,
             approval_mode: crate::runtime::ApprovalMode::Policy,
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
@@ -5611,7 +5646,7 @@ mod tests {
                     summary_output_cap: None,
                 },
                 estimator,
-                status_composer: composer(),
+                status_engine: status_engine(),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -5685,7 +5720,6 @@ mod tests {
                 model: crate::scripted_suites::support::model::scripted_session_model(
                     adapter.clone(),
                 ),
-                timezone: None,
                 approval_mode: crate::runtime::ApprovalMode::Policy,
                 context: ConversationContextConfig {
                     policy: crate::context::SessionContextPolicy {
@@ -5694,7 +5728,7 @@ mod tests {
                         summary_output_cap: None,
                     },
                     estimator,
-                    status_composer: composer(),
+                    status_engine: status_engine(),
                 },
                 tool_runtime,
                 resources: test_resources(&coordinator),
@@ -5794,7 +5828,6 @@ mod tests {
         let config = RuntimeConversationConfig {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter.clone()),
-            timezone: None,
             approval_mode: crate::runtime::ApprovalMode::Policy,
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
@@ -5803,7 +5836,7 @@ mod tests {
                     summary_output_cap: None,
                 },
                 estimator,
-                status_composer: composer(),
+                status_engine: status_engine(),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -6864,7 +6897,6 @@ mod tests {
         RuntimeConversationConfig {
             agent_id: AgentId::new("agent-claim"),
             model: scripted_session_model(fixture.adapter.clone()),
-            timezone: None,
             approval_mode: crate::runtime::ApprovalMode::Policy,
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
@@ -6873,7 +6905,7 @@ mod tests {
                     summary_output_cap: None,
                 },
                 estimator: Arc::new(DefaultTokenEstimator),
-                status_composer: composer(),
+                status_engine: status_engine(),
             },
             tool_runtime: fixture.tool_runtime.clone(),
             resources: test_resources(&fixture.coordinator),

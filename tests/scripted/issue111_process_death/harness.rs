@@ -102,7 +102,7 @@ fn models_json() -> String {
 /// The runtime configuration a child composes from.
 fn runtime_json(read_approval: &str) -> String {
     serde_json::json!({
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "agentId": "agent-fnd06",
         "model": {"model": MODEL},
         "approvalMode": "policy",

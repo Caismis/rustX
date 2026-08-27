@@ -153,6 +153,11 @@ The finite user lanes are ordered as:
 3. ExtensionEnvironment — multiple certified extensions;
 4. AgentStatus — one native-reserved owner.
 
+This is a semantic lane order, not a physical adjacency promise: the
+request-scoped AgentStatus message is the final User-context lane even when
+other canonical messages or provider-specific wire encoding occur between
+the inbound fact and its presentation.
+
 The native observation lane sits directly after claimed inbound because that
 owner's facts describe what the environment just did for the *preceding* tool
 batch, while every later lane describes the *current* request.
@@ -264,13 +269,18 @@ allocates IDs once, commits each accepted message through
 ConversationState::commit, and records the accepted ContextGeneration.
 Contributors cannot select provenance or identity.
 
-Agent Status remains structured runtime-owned data before rendering. It is
-composed from authoritative runtime facts: the runtime clock/timezone,
-persisted inbound timestamp, and the background registry snapshot. It never
-scans conversation prose or infers current state from regular expressions.
-Two status snapshots with identical bytes at different admitted steps are
+Agent Status remains structured runtime-owned data before rendering. The
+closed, rustX-owned Time and Background modules receive a FreshInbound
+opportunity, capture authoritative state once into finite immutable snapshots,
+and evaluate only those snapshots plus immutable launch configuration. The
+engine validates `Time <-> Temporal` and `Background <-> BackgroundExecution`,
+applies module-local bounds, then admits whole sections under a global
+UTF-8-byte cap in `Time -> Background` source order. It never scans
+conversation prose or infers current state from regular expressions. Two
+status generations with identical bytes at different admitted steps are
 different facts and receive different MessageIds; content deduplication is
-not a semantic operation.
+not a semantic operation. A failed module is quarantined for the current
+attempt while surviving modules continue.
 
 The Skill catalog is sampled from the immutable per-attempt capability
 snapshot and assembled as a request-time native capability section. Normal
@@ -461,8 +471,8 @@ fails the compaction.
 Runtime and Agent Status observations in retired history are historical
 evidence. The summarizer may describe a task as having run earlier and later
 completed, but the resulting text never becomes current runtime authority.
-Absence of a later extension Status section is not lifecycle completion unless
-that section's explicit contract gives absence that meaning.
+Absence of a later Agent Status section is not lifecycle completion unless
+the relevant status contract explicitly gives absence that meaning.
 
 The Ledger, Surface, and RequestSnapshot have separate ownership:
 
@@ -601,9 +611,9 @@ one staged primary step
     → start arbitration → RequestSnapshot #2 / provider request #2
 ~~~
 
-Assembly, Agent Status sampling, Skill snapshot rendering, extension
-invocation, logical ordering, contributor generation, and staging happen
-once. The retry reuses the staged ContextGeneration and the canonical
+Assembly, Agent Status capture/evaluation, Skill snapshot rendering,
+extension invocation, logical ordering, contributor generation, and staging
+happen once. The retry reuses the staged ContextGeneration and the canonical
 context facts committed at the first start. It never reinvokes contributors
 or stages a duplicate context batch, but it passes through the same
 cancellation-vs-start arbitration as every model turn: cancellation that
@@ -634,11 +644,11 @@ retry gets retry_number = 1; the original request remains independently
 reconstructable from its own snapshot and surface revision. If the provider
 overflows again, the bounded retry budget is exhausted.
 
-The overflow regression uses a deterministic fake adapter and a contributor
-counter. Its compaction candidate would cross pending fresh inbound without
-the constraint; the protected retry still contains the inbound identity. It
-proves one contributor invocation, one Agent Status sample, one extension
-fact in the ledger, one accepted context generation, changed revisions when
+The overflow regression uses a deterministic fake adapter and the closed
+Agent Status capture/evaluate counter. Its compaction candidate would cross
+pending fresh inbound without the constraint; the protected retry still
+contains the inbound identity. It proves one Agent Status generation per
+primary step, one accepted context generation, changed revisions when
 compaction occurs, and structural equality for both actual requests and their
 reconstructions.
 
@@ -693,6 +703,12 @@ transcript. Keyed lookup reconstructs one request on demand; historical
 listing uses a bounded, fallible page with an exclusive durable sequence
 cursor, so runtime bootstrap and normal admission never enumerate the full
 history.
+
+For a status-bearing FreshInbound request, the successful durable start
+commit is also the publication boundary: the canonical status User message
+is observed first, then the structured Agent Status observation is published,
+and only then is the provider invoked. If cancellation wins before that
+commit, neither status view is visible.
 
 The Event Journal follows the same boundary: append durably, publish the live
 observer, then release the committed event body from the attempt. Historical
