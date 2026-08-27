@@ -80,10 +80,10 @@ use crate::context::error::{ContextError, ContextErrorKind};
 use crate::context::projection::ContextProjection;
 use crate::context::tokens::{ObservedAnchor, ProviderObservedInput};
 use crate::context::{
-    AcceptedContext, AgentStatusOpportunitySet, ContextRuntime, ContributorInputSnapshot,
-    DeferredContextProposal, FreshInboundStatusOpportunity, MAX_DEFERRED_CONTEXT_PROPOSALS,
-    MAX_PROPOSALS_PER_CONTRIBUTOR, render_agent_status, render_effective_system_prompt,
-    validate_user_message_proposal,
+    AcceptedContext, AgentStatusOpportunitySet, AgentStatusSurfaceView, ContextRuntime,
+    ContributorInputSnapshot, DeferredContextProposal, FreshInboundStatusOpportunity,
+    MAX_DEFERRED_CONTEXT_PROPOSALS, MAX_PROPOSALS_PER_CONTRIBUTOR, render_agent_status,
+    render_effective_system_prompt, validate_user_message_proposal,
 };
 use crate::conversation::{ConversationError, ConversationState, PreparedCanonicalCommit};
 use crate::durable::ConversationStore;
@@ -129,7 +129,7 @@ use super::lifecycle::{
 use super::observer::{AgentExecutionObserver, AgentStatusObservation};
 use super::state::{ExecutionState, ExecutionStateMachine};
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 
 /// The bounded M4 retry policy for `ContextWindowExceeded`.
 ///
@@ -1432,6 +1432,9 @@ impl<'a> AgentExecution<'a> {
         native.agent_status = status_generation
             .as_ref()
             .map(|generation| render_agent_status(&generation.status));
+        native.agent_status_metadata = status_generation
+            .as_ref()
+            .map(|generation| generation.status.generation_metadata());
         let accepted = self
             .context_runtime
             .assembly
@@ -1535,16 +1538,18 @@ impl<'a> AgentExecution<'a> {
         self.finalize_model_turn(&staged_context, staged, status_generation)
     }
 
-    /// Prepares the Agent Status generation of the pending `FreshInbound`
+    /// Prepares the Agent Status generation of the pending delivery
     /// opportunity.
     ///
-    /// With no pending fresh inbound turn there is no Agent Status. With a
-    /// pending turn, the turn is validated against canonical history and the
-    /// final message's persisted timestamp drives `inbound_message_time`;
-    /// the closed engine produces the structured sections and the canonical
-    /// renderer produces the bounded text that Context Assembly admits as a
-    /// canonical Runtime context fact. The structured observation is deferred
-    /// until the model-turn-start commit wins.
+    /// With no pending `FreshInbound` turn there is no Agent Status. With a
+    /// pending turn, the current Surface head and its active canonical bodies
+    /// are frozen once, then projected into the finite immutable Surface view
+    /// consumed by every status module. The engine separately captures one
+    /// clock instant and one authoritative Background registry snapshot. The
+    /// canonical renderer produces the bounded text that Context Assembly
+    /// admits as a Runtime context fact, carrying the same generation's typed
+    /// metadata. The structured observation is deferred until the
+    /// model-turn-start commit wins.
     ///
     /// # Errors
     ///
@@ -1554,9 +1559,15 @@ impl<'a> AgentExecution<'a> {
         let Some(fresh) = &self.pending_fresh_inbound else {
             return Ok(None);
         };
-        let active = self.conversation.active_messages().map_err(|error| {
+        let frozen = self.conversation.freeze_active_surface().map_err(|error| {
             ContextError::new(ContextErrorKind::MalformedHistory, error.to_string())
         })?;
+        let surface = AgentStatusSurfaceView::from_snapshot(frozen);
+        let active = surface
+            .messages
+            .iter()
+            .map(|message| message.message.clone())
+            .collect::<Vec<_>>();
         fresh.validate_against(&active).map_err(|error| {
             ContextError::new(
                 ContextErrorKind::MalformedHistory,
@@ -1564,36 +1575,17 @@ impl<'a> AgentExecution<'a> {
             )
         })?;
         let target_message_id = fresh.last_message_id().clone();
-        let inbound_message_time = self.inbound_time_of(&target_message_id).ok_or_else(|| {
-            ContextError::new(
-                ContextErrorKind::MalformedHistory,
-                format!(
-                    "pending fresh inbound message {target_message_id} has no persisted timestamp"
-                ),
-            )
-        })?;
         let opportunities = AgentStatusOpportunitySet {
-            fresh_inbound: Some(FreshInboundStatusOpportunity {
-                target_message_id,
-                inbound_message_time,
-            }),
+            fresh_inbound: Some(FreshInboundStatusOpportunity { target_message_id }),
         };
         Ok(self
             .context_runtime
             .status_engine
-            .prepare(&opportunities, self.tool_runtime.background())
+            .prepare(&opportunities, &surface, self.tool_runtime.background())
             .map(|status| AgentStatusGeneration {
                 opportunities,
                 status,
             }))
-    }
-
-    /// The persisted timestamp of one committed inbound message.
-    fn inbound_time_of(&self, message_id: &MessageId) -> Option<DateTime<Utc>> {
-        match self.conversation.ledger().get(message_id) {
-            Some(MessageBlock::User(user)) => user.timestamp,
-            _ => None,
-        }
     }
 
     /// Builds the staged view of one actual model request: a scratch
@@ -1728,10 +1720,12 @@ impl<'a> AgentExecution<'a> {
             Some(generation) => {
                 let status_message_id = staged_context.iter().find_map(|block| match block {
                     MessageBlock::User(user)
-                        if user.kind
-                            == crate::message::types::InboundKind::Context(
-                                crate::message::types::ContextKind::AgentStatus,
-                            ) =>
+                        if matches!(
+                            user.kind,
+                            crate::message::types::InboundKind::Context(
+                                crate::message::types::ContextKind::AgentStatus(_)
+                            )
+                        ) =>
                     {
                         Some(user.id.clone())
                     }
@@ -2054,7 +2048,7 @@ impl<'a> AgentExecution<'a> {
                 id,
                 content: context.content.clone(),
                 source: context.source.clone(),
-                kind: crate::message::types::InboundKind::Context(context.kind),
+                kind: crate::message::types::InboundKind::Context(context.kind.clone()),
                 timestamp: None,
             });
             scratch
@@ -5567,7 +5561,10 @@ mod tests {
                 .all(|block| !matches!(
                     block,
                     MessageBlock::User(user)
-                        if user.kind == InboundKind::Context(ContextKind::AgentStatus)
+                        if matches!(
+                            &user.kind,
+                            InboundKind::Context(ContextKind::AgentStatus(_))
+                        )
                 )),
             "the provisional status message never became canonical"
         );
@@ -5583,7 +5580,10 @@ mod tests {
             result.messages().iter().all(|block| !matches!(
                 block,
                 MessageBlock::User(user)
-                    if user.kind == InboundKind::Context(ContextKind::AgentStatus)
+                    if matches!(
+                        &user.kind,
+                        InboundKind::Context(ContextKind::AgentStatus(_))
+                    )
             )),
             "canonical history contains no Agent Status message"
         );
@@ -6257,7 +6257,10 @@ mod tests {
             matches!(
                 message,
                 MessageBlock::User(user)
-                    if user.kind == InboundKind::Context(ContextKind::AgentStatus)
+                    if matches!(
+                        &user.kind,
+                        InboundKind::Context(ContextKind::AgentStatus(_))
+                    )
             )
         }));
         let reconstructed = tool_runtime

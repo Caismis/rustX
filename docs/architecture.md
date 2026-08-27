@@ -30,11 +30,14 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 10. An incompatible database
+The SQLite schema is development schema version 11. An incompatible database
 fails explicitly; there is no migration chain, legacy reader, compatibility
-fallback, dual write, or old storage mode. Version 10 freezes the structured
+fallback, dual write, or old storage mode. Version 10 froze the structured
 Questionnaire interaction audit vocabulary introduced by Issue #126. Version
-9 and every older development schema are rejected at open. File-backed stores
+11 adds the typed Agent Status generation descriptor: its UTC generation
+instant and admitted module membership are durable with the canonical status
+message. Version 10 and every older development schema are rejected at open.
+File-backed stores
 use WAL, `synchronous=FULL`, foreign-key enforcement, and a busy timeout. A
 successful SQLite commit is the local durability linearization point
 documented here.
@@ -53,7 +56,7 @@ answers, an explicit decline, or owning-attempt cancellation. A v9 journal may
 contain the obsolete Question/Answered payloads and is rejected rather than
 decoded or migrated.
 
-The version-10 physical tables are deliberately semantic rather than generic:
+The version-11 physical tables are deliberately semantic rather than generic:
 
 | Table | Purpose and constraints |
 | --- | --- |
@@ -658,7 +661,7 @@ underneath the waiter. Only after settlement and attempt completion may a
 reload publish a new generation, and that generation affects a later admitted
 attempt only.
 
-Runtime Client v3 carries the same semantic plane through
+Runtime Client v4 carries the same semantic plane through
 `interaction_respond`, typed acceptance/errors, `interaction_pending` and
 `interaction_settled` events, and `snapshot.pending_interactions`. Snapshot
 plus cursor and subscribe-after-cursor retain the existing repair invariant.
@@ -1462,17 +1465,24 @@ Key contracts:
   is process-local executable authority, not durable compaction state;
   compaction never reloads it. Explicit reload and cold recreation remain
   separate lifecycle boundaries.
-- Agent Status is an optional FreshInbound enrichment sampled from
-  authoritative runtime facts and admitted as a canonical
+- Agent Status is an optional FreshInbound opportunity, not an automatic
+  emission rule. At one primary-model-step preparation boundary, execution
+  preparation freezes one finite Pre-Status Surface from the active Surface
+  identities plus keyed Message Ledger hydration, samples the Agent Status
+  clock once, and captures one immutable authoritative Background registry
+  snapshot. Context Assembly consumes those frozen inputs through the closed
+  engine, which evaluates its compile-time Time and Background modules once,
+  then admits any contributing sections as a canonical
   `UserSource::Runtime` context message with
-  `InboundKind::Context(ContextKind::AgentStatus)`. The closed engine owns
-  compile-time Time and Background modules in semantic source order, captures
-  finite immutable snapshots, evaluates them once, validates their typed
-  payload mapping, and applies module-local plus global whole-section bounds.
-  It participates in normal history, projection, token accounting, and
-  Surface revisioning, and is never reinjected by an adapter. Identical
-  rendered bytes at distinct admitted steps receive distinct canonical
-  identities. If no module contributes, no empty status message is emitted.
+  `InboundKind::Context(ContextKind::AgentStatus(metadata))`. The metadata is
+  the durable typed membership/timestamp descriptor tied to that canonical
+  message; neither the engine nor a projection parses renderer text. It
+  participates in normal history, projection, token accounting, and Surface
+  revisioning, and is never reinjected by an adapter. Identical rendered bytes
+  at distinct admitted steps receive distinct canonical identities. If no
+  module contributes, no empty status message is emitted. Overflow
+  compact-and-retry reuses the accepted generation without a second Surface
+  scan, clock sample, authoritative capture, or trigger evaluation.
 - The initial-turn trigger is an explicit execution mode, never an `Option`
   used as a status switch: `AgentExecutionRequest` carries one
   `InitialTurnTrigger` — `FreshInbound(FreshInboundTurn)` makes validation and
@@ -2986,7 +2996,7 @@ environment, finite timeout, bounded diagnostics, and no generic
 
 The outermost layer exposes the runtime to humans and other systems:
 
-- Runtime Client Protocol v3 (semantic client boundary)
+- Runtime Client Protocol v4 (semantic client boundary)
 - Local interactive CLI
 - Runtime command interface
 - HTTP control interface
@@ -2995,7 +3005,7 @@ The outermost layer exposes the runtime to humans and other systems:
 
 AG-UI is an output projection, not the internal durable event model.
 
-#### Runtime Client Protocol v3 implementation (Issue #37)
+#### Runtime Client Protocol v4 implementation (Issue #37, revised by Issue #131)
 
 Issue #37 implements the one external semantic normalization boundary in
 `src/runtime_client`:
@@ -3010,7 +3020,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-      Runtime Client Protocol v3
+      Runtime Client Protocol v4
 ```
 
 The governing invariant is that all authoritative execution and
@@ -3080,7 +3090,7 @@ runtime_client/attachment.rs   RuntimeAttachment: at-most-one attachment,
                                event subscription delivery
 runtime_client/endpoint.rs     RuntimeClientEndpoint: the transport-neutral
                                semantic entry point that dispatches every
-                               v3 request, `initialize` included
+                               v4 request, `initialize` included
 runtime_client/transport/      byte-stream adapters beneath the semantic
                                layer (Issue #38); `stdio.rs` is the strict
                                stdio/JSONL transport
@@ -3118,7 +3128,7 @@ Runtime Client is a projection/control/attachment adapter over it.
 
 - **The semantic endpoint owns `initialize`.** `RuntimeClientEndpoint` is
   the boundary a transport wraps. It starts unattached and accepts every
-  v3 request; `initialize` performs version negotiation, single-attachment
+  v4 request; `initialize` performs version negotiation, single-attachment
   admission, `AttachmentId` allocation, and the linearized initial
   snapshot, storing the resulting attachment. Non-`initialize` requests
   before that are `not_attached`; a successful `detach` (or dropping the
@@ -3505,7 +3515,7 @@ Runtime Client is a projection/control/attachment adapter over it.
   compaction start, failure, and committed completion project with optional
   attempt attribution and update the shared context read model. Internal
   `RuntimeEvent` evolution therefore cannot silently break Runtime Client
-  Protocol v3.
+  Protocol v4.
 - **Streaming repair.** The snapshot carries an in-flight Assistant output
   view (accumulated blocks) and foreground tool views keyed by the
   logical tool-call identity, so a client repairing after `resync`
@@ -3540,7 +3550,7 @@ Runtime Client is a projection/control/attachment adapter over it.
   subscribe, and subscription polls) then fails with
   `projection_exhausted`. A read never hands back a model that silently
   stopped folding authoritative transitions.
-- **Attachment lifecycle.** Protocol v3 admits at most one active
+- **Attachment lifecycle.** Protocol v4 admits at most one active
   attachment: the first attach succeeds, a second fails with
   `attachment_in_use` and never evicts the first, detach (explicit or
   RAII drop) releases ownership, reconnects receive a fresh attachment
@@ -3634,7 +3644,7 @@ Runtime Client is a projection/control/attachment adapter over it.
 - **Protocol envelope.** A transport-neutral JSON-RPC-style envelope:
   `request(id, method + typed params)`, `response(id, result | error)`,
   and `event(cursor + typed payload)` with no request ids on
-  notifications. Every v3 method is client-initiated
+  notifications. Every v4 method is client-initiated
   (`initialize`, `submit_inbound`, `cancel_current_attempt`,
   `snapshot_get`, `subscribe_events`, `capability_get`,
   `background_status`, `background_cancel`, `detach`, `shutdown`).
@@ -3660,7 +3670,7 @@ rustX Runtime
 Runtime Client projection
       |
       v
-Runtime Client Protocol v3        semantic; Issue #37
+Runtime Client Protocol v4        semantic; Issue #37/#131
       |
       v
 transport adapters                framing only; src/runtime_client/transport
@@ -3706,10 +3716,10 @@ means adding a sibling module there; no semantic module moves.
   string stays in one record and multiline pretty-printed JSON is not
   supported. CRLF input is accepted by removing exactly one `\r` before
   the terminating LF; no other whitespace is touched.
-- **Malformed and oversized input is transport-fatal.** Protocol v3 has
+- **Malformed and oversized input is transport-fatal.** Protocol v4 has
   no uncorrelated error envelope, and a malformed frame may not even
   carry a request id, so the transport invents none. Any complete
-  in-bound-size record that does not deserialize to the exact v3 request
+  in-bound-size record that does not deserialize to the exact v4 request
   type — malformed JSON, unknown method, unknown field, wrong parameter
   type, empty or whitespace-only record — ends the session with a
   framing error, applies nothing, and writes no protocol record. An
@@ -3727,7 +3737,7 @@ means adding a sibling module there; no semantic module moves.
   background execution, and capability state continue under their own
   owners, and no projection lock is held across any transport await.
 - **Active-subscription lag closes the transport.** After a stall the
-  subscription may fall behind the bounded replay ring. Protocol v3 has
+  subscription may fall behind the bounded replay ring. Protocol v4 has
   no uncorrelated stream-error record, so the session ends with a typed
   local `SubscriptionLagged` error carrying the cursor information and
   the client repairs from an authoritative snapshot after reconnecting.
@@ -4483,7 +4493,7 @@ beside it:
 rustX Runtime semantics
         |
         v
-Runtime Client Protocol v3
+Runtime Client Protocol v4
         |
         v
 rustX TypeScript projection

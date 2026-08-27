@@ -1191,11 +1191,18 @@ Event Journal    = execution facts
   exposes either the complete pending batch or the complete canonical
   adoption; the process-local batch is never the authority.
 - The whole drained batch becomes one `FreshInboundTurn`, so the next model
-  request gets at most one Agent Status generation. `inbound_message_time`
-  is the persisted timestamp of the final batch item in inbound sequence
-  order (the highest-sequence item), never `min`/`max` of producer wall
-  clocks, the drain time, or current time; producer timestamps may be
-  non-monotonic due to clock skew.
+  request reaches at most one Agent Status preparation. That preparation
+  samples the clock once, freezes one finite Pre-Status Surface view through
+  the Surface head and keyed Ledger hydration, and captures one authoritative
+  active-Background snapshot. Time and Background evaluate those same frozen
+  inputs. Time refreshes when no visible typed Time generation remains or the
+  latest one is at least 30 minutes old; Background refreshes when active work
+  exists and no visible typed Background generation remains or eight
+  non-AgentStatus model-visible messages follow it. These thresholds only
+  affect the next already-existing FreshInbound opportunity: they never
+  schedule or create a model request. The canonical Agent Status message
+  carries its generated-at instant and admitted module membership as typed
+  durable metadata, so Surface reconstruction never parses renderer text.
 
 ### Safe boundaries
 

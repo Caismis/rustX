@@ -262,7 +262,10 @@ fn is_agent_status(message: &MessageBlock) -> bool {
     matches!(
         message,
         MessageBlock::User(user)
-            if user.kind == InboundKind::Context(ContextKind::AgentStatus)
+            if matches!(
+                &user.kind,
+                InboundKind::Context(ContextKind::AgentStatus(_))
+            )
     )
 }
 
@@ -435,8 +438,9 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     );
     assert!(summary_two_input.contains("FILLER-TWO-MARKER"));
 
-    // R1 observed the pre-compaction surface; R2/R3 observe exactly the
-    // rebuilt surfaces [sum, inbound, status].
+    // R1 observed the pre-compaction surface; each proactive compaction retires
+    // the old visible status, so R2/R3 observe exactly the rebuilt surfaces
+    // [summary, inbound, status].
     let r1_wire = wire(&requests[0].messages);
     assert!(r1_wire.contains("turn one"));
     assert!(r1_wire.contains("Current time:"));
@@ -846,13 +850,13 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
 
     // The ledger retains the retired tool unit and both summaries verbatim.
     let ledger = await_ledger(host).await;
-    assert_eq!(ledger.len(), 13);
+    assert_eq!(ledger.len(), 12);
     assert!(
-        matches!(&ledger[5], MessageBlock::Assistant(assistant)
+        matches!(&ledger[4], MessageBlock::Assistant(assistant)
             if assistant.content.iter().any(|block| matches!(block, AssistantContentBlock::ToolCall(_)))),
         "the retired continuation-owning tool call stays in the ledger"
     );
-    assert!(matches!(&ledger[6], MessageBlock::Tool(_)));
+    assert!(matches!(&ledger[5], MessageBlock::Tool(_)));
     assert_eq!(compaction_summaries(&ledger), 2);
     let ledger_wire = wire(&ledger);
     assert!(ledger_wire.contains("call-1"));
@@ -957,7 +961,7 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
         .expect("the runtime admits inbound without any client");
     await_request_history_len(host, 3).await;
     let detached_ledger = await_ledger(host).await;
-    assert_eq!(detached_ledger.len(), 7);
+    assert_eq!(detached_ledger.len(), 6);
     assert_eq!(compaction_summaries(&detached_ledger), 1);
 
     // Canonical reads answer while no client is attached.
@@ -978,7 +982,7 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
     }
     let (detached_snapshot, _) = host.snapshot().expect("snapshot without attachments");
     assert_eq!(detached_snapshot.context.compaction_count, 1);
-    assert_eq!(detached_snapshot.messages.len(), 7);
+    assert_eq!(detached_snapshot.messages.len(), 6);
 
     // A fresh attachment is a new projection binding over the same
     // continuous truth — never a transfer of semantic ownership.
@@ -1019,7 +1023,7 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
             .generation,
         2
     );
-    assert_eq!(snapshot.messages.len(), 11);
+    assert_eq!(snapshot.messages.len(), 10);
 
     // The full history is continuous: five snapshots, all reconstructible.
     let requests = adapter.requests();
@@ -1042,7 +1046,7 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
         );
     }
     let ledger = await_ledger(host).await;
-    assert_eq!(ledger.len(), 11);
+    assert_eq!(ledger.len(), 10);
     assert_eq!(compaction_summaries(&ledger), 2);
 }
 

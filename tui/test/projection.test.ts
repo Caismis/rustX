@@ -356,7 +356,14 @@ describe("presentation projection", () => {
           id: "status",
           content: [{ type: "text", text: "internal" }],
           source: "runtime",
-          kind: { context: "agent_status" },
+          kind: {
+            context: {
+              agent_status: {
+                generated_at: "1970-01-01T00:00:00Z",
+                modules: ["time"],
+              },
+            },
+          },
         },
         transcript_cursor: undefined,
       },
@@ -786,7 +793,6 @@ describe("presentation projection", () => {
         {
           type: "temporal" as const,
           current_time: "2026-08-14T00:00:00Z",
-          inbound_message_time: "2026-08-14T00:00:00Z",
         },
       ],
       rendered: "## Status\ncurrent time: 2026-08-14",
@@ -893,7 +899,7 @@ describe("presentation projection", () => {
           cursor: runtimeCursor(42),
           event: { type: "future_variant" } as unknown as RuntimeClientEvent,
         }),
-      /unreachable Runtime Client Protocol v3 event/,
+      /unreachable Runtime Client Protocol v4 event/,
     );
   });
 

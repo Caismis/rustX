@@ -1,7 +1,7 @@
 //! The Runtime Client host: the projection + control + attachment adapter
 //! over the conversation runtime coordinator (Issue #61).
 //!
-//! [`RuntimeClientHost`] is the Runtime Client boundary of Protocol v3. It
+//! [`RuntimeClientHost`] is the Runtime Client boundary of Protocol v4. It
 //! observes and controls the
 //! [`ConversationRuntime`](crate::runtime::conversation_runtime::ConversationRuntime)
 //! of the same conversation; it does **not** own the conversation runtime:
@@ -21,7 +21,7 @@
 //!
 //! The host owns:
 //!
-//! - the one-active-attachment v3 policy;
+//! - the one-active-attachment v4 policy;
 //! - the Runtime Client projection (snapshot read model, cursor allocation,
 //!   bounded replay, subscribers) and its linearization boundary;
 //! - protocol adaptation: request dispatch, `model_set`/`shutdown`/
@@ -143,7 +143,7 @@ pub enum HostConstructionError {
     /// The conversation runtime identity is already bound to a Runtime
     /// Client host.
     ///
-    /// Protocol v3 binds one runtime identity to at most one
+    /// Protocol v4 binds one runtime identity to at most one
     /// [`RuntimeClientHost`] for that identity's lifetime, so cloning a
     /// runtime never yields a second bindable identity and dropping the
     /// bound host never makes it bindable again. Reconnect replaces the
@@ -248,7 +248,7 @@ pub(crate) struct ClientState {
     /// The Runtime Client projection: snapshot read model, cursor,
     /// bounded replay, subscribers.
     projection: RuntimeClientProjection,
-    /// The at-most-one active attachment of Protocol v3.
+    /// The at-most-one active attachment of Protocol v4.
     attachment: Option<AttachmentState>,
     /// The next attachment identity sequence.
     next_attachment_seq: u64,
@@ -420,7 +420,7 @@ impl ClientInner {
     /// Admits one attachment: the internal primitive behind the
     /// `initialize` protocol method.
     ///
-    /// Protocol v3 allows at most one active attachment; a second
+    /// Protocol v4 allows at most one active attachment; a second
     /// simultaneous attach fails deterministically and never evicts the
     /// first. The returned snapshot and cursor are linearized with the
     /// admission under the one projection synchronization boundary.
@@ -2459,7 +2459,7 @@ mod tests {
         assert!(matches!(
             bad,
             Err(RuntimeClientError::UnsupportedProtocolVersion {
-                supported: 3,
+                supported: 4,
                 requested: 9,
             })
         ));
@@ -2587,10 +2587,12 @@ mod tests {
             matches!(
                 message,
                 MessageBlock::User(user)
-                    if user.kind
-                        == crate::message::types::InboundKind::Context(
-                            crate::message::types::ContextKind::AgentStatus,
+                    if matches!(
+                        &user.kind,
+                        crate::message::types::InboundKind::Context(
+                            crate::message::types::ContextKind::AgentStatus(_)
                         )
+                    )
             )
         }));
 
@@ -3557,15 +3559,13 @@ mod tests {
                 "assistant",
                 "tool",
                 "user",
-                "user",
                 "assistant",
-                "user",
                 "user",
                 "assistant",
             ],
-            "one authoritative history, including one canonical Runtime \
-             context fact for each fresh inbound step, extended across the \
-             tool turn, the safe-boundary drain, and both attempts"
+            "one authoritative history, with only eligible canonical Runtime \
+             context facts, extended across the tool turn, the safe-boundary \
+             drain, and both attempts"
         );
     }
 
@@ -4767,10 +4767,12 @@ mod tests {
                         if matches!(
                             message,
                             MessageBlock::User(user)
-                                if user.kind
-                                    == crate::message::types::InboundKind::Context(
-                                        crate::message::types::ContextKind::AgentStatus,
+                                if matches!(
+                                    &user.kind,
+                                    crate::message::types::InboundKind::Context(
+                                        crate::message::types::ContextKind::AgentStatus(_)
                                     )
+                                )
                         )
                 )
             })
@@ -4800,10 +4802,12 @@ mod tests {
             .iter()
             .find_map(|message| match message {
                 MessageBlock::User(user)
-                    if user.kind
-                        == crate::message::types::InboundKind::Context(
-                            crate::message::types::ContextKind::AgentStatus,
-                        ) =>
+                    if matches!(
+                        &user.kind,
+                        crate::message::types::InboundKind::Context(
+                            crate::message::types::ContextKind::AgentStatus(_)
+                        )
+                    ) =>
                 {
                     user.content.first().and_then(|content| match content {
                         crate::message::types::UserContentBlock::Text(text) => {
@@ -4825,10 +4829,12 @@ mod tests {
             .iter()
             .find_map(|message| match message {
                 MessageBlock::User(user)
-                    if user.kind
-                        == crate::message::types::InboundKind::Context(
-                            crate::message::types::ContextKind::AgentStatus,
-                        ) =>
+                    if matches!(
+                        &user.kind,
+                        crate::message::types::InboundKind::Context(
+                            crate::message::types::ContextKind::AgentStatus(_)
+                        )
+                    ) =>
                 {
                     Some(user)
                 }

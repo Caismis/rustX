@@ -51,6 +51,32 @@ impl MessageBlock {
             Self::Tool(tool) => &tool.id,
         }
     }
+
+    /// Returns the structured generation descriptor when this is a canonical
+    /// Agent Status message.
+    #[must_use]
+    pub fn agent_status_metadata(&self) -> Option<&AgentStatusGenerationMetadata> {
+        match self {
+            Self::User(user) => match &user.kind {
+                InboundKind::Context(kind) => kind.agent_status_metadata(),
+                InboundKind::Message | InboundKind::CompactionSummary => None,
+            },
+            Self::Assistant(_) | Self::Tool(_) => None,
+        }
+    }
+
+    /// Whether this canonical message belongs to the Agent Status context
+    /// family.
+    #[must_use]
+    pub fn is_agent_status(&self) -> bool {
+        matches!(
+            self,
+            Self::User(UserMessageBlock {
+                kind: InboundKind::Context(ContextKind::AgentStatus(_)),
+                ..
+            })
+        )
+    }
 }
 
 /// A stable index identifying one content block within the ordered content
@@ -174,8 +200,63 @@ pub enum InboundKind {
     Context(ContextKind),
 }
 
+/// The stable identity of one code-owned Agent Status module.
+///
+/// This identity belongs to the canonical message layer because an active
+/// Agent Status message must carry enough durable information for a later
+/// Surface scan to identify the modules it contains. It is intentionally a
+/// closed enum rather than extension metadata or a generic key/value field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentStatusModuleId {
+    /// The Time module.
+    Time,
+    /// The Background module.
+    Background,
+}
+
+/// The structured durable identity of one canonical Agent Status generation.
+///
+/// The descriptor is attached to [`ContextKind::AgentStatus`] itself. Its
+/// timestamp is the single Agent Status clock sample used to produce the
+/// generation, and its typed module list is the source of truth for active
+/// Surface visibility. Renderer text is never consulted for either fact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentStatusGenerationMetadata {
+    /// The UTC instant at which this generation was produced.
+    pub generated_at: DateTime<Utc>,
+    /// The modules whose sections were admitted into this generation, in
+    /// deterministic semantic order.
+    pub modules: Vec<AgentStatusModuleId>,
+}
+
+impl AgentStatusGenerationMetadata {
+    /// Creates canonical metadata for one admitted Agent Status generation.
+    #[must_use]
+    pub fn new(generated_at: DateTime<Utc>, modules: Vec<AgentStatusModuleId>) -> Self {
+        debug_assert!(
+            !modules.is_empty(),
+            "an Agent Status generation has a module"
+        );
+        debug_assert!(
+            modules.windows(2).all(|pair| pair[0] < pair[1]),
+            "Agent Status modules are in unique semantic order"
+        );
+        Self {
+            generated_at,
+            modules,
+        }
+    }
+
+    /// Whether this generation contains `module`.
+    #[must_use]
+    pub fn contains(&self, module: AgentStatusModuleId) -> bool {
+        self.modules.contains(&module)
+    }
+}
+
 /// The semantic family of one admitted model-visible context fact.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContextKind {
     /// The rustX runtime's own observation of a structurally settled tool
@@ -189,8 +270,20 @@ pub enum ContextKind {
     RuntimeToolObservation,
     /// Generic certified-extension/environment context.
     ExtensionEnvironment,
-    /// Native runtime/Agent Status.
-    AgentStatus,
+    /// Native runtime/Agent Status and its durable generation identity.
+    AgentStatus(AgentStatusGenerationMetadata),
+}
+
+impl ContextKind {
+    /// Returns the durable Agent Status generation metadata when this is an
+    /// Agent Status context fact.
+    #[must_use]
+    pub fn agent_status_metadata(&self) -> Option<&AgentStatusGenerationMetadata> {
+        match self {
+            Self::AgentStatus(metadata) => Some(metadata),
+            _ => None,
+        }
+    }
 }
 
 /// A content block inside a `UserMessageBlock`.

@@ -115,6 +115,21 @@ pub enum SurfaceOp {
     },
 }
 
+/// One immutable read of the current Conversation Surface head.
+///
+/// The snapshot captures identity/order and head metadata together. Callers
+/// that need canonical bodies must resolve these identities through keyed
+/// Message Ledger reads; the Surface never owns bodies.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationSurfaceHead {
+    /// The exact Surface revision represented by this head.
+    pub revision: SurfaceRevision,
+    /// The compaction generation represented by this head.
+    pub compaction_generation: u64,
+    /// Active canonical message identities in model-visible order.
+    pub active_message_ids: Vec<MessageId>,
+}
+
 impl SurfaceOp {
     /// Every canonical identity this operation names, in a stable order.
     ///
@@ -403,6 +418,17 @@ impl ConversationSurface {
     #[must_use]
     pub fn access(&self) -> &Arc<SurfaceAccess> {
         &self.access
+    }
+
+    /// Captures the current identity/order and head metadata in one read.
+    #[must_use]
+    pub fn head(&self) -> ConversationSurfaceHead {
+        self.mark_current_head_read();
+        ConversationSurfaceHead {
+            revision: self.revision,
+            compaction_generation: self.compaction_generation,
+            active_message_ids: self.active.clone(),
+        }
     }
 
     /// The current active ordered message identities.

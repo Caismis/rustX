@@ -1,4 +1,4 @@
-//! Issue #37: Runtime Client Protocol v3 wire-contract tests.
+//! Issue #37: Runtime Client Protocol v4 wire-contract tests.
 //!
 //! These tests exercise the protocol boundary exclusively through the
 //! public Runtime Client surface: deterministic serialization of every
@@ -98,8 +98,8 @@ fn protocol_envelopes_round_trip_deterministically() {
 fn protocol_errors_round_trip_with_stable_categories() {
     let cases = [
         RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 3,
-            requested: 3,
+            supported: 4,
+            requested: 4,
         },
         RuntimeClientError::AttachmentInUse {
             existing_attachment_id: rustx::runtime_client::AttachmentId::new("attachment-1"),
@@ -339,7 +339,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         incompatible,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 3,
+            supported: 4,
             requested: 7,
         })
     ));
@@ -347,7 +347,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     // The initialize method cannot re-initialize an admitted attachment.
     let reinit = attachment.handle_request(RuntimeClientRequest::Initialize {
         id: request_id(9),
-        protocol_version: 3,
+        protocol_version: 4,
     });
     assert!(matches!(
         reinit.error,

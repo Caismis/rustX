@@ -42,8 +42,8 @@ pub mod surface;
 pub use ledger::{LedgerAccess, LedgerError, MessageLedger, message_id_of};
 pub use structure::{StructuralError, StructuralIndex};
 pub use surface::{
-    ConversationSurface, SurfaceAccess, SurfaceError, SurfaceOp, SurfaceRevision, SurfaceSpan,
-    apply_surface_op,
+    ConversationSurface, ConversationSurfaceHead, SurfaceAccess, SurfaceError, SurfaceOp,
+    SurfaceRevision, SurfaceSpan, apply_surface_op,
 };
 
 use std::collections::BTreeSet;
@@ -274,6 +274,24 @@ pub struct CompactionRecord {
     pub generation: u64,
 }
 
+/// One immutable active Surface snapshot and its keyed canonical bodies.
+///
+/// `ConversationState::freeze_active_surface` obtains the Surface head once,
+/// then hydrates exactly those active identities from the Message Ledger. It
+/// is a transient read value, never a second mutable visibility authority.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConversationSurfaceSnapshot {
+    /// The exact Surface revision represented by this snapshot.
+    pub revision: SurfaceRevision,
+    /// The compaction generation represented by this snapshot.
+    pub compaction_generation: u64,
+    /// Active canonical identities in model-visible order.
+    pub active_message_ids: Vec<MessageId>,
+    /// Canonical message bodies keyed by the identities above, in the same
+    /// order.
+    pub messages: Vec<MessageBlock>,
+}
+
 /// The one canonical conversation state of a conversation.
 ///
 /// This is the single mutable conversation authority. The Runtime Client is
@@ -476,6 +494,27 @@ impl ConversationState {
     /// identity has no committed record.
     pub fn active_messages(&self) -> Result<Vec<MessageBlock>, ConversationError> {
         self.hydrate(self.surface.active())
+    }
+
+    /// Freezes the current model-visible Surface and hydrates its bodies.
+    ///
+    /// The Surface head is read once. Bodies are then resolved only through
+    /// keyed Ledger lookups for the captured active identities; the complete
+    /// Ledger is never enumerated by this path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an active Surface identity cannot be hydrated from
+    /// the canonical Message Ledger.
+    pub fn freeze_active_surface(&self) -> Result<ConversationSurfaceSnapshot, ConversationError> {
+        let head = self.surface.head();
+        let messages = self.hydrate(&head.active_message_ids)?;
+        Ok(ConversationSurfaceSnapshot {
+            revision: head.revision,
+            compaction_generation: head.compaction_generation,
+            active_message_ids: head.active_message_ids,
+            messages,
+        })
     }
 
     /// Hydrates an explicit ordered identity list through keyed lookups.
@@ -691,8 +730,9 @@ mod tests {
     use crate::conversation::structure::StructuralError;
     use crate::message::content::TextBlock;
     use crate::message::types::{
-        AssistantContentBlock, AssistantMessageBlock, ContextKind, InboundKind, MessageBlock,
-        ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+        AgentStatusGenerationMetadata, AgentStatusModuleId, AssistantContentBlock,
+        AssistantMessageBlock, ContextKind, InboundKind, MessageBlock, ToolMessageBlock,
+        UserContentBlock, UserMessageBlock, UserSource,
     };
     use crate::runtime::identity::{ConversationId, MessageId, ToolCallId, ToolId};
     use crate::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus};
@@ -1013,7 +1053,12 @@ mod tests {
                     text: text.to_owned(),
                 })],
                 source: UserSource::Runtime,
-                kind: InboundKind::Context(ContextKind::AgentStatus),
+                kind: InboundKind::Context(ContextKind::AgentStatus(
+                    AgentStatusGenerationMetadata::new(
+                        chrono::DateTime::from_timestamp(0, 0).expect("timestamp"),
+                        vec![AgentStatusModuleId::Time],
+                    ),
+                )),
                 timestamp: None,
             })
         };
@@ -1203,6 +1248,38 @@ mod tests {
         assert_eq!(active.len(), 3);
         assert_eq!(state.ledger_access().enumerations(), 0);
         assert_eq!(state.ledger_access().keyed_reads(), 3);
+    }
+
+    /// Agent Status preparation freezes one current Surface head and hydrates
+    /// only its active identities. Retired Ledger facts and historical
+    /// Surface operations never enter that finite read.
+    #[test]
+    fn status_surface_freeze_is_one_head_read_and_finite_keyed_hydration() {
+        let mut state = ConversationState::new();
+        for index in 0..200 {
+            state.commit(user(&format!("m{index}"))).expect("commit");
+        }
+        let command = state
+            .prepare_compaction(
+                summary("status-summary", "summary"),
+                SurfaceSpan::new(MessageId::new("m0"), MessageId::new("m196")),
+            )
+            .expect("prepare");
+        state.commit_compaction(command).expect("commit");
+        state.ledger_access().reset();
+        state.surface_access().reset();
+
+        let snapshot = state
+            .freeze_active_surface()
+            .expect("freeze active Surface");
+
+        assert_eq!(snapshot.active_message_ids.len(), 4);
+        assert_eq!(snapshot.messages.len(), 4);
+        assert_eq!(state.surface_access().current_head_reads(), 1);
+        assert_eq!(state.surface_access().history_enumerations(), 0);
+        assert_eq!(state.surface_access().history_steps(), 0);
+        assert_eq!(state.ledger_access().keyed_reads(), 4);
+        assert_eq!(state.ledger_access().enumerations(), 0);
     }
 
     /// Durable bootstrap keeps the current Surface as the hot base while

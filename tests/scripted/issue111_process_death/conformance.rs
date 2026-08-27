@@ -1308,14 +1308,7 @@ fn explicit_reload_publishes_one_complete_generation() {
     );
     assert_eq!(
         shapes(&durable.canonical()),
-        vec![
-            "user",
-            "context",
-            "assistant",
-            "user",
-            "context",
-            "assistant"
-        ],
+        vec!["user", "context", "assistant", "user", "assistant"],
         "reload creates no canonical message and no synthetic diff"
     );
     // The historical request still reconstructs its own old authority.
@@ -1797,7 +1790,6 @@ fn assert_cut_lineage(scenario: &str) {
             "tool",
             "assistant",
             "user",
-            "context",
             "assistant",
         ],
         "the seed is the exact prefix before the selected human message"
@@ -1992,7 +1984,6 @@ fn assert_publication_is_atomic(
             "tool",
             "assistant",
             "user",
-            "context",
             "assistant",
         ],
         "the seed is written whole before the catalog transaction, never partially"
@@ -2151,12 +2142,10 @@ fn a_cut_lineage_never_resolves_the_copied_source_identities() {
     // with `exec_1` produces no background section here, because the registry
     // — not the history — is the ownership authority.
     let statuses = status_texts(&cut_lineage.canonical());
-    let fresh = statuses
-        .last()
-        .expect("the resumed turn admitted its own Agent Status");
-    assert!(
-        !fresh.contains("Background executions:") && !fresh.contains("exec_1"),
-        "the newly composed status resolves nothing from copied history: {fresh}"
+    assert_eq!(
+        statuses.len(),
+        2,
+        "the resumed turn emits no new status when neither module has useful content"
     );
     assert!(
         statuses.iter().any(|status| status.contains("exec_1")),
@@ -2323,7 +2312,7 @@ fn historical_status_and_history_never_revive_background_ownership() {
             "context",
             "assistant",
         ],
-        "two answered turns, each with its own admitted Agent Status"
+        "the second turn contributes no new status while the prior one remains visible"
     );
     let before = status_texts(&durable.canonical());
     assert_eq!(before.len(), 2);
@@ -2359,26 +2348,15 @@ fn historical_status_and_history_never_revive_background_ownership() {
 
     let durable = lab.durable();
     let after = status_texts(&durable.canonical());
-    assert!(
-        after.len() > 2,
-        "the reopened process admitted at least one new status fact"
+    assert_eq!(
+        after, before,
+        "the reopened process admits no status fact while the visible generations remain fresh"
     );
     assert_eq!(
         &after[..2],
         &before[..],
         "the historical status messages are retained by value and never refreshed"
     );
-    for (index, status) in after[2..].iter().enumerate() {
-        assert!(
-            !status.contains("Background executions:"),
-            "status {index} after the reopen owns no execution, whatever history says: {status}"
-        );
-        assert!(
-            !status.contains(execution_id.as_str()),
-            "the historical execution identity is never re-adopted: {status}"
-        );
-    }
-
     assert_eq!(
         durable.count_events(|event| matches!(
             event,

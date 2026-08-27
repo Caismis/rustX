@@ -31,8 +31,9 @@ use rustx::local_runtime::composition::{
 };
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
-    AssistantContentBlock, AssistantMessageBlock, ContextKind, InboundKind, MessageBlock,
-    ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+    AgentStatusGenerationMetadata, AgentStatusModuleId, AssistantContentBlock,
+    AssistantMessageBlock, ContextKind, InboundKind, MessageBlock, ToolMessageBlock,
+    UserContentBlock, UserMessageBlock, UserSource,
 };
 use rustx::model::catalog::{MapCredentialEnvironment, ModelCapabilities, ModelCompat};
 use rustx::model::{
@@ -686,7 +687,9 @@ fn requirement_07_agent_status_is_excluded_from_normal_transcript() {
         .accept_inbound(InboundDraft {
             message_id: Some(MessageId::new("status-1")),
             source: UserSource::Runtime,
-            kind: InboundKind::Context(ContextKind::AgentStatus),
+            kind: InboundKind::Context(ContextKind::AgentStatus(
+                AgentStatusGenerationMetadata::new(fixed_time(), vec![AgentStatusModuleId::Time]),
+            )),
             content: vec![UserContentBlock::Text(TextBlock {
                 text: "internal status".to_owned(),
             })],

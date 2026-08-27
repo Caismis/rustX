@@ -41,10 +41,11 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 10 is the only accepted schema; version 9 and every older
+schema version 11 is the only accepted schema; version 10 and every older
 development schema fail explicitly at open and are not migrated. Version 10
-freezes the structured Questionnaire interaction audit vocabulary introduced
-by Issue #126.
+froze the structured Questionnaire interaction audit vocabulary introduced by
+Issue #126. Version 11 freezes the structured Agent Status generation
+descriptor introduced by Issue #131.
 
 The durable request-start invariant is strict: the provider adapter cannot be
 called until the Request Snapshot and exact `ModelRequestStarted` Event
@@ -2300,14 +2301,22 @@ message role, history shape, or timestamps:
   failed `ContextWindowExceeded` attempt. A foreground-tool-only continuation
   with no new mailbox drain carries no Agent Status and Agent Status never
   creates a follow-up turn.
-- `inbound_message_time` is the persisted timestamp of the final message in
-  the ordered fresh inbound turn (for a mailbox batch, the highest-sequence
-  item); the inbound sequence is the delivery-order authority, never
-  `min`/`max` of producer timestamps, the drain time, or current time.
+- At the beginning of Agent Status preparation, the runtime samples its clock
+  once, freezes one current Conversation Surface head, and hydrates exactly
+  the captured active `MessageId`s through keyed Message Ledger reads. The
+  resulting immutable `AgentStatusSurfaceView` contains the Surface revision,
+  compaction generation, active ordered identities, canonical bodies, and only
+  the bounded status-visibility indexes needed by the current modules. It
+  never enumerates the complete Ledger. Time and Background receive that same
+  view; neither module scans live conversation state independently.
 - When a module contributes, Agent Status is structured runtime-owned input
   before rendering, then follows the normal Context Assembly path as a
   canonical `UserSource::Runtime` /
-  `InboundKind::Context(ContextKind::AgentStatus)` `UserMessageBlock`. It is
+  `InboundKind::Context(ContextKind::AgentStatus(metadata))`
+  `UserMessageBlock`. The canonical metadata carries the one UTC generation
+  instant and typed admitted module membership (`Time` and/or `Background`);
+  it is the durable source of truth for later Surface scans, including after
+  restart/resume. Renderer text is presentation only. The message is
   committed to the Message Ledger and Surface once at model-turn start;
   adapters never inject it. Equal rendered bytes at different admitted steps
   remain distinct facts with distinct MessageIds. If no module contributes,
@@ -2317,6 +2326,25 @@ message role, history shape, or timestamps:
   provider registration API, dynamic plugin boundary, provider listing, or
   lexical ordering contract. The engine validates the code-owned typed
   mapping `Time <-> Temporal` and `Background <-> BackgroundExecution`.
+- Time contributes when no visible typed Time membership exists, or when the
+  latest visible Time generation is at least 30 minutes old. The threshold is
+  inclusive. It renders only the configured IANA timezone (or deterministic
+  UTC) and the frozen instant as `YYYY-MM-DD HH:mm:SS`; it does not parse
+  rendered text or use delivery-opportunity-specific timestamps.
+- Background captures one immutable snapshot from the authoritative
+  `ConversationBackgroundRegistry`, never from historical status text. It
+  contributes only when active work exists and either no visible typed
+  Background membership exists or at least 8 active model-visible canonical
+  non-AgentStatus messages follow the latest visible Background generation.
+  Agent Status messages do not advance that distance, and an empty active set
+  produces no Background generation. The heuristic is code-owned, not JSONC
+  configuration.
+- Surface visibility, authoritative domain state, and durable emission history
+  are distinct inputs. This issue supplies only the first two: compaction may
+  retire a visible Time or Background generation, making that module eligible
+  immediately on the next existing primary step. Durable generic suppression
+  history, including Todo behavior, belongs to Issue #130 and is not inferred
+  from the Surface.
 - Each interested module captures authoritative runtime state once into a
   finite immutable snapshot, then evaluates only that snapshot plus immutable
   configuration. Capture, evaluation, and payload-validation failures are
@@ -2342,16 +2370,22 @@ message role, history shape, or timestamps:
   unobserved instruction. The admitted Agent Status fact participates in
   normal canonical history, projection, and request token accounting, while
   the current unobserved inbound material remains protected from compaction.
-  One admitted primary step samples and freezes exactly one dynamic-context
-  generation. An overflow compact-and-retry reuses its accepted status,
-  Skill, extension output, provenance, ordering, and ContextGeneration; it
-  does not rerun contributors or append duplicate context facts.
+  One admitted primary step samples one clock and captures one authoritative
+  Background snapshot. An overflow compact-and-retry reuses its accepted
+  status generation, Surface/Ledger-derived context, Skill, extension output,
+  provenance, ordering, and ContextGeneration; it does not rescan the Surface,
+  recapture authoritative state, resample the clock, rerun contributors, or
+  append duplicate context facts.
 - `ContextWindowExceeded` is a rejected provider request, not proof that the
   model observed fresh inbound. Overflow compaction therefore receives the
   still-pending `FreshInboundTurn` constraint while reusing the accepted
   context generation. The retry cannot solve fresh-inbound protection by
   rerunning assembly, and cannot solve generation reuse by dropping the
   constraint.
+- Neither the 30-minute Time threshold nor the 8-message Background
+  threshold schedules, wakes, creates, or prolongs a model turn. They only
+  affect eligibility when an already-existing delivery opportunity reaches
+  this preparation boundary.
 - The context path is mandatory: every normal `AgentExecution` carries a
   `ContextRuntime`; there is no no-context execution mode. Agent Status is
   optional enrichment inside that path.
@@ -3141,7 +3175,7 @@ semantic normalization boundary. The frozen invariants:
   a model that silently stopped folding transitions.
 - **Runtime Client protocol versioning is independent from internal
   RuntimeEvent/Event Journal schema versioning.** Version negotiation is
-  explicit at attachment admission; Protocol v3 is the sole supported
+  explicit at attachment admission; Protocol v4 is the sole supported
   version, and Protocol v1 is rejected explicitly.
 - **The semantic layer owns protocol negotiation and attachment
   admission; transports are framing only.** `initialize` is dispatched by
@@ -3231,7 +3265,7 @@ semantic normalization boundary. The frozen invariants:
   no derived message mirror of its own, and deterministic regressions
   verify the projection mirror against the authoritative ledger rather
   than coordinating two histories.
-- **One active attachment.** Protocol v3 admits at most one attachment
+- **One active attachment.** Protocol v4 admits at most one attachment
   per runtime instance; a second attach fails deterministically without
   evicting the first; reconnect receives a fresh attachment identity;
   request ids are attachment-scoped; cursor/replay state belongs to the
@@ -3247,15 +3281,17 @@ semantic normalization boundary. The frozen invariants:
   terminal settlement: the Agent Loop remains the settlement authority,
   and the coordinator holds the exact cancellation trigger the attempt
   task runs against.
-- **One Agent Status generation per primary step.** For one FreshInbound
-  opportunity, the closed Agent Status engine traverses its code-owned
-  `Time -> Background` modules once: each interested module captures at most
-  one immutable snapshot and evaluates it at most once. The accepted
-  generation fans out to the canonical Runtime context UserMessageBlock and,
-  only after model-turn-start commit, the Runtime Client projection. Overflow
-  compact-and-retry reuses the same accepted generation; no client path
-  composes again and no projection parses rendered context text to recover
-  structure.
+- **One frozen Agent Status input per primary step.** For one FreshInbound
+  opportunity, the context preparation boundary creates exactly one finite
+  immutable Pre-Status Surface view, one clock instant, and one authoritative
+  active-Background snapshot. The closed Agent Status engine traverses its
+  code-owned `Time -> Background` modules once: each interested module
+  captures at most one module snapshot and evaluates it at most once against
+  those shared values. The accepted generation fans out to the canonical
+  Runtime context UserMessageBlock and, only after model-turn-start commit, the
+  Runtime Client projection. Overflow compact-and-retry reuses the same
+  accepted generation; no client path composes again and no projection parses
+  rendered context text to recover structure.
 - **Control responses preserve their settlement contract.** A successful
   `submit_inbound`, `cancel_current_attempt`, or `background_cancel` response
   means the runtime accepted the operation at its semantic commit point, not
@@ -3273,7 +3309,7 @@ endpoint. It frames; it never becomes a second authority.
   until one complete, in-bound-size framed record has successfully
   deserialized to the exact Runtime Client request type. A record that
   violates framing, exceeds the record limit, or fails exact
-  deserialization ends the transport having applied nothing; Protocol v3
+  deserialization ends the transport having applied nothing; Protocol v4
   has no uncorrelated error envelope, so no transport fabricates a
   protocol record for it.
 - **Transport loss is not semantic cancellation.** Runtime Client

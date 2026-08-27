@@ -425,9 +425,11 @@ Because the obligation is now a durable fact recovery depends on, a database
 written before it existed can no longer be read: its adoptions committed no
 obligation, and reading that silence as "no answer is owed" would strand
 exactly the crash states above. `SQLITE_SCHEMA_VERSION` therefore moved 9 → 10
-for the structured Questionnaire audit vocabulary, and v8/v9 files are refused
-at open — `pre_answer_obligation_schema_is_rejected_explicitly` and
-`pre_structured_questionnaire_schema_is_rejected_explicitly`.
+for the structured Questionnaire audit vocabulary and then 10 → 11 for typed
+Agent Status generation metadata; v8/v9/v10 files are refused at open —
+`pre_answer_obligation_schema_is_rejected_explicitly`,
+`pre_structured_questionnaire_schema_is_rejected_explicitly`, and the status
+schema gate coverage.
 The envelope's own `EVENT_SCHEMA_VERSION` is unchanged: adding a
 `RuntimeEvent` variant changes what a journal may contain, not how an envelope
 is framed.

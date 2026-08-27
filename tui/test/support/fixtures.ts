@@ -9,6 +9,7 @@
 
 import type {
   AssistantContentBlock,
+  AgentStatusGenerationMetadata,
   AttemptModelView,
   CapabilityView,
   CatalogModelView,
@@ -248,7 +249,15 @@ export function runtimeInbound(id: string, text: string) {
 export function contextUserMessage(
   id: string,
   text: string,
-  context: "runtime_tool_observation" | "extension_environment" | "agent_status" = "agent_status",
+  context:
+    | "runtime_tool_observation"
+    | "extension_environment"
+    | { agent_status: AgentStatusGenerationMetadata } = {
+    agent_status: {
+      generated_at: "1970-01-01T00:00:00Z",
+      modules: ["time"],
+    },
+  },
 ) {
   return {
     role: "user" as const,

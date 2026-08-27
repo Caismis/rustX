@@ -128,7 +128,7 @@ describe("RuntimeClientConnection", () => {
     );
   });
 
-  it("closes on an unknown v3 event without advancing the projection", async () => {
+  it("closes on an unknown v4 event without advancing the projection", async () => {
     const { peer, connection } = connect();
     const events: RuntimeClientProtocolEvent[] = [];
     let projection = replaceFromSnapshot(snapshot(), runtimeCursor(0));

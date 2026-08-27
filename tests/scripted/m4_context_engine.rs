@@ -394,7 +394,10 @@ fn runtime_with(
     ContextRuntime::with_scripted_summarizer(
         engine(window, reserve, keep_recent, estimator),
         Arc::new(summarizer),
-        rustx::context::AgentStatusEngine::default(),
+        rustx::context::AgentStatusEngine::new(
+            rustx::context::AgentStatusConfig::default(),
+            Arc::new(FixedClock(fixed_time())),
+        ),
         CompactionBudgets::new(1, 1, 1_000_000),
     )
 }
@@ -410,7 +413,10 @@ fn runtime_with_assembly(
     ContextRuntime::with_scripted_summarizer_and_assembly(
         engine(window, reserve, keep_recent, estimator),
         Arc::new(summarizer),
-        rustx::context::AgentStatusEngine::default(),
+        rustx::context::AgentStatusEngine::new(
+            rustx::context::AgentStatusConfig::default(),
+            Arc::new(FixedClock(fixed_time())),
+        ),
         assembly,
         CompactionBudgets::new(1, 1, 1_000_000),
     )
@@ -3781,8 +3787,11 @@ async fn overflow_retry_preserves_pending_fresh_inbound_and_context_generation()
                 matches!(
                     message,
                     MessageBlock::User(user)
-                        if user.kind == InboundKind::Context(
-                            rustx::message::types::ContextKind::AgentStatus
+                        if matches!(
+                            &user.kind,
+                            InboundKind::Context(
+                                rustx::message::types::ContextKind::AgentStatus(_)
+                            )
                         )
                 )
             })
@@ -4393,7 +4402,10 @@ async fn failing_status_module_is_quarantined_not_preparation_failure() {
             .all(|message| !matches!(
                 message,
                 MessageBlock::User(user)
-                    if user.kind == InboundKind::Context(ContextKind::AgentStatus)
+                    if matches!(
+                        &user.kind,
+                        InboundKind::Context(ContextKind::AgentStatus(_))
+                    )
             ))
     );
     let terminals: Vec<&RuntimeEvent> = result
@@ -5502,10 +5514,12 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
         .iter()
         .filter_map(|message| match message {
             MessageBlock::User(user)
-                if user.kind
-                    == rustx::message::types::InboundKind::Context(
-                        rustx::message::types::ContextKind::AgentStatus,
-                    ) =>
+                if matches!(
+                    &user.kind,
+                    rustx::message::types::InboundKind::Context(
+                        rustx::message::types::ContextKind::AgentStatus(_)
+                    )
+                ) =>
             {
                 Some(user)
             }
@@ -5518,7 +5532,9 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
         _ => panic!("status context is text"),
     };
     assert!(
-        status_text.contains("<system-reminder>") && status_text.contains("Inbound message time"),
+        status_text.contains(
+            "<system-reminder>\nTimezone: UTC\nCurrent time: 2026-08-07 12:00:00\n</system-reminder>"
+        ) && !status_text.contains("Inbound message time"),
         "the rendered status is committed through Context Assembly"
     );
     let serialized = serde_json::to_string(&requests[1].messages).expect("serialize");

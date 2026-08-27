@@ -118,9 +118,16 @@ use super::inbox::{
 /// so it must fail at store open rather than being interpreted by a v10
 /// reader.
 ///
-/// A v3/v4/v5/v6/v7/v8/v9 database must fail at store open; there is no
+/// Version 11 freezes the structured Agent Status generation descriptor
+/// introduced by Issue #131: canonical Agent Status context messages carry
+/// their UTC generation instant and typed admitted-module membership. A v10
+/// Ledger cannot answer Surface visibility for Time and Background without
+/// renderer parsing, so it must fail at store open rather than being
+/// interpreted by a v11 reader.
+///
+/// A v3/v4/v5/v6/v7/v8/v9/v10 database must fail at store open; there is no
 /// migration or compatibility path.
-pub const SQLITE_SCHEMA_VERSION: i64 = 10;
+pub const SQLITE_SCHEMA_VERSION: i64 = 11;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -7930,7 +7937,7 @@ mod tests {
             SqliteConversationStore::open(conversation_id, &path),
             Err(ConversationStoreError::SchemaVersionMismatch {
                 stored: 9,
-                expected: 10
+                expected: SQLITE_SCHEMA_VERSION
             })
         ));
     }

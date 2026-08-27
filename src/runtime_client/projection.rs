@@ -87,7 +87,7 @@
 //! mechanics stay internal unless they express a client-relevant semantic
 //! fact. The mapping is defined here, in one place, so internal
 //! `RuntimeEvent` evolution cannot silently break Runtime Client Protocol
-//! v3.
+//! v4.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -710,7 +710,7 @@ impl RuntimeClientProjection {
     }
 
     /// The explicit `RuntimeEvent` mapping policy of Runtime Client Protocol
-    /// v3.
+    /// v4.
     ///
     /// Classification (see the module documentation):
     ///
@@ -1649,11 +1649,9 @@ pub(crate) fn status_view(observation: &AgentStatusObservation) -> AgentStatusVi
             AgentStatusSectionData::Temporal {
                 current_time,
                 timezone,
-                inbound_message_time,
             } => RuntimeClientStatusSection::Temporal {
                 current_time: *current_time,
                 timezone: *timezone,
-                inbound_message_time: *inbound_message_time,
             },
             AgentStatusSectionData::BackgroundExecution {
                 executions,
@@ -1825,6 +1823,7 @@ mod tests {
             status_message_id: MessageId::new("status-1"),
             opportunities: AgentStatusOpportunitySet::default(),
             status: AgentStatus {
+                generated_at: chrono::DateTime::from_timestamp(0, 0).expect("timestamp"),
                 sections: Vec::new(),
             },
         };
