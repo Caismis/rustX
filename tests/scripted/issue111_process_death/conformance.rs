@@ -306,7 +306,7 @@ fn committed_todo_suppression_survives_process_death() {
         "the identical semantic reminder remains suppressed after reopen"
     );
     assert_eq!(
-        head_after.surface_progress, head_before.surface_progress,
+        head_after.todo_progress_origin, head_before.todo_progress_origin,
         "restart does not reset or advance Todo cooldown progress"
     );
 }
@@ -341,9 +341,10 @@ fn uncommitted_todo_emission_does_not_survive_process_death() {
         "the failed start has no durable suppression head"
     );
 
-    // First consume the recovery continuation, if any. It has no FreshInbound
-    // or recovered PostToolBatch opportunity, so this step cannot accidentally
-    // become the FreshInbound assertion below.
+    // Recovery intentionally creates no replacement continuation for this
+    // externally-started dead attempt. This idle process proves that recovery
+    // has no PostToolBatch marker or other work to consume before the
+    // independent FreshInbound case below.
     let mut recovered = lab.spawn(child::RESUME_IDLE, None);
     recovered.wait_note("idle");
     recovered.sigkill();

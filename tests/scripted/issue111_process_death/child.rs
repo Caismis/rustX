@@ -1392,9 +1392,12 @@ async fn scenario_body(root: &Path, scenario: &str) {
             park_owning((child, supervisor)).await;
         }
         RESUME_IDLE => {
-            // Nothing is submitted here. A recovery-permitted continuation, if
-            // any, is therefore distinguishable from new inbound work; an
-            // externally-started dead attempt must instead remain terminal.
+            // Nothing is submitted here. A recovery-permitted continuation,
+            // when an independent durable answer obligation allows one, is
+            // therefore distinguishable from new inbound work. The
+            // Issue #130 externally-started dead-tool case intentionally has
+            // no such continuation: it remains terminal and cannot recover
+            // the dead attempt's process-local PostToolBatch marker.
             let child = Child::require(
                 root,
                 vec![vec![

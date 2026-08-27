@@ -128,19 +128,17 @@ use super::inbox::{
 /// without renderer parsing, so it must fail at store open rather than being
 /// interpreted by a v11 reader.
 ///
-/// Version 12 froze Todo Agent Status suppression: semantic emission facts
-/// are committed with model-turn start and the bounded latest-emission head is
-/// updated in that same transaction. A v11 database has neither the head
-/// projection nor the request-snapshot emission binding, so it is refused.
+/// Version 12 freezes the complete Issue #130 Todo Agent Status durability
+/// contract: semantic emission facts and their bounded latest-emission heads
+/// are committed with model-turn start, and the conversation-owned
+/// `todo_progress_sequence` records one unit for each newly committed first
+/// request of a logical primary model step. A v11 database has neither this
+/// final suppression format nor the request-snapshot emission binding, so it
+/// is refused.
 ///
-/// Version 13 adds the non-compaction Surface progress coordinate to each
-/// latest-emission head. Todo uses that existing monotonic canonical-message
-/// coordinate for its bounded reminder window; a v12 head cannot answer that
-/// policy without guessing, so it is refused.
-///
-/// A v3/v4/v5/v6/v7/v8/v9/v10/v11/v12 database must fail at store open; there is no
+/// A v3/v4/v5/v6/v7/v8/v9/v10/v11 database must fail at store open; there is no
 /// migration or compatibility path.
-pub const SQLITE_SCHEMA_VERSION: i64 = 13;
+pub const SQLITE_SCHEMA_VERSION: i64 = 12;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -467,6 +465,31 @@ impl SqliteConversationStore {
             .extend(operations);
     }
 
+    /// Advances the concrete Todo reminder progress coordinate for one fresh
+    /// logical primary request. Overflow retries carry a different request
+    /// identity but do not represent new semantic progress, so they reuse the
+    /// current sequence. This value is durable only as part of the enclosing
+    /// model-turn-start transaction.
+    fn advance_todo_progress_tx(
+        transaction: &rusqlite::Transaction<'_>,
+        snapshot: &RequestSnapshot,
+    ) -> Result<u64, ConversationStoreError> {
+        let current = read_todo_progress_tx(transaction)?;
+        if snapshot.identity.retry_number != 0 {
+            return Ok(current);
+        }
+        let next = current
+            .checked_add(1)
+            .ok_or(ConversationStoreError::SequenceExhausted)?;
+        transaction
+            .execute(
+                "UPDATE rustx_store SET todo_progress_sequence=?1 WHERE id=1",
+                [seq_to_i64(next)?],
+            )
+            .map_err(|error| storage(format!("update Todo progress sequence: {error}")))?;
+        Ok(next)
+    }
+
     /// Inserts the fresh model-turn start facts into `transaction`: the
     /// request-scoped canonical context, the frozen snapshot, the
     /// `ModelRequestStarted` event, and the sequence binding (Issue #12,
@@ -556,6 +579,13 @@ impl SqliteConversationStore {
                 ],
             )
             .map_err(|error| storage(format!("bind request start sequence: {error}")))?;
+        // Todo progress is a conversation-owned semantic coordinate, not a
+        // Surface append count. Advance it only for the first request of a
+        // logical primary step and do so after this start's request context
+        // and ModelRequestStarted fact have staged. The enclosing transaction
+        // makes the resulting value the exact origin of any Todo emission
+        // committed below; a failed or cancelled start rolls it back.
+        Self::advance_todo_progress_tx(transaction, snapshot)?;
         let agent_status_emissions =
             self.insert_agent_status_emissions_tx(transaction, snapshot, timestamp)?;
         Ok(ModelTurnStartCommit {
@@ -574,6 +604,7 @@ impl SqliteConversationStore {
         let Some(agent_status) = &snapshot.agent_status else {
             return Ok(Vec::new());
         };
+        let todo_progress_origin = read_todo_progress_tx(transaction)?;
         let mut persisted_emissions = Vec::with_capacity(agent_status.emissions.len());
         for emission in &agent_status.emissions {
             let emission_event = RuntimeEventEnvelope {
@@ -588,6 +619,7 @@ impl SqliteConversationStore {
                     request_id: snapshot.request_id.clone(),
                     message_id: agent_status.message_id.clone(),
                     emission: emission.clone(),
+                    todo_progress_origin,
                 },
             };
             let persisted = persist_event_tx(transaction, &self.conversation_id, emission_event)?;
@@ -599,11 +631,7 @@ impl SqliteConversationStore {
                     "fault injected: after Agent Status emission event insert",
                 ));
             }
-            upsert_agent_status_head_tx(
-                transaction,
-                &persisted.event,
-                agent_status.surface_progress,
-            )?;
+            upsert_agent_status_head_tx(transaction, &persisted.event)?;
             #[cfg(test)]
             if self
                 .consume_request_start_fault(RequestStartFaultOperation::AfterAgentStatusHeadUpsert)
@@ -1337,6 +1365,18 @@ impl ConversationStore for SqliteConversationStore {
             .fetch_add(1, Ordering::SeqCst);
         let connection = self.lock()?;
         read_agent_status_head(&connection, module_id, key)
+    }
+
+    fn current_todo_progress(&self) -> Result<u64, ConversationStoreError> {
+        let connection = self.lock()?;
+        let value: i64 = connection
+            .query_row(
+                "SELECT todo_progress_sequence FROM rustx_store WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| storage(format!("Todo progress lookup: {error}")))?;
+        nonnegative(value, "Todo progress sequence")
     }
 
     fn load_request_snapshot(
@@ -3333,6 +3373,7 @@ fn verify_agent_status_start_tx(
             request_id,
             message_id,
             emission: committed,
+            todo_progress_origin,
         } = &event.event
         else {
             return Err(ConversationStoreError::InvalidReference(format!(
@@ -3377,7 +3418,7 @@ fn verify_agent_status_start_tx(
                     || head.emitted_at != event.timestamp
                     || head.request_id != snapshot.request_id
                     || head.canonical_message_id != agent_status.message_id
-                    || head.surface_progress != agent_status.surface_progress))
+                    || head.todo_progress_origin != *todo_progress_origin))
         {
             return Err(ConversationStoreError::InvalidReference(format!(
                 "Agent Status latest-emission head disagrees with fact {event_id}"
@@ -3475,7 +3516,8 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 conversation_id TEXT NOT NULL,
                 next_inbound_sequence INTEGER NOT NULL CHECK(next_inbound_sequence >= 0),
                 next_event_sequence INTEGER NOT NULL CHECK(next_event_sequence >= 0),
-                next_transcript_position INTEGER NOT NULL CHECK(next_transcript_position >= 0)
+                next_transcript_position INTEGER NOT NULL CHECK(next_transcript_position >= 0),
+                todo_progress_sequence INTEGER NOT NULL CHECK(todo_progress_sequence >= 0)
             );
             CREATE TABLE IF NOT EXISTS pending_inbound (
                 sequence INTEGER PRIMARY KEY,
@@ -3535,7 +3577,7 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 emitted_at TEXT NOT NULL,
                 request_id TEXT NOT NULL,
                 message_id TEXT NOT NULL,
-                surface_progress INTEGER NOT NULL CHECK(surface_progress >= 0),
+                todo_progress_origin INTEGER NOT NULL CHECK(todo_progress_origin >= 0),
                 event_sequence INTEGER NOT NULL CHECK(event_sequence >= 0),
                 PRIMARY KEY(module_id, semantic_key)
             );
@@ -3597,7 +3639,7 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
         .map_err(|error| storage(format!("create schema: {error}")))?;
     connection
         .execute(
-            "INSERT OR IGNORE INTO rustx_store(id,schema_version,conversation_id,next_inbound_sequence,next_event_sequence,next_transcript_position) VALUES(1,?1,'',0,0,0)",
+            "INSERT OR IGNORE INTO rustx_store(id,schema_version,conversation_id,next_inbound_sequence,next_event_sequence,next_transcript_position,todo_progress_sequence) VALUES(1,?1,'',0,0,0,0)",
             params![SQLITE_SCHEMA_VERSION],
         )
         .map_err(|error| storage(format!("create schema root: {error}")))?;
@@ -3629,6 +3671,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "next_inbound_sequence",
                 "next_event_sequence",
                 "next_transcript_position",
+                "todo_progress_sequence",
             ] as &[&str],
         ),
         (
@@ -3679,7 +3722,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "emitted_at",
                 "request_id",
                 "message_id",
-                "surface_progress",
+                "todo_progress_origin",
                 "event_sequence",
             ],
         ),
@@ -5499,6 +5542,17 @@ fn decode_agent_status_module(value: &str) -> Result<AgentStatusModuleId, Conver
     }
 }
 
+fn read_todo_progress_tx(transaction: &Transaction<'_>) -> Result<u64, ConversationStoreError> {
+    let value: i64 = transaction
+        .query_row(
+            "SELECT todo_progress_sequence FROM rustx_store WHERE id=1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| storage(format!("Todo progress transaction lookup: {error}")))?;
+    nonnegative(value, "Todo progress sequence")
+}
+
 struct AgentStatusHeadRow {
     module: String,
     key: String,
@@ -5506,7 +5560,7 @@ struct AgentStatusHeadRow {
     emitted_at: String,
     request_id: String,
     message_id: String,
-    surface_progress: i64,
+    todo_progress_origin: i64,
     event_sequence: i64,
 }
 
@@ -5518,7 +5572,7 @@ fn read_agent_status_head_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Agent
         emitted_at: row.get(3)?,
         request_id: row.get(4)?,
         message_id: row.get(5)?,
-        surface_progress: row.get(6)?,
+        todo_progress_origin: row.get(6)?,
         event_sequence: row.get(7)?,
     })
 }
@@ -5541,7 +5595,10 @@ fn head_record_from_row(
         emitted_at,
         request_id: RequestId::new(row.request_id),
         canonical_message_id: MessageId::new(row.message_id),
-        surface_progress: nonnegative(row.surface_progress, "Agent Status head Surface progress")?,
+        todo_progress_origin: nonnegative(
+            row.todo_progress_origin,
+            "Agent Status Todo progress origin",
+        )?,
         event_sequence: sequence_from_i64(row.event_sequence)?,
     })
 }
@@ -5553,7 +5610,7 @@ fn read_agent_status_head(
 ) -> Result<Option<AgentStatusEmissionRecord>, ConversationStoreError> {
     connection
         .query_row(
-            "SELECT module_id,semantic_key,fingerprint,emitted_at,request_id,message_id,surface_progress,event_sequence
+            "SELECT module_id,semantic_key,fingerprint,emitted_at,request_id,message_id,todo_progress_origin,event_sequence
              FROM agent_status_emission_heads
              WHERE module_id=?1 AND semantic_key=?2",
             params![module_id.as_str(), key],
@@ -5572,7 +5629,7 @@ fn read_agent_status_head_tx(
 ) -> Result<Option<AgentStatusEmissionRecord>, ConversationStoreError> {
     transaction
         .query_row(
-            "SELECT module_id,semantic_key,fingerprint,emitted_at,request_id,message_id,surface_progress,event_sequence
+            "SELECT module_id,semantic_key,fingerprint,emitted_at,request_id,message_id,todo_progress_origin,event_sequence
              FROM agent_status_emission_heads
              WHERE module_id=?1 AND semantic_key=?2",
             params![module_id.as_str(), key],
@@ -5587,12 +5644,12 @@ fn read_agent_status_head_tx(
 fn upsert_agent_status_head_tx(
     transaction: &Transaction<'_>,
     event: &RuntimeEventEnvelope,
-    surface_progress: u64,
 ) -> Result<(), ConversationStoreError> {
     let RuntimeEvent::AgentStatusEmitted {
         request_id,
         message_id,
         emission,
+        todo_progress_origin,
     } = &event.event
     else {
         return Err(ConversationStoreError::InvalidReference(
@@ -5613,7 +5670,7 @@ fn upsert_agent_status_head_tx(
             if existing.fingerprint == emission.fingerprint
                 && existing.request_id == *request_id
                 && existing.canonical_message_id == *message_id
-                && existing.surface_progress == surface_progress
+                && existing.todo_progress_origin == *todo_progress_origin
                 && existing.emitted_at == event.timestamp
             {
                 return Ok(());
@@ -5622,23 +5679,23 @@ fn upsert_agent_status_head_tx(
                 "Agent Status latest-emission head conflicts at one event sequence".to_owned(),
             ));
         }
-        if existing.surface_progress > surface_progress {
+        if existing.todo_progress_origin > *todo_progress_origin {
             return Err(ConversationStoreError::InvalidReference(
-                "Agent Status latest-emission head regresses the committed Surface progress"
+                "Agent Status latest-emission head regresses the committed Todo progress origin"
                     .to_owned(),
             ));
         }
         transaction
             .execute(
                 "UPDATE agent_status_emission_heads
-                 SET fingerprint=?1,emitted_at=?2,request_id=?3,message_id=?4,surface_progress=?5,event_sequence=?6
+                 SET fingerprint=?1,emitted_at=?2,request_id=?3,message_id=?4,todo_progress_origin=?5,event_sequence=?6
                  WHERE module_id=?7 AND semantic_key=?8",
                 params![
                     emission.fingerprint,
                     event.timestamp.to_rfc3339(),
                     request_id.as_str(),
                     message_id.as_str(),
-                    seq_to_i64(surface_progress)?,
+                    seq_to_i64(*todo_progress_origin)?,
                     seq_to_i64(event.sequence)?,
                     emission.module_id.as_str(),
                     emission.key,
@@ -5649,7 +5706,7 @@ fn upsert_agent_status_head_tx(
         transaction
             .execute(
                 "INSERT INTO agent_status_emission_heads
-                 (module_id,semantic_key,fingerprint,emitted_at,request_id,message_id,surface_progress,event_sequence)
+                 (module_id,semantic_key,fingerprint,emitted_at,request_id,message_id,todo_progress_origin,event_sequence)
                  VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
                 params![
                     emission.module_id.as_str(),
@@ -5658,7 +5715,7 @@ fn upsert_agent_status_head_tx(
                     event.timestamp.to_rfc3339(),
                     request_id.as_str(),
                     message_id.as_str(),
-                    seq_to_i64(surface_progress)?,
+                    seq_to_i64(*todo_progress_origin)?,
                     seq_to_i64(event.sequence)?,
                 ],
             )
@@ -5719,6 +5776,7 @@ fn validate_event_reference(
             request_id,
             message_id,
             emission,
+            todo_progress_origin,
         } => {
             validate_agent_status_emission_shape(emission)?;
             let Some((snapshot, Some(started_sequence), _)) =
@@ -5740,6 +5798,19 @@ fn validate_event_reference(
                     "Agent Status emission for request {request_id} has no prepared status context"
                 )));
             };
+            if snapshot.identity.retry_number != 0 {
+                return Err(ConversationStoreError::InvalidReference(
+                    "Todo Agent Status emission must belong to the first request of its logical primary step"
+                        .to_owned(),
+                ));
+            }
+            let current_todo_progress = read_todo_progress_tx(transaction)?;
+            if *todo_progress_origin != current_todo_progress {
+                return Err(ConversationStoreError::InvalidReference(
+                    "Agent Status emission Todo progress origin is not the store-owned start boundary"
+                        .to_owned(),
+                ));
+            }
             if envelope.attempt_id.as_ref() != Some(&snapshot.identity.attempt_id)
                 || envelope.turn_id.as_ref() != Some(&snapshot.identity.turn)
                 || envelope.event_id != agent_status_emission_event_id(request_id, emission)
@@ -7095,6 +7166,59 @@ mod tests {
         )
     }
 
+    /// Builds a fresh model-turn snapshot with an identity that is unique to
+    /// the progress test which owns it. The request identity is intentionally
+    /// the only progress input: the store, not this helper, assigns the
+    /// durable Todo origin at commit time.
+    fn progress_request_snapshot(
+        attempt_id: &str,
+        turn: &str,
+        retry_number: u32,
+        revision: crate::conversation::SurfaceRevision,
+        request_context_ids: Vec<MessageId>,
+    ) -> RequestSnapshot {
+        RequestSnapshot::new(
+            RequestIdentity {
+                attempt_id: AttemptId::new(attempt_id),
+                turn: TurnId::new(turn),
+                retry_number,
+            },
+            revision,
+            "frozen".to_owned(),
+            Vec::new(),
+            crate::runtime::RuntimeResourceRevision::new(1),
+            invocation(),
+            1024,
+            None,
+            false,
+            Vec::new(),
+            crate::runtime::identity::CapabilityRevision::new(1),
+            ContextGeneration {
+                id: 1,
+                contributors: Vec::new(),
+            },
+            None,
+            request_context_ids,
+        )
+    }
+
+    fn status_start_snapshot_for(
+        attempt_id: &str,
+        turn: &str,
+        revision: crate::conversation::SurfaceRevision,
+        message_id: MessageId,
+        emissions: Vec<AgentStatusEmission>,
+        request_context_ids: Vec<MessageId>,
+    ) -> RequestSnapshot {
+        let mut snapshot =
+            progress_request_snapshot(attempt_id, turn, 0, revision, request_context_ids);
+        snapshot.agent_status = Some(AgentStatusStart {
+            message_id,
+            emissions,
+        });
+        snapshot
+    }
+
     /// A request-start snapshot with a caller-chosen ordered context id set.
     fn context_start_snapshot(
         revision: crate::conversation::SurfaceRevision,
@@ -7130,14 +7254,14 @@ mod tests {
         message_id: MessageId,
         emissions: Vec<AgentStatusEmission>,
     ) -> RequestSnapshot {
-        let mut snapshot = test_request_snapshot(revision, invocation());
-        snapshot.request_context_ids = vec![message_id.clone()];
-        snapshot.agent_status = Some(AgentStatusStart {
-            message_id,
+        status_start_snapshot_for(
+            "attempt-1",
+            "1",
+            revision,
+            message_id.clone(),
             emissions,
-            surface_progress: 0,
-        });
-        snapshot
+            vec![message_id],
+        )
     }
 
     #[test]
@@ -7282,10 +7406,12 @@ mod tests {
                 request_id,
                 message_id: stored_message_id,
                 emission: stored_emission,
+                todo_progress_origin,
             } => {
                 assert_eq!(request_id, &snapshot.request_id);
                 assert_eq!(stored_message_id, &message_id);
                 assert_eq!(stored_emission, &emission);
+                assert_eq!(*todo_progress_origin, 1);
             }
             other => panic!("expected Agent Status emission fact, got {other:?}"),
         }
@@ -7340,6 +7466,311 @@ mod tests {
         );
     }
 
+    /// The Todo cooldown origin is assigned inside the same transaction that
+    /// installs request-scoped context and the canonical Agent Status. Two
+    /// context appends therefore produce one semantic progress unit, and the
+    /// committed reminder starts with zero elapsed progress of its own.
+    #[test]
+    fn todo_origin_is_assigned_at_the_post_context_start_boundary() {
+        let store = store();
+        let base = user_message("base", "base");
+        store.initialize(std::slice::from_ref(&base)).unwrap();
+        let base_revision = store.load_head().unwrap().revision;
+        let runtime_context = request_context_message("runtime-observation", "tool observation");
+        let status_message_id = MessageId::new("status-origin");
+        let status = agent_status_message(
+            status_message_id.as_str(),
+            Utc.with_ymd_and_hms(2026, 8, 27, 6, 0, 0).unwrap(),
+            &[AgentStatusModuleId::Todo],
+        );
+        let emission = AgentStatusEmission {
+            module_id: AgentStatusModuleId::Todo,
+            key: "active_actionable".to_owned(),
+            fingerprint: "origin-fingerprint".to_owned(),
+        };
+        let snapshot = status_start_snapshot_for(
+            "origin-attempt",
+            "1",
+            base_revision.next().next(),
+            status_message_id.clone(),
+            vec![emission.clone()],
+            vec![runtime_context.id().clone(), status_message_id.clone()],
+        );
+
+        let started = store
+            .commit_model_turn_start(
+                &[runtime_context, status],
+                &snapshot,
+                Utc.with_ymd_and_hms(2026, 8, 27, 6, 1, 0).unwrap(),
+            )
+            .expect("same-start RuntimeToolObservation and Agent Status commit");
+
+        assert_eq!(store.current_todo_progress().unwrap(), 1);
+        let head = store
+            .latest_agent_status_emission(AgentStatusModuleId::Todo, "active_actionable")
+            .unwrap()
+            .expect("latest Todo head");
+        assert_eq!(head.todo_progress_origin, 1);
+        assert_eq!(
+            head.todo_progress_origin,
+            store.current_todo_progress().unwrap()
+        );
+        assert_eq!(head.canonical_message_id, status_message_id);
+        assert_eq!(
+            head.event_sequence,
+            started.agent_status_emissions[0].sequence
+        );
+        assert!(matches!(
+            started.agent_status_emissions[0].event,
+            RuntimeEvent::AgentStatusEmitted {
+                todo_progress_origin: 1,
+                emission: ref committed,
+                ..
+            } if committed == &emission
+        ));
+
+        // An exact replay verifies the same store-assigned origin and does
+        // not advance the sequence a second time.
+        let replay = store
+            .commit_model_turn_start(
+                &[
+                    request_context_message("runtime-observation", "tool observation"),
+                    agent_status_message(
+                        "status-origin",
+                        Utc.with_ymd_and_hms(2026, 8, 27, 6, 0, 0).unwrap(),
+                        &[AgentStatusModuleId::Todo],
+                    ),
+                ],
+                &snapshot,
+                Utc.with_ymd_and_hms(2026, 8, 27, 6, 1, 0).unwrap(),
+            )
+            .expect("exact start replay");
+        assert_eq!(
+            replay.disposition,
+            ModelTurnStartCommitDisposition::IdempotentReplay
+        );
+        assert_eq!(
+            replay.agent_status_emissions,
+            started.agent_status_emissions
+        );
+        assert_eq!(store.current_todo_progress().unwrap(), 1);
+    }
+
+    /// Todo's four-unit window is measured from the committed origin, not
+    /// from the status preparation snapshot. Later fresh primary starts add
+    /// exactly one unit each; an overflow retry, a status-free retry, and
+    /// request-scoped context do not create another unit.
+    #[test]
+    fn todo_progress_counts_later_fresh_starts_once_and_overflow_retries_zero() {
+        let store = store();
+        let base = user_message("base", "base");
+        store.initialize(std::slice::from_ref(&base)).unwrap();
+        let status_message_id = MessageId::new("status-progress");
+        let emission = AgentStatusEmission {
+            module_id: AgentStatusModuleId::Todo,
+            key: "active_actionable".to_owned(),
+            fingerprint: "progress-fingerprint".to_owned(),
+        };
+        let first = status_start_snapshot(
+            store.load_head().unwrap().revision.next(),
+            status_message_id.clone(),
+            vec![emission],
+        );
+        let status = agent_status_message(
+            status_message_id.as_str(),
+            Utc.with_ymd_and_hms(2026, 8, 27, 6, 0, 0).unwrap(),
+            &[AgentStatusModuleId::Todo],
+        );
+        store
+            .commit_model_turn_start(
+                std::slice::from_ref(&status),
+                &first,
+                Utc.with_ymd_and_hms(2026, 8, 27, 6, 1, 0).unwrap(),
+            )
+            .unwrap();
+        let origin = store
+            .latest_agent_status_emission(AgentStatusModuleId::Todo, "active_actionable")
+            .unwrap()
+            .expect("first Todo head")
+            .todo_progress_origin;
+        assert_eq!(origin, 1);
+
+        // The overflow request belongs to the already-started first logical
+        // step. It is a real start snapshot, but it cannot consume cooldown
+        // progress or move the emission origin.
+        let retry_revision = store.load_head().unwrap().revision;
+        let overflow_retry =
+            progress_request_snapshot("attempt-1", "1", 1, retry_revision, Vec::new());
+        store
+            .commit_model_turn_start(&[], &overflow_retry, Utc::now())
+            .expect("overflow retry start");
+        assert_eq!(store.current_todo_progress().unwrap(), origin);
+
+        for index in 0..3 {
+            let revision = store.load_head().unwrap().revision;
+            let snapshot = progress_request_snapshot(
+                &format!("later-attempt-{index}"),
+                "1",
+                0,
+                revision,
+                Vec::new(),
+            );
+            store
+                .commit_model_turn_start(&[], &snapshot, Utc::now())
+                .expect("later fresh primary start");
+        }
+        assert_eq!(
+            store.current_todo_progress().unwrap() - origin,
+            3,
+            "three later fresh starts are strictly before the inclusive boundary"
+        );
+        assert_eq!(
+            store
+                .latest_agent_status_emission(AgentStatusModuleId::Todo, "active_actionable")
+                .unwrap()
+                .expect("Todo head remains the first emission")
+                .todo_progress_origin,
+            origin
+        );
+
+        let fourth_revision = store.load_head().unwrap().revision;
+        let fourth =
+            progress_request_snapshot("later-attempt-3", "1", 0, fourth_revision, Vec::new());
+        store
+            .commit_model_turn_start(&[], &fourth, Utc::now())
+            .expect("fourth later fresh primary start");
+        assert_eq!(store.current_todo_progress().unwrap() - origin, 4);
+        assert_eq!(
+            store
+                .latest_agent_status_emission(AgentStatusModuleId::Todo, "active_actionable")
+                .unwrap()
+                .expect("Todo head remains unchanged without a status")
+                .todo_progress_origin,
+            origin
+        );
+    }
+
+    /// Surface compaction retires model-visible history, but it is not Todo
+    /// progress. In particular, retiring the Agent Status message does not
+    /// reset or consume the durable reminder window.
+    #[test]
+    fn compaction_does_not_reset_or_advance_todo_progress() {
+        let store = store();
+        let base = user_message("base", "base");
+        store.initialize(std::slice::from_ref(&base)).unwrap();
+        let status_id = MessageId::new("status-before-compaction");
+        let status = agent_status_message(
+            status_id.as_str(),
+            Utc.with_ymd_and_hms(2026, 8, 27, 6, 0, 0).unwrap(),
+            &[AgentStatusModuleId::Todo],
+        );
+        let emission = AgentStatusEmission {
+            module_id: AgentStatusModuleId::Todo,
+            key: "active_actionable".to_owned(),
+            fingerprint: "compaction-fingerprint".to_owned(),
+        };
+        let snapshot = status_start_snapshot(
+            store.load_head().unwrap().revision.next(),
+            status_id.clone(),
+            vec![emission],
+        );
+        store
+            .commit_model_turn_start(
+                std::slice::from_ref(&status),
+                &snapshot,
+                Utc.with_ymd_and_hms(2026, 8, 27, 6, 1, 0).unwrap(),
+            )
+            .unwrap();
+        let origin = store
+            .latest_agent_status_emission(AgentStatusModuleId::Todo, "active_actionable")
+            .unwrap()
+            .expect("Todo head")
+            .todo_progress_origin;
+        let before = store.load_head().unwrap();
+        assert_eq!(origin, 1);
+
+        let summary = summary_message("summary-after-status", "summary");
+        store
+            .commit_compaction(CompactionCommitInput {
+                summary,
+                span: SurfaceSpan::new(base.id().clone(), status_id),
+                expected_revision: before.revision,
+                tokens_before: TokenMeasurement {
+                    input_tokens: 20,
+                    source: TokenMeasurementSource::Estimated,
+                },
+                estimated_tokens_after: 2,
+                attempt_id: None,
+                turn_id: None,
+                timestamp: Utc.with_ymd_and_hms(2026, 8, 27, 6, 2, 0).unwrap(),
+            })
+            .expect("compaction commits");
+
+        assert_eq!(store.current_todo_progress().unwrap(), origin);
+        assert_eq!(
+            store
+                .latest_agent_status_emission(AgentStatusModuleId::Todo, "active_actionable")
+                .unwrap()
+                .expect("durable Todo head survives compaction")
+                .todo_progress_origin,
+            origin
+        );
+    }
+
+    /// Time and Background are optional presentation modules in one status
+    /// generation. Their canonical status membership is not another logical
+    /// primary start, so enabling either one cannot move Todo's cadence.
+    #[test]
+    fn optional_status_modules_do_not_add_todo_progress_units() {
+        let store = store();
+        let base = user_message("base", "base");
+        store.initialize(std::slice::from_ref(&base)).unwrap();
+        let runtime_context = request_context_message("runtime-context", "observation");
+        let status_id = MessageId::new("status-all-modules");
+        let status = agent_status_message(
+            status_id.as_str(),
+            Utc.with_ymd_and_hms(2026, 8, 27, 6, 0, 0).unwrap(),
+            &[
+                AgentStatusModuleId::Time,
+                AgentStatusModuleId::Background,
+                AgentStatusModuleId::Todo,
+            ],
+        );
+        let snapshot = status_start_snapshot_for(
+            "all-modules-attempt",
+            "1",
+            store.load_head().unwrap().revision.next().next(),
+            status_id.clone(),
+            vec![AgentStatusEmission {
+                module_id: AgentStatusModuleId::Todo,
+                key: "active_actionable".to_owned(),
+                fingerprint: "all-modules-fingerprint".to_owned(),
+            }],
+            vec![runtime_context.id().clone(), status_id],
+        );
+        store
+            .commit_model_turn_start(
+                &[runtime_context, status],
+                &snapshot,
+                Utc.with_ymd_and_hms(2026, 8, 27, 6, 3, 0).unwrap(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            store.current_todo_progress().unwrap(),
+            1,
+            "all optional status sections and same-start context share one start unit"
+        );
+        assert_eq!(
+            store
+                .latest_agent_status_emission(AgentStatusModuleId::Todo, "active_actionable")
+                .unwrap()
+                .expect("Todo head")
+                .todo_progress_origin,
+            1
+        );
+    }
+
     #[test]
     fn agent_status_start_faults_roll_back_message_emission_and_head_together() {
         for fault in [
@@ -7389,6 +7820,11 @@ mod tests {
                     .is_empty()
             );
             assert!(store.read_events(None, 10).unwrap().events.is_empty());
+            assert_eq!(
+                store.current_todo_progress().unwrap(),
+                0,
+                "a failed status start does not advance Todo progress"
+            );
             assert!(
                 store
                     .latest_agent_status_emission(AgentStatusModuleId::Todo, "active_actionable")
@@ -7470,6 +7906,8 @@ mod tests {
             .unwrap()
             .expect("committed suppression survives reopen");
         assert_eq!(found.fingerprint, emission.fingerprint);
+        assert_eq!(found.todo_progress_origin, 1);
+        assert_eq!(reopened.current_todo_progress().unwrap(), 1);
         assert_eq!(reopened.agent_status_head_lookup_reads(), 1);
     }
 
@@ -8864,6 +9302,35 @@ mod tests {
             Err(ConversationStoreError::SchemaVersionMismatch {
                 stored: 9,
                 expected: SQLITE_SCHEMA_VERSION
+            })
+        ));
+    }
+
+    /// Issue #130 is one clean breaking development-schema transition from
+    /// the merged main schema (v11) to the final Todo/status format (v12).
+    /// There is no migration path for an earlier development schema.
+    #[test]
+    fn pre_issue_130_schema_version_is_rejected_explicitly() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("pre-issue-130.sqlite");
+        let conversation_id = ConversationId::new("conv-pre-issue-130");
+        {
+            let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
+            store
+                .conn
+                .lock()
+                .unwrap()
+                .execute(
+                    "UPDATE rustx_store SET schema_version = 11 WHERE id = 1",
+                    [],
+                )
+                .unwrap();
+        }
+        assert!(matches!(
+            SqliteConversationStore::open(conversation_id, &path),
+            Err(ConversationStoreError::SchemaVersionMismatch {
+                stored: 11,
+                expected: 12
             })
         ));
     }

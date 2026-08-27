@@ -1227,11 +1227,16 @@ Event Journal    = execution facts
   or eight non-AgentStatus model-visible messages follow it. Todo emits only
   for committed actionable work. Its stable key is `active_actionable`, its
   fingerprint is the SHA-256 of the bounded structured presentation, and an
-  identical fingerprint is suppressed while fewer than four non-compaction
-  Surface progress units follow the last durable emission; it is eligible
+  identical fingerprint is suppressed while fewer than four later newly
+  committed first requests of logical primary model steps follow the
+  reminder's store-assigned `todo_progress_sequence` origin; it is eligible
   again at exactly four, while changed state is eligible at the next
-  opportunity. These conditions only affect the next already-existing
-  opportunity: they never schedule or create a model request. The canonical Agent Status message carries its generated-at
+  opportunity. One successful `retry_number == 0` model-turn start advances
+  that sequence once. Same-start context/status, RuntimeToolObservation,
+  Time, Background, compaction, overflow retries, cancellation, and failed
+  starts do not advance it. These conditions only affect the next
+  already-existing opportunity: they never schedule or create a model
+  request. The canonical Agent Status message carries its generated-at
   instant and admitted module membership as typed durable metadata, so Surface
   reconstruction never parses renderer text.
 

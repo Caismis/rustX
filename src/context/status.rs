@@ -61,15 +61,15 @@ pub const MAX_TODO_STATUS_TEXT_BYTES: usize = 256;
 /// The stable semantic identity of the active Todo reminder.
 pub const TODO_STATUS_EMISSION_KEY: &str = "active_actionable";
 
-/// The number of monotonic non-compaction Conversation Surface progress units
-/// that must follow an identical Todo reminder before it can be shown again.
-/// The boundary is inclusive: a candidate at exactly `last + 4` is eligible.
+/// The number of newly committed first requests of later logical primary model
+/// steps that must follow an identical Todo reminder before it can be shown
+/// again. The boundary is inclusive: a candidate at exactly `last + 4` is
+/// eligible.
 ///
-/// This is a semantic progress window, not a timer and not a scheduler. The
-/// progress coordinate is already owned by the canonical Conversation Surface
-/// and is available at the normal status-preparation boundary. Compaction is
-/// deliberately excluded: an overflow retry may compact the Surface, but it
-/// must not advance or reset Todo suppression.
+/// This is a Todo-specific semantic progress window, not a timer and not a
+/// scheduler. The durable conversation store owns the bounded sequence. A
+/// model-turn start advances it once; request-scoped context, Agent Status,
+/// compaction, and provider-overflow retries do not add units of their own.
 pub const TODO_STATUS_REMINDER_PROGRESS_INTERVAL: u64 = 4;
 
 /// The final defensive Agent Status rendering bound, measured in UTF-8 bytes.
@@ -542,21 +542,6 @@ impl AgentStatusSurfaceView {
         self.revision
     }
 
-    /// The monotonic Surface progress coordinate used by Todo reminders.
-    ///
-    /// Every accepted Surface operation advances `revision`; only a
-    /// compaction `Replace` advances `compaction_generation` as well. Their
-    /// difference therefore counts canonical appends while remaining stable
-    /// across compaction. In particular, a provider-overflow retry cannot
-    /// advance this coordinate merely by compacting the context.
-    #[must_use]
-    pub fn todo_reminder_progress(&self) -> u64 {
-        debug_assert!(self.revision.get() >= self.compaction_generation);
-        self.revision
-            .get()
-            .saturating_sub(self.compaction_generation)
-    }
-
     /// The compaction generation represented by this view.
     #[must_use]
     pub fn compaction_generation(&self) -> u64 {
@@ -832,16 +817,20 @@ impl TodoStatusModule {
             .emission_lookup
             .latest_agent_status_emission(AgentStatusModuleId::Todo, TODO_STATUS_EMISSION_KEY)
             .map_err(|_| ModuleFailurePhase::SuppressionLookup)?;
+        let todo_progress = frozen
+            .emission_lookup
+            .current_todo_progress()
+            .map_err(|_| ModuleFailurePhase::SuppressionLookup)?;
         Ok(TodoStatusSnapshot {
             committed: frozen.committed_todos.clone(),
             latest_emission,
-            surface_progress: frozen.surface_progress,
+            todo_progress,
         })
     }
 
     /// Emits exactly one bounded reminder when committed actionable work
     /// exists and either its semantic fingerprint changed or the explicit
-    /// Surface-progress reminder window elapsed since the last durable
+    /// Todo model-progress reminder window elapsed since the last durable
     /// reminder for the stable Todo key. `FreshInbound` and `PostToolBatch`
     /// use this same policy; the opportunity set is eligibility, not a second
     /// trigger state machine.
@@ -856,8 +845,8 @@ impl TodoStatusModule {
             Some(latest) => {
                 latest.fingerprint != fingerprint
                     || snapshot
-                        .surface_progress
-                        .saturating_sub(latest.surface_progress)
+                        .todo_progress
+                        .saturating_sub(latest.todo_progress_origin)
                         >= TODO_STATUS_REMINDER_PROGRESS_INTERVAL
             }
         };
@@ -879,7 +868,7 @@ impl TodoStatusModule {
 struct TodoStatusSnapshot {
     committed: TodoSnapshot,
     latest_emission: Option<AgentStatusEmissionRecord>,
-    surface_progress: u64,
+    todo_progress: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -910,7 +899,6 @@ struct BackgroundStatusSnapshot {
 struct AgentStatusEvaluationSnapshot<'a> {
     now: DateTime<Utc>,
     surface: &'a AgentStatusSurfaceView,
-    surface_progress: u64,
     active_background: Arc<[BackgroundExecutionSnapshot]>,
     committed_todos: TodoSnapshot,
     emission_lookup: &'a dyn AgentStatusEmissionLookup,
@@ -1059,7 +1047,6 @@ impl AgentStatusEngine {
         let frozen = AgentStatusEvaluationSnapshot {
             now: self.clock.now(),
             surface,
-            surface_progress: surface.todo_reminder_progress(),
             active_background: Arc::from(background.active_snapshot().into_boxed_slice()),
             committed_todos: todos.committed(),
             emission_lookup,
@@ -1096,11 +1083,7 @@ impl AgentStatusEngine {
             }
         }
         let (status, emissions) = admit_sections(sections, frozen.now);
-        (!status.sections.is_empty()).then_some(PreparedAgentStatus {
-            status,
-            emissions,
-            surface_progress: frozen.surface_progress,
-        })
+        (!status.sections.is_empty()).then_some(PreparedAgentStatus { status, emissions })
     }
 
     /// Test-only convenience for the pre-Todo module unit suite. Production
@@ -1142,10 +1125,6 @@ pub(crate) struct PreparedAgentStatus {
     pub(crate) status: AgentStatus,
     /// The semantic emissions represented by admitted sections.
     pub(crate) emissions: Vec<AgentStatusEmission>,
-    /// The immutable Todo reminder progress observed with this generation.
-    /// It is bound into the prepared model-turn start and never recomputed by
-    /// an overflow retry.
-    pub(crate) surface_progress: u64,
 }
 
 #[cfg(test)]
@@ -1159,6 +1138,10 @@ impl AgentStatusEmissionLookup for EmptyEmissionLookup {
         _key: &str,
     ) -> Result<Option<AgentStatusEmissionRecord>, crate::durable::ConversationStoreError> {
         Ok(None)
+    }
+
+    fn current_todo_progress(&self) -> Result<u64, crate::durable::ConversationStoreError> {
+        Ok(0)
     }
 }
 
@@ -1903,7 +1886,8 @@ mod tests {
 
     struct FixedEmissionLookup {
         fingerprint: Option<String>,
-        surface_progress: u64,
+        todo_progress: u64,
+        latest_emission_origin: u64,
     }
 
     impl AgentStatusEmissionLookup for FixedEmissionLookup {
@@ -1923,9 +1907,13 @@ mod tests {
                     emitted_at: DateTime::from_timestamp(1_754_000_000, 0).expect("timestamp"),
                     request_id: RequestId::new("request"),
                     canonical_message_id: MessageId::new("status"),
-                    surface_progress: self.surface_progress,
+                    todo_progress_origin: self.latest_emission_origin,
                     event_sequence: 1,
                 }))
+        }
+
+        fn current_todo_progress(&self) -> Result<u64, crate::durable::ConversationStoreError> {
+            Ok(self.todo_progress)
         }
     }
 
@@ -2075,7 +2063,8 @@ mod tests {
                 &todos,
                 &FixedEmissionLookup {
                     fingerprint: None,
-                    surface_progress: 0,
+                    todo_progress: 0,
+                    latest_emission_origin: 0,
                 },
             )
             .expect("the actionable Todo contribution");
@@ -2922,7 +2911,8 @@ mod tests {
                     &todos,
                     &FixedEmissionLookup {
                         fingerprint: None,
-                        surface_progress: 0,
+                        todo_progress: 0,
+                        latest_emission_origin: 0,
                     },
                 )
                 .expect("one Todo generation");
@@ -2951,7 +2941,8 @@ mod tests {
         let registry = empty_background().1;
         let lookup = FixedEmissionLookup {
             fingerprint: None,
-            surface_progress: 0,
+            todo_progress: 0,
+            latest_emission_origin: 0,
         };
         let mut before_commit = engine(todo_only_config());
         assert!(
@@ -2991,7 +2982,8 @@ mod tests {
         let registry = empty_background().1;
         let lookup = FixedEmissionLookup {
             fingerprint: None,
-            surface_progress: 0,
+            todo_progress: 0,
+            latest_emission_origin: 0,
         };
         for todos in [
             ConversationTodoList::new(crate::runtime::identity::ConversationId::new("empty")),
@@ -3029,7 +3021,7 @@ mod tests {
     }
 
     #[test]
-    fn todo_status_repeats_identical_fingerprint_at_inclusive_progress_boundary() {
+    fn todo_status_repeats_identical_fingerprint_at_inclusive_model_progress_boundary() {
         let todos = todo_list_with(|writer| {
             writer
                 .create(TodoCreate {
@@ -3047,7 +3039,8 @@ mod tests {
                 &todos,
                 &FixedEmissionLookup {
                     fingerprint: None,
-                    surface_progress: 0,
+                    todo_progress: 0,
+                    latest_emission_origin: 0,
                 },
             )
             .expect("first actionable Todo state emits");
@@ -3055,51 +3048,71 @@ mod tests {
 
         let lookup = FixedEmissionLookup {
             fingerprint: Some(fingerprint.clone()),
-            surface_progress: 0,
+            todo_progress: 1,
+            latest_emission_origin: 1,
         };
-        let before_threshold =
-            crate::conversation::SurfaceRevision::new(TODO_STATUS_REMINDER_PROGRESS_INTERVAL - 1);
         assert!(
             engine(todo_only_config())
                 .prepare_with_inputs(
                     &post_tool_opportunity(),
-                    &empty_surface_at(before_threshold),
+                    &empty_surface(),
                     &registry,
                     &todos,
                     &lookup,
+                )
+                .is_none(),
+            "the newly committed reminder has zero elapsed model progress"
+        );
+
+        let before_threshold = FixedEmissionLookup {
+            fingerprint: Some(fingerprint.clone()),
+            todo_progress: 1 + TODO_STATUS_REMINDER_PROGRESS_INTERVAL - 1,
+            latest_emission_origin: 1,
+        };
+        assert!(
+            engine(todo_only_config())
+                .prepare_with_inputs(
+                    &post_tool_opportunity(),
+                    &empty_surface(),
+                    &registry,
+                    &todos,
+                    &before_threshold,
                 )
                 .is_none(),
             "an identical fingerprint is suppressed strictly before the threshold"
         );
 
-        let at_threshold =
-            crate::conversation::SurfaceRevision::new(TODO_STATUS_REMINDER_PROGRESS_INTERVAL);
+        let at_threshold = FixedEmissionLookup {
+            fingerprint: Some(fingerprint.clone()),
+            todo_progress: 1 + TODO_STATUS_REMINDER_PROGRESS_INTERVAL,
+            latest_emission_origin: 1,
+        };
         let repeated = engine(todo_only_config())
             .prepare_with_inputs(
                 &post_tool_opportunity(),
-                &empty_surface_at(at_threshold),
+                &empty_surface(),
                 &registry,
                 &todos,
-                &lookup,
+                &at_threshold,
             )
             .expect("the identical fingerprint is eligible at the inclusive threshold");
         assert_eq!(repeated.emissions[0].fingerprint, fingerprint);
 
-        assert!(
-            engine(todo_only_config())
-                .prepare_with_inputs(
-                    &post_tool_opportunity(),
-                    &empty_surface_at_with_compaction(
-                        crate::conversation::SurfaceRevision::new(1),
-                        1,
-                    ),
-                    &registry,
-                    &todos,
-                    &lookup,
-                )
-                .is_none(),
-            "a compaction-only Surface revision does not advance Todo progress"
-        );
+        let changed = FixedEmissionLookup {
+            fingerprint: Some("different-fingerprint".to_owned()),
+            todo_progress: 1,
+            latest_emission_origin: 1,
+        };
+        let changed_generation = engine(todo_only_config())
+            .prepare_with_inputs(
+                &post_tool_opportunity(),
+                &empty_surface(),
+                &registry,
+                &todos,
+                &changed,
+            )
+            .expect("a changed fingerprint bypasses the cooldown");
+        assert_eq!(changed_generation.emissions[0].fingerprint, fingerprint);
     }
 
     #[test]
@@ -3117,7 +3130,8 @@ mod tests {
         let registry = empty_background().1;
         let first_lookup = FixedEmissionLookup {
             fingerprint: None,
-            surface_progress: 0,
+            todo_progress: 0,
+            latest_emission_origin: 0,
         };
         let mut first_engine = engine(todo_only_config());
         let first = first_engine
@@ -3150,7 +3164,8 @@ mod tests {
 
         let duplicate_lookup = FixedEmissionLookup {
             fingerprint: Some(emission.fingerprint.clone()),
-            surface_progress: 0,
+            todo_progress: 0,
+            latest_emission_origin: 0,
         };
         let mut duplicate_engine = engine(todo_only_config());
         assert!(

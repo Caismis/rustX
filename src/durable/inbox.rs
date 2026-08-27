@@ -500,10 +500,10 @@ pub struct AgentStatusEmissionRecord {
     pub request_id: RequestId,
     /// The exact canonical Agent Status User message referenced by the fact.
     pub canonical_message_id: MessageId,
-    /// The monotonic non-compaction Conversation Surface progress observed
-    /// when the status generation was evaluated. Todo uses this existing
-    /// canonical-message progress coordinate for its reminder window.
-    pub surface_progress: u64,
+    /// The store-assigned Todo progress sequence at which the corresponding
+    /// model-turn start became durable. This is the reminder's cooldown
+    /// origin, not an evaluation coordinate supplied by the caller.
+    pub todo_progress_origin: u64,
     /// The Event Journal sequence of the emission fact.
     pub event_sequence: u64,
 }
@@ -522,6 +522,16 @@ pub trait AgentStatusEmissionLookup: Send + Sync {
         module_id: AgentStatusModuleId,
         key: &str,
     ) -> Result<Option<AgentStatusEmissionRecord>, ConversationStoreError>;
+
+    /// Reads the current conversation-owned Todo progress sequence through a
+    /// bounded projection. One unit is one newly committed first request of a
+    /// logical primary model step; overflow retries do not advance it.
+    /// Preparation only reads this value, and it never schedules work.
+    ///
+    /// # Errors
+    ///
+    /// Returns the conversation-store error when the bounded lookup fails.
+    fn current_todo_progress(&self) -> Result<u64, ConversationStoreError>;
 }
 
 /// A bounded page of immutable Request Snapshots.
@@ -1272,6 +1282,12 @@ pub trait ConversationStore: Send + Sync + 'static {
         key: &str,
     ) -> Result<Option<AgentStatusEmissionRecord>, ConversationStoreError>;
 
+    /// Reads the bounded Todo progress sequence used by the concrete Todo
+    /// reminder policy. It advances only in the fresh logical model-turn
+    /// start transaction, never for request-scoped context or Agent Status
+    /// appends.
+    fn current_todo_progress(&self) -> Result<u64, ConversationStoreError>;
+
     /// Loads one immutable Request Snapshot on demand.
     fn load_request_snapshot(
         &self,
@@ -1421,6 +1437,10 @@ impl<T: ConversationStore + ?Sized> AgentStatusEmissionLookup for T {
         key: &str,
     ) -> Result<Option<AgentStatusEmissionRecord>, ConversationStoreError> {
         ConversationStore::latest_agent_status_emission(self, module_id, key)
+    }
+
+    fn current_todo_progress(&self) -> Result<u64, ConversationStoreError> {
+        ConversationStore::current_todo_progress(self)
     }
 }
 

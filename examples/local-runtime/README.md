@@ -175,9 +175,9 @@ The client always offers bounded custom text; the model does not send
 `allow_free_text` or author an `Other` option. A decline is a successful tool
 result, while attempt cancellation and provider unavailability remain distinct.
 The local process speaks Runtime Client Protocol v5 only, and its SQLite
-conversation store accepts development schema version 13 only; Protocol v4 and
-development schemas before version 13 are rejected rather than
-migrated.
+conversation store accepts development schema version 12 only. Runtime Client
+Protocol v4 and development schemas before version 12 are explicitly rejected
+rather than migrated.
 
 The harmless `RUSTX_EXAMPLE_MODE` entry demonstrates the authorized runtime
 environment. Keep provider credentials in `models.jsonc`'s `apiKey` reference,

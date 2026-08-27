@@ -206,6 +206,10 @@ pub enum RuntimeEvent {
         message_id: MessageId,
         /// The module-owned semantic emission identity.
         emission: AgentStatusEmission,
+        /// The store-assigned Todo progress sequence at the model-turn-start
+        /// commit. This is the cooldown origin for the emitted Todo reminder;
+        /// it is never supplied by status preparation.
+        todo_progress_origin: u64,
     },
     /// A model request completed successfully.
     ///

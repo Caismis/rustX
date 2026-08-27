@@ -41,15 +41,14 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 13 is the only accepted schema; version 12 and every older
+schema version 12 is the only accepted schema; version 11 and every older
 development schema fail explicitly at open and are not migrated. Version 10
 froze the structured Questionnaire interaction audit vocabulary introduced by
 Issue #126. Version 11 froze the structured Agent Status generation
-descriptor introduced by Issue #131. Version 12 added canonical-message-
-coupled Agent Status emission facts and bounded latest-emission heads. Version
-13 adds the persisted non-compaction Surface progress used by the Todo
-reminder window; older development schemas fail explicitly and are not
-migrated.
+descriptor introduced by Issue #131. Final version 12 adds the complete
+canonical-message-coupled Agent Status emission facts, bounded latest-emission
+heads, and the Todo-specific durable progress sequence. The review-only
+intermediate schema history was never a supported format.
 
 The durable request-start invariant is strict: the provider adapter cannot be
 called until the Request Snapshot and exact `ModelRequestStarted` Event
@@ -2372,14 +2371,19 @@ message role, history shape, or timestamps:
   semantic key is `active_actionable`; the fingerprint is a SHA-256 of that
   bounded structured presentation. The latest durable head for
   `(module=Todo, key=active_actionable)` suppresses an identical fingerprint
-  while fewer than four non-compaction Surface progress units have followed
-  the last durable emission; the identical fingerprint is eligible again at
-  exactly four units. A changed fingerprint bypasses that duplicate window at
-  the next eligible opportunity. The progress coordinate is
-  `SurfaceRevision - compaction_generation`, so compaction and provider
-  overflow retries do not advance or reset it. There is no wall-clock polling
-  or generic cooldown framework. FreshInbound and PostToolBatch use this same
-  policy.
+  while fewer than four later newly committed first requests of logical
+  primary model steps have followed the reminder's durable origin; the
+  identical fingerprint is eligible again at exactly four later starts. A
+  changed fingerprint bypasses that duplicate window at the next eligible
+  opportunity. The progress coordinate is the store-owned
+  `todo_progress_sequence`, not a Surface revision: one successful
+  `retry_number == 0` model-turn-start transaction advances it once, while
+  request-scoped context, Agent Status (including Time and Background),
+  RuntimeToolObservation, compaction, provider-overflow retries, cancellation,
+  and failed transactions do not add units. The sequence survives restart and
+  compaction. There is no wall-clock polling or generic cooldown framework;
+  cooldown expiry only changes eligibility for a step that already exists.
+  FreshInbound and PostToolBatch use this same policy.
 - Each interested module captures authoritative runtime state once into a
   finite immutable snapshot, then evaluates only that snapshot plus immutable
   configuration. Capture, evaluation, and payload-validation failures are
@@ -2418,7 +2422,7 @@ message role, history shape, or timestamps:
   rerunning assembly, and cannot solve generation reuse by dropping the
   constraint.
 - Neither the 30-minute Time threshold, the 8-message Background threshold,
-  nor the Todo four-append progress reminder threshold schedules, wakes,
+  nor the Todo four-primary-start progress reminder threshold schedules, wakes,
   creates, or prolongs a model turn. They only affect eligibility or
   contribution when an already-existing opportunity reaches this preparation
   boundary.

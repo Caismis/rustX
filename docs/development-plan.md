@@ -772,7 +772,7 @@ projection/control only. There is no full transcript, `ConversationRecord`,
 request-message copy, generic repository, or client recovery cache.
 
 M8 introduced development schema version 1. The current store gate is schema
-version 13; incompatible files fail explicitly at open. There is no migration
+version 12; incompatible files fail explicitly at open. There is no migration
 framework, legacy reader, fallback, or dual write.
 File-backed SQLite uses WAL, `synchronous=FULL`, foreign keys, and a busy
 timeout. Commit is the local durability linearization point.
@@ -1188,12 +1188,11 @@ backend reuses the same contract.
 The durable event vocabulary changed incompatibly, so `SQLITE_SCHEMA_VERSION`
 is now 13. Version 10 froze the structured Questionnaire interaction audit
 vocabulary introduced by Issue #126; version 11 added typed Agent Status
-generation metadata to canonical status messages; version 12 added
-canonical-message-coupled Agent Status emission facts and bounded Todo
-latest-emission heads; version 13 adds the non-compaction Surface progress
-coordinate required by the Todo reminder window. Version 12 and every older
-development database are rejected at open. There is no migration and no
-compatibility layer.
+generation metadata to canonical status messages; final version 12 adds
+canonical-message-coupled Agent Status emission facts, bounded Todo
+latest-emission heads, and the Todo-specific durable progress sequence.
+Version 11 and every older development database are rejected at open. There
+is no migration and no compatibility layer.
 
 Exit criteria (met): durable-before-prompt proved inside the publication
 callback; `requested < settled(approved) < ToolExecutionStarted` proved on

@@ -169,6 +169,70 @@ fn tool_turn_then_stop(calls: &[ScriptedCall]) -> Vec<Vec<FakeStep>> {
     ]
 }
 
+/// One model step carrying a finite sibling tool batch. Keeping this builder
+/// separate from `tool_turn_then_stop` lets the cooldown regression create a
+/// known number of later primary starts before the final stop step.
+fn tool_turn(calls: &[ScriptedCall]) -> Vec<FakeStep> {
+    let mut steps = vec![FakeStep::Emit(ModelEvent::Started)];
+    for (index, call) in calls.iter().enumerate() {
+        steps.extend(
+            tool_call_events(u32::try_from(index).expect("scripted block index"), call)
+                .into_iter()
+                .map(FakeStep::Emit),
+        );
+    }
+    steps.push(FakeStep::Emit(ModelEvent::Completed {
+        finish_reason: ModelFinishReason::ToolCalls,
+        usage: None,
+    }));
+    steps
+}
+
+fn stop_turn() -> Vec<FakeStep> {
+    vec![
+        FakeStep::Emit(ModelEvent::Started),
+        FakeStep::Emit(ModelEvent::TextDelta {
+            block_index: rustx::message::types::ContentBlockIndex::new(0),
+            text: "done".to_owned(),
+        }),
+        FakeStep::Emit(ModelEvent::Completed {
+            finish_reason: ModelFinishReason::Stop,
+            usage: None,
+        }),
+    ]
+}
+
+/// The first Todo tool batch is followed by five no-op batches and a stop.
+/// The first status is therefore prepared by request 2. Requests 3, 4, 5,
+/// and 6 are the four later fresh primary starts that establish the inclusive
+/// cooldown boundary; request 7 is the next `PostToolBatch` opportunity.
+fn todo_progress_script() -> Vec<Vec<FakeStep>> {
+    let todo = ScriptedCall {
+        id: "progress-todo",
+        tool_id: TODO_TOOL_ID,
+        name: "todo",
+        arguments: serde_json::json!({
+            "action": "create",
+            "subject": "Keep the plan visible"
+        }),
+    };
+    let noops = [
+        scripted("progress-noop-1", "tool-progress-noop", "progress-noop"),
+        scripted("progress-noop-2", "tool-progress-noop", "progress-noop"),
+        scripted("progress-noop-3", "tool-progress-noop", "progress-noop"),
+        scripted("progress-noop-4", "tool-progress-noop", "progress-noop"),
+        scripted("progress-noop-5", "tool-progress-noop", "progress-noop"),
+    ];
+    let mut script = vec![tool_turn(std::slice::from_ref(&todo))];
+    script.extend(
+        noops
+            .iter()
+            .map(|call| tool_turn(std::slice::from_ref(call))),
+    );
+    script.push(stop_turn());
+    script
+}
+
 fn context_runtime(model: &Arc<FakeModel>) -> ContextRuntime {
     let snapshot = support::attempt_model(model.clone(), "issue-130-model");
     ContextRuntime::for_attempt(
@@ -562,5 +626,98 @@ async fn committed_todo_state_emits_one_bounded_post_tool_reminder() {
             .count(),
         1,
         "one Todo emission fact settles with the one status message"
+    );
+}
+
+/// The production Agent Loop owns the cooldown boundary: the first Todo
+/// reminder is committed by request 2, request 3 is the immediate next
+/// opportunity with zero elapsed progress, requests 3–6 provide exactly four
+/// later primary starts, and request 7 is the first opportunity at the
+/// inclusive threshold. No status module creates any of these requests.
+#[tokio::test]
+async fn todo_cooldown_uses_later_primary_starts_and_repeats_at_four() {
+    let model = fake_model(todo_progress_script());
+    let fixture = common::native_fixture();
+    let noop = FakeTool::new(
+        common::tool_policies(
+            "progress-noop",
+            "tool-progress-noop",
+            ToolExecutionPolicy::ForegroundOnly,
+            ToolConcurrencyPolicy::Sequential,
+        ),
+        success_result("noop"),
+    );
+    let mut tools = fixture.registry.clone();
+    noop.register(&mut tools);
+
+    let (result, recorder) = run_attempt(
+        "conv-m5",
+        "attempt-todo-progress",
+        model.clone(),
+        tools,
+        vec![MessageBlock::User(inbound("bootstrap", "work"))],
+        InitialTurnTrigger::Continuation,
+        &fixture.runtime,
+    )
+    .await;
+
+    assert!(matches!(result.outcome, AttemptOutcome::Completed { .. }));
+    assert_eq!(
+        model.requests().len(),
+        7,
+        "the cooldown threshold never creates an extra model request"
+    );
+    let observations = recorder.observations();
+    assert_eq!(
+        observations
+            .iter()
+            .filter(
+                |observation| observation.status.sections.iter().any(|section| matches!(
+                    &section.data,
+                    rustx::context::AgentStatusSectionData::Todo { .. }
+                ))
+            )
+            .count(),
+        2,
+        "the first and threshold-boundary opportunities are the only Todo generations"
+    );
+    assert_eq!(
+        status_messages(&result).len(),
+        2,
+        "one canonical status message per accepted Todo generation"
+    );
+
+    let emission_origins = fixture
+        .store
+        .read_events(None, 128)
+        .expect("event history")
+        .events
+        .iter()
+        .filter_map(|event| match &event.event {
+            RuntimeEvent::AgentStatusEmitted {
+                emission,
+                todo_progress_origin,
+                ..
+            } if emission.module_id == AgentStatusModuleId::Todo => Some(*todo_progress_origin),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        emission_origins,
+        vec![2, 7],
+        "the first origin is after request 2; the repeat is after four later starts"
+    );
+    let head = fixture
+        .store
+        .latest_agent_status_emission(AgentStatusModuleId::Todo, TODO_STATUS_EMISSION_KEY)
+        .expect("latest Todo head")
+        .expect("threshold-boundary Todo emission");
+    assert_eq!(head.todo_progress_origin, 7);
+    assert_eq!(
+        fixture
+            .store
+            .current_todo_progress()
+            .expect("Todo progress"),
+        7
     );
 }

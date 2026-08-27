@@ -521,7 +521,6 @@ struct AgentStatusGeneration {
     opportunities: AgentStatusOpportunitySet,
     status: crate::context::status::AgentStatus,
     emissions: Vec<AgentStatusEmission>,
-    surface_progress: u64,
 }
 
 fn agent_status_message_id(context: &[MessageBlock]) -> Option<MessageId> {
@@ -554,6 +553,10 @@ impl AgentStatusEmissionLookup for ConversationAgentStatusEmissionLookup<'_> {
         key: &str,
     ) -> Result<Option<AgentStatusEmissionRecord>, ConversationStoreError> {
         self.store.latest_agent_status_emission(module_id, key)
+    }
+
+    fn current_todo_progress(&self) -> Result<u64, ConversationStoreError> {
+        self.store.current_todo_progress()
     }
 }
 
@@ -1668,7 +1671,6 @@ impl<'a> AgentExecution<'a> {
                 opportunities,
                 status: prepared.status,
                 emissions: prepared.emissions,
-                surface_progress: prepared.surface_progress,
             }))
     }
 
@@ -1773,7 +1775,6 @@ impl<'a> AgentExecution<'a> {
             snapshot.agent_status = Some(AgentStatusStart {
                 message_id: status_message_id,
                 emissions: status_generation.emissions.clone(),
-                surface_progress: status_generation.surface_progress,
             });
         }
         Ok(StagedModelTurn {
@@ -4710,6 +4711,7 @@ mod tests {
                     request_id,
                     message_id,
                     emission,
+                    todo_progress_origin: 1,
                 },
             }],
             disposition,

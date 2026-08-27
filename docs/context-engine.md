@@ -310,12 +310,15 @@ at 256 UTF-8 bytes. Complete-snapshot active, blocked, completed, deleted, and
 omitted counts are included. The stable key is `active_actionable`; the
 fingerprint is the SHA-256 of the bounded structured presentation. A bounded
 latest-emission head suppresses an identical fingerprint while fewer than four
-non-compaction Surface progress units have followed the last durable emission;
-the identical state is eligible again at exactly four, while a changed
-fingerprint is eligible at the next opportunity. The progress coordinate is
-`SurfaceRevision - compaction_generation`, so compaction and overflow retries
-do not advance or reset it. It is not a wall-clock or generic cooldown
-framework and never schedules a model turn.
+later newly committed first requests of logical primary model steps have
+followed the reminder's store-assigned origin; the identical state is eligible
+again at exactly four, while a changed fingerprint is eligible at the next
+opportunity. The progress coordinate is the durable
+`todo_progress_sequence`, which advances once per successful
+`retry_number == 0` model-turn start. Same-start context/status,
+RuntimeToolObservation, Time, Background, compaction, overflow retries,
+cancellation, and failed transactions do not advance it. It is not a
+wall-clock or generic cooldown framework and never schedules a model turn.
 
 The Skill catalog is sampled from the immutable per-attempt capability
 snapshot and assembled as a request-time native capability section. Normal

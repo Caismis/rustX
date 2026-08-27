@@ -30,16 +30,17 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 13. An incompatible database
+The SQLite schema is development schema version 12. An incompatible database
 fails explicitly; there is no migration chain, legacy reader, compatibility
 fallback, dual write, or old storage mode. Version 10 froze the structured
 Questionnaire interaction audit vocabulary introduced by Issue #126. Version
 11 adds the typed Agent Status generation descriptor: its UTC generation
 instant and admitted module membership are durable with the canonical status
-message. Version 12 adds canonical-message-coupled Agent Status emission facts
-and the bounded latest-emission heads used by Todo suppression. Version 13
-adds their non-compaction Surface progress coordinate. Version 12 and every
-older development schema are rejected at open.
+message. Final version 12 adds the complete canonical-message-coupled Agent
+Status emission facts, bounded latest-emission heads, and the Todo-specific
+durable progress sequence. Version 11 and every older development schema are
+rejected at open; the review-only intermediate schema history is not a
+supported format.
 File-backed stores
 use WAL, `synchronous=FULL`, foreign-key enforcement, and a busy timeout. A
 successful SQLite commit is the local durability linearization point
@@ -63,7 +64,7 @@ The version-12 physical tables are deliberately semantic rather than generic:
 
 | Table | Purpose and constraints |
 | --- | --- |
-| `rustx_store` | One-row conversation binding, schema version, and durable next `InboundSequence` / Event Journal / transcript position counters. |
+| `rustx_store` | One-row conversation binding, schema version, durable next `InboundSequence` / Event Journal / transcript position counters, and the Todo-specific logical-primary-start progress sequence. |
 | `pending_inbound` | Pending deliveries keyed by `InboundSequence`, with unique `MessageId`, serialized User body, and optional correlation. |
 | `inbound_correlation` | Exactly-once correlation mapping to the accepted sequence and unique `MessageId`. |
 | `message_ledger` | Append-only canonical bodies keyed by commit `position` and unique `MessageId`. |
@@ -73,7 +74,7 @@ The version-12 physical tables are deliberately semantic rather than generic:
 | `context_checkpoints` | Current structural/index checkpoint matching `surface_head`; it is not message history. |
 | `request_snapshots` | One immutable non-history snapshot per `RequestId`, its frozen provisional Assistant identity, Surface revision, and committed start sequence. |
 | `events` | Append-only typed envelopes keyed by per-conversation Event Journal sequence and unique `EventId`. |
-| `agent_status_emission_heads` | One materialized latest-emission record per `(AgentStatusModuleId, semantic key)`, maintained only by the combined model-turn-start transaction. |
+| `agent_status_emission_heads` | One materialized latest-emission record per `(AgentStatusModuleId, semantic key)`, including the store-assigned Todo cooldown origin, maintained only by the combined model-turn-start transaction. |
 | `lifecycle_state` | Durable terminal markers enforcing zero-or-one terminal event and terminal absorption for attempt, turn, and background-execution lifecycles. |
 | `publication_streams` | One frozen publication generation per provider request, with terminal marker and one of the three settlements. |
 | `publication_frames` | Contiguous transient release staging for one publication stream. |
@@ -1492,12 +1493,15 @@ Key contracts:
   bounded deterministic view of actionable tasks and uses semantic key
   `active_actionable` plus a SHA-256 fingerprint of that bounded view. A
   durable latest-emission head suppresses an identical fingerprint while
-  fewer than four non-compaction Surface progress units follow the last
-  durable emission, then permits it again at exactly four; changed state is
-  eligible at the next opportunity. The head is updated atomically with the
-  canonical status message and its `AgentStatusEmitted` fact at model-turn
-  start. Surface compaction and overflow retry do not advance or reset that
-  head.
+  fewer than four later newly committed first requests of logical primary
+  model steps follow the reminder's store-assigned origin, then permits it
+  again at exactly four. Changed state is eligible at the next opportunity.
+  The head is updated atomically with the canonical status message and its
+  `AgentStatusEmitted` fact at model-turn start. The bounded
+  `todo_progress_sequence` advances once for each successful
+  `retry_number == 0` start; same-start context/status, Time, Background,
+  RuntimeToolObservation, compaction, and overflow retries do not advance or
+  reset it.
 - The initial-turn trigger is an explicit execution mode, never an `Option`
   used as a status switch: `AgentExecutionRequest` carries one
   `InitialTurnTrigger` — `FreshInbound(FreshInboundTurn)` makes validation and

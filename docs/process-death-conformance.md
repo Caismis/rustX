@@ -110,11 +110,14 @@ the bounded latest-emission head(s) commit with the Request Snapshot and
 `ModelRequestStarted`. Reopen therefore preserves suppression through one
 bounded `(module, key)` lookup even when compaction has retired the status
 message from the active Surface. Todo suppresses an identical bounded
-fingerprint while fewer than four non-compaction Surface progress units have
-followed its last durable emission, and is eligible again at exactly four;
-changed fingerprints bypass that duplicate window. Overflow retry reuses the
-accepted generation and cannot add a second emission fact or advance this
-progress coordinate.
+fingerprint while fewer than four later newly committed first requests of
+logical primary model steps have followed its store-assigned durable origin,
+and is eligible again at exactly four; changed fingerprints bypass that
+duplicate window. The origin is assigned after same-start context and status
+messages have staged, so those messages contribute zero elapsed progress.
+Time, Background, RuntimeToolObservation, compaction, and overflow retries do
+not advance the Todo-specific `todo_progress_sequence`. Overflow retry reuses
+the accepted generation and cannot add a second emission fact.
 
 ## 2. Provider / publication / conversation separation
 
@@ -457,10 +460,10 @@ written before it existed can no longer be read: its adoptions committed no
 obligation, and reading that silence as "no answer is owed" would strand
 exactly the crash states above. `SQLITE_SCHEMA_VERSION` therefore moved 9 → 10
 for the structured Questionnaire audit vocabulary, 10 → 11 for typed Agent
-Status generation metadata, and 11 → 12 for canonical-message-coupled Agent
-Status emission facts and bounded Todo latest-emission heads; version 13 adds
-the persisted non-compaction Surface progress field, and v8/v9/v10/v11/v12
-files are refused at open —
+Status generation metadata, and 11 → 12 for the complete
+canonical-message-coupled Agent Status emission facts, bounded Todo
+latest-emission heads, and the Todo-specific progress sequence. Version 11 and
+older files are refused at open —
 `pre_answer_obligation_schema_is_rejected_explicitly`,
 `pre_structured_questionnaire_schema_is_rejected_explicitly`, and the status
 schema gate coverage.
