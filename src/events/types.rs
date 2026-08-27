@@ -86,6 +86,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::conversation::SurfaceRevision;
 use crate::events::interaction::{InteractionSettlement, InteractionSubject};
+use crate::message::types::AgentStatusEmission;
 use crate::model::error::ModelError;
 use crate::model::finish::ModelFinishReason;
 use crate::model::types::ModelUsage;
@@ -194,6 +195,17 @@ pub enum RuntimeEvent {
         /// The model selected by the frozen invocation. This is a projection
         /// convenience; the Request Snapshot remains the authority.
         model: String,
+    },
+    /// One semantic Agent Status emission became durable with its owning
+    /// model-turn start. This is a canonical-message-referencing fact and may
+    /// only be inserted by the combined start transition.
+    AgentStatusEmitted {
+        /// The exact request whose start accepted the emission.
+        request_id: RequestId,
+        /// The canonical Agent Status User message visible to the model.
+        message_id: MessageId,
+        /// The module-owned semantic emission identity.
+        emission: AgentStatusEmission,
     },
     /// A model request completed successfully.
     ///
@@ -464,6 +476,20 @@ pub enum RuntimeEvent {
         /// The bounded terminal settlement.
         settlement: InteractionSettlement,
     },
+}
+
+/// Derives the deterministic Event Journal identity of one Agent Status
+/// emission settled by a request start.
+#[must_use]
+pub fn agent_status_emission_event_id(
+    request_id: &RequestId,
+    emission: &AgentStatusEmission,
+) -> EventId {
+    EventId::new(format!(
+        "agent-status-emitted:{request_id}:{}:{}",
+        emission.module_id.as_str(),
+        emission.key
+    ))
 }
 
 /// The durable terminal outcome of an asynchronous one-shot subagent child

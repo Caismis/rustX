@@ -118,7 +118,7 @@ export type InboundKind =
           };
     };
 
-export type AgentStatusModuleId = "time" | "background";
+export type AgentStatusModuleId = "time" | "background" | "todo";
 
 export interface AgentStatusGenerationMetadata {
   generated_at: string;
@@ -717,7 +717,25 @@ export type RuntimeClientStatusSection =
       type: "background_executions";
       executions: RuntimeClientBackgroundExecution[];
       omitted_count: number;
+    }
+  | {
+      type: "todo";
+      current?: RuntimeClientTodoStatusTask;
+      tasks: RuntimeClientTodoStatusTask[];
+      active_count: number;
+      blocked_count: number;
+      completed_count: number;
+      deleted_count: number;
+      omitted_count: number;
     };
+
+export interface RuntimeClientTodoStatusTask {
+  id: number;
+  subject: string;
+  active_form?: string;
+  status: TodoStatus;
+  blocked: boolean;
+}
 
 export interface FreshInboundStatusOpportunityView {
   target_message_id: MessageId;
@@ -726,7 +744,11 @@ export interface FreshInboundStatusOpportunityView {
 export interface AgentStatusOpportunityView {
   /** The opportunity is optional until a producer makes it eligible. */
   fresh_inbound?: FreshInboundStatusOpportunityView;
+  /** A complete settled tool batch for the next existing primary step. */
+  post_tool_batch?: PostToolBatchStatusOpportunityView;
 }
+
+export interface PostToolBatchStatusOpportunityView {}
 
 export interface AgentStatusView {
   attempt_id: AttemptId;

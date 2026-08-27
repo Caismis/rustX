@@ -1,12 +1,13 @@
-//! The closed, bounded Agent Status engine (Issue #129).
+//! The closed, bounded Agent Status engine (Issues #129 and #130).
 //!
 //! Agent Status is optional, provider-independent runtime context for an
-//! already-established primary model turn. In this issue the only production
-//! delivery opportunity is [`FreshInboundStatusOpportunity`]. The engine does
-//! not schedule work, create a turn, or prolong an attempt:
+//! already-established primary model turn. A settled tool batch can add
+//! [`PostToolBatchStatusOpportunity`] to the next already-existing primary
+//! step; it never schedules that step. The engine does not schedule work,
+//! create a turn, or prolong an attempt:
 //!
 //! ```text
-//! FreshInbound
+//! FreshInbound and/or PostToolBatch
 //!     -> capture authoritative state once
 //!     -> evaluate frozen snapshots once
 //!     -> validate the code-owned payload mapping
@@ -23,17 +24,22 @@
 //! quarantined in the attempt-local engine and the surviving modules continue;
 //! the failure never becomes a Context Assembly or model-turn failure.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::conversation::ConversationSurfaceSnapshot;
-use crate::message::types::{AgentStatusGenerationMetadata, AgentStatusModuleId, MessageBlock};
+use crate::durable::{AgentStatusEmissionLookup, AgentStatusEmissionRecord};
+use crate::message::types::{
+    AgentStatusEmission, AgentStatusGenerationMetadata, AgentStatusModuleId, MessageBlock,
+};
 use crate::runtime::identity::MessageId;
 use crate::tools::background::{BackgroundExecutionSnapshot, ConversationBackgroundRegistry};
+use crate::tools::todo::{ConversationTodoList, TodoSnapshot, TodoStatus};
 use crate::tools::types::ToolProgress;
 
 /// The maximum number of active executions the Background module presents.
@@ -44,6 +50,16 @@ pub const MAX_BACKGROUND_STATUS_EXECUTIONS: usize = 8;
 /// This limit is applied to source fields before rendering. It is not a
 /// substitute for the final Agent Status cap.
 pub const MAX_BACKGROUND_STATUS_TEXT_BYTES: usize = 256;
+
+/// The maximum number of Todo tasks included in one bounded status
+/// contribution. The current in-progress task, when any, uses one slot.
+pub const MAX_TODO_STATUS_TASKS: usize = 6;
+
+/// The maximum byte length of one Todo task label included in Agent Status.
+pub const MAX_TODO_STATUS_TEXT_BYTES: usize = 256;
+
+/// The stable semantic identity of the active Todo reminder.
+pub const TODO_STATUS_EMISSION_KEY: &str = "active_actionable";
 
 /// The final defensive Agent Status rendering bound, measured in UTF-8 bytes.
 pub const GLOBAL_AGENT_STATUS_BYTE_CAP: usize = 4096;
@@ -123,22 +139,14 @@ impl AgentStatusModuleId {
         match self {
             Self::Time => AgentStatusSectionId::TEMPORAL,
             Self::Background => AgentStatusSectionId::BACKGROUND_EXECUTION,
-        }
-    }
-
-    /// The stable diagnostic name.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Time => "time",
-            Self::Background => "background",
+            Self::Todo => AgentStatusSectionId::TODO,
         }
     }
 }
 
-/// The one production Agent Status delivery opportunity implemented by this
-/// issue. The inbound identity is retained separately from the status
-/// message identity, which does not exist until Context Assembly stages it.
+/// The inbound Agent Status delivery opportunity. Its inbound identity is
+/// retained separately from the status message identity, which does not exist
+/// until Context Assembly stages it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FreshInboundStatusOpportunity {
     /// The final canonical inbound message that made this opportunity
@@ -146,14 +154,72 @@ pub struct FreshInboundStatusOpportunity {
     pub target_message_id: MessageId,
 }
 
+/// The batch-level `PostToolBatch` opportunity.
+///
+/// The marker intentionally carries no durable identity or payload. Its
+/// existence means only that one complete canonical `ToolResult` batch settled
+/// before this primary step; it cannot be reconstructed after an attempt
+/// dies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PostToolBatchStatusOpportunity;
+
 /// The opportunities available to one logical primary step.
 ///
-/// There is intentionally no `post_tool_batch` field until that opportunity
-/// has a real production producer.
+/// `FreshInbound` and `PostToolBatch` are independent members rather than
+/// mutually exclusive alternatives. A module receives this whole set once,
+/// so matching multiple present opportunities still produces one capture and
+/// one evaluation.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AgentStatusOpportunitySet {
     /// The `FreshInbound` opportunity, when one is present.
     pub fresh_inbound: Option<FreshInboundStatusOpportunity>,
+    /// The complete settled tool-batch opportunity, when one is pending for
+    /// this attempt's next primary step.
+    pub post_tool_batch: Option<PostToolBatchStatusOpportunity>,
+}
+
+/// One bounded Todo task shown by Agent Status.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TodoStatusTask {
+    /// The conversation-owned task id.
+    pub id: u64,
+    /// The bounded task subject.
+    pub subject: String,
+    /// The bounded in-progress label, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_form: Option<String>,
+    /// The authoritative committed lifecycle status.
+    pub status: TodoStatus,
+    /// Whether an active dependency still blocks this task.
+    pub blocked: bool,
+}
+
+/// The bounded semantic Todo presentation and fingerprint input.
+///
+/// Tasks are in conversation creation order. `current` is the first committed
+/// `InProgress` task, when any; `tasks` contains the remaining committed active
+/// tasks up to the explicit module bound. Counts cover the complete committed
+/// snapshot, while `omitted_count` is the number of active tasks not shown.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TodoStatusPresentation {
+    /// The first committed `InProgress` task, when any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<TodoStatusTask>,
+    /// Remaining active tasks in deterministic creation order.
+    #[serde(default)]
+    pub tasks: Vec<TodoStatusTask>,
+    /// Number of committed Pending or `InProgress` tasks.
+    pub active_count: usize,
+    /// Number of active tasks with an unresolved active dependency.
+    pub blocked_count: usize,
+    /// Number of committed Completed tasks.
+    pub completed_count: usize,
+    /// Number of committed Deleted tasks.
+    pub deleted_count: usize,
+    /// Number of active tasks omitted by the bounded presentation.
+    pub omitted_count: usize,
 }
 
 /// The structured data of one accepted Agent Status section.
@@ -173,6 +239,11 @@ pub enum AgentStatusSectionData {
         /// Active executions omitted by the module-local entry bound.
         omitted_count: usize,
     },
+    /// The bounded conversation-owned Todo payload.
+    Todo {
+        /// The bounded semantic Todo presentation.
+        presentation: TodoStatusPresentation,
+    },
 }
 
 /// The stable identity of one Agent Status section.
@@ -185,6 +256,8 @@ impl AgentStatusSectionId {
     pub const TEMPORAL: &'static str = "temporal";
     /// The stable Background section id.
     pub const BACKGROUND_EXECUTION: &'static str = "background_execution";
+    /// The stable Todo section id.
+    pub const TODO: &'static str = "todo";
 
     /// Creates a section id for internal projection construction.
     #[must_use]
@@ -240,6 +313,7 @@ impl AgentStatus {
             .map(|section| match section.id.as_str() {
                 AgentStatusSectionId::TEMPORAL => AgentStatusModuleId::Time,
                 AgentStatusSectionId::BACKGROUND_EXECUTION => AgentStatusModuleId::Background,
+                AgentStatusSectionId::TODO => AgentStatusModuleId::Todo,
                 _ => unreachable!("the closed Agent Status engine emitted an unknown section"),
             })
             .collect();
@@ -252,12 +326,11 @@ impl AgentStatusOpportunitySet {
     /// Whether this logical step has no Agent Status delivery opportunity.
     ///
     /// Delivery opportunity is deliberately independent from module trigger
-    /// policy. The closed production set currently contains only `FreshInbound`,
-    /// while future opportunities can be added without changing module input
-    /// types or their Surface-aware policies.
+    /// policy. Both members may be present in one set, and the set is consumed
+    /// once by the closed engine.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.fresh_inbound.is_none()
+        self.fresh_inbound.is_none() && self.post_tool_batch.is_none()
     }
 }
 
@@ -338,7 +411,7 @@ pub struct AgentStatusSurfaceView {
     compaction_generation: u64,
     active_message_ids: Arc<[MessageId]>,
     messages: Arc<[SurfaceMessageView]>,
-    latest_by_module: [Option<VisibleAgentStatus>; 2],
+    latest_by_module: [Option<VisibleAgentStatus>; 3],
 }
 
 /// The latest visible Agent Status generation containing one module.
@@ -513,6 +586,7 @@ const fn module_index(module: AgentStatusModuleId) -> usize {
     match module {
         AgentStatusModuleId::Time => 0,
         AgentStatusModuleId::Background => 1,
+        AgentStatusModuleId::Todo => 2,
     }
 }
 
@@ -541,6 +615,8 @@ enum AgentStatusModule {
     Time(TimeStatusModule),
     /// The built-in Background module.
     Background(BackgroundStatusModule),
+    /// The built-in conversation-owned Todo module.
+    Todo(TodoStatusModule),
 }
 
 impl AgentStatusModule {
@@ -548,6 +624,7 @@ impl AgentStatusModule {
         match self {
             Self::Time(_) => AgentStatusModuleId::Time,
             Self::Background(_) => AgentStatusModuleId::Background,
+            Self::Todo(_) => AgentStatusModuleId::Todo,
         }
     }
 
@@ -555,6 +632,19 @@ impl AgentStatusModule {
         match self {
             Self::Time(module) => module.config.enabled,
             Self::Background(module) => module.config.enabled,
+            Self::Todo(_) => true,
+        }
+    }
+
+    fn interested_in(&self, opportunities: &AgentStatusOpportunitySet) -> bool {
+        // The production modules all inspect the same finite opportunity set
+        // once. Time and Background retain #131's FreshInbound-only policy;
+        // Todo is the first module whose reminder policy uses both delivery
+        // opportunities. This is a set intersection, never one invocation per
+        // opportunity member.
+        match self {
+            Self::Time(_) | Self::Background(_) => opportunities.fresh_inbound.is_some(),
+            Self::Todo(_) => !opportunities.is_empty(),
         }
     }
 
@@ -577,6 +667,9 @@ impl AgentStatusModule {
             Self::Background(_) => Ok(AgentStatusModuleSnapshot::Background(
                 BackgroundStatusModule::capture(frozen),
             )),
+            Self::Todo(_) => Ok(AgentStatusModuleSnapshot::Todo(TodoStatusModule::capture(
+                frozen,
+            )?)),
         }
     }
 
@@ -600,6 +693,9 @@ impl AgentStatusModule {
             (Self::Background(_), AgentStatusModuleSnapshot::Background(snapshot)) => {
                 BackgroundStatusModule::evaluate(snapshot)
             }
+            (Self::Todo(_), AgentStatusModuleSnapshot::Todo(snapshot)) => {
+                TodoStatusModule::evaluate(snapshot)
+            }
             _ => return Err(ModuleFailurePhase::Evaluate),
         };
         if seam.is_some_and(|value| value.take_payload_mismatch(id)) {
@@ -608,10 +704,12 @@ impl AgentStatusModule {
                     executions: Vec::new(),
                     omitted_count: 0,
                 },
-                AgentStatusModuleId::Background => AgentStatusPayload::Temporal {
-                    current_time: now,
-                    timezone: None,
-                },
+                AgentStatusModuleId::Background | AgentStatusModuleId::Todo => {
+                    AgentStatusPayload::Temporal {
+                        current_time: now,
+                        timezone: None,
+                    }
+                }
             }));
         }
         Ok(payload)
@@ -693,10 +791,67 @@ impl BackgroundStatusModule {
     }
 }
 
+/// The code-owned Todo status module.
+///
+/// Todo state remains owned by [`ConversationTodoList`]. This module only
+/// builds a bounded view of its committed snapshot and applies the one
+/// concrete reminder policy documented on [`Self::evaluate`].
+struct TodoStatusModule;
+
+impl TodoStatusModule {
+    fn capture(
+        frozen: &AgentStatusEvaluationSnapshot<'_>,
+    ) -> Result<TodoStatusSnapshot, ModuleFailurePhase> {
+        let latest_emission = frozen
+            .emission_lookup
+            .latest_agent_status_emission(AgentStatusModuleId::Todo, TODO_STATUS_EMISSION_KEY)
+            .map_err(|_| ModuleFailurePhase::SuppressionLookup)?;
+        Ok(TodoStatusSnapshot {
+            committed: frozen.committed_todos.clone(),
+            latest_emission,
+        })
+    }
+
+    /// Emits exactly one bounded reminder when committed actionable work
+    /// exists and its semantic fingerprint differs from the last durable
+    /// reminder for the stable Todo key. `FreshInbound` and `PostToolBatch` use
+    /// this same policy; the opportunity set is eligibility, not a second
+    /// trigger state machine.
+    fn evaluate(snapshot: &TodoStatusSnapshot) -> Option<AgentStatusPayload> {
+        let presentation = todo_presentation(&snapshot.committed);
+        if presentation.active_count == 0 {
+            return None;
+        }
+        let fingerprint = todo_fingerprint(&presentation);
+        if snapshot
+            .latest_emission
+            .as_ref()
+            .is_some_and(|latest| latest.fingerprint == fingerprint)
+        {
+            return None;
+        }
+        Some(AgentStatusPayload::Todo {
+            presentation,
+            emission: AgentStatusEmission {
+                module_id: AgentStatusModuleId::Todo,
+                key: TODO_STATUS_EMISSION_KEY.to_owned(),
+                fingerprint,
+            },
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct TodoStatusSnapshot {
+    committed: TodoSnapshot,
+    latest_emission: Option<AgentStatusEmissionRecord>,
+}
+
 #[derive(Debug, Clone)]
 enum AgentStatusModuleSnapshot {
     Time(TimeStatusSnapshot),
     Background(BackgroundStatusSnapshot),
+    Todo(TodoStatusSnapshot),
 }
 
 #[derive(Debug, Clone)]
@@ -721,6 +876,8 @@ struct AgentStatusEvaluationSnapshot<'a> {
     now: DateTime<Utc>,
     surface: &'a AgentStatusSurfaceView,
     active_background: Arc<[BackgroundExecutionSnapshot]>,
+    committed_todos: TodoSnapshot,
+    emission_lookup: &'a dyn AgentStatusEmissionLookup,
 }
 
 #[derive(Debug, Clone)]
@@ -733,6 +890,10 @@ enum AgentStatusPayload {
         executions: Vec<BackgroundExecutionSnapshot>,
         omitted_count: usize,
     },
+    Todo {
+        presentation: TodoStatusPresentation,
+        emission: AgentStatusEmission,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -740,6 +901,7 @@ enum ModuleFailurePhase {
     Capture,
     Evaluate,
     PayloadValidation,
+    SuppressionLookup,
 }
 
 impl ModuleFailurePhase {
@@ -748,6 +910,7 @@ impl ModuleFailurePhase {
             Self::Capture => "capture",
             Self::Evaluate => "evaluate",
             Self::PayloadValidation => "payload_validation",
+            Self::SuppressionLookup => "suppression_lookup",
         }
     }
 }
@@ -756,7 +919,7 @@ impl ModuleFailurePhase {
 pub struct AgentStatusEngine {
     config: AgentStatusConfig,
     clock: Arc<dyn AgentStatusClock>,
-    modules: [AgentStatusModule; 2],
+    modules: [AgentStatusModule; 3],
     quarantined: HashSet<AgentStatusModuleId>,
     #[cfg(test)]
     test_seam: Option<AgentStatusTestSeam>,
@@ -766,7 +929,7 @@ impl core::fmt::Debug for AgentStatusEngine {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("AgentStatusEngine")
             .field("config", &self.config)
-            .field("semantic_order", &["time", "background"])
+            .field("semantic_order", &["time", "background", "todo"])
             .field("quarantined", &self.quarantined)
             .finish_non_exhaustive()
     }
@@ -791,6 +954,7 @@ impl AgentStatusEngine {
                 AgentStatusModule::Background(BackgroundStatusModule {
                     config: config.background.clone(),
                 }),
+                AgentStatusModule::Todo(TodoStatusModule),
             ],
             config,
             quarantined: HashSet::new(),
@@ -840,16 +1004,19 @@ impl AgentStatusEngine {
 
     /// Captures, evaluates, validates, and bounds one Agent Status generation.
     /// The engine's module array is traversed exactly in source order: Time,
-    /// then Background. The caller supplies the one immutable Pre-Status
-    /// Surface view; this method captures the clock and authoritative active
-    /// Background registry state exactly once.
+    /// Background, then Todo. The caller supplies the one immutable Pre-Status
+    /// Surface view and the conversation-owned committed Todo authority. Every
+    /// module sees one finite opportunity set, even when both members are
+    /// present.
     #[must_use]
-    pub fn prepare(
+    pub(crate) fn prepare_with_inputs(
         &mut self,
         opportunities: &AgentStatusOpportunitySet,
         surface: &AgentStatusSurfaceView,
         background: &ConversationBackgroundRegistry,
-    ) -> Option<AgentStatus> {
+        todos: &ConversationTodoList,
+        emission_lookup: &dyn AgentStatusEmissionLookup,
+    ) -> Option<PreparedAgentStatus> {
         if opportunities.is_empty() {
             return None;
         }
@@ -857,6 +1024,8 @@ impl AgentStatusEngine {
             now: self.clock.now(),
             surface,
             active_background: Arc::from(background.active_snapshot().into_boxed_slice()),
+            committed_todos: todos.committed(),
+            emission_lookup,
         };
         #[cfg(test)]
         let seam = self.test_seam.clone();
@@ -866,7 +1035,10 @@ impl AgentStatusEngine {
         for index in 0..self.modules.len() {
             let module = &self.modules[index];
             let id = module.id();
-            if !module.enabled() || self.quarantined.contains(&id) {
+            if !module.enabled()
+                || self.quarantined.contains(&id)
+                || !module.interested_in(opportunities)
+            {
                 continue;
             }
             let result = (|| {
@@ -881,13 +1053,31 @@ impl AgentStatusEngine {
                 validate_payload(id, payload)
             })();
             match result {
-                Ok(Some(section)) => sections.push(section),
+                Ok(Some(contribution)) => sections.push(contribution),
                 Ok(None) => {}
                 Err(phase) => self.quarantine(id, phase),
             }
         }
-        let accepted = admit_sections(sections, frozen.now);
-        (!accepted.sections.is_empty()).then_some(accepted)
+        let (status, emissions) = admit_sections(sections, frozen.now);
+        (!status.sections.is_empty()).then_some(PreparedAgentStatus { status, emissions })
+    }
+
+    /// Test-only convenience for the pre-Todo module unit suite. Production
+    /// execution always supplies the real conversation Todo authority and
+    /// bounded durable emission lookup through [`Self::prepare_with_inputs`].
+    #[cfg(test)]
+    pub(crate) fn prepare(
+        &mut self,
+        opportunities: &AgentStatusOpportunitySet,
+        surface: &AgentStatusSurfaceView,
+        background: &ConversationBackgroundRegistry,
+    ) -> Option<AgentStatus> {
+        let todos = ConversationTodoList::new(crate::runtime::identity::ConversationId::new(
+            "agent-status-test",
+        ));
+        let lookup = EmptyEmissionLookup;
+        self.prepare_with_inputs(opportunities, surface, background, &todos, &lookup)
+            .map(|prepared| prepared.status)
     }
 
     fn quarantine(&mut self, id: AgentStatusModuleId, phase: ModuleFailurePhase) {
@@ -900,10 +1090,37 @@ impl AgentStatusEngine {
     }
 }
 
+/// The accepted status and its request-scoped durable emission metadata.
+///
+/// The Agent Loop attaches this value to the exact prepared Agent Status
+/// message before the model-turn-start transaction. It is not a free-floating
+/// emission list and has no durable effect during preparation.
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedAgentStatus {
+    /// The one bounded status generation.
+    pub(crate) status: AgentStatus,
+    /// The semantic emissions represented by admitted sections.
+    pub(crate) emissions: Vec<AgentStatusEmission>,
+}
+
+#[cfg(test)]
+struct EmptyEmissionLookup;
+
+#[cfg(test)]
+impl AgentStatusEmissionLookup for EmptyEmissionLookup {
+    fn latest_agent_status_emission(
+        &self,
+        _module_id: AgentStatusModuleId,
+        _key: &str,
+    ) -> Result<Option<AgentStatusEmissionRecord>, crate::durable::ConversationStoreError> {
+        Ok(None)
+    }
+}
+
 fn validate_payload(
     id: AgentStatusModuleId,
     payload: AgentStatusPayload,
-) -> Result<Option<AgentStatusSection>, ModuleFailurePhase> {
+) -> Result<Option<AgentStatusContribution>, ModuleFailurePhase> {
     match (id, payload) {
         (
             AgentStatusModuleId::Time,
@@ -911,12 +1128,15 @@ fn validate_payload(
                 current_time,
                 timezone,
             },
-        ) => Ok(Some(AgentStatusSection {
-            id: AgentStatusSectionId::new(id.section_id()),
-            data: AgentStatusSectionData::Temporal {
-                current_time,
-                timezone,
+        ) => Ok(Some(AgentStatusContribution {
+            section: AgentStatusSection {
+                id: AgentStatusSectionId::new(id.section_id()),
+                data: AgentStatusSectionData::Temporal {
+                    current_time,
+                    timezone,
+                },
             },
+            emission: None,
         })),
         (
             AgentStatusModuleId::Background,
@@ -924,18 +1144,45 @@ fn validate_payload(
                 executions,
                 omitted_count,
             },
-        ) if !executions.is_empty() || omitted_count > 0 => Ok(Some(AgentStatusSection {
-            id: AgentStatusSectionId::new(id.section_id()),
-            data: AgentStatusSectionData::BackgroundExecution {
-                executions,
-                omitted_count,
+        ) if !executions.is_empty() || omitted_count > 0 => Ok(Some(AgentStatusContribution {
+            section: AgentStatusSection {
+                id: AgentStatusSectionId::new(id.section_id()),
+                data: AgentStatusSectionData::BackgroundExecution {
+                    executions,
+                    omitted_count,
+                },
             },
+            emission: None,
         })),
         (AgentStatusModuleId::Background, AgentStatusPayload::BackgroundExecution { .. }) => {
             Ok(None)
         }
+        (
+            AgentStatusModuleId::Todo,
+            AgentStatusPayload::Todo {
+                presentation,
+                emission,
+            },
+        ) if presentation.active_count > 0
+            && emission.module_id == AgentStatusModuleId::Todo
+            && emission.key == TODO_STATUS_EMISSION_KEY
+            && !emission.fingerprint.is_empty() =>
+        {
+            Ok(Some(AgentStatusContribution {
+                section: AgentStatusSection {
+                    id: AgentStatusSectionId::new(id.section_id()),
+                    data: AgentStatusSectionData::Todo { presentation },
+                },
+                emission: Some(emission),
+            }))
+        }
         _ => Err(ModuleFailurePhase::PayloadValidation),
     }
+}
+
+struct AgentStatusContribution {
+    section: AgentStatusSection,
+    emission: Option<AgentStatusEmission>,
 }
 
 /// Applies the global defensive byte cap.
@@ -944,13 +1191,20 @@ fn validate_payload(
 /// rendered from scratch, so separators are accounted for using the retained
 /// set. If a section is too large, later sections still get a chance to fit;
 /// no rendered wrapper or UTF-8 string is ever byte-sliced.
-fn admit_sections(sections: Vec<AgentStatusSection>, generated_at: DateTime<Utc>) -> AgentStatus {
+fn admit_sections(
+    sections: Vec<AgentStatusContribution>,
+    generated_at: DateTime<Utc>,
+) -> (AgentStatus, Vec<AgentStatusEmission>) {
     let mut accepted = Vec::new();
-    for section in sections {
+    let mut emissions = Vec::new();
+    for contribution in sections {
         let mut candidate = accepted.clone();
-        candidate.push(section.clone());
+        candidate.push(contribution.section.clone());
         if render_sections(&candidate).len() <= GLOBAL_AGENT_STATUS_BYTE_CAP {
-            accepted.push(section);
+            accepted.push(contribution.section);
+            if let Some(emission) = contribution.emission {
+                emissions.push(emission);
+            }
         }
     }
     let status = AgentStatus {
@@ -962,7 +1216,7 @@ fn admit_sections(sections: Vec<AgentStatusSection>, generated_at: DateTime<Utc>
         rendered.len() <= GLOBAL_AGENT_STATUS_BYTE_CAP,
         "Agent Status renderer exceeded its global UTF-8 byte cap"
     );
-    status
+    (status, emissions)
 }
 
 fn bound_background_snapshot(
@@ -978,11 +1232,15 @@ fn bound_background_snapshot(
 }
 
 fn bound_status_text(text: String) -> String {
-    if text.len() <= MAX_BACKGROUND_STATUS_TEXT_BYTES {
+    bound_status_text_to(text, MAX_BACKGROUND_STATUS_TEXT_BYTES)
+}
+
+fn bound_status_text_to(text: String, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
         return text;
     }
     let marker = "…";
-    let limit = MAX_BACKGROUND_STATUS_TEXT_BYTES.saturating_sub(marker.len());
+    let limit = max_bytes.saturating_sub(marker.len());
     let mut end = limit.min(text.len());
     while end > 0 && !text.is_char_boundary(end) {
         end -= 1;
@@ -990,6 +1248,101 @@ fn bound_status_text(text: String) -> String {
     let mut bounded = text[..end].to_owned();
     bounded.push_str(marker);
     bounded
+}
+
+fn todo_presentation(snapshot: &TodoSnapshot) -> TodoStatusPresentation {
+    let states = snapshot
+        .tasks
+        .iter()
+        .map(|task| (task.id, task.status))
+        .collect::<BTreeMap<_, _>>();
+    let active = snapshot
+        .tasks
+        .iter()
+        .filter(|task| matches!(task.status, TodoStatus::Pending | TodoStatus::InProgress));
+    let active_count = active.clone().count();
+    let blocked_count = active
+        .clone()
+        .filter(|task| {
+            task.blocked_by.iter().any(|blocker| {
+                states.get(blocker).is_some_and(|status| {
+                    matches!(status, TodoStatus::Pending | TodoStatus::InProgress)
+                })
+            })
+        })
+        .count();
+    let completed_count = snapshot
+        .tasks
+        .iter()
+        .filter(|task| task.status == TodoStatus::Completed)
+        .count();
+    let deleted_count = snapshot
+        .tasks
+        .iter()
+        .filter(|task| task.status == TodoStatus::Deleted)
+        .count();
+
+    let current_id = snapshot
+        .tasks
+        .iter()
+        .find(|task| task.status == TodoStatus::InProgress)
+        .map(|task| task.id);
+    let mut current = None;
+    let mut tasks = Vec::new();
+    let task_limit = if current_id.is_some() {
+        MAX_TODO_STATUS_TASKS.saturating_sub(1)
+    } else {
+        MAX_TODO_STATUS_TASKS
+    };
+    for task in snapshot
+        .tasks
+        .iter()
+        .filter(|task| matches!(task.status, TodoStatus::Pending | TodoStatus::InProgress))
+    {
+        let bounded = todo_status_task(task, &states);
+        if Some(task.id) == current_id {
+            current = Some(bounded);
+        } else if tasks.len() < task_limit {
+            tasks.push(bounded);
+        }
+    }
+    let displayed = usize::from(current.is_some()) + tasks.len();
+    TodoStatusPresentation {
+        current,
+        tasks,
+        active_count,
+        blocked_count,
+        completed_count,
+        deleted_count,
+        omitted_count: active_count.saturating_sub(displayed),
+    }
+}
+
+fn todo_status_task(
+    task: &crate::tools::todo::TodoTask,
+    states: &BTreeMap<u64, TodoStatus>,
+) -> TodoStatusTask {
+    TodoStatusTask {
+        id: task.id,
+        subject: bound_status_text_to(task.subject.clone(), MAX_TODO_STATUS_TEXT_BYTES),
+        active_form: task
+            .active_form
+            .clone()
+            .map(|value| bound_status_text_to(value, MAX_TODO_STATUS_TEXT_BYTES)),
+        status: task.status,
+        blocked: task.blocked_by.iter().any(|blocker| {
+            states.get(blocker).is_some_and(|status| {
+                matches!(status, TodoStatus::Pending | TodoStatus::InProgress)
+            })
+        }),
+    }
+}
+
+fn todo_fingerprint(presentation: &TodoStatusPresentation) -> String {
+    let encoded =
+        serde_json::to_vec(presentation).expect("Todo status presentation is serializable");
+    let digest = Sha256::digest(encoded);
+    format!("{digest:x}")
 }
 
 fn render_instant(instant: DateTime<Utc>, timezone: Option<Tz>) -> String {
@@ -1044,6 +1397,33 @@ fn render_sections(sections: &[AgentStatusSection]) -> String {
                     lines.push(format!("- … and {omitted_count} more active executions"));
                 }
             }
+            AgentStatusSectionData::Todo { presentation } => {
+                if presentation.active_count == 0 {
+                    continue;
+                }
+                if !lines.is_empty() {
+                    lines.push(String::new());
+                }
+                lines.push(format!(
+                    "Todo: {} active ({} blocked, {} completed, {} deleted)",
+                    presentation.active_count,
+                    presentation.blocked_count,
+                    presentation.completed_count,
+                    presentation.deleted_count,
+                ));
+                if let Some(current) = &presentation.current {
+                    lines.push(format_todo_task("Current", current));
+                }
+                for task in &presentation.tasks {
+                    lines.push(format_todo_task("Next", task));
+                }
+                if presentation.omitted_count > 0 {
+                    lines.push(format!(
+                        "- … and {} more active Todo tasks",
+                        presentation.omitted_count
+                    ));
+                }
+            }
         }
     }
     let mut rendered = String::from("<system-reminder>\n");
@@ -1051,6 +1431,19 @@ fn render_sections(sections: &[AgentStatusSection]) -> String {
     rendered.push('\n');
     rendered.push_str("</system-reminder>");
     rendered
+}
+
+fn format_todo_task(label: &str, task: &TodoStatusTask) -> String {
+    let blocked = if task.blocked { " | blocked" } else { "" };
+    let subject = if task.status == TodoStatus::InProgress {
+        task.active_form.as_deref().unwrap_or(&task.subject)
+    } else {
+        &task.subject
+    };
+    format!(
+        "- {label} #{} | {subject} | {}{blocked}",
+        task.id, task.status
+    )
 }
 
 /// Renders the already-admitted Agent Status generation.
@@ -1108,8 +1501,10 @@ type AfterCaptureHook = Arc<dyn Fn(AgentStatusModuleId) + Send + Sync>;
 struct AgentStatusTestState {
     capture_time: std::sync::atomic::AtomicUsize,
     capture_background: std::sync::atomic::AtomicUsize,
+    capture_todo: std::sync::atomic::AtomicUsize,
     evaluate_time: std::sync::atomic::AtomicUsize,
     evaluate_background: std::sync::atomic::AtomicUsize,
+    evaluate_todo: std::sync::atomic::AtomicUsize,
     capture_failure: std::sync::Mutex<Option<AgentStatusModuleId>>,
     evaluate_failure: std::sync::Mutex<Option<AgentStatusModuleId>>,
     payload_mismatch: std::sync::Mutex<Option<AgentStatusModuleId>>,
@@ -1124,8 +1519,10 @@ impl AgentStatusTestSeam {
             state: Arc::new(AgentStatusTestState {
                 capture_time: std::sync::atomic::AtomicUsize::new(0),
                 capture_background: std::sync::atomic::AtomicUsize::new(0),
+                capture_todo: std::sync::atomic::AtomicUsize::new(0),
                 evaluate_time: std::sync::atomic::AtomicUsize::new(0),
                 evaluate_background: std::sync::atomic::AtomicUsize::new(0),
+                evaluate_todo: std::sync::atomic::AtomicUsize::new(0),
                 capture_failure: std::sync::Mutex::new(None),
                 evaluate_failure: std::sync::Mutex::new(None),
                 payload_mismatch: std::sync::Mutex::new(None),
@@ -1175,6 +1572,7 @@ impl AgentStatusTestSeam {
         match module {
             AgentStatusModuleId::Time => self.state.capture_time.load(Ordering::SeqCst),
             AgentStatusModuleId::Background => self.state.capture_background.load(Ordering::SeqCst),
+            AgentStatusModuleId::Todo => self.state.capture_todo.load(Ordering::SeqCst),
         }
     }
 
@@ -1186,6 +1584,7 @@ impl AgentStatusTestSeam {
             AgentStatusModuleId::Background => {
                 self.state.evaluate_background.load(Ordering::SeqCst)
             }
+            AgentStatusModuleId::Todo => self.state.evaluate_todo.load(Ordering::SeqCst),
         }
     }
 
@@ -1197,6 +1596,9 @@ impl AgentStatusTestSeam {
             }
             AgentStatusModuleId::Background => {
                 self.state.capture_background.fetch_add(1, Ordering::SeqCst);
+            }
+            AgentStatusModuleId::Todo => {
+                self.state.capture_todo.fetch_add(1, Ordering::SeqCst);
             }
         }
     }
@@ -1211,6 +1613,9 @@ impl AgentStatusTestSeam {
                 self.state
                     .evaluate_background
                     .fetch_add(1, Ordering::SeqCst);
+            }
+            AgentStatusModuleId::Todo => {
+                self.state.evaluate_todo.fetch_add(1, Ordering::SeqCst);
             }
         }
     }
@@ -1277,16 +1682,19 @@ mod tests {
     use crate::durable::{ConversationStore, SqliteConversationStore};
     use crate::message::content::TextBlock;
     use crate::message::types::{
-        ContextKind, InboundKind, UserContentBlock, UserMessageBlock, UserSource,
+        ContextKind, InboundKind, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
-    use crate::runtime::identity::{ToolExecutionId, ToolId};
+    use crate::runtime::identity::{RequestId, ToolCallId, ToolExecutionId, ToolId};
     use crate::tools::background::BackgroundLifecycle;
+    use crate::tools::todo::{TODO_TOOL_ID, TodoCreate, TodoWriter};
+    use crate::tools::types::{ToolExecutionResult, ToolExecutionStatus, ToolResultContent};
 
     fn opportunity() -> AgentStatusOpportunitySet {
         AgentStatusOpportunitySet {
             fresh_inbound: Some(FreshInboundStatusOpportunity {
                 target_message_id: MessageId::new("inbound"),
             }),
+            post_tool_batch: None,
         }
     }
 
@@ -1377,6 +1785,87 @@ mod tests {
                 total: Some(2.0),
             }),
             result: None,
+        }
+    }
+
+    fn todo_result(snapshot: &TodoSnapshot) -> MessageBlock {
+        MessageBlock::Tool(ToolMessageBlock {
+            id: MessageId::new("todo-status-result"),
+            tool_call_id: ToolCallId::new("todo-status-call"),
+            tool_id: ToolId::new(TODO_TOOL_ID),
+            result: ToolExecutionResult {
+                status: ToolExecutionStatus::Success,
+                content: vec![ToolResultContent::Json {
+                    value: serde_json::to_value(snapshot).expect("Todo snapshot serializes"),
+                }],
+                duration_ms: 0,
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+                managed_output: None,
+            },
+        })
+    }
+
+    fn todo_list_with(build: impl FnOnce(&TodoWriter)) -> ConversationTodoList {
+        let list = ConversationTodoList::new(crate::runtime::identity::ConversationId::new(
+            "agent-status-todos",
+        ));
+        let batch = list.open_batch().expect("Todo batch opens");
+        let writer = batch.writer();
+        build(&writer);
+        let snapshot = writer.snapshot().expect("Todo batch remains open");
+        batch.settle(&[todo_result(&snapshot)]);
+        list
+    }
+
+    fn todo_only_config() -> AgentStatusConfig {
+        AgentStatusConfig {
+            time: TimeStatusConfig {
+                enabled: false,
+                timezone: None,
+            },
+            background: BackgroundStatusConfig { enabled: false },
+        }
+    }
+
+    fn post_tool_opportunity() -> AgentStatusOpportunitySet {
+        AgentStatusOpportunitySet {
+            fresh_inbound: None,
+            post_tool_batch: Some(PostToolBatchStatusOpportunity),
+        }
+    }
+
+    fn combined_opportunity() -> AgentStatusOpportunitySet {
+        AgentStatusOpportunitySet {
+            fresh_inbound: Some(FreshInboundStatusOpportunity {
+                target_message_id: MessageId::new("inbound"),
+            }),
+            post_tool_batch: Some(PostToolBatchStatusOpportunity),
+        }
+    }
+
+    struct FixedEmissionLookup(Option<String>);
+
+    impl AgentStatusEmissionLookup for FixedEmissionLookup {
+        fn latest_agent_status_emission(
+            &self,
+            module_id: AgentStatusModuleId,
+            key: &str,
+        ) -> Result<Option<AgentStatusEmissionRecord>, crate::durable::ConversationStoreError>
+        {
+            Ok(self
+                .0
+                .as_ref()
+                .map(|fingerprint| AgentStatusEmissionRecord {
+                    module_id,
+                    key: key.to_owned(),
+                    fingerprint: fingerprint.clone(),
+                    emitted_at: DateTime::from_timestamp(1_754_000_000, 0).expect("timestamp"),
+                    request_id: RequestId::new("request"),
+                    canonical_message_id: MessageId::new("status"),
+                    event_sequence: 1,
+                }))
         }
     }
 
@@ -1689,7 +2178,9 @@ mod tests {
                 AgentStatusSectionData::BackgroundExecution { executions, .. } => {
                     executions.first()
                 }
-                AgentStatusSectionData::Temporal { .. } => None,
+                AgentStatusSectionData::Temporal { .. } | AgentStatusSectionData::Todo { .. } => {
+                    None
+                }
             })
             .expect("Background section");
         assert_eq!(background.execution_id, execution_id);
@@ -2171,10 +2662,20 @@ mod tests {
                 timezone: None,
             },
         };
-        let status = admit_sections(
-            vec![oversized, small],
+        let (status, emissions) = admit_sections(
+            vec![
+                AgentStatusContribution {
+                    section: oversized,
+                    emission: None,
+                },
+                AgentStatusContribution {
+                    section: small,
+                    emission: None,
+                },
+            ],
             DateTime::from_timestamp(1_754_000_001, 0).expect("timestamp"),
         );
+        assert!(emissions.is_empty());
         assert_eq!(status.sections.len(), 1);
         assert_eq!(status.sections[0].id.as_str(), "small");
         let rendered = render_agent_status(&status);
@@ -2285,6 +2786,9 @@ mod tests {
                 ModuleFailurePhase::PayloadValidation => {
                     seam.mismatch_once(AgentStatusModuleId::Background);
                 }
+                ModuleFailurePhase::SuppressionLookup => {
+                    unreachable!("suppression lookup is not part of this loop");
+                }
             }
             let mut failing = engine(AgentStatusConfig::default()).with_test_seam(seam);
             let surviving = failing
@@ -2297,5 +2801,208 @@ mod tests {
         let execution_id = crate::runtime::identity::ToolExecutionId::new("exec_1");
         release.send_replace(true);
         registry.wait_until_terminal(&execution_id).await;
+    }
+
+    #[test]
+    fn fresh_post_and_combined_opportunities_share_one_finite_evaluation() {
+        let surface = empty_surface();
+        let registry = empty_background().1;
+        for opportunities in [
+            opportunity(),
+            post_tool_opportunity(),
+            combined_opportunity(),
+        ] {
+            assert!(!opportunities.is_empty());
+            let todos = todo_list_with(|writer| {
+                writer
+                    .create(TodoCreate {
+                        subject: "Keep the plan visible".to_owned(),
+                        ..TodoCreate::default()
+                    })
+                    .expect("create Todo");
+            });
+            let seam = AgentStatusTestSeam::new();
+            let mut engine = engine(todo_only_config()).with_test_seam(seam.clone());
+            let prepared = engine
+                .prepare_with_inputs(
+                    &opportunities,
+                    &surface,
+                    &registry,
+                    &todos,
+                    &FixedEmissionLookup(None),
+                )
+                .expect("one Todo generation");
+
+            assert_eq!(prepared.status.sections.len(), 1);
+            assert_eq!(prepared.emissions.len(), 1);
+            assert_eq!(seam.capture_count(AgentStatusModuleId::Todo), 1);
+            assert_eq!(seam.evaluate_count(AgentStatusModuleId::Todo), 1);
+        }
+    }
+
+    #[test]
+    fn todo_status_reads_only_the_committed_snapshot() {
+        let list = ConversationTodoList::new(crate::runtime::identity::ConversationId::new(
+            "staged-todo-status",
+        ));
+        let batch = list.open_batch().expect("Todo batch opens");
+        let writer = batch.writer();
+        writer
+            .create(TodoCreate {
+                subject: "Provisional work".to_owned(),
+                ..TodoCreate::default()
+            })
+            .expect("stage Todo");
+
+        let registry = empty_background().1;
+        let lookup = FixedEmissionLookup(None);
+        let mut before_commit = engine(todo_only_config());
+        assert!(
+            before_commit
+                .prepare_with_inputs(
+                    &post_tool_opportunity(),
+                    &empty_surface(),
+                    &registry,
+                    &list,
+                    &lookup,
+                )
+                .is_none()
+        );
+        assert_eq!(list.snapshot().tasks.len(), 1, "the test has staged work");
+        assert!(list.committed().tasks.is_empty());
+
+        let committed = writer.snapshot().expect("batch remains open");
+        batch.settle(&[todo_result(&committed)]);
+        let mut after_commit = engine(todo_only_config());
+        let prepared = after_commit
+            .prepare_with_inputs(
+                &post_tool_opportunity(),
+                &empty_surface(),
+                &registry,
+                &list,
+                &lookup,
+            )
+            .expect("committed Todo work is visible");
+        assert!(matches!(
+            prepared.status.sections[0].data,
+            AgentStatusSectionData::Todo { .. }
+        ));
+    }
+
+    #[test]
+    fn todo_status_has_no_reminder_for_empty_or_fully_terminal_work() {
+        let registry = empty_background().1;
+        let lookup = FixedEmissionLookup(None);
+        for todos in [
+            ConversationTodoList::new(crate::runtime::identity::ConversationId::new("empty")),
+            todo_list_with(|writer| {
+                let (task, _) = writer
+                    .create(TodoCreate {
+                        subject: "Finished work".to_owned(),
+                        ..TodoCreate::default()
+                    })
+                    .expect("create Todo");
+                writer
+                    .update(
+                        task.id,
+                        crate::tools::todo::TodoChange {
+                            status: Some(TodoStatus::Completed),
+                            ..crate::tools::todo::TodoChange::default()
+                        },
+                    )
+                    .expect("complete Todo");
+            }),
+        ] {
+            let mut engine = engine(todo_only_config());
+            assert!(
+                engine
+                    .prepare_with_inputs(
+                        &post_tool_opportunity(),
+                        &empty_surface(),
+                        &registry,
+                        &todos,
+                        &lookup,
+                    )
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn todo_status_is_bounded_deterministic_and_fingerprinted_by_semantics() {
+        let todos = todo_list_with(|writer| {
+            for index in 0..(MAX_TODO_STATUS_TASKS + 4) {
+                writer
+                    .create(TodoCreate {
+                        subject: format!("Task {index} {}", "😀".repeat(200)),
+                        ..TodoCreate::default()
+                    })
+                    .expect("create Todo");
+            }
+        });
+        let registry = empty_background().1;
+        let first_lookup = FixedEmissionLookup(None);
+        let mut first_engine = engine(todo_only_config());
+        let first = first_engine
+            .prepare_with_inputs(
+                &post_tool_opportunity(),
+                &empty_surface(),
+                &registry,
+                &todos,
+                &first_lookup,
+            )
+            .expect("bounded Todo status");
+        let AgentStatusSectionData::Todo { presentation } = &first.status.sections[0].data else {
+            panic!("expected Todo section");
+        };
+        assert_eq!(presentation.active_count, MAX_TODO_STATUS_TASKS + 4);
+        assert_eq!(presentation.tasks.len(), MAX_TODO_STATUS_TASKS);
+        assert_eq!(presentation.omitted_count, 4);
+        assert!(
+            presentation
+                .tasks
+                .iter()
+                .all(|task| task.subject.len() <= MAX_TODO_STATUS_TEXT_BYTES)
+        );
+        assert!(render_agent_status(&first.status).len() <= GLOBAL_AGENT_STATUS_BYTE_CAP);
+
+        let emission = &first.emissions[0];
+        assert_eq!(emission.module_id, AgentStatusModuleId::Todo);
+        assert_eq!(emission.key, TODO_STATUS_EMISSION_KEY);
+        assert_ne!(emission.key, emission.fingerprint);
+
+        let duplicate_lookup = FixedEmissionLookup(Some(emission.fingerprint.clone()));
+        let mut duplicate_engine = engine(todo_only_config());
+        assert!(
+            duplicate_engine
+                .prepare_with_inputs(
+                    &post_tool_opportunity(),
+                    &empty_surface(),
+                    &registry,
+                    &todos,
+                    &duplicate_lookup,
+                )
+                .is_none()
+        );
+
+        let changed_todos = todo_list_with(|writer| {
+            writer
+                .create(TodoCreate {
+                    subject: "A materially different task".to_owned(),
+                    ..TodoCreate::default()
+                })
+                .expect("create changed Todo");
+        });
+        let mut changed_engine = engine(todo_only_config());
+        let changed = changed_engine
+            .prepare_with_inputs(
+                &post_tool_opportunity(),
+                &empty_surface(),
+                &registry,
+                &changed_todos,
+                &duplicate_lookup,
+            )
+            .expect("changed Todo state is eligible");
+        assert_ne!(changed.emissions[0].fingerprint, emission.fingerprint);
     }
 }

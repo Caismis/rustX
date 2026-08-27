@@ -30,13 +30,15 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 11. An incompatible database
+The SQLite schema is development schema version 12. An incompatible database
 fails explicitly; there is no migration chain, legacy reader, compatibility
 fallback, dual write, or old storage mode. Version 10 froze the structured
 Questionnaire interaction audit vocabulary introduced by Issue #126. Version
 11 adds the typed Agent Status generation descriptor: its UTC generation
 instant and admitted module membership are durable with the canonical status
-message. Version 10 and every older development schema are rejected at open.
+message. Version 12 adds canonical-message-coupled Agent Status emission facts
+and the bounded latest-emission heads used by Todo suppression. Version 11 and
+every older development schema are rejected at open.
 File-backed stores
 use WAL, `synchronous=FULL`, foreign-key enforcement, and a busy timeout. A
 successful SQLite commit is the local durability linearization point
@@ -56,7 +58,7 @@ answers, an explicit decline, or owning-attempt cancellation. A v9 journal may
 contain the obsolete Question/Answered payloads and is rejected rather than
 decoded or migrated.
 
-The version-11 physical tables are deliberately semantic rather than generic:
+The version-12 physical tables are deliberately semantic rather than generic:
 
 | Table | Purpose and constraints |
 | --- | --- |
@@ -70,6 +72,7 @@ The version-11 physical tables are deliberately semantic rather than generic:
 | `context_checkpoints` | Current structural/index checkpoint matching `surface_head`; it is not message history. |
 | `request_snapshots` | One immutable non-history snapshot per `RequestId`, its frozen provisional Assistant identity, Surface revision, and committed start sequence. |
 | `events` | Append-only typed envelopes keyed by per-conversation Event Journal sequence and unique `EventId`. |
+| `agent_status_emission_heads` | One materialized latest-emission record per `(AgentStatusModuleId, semantic key)`, maintained only by the combined model-turn-start transaction. |
 | `lifecycle_state` | Durable terminal markers enforcing zero-or-one terminal event and terminal absorption for attempt, turn, and background-execution lifecycles. |
 | `publication_streams` | One frozen publication generation per provider request, with terminal marker and one of the three settlements. |
 | `publication_frames` | Contiguous transient release staging for one publication stream. |
@@ -1465,42 +1468,51 @@ Key contracts:
   is process-local executable authority, not durable compaction state;
   compaction never reloads it. Explicit reload and cold recreation remain
   separate lifecycle boundaries.
-- Agent Status is an optional FreshInbound opportunity, not an automatic
-  emission rule. At one primary-model-step preparation boundary, execution
-  preparation freezes one finite Pre-Status Surface from the active Surface
-  identities plus keyed Message Ledger hydration, samples the Agent Status
-  clock once, and captures one immutable authoritative Background registry
-  snapshot. Context Assembly consumes those frozen inputs through the closed
-  engine, which evaluates its compile-time Time and Background modules once,
-  then admits any contributing sections as a canonical
-  `UserSource::Runtime` context message with
+- Agent Status is an optional delivery opportunity, not an automatic emission
+  rule. One logical primary step owns one finite
+  `AgentStatusOpportunitySet`; its independent FreshInbound and PostToolBatch
+  members may coexist. At preparation, execution freezes one finite Pre-Status
+  Surface from active identities plus keyed Message Ledger hydration, samples
+  the clock once, and captures one immutable authoritative Background and
+  committed Todo snapshot. The closed engine evaluates each interested module
+  once against that set, then admits any contributing sections as one
+  canonical `UserSource::Runtime` context message with
   `InboundKind::Context(ContextKind::AgentStatus(metadata))`. The metadata is
   the durable typed membership/timestamp descriptor tied to that canonical
-  message; neither the engine nor a projection parses renderer text. It
-  participates in normal history, projection, token accounting, and Surface
-  revisioning, and is never reinjected by an adapter. Identical rendered bytes
-  at distinct admitted steps receive distinct canonical identities. If no
-  module contributes, no empty status message is emitted. Overflow
-  compact-and-retry reuses the accepted generation without a second Surface
-  scan, clock sample, authoritative capture, or trigger evaluation.
+  message; neither the engine nor a projection parses renderer text. A
+  complete tool batch marks PostToolBatch only after its canonical ToolResult
+  batch commits; the marker is attempt-local and never creates or prolongs a
+  model turn. RuntimeToolObservation remains a separate producer and precedes
+  AgentStatus in Context Assembly. If no module contributes, no empty status
+  message is emitted. Overflow compact-and-retry reuses the accepted
+  generation without a second Surface scan, clock sample, authoritative
+  capture, or trigger evaluation.
+- Todo status reads only `ConversationTodoList::committed()`. It shows a
+  bounded deterministic view of actionable tasks and uses semantic key
+  `active_actionable` plus a SHA-256 fingerprint of that bounded view. A
+  durable latest-emission head suppresses an identical fingerprint; it is
+  updated atomically with the canonical status message and its
+  `AgentStatusEmitted` fact at model-turn start. Surface compaction does not
+  reset that head.
 - The initial-turn trigger is an explicit execution mode, never an `Option`
   used as a status switch: `AgentExecutionRequest` carries one
   `InitialTurnTrigger` — `FreshInbound(FreshInboundTurn)` makes validation and
   fresh-inbound compaction protection mandatory and offers the optional Agent
   Status opportunity; `Continuation` expresses an intentional pure
   continuation with no new inbound turn and therefore no Agent Status on the
-  first request. There is no legacy no-context execution path. FreshInbound
-  is the only production status opportunity in this slice, and one logical
-  primary step owns at most one generation.
+  first request. There is no legacy no-context execution path. A settled tool
+  batch adds the independent attempt-local PostToolBatch member to the next
+  already-existing continuation step; one logical primary step owns at most
+  one generation.
 - A `FreshInboundTurn` is ordered according to canonical history/inbound
   sequence: `validate_against` requires the referenced messages to occur in
   strictly increasing canonical position in `message_ids` order
   (`OutOfCanonicalOrder` otherwise); the runtime never sorts or reinterprets
   a caller-supplied turn order.
 - There is no provider registration seam. The engine validates the
-  rustX-owned `Time <-> Temporal` and `Background <-> BackgroundExecution`
-  mapping, and a capture, evaluation, or validation failure quarantines only
-  that module for the rest of the attempt. Surviving modules continue;
+  rustX-owned `Time <-> Temporal`, `Background <-> BackgroundExecution`, and
+  `Todo <-> Todo` mapping, and a capture, evaluation, or validation failure
+  quarantines only that module for the rest of the attempt. Surviving modules continue;
   quarantine is not persisted and a new attempt retries the module. These
   optional failures never become a context-preparation failure or alter model
   request count.
@@ -2058,12 +2070,12 @@ durable `ToolExecutionProgress` Event Journal facts at batch commit;
 coalesced observations never cross the durable commit point. Background
 progress retains only the latest bounded snapshot per execution record.
 
-Agent Status owns the runtime `background_execution` built-in section: the
+Agent Status owns the runtime `background_execution` built-in section:
 executing attempt captures one read-only active snapshot from the background
 registry, the closed Background module bounds and evaluates it, and the
 renderer shows retained active executions in allocation order with an
-`omitted_count` when necessary. Time and Background are compile-time-owned
-modules; there is no extension provider registration seam.
+`omitted_count` when necessary. Time, Background, and Todo are compile-time-
+owned modules; there is no extension provider registration seam.
 
 The native tool plane implements Read, Write, Edit, Glob, Grep, and Bash as
 ordinary registrations under the concrete bounded `NativeToolPolicies`
@@ -3631,16 +3643,18 @@ Runtime Client is a projection/control/attachment adapter over it.
   the capability set. Available
   and active Tools are distinct fields, and provider requests use only the
   active field.
-- **Agent Status projection: one frozen generation.** One FreshInbound
-  preparation traverses the closed engine's source-owned `Time -> Background`
-  modules once. Each interested module captures one finite immutable snapshot
-  and evaluates it once; the accepted typed sections feed both
-  `render_agent_status` for the canonical Runtime context UserMessageBlock
-  and, after successful model-turn-start commit, `observe_status` for the
-  Runtime Client projection. Overflow retry reuses the generation, and the
-  client path never recomposes or parses rendered context text. A module
-  failure is quarantined for the current attempt and does not fail
-  preparation.
+- **Agent Status projection: one frozen generation.** One primary-step
+  preparation traverses the closed engine's source-owned `Time -> Background ->
+  Todo` modules once against one finite opportunity set. Each interested module
+  captures one immutable snapshot and evaluates it once; the accepted typed
+  sections feed both `render_agent_status` for the canonical Runtime context
+  UserMessageBlock and, after successful model-turn-start commit,
+  `observe_status` for the Runtime Client projection. Overflow retry reuses the
+  generation, and the client path never recomposes or parses rendered context
+  text. A module failure is quarantined for the current attempt and does not
+  fail preparation. The optional `opportunities.post_tool_batch` field carries
+  only the batch-level eligibility fact; it is omitted unless that production
+  opportunity actually existed.
 - **Protocol envelope.** A transport-neutral JSON-RPC-style envelope:
   `request(id, method + typed params)`, `response(id, result | error)`,
   and `event(cursor + typed payload)` with no request ids on

@@ -60,10 +60,9 @@
 //!
 //! The context path is mandatory: every normal `AgentExecution` is
 //! constructed with a [`ContextRuntime`], and there is exactly one normal
-//! execution model — no no-context/unbounded mode. Agent Status is an optional
-//! `FreshInbound` enrichment and is consumed by the first successful model
-//! invocation that observes it. The conversation inbound mailbox is owned by
-//! the conversation tool runtime: the loop drains exactly
+//! execution model — no no-context/unbounded mode. Agent Status is optional
+//! `FreshInbound`/`PostToolBatch` enrichment for an already-existing primary
+//! step. The conversation inbound mailbox is owned by the conversation tool runtime: the loop drains exactly
 //! `tool_runtime.mailbox()` at every safe boundary, so background terminal
 //! notifications always enter the same mailbox the Agent Loop drains.
 //! Cancellation is a generic Agent Loop invariant for every execution:
@@ -82,21 +81,25 @@ use crate::context::tokens::{ObservedAnchor, ProviderObservedInput};
 use crate::context::{
     AcceptedContext, AgentStatusOpportunitySet, AgentStatusSurfaceView, ContextRuntime,
     ContributorInputSnapshot, DeferredContextProposal, FreshInboundStatusOpportunity,
-    MAX_DEFERRED_CONTEXT_PROPOSALS, MAX_PROPOSALS_PER_CONTRIBUTOR, render_agent_status,
-    render_effective_system_prompt, validate_user_message_proposal,
+    MAX_DEFERRED_CONTEXT_PROPOSALS, MAX_PROPOSALS_PER_CONTRIBUTOR, PostToolBatchStatusOpportunity,
+    render_agent_status, render_effective_system_prompt, validate_user_message_proposal,
 };
 use crate::conversation::{ConversationError, ConversationState, PreparedCanonicalCommit};
-use crate::durable::ConversationStore;
+use crate::durable::{
+    AgentStatusEmissionLookup, AgentStatusEmissionRecord, ConversationStore, ConversationStoreError,
+};
 use crate::events::types::{
     AttemptFailure, AttemptOutcome, EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope,
 };
-use crate::message::types::{AssistantMessageBlock, MessageBlock, ToolMessageBlock};
+use crate::message::types::{
+    AgentStatusEmission, AgentStatusModuleId, AssistantMessageBlock, MessageBlock, ToolMessageBlock,
+};
 use crate::model::adapter::ModelEventStream;
 use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
 use crate::model::session::AttemptModelSnapshot;
-use crate::model::snapshot::{RequestIdentity, RequestSnapshot};
+use crate::model::snapshot::{AgentStatusStart, RequestIdentity, RequestSnapshot};
 use crate::model::types::{ModelRequest, ModelUsage};
 use crate::publication::{
     CoalescePolicy, PublicationClock, PublicationCoalescer, PublicationFrame, PublicationPayload,
@@ -275,7 +278,7 @@ impl AgentExecutionResult {
 /// mandatory M4 context runtime, the conversation tool runtime (whose
 /// canonical mailbox the loop drains), the execution state machine, the
 /// bounded current read model, the retained continuation state, and the
-/// pending fresh inbound trigger.
+/// pending `FreshInbound` trigger and attempt-local `PostToolBatch` opportunity.
 pub struct AgentExecution<'a> {
     request: AgentExecutionRequest,
     capability: AttemptCapabilityLease,
@@ -304,6 +307,10 @@ pub struct AgentExecution<'a> {
     /// invocation has observed it. One pending fresh inbound turn produces
     /// at most one Agent Status generation.
     pending_fresh_inbound: Option<FreshInboundTurn>,
+    /// The attempt-local marker installed after one complete canonical
+    /// `ToolResult` batch settles. It is consumed by the next primary-step
+    /// preparation and is never persisted or reconstructed.
+    pending_post_tool_batch: Option<PostToolBatchStatusOpportunity>,
     context_runtime: ContextRuntime,
     /// The transient accepted context for the current admitted primary step.
     /// It is retained across an overflow compaction/retry and discarded only
@@ -482,7 +489,8 @@ struct PreparedModelTurn {
     /// count) is the correction the recovery compaction plans with.
     estimated_input: u64,
     /// The status observation whose canonical message is included in this
-    /// prepared context, when this is a `FreshInbound` turn.
+    /// prepared context, when this primary step owns an accepted status
+    /// generation.
     status_observation: Option<AgentStatusObservation>,
 }
 
@@ -492,6 +500,40 @@ struct PreparedModelTurn {
 struct AgentStatusGeneration {
     opportunities: AgentStatusOpportunitySet,
     status: crate::context::status::AgentStatus,
+    emissions: Vec<AgentStatusEmission>,
+}
+
+fn agent_status_message_id(context: &[MessageBlock]) -> Option<MessageId> {
+    context.iter().find_map(|block| match block {
+        MessageBlock::User(user)
+            if matches!(
+                user.kind,
+                crate::message::types::InboundKind::Context(
+                    crate::message::types::ContextKind::AgentStatus(_)
+                )
+            ) =>
+        {
+            Some(user.id.clone())
+        }
+        _ => None,
+    })
+}
+
+/// Narrows the conversation store's bounded read to the read-only interface
+/// the status module needs during preparation. The wrapper owns no state and
+/// cannot write durable suppression history.
+struct ConversationAgentStatusEmissionLookup<'a> {
+    store: &'a dyn ConversationStore,
+}
+
+impl AgentStatusEmissionLookup for ConversationAgentStatusEmissionLookup<'_> {
+    fn latest_agent_status_emission(
+        &self,
+        module_id: AgentStatusModuleId,
+        key: &str,
+    ) -> Result<Option<AgentStatusEmissionRecord>, ConversationStoreError> {
+        self.store.latest_agent_status_emission(module_id, key)
+    }
 }
 
 /// The intermediate staged view of one model turn: scratch conversation,
@@ -703,6 +745,7 @@ impl<'a> AgentExecution<'a> {
             pending_continuation: None,
             continuation_owner: None,
             pending_fresh_inbound: None,
+            pending_post_tool_batch: None,
             context_runtime,
             accepted_context: None,
             lifecycle,
@@ -1485,7 +1528,7 @@ impl<'a> AgentExecution<'a> {
         // identities, and in-memory validation only. Nothing commits until
         // the start arbitration wins.
         let staged_context = self.stage_context(accepted)?;
-        let mut staged = self.stage_model_turn(0, &staged_context)?;
+        let mut staged = self.stage_model_turn(0, &staged_context, status_generation.as_ref())?;
         let budgets = self.compaction_budgets();
         let should_compact = match self
             .context_runtime
@@ -1522,7 +1565,7 @@ impl<'a> AgentExecution<'a> {
             .await?;
             // Restage over the rewritten Surface: the staged context blocks
             // are unchanged, the Surface revision and projection are not.
-            staged = self.stage_model_turn(0, &staged_context)?;
+            staged = self.stage_model_turn(0, &staged_context, status_generation.as_ref())?;
             if !self
                 .context_runtime
                 .engine
@@ -1541,24 +1584,27 @@ impl<'a> AgentExecution<'a> {
     /// Prepares the Agent Status generation of the pending delivery
     /// opportunity.
     ///
-    /// With no pending `FreshInbound` turn there is no Agent Status. With a
-    /// pending turn, the current Surface head and its active canonical bodies
-    /// are frozen once, then projected into the finite immutable Surface view
-    /// consumed by every status module. The engine separately captures one
-    /// clock instant and one authoritative Background registry snapshot. The
-    /// canonical renderer produces the bounded text that Context Assembly
-    /// admits as a Runtime context fact, carrying the same generation's typed
-    /// metadata. The structured observation is deferred until the
-    /// model-turn-start commit wins.
+    /// With neither pending opportunity there is no Agent Status. When one or
+    /// both opportunities are pending, the current Surface head and its
+    /// active canonical bodies are frozen once, then projected into the finite
+    /// immutable Surface view consumed by every status module. The engine
+    /// separately captures one clock instant, one authoritative Background
+    /// registry snapshot, and one committed Todo snapshot. The canonical
+    /// renderer produces the bounded text that Context Assembly admits as a
+    /// Runtime context fact, carrying the same generation's typed metadata.
+    /// The structured observation is deferred until the model-turn-start
+    /// commit wins.
     ///
     /// # Errors
     ///
     /// Returns a context error for a fresh-inbound contract violation
     /// (`MalformedHistory`). Module failures are isolated by the engine.
     fn compose_status(&mut self) -> Result<Option<AgentStatusGeneration>, ContextError> {
-        let Some(fresh) = &self.pending_fresh_inbound else {
+        let fresh = self.pending_fresh_inbound.clone();
+        let post_tool_batch = self.pending_post_tool_batch.take();
+        if fresh.is_none() && post_tool_batch.is_none() {
             return Ok(None);
-        };
+        }
         let frozen = self.conversation.freeze_active_surface().map_err(|error| {
             ContextError::new(ContextErrorKind::MalformedHistory, error.to_string())
         })?;
@@ -1570,23 +1616,37 @@ impl<'a> AgentExecution<'a> {
             .iter()
             .map(|message| message.message.clone())
             .collect::<Vec<_>>();
-        fresh.validate_against(&active).map_err(|error| {
-            ContextError::new(
-                ContextErrorKind::MalformedHistory,
-                format!("pending fresh inbound turn is inconsistent: {error}"),
-            )
-        })?;
-        let target_message_id = fresh.last_message_id().clone();
+        if let Some(fresh) = &fresh {
+            fresh.validate_against(&active).map_err(|error| {
+                ContextError::new(
+                    ContextErrorKind::MalformedHistory,
+                    format!("pending fresh inbound turn is inconsistent: {error}"),
+                )
+            })?;
+        }
         let opportunities = AgentStatusOpportunitySet {
-            fresh_inbound: Some(FreshInboundStatusOpportunity { target_message_id }),
+            fresh_inbound: fresh.map(|fresh| FreshInboundStatusOpportunity {
+                target_message_id: fresh.last_message_id().clone(),
+            }),
+            post_tool_batch,
+        };
+        let emission_lookup = ConversationAgentStatusEmissionLookup {
+            store: self.store.as_ref(),
         };
         Ok(self
             .context_runtime
             .status_engine
-            .prepare(&opportunities, &surface, self.tool_runtime.background())
-            .map(|status| AgentStatusGeneration {
+            .prepare_with_inputs(
+                &opportunities,
+                &surface,
+                self.tool_runtime.background(),
+                self.tool_runtime.todos(),
+                &emission_lookup,
+            )
+            .map(|prepared| AgentStatusGeneration {
                 opportunities,
-                status,
+                status: prepared.status,
+                emissions: prepared.emissions,
             }))
     }
 
@@ -1603,6 +1663,7 @@ impl<'a> AgentExecution<'a> {
         &self,
         retry_number: u32,
         staged_context: &[MessageBlock],
+        status_generation: Option<&AgentStatusGeneration>,
     ) -> Result<StagedModelTurn, Terminal> {
         let active = self.conversation.active_messages().map_err(|error| {
             Self::context_failure_terminal(&ContextError::new(
@@ -1656,7 +1717,7 @@ impl<'a> AgentExecution<'a> {
             ))
         })?;
         let primary = self.request.model.primary();
-        let snapshot = RequestSnapshot::new(
+        let mut snapshot = RequestSnapshot::new(
             RequestIdentity {
                 attempt_id: self.request.attempt_id.clone(),
                 turn: TurnId::new(self.turn.to_string()),
@@ -1679,6 +1740,19 @@ impl<'a> AgentExecution<'a> {
                 .map(crate::conversation::message_id_of)
                 .collect(),
         );
+        if let Some(status_generation) = status_generation {
+            let status_message_id = agent_status_message_id(staged_context);
+            let Some(status_message_id) = status_message_id else {
+                return Err(Self::context_failure_terminal(&ContextError::new(
+                    ContextErrorKind::Internal,
+                    "the accepted Agent Status generation has no staged Agent Status message",
+                )));
+            };
+            snapshot.agent_status = Some(AgentStatusStart {
+                message_id: status_message_id,
+                emissions: status_generation.emissions.clone(),
+            });
+        }
         Ok(StagedModelTurn {
             projection,
             effective_system_prompt,
@@ -1720,25 +1794,26 @@ impl<'a> AgentExecution<'a> {
         );
         let status_observation = match status_generation {
             Some(generation) => {
-                let status_message_id = staged_context.iter().find_map(|block| match block {
-                    MessageBlock::User(user)
-                        if matches!(
-                            user.kind,
-                            crate::message::types::InboundKind::Context(
-                                crate::message::types::ContextKind::AgentStatus(_)
-                            )
-                        ) =>
-                    {
-                        Some(user.id.clone())
-                    }
-                    _ => None,
-                });
+                let status_message_id = agent_status_message_id(staged_context);
                 let Some(status_message_id) = status_message_id else {
                     return Err(Self::context_failure_terminal(&ContextError::new(
                         ContextErrorKind::Internal,
                         "the accepted Agent Status generation has no staged Agent Status message",
                     )));
                 };
+                let Some(start) = staged.snapshot.agent_status.as_ref() else {
+                    return Err(Self::context_failure_terminal(&ContextError::new(
+                        ContextErrorKind::Internal,
+                        "the accepted Agent Status message has no snapshot metadata",
+                    )));
+                };
+                if start.message_id != status_message_id || start.emissions != generation.emissions
+                {
+                    return Err(Self::context_failure_terminal(&ContextError::new(
+                        ContextErrorKind::Internal,
+                        "the prepared Agent Status metadata is not bound to its message",
+                    )));
+                }
                 Some(AgentStatusObservation {
                     attempt_id: self.request.attempt_id.clone(),
                     turn: self.turn,
@@ -2507,7 +2582,7 @@ impl<'a> AgentExecution<'a> {
         // already committed it), freezes its own Request Snapshot, and
         // passes through the one cancellation-vs-start arbitration exactly
         // like the first request of the turn.
-        let staged = match self.stage_model_turn(retry_number, &[]) {
+        let staged = match self.stage_model_turn(retry_number, &[], None) {
             Ok(staged) => staged,
             Err(terminal) => return Err(terminal),
         };
@@ -2917,6 +2992,15 @@ impl<'a> AgentExecution<'a> {
         if let Some(todos) = todos {
             todos.settle(&blocks);
         }
+        // The complete canonical ToolResult batch, not an individual tool
+        // completion, establishes one attempt-local PostToolBatch
+        // opportunity for the next primary step that already exists.
+        self.pending_post_tool_batch = Some(PostToolBatchStatusOpportunity);
+        // FND-06 can kill a real process in the narrow window after the
+        // canonical batch commit and before the next primary-step
+        // preparation. The marker is deliberately process-local; this hook
+        // proves recovery does not synthesize it from durable tool history.
+        crate::runtime::process_death::reach("after:post_tool_batch_marker");
         let settled = result_slots
             .into_iter()
             .map(|(batch_position, slot, result)| SettledCall {
@@ -6354,6 +6438,19 @@ mod tests {
             crate::events::types::AttemptOutcome::Cancelled {
                 reason: CancellationReason::UserRequested,
             }
+        );
+        assert!(
+            result
+                .messages()
+                .iter()
+                .all(|message| !message.is_agent_status()),
+            "the attempt-local PostToolBatch marker cannot create a status turn"
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| !matches!(event, RuntimeEvent::AgentStatusEmitted { .. })),
+            "cancellation before the next start leaves no durable status emission"
         );
     }
 

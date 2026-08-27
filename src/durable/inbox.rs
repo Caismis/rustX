@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::conversation::{SurfaceOp, SurfaceRevision, SurfaceSpan};
 use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use crate::message::types::{
-    InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+    AgentStatusModuleId, InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
 use crate::model::snapshot::RequestSnapshot;
 use crate::model::types::ModelRequest;
@@ -449,6 +449,42 @@ pub struct EventPage {
     pub events: Vec<RuntimeEventEnvelope>,
     /// The last event sequence in this page, when non-empty.
     pub next_sequence: Option<u64>,
+}
+
+/// One durable semantic Agent Status emission fact and its materialized latest
+/// lookup position.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentStatusEmissionRecord {
+    /// The closed module that owns the reminder semantics.
+    pub module_id: AgentStatusModuleId,
+    /// Stable semantic reminder identity.
+    pub key: String,
+    /// Fingerprint of the bounded relevant content that was emitted.
+    pub fingerprint: String,
+    /// The durable event timestamp.
+    pub emitted_at: DateTime<Utc>,
+    /// The exact model request start that made the emission visible.
+    pub request_id: RequestId,
+    /// The exact canonical Agent Status User message referenced by the fact.
+    pub canonical_message_id: MessageId,
+    /// The Event Journal sequence of the emission fact.
+    pub event_sequence: u64,
+}
+
+/// The read-only bounded suppression-history view used during status
+/// preparation.
+pub trait AgentStatusEmissionLookup: Send + Sync {
+    /// Reads the latest durable emission for one semantic module/key pair.
+    ///
+    /// # Errors
+    ///
+    /// Returns the conversation-store error when the bounded lookup cannot be
+    /// completed or its durable row is malformed.
+    fn latest_agent_status_emission(
+        &self,
+        module_id: AgentStatusModuleId,
+        key: &str,
+    ) -> Result<Option<AgentStatusEmissionRecord>, ConversationStoreError>;
 }
 
 /// A bounded page of immutable Request Snapshots.
@@ -1064,8 +1100,10 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// This is the canonical-append durability seam for ordinary
     /// **non-inbound** commits (Assistant messages, `ToolResult`s, and
     /// admitted context facts). It must be called in canonical commit order
-    /// so the durable Ledger records the exact committed fact. Inbound
-    /// adoption appends its
+    /// so the durable Ledger records the exact committed fact. Generated
+    /// Agent Status is admitted by `commit_model_turn_start`, which couples
+    /// its canonical message to the start-owned emission settlement; this
+    /// method is not that generation path. Inbound adoption appends its
     /// selected User messages through [`ConversationStore::adopt_pending_batch`]
     /// and compaction summaries use [`ConversationStore::commit_compaction`];
     /// neither structurally special transition can be split through this
@@ -1180,6 +1218,17 @@ pub trait ConversationStore: Send + Sync + 'static {
         snapshot: &RequestSnapshot,
         timestamp: DateTime<Utc>,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+
+    /// Reads the materialized latest Agent Status emission for one bounded
+    /// semantic module/key pair. Normal status preparation never scans the
+    /// Event Journal; this projection is advanced only by the combined
+    /// model-turn-start transition that commits the referenced status message
+    /// and emission fact together.
+    fn latest_agent_status_emission(
+        &self,
+        module_id: AgentStatusModuleId,
+        key: &str,
+    ) -> Result<Option<AgentStatusEmissionRecord>, ConversationStoreError>;
 
     /// Loads one immutable Request Snapshot on demand.
     fn load_request_snapshot(
@@ -1321,6 +1370,16 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         stream_id: &PublicationStreamId,
     ) -> Result<Option<PublicationAudit>, ConversationStoreError>;
+}
+
+impl<T: ConversationStore + ?Sized> AgentStatusEmissionLookup for T {
+    fn latest_agent_status_emission(
+        &self,
+        module_id: AgentStatusModuleId,
+        key: &str,
+    ) -> Result<Option<AgentStatusEmissionRecord>, ConversationStoreError> {
+        ConversationStore::latest_agent_status_emission(self, module_id, key)
+    }
 }
 
 impl<T: ConversationStore + ?Sized> ConversationInboundCapability for T {

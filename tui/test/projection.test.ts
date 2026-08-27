@@ -834,6 +834,32 @@ describe("presentation projection", () => {
     assert.equal(state.status?.opportunities.fresh_inbound, undefined);
   });
 
+  it("folds simultaneous FreshInbound and PostToolBatch opportunities", () => {
+    const status = {
+      attempt_id: "a1",
+      turn: 1,
+      status_message_id: "status-combined",
+      opportunities: {
+        fresh_inbound: { target_message_id: "m1" },
+        post_tool_batch: {},
+      },
+      sections: [],
+      rendered: "## Status",
+    };
+    const state = fold(initial(), [
+      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      {
+        type: "agent_status_composed",
+        attempt_id: "a1",
+        turn: 1,
+        status,
+      },
+    ]);
+
+    assert.deepEqual(state.status?.opportunities, status.opportunities);
+    assert.equal(state.status?.status_message_id, "status-combined");
+  });
+
   it("folds a capability revision swap", () => {
     const state = fold(initial(), [
       { type: "capability_updated", capabilities: capabilities(7) },

@@ -203,10 +203,14 @@ published.
 ## Historical observations and lineage
 
 Agent Status is an optional runtime-sourced canonical User context fact for a
-successful FreshInbound model-turn start. Multiple status messages may remain
-in their canonical order until normal Surface replacement/compaction removes
-them; old status is never scanned to reconstruct live state. A generation that
-loses cancellation-versus-start arbitration is never committed or projected.
+successful primary model-turn start. One finite opportunity set may contain
+FreshInbound, PostToolBatch, or both; a complete settled tool batch marks the
+attempt-local PostToolBatch member only after canonical ToolResult settlement,
+and never creates a model turn. Multiple status messages may remain in their
+canonical order until normal Surface replacement/compaction removes them; old
+status is never scanned to reconstruct Todo suppression. A generation that
+loses cancellation-versus-start arbitration is never committed or projected,
+and its Todo emission/head settlement is absent as well.
 
 Fork, clone, and tree operations project a historical prefix. At a selected
 human User boundary, the selected message and context/status belonging to that

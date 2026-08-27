@@ -860,11 +860,11 @@ async fn agent_status_shares_one_composition() {
     );
 }
 
-/// Disabling both compile-time-owned modules removes the optional status
-/// message and its structured observation while leaving normal execution and
-/// Context Assembly intact.
+/// Disabling the configurable Time and Background modules, with no actionable
+/// Todo state, removes the optional status message and structured observation
+/// while leaving normal execution and Context Assembly intact.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn all_agent_status_modules_disabled_emit_no_message_or_observation() {
+async fn disabled_time_and_background_with_no_actionable_todos_emit_no_status() {
     let config = AgentStatusConfig {
         time: rustx::context::TimeStatusConfig {
             enabled: false,

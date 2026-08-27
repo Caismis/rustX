@@ -213,6 +213,37 @@ pub enum AgentStatusModuleId {
     Time,
     /// The Background module.
     Background,
+    /// The conversation-owned Todo module.
+    Todo,
+}
+
+impl AgentStatusModuleId {
+    /// The stable diagnostic and durable-storage name of this module.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Time => "time",
+            Self::Background => "background",
+            Self::Todo => "todo",
+        }
+    }
+}
+
+/// One semantic Agent Status emission carried by a prepared model-turn start.
+///
+/// `key` identifies the reminder meaning (for example, the active Todo
+/// reminder), while `fingerprint` identifies the bounded relevant state that
+/// was actually presented. They are deliberately separate so a changed Todo
+/// state does not become a different reminder kind.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentStatusEmission {
+    /// Stable semantic reminder identity owned by the status module.
+    pub module_id: AgentStatusModuleId,
+    /// Stable key for the reminder meaning.
+    pub key: String,
+    /// Fingerprint of the exact bounded relevant content.
+    pub fingerprint: String,
 }
 
 /// An invalid canonical Agent Status module membership.
@@ -222,7 +253,8 @@ pub enum AgentStatusMetadataError {
     EmptyModules,
     /// A module appeared more than once in the membership list.
     DuplicateModule(AgentStatusModuleId),
-    /// Modules must use the closed semantic order (`Time`, then `Background`).
+    /// Modules must use the closed semantic order (`Time`, `Background`, then
+    /// `Todo`).
     NonCanonicalOrder {
         /// The module that appeared first.
         previous: AgentStatusModuleId,
@@ -582,7 +614,13 @@ mod tests {
         for modules in [
             vec![AgentStatusModuleId::Time],
             vec![AgentStatusModuleId::Background],
+            vec![AgentStatusModuleId::Todo],
             vec![AgentStatusModuleId::Time, AgentStatusModuleId::Background],
+            vec![
+                AgentStatusModuleId::Time,
+                AgentStatusModuleId::Background,
+                AgentStatusModuleId::Todo,
+            ],
         ] {
             let metadata = AgentStatusGenerationMetadata::new(status_timestamp(), modules.clone())
                 .expect("valid Agent Status module membership");

@@ -30,10 +30,12 @@ use crate::events::interaction::{
     InteractionSubject, interaction_arguments_digest, validate_interaction_settlement,
     validate_interaction_subject,
 };
-use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
+use crate::events::types::{
+    EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope, agent_status_emission_event_id,
+};
 use crate::message::types::{
-    AssistantContentBlock, ContentBlockIndex, InboundKind, MessageBlock, UserMessageBlock,
-    UserSource,
+    AgentStatusEmission, AgentStatusModuleId, AssistantContentBlock, ContentBlockIndex,
+    InboundKind, MessageBlock, UserMessageBlock, UserSource,
 };
 use crate::model::snapshot::RequestSnapshot;
 use crate::model::types::ModelRequest;
@@ -50,9 +52,9 @@ use crate::runtime::inbound::InboundSequence;
 use crate::runtime::process_death;
 
 use super::inbox::{
-    AcceptedInbound, CanonicalMessagePage, CompactionCommitInput, ConversationStore,
-    ConversationStoreError, DurableConversationHead, EventPage, InboundDraft, LineageSeed,
-    PendingBatch, PendingInboundItem, RequestSnapshotPage, SurfaceUserMessageBoundary,
+    AcceptedInbound, AgentStatusEmissionRecord, CanonicalMessagePage, CompactionCommitInput,
+    ConversationStore, ConversationStoreError, DurableConversationHead, EventPage, InboundDraft,
+    LineageSeed, PendingBatch, PendingInboundItem, RequestSnapshotPage, SurfaceUserMessageBoundary,
     SurfaceUserMessageBoundaryPage, TRANSCRIPT_PAGE_LIMIT_MAX, TranscriptCommitReceipt,
     TranscriptCursor, TranscriptEntry, TranscriptItem, TranscriptPage,
 };
@@ -121,13 +123,21 @@ use super::inbox::{
 /// Version 11 freezes the structured Agent Status generation descriptor
 /// introduced by Issue #131: canonical Agent Status context messages carry
 /// their UTC generation instant and typed admitted-module membership. A v10
-/// Ledger cannot answer Surface visibility for Time and Background without
-/// renderer parsing, so it must fail at store open rather than being
+/// Ledger cannot answer Surface visibility for the closed status modules
+/// without renderer parsing, so it must fail at store open rather than being
 /// interpreted by a v11 reader.
 ///
-/// A v3/v4/v5/v6/v7/v8/v9/v10 database must fail at store open; there is no
+/// Version 12 freezes Todo Agent Status suppression: semantic emission facts
+/// are committed with model-turn start and the bounded latest-emission head is
+/// updated in that same transaction. A v11 database has neither the head
+/// projection nor the request-snapshot emission binding, so it is refused.
+///
+/// A v3/v4/v5/v6/v7/v8/v9/v10/v11 database must fail at store open; there is no
 /// migration or compatibility path.
-pub const SQLITE_SCHEMA_VERSION: i64 = 11;
+pub const SQLITE_SCHEMA_VERSION: i64 = 12;
+
+const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
+const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -170,6 +180,10 @@ pub(crate) enum RequestStartFaultOperation {
     AfterSnapshotInsert,
     /// Fail after the `ModelRequestStarted` Event Journal fact has staged.
     AfterEventInsert,
+    /// Fail after the Agent Status emission fact has staged.
+    AfterAgentStatusEventInsert,
+    /// Fail after the latest-emission head has staged.
+    AfterAgentStatusHeadUpsert,
 }
 
 /// The native durable conversation authority for one conversation.
@@ -194,6 +208,8 @@ pub struct SqliteConversationStore {
     pub(crate) terminal_event_attempts: Arc<AtomicUsize>,
     #[cfg(test)]
     pub(crate) request_snapshot_page_reads: Arc<AtomicUsize>,
+    #[cfg(test)]
+    pub(crate) agent_status_head_lookup_reads: Arc<AtomicUsize>,
     #[cfg(test)]
     pub(crate) admission_fault_script: Arc<Mutex<VecDeque<AdmissionFaultOperation>>>,
     #[cfg(test)]
@@ -280,6 +296,8 @@ impl SqliteConversationStore {
             terminal_event_attempts: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
             request_snapshot_page_reads: Arc::new(AtomicUsize::new(0)),
+            #[cfg(test)]
+            agent_status_head_lookup_reads: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
             admission_fault_script: Arc::new(Mutex::new(VecDeque::new())),
             #[cfg(test)]
@@ -374,6 +392,12 @@ impl SqliteConversationStore {
     #[cfg(test)]
     pub(crate) fn request_snapshot_page_reads(&self) -> usize {
         self.request_snapshot_page_reads.load(Ordering::SeqCst)
+    }
+
+    /// Returns how many bounded latest-emission head reads the test exercised.
+    #[cfg(test)]
+    pub(crate) fn agent_status_head_lookup_reads(&self) -> usize {
+        self.agent_status_head_lookup_reads.load(Ordering::SeqCst)
     }
 
     #[cfg(test)]
@@ -526,7 +550,54 @@ impl SqliteConversationStore {
                 ],
             )
             .map_err(|error| storage(format!("bind request start sequence: {error}")))?;
+        self.insert_agent_status_emissions_tx(transaction, snapshot, timestamp)?;
         Ok(persisted.event)
+    }
+
+    fn insert_agent_status_emissions_tx(
+        &self,
+        transaction: &rusqlite::Transaction<'_>,
+        snapshot: &RequestSnapshot,
+        timestamp: DateTime<Utc>,
+    ) -> Result<(), ConversationStoreError> {
+        let Some(agent_status) = &snapshot.agent_status else {
+            return Ok(());
+        };
+        for emission in &agent_status.emissions {
+            let emission_event = RuntimeEventEnvelope {
+                schema_version: EVENT_SCHEMA_VERSION,
+                event_id: agent_status_emission_event_id(&snapshot.request_id, emission),
+                sequence: 0,
+                conversation_id: self.conversation_id.clone(),
+                attempt_id: Some(snapshot.identity.attempt_id.clone()),
+                turn_id: Some(snapshot.identity.turn.clone()),
+                timestamp,
+                event: RuntimeEvent::AgentStatusEmitted {
+                    request_id: snapshot.request_id.clone(),
+                    message_id: agent_status.message_id.clone(),
+                    emission: emission.clone(),
+                },
+            };
+            let persisted = persist_event_tx(transaction, &self.conversation_id, emission_event)?;
+            #[cfg(test)]
+            if self.consume_request_start_fault(
+                RequestStartFaultOperation::AfterAgentStatusEventInsert,
+            ) {
+                return Err(storage(
+                    "fault injected: after Agent Status emission event insert",
+                ));
+            }
+            upsert_agent_status_head_tx(transaction, &persisted.event)?;
+            #[cfg(test)]
+            if self
+                .consume_request_start_fault(RequestStartFaultOperation::AfterAgentStatusHeadUpsert)
+            {
+                return Err(storage(
+                    "fault injected: after Agent Status emission head upsert",
+                ));
+            }
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -1200,6 +1271,7 @@ impl ConversationStore for SqliteConversationStore {
         // context while persisting a snapshot whose `request_context_ids`
         // disagrees with what it just appended.
         validate_request_context(snapshot, context)?;
+        validate_agent_status_start(snapshot, context)?;
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1236,6 +1308,18 @@ impl ConversationStore for SqliteConversationStore {
             .map_err(|error| storage(format!("request start commit: {error}")))?;
         process_death::reach("after:commit_model_turn_start");
         Ok(persisted)
+    }
+
+    fn latest_agent_status_emission(
+        &self,
+        module_id: AgentStatusModuleId,
+        key: &str,
+    ) -> Result<Option<AgentStatusEmissionRecord>, ConversationStoreError> {
+        #[cfg(test)]
+        self.agent_status_head_lookup_reads
+            .fetch_add(1, Ordering::SeqCst);
+        let connection = self.lock()?;
+        read_agent_status_head(&connection, module_id, key)
     }
 
     fn load_request_snapshot(
@@ -3001,6 +3085,15 @@ fn append_canonical_messages(
     if messages.is_empty() {
         return Ok(Vec::new());
     }
+    if messages.iter().any(|message| {
+        message
+            .agent_status_metadata()
+            .is_some_and(|metadata| metadata.contains(AgentStatusModuleId::Todo))
+    }) {
+        return Err(ConversationStoreError::InvalidReference(
+            "Todo Agent Status must use the atomic model-turn-start transition".to_owned(),
+        ));
+    }
     let mut connection = store.lock()?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -3092,7 +3185,169 @@ fn verify_committed_start_tx(
         )));
     }
     validate_request_start_metadata(&stored, &started)?;
+    verify_agent_status_start_tx(transaction, context, &stored, &started)?;
     Ok(started)
+}
+
+fn validate_agent_status_emission_shape(
+    emission: &AgentStatusEmission,
+) -> Result<(), ConversationStoreError> {
+    if emission.key.is_empty()
+        || emission.key.len() > MAX_AGENT_STATUS_EMISSION_KEY_BYTES
+        || emission.fingerprint.is_empty()
+        || emission.fingerprint.len() > MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "Agent Status emission key and fingerprint must be non-empty and bounded".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Validates the exact status message/emission binding before a start chooses
+/// its fresh or idempotent path. This is the construction boundary that keeps
+/// a free-standing emission vector from entering durable storage.
+fn validate_agent_status_start(
+    snapshot: &RequestSnapshot,
+    context: &[MessageBlock],
+) -> Result<(), ConversationStoreError> {
+    let status_messages = context
+        .iter()
+        .filter(|message| message.is_agent_status())
+        .collect::<Vec<_>>();
+    match snapshot.agent_status.as_ref() {
+        None => {
+            if !status_messages.is_empty() {
+                return Err(ConversationStoreError::InvalidReference(
+                    "request context contains Agent Status without its prepared start metadata"
+                        .to_owned(),
+                ));
+            }
+        }
+        Some(agent_status) => {
+            let [message] = status_messages.as_slice() else {
+                return Err(ConversationStoreError::InvalidReference(
+                    "a prepared Agent Status start must contain exactly one canonical status message"
+                        .to_owned(),
+                ));
+            };
+            if message.id() != &agent_status.message_id {
+                return Err(ConversationStoreError::InvalidReference(
+                    "prepared Agent Status metadata names a different canonical message".to_owned(),
+                ));
+            }
+            let metadata = message.agent_status_metadata().ok_or_else(|| {
+                ConversationStoreError::InvalidReference(
+                    "prepared Agent Status context has no structured generation metadata"
+                        .to_owned(),
+                )
+            })?;
+            let mut seen = BTreeSet::new();
+            let mut todo_emissions = 0usize;
+            for emission in &agent_status.emissions {
+                validate_agent_status_emission_shape(emission)?;
+                if emission.module_id != AgentStatusModuleId::Todo {
+                    return Err(ConversationStoreError::InvalidReference(
+                        "only Todo Agent Status emissions have a durable settlement".to_owned(),
+                    ));
+                }
+                todo_emissions = todo_emissions.saturating_add(1);
+                if !metadata.contains(emission.module_id) {
+                    return Err(ConversationStoreError::InvalidReference(format!(
+                        "Agent Status emission module {} is absent from the canonical status metadata",
+                        emission.module_id.as_str()
+                    )));
+                }
+                if !seen.insert((emission.module_id, emission.key.clone())) {
+                    return Err(ConversationStoreError::InvalidReference(format!(
+                        "Agent Status emission key {} is duplicated for module {}",
+                        emission.key,
+                        emission.module_id.as_str()
+                    )));
+                }
+            }
+            let todo_in_metadata = metadata.contains(AgentStatusModuleId::Todo);
+            if todo_in_metadata != (todo_emissions == 1) {
+                return Err(ConversationStoreError::InvalidReference(
+                    "Todo Agent Status metadata and its exact emission settlement disagree"
+                        .to_owned(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Verifies all status facts on an idempotent start retry. The direct event
+/// identity lookup stays bounded and the latest head may legitimately point
+/// at a newer emission of the same semantic key.
+fn verify_agent_status_start_tx(
+    transaction: &Transaction<'_>,
+    context: &[MessageBlock],
+    snapshot: &RequestSnapshot,
+    started: &RuntimeEventEnvelope,
+) -> Result<(), ConversationStoreError> {
+    validate_agent_status_start(snapshot, context)?;
+    let Some(agent_status) = snapshot.agent_status.as_ref() else {
+        return Ok(());
+    };
+    for emission in &agent_status.emissions {
+        let event_id = agent_status_emission_event_id(&snapshot.request_id, emission);
+        let event = find_event_by_id(transaction, &event_id)?.ok_or_else(|| {
+            ConversationStoreError::InvalidReference(format!(
+                "request {} has status metadata without emission fact {}",
+                snapshot.request_id, event_id
+            ))
+        })?;
+        if event.event_id != event_id {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "request {} emission lookup returned a different event identity than {event_id}",
+                snapshot.request_id
+            )));
+        }
+        let RuntimeEvent::AgentStatusEmitted {
+            request_id,
+            message_id,
+            emission: committed,
+        } = &event.event
+        else {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "event {event_id} is not the expected Agent Status emission fact"
+            )));
+        };
+        if request_id != &snapshot.request_id
+            || message_id != &agent_status.message_id
+            || committed != emission
+            || event.conversation_id != started.conversation_id
+            || event.attempt_id.as_ref() != Some(&snapshot.identity.attempt_id)
+            || event.turn_id.as_ref() != Some(&snapshot.identity.turn)
+            || event.timestamp != started.timestamp
+        {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "request {} has contradictory Agent Status emission fact {event_id}",
+                snapshot.request_id
+            )));
+        }
+        let Some(head) = read_agent_status_head_tx(transaction, emission.module_id, &emission.key)?
+        else {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "request {} has emission fact {event_id} without its latest-emission head",
+                snapshot.request_id
+            )));
+        };
+        if head.event_sequence < event.sequence
+            || (head.event_sequence == event.sequence
+                && (head.fingerprint != emission.fingerprint
+                    || head.emitted_at != event.timestamp
+                    || head.request_id != snapshot.request_id
+                    || head.canonical_message_id != agent_status.message_id))
+        {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "Agent Status latest-emission head disagrees with fact {event_id}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn configure_connection(
@@ -3235,6 +3490,16 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 started_sequence INTEGER,
                 completed_sequence INTEGER
             );
+            CREATE TABLE IF NOT EXISTS agent_status_emission_heads (
+                module_id TEXT NOT NULL,
+                semantic_key TEXT NOT NULL,
+                fingerprint TEXT NOT NULL,
+                emitted_at TEXT NOT NULL,
+                request_id TEXT NOT NULL,
+                message_id TEXT NOT NULL,
+                event_sequence INTEGER NOT NULL CHECK(event_sequence >= 0),
+                PRIMARY KEY(module_id, semantic_key)
+            );
             CREATE TABLE IF NOT EXISTS publication_streams (
                 stream_id TEXT PRIMARY KEY,
                 attempt_id TEXT NOT NULL,
@@ -3286,6 +3551,7 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
             CREATE INDEX IF NOT EXISTS events_sequence_idx ON events(sequence);
             CREATE INDEX IF NOT EXISTS events_attempt_idx ON events(attempt_id, sequence);
             CREATE INDEX IF NOT EXISTS request_snapshots_surface_idx ON request_snapshots(surface_revision);
+            CREATE INDEX IF NOT EXISTS agent_status_emission_heads_lookup_idx ON agent_status_emission_heads(module_id, semantic_key);
             CREATE INDEX IF NOT EXISTS publication_frames_stream_idx ON publication_frames(stream_id, sequence);
             CREATE INDEX IF NOT EXISTS publication_streams_settlement_idx ON publication_streams(settlement);",
         )
@@ -3363,6 +3629,18 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "snapshot_json",
                 "started_sequence",
                 "completed_sequence",
+            ],
+        ),
+        (
+            "agent_status_emission_heads",
+            &[
+                "module_id",
+                "semantic_key",
+                "fingerprint",
+                "emitted_at",
+                "request_id",
+                "message_id",
+                "event_sequence",
             ],
         ),
         (
@@ -3447,6 +3725,11 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         connection,
         "transcript_order",
         &["reference_kind", "reference_id"],
+    )?;
+    verify_unique_columns(
+        connection,
+        "agent_status_emission_heads",
+        &["module_id", "semantic_key"],
     )?;
     Ok(())
 }
@@ -5146,6 +5429,183 @@ fn find_event_by_id(
     Ok(Some(decode(&json, "event identity")?))
 }
 
+fn find_event_at_sequence(
+    transaction: &Transaction<'_>,
+    sequence: u64,
+) -> Result<Option<RuntimeEventEnvelope>, ConversationStoreError> {
+    let sequence = seq_to_i64(sequence)?;
+    let Some(json) = transaction
+        .query_row(
+            "SELECT event_json FROM events WHERE sequence=?1",
+            [sequence],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| storage(format!("event sequence probe: {error}")))?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(decode(&json, "event sequence")?))
+}
+
+fn decode_agent_status_module(value: &str) -> Result<AgentStatusModuleId, ConversationStoreError> {
+    match value {
+        "time" => Ok(AgentStatusModuleId::Time),
+        "background" => Ok(AgentStatusModuleId::Background),
+        "todo" => Ok(AgentStatusModuleId::Todo),
+        _ => Err(ConversationStoreError::InvalidReference(format!(
+            "unknown Agent Status module {value:?} in latest-emission head"
+        ))),
+    }
+}
+
+fn read_agent_status_head_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<(String, String, String, String, String, String, i64)> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+    ))
+}
+
+fn head_record_from_row(
+    row: (String, String, String, String, String, String, i64),
+) -> Result<AgentStatusEmissionRecord, ConversationStoreError> {
+    let (module, key, fingerprint, emitted_at, request_id, message_id, event_sequence) = row;
+    let emitted_at = DateTime::parse_from_rfc3339(&emitted_at)
+        .map_err(|error| {
+            ConversationStoreError::InvalidReference(format!(
+                "invalid Agent Status head timestamp {emitted_at:?}: {error}"
+            ))
+        })?
+        .with_timezone(&Utc);
+    Ok(AgentStatusEmissionRecord {
+        module_id: decode_agent_status_module(&module)?,
+        key,
+        fingerprint,
+        emitted_at,
+        request_id: RequestId::new(request_id),
+        canonical_message_id: MessageId::new(message_id),
+        event_sequence: sequence_from_i64(event_sequence)?,
+    })
+}
+
+fn read_agent_status_head(
+    connection: &Connection,
+    module_id: AgentStatusModuleId,
+    key: &str,
+) -> Result<Option<AgentStatusEmissionRecord>, ConversationStoreError> {
+    connection
+        .query_row(
+            "SELECT module_id,semantic_key,fingerprint,emitted_at,request_id,message_id,event_sequence
+             FROM agent_status_emission_heads
+             WHERE module_id=?1 AND semantic_key=?2",
+            params![module_id.as_str(), key],
+            read_agent_status_head_row,
+        )
+        .optional()
+        .map_err(|error| storage(format!("Agent Status head lookup: {error}")))?
+        .map(head_record_from_row)
+        .transpose()
+}
+
+fn read_agent_status_head_tx(
+    transaction: &Transaction<'_>,
+    module_id: AgentStatusModuleId,
+    key: &str,
+) -> Result<Option<AgentStatusEmissionRecord>, ConversationStoreError> {
+    transaction
+        .query_row(
+            "SELECT module_id,semantic_key,fingerprint,emitted_at,request_id,message_id,event_sequence
+             FROM agent_status_emission_heads
+             WHERE module_id=?1 AND semantic_key=?2",
+            params![module_id.as_str(), key],
+            read_agent_status_head_row,
+        )
+        .optional()
+        .map_err(|error| storage(format!("Agent Status head lookup: {error}")))?
+        .map(head_record_from_row)
+        .transpose()
+}
+
+fn upsert_agent_status_head_tx(
+    transaction: &Transaction<'_>,
+    event: &RuntimeEventEnvelope,
+) -> Result<(), ConversationStoreError> {
+    let RuntimeEvent::AgentStatusEmitted {
+        request_id,
+        message_id,
+        emission,
+    } = &event.event
+    else {
+        return Err(ConversationStoreError::InvalidReference(
+            "latest-emission head update requires an Agent Status emission fact".to_owned(),
+        ));
+    };
+    let existing = read_agent_status_head_tx(transaction, emission.module_id, &emission.key)?;
+    if let Some(existing) = existing {
+        if existing.event_sequence > event.sequence {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "Agent Status head for {}:{} is newer than event {}",
+                emission.module_id.as_str(),
+                emission.key,
+                event.sequence
+            )));
+        }
+        if existing.event_sequence == event.sequence {
+            if existing.fingerprint == emission.fingerprint
+                && existing.request_id == *request_id
+                && existing.canonical_message_id == *message_id
+                && existing.emitted_at == event.timestamp
+            {
+                return Ok(());
+            }
+            return Err(ConversationStoreError::InvalidReference(
+                "Agent Status latest-emission head conflicts at one event sequence".to_owned(),
+            ));
+        }
+        transaction
+            .execute(
+                "UPDATE agent_status_emission_heads
+                 SET fingerprint=?1,emitted_at=?2,request_id=?3,message_id=?4,event_sequence=?5
+                 WHERE module_id=?6 AND semantic_key=?7",
+                params![
+                    emission.fingerprint,
+                    event.timestamp.to_rfc3339(),
+                    request_id.as_str(),
+                    message_id.as_str(),
+                    seq_to_i64(event.sequence)?,
+                    emission.module_id.as_str(),
+                    emission.key,
+                ],
+            )
+            .map_err(|error| storage(format!("update Agent Status head: {error}")))?;
+    } else {
+        transaction
+            .execute(
+                "INSERT INTO agent_status_emission_heads
+                 (module_id,semantic_key,fingerprint,emitted_at,request_id,message_id,event_sequence)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7)",
+                params![
+                    emission.module_id.as_str(),
+                    emission.key,
+                    emission.fingerprint,
+                    event.timestamp.to_rfc3339(),
+                    request_id.as_str(),
+                    message_id.as_str(),
+                    seq_to_i64(event.sequence)?,
+                ],
+            )
+            .map_err(|error| storage(format!("insert Agent Status head: {error}")))?;
+    }
+    Ok(())
+}
+
 /// Resolves the authoritative child agent identity from the one durable
 /// ownership opening fact of a subagent lifecycle.
 ///
@@ -5194,6 +5654,63 @@ fn validate_event_reference(
     envelope: &RuntimeEventEnvelope,
 ) -> Result<(), ConversationStoreError> {
     match &envelope.event {
+        RuntimeEvent::AgentStatusEmitted {
+            request_id,
+            message_id,
+            emission,
+        } => {
+            validate_agent_status_emission_shape(emission)?;
+            let Some((snapshot, Some(started_sequence), _)) =
+                read_request_snapshot_tx(transaction, request_id)?
+            else {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "Agent Status emission references request {request_id}, which has not started"
+                )));
+            };
+            let started =
+                find_event_at_sequence(transaction, started_sequence)?.ok_or_else(|| {
+                    ConversationStoreError::InvalidReference(format!(
+                        "request {request_id} has no event at its recorded start sequence"
+                    ))
+                })?;
+            validate_request_start_metadata(&snapshot, &started)?;
+            let Some(agent_status) = snapshot.agent_status.as_ref() else {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "Agent Status emission for request {request_id} has no prepared status context"
+                )));
+            };
+            if envelope.attempt_id.as_ref() != Some(&snapshot.identity.attempt_id)
+                || envelope.turn_id.as_ref() != Some(&snapshot.identity.turn)
+                || envelope.event_id != agent_status_emission_event_id(request_id, emission)
+                || envelope.timestamp != started.timestamp
+                || message_id != &agent_status.message_id
+                || !agent_status
+                    .emissions
+                    .iter()
+                    .any(|candidate| candidate == emission)
+            {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "Agent Status emission for request {request_id} does not match its prepared start"
+                )));
+            }
+            let message = load_message_tx(transaction, message_id)?;
+            let Some(metadata) = message.agent_status_metadata() else {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "Agent Status emission references non-status message {message_id}"
+                )));
+            };
+            if !metadata.contains(emission.module_id) {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "Agent Status emission module {} is absent from message {message_id}",
+                    emission.module_id.as_str()
+                )));
+            }
+            if message.id() != message_id {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "Agent Status emission message reference {message_id} disagrees with its body"
+                )));
+            }
+        }
         // A provider outcome names an actual started request. Without this
         // the P marker could be recorded against a request that never had a
         // durable start fact.
@@ -5637,6 +6154,7 @@ fn requires_specialized_transition(event: &RuntimeEvent) -> bool {
             | RuntimeEvent::ToolMessageCommitted { .. }
             | RuntimeEvent::CompactionCompleted { .. }
             | RuntimeEvent::ModelRequestStarted { .. }
+            | RuntimeEvent::AgentStatusEmitted { .. }
             | RuntimeEvent::BackgroundTerminalPublished { .. }
             | RuntimeEvent::SubagentTerminalPublished { .. }
             | RuntimeEvent::InteractionRequested { .. }
@@ -5908,15 +6426,15 @@ mod tests {
     use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope, SubagentTerminalState};
     use crate::message::content::TextBlock;
     use crate::message::types::{
-        AgentStatusGenerationMetadata, AgentStatusModuleId, AssistantContentBlock,
-        AssistantMessageBlock, ContextKind, InboundKind, MessageBlock, UserContentBlock,
-        UserMessageBlock, UserSource,
+        AgentStatusEmission, AgentStatusGenerationMetadata, AgentStatusModuleId,
+        AssistantContentBlock, AssistantMessageBlock, ContextKind, InboundKind, MessageBlock,
+        UserContentBlock, UserMessageBlock, UserSource,
     };
     use crate::model::catalog::ModelCapabilities;
     use crate::model::catalog::ModelCompat;
     use crate::model::finish::ModelFinishReason;
     use crate::model::invocation::{ModelInvocationConfig, RequestParams};
-    use crate::model::snapshot::{RequestIdentity, RequestSnapshot};
+    use crate::model::snapshot::{AgentStatusStart, RequestIdentity, RequestSnapshot};
     use crate::model::types::{ModelProtocol, ModelRequest};
     use crate::runtime::identity::{AttemptId, EventId, TurnId};
     use crate::runtime::types::{TokenMeasurement, TokenMeasurementSource};
@@ -5959,6 +6477,25 @@ mod tests {
             })],
             source: UserSource::Runtime,
             kind: InboundKind::Context(ContextKind::RuntimeToolObservation),
+            timestamp: None,
+        })
+    }
+
+    fn agent_status_message(
+        id: &str,
+        generated_at: DateTime<Utc>,
+        modules: &[AgentStatusModuleId],
+    ) -> MessageBlock {
+        MessageBlock::User(UserMessageBlock {
+            id: MessageId::new(id),
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: "<system-reminder>bounded status</system-reminder>".to_owned(),
+            })],
+            source: UserSource::Runtime,
+            kind: InboundKind::Context(ContextKind::AgentStatus(
+                AgentStatusGenerationMetadata::new(generated_at, modules.to_vec())
+                    .expect("valid Agent Status metadata"),
+            )),
             timestamp: None,
         })
     }
@@ -6037,6 +6574,26 @@ mod tests {
             ConversationStoreError::Storage(message)
                 if message.contains("decode Ledger message")
         ));
+    }
+
+    #[test]
+    fn ordinary_canonical_append_rejects_unbound_agent_status() {
+        let store = store();
+        let base = user_message("base", "base");
+        store.initialize(std::slice::from_ref(&base)).unwrap();
+        let status = agent_status_message(
+            "status-unbound",
+            Utc.with_ymd_and_hms(2026, 8, 27, 6, 0, 0).unwrap(),
+            &[AgentStatusModuleId::Todo],
+        );
+
+        assert!(matches!(
+            store.append_canonical(&status),
+            Err(ConversationStoreError::InvalidReference(message))
+                if message.contains("atomic model-turn-start")
+        ));
+        assert_eq!(store.load_canonical().unwrap(), vec![base]);
+        assert!(store.read_events(None, 10).unwrap().events.is_empty());
     }
 
     fn envelope(
@@ -6507,6 +7064,20 @@ mod tests {
         )
     }
 
+    fn status_start_snapshot(
+        revision: crate::conversation::SurfaceRevision,
+        message_id: MessageId,
+        emissions: Vec<AgentStatusEmission>,
+    ) -> RequestSnapshot {
+        let mut snapshot = test_request_snapshot(revision, invocation());
+        snapshot.request_context_ids = vec![message_id.clone()];
+        snapshot.agent_status = Some(AgentStatusStart {
+            message_id,
+            emissions,
+        });
+        snapshot
+    }
+
     #[test]
     fn request_start_is_atomic_and_reconstructs_from_durable_history() {
         let directory = tempfile::tempdir().unwrap();
@@ -6601,6 +7172,220 @@ mod tests {
                 .sequence,
             1
         );
+    }
+
+    #[test]
+    fn agent_status_emission_is_atomic_with_start_and_exactly_replayed() {
+        let store = store();
+        let base = user_message("base", "base");
+        store.initialize(std::slice::from_ref(&base)).unwrap();
+        let revision = store.load_head().unwrap().revision.next();
+        let message_id = MessageId::new("status-todo-1");
+        let context = agent_status_message(
+            message_id.as_str(),
+            Utc.with_ymd_and_hms(2026, 8, 27, 6, 0, 0).unwrap(),
+            &[AgentStatusModuleId::Todo],
+        );
+        let emission = AgentStatusEmission {
+            module_id: AgentStatusModuleId::Todo,
+            key: "active_actionable".to_owned(),
+            fingerprint: "todo-fingerprint-1".to_owned(),
+        };
+        let snapshot = status_start_snapshot(revision, message_id.clone(), vec![emission.clone()]);
+        let timestamp = Utc.with_ymd_and_hms(2026, 8, 27, 6, 1, 0).unwrap();
+
+        let started = store
+            .commit_model_turn_start(std::slice::from_ref(&context), &snapshot, timestamp)
+            .expect("status and start commit together");
+        assert_eq!(started.sequence, 1);
+        let events = store.read_events(None, 10).unwrap().events;
+        assert_eq!(events.len(), 2);
+        match &events[1].event {
+            RuntimeEvent::AgentStatusEmitted {
+                request_id,
+                message_id: stored_message_id,
+                emission: stored_emission,
+            } => {
+                assert_eq!(request_id, &snapshot.request_id);
+                assert_eq!(stored_message_id, &message_id);
+                assert_eq!(stored_emission, &emission);
+            }
+            other => panic!("expected Agent Status emission fact, got {other:?}"),
+        }
+        let head = store
+            .latest_agent_status_emission(AgentStatusModuleId::Todo, "active_actionable")
+            .unwrap()
+            .expect("durable latest-emission head");
+        assert_eq!(head.module_id, AgentStatusModuleId::Todo);
+        assert_eq!(head.key, emission.key);
+        assert_eq!(head.fingerprint, emission.fingerprint);
+        assert_eq!(head.request_id, snapshot.request_id);
+        assert_eq!(head.canonical_message_id, message_id);
+        assert_eq!(head.event_sequence, events[1].sequence);
+
+        let retried = store
+            .commit_model_turn_start(std::slice::from_ref(&context), &snapshot, timestamp)
+            .expect("exact start replay is idempotent");
+        assert_eq!(retried, started);
+        assert_eq!(store.read_events(None, 10).unwrap().events.len(), 2);
+
+        let mut contradictory = snapshot.clone();
+        contradictory
+            .agent_status
+            .as_mut()
+            .expect("status metadata")
+            .emissions[0]
+            .fingerprint = "contradictory-fingerprint".to_owned();
+        assert!(matches!(
+            store.commit_model_turn_start(
+                std::slice::from_ref(&context),
+                &contradictory,
+                timestamp,
+            ),
+            Err(ConversationStoreError::InvalidReference(_))
+        ));
+        assert_eq!(store.read_events(None, 10).unwrap().events.len(), 2);
+        assert_eq!(
+            store
+                .latest_agent_status_emission(AgentStatusModuleId::Todo, "active_actionable")
+                .unwrap()
+                .expect("head remains committed")
+                .fingerprint,
+            emission.fingerprint
+        );
+    }
+
+    #[test]
+    fn agent_status_start_faults_roll_back_message_emission_and_head_together() {
+        for fault in [
+            RequestStartFaultOperation::AfterAgentStatusEventInsert,
+            RequestStartFaultOperation::AfterAgentStatusHeadUpsert,
+        ] {
+            let store = store();
+            let base = user_message("base", "base");
+            store.initialize(std::slice::from_ref(&base)).unwrap();
+            let message_id = MessageId::new(format!("status-fault-{fault:?}"));
+            let context = agent_status_message(
+                message_id.as_str(),
+                Utc.with_ymd_and_hms(2026, 8, 27, 6, 0, 0).unwrap(),
+                &[AgentStatusModuleId::Todo],
+            );
+            let emission = AgentStatusEmission {
+                module_id: AgentStatusModuleId::Todo,
+                key: "active_actionable".to_owned(),
+                fingerprint: "fault-fingerprint".to_owned(),
+            };
+            let snapshot = status_start_snapshot(
+                store.load_head().unwrap().revision.next(),
+                message_id,
+                vec![emission],
+            );
+            store.arm_request_start_fault_script([fault]);
+            assert!(
+                store
+                    .commit_model_turn_start(
+                        std::slice::from_ref(&context),
+                        &snapshot,
+                        Utc.with_ymd_and_hms(2026, 8, 27, 6, 1, 0).unwrap(),
+                    )
+                    .is_err()
+            );
+
+            assert_eq!(
+                store.load_head().unwrap().revision,
+                crate::conversation::SurfaceRevision::new(1)
+            );
+            assert_eq!(store.load_canonical().unwrap(), vec![base]);
+            assert!(
+                store
+                    .read_request_snapshots(None, 10)
+                    .unwrap()
+                    .snapshots
+                    .is_empty()
+            );
+            assert!(store.read_events(None, 10).unwrap().events.is_empty());
+            assert!(
+                store
+                    .latest_agent_status_emission(AgentStatusModuleId::Todo, "active_actionable")
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn agent_status_start_binds_metadata_to_the_exact_status_message() {
+        let store = store();
+        let base = user_message("base", "base");
+        store.initialize(std::slice::from_ref(&base)).unwrap();
+        let emission = AgentStatusEmission {
+            module_id: AgentStatusModuleId::Todo,
+            key: "active_actionable".to_owned(),
+            fingerprint: "fingerprint".to_owned(),
+        };
+        let expected_id = MessageId::new("expected-status");
+        let actual = agent_status_message(
+            "actual-status",
+            Utc.with_ymd_and_hms(2026, 8, 27, 6, 0, 0).unwrap(),
+            &[AgentStatusModuleId::Todo],
+        );
+        let snapshot = status_start_snapshot(
+            store.load_head().unwrap().revision.next(),
+            expected_id,
+            vec![emission],
+        );
+        assert!(matches!(
+            store.commit_model_turn_start(
+                std::slice::from_ref(&actual),
+                &snapshot,
+                Utc.with_ymd_and_hms(2026, 8, 27, 6, 1, 0).unwrap(),
+            ),
+            Err(ConversationStoreError::InvalidReference(_))
+        ));
+        assert!(store.read_events(None, 10).unwrap().events.is_empty());
+        assert_eq!(store.load_canonical().unwrap(), vec![base]);
+    }
+
+    #[test]
+    fn agent_status_head_resume_uses_one_bounded_lookup() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("conversation.sqlite");
+        let conversation_id = ConversationId::new("status-head-resume");
+        let emission = AgentStatusEmission {
+            module_id: AgentStatusModuleId::Todo,
+            key: "active_actionable".to_owned(),
+            fingerprint: "resume-fingerprint".to_owned(),
+        };
+        {
+            let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
+            let base = user_message("base", "base");
+            store.initialize(std::slice::from_ref(&base)).unwrap();
+            let message_id = MessageId::new("status-resume");
+            let context = agent_status_message(
+                message_id.as_str(),
+                Utc.with_ymd_and_hms(2026, 8, 27, 6, 0, 0).unwrap(),
+                &[AgentStatusModuleId::Todo],
+            );
+            let snapshot = status_start_snapshot(
+                store.load_head().unwrap().revision.next(),
+                message_id,
+                vec![emission.clone()],
+            );
+            store
+                .commit_model_turn_start(
+                    std::slice::from_ref(&context),
+                    &snapshot,
+                    Utc.with_ymd_and_hms(2026, 8, 27, 6, 1, 0).unwrap(),
+                )
+                .unwrap();
+        }
+        let reopened = SqliteConversationStore::open(conversation_id, &path).unwrap();
+        let found = reopened
+            .latest_agent_status_emission(AgentStatusModuleId::Todo, &emission.key)
+            .unwrap()
+            .expect("committed suppression survives reopen");
+        assert_eq!(found.fingerprint, emission.fingerprint);
+        assert_eq!(reopened.agent_status_head_lookup_reads(), 1);
     }
 
     /// Issue #12 (M9b): the request-scoped context, the Request Snapshot,

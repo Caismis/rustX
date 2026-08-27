@@ -273,22 +273,44 @@ Agent Status remains structured runtime-owned data before rendering. At the
 single primary-model-step preparation boundary, the Agent Loop freezes one
 finite Pre-Status Surface view by copying the active Surface identities and
 hydrating only those identities from the Message Ledger. It samples the clock
-once and captures one immutable authoritative Background registry snapshot;
-the closed, rustX-owned Time and Background modules then evaluate those shared
-inputs once. The FreshInbound opportunity says only that status may be
-considered — it does not make either module contribute automatically.
-The engine validates `Time <-> Temporal` and
-`Background <-> BackgroundExecution`, applies module-local bounds, then admits
-whole sections under a global UTF-8-byte cap in `Time -> Background` source
-order. It never scans conversation prose or infers current state from regular
+once and captures one immutable authoritative Background registry snapshot and
+one committed Todo snapshot; the closed, rustX-owned Time, Background, and Todo
+modules then evaluate those shared inputs once against one finite
+`AgentStatusOpportunitySet`. FreshInbound and PostToolBatch are independent
+members of that set and may coexist; neither opportunity makes a module
+contribute automatically.
+The engine validates `Time <-> Temporal`, `Background <-> BackgroundExecution`,
+and `Todo <-> Todo`, applies module-local bounds, then admits whole sections
+under a global UTF-8-byte cap in `Time -> Background -> Todo` source order. It
+never scans conversation prose or infers current state from regular
 expressions: visible status membership comes from typed canonical generation
 metadata, whose private validated representation rejects invalid durable
-membership, while current Background activity comes only from the registry.
+membership, current Background activity comes only from the registry, and Todo
+state comes only from `ConversationTodoList::committed()`.
 Two status generations with identical bytes at different admitted steps are
-different facts and receive different MessageIds; content deduplication is
-not a semantic operation. A failed module is quarantined for the current
-attempt while surviving modules continue. Overflow compaction retries reuse
-the accepted generation and do not rescan, recapture, or reevaluate it.
+different facts and receive different MessageIds; Todo's separate semantic
+fingerprint is about suppression, not canonical message identity. A failed
+module is quarantined for the current attempt while surviving modules
+continue. Overflow compaction retries reuse the accepted generation and do not
+rescan, recapture, or reevaluate it.
+
+The complete canonical ToolResult batch is committed before the Agent Loop
+marks the attempt-local PostToolBatch opportunity. The marker is consumed only
+by the next already-existing primary step, is never persisted or recovered,
+and cannot create a model request. RuntimeToolObservation and AgentStatus
+remain separate producers; the former is admitted before the latter.
+
+The production Todo policy is deliberately bounded and semantic: a committed
+snapshot with at least one non-terminal Pending or InProgress task is
+actionable; blocked active tasks remain relevant and are marked/count as
+blocked. Empty, completed-only, and deleted-only snapshots emit nothing. The
+first InProgress task is `current`, remaining active tasks stay in creation
+order, at most six active tasks are shown, and subjects/active forms are capped
+at 256 UTF-8 bytes. Complete-snapshot active, blocked, completed, deleted, and
+omitted counts are included. The stable key is `active_actionable`; the
+fingerprint is the SHA-256 of the bounded structured presentation. A bounded
+latest-emission head suppresses an identical fingerprint until the relevant
+presentation changes. It is not a wall-clock or generic cooldown framework.
 
 The Skill catalog is sampled from the immutable per-attempt capability
 snapshot and assembled as a request-time native capability section. Normal
@@ -622,8 +644,10 @@ one staged primary step
 Assembly, Agent Status capture/evaluation, Skill snapshot rendering,
 extension invocation, logical ordering, contributor generation, and staging
 happen once. The retry reuses the staged ContextGeneration and the canonical
-context facts committed at the first start. It never reinvokes contributors
-or stages a duplicate context batch, but it passes through the same
+context facts committed at the first start, including the one
+canonical-message-bound Agent Status emission settlement. It never reinvokes
+contributors, rereads Todo authority, reevaluates the opportunity set, or
+stages a duplicate context batch, but it passes through the same
 cancellation-vs-start arbitration as every model turn: cancellation that
 linearizes before the retry's start commit stops the retry while the
 already-committed compaction remains an independent durable fact.
@@ -712,11 +736,16 @@ listing uses a bounded, fallible page with an exclusive durable sequence
 cursor, so runtime bootstrap and normal admission never enumerate the full
 history.
 
-For a status-bearing FreshInbound request, the successful durable start
-commit is also the publication boundary: the canonical status User message
-is observed first, then the structured Agent Status observation is published,
-and only then is the provider invoked. If cancellation wins before that
-commit, neither status view is visible.
+For a status-bearing primary request, the successful durable start commit is
+also the publication boundary: the canonical status User message, its
+canonical-message-bound `AgentStatusEmitted` fact(s), and the latest-emission
+head(s) are committed atomically with the Request Snapshot and
+`ModelRequestStarted`. The canonical status message is observed first, then
+the structured Agent Status observation is published, and only then is the
+provider invoked. If cancellation wins before that commit, neither status
+view nor any emission/head settlement is visible. Exact start retries verify
+the complete status context and emission set; contradictory metadata is
+rejected.
 
 The Event Journal follows the same boundary: append durably, publish the live
 observer, then release the committed event body from the attempt. Historical

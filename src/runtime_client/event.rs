@@ -315,8 +315,8 @@ pub enum RuntimeClientEvent {
         transcript_cursor: Option<RuntimeClientTranscriptCursor>,
     },
 
-    /// The runtime published the Agent Status committed with a fresh inbound
-    /// model turn.
+    /// The runtime published the Agent Status committed with an existing
+    /// primary model turn.
     ///
     /// The carried view derives from the exact composed status used by the
     /// model path; a client never causes a second composition.

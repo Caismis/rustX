@@ -100,7 +100,11 @@ fn models_json() -> String {
 }
 
 /// The runtime configuration a child composes from.
-fn runtime_json(read_approval: &str) -> String {
+fn runtime_json(read_approval: &str, include_todo: bool) -> String {
+    let mut default_tools = vec!["read", "bash", "background_task", "subagent"];
+    if include_todo {
+        default_tools.push("todo");
+    }
     serde_json::json!({
         "schemaVersion": 3,
         "agentId": "agent-fnd06",
@@ -111,9 +115,17 @@ fn runtime_json(read_approval: &str) -> String {
             "read": {"approval": read_approval},
             "bash": {"execution": "model_selectable"}
         },
-        "defaultTools": ["read", "bash", "background_task", "subagent"]
+        "defaultTools": default_tools
     })
     .to_string()
+}
+
+/// Rewrites a child lab configuration with the native Todo tool enabled.
+/// Only the Issue #130 process-death scenarios need this extra model-facing
+/// tool; the rest of FND-06 retains its original bounded catalog.
+pub(crate) fn write_runtime_config_with_todo(root: &Path) {
+    std::fs::write(root.join("rustx.jsonc"), runtime_json("never", true))
+        .expect("rustx.jsonc with Todo");
 }
 
 /// One temporary lab: the complete on-disk world of one conformance case.
@@ -152,8 +164,11 @@ impl Lab {
     }
 
     pub(crate) fn write_runtime_config(&self, read_approval: &str) {
-        std::fs::write(self.root().join("rustx.jsonc"), runtime_json(read_approval))
-            .expect("rustx.jsonc");
+        std::fs::write(
+            self.root().join("rustx.jsonc"),
+            runtime_json(read_approval, false),
+        )
+        .expect("rustx.jsonc");
     }
 
     /// Replaces the loaded `AGENTS.md` project-instruction file.

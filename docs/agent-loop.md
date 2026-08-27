@@ -1,4 +1,4 @@
-# Agent Loop (M3 + Issue #22 + Issue #55 + Issue #56)
+# Agent Loop (M3 + Issue #22 + Issue #55 + Issue #56 + Issue #130)
 
 This document describes the runtime boundary implemented by the M3
 deterministic agent loop, mirroring the M2 model-plane documentation in
@@ -20,11 +20,15 @@ The loop (`src/agent`) executes one attempt to its single terminal outcome:
 - tool resolution and tool execution (in deterministic block order)
 - canonical continuation state retention and propagation
 - safe-boundary inbound mailbox consumption (one finite drain per boundary)
+- the attempt-local post-tool-batch delivery marker: one marker after one
+  complete canonical ToolResult batch, consumed only by the next existing
+  primary step
 - cancellation observation and terminal cancellation outcome
 - the recorded `RuntimeEvent` trace
 - the moved `ConversationState` owned by the attempt while it runs
-- the pending fresh inbound trigger lifecycle (`FreshInboundTurn`) and its
-  composition into one native Context Assembly generation
+- the pending fresh inbound trigger lifecycle (`FreshInboundTurn`), the
+  attempt-local `PostToolBatch` opportunity, and their composition into one
+  native Context Assembly generation
 - the finite `ContributorInputSnapshot` boundary and certified-extension
   proposal admission
 - the one cancellation-vs-start arbitration point of every model turn
@@ -159,29 +163,37 @@ pub enum InitialTurnTrigger {
   invocation observes it: a provider `ContextWindowExceeded` overflow does
   not consume it, while a successful `ToolCalls` response does.
 - `Continuation`: there is intentionally no new inbound user turn for the
-  first model invocation, so no Agent Status is attached. This is the
-  explicit expression of a pure continuation, never a configuration switch
-  for disabling status on inbound messages.
+  first model invocation, so FreshInbound is absent. A continuation after a
+  settled tool batch may carry the independent attempt-local PostToolBatch
+  opportunity; it still uses the model step the loop already needed and does
+  not constitute a status-created turn. This is the explicit expression of a
+  pure continuation, never a configuration switch for disabling status on
+  inbound messages.
 
 There is no legacy no-context execution path: Agent Status is optional
-enrichment inside the normal Context Assembly path, and disabling all
-launch-scoped status modules produces no status message or structured status
-observation.
+enrichment inside the normal Context Assembly path. Time and Background are
+configurable; the closed Todo module remains enabled and produces no status
+message or structured status observation when its committed list is
+non-actionable or its semantic reminder is suppressed.
 
 The first successfully completed model invocation consumes the fresh
 trigger (including a successful `ToolCalls` response: the model has already
 observed the turn). A safe-boundary mailbox drain appends the whole batch to
 canonical history and establishes one new `FreshInboundTurn` from the
-drained ids in sequence order. The next model request samples Agent Status
-and admits it through Context Assembly as a canonical Runtime context fact.
-A `ContextWindowExceeded` overflow does not consume the trigger and the
-retry reuses the already accepted context generation; it does not resample,
-reinvoke contributors, or append duplicate context. A foreground-tool-only
-continuation with no new drain carries no Agent Status. Time and Background
-are compile-time-owned modules: each captures once into a finite immutable
-snapshot and evaluates only that snapshot. Module capture/evaluation/payload
-failures are attempt-scoped quarantine events; they omit that module and do
-not fail preparation, alter request count, or create a continuation.
+drained ids in sequence order. After all sibling tools settle, the one
+canonical ToolResult batch commit marks `PostToolBatch` in attempt memory.
+`prepare_model_turn` then consumes the pending opportunity members together,
+freezes/captures Agent Status once, and admits at most one canonical Runtime
+context fact. Neither marker creates a request nor is it reconstructed during
+recovery. A `ContextWindowExceeded` overflow does not consume the fresh
+trigger and the retry reuses the already accepted status generation; it does
+not resample, reinvoke contributors, or append duplicate context. A
+foreground-tool-only continuation with no new drain and no settled batch
+carries no Agent Status. Time, Background, and Todo are compile-time-owned
+modules: each captures once into a finite immutable snapshot and evaluates
+only that snapshot. Module capture/evaluation/payload failures are
+attempt-scoped quarantine events; they omit that module and do not fail
+preparation, alter provider request count, or create a continuation.
 
 ## 4.2 Context Assembly and model-turn start
 
@@ -1194,15 +1206,21 @@ Event Journal    = execution facts
   request reaches at most one Agent Status preparation. That preparation
   samples the clock once, freezes one finite Pre-Status Surface view through
   the Surface head and keyed Ledger hydration, and captures one authoritative
-  active-Background snapshot. Time and Background evaluate those same frozen
-  inputs. Time refreshes when no visible typed Time generation remains or the
-  latest one is at least 30 minutes old; Background refreshes when active work
-  exists and no visible typed Background generation remains or eight
-  non-AgentStatus model-visible messages follow it. These thresholds only
-  affect the next already-existing FreshInbound opportunity: they never
-  schedule or create a model request. The canonical Agent Status message
-  carries its generated-at instant and admitted module membership as typed
-  durable metadata, so Surface reconstruction never parses renderer text.
+  active-Background and committed Todo snapshot. Time, Background, and Todo
+  evaluate those same frozen inputs against one finite opportunity set. A
+  complete sibling-tool batch marks the independent attempt-local
+  `PostToolBatch` member only after its canonical ToolResult batch commits;
+  FreshInbound and PostToolBatch may therefore coexist in the next already-
+  existing model step. Time refreshes when no visible typed Time generation
+  remains or the latest one is at least 30 minutes old; Background refreshes
+  when active work exists and no visible typed Background generation remains
+  or eight non-AgentStatus model-visible messages follow it. Todo emits only
+  for committed actionable work and suppresses an identical bounded semantic
+  fingerprint using its durable latest-emission head. These conditions only
+  affect the next already-existing opportunity: they never schedule or create
+  a model request. The canonical Agent Status message carries its generated-at
+  instant and admitted module membership as typed durable metadata, so Surface
+  reconstruction never parses renderer text.
 
 ### Safe boundaries
 
@@ -1214,9 +1232,9 @@ assistant tool call(s)
   ↓
 execute every foreground call in existing deterministic order
   ↓
-commit every ToolMessage
+commit the complete canonical ToolResult batch in model call order
   ↓
-state.tools_finished()
+mark attempt-local PostToolBatch
   ↓
 TurnCompleted
   ↓

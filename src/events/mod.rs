@@ -73,5 +73,5 @@ pub use interaction::{
 };
 pub use types::{
     AttemptFailure, AttemptLimit, AttemptOutcome, BackgroundTerminalState, EVENT_SCHEMA_VERSION,
-    RuntimeEvent, RuntimeEventEnvelope,
+    RuntimeEvent, RuntimeEventEnvelope, agent_status_emission_event_id,
 };
