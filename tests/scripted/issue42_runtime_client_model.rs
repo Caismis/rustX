@@ -27,7 +27,7 @@ use rustx::runtime_client::{
 use support::fake::{FakeModel, FakeStep};
 use support::model::{FixtureModel, MappedAdapterFactory, fixture_catalog_document};
 
-const LIVENESS: std::time::Duration = std::time::Duration::from_secs(120);
+const LIVENESS: std::time::Duration = std::time::Duration::from_mins(2);
 
 /// The literal credential the fixture catalog binds. It must never appear in
 /// any client-visible value.

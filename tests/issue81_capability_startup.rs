@@ -769,7 +769,7 @@ async fn process_request(
     use rustx::runtime_client::types::{RuntimeClientProtocolEvent, RuntimeClientResponse};
     use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
 
-    const LIVENESS: std::time::Duration = std::time::Duration::from_secs(120);
+    const LIVENESS: std::time::Duration = std::time::Duration::from_mins(2);
     let request = build(rustx::runtime_client::RequestId::new(id));
     let line = serde_json::to_string(&request).expect("serialize the request");
     tokio::time::timeout(LIVENESS, async {
@@ -810,7 +810,7 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
     use rustx::runtime_client::types::{RuntimeClientRequest, RuntimeClientResult};
     use tokio::io::BufReader;
 
-    const LIVENESS: std::time::Duration = std::time::Duration::from_secs(120);
+    const LIVENESS: std::time::Duration = std::time::Duration::from_mins(2);
 
     let root = tempfile::tempdir().expect("temp root");
     let workspace = root.path().join("workspace");

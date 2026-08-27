@@ -2361,7 +2361,7 @@ mod mcp_race_tests {
 
         // The two close tasks may be entered in either order, but the drain
         // cannot report until both physical owners have settled.
-        tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        tokio::time::timeout(std::time::Duration::from_mins(1), async {
             tokio::join!(alpha.wait_entered(), beta.wait_entered());
         })
         .await
@@ -2379,7 +2379,7 @@ mod mcp_race_tests {
         );
 
         beta.release();
-        let result = tokio::time::timeout(std::time::Duration::from_secs(60), done_rx)
+        let result = tokio::time::timeout(std::time::Duration::from_mins(1), done_rx)
             .await
             .expect("drain completes once every owned runtime settled")
             .expect("drain result channel");
@@ -2420,7 +2420,7 @@ mod mcp_race_tests {
 
         let preparing = coordinator.clone();
         let caller = tokio::spawn(async move { preparing.prepare_candidate().await });
-        tokio::time::timeout(std::time::Duration::from_secs(60), pause.wait_entered())
+        tokio::time::timeout(std::time::Duration::from_mins(1), pause.wait_entered())
             .await
             .expect("physical MCP process ownership is established");
 
@@ -2446,7 +2446,7 @@ mod mcp_race_tests {
         // drives the spawned process to its physical settlement proof.
         pause.release();
         tokio::time::timeout(
-            std::time::Duration::from_secs(60),
+            std::time::Duration::from_mins(1),
             lifecycle.wait_for_no_admissions(),
         )
         .await

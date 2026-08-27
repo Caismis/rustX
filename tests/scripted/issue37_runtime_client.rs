@@ -72,7 +72,7 @@ async fn host(
 /// This bounds only the total wall time of one `receive_until` call, as a
 /// whole-call budget rather than a per-event bound, so a single scheduling
 /// stall on a loaded runner can never fail a correct run.
-const STREAM_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_secs(120);
+const STREAM_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_mins(2);
 
 /// Subscribes an attachment and receives until the predicate matches.
 async fn receive_until(

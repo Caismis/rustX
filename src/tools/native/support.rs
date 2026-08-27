@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::runtime::types::CancellationReason;
 use crate::tools::managed_output::ManagedToolOutput;
 use crate::tools::types::{ToolExecutionResult, ToolExecutionStatus, ToolResultContent};
 
@@ -214,6 +215,21 @@ pub fn failed_result(error: impl Into<String>) -> ToolExecutionResult {
         status: ToolExecutionStatus::Failed {
             error: error.into(),
         },
+        content: Vec::new(),
+        duration_ms: 0,
+        exit_code: None,
+        artifacts: Vec::new(),
+        truncation: None,
+        managed_output: None,
+    }
+}
+
+/// A normalized cancelled tool result: the runtime cancellation authority
+/// owns the reason, and the executor's partial semantic work is discarded.
+#[must_use]
+pub fn cancelled_result(reason: CancellationReason) -> ToolExecutionResult {
+    ToolExecutionResult {
+        status: ToolExecutionStatus::Cancelled { reason },
         content: Vec::new(),
         duration_ms: 0,
         exit_code: None,

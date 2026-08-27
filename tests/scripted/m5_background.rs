@@ -699,7 +699,7 @@ async fn await_background_started(
     description: &'static str,
 ) {
     tokio::time::timeout(
-        Duration::from_secs(120),
+        Duration::from_mins(2),
         started.wait_for(|is_started| *is_started),
     )
     .await

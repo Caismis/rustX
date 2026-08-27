@@ -26,7 +26,7 @@ use rustx::runtime_client::types::{
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 /// The outer liveness guard of one process interaction.
-const LIVENESS: std::time::Duration = std::time::Duration::from_secs(120);
+const LIVENESS: std::time::Duration = std::time::Duration::from_mins(2);
 
 /// The `rustx` binary under test, built by cargo alongside this test.
 fn binary() -> std::path::PathBuf {

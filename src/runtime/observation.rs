@@ -81,6 +81,11 @@ use crate::tools::background::BackgroundExecutionSnapshot;
 /// source types only — the Runtime Client layer owns the translation into
 /// its snapshot/event vocabulary.
 #[derive(Debug, Clone)]
+// The pending-interaction variant deliberately keeps its live request,
+// audit envelope, and transcript cursor inline: the enum is constructed on
+// rare interaction boundaries, and boxing an envelope would add an
+// allocation to the hot observation path. The size spread is by design.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ConversationObservation {
     /// One canonical internal runtime fact of an attempt.
     Event {

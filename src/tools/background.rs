@@ -3275,7 +3275,7 @@ mod tests {
         assert_eq!(progress_events.len(), 1);
     }
 
-    const TEST_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_secs(120);
+    const TEST_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_mins(2);
 
     async fn await_test_started(started: &mut watch::Receiver<bool>, description: &'static str) {
         tokio::time::timeout(

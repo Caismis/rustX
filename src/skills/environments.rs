@@ -125,9 +125,9 @@ pub const NODE_ENVIRONMENT_FORMAT: &str = "rustx-node-environment-v1";
 /// The deterministic environment manifest/marker file name.
 pub const ENVIRONMENT_MANIFEST_FILE: &str = "RUSTX_ENV_MANIFEST.json";
 /// The finite timeout of one materialization command.
-pub const ENVIRONMENT_COMMAND_TIMEOUT: Duration = Duration::from_secs(600);
+pub const ENVIRONMENT_COMMAND_TIMEOUT: Duration = Duration::from_mins(10);
 /// The finite timeout of one runtime version probe.
-pub const RUNTIME_PROBE_TIMEOUT: Duration = Duration::from_secs(60);
+pub const RUNTIME_PROBE_TIMEOUT: Duration = Duration::from_mins(1);
 
 /// The explicit PATH of materialization commands: the runtime-approved
 /// baseline. Parent-process environment inheritance is never re-enabled.

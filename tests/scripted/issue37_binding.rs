@@ -352,7 +352,7 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
     // transfer makes the runtime provably idle before the resource reload
     // below, so the reload can never be rejected as Busy by an active attempt
     // lease.
-    tokio::time::timeout(std::time::Duration::from_secs(120), async {
+    tokio::time::timeout(std::time::Duration::from_mins(2), async {
         loop {
             if !common::request_snapshots(&host_a.request_history()).is_empty() {
                 return;
@@ -367,10 +367,9 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
     // event for the second attempt, making the request-count assertion depend
     // on scheduler timing.
     loop {
-        let delivery =
-            tokio::time::timeout(std::time::Duration::from_secs(120), subscription.next())
-                .await
-                .expect("the first attempt event must arrive");
+        let delivery = tokio::time::timeout(std::time::Duration::from_mins(2), subscription.next())
+            .await
+            .expect("the first attempt event must arrive");
         let rustx::runtime_client::EventDelivery::Event(event) = delivery else {
             panic!("subscription stays open, got {delivery:?}");
         };
@@ -385,7 +384,7 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
     // signal fires. Waiting for both seams prevents a legitimate reload
     // `Busy(Attempt)` result without relying on delivery timing.
     tokio::time::timeout(
-        std::time::Duration::from_secs(120),
+        std::time::Duration::from_mins(2),
         runtime.settlement_signal().notified(),
     )
     .await
@@ -425,10 +424,9 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
     ));
     loop {
         // Liveness guard only: the delivery wait itself is exact.
-        let delivery =
-            tokio::time::timeout(std::time::Duration::from_secs(120), subscription.next())
-                .await
-                .expect("the stream must not stall");
+        let delivery = tokio::time::timeout(std::time::Duration::from_mins(2), subscription.next())
+            .await
+            .expect("the stream must not stall");
         let rustx::runtime_client::EventDelivery::Event(event) = delivery else {
             panic!("subscription stays open, got {delivery:?}");
         };
@@ -566,7 +564,7 @@ async fn await_message_committed(
     rustx::runtime_client::RuntimeClientSnapshot,
     rustx::runtime_client::RuntimeClientCursor,
 ) {
-    tokio::time::timeout(std::time::Duration::from_secs(120), async {
+    tokio::time::timeout(std::time::Duration::from_mins(2), async {
         loop {
             let snapshot = host.snapshot().expect("snapshot");
             if snapshot
@@ -665,10 +663,9 @@ async fn the_host_conversation_identity_is_the_tool_runtime_identity() {
     // cannot panic after admission.
     let settled_attempt = loop {
         // Liveness guard only: the delivery wait itself is exact.
-        let delivery =
-            tokio::time::timeout(std::time::Duration::from_secs(120), subscription.next())
-                .await
-                .expect("the stream must not stall");
+        let delivery = tokio::time::timeout(std::time::Duration::from_mins(2), subscription.next())
+            .await
+            .expect("the stream must not stall");
         let rustx::runtime_client::EventDelivery::Event(event) = delivery else {
             panic!("subscription stays open, got {delivery:?}");
         };

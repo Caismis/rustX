@@ -261,7 +261,7 @@ pub struct FakeTool {
 /// fixture so a test binary cannot wait forever.
 pub async fn await_started(started: &mut watch::Receiver<bool>, description: &'static str) {
     tokio::time::timeout(
-        Duration::from_secs(120),
+        Duration::from_mins(2),
         started.wait_for(|is_started| *is_started),
     )
     .await

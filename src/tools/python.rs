@@ -3713,12 +3713,9 @@ mod tests {
         );
         let r1_runtime = tool_runtime.clone();
         let r1_task = tokio::spawn(async move { execute_once(&executor_r1, &r1_runtime).await });
-        tokio::time::timeout(
-            std::time::Duration::from_secs(60),
-            runner.entered.notified(),
-        )
-        .await
-        .expect("the R1 execution bundle is live");
+        tokio::time::timeout(std::time::Duration::from_mins(1), runner.entered.notified())
+            .await
+            .expect("the R1 execution bundle is live");
         let r1_cwd = runner.commands.lock().expect("commands lock")[0].1.clone();
         let r1_bundle = r1_cwd.parent().expect("R1 bundle").to_path_buf();
         assert!(r1_bundle.join("source/tool.py").is_file());
@@ -3750,7 +3747,7 @@ mod tests {
         // Releasing R1 settles it independently and removes only its own
         // bundle; the canonical published source is untouched throughout.
         runner.release.notify_one();
-        let r1 = tokio::time::timeout(std::time::Duration::from_secs(60), r1_task)
+        let r1 = tokio::time::timeout(std::time::Duration::from_mins(1), r1_task)
             .await
             .expect("R1 settles")
             .expect("R1 task");

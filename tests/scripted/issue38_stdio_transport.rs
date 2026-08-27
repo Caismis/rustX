@@ -49,7 +49,7 @@ use tokio::sync::watch;
 
 /// The outer liveness guard of one whole wait. Every wait below is exact;
 /// no assertion depends on this value.
-const LIVENESS_GUARD: Duration = Duration::from_secs(120);
+const LIVENESS_GUARD: Duration = Duration::from_mins(2);
 
 /// The client pipe capacity for ordinary records.
 const PIPE_BYTES: usize = 256 * 1024;

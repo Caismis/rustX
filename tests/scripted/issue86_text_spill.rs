@@ -604,7 +604,7 @@ async fn the_background_live_output_path_reaches_the_provider_before_completion(
         .expect("fifo writer")
         .expect("release the barrier");
     let terminal = tokio::time::timeout(
-        std::time::Duration::from_secs(120),
+        std::time::Duration::from_mins(2),
         fixture
             .runtime
             .background()

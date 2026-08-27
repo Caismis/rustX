@@ -1121,7 +1121,7 @@ async fn a_resource_edit_during_streaming_cannot_splice_a_new_generation() {
     // condition is the durable Ledger row itself, so the wait is exact; the
     // timeout is a liveness guard only and decides nothing.
     let store = fixture.tool_runtime.durable_store();
-    let canonical = tokio::time::timeout(std::time::Duration::from_secs(120), async {
+    let canonical = tokio::time::timeout(std::time::Duration::from_mins(2), async {
         loop {
             let canonical = store.load_canonical().expect("canonical");
             if canonical
