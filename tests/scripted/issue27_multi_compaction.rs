@@ -88,8 +88,8 @@ impl AgentStatusClock for FixedStatusClock {
 }
 
 /// Builds the closed status engine with its deterministic in-crate counting
-/// seam. The seam is shared through attempt-template clones, while quarantine
-/// itself remains attempt-local.
+/// seam. The seam is shared through fresh-attempt construction, while
+/// quarantine itself remains attempt-local.
 fn counting_status_engine(seam: rustx::context::AgentStatusTestSeam) -> AgentStatusEngine {
     AgentStatusEngine::new(AgentStatusConfig::default(), Arc::new(FixedStatusClock))
         .with_test_seam(seam)

@@ -437,22 +437,6 @@ pub struct AgentStatusEngine {
     test_seam: Option<AgentStatusTestSeam>,
 }
 
-impl Clone for AgentStatusEngine {
-    fn clone(&self) -> Self {
-        let clone = Self::new(self.config.clone(), self.clock());
-        #[cfg(test)]
-        let clone = {
-            // The seam is shared so a runtime-created attempt can be counted
-            // by its owning test, while the new engine still starts with
-            // empty attempt-local quarantine state.
-            let mut clone = clone;
-            clone.test_seam = self.test_seam.clone();
-            clone
-        };
-        clone
-    }
-}
-
 impl core::fmt::Debug for AgentStatusEngine {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("AgentStatusEngine")
@@ -488,6 +472,27 @@ impl AgentStatusEngine {
             #[cfg(test)]
             test_seam: None,
         }
+    }
+
+    /// Constructs the fresh engine for a new attempt from this conversation's
+    /// launch-scoped status configuration.
+    ///
+    /// The returned engine deliberately starts with an empty quarantine set;
+    /// quarantine belongs to the attempt and must never leak into a later
+    /// attempt. This explicit lifecycle operation is distinct from cloning an
+    /// attempt-owned engine (which is not supported).
+    #[must_use]
+    pub fn for_attempt(&self) -> Self {
+        let engine = Self::new(self.config.clone(), self.clock());
+        #[cfg(test)]
+        let engine = {
+            // Share the deterministic seam with runtime-created attempts;
+            // the mutable quarantine state remains local to this engine.
+            let mut engine = engine;
+            engine.test_seam = self.test_seam.clone();
+            engine
+        };
+        engine
     }
 
     /// Returns the launch-scoped configuration carried by this engine.
@@ -1071,11 +1076,12 @@ mod tests {
     }
 
     #[test]
-    fn failures_quarantine_one_module_and_new_engine_retries_it() {
+    fn failures_quarantine_one_module_and_fresh_attempt_retries_it() {
         let seam = AgentStatusTestSeam::new();
         seam.fail_capture_once(AgentStatusModuleId::Time);
         let (_fixture, registry) = empty_background();
-        let mut first = engine(AgentStatusConfig::default()).with_test_seam(seam.clone());
+        let template = engine(AgentStatusConfig::default()).with_test_seam(seam.clone());
+        let mut first = template.for_attempt();
         assert!(
             first.prepare(&opportunity(), &registry).is_none(),
             "a failed Time module leaves no useful status when Background is empty"
@@ -1084,7 +1090,7 @@ mod tests {
         let _ = first.prepare(&opportunity(), &registry);
         assert_eq!(seam.capture_count(AgentStatusModuleId::Time), 1);
 
-        let mut second = engine(AgentStatusConfig::default()).with_test_seam(seam.clone());
+        let mut second = template.for_attempt();
         let status = second.prepare(&opportunity(), &registry).expect("retry");
         assert_eq!(status.sections[0].id.as_str(), "temporal");
         assert_eq!(seam.capture_count(AgentStatusModuleId::Time), 2);
