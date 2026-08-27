@@ -806,6 +806,28 @@ describe("presentation projection", () => {
     assert.deepEqual(state.status?.sections, status.sections);
   });
 
+  it("folds an Agent Status opportunity set without FreshInbound", () => {
+    const status = {
+      attempt_id: "a1",
+      turn: 1,
+      status_message_id: "status-1",
+      opportunities: {},
+      sections: [],
+      rendered: "<system-reminder>\n</system-reminder>",
+    };
+    const state = fold(initial(), [
+      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      {
+        type: "agent_status_composed",
+        attempt_id: "a1",
+        turn: 1,
+        status,
+      },
+    ]);
+
+    assert.equal(state.status?.opportunities.fresh_inbound, undefined);
+  });
+
   it("folds a capability revision swap", () => {
     const state = fold(initial(), [
       { type: "capability_updated", capabilities: capabilities(7) },

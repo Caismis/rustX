@@ -741,7 +741,7 @@ pub struct AgentStatusView {
     pub turn: u32,
     /// The canonical Agent Status User message described by this view.
     pub status_message_id: MessageId,
-    /// The `FreshInbound` fact that made this generation eligible.
+    /// The delivery opportunities that made this generation eligible.
     pub opportunities: AgentStatusOpportunityView,
     /// The ordered structured sections.
     pub sections: Vec<RuntimeClientStatusSection>,
@@ -778,8 +778,11 @@ pub enum RuntimeClientStatusSection {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentStatusOpportunityView {
-    /// The `FreshInbound` opportunity that produced this status.
-    pub fresh_inbound: FreshInboundStatusOpportunityView,
+    /// The `FreshInbound` opportunity that produced this status, when one is
+    /// present. Future delivery opportunities can be added alongside it
+    /// without making this member structurally mandatory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fresh_inbound: Option<FreshInboundStatusOpportunityView>,
 }
 
 /// The external view of one `FreshInbound` status opportunity.

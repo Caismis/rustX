@@ -716,7 +716,8 @@ export interface FreshInboundStatusOpportunityView {
 }
 
 export interface AgentStatusOpportunityView {
-  fresh_inbound: FreshInboundStatusOpportunityView;
+  /** The opportunity is optional until a producer makes it eligible. */
+  fresh_inbound?: FreshInboundStatusOpportunityView;
 }
 
 export interface AgentStatusView {

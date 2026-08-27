@@ -792,7 +792,18 @@ async fn agent_status_shares_one_composition() {
     );
     assert_eq!(
         status_wire["opportunities"]["fresh_inbound"]["target_message_id"],
-        serde_json::json!(status_view.opportunities.fresh_inbound.target_message_id)
+        serde_json::json!(
+            status_view
+                .opportunities
+                .fresh_inbound
+                .as_ref()
+                .expect("FreshInbound is populated by the current producer")
+                .target_message_id
+        )
+    );
+    assert!(
+        status_view.opportunities.fresh_inbound.is_some(),
+        "the current FreshInbound-only producer still populates its opportunity"
     );
     assert!(
         status_wire["opportunities"]
@@ -824,7 +835,13 @@ async fn agent_status_shares_one_composition() {
         matches!(
             message,
             MessageBlock::User(user)
-                if user.id == status_view.opportunities.fresh_inbound.target_message_id
+                if user.id
+                    == status_view
+                        .opportunities
+                        .fresh_inbound
+                        .as_ref()
+                        .expect("FreshInbound is populated by the current producer")
+                        .target_message_id
         )
     }));
     assert!(matches!(

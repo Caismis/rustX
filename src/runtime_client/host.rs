@@ -4836,11 +4836,21 @@ mod tests {
             })
             .expect("canonical status message");
         assert_eq!(status_event.status_message_id, committed_status.id);
+        assert!(
+            status_event.opportunities.fresh_inbound.is_some(),
+            "the current FreshInbound-only producer still populates its opportunity"
+        );
         assert!(snapshot.messages.iter().any(|message| {
             matches!(
                 message,
                 MessageBlock::User(user)
-                    if user.id == status_event.opportunities.fresh_inbound.target_message_id
+                    if user.id
+                        == status_event
+                            .opportunities
+                            .fresh_inbound
+                            .as_ref()
+                            .expect("FreshInbound is populated by the current producer")
+                            .target_message_id
             )
         }));
         assert!(matches!(

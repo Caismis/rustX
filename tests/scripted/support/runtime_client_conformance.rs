@@ -1391,7 +1391,13 @@ pub async fn agent_status_is_runtime_owned(factory: &dyn DriverFactory) {
             RuntimeClientEvent::AgentStatusComposed { turn, status, .. } => Some((
                 *turn,
                 status.status_message_id.clone(),
-                status.opportunities.fresh_inbound.target_message_id.clone(),
+                status
+                    .opportunities
+                    .fresh_inbound
+                    .as_ref()
+                    .expect("FreshInbound is populated by the current producer")
+                    .target_message_id
+                    .clone(),
                 status.clone(),
             )),
             _ => None,
@@ -1401,6 +1407,7 @@ pub async fn agent_status_is_runtime_owned(factory: &dyn DriverFactory) {
     let (turn, status_message_id, target, status) = &composed[0];
     assert_eq!(*turn, 1);
     assert_eq!(target, &message_id);
+    assert!(status.opportunities.fresh_inbound.is_some());
     assert!(
         !status.sections.is_empty(),
         "the structured sections are projected, not only the rendering"

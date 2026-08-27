@@ -2389,9 +2389,10 @@ message role, history shape, or timestamps:
 - A successful start commit publishes the canonical Agent Status message
   through `observe_committed` before publishing its structured `observe_status`
   projection. The structured projection carries the exact committed
-  `status_message_id` and the nested
-  `opportunities.fresh_inbound.target_message_id`; cancellation winning
-  before start publishes neither.
+  `status_message_id` and mirrors the internal opportunity set. Its
+  `opportunities.fresh_inbound` member is optional and, when present in the
+  current FreshInbound-only production path, carries the inbound
+  `target_message_id`; cancellation winning before start publishes neither.
 - `ModelRequest.effective_system_prompt` is the sole System authority. It is
   rustX-rendered from ordered native/extension sections; canonical history
   has no System role. Frozen project instructions occupy the

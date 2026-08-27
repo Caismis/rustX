@@ -1668,16 +1668,14 @@ pub(crate) fn status_view(observation: &AgentStatusObservation) -> AgentStatusVi
         .opportunities
         .fresh_inbound
         .as_ref()
-        .expect("a published Agent Status always has a FreshInbound opportunity");
+        .map(|fresh| FreshInboundStatusOpportunityView {
+            target_message_id: fresh.target_message_id.clone(),
+        });
     AgentStatusView {
         attempt_id: observation.attempt_id.clone(),
         turn: observation.turn,
         status_message_id: observation.status_message_id.clone(),
-        opportunities: AgentStatusOpportunityView {
-            fresh_inbound: FreshInboundStatusOpportunityView {
-                target_message_id: fresh_inbound.target_message_id.clone(),
-            },
-        },
+        opportunities: AgentStatusOpportunityView { fresh_inbound },
         rendered: render_agent_status(&observation.status),
         sections,
     }
@@ -1690,8 +1688,8 @@ mod tests {
         AgentExecution, AgentExecutionObserver, AgentExecutionRequest, AgentStatusObservation,
     };
     use crate::context::{
-        AgentStatusEngine, CompactionBudgets, ContextEngine, ContextError, ContextErrorKind,
-        ContextRuntime,
+        AgentStatus, AgentStatusEngine, AgentStatusOpportunitySet, CompactionBudgets,
+        ContextEngine, ContextError, ContextErrorKind, ContextRuntime,
     };
     use crate::conversation::ConversationState;
     use crate::events::interaction::{InteractionSettlement, InteractionSubject};
@@ -1720,7 +1718,7 @@ mod tests {
     use crate::runtime::types::{CancellationReason, TokenMeasurement, TokenMeasurementSource};
     use crate::runtime_client::event::{RuntimeClientEvent, RuntimeClientOutcome};
     use crate::runtime_client::snapshot::{
-        ForegroundToolState, InFlightBlock, RuntimeClientAttemptPhase,
+        AgentStatusOpportunityView, ForegroundToolState, InFlightBlock, RuntimeClientAttemptPhase,
         RuntimeClientTranscriptCursor,
     };
     use crate::runtime_client::types::RuntimeClientCursor;
@@ -1817,6 +1815,28 @@ mod tests {
             attempt_id: attempt(),
             event,
         }
+    }
+
+    #[test]
+    fn agent_status_opportunity_view_allows_absent_fresh_inbound() {
+        let observation = AgentStatusObservation {
+            attempt_id: attempt(),
+            turn: 1,
+            status_message_id: MessageId::new("status-1"),
+            opportunities: AgentStatusOpportunitySet::default(),
+            status: AgentStatus {
+                sections: Vec::new(),
+            },
+        };
+
+        let view = super::status_view(&observation);
+        assert!(view.opportunities.fresh_inbound.is_none());
+
+        let encoded = serde_json::to_value(&view.opportunities).expect("serialize opportunity");
+        assert_eq!(encoded, serde_json::json!({}));
+        let decoded: AgentStatusOpportunityView =
+            serde_json::from_value(encoded).expect("deserialize opportunity");
+        assert_eq!(decoded, view.opportunities);
     }
 
     fn collect(
