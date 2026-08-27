@@ -215,37 +215,124 @@ pub enum AgentStatusModuleId {
     Background,
 }
 
+/// An invalid canonical Agent Status module membership.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentStatusMetadataError {
+    /// A generation must contain at least one admitted module.
+    EmptyModules,
+    /// A module appeared more than once in the membership list.
+    DuplicateModule(AgentStatusModuleId),
+    /// Modules must use the closed semantic order (`Time`, then `Background`).
+    NonCanonicalOrder {
+        /// The module that appeared first.
+        previous: AgentStatusModuleId,
+        /// The module that appeared after it.
+        next: AgentStatusModuleId,
+    },
+}
+
+impl core::fmt::Display for AgentStatusMetadataError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::EmptyModules => f.write_str("an Agent Status generation must contain a module"),
+            Self::DuplicateModule(module) => {
+                write!(f, "Agent Status module {module:?} is duplicated")
+            }
+            Self::NonCanonicalOrder { previous, next } => write!(
+                f,
+                "Agent Status modules are not in semantic order: {previous:?} precedes {next:?}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for AgentStatusMetadataError {}
+
 /// The structured durable identity of one canonical Agent Status generation.
 ///
 /// The descriptor is attached to [`ContextKind::AgentStatus`] itself. Its
 /// timestamp is the single Agent Status clock sample used to produce the
 /// generation, and its typed module list is the source of truth for active
 /// Surface visibility. Renderer text is never consulted for either fact.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// The fields are private so every value, including one decoded from durable
+/// JSON, has non-empty, duplicate-free membership in deterministic semantic
+/// order.
+///
+/// ```compile_fail
+/// use rustx::message::types::AgentStatusGenerationMetadata;
+///
+/// fn mutate(metadata: &mut AgentStatusGenerationMetadata) {
+///     metadata.modules = Vec::new();
+/// }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AgentStatusGenerationMetadata {
-    /// The UTC instant at which this generation was produced.
-    pub generated_at: DateTime<Utc>,
-    /// The modules whose sections were admitted into this generation, in
-    /// deterministic semantic order.
-    pub modules: Vec<AgentStatusModuleId>,
+    generated_at: DateTime<Utc>,
+    modules: Vec<AgentStatusModuleId>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentStatusGenerationMetadataRepr {
+    generated_at: DateTime<Utc>,
+    modules: Vec<AgentStatusModuleId>,
+}
+
+impl<'de> Deserialize<'de> for AgentStatusGenerationMetadata {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let repr = AgentStatusGenerationMetadataRepr::deserialize(deserializer)?;
+        Self::new(repr.generated_at, repr.modules).map_err(serde::de::Error::custom)
+    }
 }
 
 impl AgentStatusGenerationMetadata {
     /// Creates canonical metadata for one admitted Agent Status generation.
-    #[must_use]
-    pub fn new(generated_at: DateTime<Utc>, modules: Vec<AgentStatusModuleId>) -> Self {
-        debug_assert!(
-            !modules.is_empty(),
-            "an Agent Status generation has a module"
-        );
-        debug_assert!(
-            modules.windows(2).all(|pair| pair[0] < pair[1]),
-            "Agent Status modules are in unique semantic order"
-        );
-        Self {
-            generated_at,
-            modules,
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when membership is empty, contains a duplicate module,
+    /// or is not in the closed semantic order.
+    pub fn new(
+        generated_at: DateTime<Utc>,
+        modules: impl IntoIterator<Item = AgentStatusModuleId>,
+    ) -> Result<Self, AgentStatusMetadataError> {
+        let mut validated = Vec::new();
+        for module in modules {
+            if validated.contains(&module) {
+                return Err(AgentStatusMetadataError::DuplicateModule(module));
+            }
+            if let Some(previous) = validated.last().copied()
+                && module < previous
+            {
+                return Err(AgentStatusMetadataError::NonCanonicalOrder {
+                    previous,
+                    next: module,
+                });
+            }
+            validated.push(module);
         }
+        if validated.is_empty() {
+            return Err(AgentStatusMetadataError::EmptyModules);
+        }
+        Ok(Self {
+            generated_at,
+            modules: validated,
+        })
+    }
+
+    /// The UTC instant at which this generation was produced.
+    #[must_use]
+    pub fn generated_at(&self) -> DateTime<Utc> {
+        self.generated_at
+    }
+
+    /// The admitted modules in deterministic semantic order.
+    #[must_use]
+    pub fn modules(&self) -> &[AgentStatusModuleId] {
+        &self.modules
     }
 
     /// Whether this generation contains `module`.
@@ -375,12 +462,14 @@ pub struct ToolMessageBlock {
 #[cfg(test)]
 mod tests {
     use super::{
+        AgentStatusGenerationMetadata, AgentStatusMetadataError, AgentStatusModuleId,
         AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, ToolMessageBlock,
         UserContentBlock, UserMessageBlock, UserSource,
     };
     use crate::message::content::TextBlock;
     use crate::runtime::identity::{AgentId, MessageId, ToolCallId, ToolId};
     use crate::tools::types::{ToolExecutionResult, ToolExecutionStatus};
+    use chrono::{DateTime, Utc};
 
     /// All three canonical conversational roles serialize with stable discriminators.
     #[test]
@@ -482,5 +571,86 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    fn status_timestamp() -> DateTime<Utc> {
+        DateTime::from_timestamp(1_754_000_000, 0).expect("timestamp")
+    }
+
+    #[test]
+    fn agent_status_metadata_accepts_each_valid_closed_membership() {
+        for modules in [
+            vec![AgentStatusModuleId::Time],
+            vec![AgentStatusModuleId::Background],
+            vec![AgentStatusModuleId::Time, AgentStatusModuleId::Background],
+        ] {
+            let metadata = AgentStatusGenerationMetadata::new(status_timestamp(), modules.clone())
+                .expect("valid Agent Status module membership");
+            assert_eq!(metadata.modules(), modules.as_slice());
+            assert_eq!(metadata.generated_at(), status_timestamp());
+        }
+    }
+
+    #[test]
+    fn agent_status_metadata_rejects_invalid_membership_without_normalizing() {
+        assert_eq!(
+            AgentStatusGenerationMetadata::new(status_timestamp(), Vec::new()),
+            Err(AgentStatusMetadataError::EmptyModules)
+        );
+        assert_eq!(
+            AgentStatusGenerationMetadata::new(
+                status_timestamp(),
+                [AgentStatusModuleId::Time, AgentStatusModuleId::Time]
+            ),
+            Err(AgentStatusMetadataError::DuplicateModule(
+                AgentStatusModuleId::Time
+            ))
+        );
+        assert_eq!(
+            AgentStatusGenerationMetadata::new(
+                status_timestamp(),
+                [AgentStatusModuleId::Background, AgentStatusModuleId::Time]
+            ),
+            Err(AgentStatusMetadataError::NonCanonicalOrder {
+                previous: AgentStatusModuleId::Background,
+                next: AgentStatusModuleId::Time,
+            })
+        );
+    }
+
+    #[test]
+    fn agent_status_metadata_serde_rejects_invalid_membership() {
+        let invalid_memberships = [
+            serde_json::json!([]),
+            serde_json::json!(["time", "time"]),
+            serde_json::json!(["background", "time"]),
+            serde_json::json!(["unknown"]),
+        ];
+        for modules in invalid_memberships {
+            let value = serde_json::json!({
+                "generated_at": status_timestamp(),
+                "modules": modules,
+            });
+            assert!(
+                serde_json::from_value::<AgentStatusGenerationMetadata>(value).is_err(),
+                "invalid membership must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_status_metadata_keeps_the_existing_wire_shape() {
+        let metadata = AgentStatusGenerationMetadata::new(
+            status_timestamp(),
+            [AgentStatusModuleId::Time, AgentStatusModuleId::Background],
+        )
+        .expect("valid metadata");
+        assert_eq!(
+            serde_json::to_value(metadata).expect("serialize metadata"),
+            serde_json::json!({
+                "generated_at": status_timestamp(),
+                "modules": ["time", "background"],
+            })
+        );
     }
 }

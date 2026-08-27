@@ -688,7 +688,8 @@ fn requirement_07_agent_status_is_excluded_from_normal_transcript() {
             message_id: Some(MessageId::new("status-1")),
             source: UserSource::Runtime,
             kind: InboundKind::Context(ContextKind::AgentStatus(
-                AgentStatusGenerationMetadata::new(fixed_time(), vec![AgentStatusModuleId::Time]),
+                AgentStatusGenerationMetadata::new(fixed_time(), vec![AgentStatusModuleId::Time])
+                    .expect("valid Agent Status metadata"),
             )),
             content: vec![UserContentBlock::Text(TextBlock {
                 text: "internal status".to_owned(),

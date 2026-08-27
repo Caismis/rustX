@@ -2184,7 +2184,8 @@ mod tests {
                 AgentStatusGenerationMetadata::new(
                     chrono::DateTime::from_timestamp(0, 0).expect("timestamp"),
                     vec![AgentStatusModuleId::Time],
-                ),
+                )
+                .expect("valid Agent Status metadata"),
             )),
             timestamp: None,
         })

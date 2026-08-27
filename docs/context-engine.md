@@ -282,7 +282,8 @@ The engine validates `Time <-> Temporal` and
 whole sections under a global UTF-8-byte cap in `Time -> Background` source
 order. It never scans conversation prose or infers current state from regular
 expressions: visible status membership comes from typed canonical generation
-metadata, while current Background activity comes only from the registry.
+metadata, whose private validated representation rejects invalid durable
+membership, while current Background activity comes only from the registry.
 Two status generations with identical bytes at different admitted steps are
 different facts and receive different MessageIds; content deduplication is
 not a semantic operation. A failed module is quarantined for the current

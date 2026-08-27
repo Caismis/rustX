@@ -2307,8 +2307,10 @@ message role, history shape, or timestamps:
   resulting immutable `AgentStatusSurfaceView` contains the Surface revision,
   compaction generation, active ordered identities, canonical bodies, and only
   the bounded status-visibility indexes needed by the current modules. It
-  never enumerates the complete Ledger. Time and Background receive that same
-  view; neither module scans live conversation state independently.
+  never enumerates the complete Ledger. Its representation is private and its
+  read-only accessors cannot replace identities, bodies, or the indexes derived
+  from them. Time and Background receive that same view; neither module scans
+  live conversation state independently.
 - When a module contributes, Agent Status is structured runtime-owned input
   before rendering, then follows the normal Context Assembly path as a
   canonical `UserSource::Runtime` /
@@ -2316,7 +2318,10 @@ message role, history shape, or timestamps:
   `UserMessageBlock`. The canonical metadata carries the one UTC generation
   instant and typed admitted module membership (`Time` and/or `Background`);
   it is the durable source of truth for later Surface scans, including after
-  restart/resume. Renderer text is presentation only. The message is
+  restart/resume. `AgentStatusGenerationMetadata` is validated canonical truth:
+  construction and deserialization reject empty, duplicate, unknown, or
+  non-semantic-order membership and never normalize invalid input. Renderer
+  text is presentation only. The message is
   committed to the Message Ledger and Surface once at model-turn start;
   adapters never inject it. Equal rendered bytes at different admitted steps
   remain distinct facts with distinct MessageIds. If no module contributes,

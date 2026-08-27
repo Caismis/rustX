@@ -1239,10 +1239,13 @@ mod tests {
                 &input(),
                 &NativeContextInput {
                     agent_status: Some("same bytes".to_owned()),
-                    agent_status_metadata: Some(AgentStatusGenerationMetadata::new(
-                        chrono::DateTime::from_timestamp(0, 0).expect("timestamp"),
-                        vec![crate::message::types::AgentStatusModuleId::Time],
-                    )),
+                    agent_status_metadata: Some(
+                        AgentStatusGenerationMetadata::new(
+                            chrono::DateTime::from_timestamp(0, 0).expect("timestamp"),
+                            vec![crate::message::types::AgentStatusModuleId::Time],
+                        )
+                        .expect("valid Agent Status metadata"),
+                    ),
                     ..NativeContextInput::default()
                 },
                 &[],
@@ -1748,10 +1751,13 @@ mod tests {
                 &NativeContextInput {
                     workspace_instructions: Some("workspace".to_owned()),
                     agent_status: Some("status".to_owned()),
-                    agent_status_metadata: Some(AgentStatusGenerationMetadata::new(
-                        chrono::DateTime::from_timestamp(0, 0).expect("timestamp"),
-                        vec![crate::message::types::AgentStatusModuleId::Time],
-                    )),
+                    agent_status_metadata: Some(
+                        AgentStatusGenerationMetadata::new(
+                            chrono::DateTime::from_timestamp(0, 0).expect("timestamp"),
+                            vec![crate::message::types::AgentStatusModuleId::Time],
+                        )
+                        .expect("valid Agent Status metadata"),
+                    ),
                     ..NativeContextInput::default()
                 },
                 &[
@@ -1780,10 +1786,13 @@ mod tests {
                     extension_source("example.extension")
                 ),
                 (
-                    ContextKind::AgentStatus(AgentStatusGenerationMetadata::new(
-                        chrono::DateTime::from_timestamp(0, 0).expect("timestamp"),
-                        vec![crate::message::types::AgentStatusModuleId::Time],
-                    )),
+                    ContextKind::AgentStatus(
+                        AgentStatusGenerationMetadata::new(
+                            chrono::DateTime::from_timestamp(0, 0).expect("timestamp"),
+                            vec![crate::message::types::AgentStatusModuleId::Time],
+                        )
+                        .expect("valid Agent Status metadata"),
+                    ),
                     UserSource::Runtime,
                 ),
             ],

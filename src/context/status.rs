@@ -226,9 +226,15 @@ pub struct AgentStatus {
 impl AgentStatus {
     /// Returns the durable descriptor attached to the canonical Agent Status
     /// message for this generation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a hand-constructed `AgentStatus` that contains no
+    /// valid closed-engine sections. Production generations are assembled by
+    /// the closed engine and always satisfy this invariant.
     #[must_use]
     pub fn generation_metadata(&self) -> AgentStatusGenerationMetadata {
-        let modules = self
+        let modules: Vec<AgentStatusModuleId> = self
             .sections
             .iter()
             .map(|section| match section.id.as_str() {
@@ -238,6 +244,7 @@ impl AgentStatus {
             })
             .collect();
         AgentStatusGenerationMetadata::new(self.generated_at, modules)
+            .expect("the closed Agent Status engine emits a valid generation")
     }
 }
 
@@ -263,23 +270,74 @@ pub struct SurfaceMessageView {
     pub message: MessageBlock,
 }
 
+/// An invalid identity/body projection supplied to an Agent Status Surface
+/// view boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentStatusSurfaceViewError {
+    /// A frozen snapshot must contain one canonical body for every active
+    /// identity.
+    IdentityBodyCountMismatch {
+        /// Number of active identities in the snapshot.
+        active_message_ids: usize,
+        /// Number of canonical bodies in the snapshot.
+        messages: usize,
+    },
+    /// A keyed canonical body does not have the identity assigned to its
+    /// active Surface position.
+    IdentityBodyMismatch {
+        /// Identity from the Surface projection.
+        expected: MessageId,
+        /// Identity found in the hydrated canonical body.
+        actual: MessageId,
+    },
+}
+
+impl core::fmt::Display for AgentStatusSurfaceViewError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::IdentityBodyCountMismatch {
+                active_message_ids,
+                messages,
+            } => write!(
+                f,
+                "Agent Status Surface snapshot has {active_message_ids} identities and {messages} bodies"
+            ),
+            Self::IdentityBodyMismatch { expected, actual } => write!(
+                f,
+                "Agent Status Surface identity {expected} contains canonical body {actual}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for AgentStatusSurfaceViewError {}
+
 /// The finite immutable model-visible Surface projection used by Agent Status.
 ///
 /// This value is built once at the status preparation boundary from one
 /// Surface head and keyed Ledger hydration. It contains no authoritative
 /// domain state and no durable emission history. The small latest-status index
-/// is derived from the same immutable message slice; it is not a second
-/// mutable Surface authority.
+/// is derived from the same private immutable message slice; it is not a
+/// second mutable Surface authority. There is no public constructor that can
+/// bypass the identity/body validation.
+///
+/// The view's representation is intentionally private: callers can inspect a
+/// frozen snapshot but cannot replace one of its identities, bodies, or
+/// derived indexes after construction.
+///
+/// ```compile_fail
+/// use rustx::context::AgentStatusSurfaceView;
+///
+/// fn mutate(view: &mut AgentStatusSurfaceView) {
+///     view.revision = rustx::conversation::SurfaceRevision::INITIAL;
+/// }
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentStatusSurfaceView {
-    /// The exact Surface revision represented by this view.
-    pub revision: crate::conversation::SurfaceRevision,
-    /// The compaction generation represented by this view.
-    pub compaction_generation: u64,
-    /// Active identities in model-visible order.
-    pub active_message_ids: Arc<[MessageId]>,
-    /// Keyed canonical bodies in the same order as `active_message_ids`.
-    pub messages: Arc<[SurfaceMessageView]>,
+    revision: crate::conversation::SurfaceRevision,
+    compaction_generation: u64,
+    active_message_ids: Arc<[MessageId]>,
+    messages: Arc<[SurfaceMessageView]>,
     latest_by_module: [Option<VisibleAgentStatus>; 2],
 }
 
@@ -298,27 +356,27 @@ impl AgentStatusSurfaceView {
     /// The snapshot has already established the Surface/Message Ledger read
     /// boundary. This constructor only derives the bounded semantic index.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the snapshot does not contain exactly one canonical body for
-    /// every active identity, or if an identity does not match its body.
-    #[must_use]
-    pub fn from_snapshot(snapshot: ConversationSurfaceSnapshot) -> Self {
-        assert_eq!(
-            snapshot.active_message_ids.len(),
-            snapshot.messages.len(),
-            "a frozen Surface snapshot has one body per active identity"
-        );
+    /// Returns an error if the snapshot has a missing body or an identity/body
+    /// mismatch. Durable decoding and the Conversation Surface hydration path
+    /// therefore fail closed instead of materializing an inconsistent view.
+    pub fn from_snapshot(
+        snapshot: ConversationSurfaceSnapshot,
+    ) -> Result<Self, AgentStatusSurfaceViewError> {
+        if snapshot.active_message_ids.len() != snapshot.messages.len() {
+            return Err(AgentStatusSurfaceViewError::IdentityBodyCountMismatch {
+                active_message_ids: snapshot.active_message_ids.len(),
+                messages: snapshot.messages.len(),
+            });
+        }
         let active_message_ids: Arc<[MessageId]> =
             Arc::from(snapshot.active_message_ids.into_boxed_slice());
         let messages = active_message_ids
             .iter()
             .cloned()
             .zip(snapshot.messages)
-            .map(|(id, message)| {
-                assert_eq!(id, *message.id(), "Surface identity/body mismatch");
-                SurfaceMessageView { id, message }
-            })
+            .map(|(id, message)| SurfaceMessageView { id, message })
             .collect::<Vec<_>>();
         Self::from_parts(
             snapshot.revision,
@@ -330,53 +388,92 @@ impl AgentStatusSurfaceView {
 
     /// Builds a view from one captured ordered identity/body set.
     ///
-    /// This is useful for deterministic unit tests and remains a pure
-    /// immutable projection; production preparation uses [`Self::from_snapshot`].
-    ///
-    /// # Panics
-    ///
-    /// Panics if the identity and body slices differ in length or order, or
-    /// if a body identity does not match its containing message.
-    #[must_use]
-    pub fn from_parts(
+    /// This internal constructor is also used by focused unit tests. It is
+    /// fallible for the same reason as [`Self::from_snapshot`], so tests cannot
+    /// construct a view whose derived indexes disagree with its identity/body
+    /// sequence.
+    #[cfg(test)]
+    pub(crate) fn for_test(
         revision: crate::conversation::SurfaceRevision,
         compaction_generation: u64,
         active_message_ids: Arc<[MessageId]>,
         messages: Arc<[SurfaceMessageView]>,
-    ) -> Self {
-        assert_eq!(
-            active_message_ids.len(),
-            messages.len(),
-            "a Surface view has one body per active identity"
-        );
+    ) -> Result<Self, AgentStatusSurfaceViewError> {
+        Self::from_parts(
+            revision,
+            compaction_generation,
+            active_message_ids,
+            messages,
+        )
+    }
+
+    fn from_parts(
+        revision: crate::conversation::SurfaceRevision,
+        compaction_generation: u64,
+        active_message_ids: Arc<[MessageId]>,
+        messages: Arc<[SurfaceMessageView]>,
+    ) -> Result<Self, AgentStatusSurfaceViewError> {
+        if active_message_ids.len() != messages.len() {
+            return Err(AgentStatusSurfaceViewError::IdentityBodyCountMismatch {
+                active_message_ids: active_message_ids.len(),
+                messages: messages.len(),
+            });
+        }
         let mut latest_by_module = std::array::from_fn(|_| None);
         for (index, message) in messages.iter().enumerate() {
-            assert_eq!(
-                active_message_ids[index], message.id,
-                "Surface identity/order mismatch"
-            );
-            assert_eq!(
-                message.id,
-                *message.message.id(),
-                "Surface identity/body mismatch"
-            );
+            if active_message_ids[index] != message.id {
+                return Err(AgentStatusSurfaceViewError::IdentityBodyMismatch {
+                    expected: active_message_ids[index].clone(),
+                    actual: message.id.clone(),
+                });
+            }
+            if message.id != *message.message.id() {
+                return Err(AgentStatusSurfaceViewError::IdentityBodyMismatch {
+                    expected: message.id.clone(),
+                    actual: message.message.id().clone(),
+                });
+            }
             let Some(metadata) = message.message.agent_status_metadata() else {
                 continue;
             };
-            for module in &metadata.modules {
+            for module in metadata.modules() {
                 latest_by_module[module_index(*module)] = Some(VisibleAgentStatus {
                     message_id: message.id.clone(),
-                    generated_at: metadata.generated_at,
+                    generated_at: metadata.generated_at(),
                 });
             }
         }
-        Self {
+        Ok(Self {
             revision,
             compaction_generation,
             active_message_ids,
             messages,
             latest_by_module,
-        }
+        })
+    }
+
+    /// The exact Surface revision represented by this view.
+    #[must_use]
+    pub fn revision(&self) -> crate::conversation::SurfaceRevision {
+        self.revision
+    }
+
+    /// The compaction generation represented by this view.
+    #[must_use]
+    pub fn compaction_generation(&self) -> u64 {
+        self.compaction_generation
+    }
+
+    /// Active identities in model-visible order.
+    #[must_use]
+    pub fn active_message_ids(&self) -> &[MessageId] {
+        &self.active_message_ids
+    }
+
+    /// Keyed canonical bodies in the same order as [`Self::active_message_ids`].
+    #[must_use]
+    pub fn messages(&self) -> &[SurfaceMessageView] {
+        &self.messages
     }
 
     /// The latest visible Agent Status generation containing `module`.
@@ -1194,12 +1291,13 @@ mod tests {
     }
 
     fn empty_surface() -> AgentStatusSurfaceView {
-        AgentStatusSurfaceView::from_parts(
+        AgentStatusSurfaceView::for_test(
             crate::conversation::SurfaceRevision::INITIAL,
             0,
             Arc::from(Vec::<MessageId>::new().into_boxed_slice()),
             Arc::from(Vec::<SurfaceMessageView>::new().into_boxed_slice()),
         )
+        .expect("valid empty test Surface")
     }
 
     fn plain_surface_message(id: &str) -> SurfaceMessageView {
@@ -1233,7 +1331,8 @@ mod tests {
                 })],
                 source: UserSource::Runtime,
                 kind: InboundKind::Context(ContextKind::AgentStatus(
-                    AgentStatusGenerationMetadata::new(generated_at, modules.to_vec()),
+                    AgentStatusGenerationMetadata::new(generated_at, modules.to_vec())
+                        .expect("valid test Agent Status metadata"),
                 )),
                 timestamp: None,
             }),
@@ -1257,12 +1356,13 @@ mod tests {
             .iter()
             .map(|message| message.id.clone())
             .collect::<Vec<_>>();
-        AgentStatusSurfaceView::from_parts(
+        AgentStatusSurfaceView::for_test(
             crate::conversation::SurfaceRevision::new(ids.len() as u64),
             0,
             Arc::from(ids.into_boxed_slice()),
             Arc::from(messages.into_boxed_slice()),
         )
+        .expect("valid test Surface")
     }
 
     fn background_snapshot(index: usize, detail: &str) -> BackgroundExecutionSnapshot {
@@ -1488,7 +1588,7 @@ mod tests {
         let frozen = live
             .freeze_active_surface()
             .expect("freeze the pre-status Surface");
-        let surface = AgentStatusSurfaceView::from_snapshot(frozen);
+        let surface = AgentStatusSurfaceView::from_snapshot(frozen).expect("valid frozen Surface");
         assert!(!surface.contains_status(AgentStatusModuleId::Time));
 
         live.commit(
@@ -1641,7 +1741,8 @@ mod tests {
             conversation
                 .freeze_active_surface()
                 .expect("freeze rebuilt Surface"),
-        );
+        )
+        .expect("valid rebuilt Surface view");
 
         assert_eq!(
             view.latest_status(AgentStatusModuleId::Time)
@@ -1693,6 +1794,31 @@ mod tests {
         let renderer_only = surface(vec![plain_surface_message("renderer-only")]);
         assert!(!renderer_only.contains_status(AgentStatusModuleId::Time));
         assert!(!renderer_only.contains_status(AgentStatusModuleId::Background));
+    }
+
+    #[test]
+    fn surface_view_validates_identity_body_pairs_and_exposes_only_snapshot_reads() {
+        let message = plain_surface_message("message");
+        let invalid = AgentStatusSurfaceView::for_test(
+            crate::conversation::SurfaceRevision::INITIAL,
+            0,
+            Arc::from(vec![MessageId::new("different")].into_boxed_slice()),
+            Arc::from(vec![message.clone()].into_boxed_slice()),
+        );
+        assert!(matches!(
+            invalid,
+            Err(AgentStatusSurfaceViewError::IdentityBodyMismatch { .. })
+        ));
+
+        let view = surface(vec![message]);
+        assert_eq!(
+            view.revision(),
+            crate::conversation::SurfaceRevision::new(1)
+        );
+        assert_eq!(view.compaction_generation(), 0);
+        assert_eq!(view.active_message_ids(), &[MessageId::new("message")]);
+        assert_eq!(view.messages().len(), 1);
+        assert_eq!(view.messages()[0].id, MessageId::new("message"));
     }
 
     #[test]
@@ -1829,7 +1955,8 @@ mod tests {
             conversation
                 .freeze_active_surface()
                 .expect("freeze before compaction"),
-        );
+        )
+        .expect("valid pre-compaction Surface view");
         let execution = background_snapshot(0, "still active");
         let background_snapshot_for = |view: &AgentStatusSurfaceView| BackgroundStatusSnapshot {
             executions: Arc::from(vec![execution.clone()].into_boxed_slice()),
@@ -1857,7 +1984,8 @@ mod tests {
             conversation
                 .freeze_active_surface()
                 .expect("freeze after compaction"),
-        );
+        )
+        .expect("valid post-compaction Surface view");
         assert!(!after.contains_status(AgentStatusModuleId::Time));
         assert!(!after.contains_status(AgentStatusModuleId::Background));
         assert!(

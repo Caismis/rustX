@@ -1562,9 +1562,11 @@ impl<'a> AgentExecution<'a> {
         let frozen = self.conversation.freeze_active_surface().map_err(|error| {
             ContextError::new(ContextErrorKind::MalformedHistory, error.to_string())
         })?;
-        let surface = AgentStatusSurfaceView::from_snapshot(frozen);
+        let surface = AgentStatusSurfaceView::from_snapshot(frozen).map_err(|error| {
+            ContextError::new(ContextErrorKind::MalformedHistory, error.to_string())
+        })?;
         let active = surface
-            .messages
+            .messages()
             .iter()
             .map(|message| message.message.clone())
             .collect::<Vec<_>>();

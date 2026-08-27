@@ -43,7 +43,9 @@ use std::sync::Arc;
 
 use crate::model::session::AttemptModelSnapshot;
 
-pub use crate::message::types::{AgentStatusGenerationMetadata, AgentStatusModuleId};
+pub use crate::message::types::{
+    AgentStatusGenerationMetadata, AgentStatusMetadataError, AgentStatusModuleId,
+};
 pub use assembly::{
     AcceptedContext, AcceptedSystemSection, AcceptedUserContext, CONTEXT_COMPATIBILITY_ABI_VERSION,
     ContextAssembly, ContextAssemblyError, ContextCompatibilityManifest, ContextContributor,
@@ -64,8 +66,8 @@ pub(crate) use status::AgentStatusTestSeam;
 pub use status::{
     AgentStatus, AgentStatusClock, AgentStatusConfig, AgentStatusEngine, AgentStatusOpportunitySet,
     AgentStatusSection, AgentStatusSectionData, AgentStatusSectionId, AgentStatusSurfaceView,
-    BACKGROUND_REMINDER_MESSAGE_INTERVAL, BackgroundStatusConfig, FreshInboundStatusOpportunity,
-    GLOBAL_AGENT_STATUS_BYTE_CAP, MAX_BACKGROUND_STATUS_EXECUTIONS,
+    AgentStatusSurfaceViewError, BACKGROUND_REMINDER_MESSAGE_INTERVAL, BackgroundStatusConfig,
+    FreshInboundStatusOpportunity, GLOBAL_AGENT_STATUS_BYTE_CAP, MAX_BACKGROUND_STATUS_EXECUTIONS,
     MAX_BACKGROUND_STATUS_TEXT_BYTES, SystemClock, TIME_REFRESH_INTERVAL, TimeStatusConfig,
     render_agent_status,
 };
