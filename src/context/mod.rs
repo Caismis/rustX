@@ -70,7 +70,8 @@ pub use status::{
     FreshInboundStatusOpportunity, GLOBAL_AGENT_STATUS_BYTE_CAP, MAX_BACKGROUND_STATUS_EXECUTIONS,
     MAX_BACKGROUND_STATUS_TEXT_BYTES, MAX_TODO_STATUS_TASKS, MAX_TODO_STATUS_TEXT_BYTES,
     PostToolBatchStatusOpportunity, SystemClock, TIME_REFRESH_INTERVAL, TODO_STATUS_EMISSION_KEY,
-    TimeStatusConfig, TodoStatusPresentation, TodoStatusTask, render_agent_status,
+    TODO_STATUS_REMINDER_PROGRESS_INTERVAL, TimeStatusConfig, TodoStatusPresentation,
+    TodoStatusTask, render_agent_status,
 };
 pub use summarizer::{ContextSummarizer, ModelBackedSummarizer, SummaryModelInput, SummaryRequest};
 pub use tokens::{

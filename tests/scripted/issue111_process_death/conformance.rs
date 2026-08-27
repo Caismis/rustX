@@ -193,12 +193,12 @@ fn tool_results(messages: &[MessageBlock]) -> Vec<(String, ToolExecutionStatus)>
 // ---------------------------------------------------------------------------
 
 /// A settled tool batch leaves its `PostToolBatch` marker only in the dying
-/// attempt. The dead continuation is not replaced with a new model step on
-/// reopen, and the reopened runtime receives no inherited marker; therefore
-/// it cannot emit a Todo reminder from a `PostToolBatch` opportunity that no
-/// longer exists.
+/// attempt. Because the durable tool-start fact proves that external work
+/// happened, rustX intentionally terminalizes that attempt on recovery rather
+/// than replaying a post-tool continuation. The reopened runtime receives no
+/// inherited marker and recovery itself cannot create a model step from it.
 #[test]
-fn post_tool_batch_opportunity_is_not_recovered_after_process_death() {
+fn post_tool_batch_marker_is_not_recovered_after_external_side_effect_blocks_continuation() {
     let lab = Lab::new();
     let mut process = lab.spawn(
         child::TODO_STATUS_TURN,
@@ -221,12 +221,17 @@ fn post_tool_batch_opportunity_is_not_recovered_after_process_death() {
     assert_eq!(todo_emission_count(&durable), 0);
     let starts_before = model_request_start_count(&durable);
 
-    // This crash is before the attempt's next model step, so recovery does
-    // not create a replacement step for the abandoned tool continuation. If
-    // the process-local marker had become durable, the reopened authority
-    // could incorrectly produce a Todo reminder despite having no new model
-    // step; it does not.
+    // This crash is before the attempt's next model step. The settled
+    // ToolResult does not erase the earlier ToolExecutionStarted evidence, so
+    // recovery classifies the dead attempt as an external-outcome-known
+    // attempt and terminalizes it. This is the external-side-effect recovery
+    // contract: no post-tool continuation is replayed, and the process-local
+    // marker is not reconstructed as a way around that decision.
     let mut resumed = lab.spawn(child::RESUME_IDLE, None);
+    assert_eq!(
+        resumed.wait_note_prefixed("recovery:"),
+        "recovery:PendingInboundOnly"
+    );
     resumed.wait_note("idle");
     resumed.sigkill();
 
@@ -288,18 +293,21 @@ fn committed_todo_suppression_survives_process_death() {
     let durable = lab.durable();
     assert_eq!(todo_status_count(&durable), 1);
     assert_eq!(todo_emission_count(&durable), 1);
+    let head_after = durable
+        .store()
+        .latest_agent_status_emission(
+            AgentStatusModuleId::Todo,
+            crate::context::TODO_STATUS_EMISSION_KEY,
+        )
+        .expect("Todo suppression head lookup")
+        .expect("the Todo suppression head");
     assert_eq!(
-        durable
-            .store()
-            .latest_agent_status_emission(
-                AgentStatusModuleId::Todo,
-                crate::context::TODO_STATUS_EMISSION_KEY,
-            )
-            .expect("Todo suppression head lookup")
-            .expect("the Todo suppression head")
-            .fingerprint,
-        head_before.fingerprint,
+        head_after.fingerprint, head_before.fingerprint,
         "the identical semantic reminder remains suppressed after reopen"
+    );
+    assert_eq!(
+        head_after.surface_progress, head_before.surface_progress,
+        "restart does not reset or advance Todo cooldown progress"
     );
 }
 

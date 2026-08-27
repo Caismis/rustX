@@ -86,7 +86,8 @@ use crate::context::{
 };
 use crate::conversation::{ConversationError, ConversationState, PreparedCanonicalCommit};
 use crate::durable::{
-    AgentStatusEmissionLookup, AgentStatusEmissionRecord, ConversationStore, ConversationStoreError,
+    AgentStatusEmissionLookup, AgentStatusEmissionRecord, ConversationStore,
+    ConversationStoreError, ModelTurnStartCommit, ModelTurnStartCommitDisposition,
 };
 use crate::events::types::{
     AttemptFailure, AttemptOutcome, EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope,
@@ -412,6 +413,25 @@ pub struct AgentExecution<'a> {
     terminal_emitted: bool,
 }
 
+/// Publishes the newly committed start-owned Event Journal facts through the
+/// live execution observer in their durable order. An idempotent retry gets a
+/// receipt for historical verification, but must not replay those historical
+/// facts into a live observer.
+fn publish_model_turn_start_events(
+    observer: Option<&dyn AgentExecutionObserver>,
+    attempt_id: &AttemptId,
+    commit: &ModelTurnStartCommit,
+) {
+    if commit.disposition != ModelTurnStartCommitDisposition::NewlyCommitted {
+        return;
+    }
+    for event in commit.events() {
+        if let Some(observer) = observer {
+            observer.observe_event(attempt_id, &event.event);
+        }
+    }
+}
+
 /// The open publication stream of one in-flight model request.
 ///
 /// The stream owns the release plane of exactly one provider request: the
@@ -501,6 +521,7 @@ struct AgentStatusGeneration {
     opportunities: AgentStatusOpportunitySet,
     status: crate::context::status::AgentStatus,
     emissions: Vec<AgentStatusEmission>,
+    surface_progress: u64,
 }
 
 fn agent_status_message_id(context: &[MessageBlock]) -> Option<MessageId> {
@@ -1647,6 +1668,7 @@ impl<'a> AgentExecution<'a> {
                 opportunities,
                 status: prepared.status,
                 emissions: prepared.emissions,
+                surface_progress: prepared.surface_progress,
             }))
     }
 
@@ -1751,6 +1773,7 @@ impl<'a> AgentExecution<'a> {
             snapshot.agent_status = Some(AgentStatusStart {
                 message_id: status_message_id,
                 emissions: status_generation.emissions.clone(),
+                surface_progress: status_generation.surface_progress,
             });
         }
         Ok(StagedModelTurn {
@@ -1844,8 +1867,9 @@ impl<'a> AgentExecution<'a> {
     /// The attempt's model-turn start gate serializes the cancellation
     /// observation against the durable start commit
     /// (`ConversationStore::commit_model_turn_start`: the request-scoped
-    /// context, the immutable Request Snapshot, and the exact
-    /// `ModelRequestStarted` fact in one transaction). Exactly one side
+    /// context, the immutable Request Snapshot, and the complete typed start
+    /// receipt — `ModelRequestStarted` followed by any Agent Status emission
+    /// facts — in one transaction). Exactly one side
     /// wins:
     ///
     /// - cancellation linearized first ⇒ the prepared turn is discarded:
@@ -1890,13 +1914,13 @@ impl<'a> AgentExecution<'a> {
                 .collect();
             store.commit_model_turn_start(&context, &prepared.snapshot, Utc::now())
         });
-        let started = match arbitration {
+        let start_commit = match arbitration {
             Ok(StartAdjudication::CancelledBeforeStart) => {
                 return Err(Terminal::Cancelled {
                     reason: self.cancellation.reason(),
                 });
             }
-            Ok(StartAdjudication::Started(started)) => started,
+            Ok(StartAdjudication::Started(start_commit)) => start_commit,
             Err(error) => {
                 // The durable start transaction failed: no start fact, no
                 // request-scoped context, and no provider invocation
@@ -1941,7 +1965,11 @@ impl<'a> AgentExecution<'a> {
         {
             observer.observe_status(status_observation);
         }
-        self.record_persisted_event(started);
+        // The receipt is the only live publication source for the start-owned
+        // Event Journal facts. Publish only a fresh durable transition; an
+        // idempotent store verification returns the historical receipt but
+        // must not replay those facts to a live observer.
+        publish_model_turn_start_events(self.observer, &self.request.attempt_id, &start_commit);
         self.last_request_fingerprint = Some(prepared.fingerprint);
         self.last_request_identity = Some(prepared.request_identity);
         self.last_request_anchor = Some(prepared.anchor.clone());
@@ -4342,7 +4370,8 @@ pub(crate) mod test_sync {
 mod tests {
     use crate::conversation::ConversationState;
     use crate::durable::inbox::ConversationStore;
-    use crate::events::types::{AttemptOutcome, RuntimeEvent};
+    use crate::durable::{ModelTurnStartCommit, ModelTurnStartCommitDisposition};
+    use crate::events::types::{AttemptOutcome, RuntimeEvent, RuntimeEventEnvelope};
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
@@ -4362,7 +4391,8 @@ mod tests {
     use crate::model::types::{ModelProtocol, ModelRequest};
     use crate::runtime::cancellation::CancellationSignal;
     use crate::runtime::identity::{
-        AgentId, AttemptId, ConversationId, MessageId, RequestId, ToolCallId, ToolId,
+        AgentId, AttemptId, ConversationId, EventId, MessageId, RequestId, ToolCallId, ToolId,
+        TurnId,
     };
     use crate::runtime::inbound::InitialTurnTrigger;
     use crate::runtime::types::CancellationReason;
@@ -4583,6 +4613,12 @@ mod tests {
         audits: Mutex<Vec<crate::publication::PublicationAudit>>,
     }
 
+    impl RecordingObserver {
+        fn events(&self) -> Vec<RuntimeEvent> {
+            self.events.lock().expect("observer event lock").clone()
+        }
+    }
+
     impl AgentExecutionObserver for RecordingObserver {
         fn observe_event(&self, _attempt_id: &AttemptId, event: &RuntimeEvent) {
             self.events
@@ -4635,6 +4671,66 @@ mod tests {
                 .expect("observer audit lock")
                 .push(audit.clone());
         }
+    }
+
+    fn observer_start_commit(disposition: ModelTurnStartCommitDisposition) -> ModelTurnStartCommit {
+        let attempt_id = AttemptId::new("observer-attempt");
+        let turn = TurnId::new("1");
+        let request_id = RequestId::new("observer-request");
+        let message_id = MessageId::new("observer-status");
+        let timestamp = chrono::DateTime::from_timestamp(0, 0).expect("timestamp");
+        let emission = crate::message::types::AgentStatusEmission {
+            module_id: crate::message::types::AgentStatusModuleId::Todo,
+            key: "active_actionable".to_owned(),
+            fingerprint: "observer-fingerprint".to_owned(),
+        };
+        ModelTurnStartCommit {
+            started: RuntimeEventEnvelope {
+                schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
+                event_id: EventId::new("observer-start"),
+                sequence: 1,
+                conversation_id: ConversationId::new("observer-conversation"),
+                attempt_id: Some(attempt_id.clone()),
+                turn_id: Some(turn.clone()),
+                timestamp,
+                event: RuntimeEvent::ModelRequestStarted {
+                    request_id: request_id.clone(),
+                    model: "observer-model".to_owned(),
+                },
+            },
+            agent_status_emissions: vec![RuntimeEventEnvelope {
+                schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
+                event_id: EventId::new("observer-emission"),
+                sequence: 2,
+                conversation_id: ConversationId::new("observer-conversation"),
+                attempt_id: Some(attempt_id),
+                turn_id: Some(turn),
+                timestamp,
+                event: RuntimeEvent::AgentStatusEmitted {
+                    request_id,
+                    message_id,
+                    emission,
+                },
+            }],
+            disposition,
+        }
+    }
+
+    #[test]
+    fn idempotent_start_receipt_does_not_republish_live_facts() {
+        let observer = RecordingObserver::default();
+        let attempt_id = AttemptId::new("observer-attempt");
+        let first = observer_start_commit(ModelTurnStartCommitDisposition::NewlyCommitted);
+        let replay = observer_start_commit(ModelTurnStartCommitDisposition::IdempotentReplay);
+
+        super::publish_model_turn_start_events(Some(&observer), &attempt_id, &first);
+        super::publish_model_turn_start_events(Some(&observer), &attempt_id, &replay);
+
+        let expected = first
+            .events()
+            .map(|event| event.event.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(observer.events(), expected);
     }
 
     /// A contributor whose bounded work is explicitly held at an awaited

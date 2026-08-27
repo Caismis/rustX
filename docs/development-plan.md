@@ -772,7 +772,7 @@ projection/control only. There is no full transcript, `ConversationRecord`,
 request-message copy, generic repository, or client recovery cache.
 
 M8 introduced development schema version 1. The current store gate is schema
-version 12; incompatible files fail explicitly at open. There is no migration
+version 13; incompatible files fail explicitly at open. There is no migration
 framework, legacy reader, fallback, or dual write.
 File-backed SQLite uses WAL, `synchronous=FULL`, foreign keys, and a busy
 timeout. Commit is the local durability linearization point.
@@ -1086,7 +1086,7 @@ tool-start capability. The real ConversationRuntime shutdown path proves that
 pending-map removal is not waiter or attempt settlement: Quiescent waits for
 the waiter handoff, projection callback, AgentExecution, and attempt task.
 
-Runtime Client v4 carries `interaction_respond`, typed acceptance/errors,
+Runtime Client v5 carries `interaction_respond`, typed acceptance/errors,
 pending/settled events, and `snapshot.pending_interactions`. It also projects
 authoritative effective and pending ApprovalMode state and accepts mode
 changes through runtime control. The TUI remains a projection/client: it
@@ -1186,12 +1186,14 @@ the live path and the durable path cannot drift and a future PostgreSQL
 backend reuses the same contract.
 
 The durable event vocabulary changed incompatibly, so `SQLITE_SCHEMA_VERSION`
-is now 12. Version 10 froze the structured Questionnaire interaction audit
+is now 13. Version 10 froze the structured Questionnaire interaction audit
 vocabulary introduced by Issue #126; version 11 added typed Agent Status
-generation metadata to canonical status messages; version 12 adds
+generation metadata to canonical status messages; version 12 added
 canonical-message-coupled Agent Status emission facts and bounded Todo
-latest-emission heads. Version 11 and every older development database are
-rejected at open. There is no migration and no compatibility layer.
+latest-emission heads; version 13 adds the non-compaction Surface progress
+coordinate required by the Todo reminder window. Version 12 and every older
+development database are rejected at open. There is no migration and no
+compatibility layer.
 
 Exit criteria (met): durable-before-prompt proved inside the publication
 callback; `requested < settled(approved) < ToolExecutionStarted` proved on
@@ -1311,7 +1313,7 @@ the repeated terminal payload.
 
 Capabilities are deny-by-construction: the child composes the base tool
 plane only (v1 profile `explore`: Read/Glob/Grep) and has no `subagent`
-tool, so recursion is impossible by construction. Runtime Client v4 carries
+tool, so recursion is impossible by construction. Runtime Client v5 carries
 `subagent_status`, `subagent_cancel`, the `SubagentUpdated` event, and
 `snapshot.subagents`; the TUI renders the same projection.
 

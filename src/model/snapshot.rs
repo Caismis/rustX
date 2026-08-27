@@ -76,6 +76,10 @@ pub struct AgentStatusStart {
     /// Emissions represented by that one status generation.
     #[serde(default)]
     pub emissions: Vec<AgentStatusEmission>,
+    /// The Todo-specific non-compaction Surface progress captured when this
+    /// generation was evaluated. It is persisted with the exact prepared
+    /// status context so a durable retry cannot change the cooldown origin.
+    pub surface_progress: u64,
 }
 
 /// A provider-independent frozen request boundary.

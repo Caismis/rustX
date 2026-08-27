@@ -87,7 +87,7 @@
 //! mechanics stay internal unless they express a client-relevant semantic
 //! fact. The mapping is defined here, in one place, so internal
 //! `RuntimeEvent` evolution cannot silently break Runtime Client Protocol
-//! v4.
+//! v5.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -711,7 +711,7 @@ impl RuntimeClientProjection {
     }
 
     /// The explicit `RuntimeEvent` mapping policy of Runtime Client Protocol
-    /// v4.
+    /// v5.
     ///
     /// Classification (see the module documentation):
     ///
@@ -1752,7 +1752,7 @@ mod tests {
     use crate::runtime_client::event::{RuntimeClientEvent, RuntimeClientOutcome};
     use crate::runtime_client::snapshot::{
         AgentStatusOpportunityView, ForegroundToolState, InFlightBlock, RuntimeClientAttemptPhase,
-        RuntimeClientTranscriptCursor,
+        RuntimeClientStatusSection, RuntimeClientTranscriptCursor,
     };
     use crate::runtime_client::types::RuntimeClientCursor;
     use crate::scripted_suites::support::context::{
@@ -1912,6 +1912,37 @@ mod tests {
         assert_eq!(
             encoded["status_message_id"],
             serde_json::json!("status-combined")
+        );
+    }
+
+    #[test]
+    fn todo_status_section_round_trips_the_v5_wire_shape() {
+        let wire = serde_json::json!({
+            "type": "todo",
+            "current": {
+                "id": 7,
+                "subject": "Review the boundary",
+                "active_form": "Reviewing the boundary",
+                "status": "in_progress",
+                "blocked": false
+            },
+            "tasks": [{
+                "id": 8,
+                "subject": "Write the regression",
+                "status": "pending",
+                "blocked": true
+            }],
+            "active_count": 2,
+            "blocked_count": 1,
+            "completed_count": 3,
+            "deleted_count": 1,
+            "omitted_count": 0
+        });
+        let section: RuntimeClientStatusSection =
+            serde_json::from_value(wire.clone()).expect("decode the v5 Todo section");
+        assert_eq!(
+            serde_json::to_value(section).expect("encode the v5 Todo section"),
+            wire
         );
     }
 

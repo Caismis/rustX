@@ -41,13 +41,15 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 12 is the only accepted schema; version 11 and every older
+schema version 13 is the only accepted schema; version 12 and every older
 development schema fail explicitly at open and are not migrated. Version 10
 froze the structured Questionnaire interaction audit vocabulary introduced by
 Issue #126. Version 11 froze the structured Agent Status generation
-descriptor introduced by Issue #131. Version 12 adds canonical-message-
-coupled Agent Status emission facts and bounded latest-emission heads required
-by the Todo reminder policy in Issue #130.
+descriptor introduced by Issue #131. Version 12 added canonical-message-
+coupled Agent Status emission facts and bounded latest-emission heads. Version
+13 adds the persisted non-compaction Surface progress used by the Todo
+reminder window; older development schemas fail explicitly and are not
+migrated.
 
 The durable request-start invariant is strict: the provider adapter cannot be
 called until the Request Snapshot and exact `ModelRequestStarted` Event
@@ -2370,8 +2372,13 @@ message role, history shape, or timestamps:
   semantic key is `active_actionable`; the fingerprint is a SHA-256 of that
   bounded structured presentation. The latest durable head for
   `(module=Todo, key=active_actionable)` suppresses an identical fingerprint
-  until the relevant presentation changes. There is no wall-clock polling or
-  generic cooldown framework. FreshInbound and PostToolBatch use this same
+  while fewer than four non-compaction Surface progress units have followed
+  the last durable emission; the identical fingerprint is eligible again at
+  exactly four units. A changed fingerprint bypasses that duplicate window at
+  the next eligible opportunity. The progress coordinate is
+  `SurfaceRevision - compaction_generation`, so compaction and provider
+  overflow retries do not advance or reset it. There is no wall-clock polling
+  or generic cooldown framework. FreshInbound and PostToolBatch use this same
   policy.
 - Each interested module captures authoritative runtime state once into a
   finite immutable snapshot, then evaluates only that snapshot plus immutable
@@ -2411,9 +2418,10 @@ message role, history shape, or timestamps:
   rerunning assembly, and cannot solve generation reuse by dropping the
   constraint.
 - Neither the 30-minute Time threshold, the 8-message Background threshold,
-  nor the Todo semantic deduplication rule schedules, wakes, creates, or
-  prolongs a model turn. They only affect eligibility or contribution when an
-  already-existing opportunity reaches this preparation boundary.
+  nor the Todo four-append progress reminder threshold schedules, wakes,
+  creates, or prolongs a model turn. They only affect eligibility or
+  contribution when an already-existing opportunity reaches this preparation
+  boundary.
 - The context path is mandatory: every normal `AgentExecution` carries a
   `ContextRuntime`; there is no no-context execution mode. Agent Status is
   optional enrichment inside that path.
@@ -2442,6 +2450,10 @@ message role, history shape, or timestamps:
   When the prepared context contains Agent Status, that same transaction also
   commits the exact canonical status message, its canonical-message-bound
   `AgentStatusEmitted` fact(s), and the materialized latest-emission head(s).
+  The typed commit receipt contains `ModelRequestStarted` followed by every
+  newly committed `AgentStatusEmitted` fact in durable sequence order. An
+  idempotent replay returns the historical facts as a verification but does
+  not republish them through the live observer.
   The head is a bounded projection of durable emission facts, not an
   independently writable Todo authority.
   Accepted system sections are transient assembly values; they are not
@@ -2462,11 +2474,20 @@ message role, history shape, or timestamps:
   and carries only the fact that one complete batch made this existing step
   eligible. FreshInbound and PostToolBatch therefore publish one observation,
   never two. Cancellation winning before start publishes neither.
-- Runtime Client protocol v4 carries the optional structured
-  `opportunities.post_tool_batch` member and the typed Todo section. The
-  field is omitted when no production PostToolBatch marker existed; the
-  protocol remains v4 under the repository's additive-shape policy, with no
-  old/new aliases or compatibility wire paths.
+- A settled tool batch by itself is not a durable answer obligation. Under the
+  current external-side-effect recovery contract, the earlier
+  `ToolExecutionStarted` evidence makes a dead attempt unsafe to replay, even
+  when its canonical ToolResult batch is complete; recovery terminalizes that
+  attempt with `PendingInboundOnly` and never creates a replacement model step
+  to consume the dead `PostToolBatch` marker. An adopted FreshInbound turn has
+  its separate durable answer obligation and follows the ordinary recovery
+  contract; the process-local PostToolBatch marker is never reconstructed.
+- Runtime Client protocol v5 carries the optional structured
+  `opportunities.post_tool_batch` member and the tagged Todo section. The
+  field is omitted when no production PostToolBatch marker existed. Adding a
+  strict tagged `Todo` variant is a breaking wire-contract change, so v4 is
+  explicitly rejected; v5 is the sole supported version and has no aliases or
+  compatibility wire paths.
 - `ModelRequest.effective_system_prompt` is the sole System authority. It is
   rustX-rendered from ordered native/extension sections; canonical history
   has no System role. Frozen project instructions occupy the
@@ -3215,8 +3236,8 @@ semantic normalization boundary. The frozen invariants:
   a model that silently stopped folding transitions.
 - **Runtime Client protocol versioning is independent from internal
   RuntimeEvent/Event Journal schema versioning.** Version negotiation is
-  explicit at attachment admission; Protocol v4 is the sole supported
-  version, and Protocol v1 is rejected explicitly.
+  explicit at attachment admission; Protocol v5 is the sole supported
+  version, and Protocol v4 is rejected explicitly.
 - **The semantic layer owns protocol negotiation and attachment
   admission; transports are framing only.** `initialize` is dispatched by
   `RuntimeClientEndpoint` and is by itself sufficient to establish the
@@ -3305,7 +3326,7 @@ semantic normalization boundary. The frozen invariants:
   no derived message mirror of its own, and deterministic regressions
   verify the projection mirror against the authoritative ledger rather
   than coordinating two histories.
-- **One active attachment.** Protocol v4 admits at most one attachment
+- **One active attachment.** Protocol v5 admits at most one attachment
   per runtime instance; a second attach fails deterministically without
   evicting the first; reconnect receives a fresh attachment identity;
   request ids are attachment-scoped; cursor/replay state belongs to the
@@ -3354,7 +3375,7 @@ endpoint. It frames; it never becomes a second authority.
   until one complete, in-bound-size framed record has successfully
   deserialized to the exact Runtime Client request type. A record that
   violates framing, exceeds the record limit, or fails exact
-  deserialization ends the transport having applied nothing; Protocol v4
+  deserialization ends the transport having applied nothing; Protocol v5
   has no uncorrelated error envelope, so no transport fabricates a
   protocol record for it.
 - **Transport loss is not semantic cancellation.** Runtime Client

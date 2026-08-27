@@ -3190,7 +3190,7 @@ impl ConversationRuntime {
     /// Claims the one-time Runtime Client binding of the tool runtime and of
     /// the capability coordinator.
     ///
-    /// Protocol v4 binds one runtime identity to at most one Runtime Client
+    /// Protocol v5 binds one runtime identity to at most one Runtime Client
     /// adapter for that identity's lifetime, so cloning a runtime never
     /// yields a second bindable identity and dropping the bound adapter
     /// never makes it bindable again. Reconnect replaces the attachment,

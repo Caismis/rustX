@@ -57,6 +57,7 @@ impl AgentStatusClock for FixedStatusClock {
 #[derive(Debug, Default)]
 struct StatusRecorder {
     observations: Mutex<Vec<AgentStatusObservation>>,
+    events: Mutex<Vec<RuntimeEvent>>,
 }
 
 impl StatusRecorder {
@@ -66,10 +67,19 @@ impl StatusRecorder {
             .expect("status observation lock")
             .clone()
     }
+
+    fn events(&self) -> Vec<RuntimeEvent> {
+        self.events.lock().expect("runtime event lock").clone()
+    }
 }
 
 impl AgentExecutionObserver for StatusRecorder {
-    fn observe_event(&self, _attempt_id: &AttemptId, _event: &RuntimeEvent) {}
+    fn observe_event(&self, _attempt_id: &AttemptId, event: &RuntimeEvent) {
+        self.events
+            .lock()
+            .expect("runtime event lock")
+            .push(event.clone());
+    }
 
     fn observe_committed(
         &self,
@@ -300,6 +310,42 @@ async fn one_settled_tool_batch_creates_one_post_tool_opportunity() {
         1,
         "the Todo status has one suppression fact"
     );
+
+    let durable_start_facts = store
+        .read_events(None, 32)
+        .expect("event history")
+        .events
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event.event,
+                RuntimeEvent::ModelRequestStarted { .. } | RuntimeEvent::AgentStatusEmitted { .. }
+            )
+        })
+        .map(|event| event.event)
+        .collect::<Vec<_>>();
+    let live_start_facts = recorder
+        .events()
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event,
+                RuntimeEvent::ModelRequestStarted { .. } | RuntimeEvent::AgentStatusEmitted { .. }
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        live_start_facts, durable_start_facts,
+        "the live observer receives every newly committed start-owned fact in durable order"
+    );
+    assert!(matches!(
+        live_start_facts.as_slice(),
+        [
+            RuntimeEvent::ModelRequestStarted { .. },
+            RuntimeEvent::ModelRequestStarted { .. },
+            RuntimeEvent::AgentStatusEmitted { .. },
+        ]
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

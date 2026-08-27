@@ -1,4 +1,4 @@
-//! The Runtime Client snapshot read model (Runtime Client Protocol v4).
+//! The Runtime Client snapshot read model (Runtime Client Protocol v5).
 //!
 //! [`RuntimeClientSnapshot`] is the one deterministic external read model
 //! of authoritative runtime state. It is a projection, never a second
@@ -61,7 +61,7 @@ pub struct RuntimeDurabilityFailure {
 /// The authoritative Runtime Client snapshot of one conversation runtime.
 ///
 /// Every section is a deterministic projection of one authoritative
-/// runtime owner. The shape belongs to Runtime Client Protocol v4: internal
+/// runtime owner. The shape belongs to Runtime Client Protocol v5: internal
 /// snapshot types are projected into these external DTOs, never exposed
 /// directly.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -680,7 +680,7 @@ pub struct InboundDrainView {
 ///
 /// Projected from the authoritative [`ConversationBackgroundRegistry`]
 /// ([`crate::tools::background::ConversationBackgroundRegistry`]); the
-/// container shape belongs to Runtime Client Protocol v4 while the
+/// container shape belongs to Runtime Client Protocol v5 while the
 /// lifecycle, progress, and result leaf types are stable runtime-owned
 /// value contracts. No internal task handles or process ids ever appear.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

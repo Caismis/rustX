@@ -309,8 +309,13 @@ order, at most six active tasks are shown, and subjects/active forms are capped
 at 256 UTF-8 bytes. Complete-snapshot active, blocked, completed, deleted, and
 omitted counts are included. The stable key is `active_actionable`; the
 fingerprint is the SHA-256 of the bounded structured presentation. A bounded
-latest-emission head suppresses an identical fingerprint until the relevant
-presentation changes. It is not a wall-clock or generic cooldown framework.
+latest-emission head suppresses an identical fingerprint while fewer than four
+non-compaction Surface progress units have followed the last durable emission;
+the identical state is eligible again at exactly four, while a changed
+fingerprint is eligible at the next opportunity. The progress coordinate is
+`SurfaceRevision - compaction_generation`, so compaction and overflow retries
+do not advance or reset it. It is not a wall-clock or generic cooldown
+framework and never schedules a model turn.
 
 The Skill catalog is sampled from the immutable per-attempt capability
 snapshot and assembled as a request-time native capability section. Normal
@@ -742,10 +747,15 @@ canonical-message-bound `AgentStatusEmitted` fact(s), and the latest-emission
 head(s) are committed atomically with the Request Snapshot and
 `ModelRequestStarted`. The canonical status message is observed first, then
 the structured Agent Status observation is published, and only then is the
-provider invoked. If cancellation wins before that commit, neither status
-view nor any emission/head settlement is visible. Exact start retries verify
-the complete status context and emission set; contradictory metadata is
-rejected.
+provider invoked. The typed start receipt exposes the newly committed
+`ModelRequestStarted` followed by every `AgentStatusEmitted` fact in durable
+sequence order; the live `AgentExecutionObserver` receives that same order
+after COMMIT, while the Runtime Client projection intentionally folds the
+internal emission fact into the one structured status observation. If
+cancellation wins before that commit, neither status view nor any
+emission/head settlement is visible. Exact start retries verify the complete
+status context and emission set; contradictory metadata is rejected, and an
+idempotent retry does not republish historical events to the live observer.
 
 The Event Journal follows the same boundary: append durably, publish the live
 observer, then release the committed event body from the attempt. Historical

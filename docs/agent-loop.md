@@ -188,7 +188,12 @@ context fact. Neither marker creates a request nor is it reconstructed during
 recovery. A `ContextWindowExceeded` overflow does not consume the fresh
 trigger and the retry reuses the already accepted status generation; it does
 not resample, reinvoke contributors, or append duplicate context. A
-foreground-tool-only continuation with no new drain and no settled batch
+process death after the marker follows the existing external-side-effect
+recovery contract: the settled `ToolResult` does not erase
+`ToolExecutionStarted`, so the dead attempt is terminalized with
+`PendingInboundOnly` and no replacement model step is created. The marker is
+attempt-local and no recovery path reconstructs it. A foreground-tool-only
+continuation with no new drain and no settled batch
 carries no Agent Status. Time, Background, and Todo are compile-time-owned
 modules: each captures once into a finite immutable snapshot and evaluates
 only that snapshot. Module capture/evaluation/payload failures are
@@ -301,7 +306,12 @@ published as runtime-owned `ConversationObservation`s
 (`src/runtime/observation.rs`) into one leaf queue. That stream is folded
 **exactly once**, by the Runtime Client projection; the runtime keeps no
 mirrored attempt/status/compaction read model. It does not need one: a
-Runtime Client host binds before the conversation runtime is activated
+model-turn-start commit returns a typed receipt whose fresh transition lists
+`ModelRequestStarted` and any `AgentStatusEmitted` facts in durable order;
+the loop publishes those committed facts through `observe_event` in that same
+order. An idempotent start verification returns the historical receipt but
+does not republish it. A Runtime Client host binds before the conversation
+runtime is activated
 (Issue #61), the inactive phase admits no semantic mutation at all
 (mailbox, `model_set`, `shutdown`, background dispatch commit, and
 runtime-owned capability commit are all refused typed), and an inactive
@@ -1215,10 +1225,13 @@ Event Journal    = execution facts
   remains or the latest one is at least 30 minutes old; Background refreshes
   when active work exists and no visible typed Background generation remains
   or eight non-AgentStatus model-visible messages follow it. Todo emits only
-  for committed actionable work and suppresses an identical bounded semantic
-  fingerprint using its durable latest-emission head. These conditions only
-  affect the next already-existing opportunity: they never schedule or create
-  a model request. The canonical Agent Status message carries its generated-at
+  for committed actionable work. Its stable key is `active_actionable`, its
+  fingerprint is the SHA-256 of the bounded structured presentation, and an
+  identical fingerprint is suppressed while fewer than four non-compaction
+  Surface progress units follow the last durable emission; it is eligible
+  again at exactly four, while changed state is eligible at the next
+  opportunity. These conditions only affect the next already-existing
+  opportunity: they never schedule or create a model request. The canonical Agent Status message carries its generated-at
   instant and admitted module membership as typed durable metadata, so Surface
   reconstruction never parses renderer text.
 

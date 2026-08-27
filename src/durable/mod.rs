@@ -71,9 +71,10 @@ pub use inbox::{
     AcceptedInbound, AgentStatusEmissionLookup, AgentStatusEmissionRecord, CanonicalMessagePage,
     CompactionCommitInput, ConversationInboundCapability, ConversationInteractionAudit,
     ConversationStore, ConversationStoreBinding, ConversationStoreError, DurableConversationHead,
-    EventPage, InboundDraft, LineageSeed, PendingBatch, PendingInboundItem, RequestSnapshotPage,
-    SurfaceUserMessageBoundary, SurfaceUserMessageBoundaryPage, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT,
-    TRANSCRIPT_PAGE_LIMIT_MAX, TranscriptCursor, TranscriptEntry, TranscriptItem, TranscriptPage,
+    EventPage, InboundDraft, LineageSeed, ModelTurnStartCommit, ModelTurnStartCommitDisposition,
+    PendingBatch, PendingInboundItem, RequestSnapshotPage, SurfaceUserMessageBoundary,
+    SurfaceUserMessageBoundaryPage, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT, TRANSCRIPT_PAGE_LIMIT_MAX,
+    TranscriptCursor, TranscriptEntry, TranscriptItem, TranscriptPage,
     interaction_audit_capability,
 };
 pub use sqlite::SqliteConversationStore;

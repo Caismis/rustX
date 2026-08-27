@@ -91,17 +91,30 @@ cases start.
 Agent Loop sets one marker only after the complete canonical ToolResult batch
 commits, and `prepare_model_turn` consumes it together with any pending
 FreshInbound member. If the process dies before that next primary step, the
-reopened attempt has no marker and recovery does not synthesize one. A status
-candidate prepared but cancelled before model-turn-start likewise leaves no
-canonical status message, `AgentStatusEmitted` fact, or latest-emission head.
+reopened attempt has no marker and recovery does not synthesize one. In the
+settled-tool case covered by
+`post_tool_batch_marker_is_not_recovered_after_external_side_effect_blocks_continuation`,
+the earlier `ToolExecutionStarted` fact proves that external work happened, so
+the existing recovery architecture intentionally terminalizes the dead
+attempt and reports `PendingInboundOnly` rather than replaying a post-tool
+continuation. It does not create a replacement model step merely to consume
+the dead marker. (`BlockedIndeterminate` remains the recovery disposition for
+the separate case where a started external outcome is still unknown.) A
+status candidate prepared but cancelled before model-turn-start likewise
+leaves no canonical status message, `AgentStatusEmitted` fact, or
+latest-emission head.
 
 The converse boundary is the combined model-turn-start commit: the canonical
 Agent Status User message, its canonical-message-bound emission fact(s), and
 the bounded latest-emission head(s) commit with the Request Snapshot and
 `ModelRequestStarted`. Reopen therefore preserves suppression through one
 bounded `(module, key)` lookup even when compaction has retired the status
-message from the active Surface. Overflow retry reuses that accepted
-generation and cannot add a second emission fact.
+message from the active Surface. Todo suppresses an identical bounded
+fingerprint while fewer than four non-compaction Surface progress units have
+followed its last durable emission, and is eligible again at exactly four;
+changed fingerprints bypass that duplicate window. Overflow retry reuses the
+accepted generation and cannot add a second emission fact or advance this
+progress coordinate.
 
 ## 2. Provider / publication / conversation separation
 
@@ -445,7 +458,8 @@ obligation, and reading that silence as "no answer is owed" would strand
 exactly the crash states above. `SQLITE_SCHEMA_VERSION` therefore moved 9 → 10
 for the structured Questionnaire audit vocabulary, 10 → 11 for typed Agent
 Status generation metadata, and 11 → 12 for canonical-message-coupled Agent
-Status emission facts and bounded Todo latest-emission heads; v8/v9/v10/v11
+Status emission facts and bounded Todo latest-emission heads; version 13 adds
+the persisted non-compaction Surface progress field, and v8/v9/v10/v11/v12
 files are refused at open —
 `pre_answer_obligation_schema_is_rejected_explicitly`,
 `pre_structured_questionnaire_schema_is_rejected_explicitly`, and the status

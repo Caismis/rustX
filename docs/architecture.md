@@ -30,15 +30,16 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 12. An incompatible database
+The SQLite schema is development schema version 13. An incompatible database
 fails explicitly; there is no migration chain, legacy reader, compatibility
 fallback, dual write, or old storage mode. Version 10 froze the structured
 Questionnaire interaction audit vocabulary introduced by Issue #126. Version
 11 adds the typed Agent Status generation descriptor: its UTC generation
 instant and admitted module membership are durable with the canonical status
 message. Version 12 adds canonical-message-coupled Agent Status emission facts
-and the bounded latest-emission heads used by Todo suppression. Version 11 and
-every older development schema are rejected at open.
+and the bounded latest-emission heads used by Todo suppression. Version 13
+adds their non-compaction Surface progress coordinate. Version 12 and every
+older development schema are rejected at open.
 File-backed stores
 use WAL, `synchronous=FULL`, foreign-key enforcement, and a busy timeout. A
 successful SQLite commit is the local durability linearization point
@@ -664,7 +665,7 @@ underneath the waiter. Only after settlement and attempt completion may a
 reload publish a new generation, and that generation affects a later admitted
 attempt only.
 
-Runtime Client v4 carries the same semantic plane through
+Runtime Client v5 carries the same semantic plane through
 `interaction_respond`, typed acceptance/errors, `interaction_pending` and
 `interaction_settled` events, and `snapshot.pending_interactions`. Snapshot
 plus cursor and subscribe-after-cursor retain the existing repair invariant.
@@ -1490,10 +1491,13 @@ Key contracts:
 - Todo status reads only `ConversationTodoList::committed()`. It shows a
   bounded deterministic view of actionable tasks and uses semantic key
   `active_actionable` plus a SHA-256 fingerprint of that bounded view. A
-  durable latest-emission head suppresses an identical fingerprint; it is
-  updated atomically with the canonical status message and its
-  `AgentStatusEmitted` fact at model-turn start. Surface compaction does not
-  reset that head.
+  durable latest-emission head suppresses an identical fingerprint while
+  fewer than four non-compaction Surface progress units follow the last
+  durable emission, then permits it again at exactly four; changed state is
+  eligible at the next opportunity. The head is updated atomically with the
+  canonical status message and its `AgentStatusEmitted` fact at model-turn
+  start. Surface compaction and overflow retry do not advance or reset that
+  head.
 - The initial-turn trigger is an explicit execution mode, never an `Option`
   used as a status switch: `AgentExecutionRequest` carries one
   `InitialTurnTrigger` — `FreshInbound(FreshInboundTurn)` makes validation and
@@ -3008,7 +3012,7 @@ environment, finite timeout, bounded diagnostics, and no generic
 
 The outermost layer exposes the runtime to humans and other systems:
 
-- Runtime Client Protocol v4 (semantic client boundary)
+- Runtime Client Protocol v5 (semantic client boundary)
 - Local interactive CLI
 - Runtime command interface
 - HTTP control interface
@@ -3017,7 +3021,7 @@ The outermost layer exposes the runtime to humans and other systems:
 
 AG-UI is an output projection, not the internal durable event model.
 
-#### Runtime Client Protocol v4 implementation (Issue #37, revised by Issue #131)
+#### Runtime Client Protocol v5 implementation (Issue #37, revised by Issues #131 and #130)
 
 Issue #37 implements the one external semantic normalization boundary in
 `src/runtime_client`:
@@ -3032,7 +3036,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-      Runtime Client Protocol v4
+      Runtime Client Protocol v5
 ```
 
 The governing invariant is that all authoritative execution and
@@ -3102,7 +3106,7 @@ runtime_client/attachment.rs   RuntimeAttachment: at-most-one attachment,
                                event subscription delivery
 runtime_client/endpoint.rs     RuntimeClientEndpoint: the transport-neutral
                                semantic entry point that dispatches every
-                               v4 request, `initialize` included
+                               v5 request, `initialize` included
 runtime_client/transport/      byte-stream adapters beneath the semantic
                                layer (Issue #38); `stdio.rs` is the strict
                                stdio/JSONL transport
@@ -3140,7 +3144,7 @@ Runtime Client is a projection/control/attachment adapter over it.
 
 - **The semantic endpoint owns `initialize`.** `RuntimeClientEndpoint` is
   the boundary a transport wraps. It starts unattached and accepts every
-  v4 request; `initialize` performs version negotiation, single-attachment
+  v5 request; `initialize` performs version negotiation, single-attachment
   admission, `AttachmentId` allocation, and the linearized initial
   snapshot, storing the resulting attachment. Non-`initialize` requests
   before that are `not_attached`; a successful `detach` (or dropping the
@@ -3527,7 +3531,7 @@ Runtime Client is a projection/control/attachment adapter over it.
   compaction start, failure, and committed completion project with optional
   attempt attribution and update the shared context read model. Internal
   `RuntimeEvent` evolution therefore cannot silently break Runtime Client
-  Protocol v4.
+  Protocol v5.
 - **Streaming repair.** The snapshot carries an in-flight Assistant output
   view (accumulated blocks) and foreground tool views keyed by the
   logical tool-call identity, so a client repairing after `resync`
@@ -3562,7 +3566,7 @@ Runtime Client is a projection/control/attachment adapter over it.
   subscribe, and subscription polls) then fails with
   `projection_exhausted`. A read never hands back a model that silently
   stopped folding authoritative transitions.
-- **Attachment lifecycle.** Protocol v4 admits at most one active
+- **Attachment lifecycle.** Protocol v5 admits at most one active
   attachment: the first attach succeeds, a second fails with
   `attachment_in_use` and never evicts the first, detach (explicit or
   RAII drop) releases ownership, reconnects receive a fresh attachment
@@ -3658,7 +3662,7 @@ Runtime Client is a projection/control/attachment adapter over it.
 - **Protocol envelope.** A transport-neutral JSON-RPC-style envelope:
   `request(id, method + typed params)`, `response(id, result | error)`,
   and `event(cursor + typed payload)` with no request ids on
-  notifications. Every v4 method is client-initiated
+  notifications. Every v5 method is client-initiated
   (`initialize`, `submit_inbound`, `cancel_current_attempt`,
   `snapshot_get`, `subscribe_events`, `capability_get`,
   `background_status`, `background_cancel`, `detach`, `shutdown`).
@@ -3684,7 +3688,7 @@ rustX Runtime
 Runtime Client projection
       |
       v
-Runtime Client Protocol v4        semantic; Issue #37/#131
+Runtime Client Protocol v5        semantic; Issue #37/#131/#130
       |
       v
 transport adapters                framing only; src/runtime_client/transport
@@ -3730,10 +3734,10 @@ means adding a sibling module there; no semantic module moves.
   string stays in one record and multiline pretty-printed JSON is not
   supported. CRLF input is accepted by removing exactly one `\r` before
   the terminating LF; no other whitespace is touched.
-- **Malformed and oversized input is transport-fatal.** Protocol v4 has
+- **Malformed and oversized input is transport-fatal.** Protocol v5 has
   no uncorrelated error envelope, and a malformed frame may not even
   carry a request id, so the transport invents none. Any complete
-  in-bound-size record that does not deserialize to the exact v4 request
+  in-bound-size record that does not deserialize to the exact v5 request
   type — malformed JSON, unknown method, unknown field, wrong parameter
   type, empty or whitespace-only record — ends the session with a
   framing error, applies nothing, and writes no protocol record. An
@@ -3751,7 +3755,7 @@ means adding a sibling module there; no semantic module moves.
   background execution, and capability state continue under their own
   owners, and no projection lock is held across any transport await.
 - **Active-subscription lag closes the transport.** After a stall the
-  subscription may fall behind the bounded replay ring. Protocol v4 has
+  subscription may fall behind the bounded replay ring. Protocol v5 has
   no uncorrelated stream-error record, so the session ends with a typed
   local `SubscriptionLagged` error carrying the cursor information and
   the client repairs from an authoritative snapshot after reconnecting.
@@ -4507,7 +4511,7 @@ beside it:
 rustX Runtime semantics
         |
         v
-Runtime Client Protocol v4
+Runtime Client Protocol v5
         |
         v
 rustX TypeScript projection
@@ -5158,6 +5162,15 @@ The attempt class answers "what happened to the external plane", and nothing
 else. **Whether a turn is still owed an answer is a separate durable
 question**, answered by the answer obligation below, so every class except C
 can continue an unanswered turn and none of them continues an answered one.
+
+A settled ToolResult batch without a new `InboundTurnAdopted` fact does not
+open another answer obligation. This is the deliberate post-tool recovery
+contract: the earlier `ToolExecutionStarted` evidence proves that external
+work crossed its start boundary, so a dead attempt is terminalized with
+`PendingInboundOnly` rather than replaying a continuation model request. The
+attempt-local `PostToolBatch` marker is never recovered and recovery never
+creates a model step merely to consume it. A fresh inbound batch adopted at a
+safe boundary still follows the separate durable answer-obligation contract.
 
 Class B is the **only** state whose meaning is "no external work started" *for
 an attempt that exists*: it requires durable proof that **zero** external-start

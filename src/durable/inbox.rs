@@ -73,6 +73,39 @@ pub struct TranscriptCommitReceipt {
     pub transcript_cursor: Option<TranscriptCursor>,
 }
 
+/// The durable receipt of one model-turn-start transition.
+///
+/// The receipt carries the complete start-owned Event Journal sequence in
+/// durable order. `NewlyCommitted` is the only disposition that publishes
+/// those events through the live observation seam; `IdempotentReplay` is an
+/// exact historical verification and must not replay its facts to observers.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelTurnStartCommit {
+    /// The `ModelRequestStarted` fact, first in the committed sequence.
+    pub started: RuntimeEventEnvelope,
+    /// The status emission facts committed immediately after `started`, in
+    /// the prepared emission order (which is also durable sequence order).
+    pub agent_status_emissions: Vec<RuntimeEventEnvelope>,
+    /// Whether this call inserted the transition or only verified it.
+    pub disposition: ModelTurnStartCommitDisposition,
+}
+
+impl ModelTurnStartCommit {
+    /// Returns every start-owned event in exact durable sequence order.
+    pub fn events(&self) -> impl Iterator<Item = &RuntimeEventEnvelope> {
+        std::iter::once(&self.started).chain(self.agent_status_emissions.iter())
+    }
+}
+
+/// Whether a model-turn-start receipt committed new durable facts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelTurnStartCommitDisposition {
+    /// The transition was committed by this call.
+    NewlyCommitted,
+    /// The exact transition was already committed and was verified again.
+    IdempotentReplay,
+}
+
 /// A producer-supplied draft of one inbound item, before acceptance.
 ///
 /// The producer supplies destination content/provenance/correlation and, for
@@ -467,6 +500,10 @@ pub struct AgentStatusEmissionRecord {
     pub request_id: RequestId,
     /// The exact canonical Agent Status User message referenced by the fact.
     pub canonical_message_id: MessageId,
+    /// The monotonic non-compaction Conversation Surface progress observed
+    /// when the status generation was evaluated. Todo uses this existing
+    /// canonical-message progress coordinate for its reminder window.
+    pub surface_progress: u64,
     /// The Event Journal sequence of the emission fact.
     pub event_sequence: u64,
 }
@@ -1196,7 +1233,9 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// Commits one model-turn start atomically (Issue #12, M9b): the
     /// request-scoped canonical context messages (Ledger append + Surface
     /// advance), the immutable Request Snapshot, and the exact
-    /// `ModelRequestStarted` evidence in **one** transaction.
+    /// `ModelRequestStarted` evidence and, when the prepared request carries
+    /// Agent Status, the exact canonical status message, emission facts, and
+    /// latest-emission projection in **one** transaction.
     ///
     /// This is the one durable request-start transition of every actual
     /// primary model request — the first turn, every tool→model
@@ -1209,15 +1248,18 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// its request starting.
     ///
     /// The store validates structure and durability only; it owns no
-    /// cancellation policy. The retry-safe idempotency rule is unchanged:
-    /// repeating the exact same start (same snapshot, same context) returns
-    /// the original start fact, and a conflicting retry is rejected.
+    /// cancellation policy. A fresh commit returns a typed receipt containing
+    /// every newly committed start-owned event in Event Journal sequence
+    /// order. An exact retry returns the same events with an
+    /// [`ModelTurnStartCommitDisposition::IdempotentReplay`] disposition, so a
+    /// live observer can avoid replaying historical facts. A conflicting
+    /// retry is rejected.
     fn commit_model_turn_start(
         &self,
         context: &[MessageBlock],
         snapshot: &RequestSnapshot,
         timestamp: DateTime<Utc>,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+    ) -> Result<ModelTurnStartCommit, ConversationStoreError>;
 
     /// Reads the materialized latest Agent Status emission for one bounded
     /// semantic module/key pair. Normal status preparation never scans the

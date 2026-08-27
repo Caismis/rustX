@@ -129,8 +129,8 @@ pub(crate) const BACKGROUND_STATUS: &str = "background_status";
 /// A native Todo mutation followed by a continuation, used to kill the
 /// process around the Issue #130 opportunity and start boundaries.
 pub(crate) const TODO_STATUS_TURN: &str = "todo_status_turn";
-/// A reopened conversation that submits **nothing**, so the only work it can
-/// start is the continuation recovery permitted.
+/// A reopened conversation that submits **nothing**, so recovery behavior can
+/// be observed without a new inbound request creating work.
 pub(crate) const RESUME_IDLE: &str = "resume_idle";
 
 /// A text payload larger than the coalescer's default byte threshold, so the
@@ -1392,9 +1392,9 @@ async fn scenario_body(root: &Path, scenario: &str) {
             park_owning((child, supervisor)).await;
         }
         RESUME_IDLE => {
-            // Nothing is submitted here. Whatever attempt this process starts
-            // is the recovered continuation of an already-canonical turn, and
-            // nothing else can be confused for it.
+            // Nothing is submitted here. A recovery-permitted continuation, if
+            // any, is therefore distinguishable from new inbound work; an
+            // externally-started dead attempt must instead remain terminal.
             let child = Child::require(
                 root,
                 vec![vec![

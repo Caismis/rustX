@@ -860,6 +860,46 @@ describe("presentation projection", () => {
     assert.equal(state.status?.status_message_id, "status-combined");
   });
 
+  it("folds the bounded Todo Agent Status section", () => {
+    const status = {
+      attempt_id: "a1",
+      turn: 2,
+      status_message_id: "status-todo",
+      opportunities: { post_tool_batch: {} },
+      sections: [
+        {
+          type: "todo" as const,
+          current: {
+            id: 7,
+            subject: "Review the boundary",
+            active_form: "Reviewing the boundary",
+            status: "in_progress" as const,
+            blocked: false,
+          },
+          tasks: [],
+          active_count: 1,
+          blocked_count: 0,
+          completed_count: 3,
+          deleted_count: 1,
+          omitted_count: 0,
+        },
+      ],
+      rendered: "## Todo\n- Review the boundary",
+    };
+    const state = fold(initial(), [
+      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      {
+        type: "agent_status_composed",
+        attempt_id: "a1",
+        turn: 2,
+        status,
+      },
+    ]);
+
+    assert.deepEqual(state.status?.sections, status.sections);
+    assert.deepEqual(state.status?.opportunities, status.opportunities);
+  });
+
   it("folds a capability revision swap", () => {
     const state = fold(initial(), [
       { type: "capability_updated", capabilities: capabilities(7) },
@@ -925,7 +965,7 @@ describe("presentation projection", () => {
           cursor: runtimeCursor(42),
           event: { type: "future_variant" } as unknown as RuntimeClientEvent,
         }),
-      /unreachable Runtime Client Protocol v4 event/,
+      /unreachable Runtime Client Protocol v5 event/,
     );
   });
 
