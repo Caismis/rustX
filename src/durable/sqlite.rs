@@ -118,9 +118,16 @@ use super::inbox::{
 /// so it must fail at store open rather than being interpreted by a v10
 /// reader.
 ///
-/// A v3/v4/v5/v6/v7/v8/v9 database must fail at store open; there is no
+/// Version 11 freezes the structured Agent Status generation descriptor
+/// introduced by Issue #131: canonical Agent Status context messages carry
+/// their UTC generation instant and typed admitted-module membership. A v10
+/// Ledger cannot answer Surface visibility for Time and Background without
+/// renderer parsing, so it must fail at store open rather than being
+/// interpreted by a v11 reader.
+///
+/// A v3/v4/v5/v6/v7/v8/v9/v10 database must fail at store open; there is no
 /// migration or compatibility path.
-pub const SQLITE_SCHEMA_VERSION: i64 = 10;
+pub const SQLITE_SCHEMA_VERSION: i64 = 11;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -5901,8 +5908,9 @@ mod tests {
     use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope, SubagentTerminalState};
     use crate::message::content::TextBlock;
     use crate::message::types::{
-        AssistantContentBlock, AssistantMessageBlock, ContextKind, InboundKind, MessageBlock,
-        UserContentBlock, UserMessageBlock, UserSource,
+        AgentStatusGenerationMetadata, AgentStatusModuleId, AssistantContentBlock,
+        AssistantMessageBlock, ContextKind, InboundKind, MessageBlock, UserContentBlock,
+        UserMessageBlock, UserSource,
     };
     use crate::model::catalog::ModelCapabilities;
     use crate::model::catalog::ModelCompat;
@@ -5974,6 +5982,61 @@ mod tests {
                 text: text.to_owned(),
             })],
         })
+    }
+
+    #[test]
+    fn invalid_agent_status_metadata_is_rejected_by_durable_decode() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("conversation.sqlite");
+        let conversation_id = ConversationId::new("metadata-corruption");
+        let message_id = MessageId::new("status-invalid-after-persist");
+        let status = MessageBlock::User(UserMessageBlock {
+            id: message_id.clone(),
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: "renderer text is irrelevant".to_owned(),
+            })],
+            source: UserSource::Runtime,
+            kind: InboundKind::Context(ContextKind::AgentStatus(
+                AgentStatusGenerationMetadata::new(
+                    Utc.with_ymd_and_hms(2026, 8, 27, 6, 0, 0).unwrap(),
+                    [AgentStatusModuleId::Time, AgentStatusModuleId::Background],
+                )
+                .expect("valid Agent Status metadata"),
+            )),
+            timestamp: None,
+        });
+
+        {
+            let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
+            store.initialize(&[]).unwrap();
+            store.append_canonical(&status).unwrap();
+            let reloaded = store
+                .load_messages(std::slice::from_ref(&message_id))
+                .unwrap();
+            assert_eq!(reloaded, vec![status.clone()]);
+        }
+
+        let mut encoded = serde_json::to_value(&status).unwrap();
+        encoded["kind"]["context"]["agent_status"]["modules"] = serde_json::json!([]);
+        let encoded = serde_json::to_string(&encoded).unwrap();
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute(
+                "UPDATE message_ledger SET message_json=?1 WHERE message_id=?2",
+                params![encoded, message_id.as_str()],
+            )
+            .unwrap();
+        drop(connection);
+
+        let reopened = SqliteConversationStore::open(conversation_id, &path).unwrap();
+        let error = reopened
+            .load_messages(std::slice::from_ref(&message_id))
+            .expect_err("invalid canonical metadata must fail closed");
+        assert!(matches!(
+            error,
+            ConversationStoreError::Storage(message)
+                if message.contains("decode Ledger message")
+        ));
     }
 
     fn envelope(
@@ -7930,7 +7993,7 @@ mod tests {
             SqliteConversationStore::open(conversation_id, &path),
             Err(ConversationStoreError::SchemaVersionMismatch {
                 stored: 9,
-                expected: 10
+                expected: SQLITE_SCHEMA_VERSION
             })
         ));
     }

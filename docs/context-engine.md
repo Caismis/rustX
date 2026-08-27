@@ -261,7 +261,7 @@ MessageBlock::User with InboundKind::Context(ContextKind):
 | semantic fact | trusted source | context kind |
 | --- | --- | --- |
 | certified extension context | Extension { contributor } | ExtensionEnvironment |
-| Agent Status | Runtime | AgentStatus |
+| Agent Status | Runtime | AgentStatus(metadata) |
 
 The Agent Loop admission function is the only path that allocates context
 message identities, appends ledger facts, and advances the surface. It
@@ -269,18 +269,26 @@ allocates IDs once, commits each accepted message through
 ConversationState::commit, and records the accepted ContextGeneration.
 Contributors cannot select provenance or identity.
 
-Agent Status remains structured runtime-owned data before rendering. The
-closed, rustX-owned Time and Background modules receive a FreshInbound
-opportunity, capture authoritative state once into finite immutable snapshots,
-and evaluate only those snapshots plus immutable launch configuration. The
-engine validates `Time <-> Temporal` and `Background <-> BackgroundExecution`,
-applies module-local bounds, then admits whole sections under a global
-UTF-8-byte cap in `Time -> Background` source order. It never scans
-conversation prose or infers current state from regular expressions. Two
-status generations with identical bytes at different admitted steps are
+Agent Status remains structured runtime-owned data before rendering. At the
+single primary-model-step preparation boundary, the Agent Loop freezes one
+finite Pre-Status Surface view by copying the active Surface identities and
+hydrating only those identities from the Message Ledger. It samples the clock
+once and captures one immutable authoritative Background registry snapshot;
+the closed, rustX-owned Time and Background modules then evaluate those shared
+inputs once. The FreshInbound opportunity says only that status may be
+considered — it does not make either module contribute automatically.
+The engine validates `Time <-> Temporal` and
+`Background <-> BackgroundExecution`, applies module-local bounds, then admits
+whole sections under a global UTF-8-byte cap in `Time -> Background` source
+order. It never scans conversation prose or infers current state from regular
+expressions: visible status membership comes from typed canonical generation
+metadata, whose private validated representation rejects invalid durable
+membership, while current Background activity comes only from the registry.
+Two status generations with identical bytes at different admitted steps are
 different facts and receive different MessageIds; content deduplication is
 not a semantic operation. A failed module is quarantined for the current
-attempt while surviving modules continue.
+attempt while surviving modules continue. Overflow compaction retries reuse
+the accepted generation and do not rescan, recapture, or reevaluate it.
 
 The Skill catalog is sampled from the immutable per-attempt capability
 snapshot and assembled as a request-time native capability section. Normal

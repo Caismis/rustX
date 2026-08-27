@@ -10,7 +10,7 @@
 //! Runtime Client projection
 //!       |
 //!       v
-//! Runtime Client Protocol v3        (semantic; Issue #37)
+//! Runtime Client Protocol v4        (semantic; Issue #37)
 //!       |
 //!       v
 //! transport adapters                (framing only; this module)

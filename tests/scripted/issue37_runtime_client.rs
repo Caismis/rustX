@@ -184,10 +184,12 @@ async fn submit_idle_admits_and_settles_asynchronously() {
         matches!(
             message,
             MessageBlock::User(user)
-                if user.kind
-                    == rustx::message::types::InboundKind::Context(
-                        rustx::message::types::ContextKind::AgentStatus,
+                if matches!(
+                    &user.kind,
+                    rustx::message::types::InboundKind::Context(
+                        rustx::message::types::ContextKind::AgentStatus(_)
                     )
+                )
         )
     }));
 
@@ -760,10 +762,12 @@ async fn agent_status_shares_one_composition() {
         .iter()
         .find_map(|message| match message {
             MessageBlock::User(user)
-                if user.kind
-                    == rustx::message::types::InboundKind::Context(
-                        rustx::message::types::ContextKind::AgentStatus,
-                    ) =>
+                if matches!(
+                    &user.kind,
+                    rustx::message::types::InboundKind::Context(
+                        rustx::message::types::ContextKind::AgentStatus(_)
+                    )
+                ) =>
             {
                 user.content.first().and_then(|content| match content {
                     rustx::message::types::UserContentBlock::Text(text) => Some(text.text.clone()),
@@ -817,10 +821,12 @@ async fn agent_status_shares_one_composition() {
         .iter()
         .find_map(|message| match message {
             MessageBlock::User(user)
-                if user.kind
-                    == rustx::message::types::InboundKind::Context(
-                        rustx::message::types::ContextKind::AgentStatus,
-                    ) =>
+                if matches!(
+                    &user.kind,
+                    rustx::message::types::InboundKind::Context(
+                        rustx::message::types::ContextKind::AgentStatus(_)
+                    )
+                ) =>
             {
                 Some(user)
             }
@@ -901,10 +907,12 @@ async fn all_agent_status_modules_disabled_emit_no_message_or_observation() {
         matches!(
             message,
             MessageBlock::User(user)
-                if user.kind
-                    == rustx::message::types::InboundKind::Context(
-                        rustx::message::types::ContextKind::AgentStatus,
+                if matches!(
+                    &user.kind,
+                    rustx::message::types::InboundKind::Context(
+                        rustx::message::types::ContextKind::AgentStatus(_)
                     )
+                )
         )
     }));
     let (snapshot, _) = host.snapshot().expect("snapshot");
@@ -973,10 +981,12 @@ async fn agent_status_is_composed_exactly_once_per_request() {
     for request in &requests {
         let Some((id, text)) = request.messages.iter().find_map(|message| match message {
             MessageBlock::User(user)
-                if user.kind
-                    == rustx::message::types::InboundKind::Context(
-                        rustx::message::types::ContextKind::AgentStatus,
-                    ) =>
+                if matches!(
+                    &user.kind,
+                    rustx::message::types::InboundKind::Context(
+                        rustx::message::types::ContextKind::AgentStatus(_)
+                    )
+                ) =>
             {
                 user.content.first().and_then(|content| match content {
                     rustx::message::types::UserContentBlock::Text(text) => {

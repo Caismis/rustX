@@ -26,10 +26,12 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
+use crate::conversation::ConversationSurfaceSnapshot;
+use crate::message::types::{AgentStatusGenerationMetadata, AgentStatusModuleId, MessageBlock};
 use crate::runtime::identity::MessageId;
 use crate::tools::background::{BackgroundExecutionSnapshot, ConversationBackgroundRegistry};
 use crate::tools::types::ToolProgress;
@@ -45,6 +47,14 @@ pub const MAX_BACKGROUND_STATUS_TEXT_BYTES: usize = 256;
 
 /// The final defensive Agent Status rendering bound, measured in UTF-8 bytes.
 pub const GLOBAL_AGENT_STATUS_BYTE_CAP: usize = 4096;
+
+/// Time is refreshed when the latest visible Time contribution reaches this
+/// age. The threshold is inclusive.
+pub const TIME_REFRESH_INTERVAL: ChronoDuration = ChronoDuration::minutes(30);
+
+/// Background reminders are eligible after this many visible non-AgentStatus
+/// canonical messages follow the latest visible Background contribution.
+pub const BACKGROUND_REMINDER_MESSAGE_INTERVAL: usize = 8;
 
 const DEFAULT_ENABLED: bool = true;
 
@@ -68,7 +78,7 @@ pub struct AgentStatusConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 pub struct TimeStatusConfig {
-    /// Whether Time contributes to `FreshInbound` status.
+    /// Whether Time participates in an available Agent Status opportunity.
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     /// The optional IANA timezone used only by Time presentation.
@@ -89,7 +99,7 @@ impl Default for TimeStatusConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 pub struct BackgroundStatusConfig {
-    /// Whether Background contributes to `FreshInbound` status.
+    /// Whether Background participates in an available Agent Status opportunity.
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 }
@@ -104,16 +114,6 @@ impl Default for BackgroundStatusConfig {
             enabled: DEFAULT_ENABLED,
         }
     }
-}
-
-/// The stable identity of one code-owned Agent Status module/section.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentStatusModuleId {
-    /// The Time module.
-    Time,
-    /// The Background module.
-    Background,
 }
 
 impl AgentStatusModuleId {
@@ -144,8 +144,6 @@ pub struct FreshInboundStatusOpportunity {
     /// The final canonical inbound message that made this opportunity
     /// eligible.
     pub target_message_id: MessageId,
-    /// The persisted timestamp of that inbound message.
-    pub inbound_message_time: DateTime<Utc>,
 }
 
 /// The opportunities available to one logical primary step.
@@ -167,8 +165,6 @@ pub enum AgentStatusSectionData {
         current_time: DateTime<Utc>,
         /// The configured IANA timezone, when known.
         timezone: Option<Tz>,
-        /// The persisted timestamp of the triggering inbound message.
-        inbound_message_time: DateTime<Utc>,
     },
     /// The Background module's typed presentation payload.
     BackgroundExecution {
@@ -221,8 +217,303 @@ pub struct AgentStatusSection {
 /// One accepted Agent Status generation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentStatus {
+    /// The one Agent Status clock instant used for this generation.
+    pub generated_at: DateTime<Utc>,
     /// Sections in rustX semantic source order.
     pub sections: Vec<AgentStatusSection>,
+}
+
+impl AgentStatus {
+    /// Returns the durable descriptor attached to the canonical Agent Status
+    /// message for this generation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a hand-constructed `AgentStatus` that contains no
+    /// valid closed-engine sections. Production generations are assembled by
+    /// the closed engine and always satisfy this invariant.
+    #[must_use]
+    pub fn generation_metadata(&self) -> AgentStatusGenerationMetadata {
+        let modules: Vec<AgentStatusModuleId> = self
+            .sections
+            .iter()
+            .map(|section| match section.id.as_str() {
+                AgentStatusSectionId::TEMPORAL => AgentStatusModuleId::Time,
+                AgentStatusSectionId::BACKGROUND_EXECUTION => AgentStatusModuleId::Background,
+                _ => unreachable!("the closed Agent Status engine emitted an unknown section"),
+            })
+            .collect();
+        AgentStatusGenerationMetadata::new(self.generated_at, modules)
+            .expect("the closed Agent Status engine emits a valid generation")
+    }
+}
+
+impl AgentStatusOpportunitySet {
+    /// Whether this logical step has no Agent Status delivery opportunity.
+    ///
+    /// Delivery opportunity is deliberately independent from module trigger
+    /// policy. The closed production set currently contains only `FreshInbound`,
+    /// while future opportunities can be added without changing module input
+    /// types or their Surface-aware policies.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.fresh_inbound.is_none()
+    }
+}
+
+/// One canonical message body resolved for an active Surface identity.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SurfaceMessageView {
+    /// The active Surface identity.
+    pub id: MessageId,
+    /// The immutable canonical body resolved from the Message Ledger.
+    pub message: MessageBlock,
+}
+
+/// An invalid identity/body projection supplied to an Agent Status Surface
+/// view boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentStatusSurfaceViewError {
+    /// A frozen snapshot must contain one canonical body for every active
+    /// identity.
+    IdentityBodyCountMismatch {
+        /// Number of active identities in the snapshot.
+        active_message_ids: usize,
+        /// Number of canonical bodies in the snapshot.
+        messages: usize,
+    },
+    /// A keyed canonical body does not have the identity assigned to its
+    /// active Surface position.
+    IdentityBodyMismatch {
+        /// Identity from the Surface projection.
+        expected: MessageId,
+        /// Identity found in the hydrated canonical body.
+        actual: MessageId,
+    },
+}
+
+impl core::fmt::Display for AgentStatusSurfaceViewError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::IdentityBodyCountMismatch {
+                active_message_ids,
+                messages,
+            } => write!(
+                f,
+                "Agent Status Surface snapshot has {active_message_ids} identities and {messages} bodies"
+            ),
+            Self::IdentityBodyMismatch { expected, actual } => write!(
+                f,
+                "Agent Status Surface identity {expected} contains canonical body {actual}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for AgentStatusSurfaceViewError {}
+
+/// The finite immutable model-visible Surface projection used by Agent Status.
+///
+/// This value is built once at the status preparation boundary from one
+/// Surface head and keyed Ledger hydration. It contains no authoritative
+/// domain state and no durable emission history. The small latest-status index
+/// is derived from the same private immutable message slice; it is not a
+/// second mutable Surface authority. There is no public constructor that can
+/// bypass the identity/body validation.
+///
+/// The view's representation is intentionally private: callers can inspect a
+/// frozen snapshot but cannot replace one of its identities, bodies, or
+/// derived indexes after construction.
+///
+/// ```compile_fail
+/// use rustx::context::AgentStatusSurfaceView;
+///
+/// fn mutate(view: &mut AgentStatusSurfaceView) {
+///     view.revision = rustx::conversation::SurfaceRevision::INITIAL;
+/// }
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentStatusSurfaceView {
+    revision: crate::conversation::SurfaceRevision,
+    compaction_generation: u64,
+    active_message_ids: Arc<[MessageId]>,
+    messages: Arc<[SurfaceMessageView]>,
+    latest_by_module: [Option<VisibleAgentStatus>; 2],
+}
+
+/// The latest visible Agent Status generation containing one module.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisibleAgentStatus {
+    /// The canonical Agent Status message identity.
+    pub message_id: MessageId,
+    /// The structured generation timestamp.
+    pub generated_at: DateTime<Utc>,
+}
+
+impl AgentStatusSurfaceView {
+    /// Builds a Surface view from one already-frozen conversation snapshot.
+    ///
+    /// The snapshot has already established the Surface/Message Ledger read
+    /// boundary. This constructor only derives the bounded semantic index.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the snapshot has a missing body or an identity/body
+    /// mismatch. Durable decoding and the Conversation Surface hydration path
+    /// therefore fail closed instead of materializing an inconsistent view.
+    pub fn from_snapshot(
+        snapshot: ConversationSurfaceSnapshot,
+    ) -> Result<Self, AgentStatusSurfaceViewError> {
+        if snapshot.active_message_ids.len() != snapshot.messages.len() {
+            return Err(AgentStatusSurfaceViewError::IdentityBodyCountMismatch {
+                active_message_ids: snapshot.active_message_ids.len(),
+                messages: snapshot.messages.len(),
+            });
+        }
+        let active_message_ids: Arc<[MessageId]> =
+            Arc::from(snapshot.active_message_ids.into_boxed_slice());
+        let messages = active_message_ids
+            .iter()
+            .cloned()
+            .zip(snapshot.messages)
+            .map(|(id, message)| SurfaceMessageView { id, message })
+            .collect::<Vec<_>>();
+        Self::from_parts(
+            snapshot.revision,
+            snapshot.compaction_generation,
+            active_message_ids,
+            Arc::from(messages.into_boxed_slice()),
+        )
+    }
+
+    /// Builds a view from one captured ordered identity/body set.
+    ///
+    /// This internal constructor is also used by focused unit tests. It is
+    /// fallible for the same reason as [`Self::from_snapshot`], so tests cannot
+    /// construct a view whose derived indexes disagree with its identity/body
+    /// sequence.
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        revision: crate::conversation::SurfaceRevision,
+        compaction_generation: u64,
+        active_message_ids: Arc<[MessageId]>,
+        messages: Arc<[SurfaceMessageView]>,
+    ) -> Result<Self, AgentStatusSurfaceViewError> {
+        Self::from_parts(
+            revision,
+            compaction_generation,
+            active_message_ids,
+            messages,
+        )
+    }
+
+    fn from_parts(
+        revision: crate::conversation::SurfaceRevision,
+        compaction_generation: u64,
+        active_message_ids: Arc<[MessageId]>,
+        messages: Arc<[SurfaceMessageView]>,
+    ) -> Result<Self, AgentStatusSurfaceViewError> {
+        if active_message_ids.len() != messages.len() {
+            return Err(AgentStatusSurfaceViewError::IdentityBodyCountMismatch {
+                active_message_ids: active_message_ids.len(),
+                messages: messages.len(),
+            });
+        }
+        let mut latest_by_module = std::array::from_fn(|_| None);
+        for (index, message) in messages.iter().enumerate() {
+            if active_message_ids[index] != message.id {
+                return Err(AgentStatusSurfaceViewError::IdentityBodyMismatch {
+                    expected: active_message_ids[index].clone(),
+                    actual: message.id.clone(),
+                });
+            }
+            if message.id != *message.message.id() {
+                return Err(AgentStatusSurfaceViewError::IdentityBodyMismatch {
+                    expected: message.id.clone(),
+                    actual: message.message.id().clone(),
+                });
+            }
+            let Some(metadata) = message.message.agent_status_metadata() else {
+                continue;
+            };
+            for module in metadata.modules() {
+                latest_by_module[module_index(*module)] = Some(VisibleAgentStatus {
+                    message_id: message.id.clone(),
+                    generated_at: metadata.generated_at(),
+                });
+            }
+        }
+        Ok(Self {
+            revision,
+            compaction_generation,
+            active_message_ids,
+            messages,
+            latest_by_module,
+        })
+    }
+
+    /// The exact Surface revision represented by this view.
+    #[must_use]
+    pub fn revision(&self) -> crate::conversation::SurfaceRevision {
+        self.revision
+    }
+
+    /// The compaction generation represented by this view.
+    #[must_use]
+    pub fn compaction_generation(&self) -> u64 {
+        self.compaction_generation
+    }
+
+    /// Active identities in model-visible order.
+    #[must_use]
+    pub fn active_message_ids(&self) -> &[MessageId] {
+        &self.active_message_ids
+    }
+
+    /// Keyed canonical bodies in the same order as [`Self::active_message_ids`].
+    #[must_use]
+    pub fn messages(&self) -> &[SurfaceMessageView] {
+        &self.messages
+    }
+
+    /// The latest visible Agent Status generation containing `module`.
+    #[must_use]
+    pub fn latest_status(&self, module: AgentStatusModuleId) -> Option<&VisibleAgentStatus> {
+        self.latest_by_module[module_index(module)].as_ref()
+    }
+
+    /// Whether a visible Agent Status generation contains `module`.
+    #[must_use]
+    pub fn contains_status(&self, module: AgentStatusModuleId) -> bool {
+        self.latest_status(module).is_some()
+    }
+
+    /// Counts active model-visible non-AgentStatus messages after `message_id`.
+    ///
+    /// Agent Status messages are deliberately excluded so reminders cannot
+    /// self-excite. `None` means the supplied identity is not active in this
+    /// frozen Surface.
+    #[must_use]
+    pub fn non_status_messages_since(&self, message_id: &MessageId) -> Option<usize> {
+        let position = self
+            .active_message_ids
+            .iter()
+            .position(|active| active == message_id)?;
+        Some(
+            self.messages
+                .iter()
+                .skip(position.saturating_add(1))
+                .filter(|message| !message.message.is_agent_status())
+                .count(),
+        )
+    }
+}
+
+const fn module_index(module: AgentStatusModuleId) -> usize {
+    match module {
+        AgentStatusModuleId::Time => 0,
+        AgentStatusModuleId::Background => 1,
+    }
 }
 
 /// The clock boundary of the Time module.
@@ -269,7 +560,7 @@ impl AgentStatusModule {
 
     fn capture(
         &self,
-        background: &ConversationBackgroundRegistry,
+        frozen: &AgentStatusEvaluationSnapshot<'_>,
         seam: Option<&AgentStatusTestSeam>,
     ) -> Result<AgentStatusModuleSnapshot, ModuleFailurePhase> {
         let id = self.id();
@@ -280,9 +571,11 @@ impl AgentStatusModule {
             }
         }
         match self {
-            Self::Time(module) => Ok(AgentStatusModuleSnapshot::Time(module.capture())),
+            Self::Time(_) => Ok(AgentStatusModuleSnapshot::Time(TimeStatusModule::capture(
+                frozen,
+            ))),
             Self::Background(_) => Ok(AgentStatusModuleSnapshot::Background(
-                BackgroundStatusModule::capture(background),
+                BackgroundStatusModule::capture(frozen),
             )),
         }
     }
@@ -290,7 +583,7 @@ impl AgentStatusModule {
     fn evaluate(
         &self,
         snapshot: &AgentStatusModuleSnapshot,
-        opportunity: &FreshInboundStatusOpportunity,
+        now: DateTime<Utc>,
         seam: Option<&AgentStatusTestSeam>,
     ) -> Result<Option<AgentStatusPayload>, ModuleFailurePhase> {
         let id = self.id();
@@ -302,7 +595,7 @@ impl AgentStatusModule {
         }
         let payload = match (self, snapshot) {
             (Self::Time(module), AgentStatusModuleSnapshot::Time(snapshot)) => {
-                Some(module.evaluate(snapshot, opportunity))
+                module.evaluate(snapshot)
             }
             (Self::Background(_), AgentStatusModuleSnapshot::Background(snapshot)) => {
                 BackgroundStatusModule::evaluate(snapshot)
@@ -316,9 +609,8 @@ impl AgentStatusModule {
                     omitted_count: 0,
                 },
                 AgentStatusModuleId::Background => AgentStatusPayload::Temporal {
-                    current_time: opportunity.inbound_message_time,
+                    current_time: now,
                     timezone: None,
-                    inbound_message_time: opportunity.inbound_message_time,
                 },
             }));
         }
@@ -329,26 +621,30 @@ impl AgentStatusModule {
 /// The code-owned Time module.
 struct TimeStatusModule {
     config: TimeStatusConfig,
-    clock: Arc<dyn AgentStatusClock>,
 }
 
 impl TimeStatusModule {
-    fn capture(&self) -> TimeStatusSnapshot {
+    fn capture(frozen: &AgentStatusEvaluationSnapshot<'_>) -> TimeStatusSnapshot {
         TimeStatusSnapshot {
-            current_time: self.clock.now(),
+            current_time: frozen.now,
+            latest_visible: frozen
+                .surface
+                .latest_status(AgentStatusModuleId::Time)
+                .cloned(),
         }
     }
 
-    fn evaluate(
-        &self,
-        snapshot: &TimeStatusSnapshot,
-        opportunity: &FreshInboundStatusOpportunity,
-    ) -> AgentStatusPayload {
-        AgentStatusPayload::Temporal {
+    fn evaluate(&self, snapshot: &TimeStatusSnapshot) -> Option<AgentStatusPayload> {
+        let eligible = snapshot.latest_visible.as_ref().is_none_or(|latest| {
+            snapshot
+                .current_time
+                .signed_duration_since(latest.generated_at)
+                >= TIME_REFRESH_INTERVAL
+        });
+        eligible.then_some(AgentStatusPayload::Temporal {
             current_time: snapshot.current_time,
             timezone: self.config.timezone,
-            inbound_message_time: opportunity.inbound_message_time,
-        }
+        })
     }
 }
 
@@ -358,14 +654,29 @@ struct BackgroundStatusModule {
 }
 
 impl BackgroundStatusModule {
-    fn capture(background: &ConversationBackgroundRegistry) -> BackgroundStatusSnapshot {
+    fn capture(frozen: &AgentStatusEvaluationSnapshot<'_>) -> BackgroundStatusSnapshot {
+        let latest_visible = frozen
+            .surface
+            .latest_status(AgentStatusModuleId::Background)
+            .cloned();
+        let non_status_messages_since = latest_visible
+            .as_ref()
+            .and_then(|latest| frozen.surface.non_status_messages_since(&latest.message_id));
         BackgroundStatusSnapshot {
-            executions: background.active_snapshot(),
+            executions: Arc::clone(&frozen.active_background),
+            latest_visible,
+            non_status_messages_since,
         }
     }
 
     fn evaluate(snapshot: &BackgroundStatusSnapshot) -> Option<AgentStatusPayload> {
-        if snapshot.executions.is_empty() {
+        let eligible = !snapshot.executions.is_empty()
+            && snapshot.latest_visible.as_ref().is_none_or(|_| {
+                snapshot
+                    .non_status_messages_since
+                    .is_some_and(|count| count >= BACKGROUND_REMINDER_MESSAGE_INTERVAL)
+            });
+        if !eligible {
             return None;
         }
         let retained = snapshot
@@ -391,11 +702,25 @@ enum AgentStatusModuleSnapshot {
 #[derive(Debug, Clone)]
 struct TimeStatusSnapshot {
     current_time: DateTime<Utc>,
+    latest_visible: Option<VisibleAgentStatus>,
 }
 
 #[derive(Debug, Clone)]
 struct BackgroundStatusSnapshot {
-    executions: Vec<BackgroundExecutionSnapshot>,
+    executions: Arc<[BackgroundExecutionSnapshot]>,
+    latest_visible: Option<VisibleAgentStatus>,
+    non_status_messages_since: Option<usize>,
+}
+
+/// The immutable inputs shared by every module in one logical primary step.
+///
+/// `now` and `active_background` are captured before module evaluation starts;
+/// `surface` is the one already-frozen finite Pre-Status Surface view. A
+/// module never reads the live conversation or registry directly.
+struct AgentStatusEvaluationSnapshot<'a> {
+    now: DateTime<Utc>,
+    surface: &'a AgentStatusSurfaceView,
+    active_background: Arc<[BackgroundExecutionSnapshot]>,
 }
 
 #[derive(Debug, Clone)]
@@ -403,7 +728,6 @@ enum AgentStatusPayload {
     Temporal {
         current_time: DateTime<Utc>,
         timezone: Option<Tz>,
-        inbound_message_time: DateTime<Utc>,
     },
     BackgroundExecution {
         executions: Vec<BackgroundExecutionSnapshot>,
@@ -431,6 +755,7 @@ impl ModuleFailurePhase {
 /// The attempt-owned closed Agent Status engine.
 pub struct AgentStatusEngine {
     config: AgentStatusConfig,
+    clock: Arc<dyn AgentStatusClock>,
     modules: [AgentStatusModule; 2],
     quarantined: HashSet<AgentStatusModuleId>,
     #[cfg(test)]
@@ -458,10 +783,10 @@ impl AgentStatusEngine {
     #[must_use]
     pub fn new(config: AgentStatusConfig, clock: Arc<dyn AgentStatusClock>) -> Self {
         Self {
+            clock,
             modules: [
                 AgentStatusModule::Time(TimeStatusModule {
                     config: config.time.clone(),
-                    clock,
                 }),
                 AgentStatusModule::Background(BackgroundStatusModule {
                     config: config.background.clone(),
@@ -502,10 +827,7 @@ impl AgentStatusEngine {
     }
 
     fn clock(&self) -> Arc<dyn AgentStatusClock> {
-        match &self.modules[0] {
-            AgentStatusModule::Time(module) => module.clock.clone(),
-            AgentStatusModule::Background(_) => unreachable!("Time owns the engine clock"),
-        }
+        Arc::clone(&self.clock)
     }
 
     /// Attaches the deterministic in-crate failure/counting seam.
@@ -516,16 +838,26 @@ impl AgentStatusEngine {
         self
     }
 
-    /// Captures, evaluates, validates, and bounds one `FreshInbound`
-    /// generation. The engine's module array is traversed exactly in source
-    /// order: Time, then Background.
+    /// Captures, evaluates, validates, and bounds one Agent Status generation.
+    /// The engine's module array is traversed exactly in source order: Time,
+    /// then Background. The caller supplies the one immutable Pre-Status
+    /// Surface view; this method captures the clock and authoritative active
+    /// Background registry state exactly once.
     #[must_use]
     pub fn prepare(
         &mut self,
         opportunities: &AgentStatusOpportunitySet,
+        surface: &AgentStatusSurfaceView,
         background: &ConversationBackgroundRegistry,
     ) -> Option<AgentStatus> {
-        let opportunity = opportunities.fresh_inbound.as_ref()?;
+        if opportunities.is_empty() {
+            return None;
+        }
+        let frozen = AgentStatusEvaluationSnapshot {
+            now: self.clock.now(),
+            surface,
+            active_background: Arc::from(background.active_snapshot().into_boxed_slice()),
+        };
         #[cfg(test)]
         let seam = self.test_seam.clone();
         #[cfg(not(test))]
@@ -538,12 +870,12 @@ impl AgentStatusEngine {
                 continue;
             }
             let result = (|| {
-                let snapshot = module.capture(background, seam.as_ref())?;
+                let snapshot = module.capture(&frozen, seam.as_ref())?;
                 #[cfg(test)]
                 if let Some(seam) = seam.as_ref() {
                     seam.run_after_capture(id);
                 }
-                let Some(payload) = module.evaluate(&snapshot, opportunity, seam.as_ref())? else {
+                let Some(payload) = module.evaluate(&snapshot, frozen.now, seam.as_ref())? else {
                     return Ok(None);
                 };
                 validate_payload(id, payload)
@@ -554,7 +886,7 @@ impl AgentStatusEngine {
                 Err(phase) => self.quarantine(id, phase),
             }
         }
-        let accepted = admit_sections(sections);
+        let accepted = admit_sections(sections, frozen.now);
         (!accepted.sections.is_empty()).then_some(accepted)
     }
 
@@ -578,14 +910,12 @@ fn validate_payload(
             AgentStatusPayload::Temporal {
                 current_time,
                 timezone,
-                inbound_message_time,
             },
         ) => Ok(Some(AgentStatusSection {
             id: AgentStatusSectionId::new(id.section_id()),
             data: AgentStatusSectionData::Temporal {
                 current_time,
                 timezone,
-                inbound_message_time,
             },
         })),
         (
@@ -614,7 +944,7 @@ fn validate_payload(
 /// rendered from scratch, so separators are accounted for using the retained
 /// set. If a section is too large, later sections still get a chance to fit;
 /// no rendered wrapper or UTF-8 string is ever byte-sliced.
-fn admit_sections(sections: Vec<AgentStatusSection>) -> AgentStatus {
+fn admit_sections(sections: Vec<AgentStatusSection>, generated_at: DateTime<Utc>) -> AgentStatus {
     let mut accepted = Vec::new();
     for section in sections {
         let mut candidate = accepted.clone();
@@ -623,7 +953,10 @@ fn admit_sections(sections: Vec<AgentStatusSection>) -> AgentStatus {
             accepted.push(section);
         }
     }
-    let status = AgentStatus { sections: accepted };
+    let status = AgentStatus {
+        generated_at,
+        sections: accepted,
+    };
     let rendered = render_sections(&status.sections);
     assert!(
         rendered.len() <= GLOBAL_AGENT_STATUS_BYTE_CAP,
@@ -660,12 +993,11 @@ fn bound_status_text(text: String) -> String {
 }
 
 fn render_instant(instant: DateTime<Utc>, timezone: Option<Tz>) -> String {
-    match timezone {
-        Some(timezone) => instant
-            .with_timezone(&timezone)
-            .to_rfc3339_opts(SecondsFormat::Secs, true),
-        None => instant.to_rfc3339_opts(SecondsFormat::Secs, true),
-    }
+    let timezone = timezone.unwrap_or(chrono_tz::UTC);
+    instant
+        .with_timezone(&timezone)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string()
 }
 
 fn render_sections(sections: &[AgentStatusSection]) -> String {
@@ -675,18 +1007,11 @@ fn render_sections(sections: &[AgentStatusSection]) -> String {
             AgentStatusSectionData::Temporal {
                 current_time,
                 timezone,
-                inbound_message_time,
             } => {
+                lines.push(format!("Timezone: {}", timezone.map_or("UTC", Tz::name)));
                 lines.push(format!(
                     "Current time: {}",
                     render_instant(*current_time, *timezone)
-                ));
-                if let Some(timezone) = timezone {
-                    lines.push(format!("Timezone: {}", timezone.name()));
-                }
-                lines.push(format!(
-                    "Inbound message time: {}",
-                    render_instant(*inbound_message_time, *timezone)
                 ));
             }
             AgentStatusSectionData::BackgroundExecution {
@@ -948,6 +1273,12 @@ impl AgentStatusTestSeam {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::conversation::ConversationState;
+    use crate::durable::{ConversationStore, SqliteConversationStore};
+    use crate::message::content::TextBlock;
+    use crate::message::types::{
+        ContextKind, InboundKind, UserContentBlock, UserMessageBlock, UserSource,
+    };
     use crate::runtime::identity::{ToolExecutionId, ToolId};
     use crate::tools::background::BackgroundLifecycle;
 
@@ -955,10 +1286,83 @@ mod tests {
         AgentStatusOpportunitySet {
             fresh_inbound: Some(FreshInboundStatusOpportunity {
                 target_message_id: MessageId::new("inbound"),
-                inbound_message_time: DateTime::from_timestamp(1_754_000_000, 0)
-                    .expect("timestamp"),
             }),
         }
+    }
+
+    fn empty_surface() -> AgentStatusSurfaceView {
+        AgentStatusSurfaceView::for_test(
+            crate::conversation::SurfaceRevision::INITIAL,
+            0,
+            Arc::from(Vec::<MessageId>::new().into_boxed_slice()),
+            Arc::from(Vec::<SurfaceMessageView>::new().into_boxed_slice()),
+        )
+        .expect("valid empty test Surface")
+    }
+
+    fn plain_surface_message(id: &str) -> SurfaceMessageView {
+        SurfaceMessageView {
+            id: MessageId::new(id),
+            message: MessageBlock::User(UserMessageBlock {
+                id: MessageId::new(id),
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: id.to_owned(),
+                })],
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                timestamp: None,
+            }),
+        }
+    }
+
+    fn status_surface_message(
+        id: &str,
+        generated_at: DateTime<Utc>,
+        modules: &[AgentStatusModuleId],
+        rendered_text: &str,
+    ) -> SurfaceMessageView {
+        let message_id = MessageId::new(id);
+        SurfaceMessageView {
+            id: message_id.clone(),
+            message: MessageBlock::User(UserMessageBlock {
+                id: message_id,
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: rendered_text.to_owned(),
+                })],
+                source: UserSource::Runtime,
+                kind: InboundKind::Context(ContextKind::AgentStatus(
+                    AgentStatusGenerationMetadata::new(generated_at, modules.to_vec())
+                        .expect("valid test Agent Status metadata"),
+                )),
+                timestamp: None,
+            }),
+        }
+    }
+
+    fn compaction_summary(id: &str, text: &str) -> UserMessageBlock {
+        UserMessageBlock {
+            id: MessageId::new(id),
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: text.to_owned(),
+            })],
+            source: UserSource::Runtime,
+            kind: InboundKind::CompactionSummary,
+            timestamp: None,
+        }
+    }
+
+    fn surface(messages: Vec<SurfaceMessageView>) -> AgentStatusSurfaceView {
+        let ids = messages
+            .iter()
+            .map(|message| message.id.clone())
+            .collect::<Vec<_>>();
+        AgentStatusSurfaceView::for_test(
+            crate::conversation::SurfaceRevision::new(ids.len() as u64),
+            0,
+            Arc::from(ids.into_boxed_slice()),
+            Arc::from(messages.into_boxed_slice()),
+        )
+        .expect("valid test Surface")
     }
 
     fn background_snapshot(index: usize, detail: &str) -> BackgroundExecutionSnapshot {
@@ -994,6 +1398,19 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct CountingClock {
+        now: DateTime<Utc>,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl AgentStatusClock for CountingClock {
+        fn now(&self) -> DateTime<Utc> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.now
+        }
+    }
+
     fn engine(config: AgentStatusConfig) -> AgentStatusEngine {
         AgentStatusEngine::new(
             config,
@@ -1015,9 +1432,10 @@ mod tests {
     #[test]
     fn default_engine_delivers_time_before_background() {
         let (_fixture, registry) = empty_background();
+        let surface = empty_surface();
         let mut engine = engine(AgentStatusConfig::default());
         let status = engine
-            .prepare(&opportunity(), &registry)
+            .prepare(&opportunity(), &surface, &registry)
             .expect("time status");
         assert_eq!(status.sections.len(), 1);
         assert_eq!(status.sections[0].id.as_str(), "temporal");
@@ -1026,6 +1444,7 @@ mod tests {
     #[test]
     fn time_disabled_produces_no_time_contribution() {
         let (_fixture, registry) = empty_background();
+        let surface = empty_surface();
         let mut engine = engine(AgentStatusConfig {
             time: TimeStatusConfig {
                 enabled: false,
@@ -1033,18 +1452,23 @@ mod tests {
             },
             background: BackgroundStatusConfig::default(),
         });
-        assert!(engine.prepare(&opportunity(), &registry).is_none());
+        assert!(
+            engine
+                .prepare(&opportunity(), &surface, &registry)
+                .is_none()
+        );
     }
 
     #[test]
     fn background_disabled_keeps_time_without_background_contribution() {
         let (_fixture, registry) = empty_background();
+        let surface = empty_surface();
         let mut engine = engine(AgentStatusConfig {
             time: TimeStatusConfig::default(),
             background: BackgroundStatusConfig { enabled: false },
         });
         let status = engine
-            .prepare(&opportunity(), &registry)
+            .prepare(&opportunity(), &surface, &registry)
             .expect("time status");
         assert_eq!(status.sections.len(), 1);
         assert_eq!(status.sections[0].id.as_str(), "temporal");
@@ -1053,6 +1477,7 @@ mod tests {
     #[test]
     fn disabled_modules_produce_no_generation() {
         let (_fixture, registry) = empty_background();
+        let surface = empty_surface();
         let mut engine = engine(AgentStatusConfig {
             time: TimeStatusConfig {
                 enabled: false,
@@ -1060,7 +1485,11 @@ mod tests {
             },
             background: BackgroundStatusConfig { enabled: false },
         });
-        assert!(engine.prepare(&opportunity(), &registry).is_none());
+        assert!(
+            engine
+                .prepare(&opportunity(), &surface, &registry)
+                .is_none()
+        );
     }
 
     #[test]
@@ -1068,7 +1497,8 @@ mod tests {
         let seam = AgentStatusTestSeam::new();
         let mut engine = engine(AgentStatusConfig::default()).with_test_seam(seam.clone());
         let (_fixture, registry) = empty_background();
-        let _ = engine.prepare(&opportunity(), &registry);
+        let surface = empty_surface();
+        let _ = engine.prepare(&opportunity(), &surface, &registry);
         assert_eq!(seam.capture_count(AgentStatusModuleId::Time), 1);
         assert_eq!(seam.evaluate_count(AgentStatusModuleId::Time), 1);
         assert_eq!(seam.capture_count(AgentStatusModuleId::Background), 1);
@@ -1080,18 +1510,21 @@ mod tests {
         let seam = AgentStatusTestSeam::new();
         seam.fail_capture_once(AgentStatusModuleId::Time);
         let (_fixture, registry) = empty_background();
+        let surface = empty_surface();
         let template = engine(AgentStatusConfig::default()).with_test_seam(seam.clone());
         let mut first = template.for_attempt();
         assert!(
-            first.prepare(&opportunity(), &registry).is_none(),
+            first.prepare(&opportunity(), &surface, &registry).is_none(),
             "a failed Time module leaves no useful status when Background is empty"
         );
         assert_eq!(seam.capture_count(AgentStatusModuleId::Time), 1);
-        let _ = first.prepare(&opportunity(), &registry);
+        let _ = first.prepare(&opportunity(), &surface, &registry);
         assert_eq!(seam.capture_count(AgentStatusModuleId::Time), 1);
 
         let mut second = template.for_attempt();
-        let status = second.prepare(&opportunity(), &registry).expect("retry");
+        let status = second
+            .prepare(&opportunity(), &surface, &registry)
+            .expect("retry");
         assert_eq!(status.sections[0].id.as_str(), "temporal");
         assert_eq!(seam.capture_count(AgentStatusModuleId::Time), 2);
     }
@@ -1102,14 +1535,23 @@ mod tests {
         seam.fail_evaluate_once(AgentStatusModuleId::Time);
         let mut failure_engine = engine(AgentStatusConfig::default()).with_test_seam(seam.clone());
         let (_fixture, registry) = empty_background();
-        assert!(failure_engine.prepare(&opportunity(), &registry).is_none());
+        let surface = empty_surface();
+        assert!(
+            failure_engine
+                .prepare(&opportunity(), &surface, &registry)
+                .is_none()
+        );
         assert_eq!(seam.capture_count(AgentStatusModuleId::Time), 1);
         assert_eq!(seam.evaluate_count(AgentStatusModuleId::Time), 1);
 
         let seam = AgentStatusTestSeam::new();
         seam.mismatch_once(AgentStatusModuleId::Time);
         let mut engine = engine(AgentStatusConfig::default()).with_test_seam(seam);
-        assert!(engine.prepare(&opportunity(), &registry).is_none());
+        assert!(
+            engine
+                .prepare(&opportunity(), &surface, &registry)
+                .is_none()
+        );
     }
 
     #[test]
@@ -1128,11 +1570,552 @@ mod tests {
             AgentStatusEngine::new(AgentStatusConfig::default(), Arc::new(MutableClock(clock)))
                 .with_test_seam(seam);
         let (_fixture, registry) = empty_background();
-        let status = engine.prepare(&opportunity(), &registry).expect("status");
+        let surface = empty_surface();
+        let status = engine
+            .prepare(&opportunity(), &surface, &registry)
+            .expect("status");
         assert!(matches!(
             status.sections.first().map(|section| &section.data),
             Some(AgentStatusSectionData::Temporal { current_time, .. }) if *current_time == fixed
         ));
+    }
+
+    #[test]
+    fn live_surface_mutation_after_freeze_cannot_change_the_generation() {
+        let now = DateTime::from_timestamp(1_754_000_001, 0).expect("timestamp");
+        let mut live = ConversationState::from_messages([plain_surface_message("inbound").message])
+            .expect("conversation");
+        let frozen = live
+            .freeze_active_surface()
+            .expect("freeze the pre-status Surface");
+        let surface = AgentStatusSurfaceView::from_snapshot(frozen).expect("valid frozen Surface");
+        assert!(!surface.contains_status(AgentStatusModuleId::Time));
+
+        live.commit(
+            status_surface_message(
+                "mutated-live-status",
+                now - ChronoDuration::seconds(1),
+                &[AgentStatusModuleId::Time],
+                "renderer text is not consulted",
+            )
+            .message,
+        )
+        .expect("mutate live Surface after the freeze");
+
+        let (_fixture, registry) = empty_background();
+        let mut engine = AgentStatusEngine::new(
+            AgentStatusConfig {
+                time: TimeStatusConfig {
+                    enabled: true,
+                    timezone: None,
+                },
+                background: BackgroundStatusConfig { enabled: false },
+            },
+            Arc::new(FixedClock(now)),
+        );
+        let status = engine
+            .prepare(&opportunity(), &surface, &registry)
+            .expect("the frozen Surface has no visible Time contribution");
+        assert!(
+            status
+                .sections
+                .iter()
+                .any(|section| { section.id.as_str() == AgentStatusSectionId::TEMPORAL })
+        );
+    }
+
+    /// The test hook mutates the live authoritative registry after the shared
+    /// capture point. Background still uses the captured active set and state,
+    /// while the live registry settles independently afterwards.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn live_background_mutation_after_capture_cannot_change_the_generation() {
+        let fixture = crate::scripted_suites::common::tool_runtime("agent-status-freeze");
+        let invocation = crate::tools::types::ToolInvocation {
+            call_id: crate::runtime::identity::ToolCallId::new("call-freeze"),
+            tool_id: crate::runtime::identity::ToolId::new("tool-background"),
+            tool_name: "background".to_owned(),
+            mode: crate::tools::types::ToolInvocationMode::Background,
+            arguments: serde_json::json!({}),
+        };
+        let (tool, release) = crate::scripted_suites::support::fake::FakeTool::parking(
+            crate::scripted_suites::common::tool_policies(
+                "background",
+                "tool-background",
+                crate::tools::types::ToolExecutionPolicy::ModelSelectable,
+                crate::tools::types::ToolConcurrencyPolicy::Sequential,
+            ),
+            crate::scripted_suites::support::fake::success_result("done"),
+        );
+        let mut started = tool.started();
+        let executor: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(tool);
+        let prepared = fixture
+            .background()
+            .prepare_dispatch(
+                &invocation,
+                &executor,
+                crate::tools::environment::ToolEnvironment::new(),
+            )
+            .expect("background dispatch prepares");
+        fixture
+            .background()
+            .commit_dispatch(prepared, &crate::runtime::CancellationSignal::new())
+            .expect("background dispatch commits");
+        let registry = fixture.background().clone();
+        started
+            .wait_for(|is_started| *is_started)
+            .await
+            .expect("background tool starts before the freeze");
+        let before = registry.active_snapshot();
+        assert_eq!(before.len(), 1);
+        let execution_id = before[0].execution_id.clone();
+
+        let seam = AgentStatusTestSeam::new();
+        let mutation_registry = registry.clone();
+        let mutation_id = execution_id.clone();
+        seam.after_capture(move |module| {
+            if module == AgentStatusModuleId::Time {
+                let _ = mutation_registry.cancel(&mutation_id);
+            }
+        });
+        let mut engine = engine(AgentStatusConfig::default()).with_test_seam(seam);
+        let status = engine
+            .prepare(&opportunity(), &empty_surface(), &registry)
+            .expect("the frozen active execution produces Background status");
+
+        let background = status
+            .sections
+            .iter()
+            .find_map(|section| match &section.data {
+                AgentStatusSectionData::BackgroundExecution { executions, .. } => {
+                    executions.first()
+                }
+                AgentStatusSectionData::Temporal { .. } => None,
+            })
+            .expect("Background section");
+        assert_eq!(background.execution_id, execution_id);
+        assert_eq!(background.state, before[0].state);
+
+        registry.wait_until_terminal(&execution_id).await;
+        assert!(registry.active_snapshot().is_empty());
+        release.send_replace(true);
+    }
+
+    #[test]
+    fn typed_status_metadata_survives_durable_restart_and_surface_rebuild() {
+        let root = tempfile::tempdir().expect("temporary store directory");
+        let path = root.path().join("conversation.sqlite");
+        let conversation_id = crate::runtime::identity::ConversationId::new("status-restart");
+        let generated_at = DateTime::from_timestamp(1_754_000_001, 0).expect("timestamp");
+        let status = status_surface_message(
+            "status-both",
+            generated_at,
+            &[AgentStatusModuleId::Time, AgentStatusModuleId::Background],
+            "presentation can change without changing typed membership",
+        )
+        .message;
+
+        {
+            let store = SqliteConversationStore::open(conversation_id.clone(), &path)
+                .expect("open durable store");
+            store.initialize(&[]).expect("initialize durable store");
+            store
+                .append_canonical(&status)
+                .expect("persist Agent Status generation");
+        }
+
+        let reopened =
+            SqliteConversationStore::open(conversation_id, &path).expect("reopen durable store");
+        let head = reopened.load_head().expect("load durable Surface head");
+        let active_ids = head.active_message_ids.clone();
+        let active = reopened
+            .load_messages(&active_ids)
+            .expect("hydrate active bodies");
+        let conversation = ConversationState::from_durable_head(
+            active,
+            active_ids,
+            head.revision,
+            head.compaction_generation,
+        )
+        .expect("rebuild conversation Surface");
+        let view = AgentStatusSurfaceView::from_snapshot(
+            conversation
+                .freeze_active_surface()
+                .expect("freeze rebuilt Surface"),
+        )
+        .expect("valid rebuilt Surface view");
+
+        assert_eq!(
+            view.latest_status(AgentStatusModuleId::Time)
+                .expect("Time membership")
+                .generated_at,
+            generated_at
+        );
+        assert_eq!(
+            view.latest_status(AgentStatusModuleId::Background)
+                .expect("Background membership")
+                .message_id,
+            MessageId::new("status-both")
+        );
+    }
+
+    #[test]
+    fn surface_view_indexes_typed_status_metadata_and_ignores_rendered_text() {
+        let generated_at = DateTime::from_timestamp(1_754_000_000, 0).expect("timestamp");
+        let view = surface(vec![
+            status_surface_message(
+                "status-time",
+                generated_at,
+                &[AgentStatusModuleId::Time],
+                "Timezone: fake\nCurrent time: fake\nBackground executions: fake",
+            ),
+            plain_surface_message("message-1"),
+            status_surface_message(
+                "status-background",
+                generated_at,
+                &[AgentStatusModuleId::Background],
+                "not a status-looking renderer at all",
+            ),
+            plain_surface_message("message-2"),
+        ]);
+
+        assert!(view.contains_status(AgentStatusModuleId::Time));
+        assert!(view.contains_status(AgentStatusModuleId::Background));
+        assert_eq!(
+            view.latest_status(AgentStatusModuleId::Background)
+                .expect("background status")
+                .message_id,
+            MessageId::new("status-background")
+        );
+        assert_eq!(
+            view.non_status_messages_since(&MessageId::new("status-background")),
+            Some(1)
+        );
+
+        let renderer_only = surface(vec![plain_surface_message("renderer-only")]);
+        assert!(!renderer_only.contains_status(AgentStatusModuleId::Time));
+        assert!(!renderer_only.contains_status(AgentStatusModuleId::Background));
+    }
+
+    #[test]
+    fn surface_view_validates_identity_body_pairs_and_exposes_only_snapshot_reads() {
+        let message = plain_surface_message("message");
+        let invalid = AgentStatusSurfaceView::for_test(
+            crate::conversation::SurfaceRevision::INITIAL,
+            0,
+            Arc::from(vec![MessageId::new("different")].into_boxed_slice()),
+            Arc::from(vec![message.clone()].into_boxed_slice()),
+        );
+        assert!(matches!(
+            invalid,
+            Err(AgentStatusSurfaceViewError::IdentityBodyMismatch { .. })
+        ));
+
+        let view = surface(vec![message]);
+        assert_eq!(
+            view.revision(),
+            crate::conversation::SurfaceRevision::new(1)
+        );
+        assert_eq!(view.compaction_generation(), 0);
+        assert_eq!(view.active_message_ids(), &[MessageId::new("message")]);
+        assert_eq!(view.messages().len(), 1);
+        assert_eq!(view.messages()[0].id, MessageId::new("message"));
+    }
+
+    #[test]
+    fn time_refresh_is_surface_aware_and_uses_the_frozen_clock_instant() {
+        let now = DateTime::from_timestamp(1_787_808_738, 0).expect("timestamp");
+        let mut engine = AgentStatusEngine::new(
+            AgentStatusConfig {
+                time: TimeStatusConfig {
+                    enabled: true,
+                    timezone: Some(chrono_tz::Asia::Tokyo),
+                },
+                background: BackgroundStatusConfig { enabled: false },
+            },
+            Arc::new(FixedClock(now)),
+        );
+
+        let no_visible = engine
+            .prepare(&opportunity(), &empty_surface(), &empty_background().1)
+            .expect("Time is eligible without a visible Time contribution");
+        assert_eq!(no_visible.generated_at, now);
+        assert_eq!(
+            render_agent_status(&no_visible),
+            "<system-reminder>\nTimezone: Asia/Tokyo\nCurrent time: 2026-08-27 14:32:18\n</system-reminder>"
+        );
+        assert!(!render_agent_status(&no_visible).contains("Inbound message time"));
+
+        let recent = surface(vec![status_surface_message(
+            "time-recent",
+            now - ChronoDuration::minutes(29) - ChronoDuration::seconds(59),
+            &[AgentStatusModuleId::Time],
+            "Current time: 1900-01-01 00:00:00",
+        )]);
+        assert!(
+            engine
+                .prepare(&opportunity(), &recent, &empty_background().1)
+                .is_none()
+        );
+
+        let exact = surface(vec![status_surface_message(
+            "time-exact",
+            now - TIME_REFRESH_INTERVAL,
+            &[AgentStatusModuleId::Time],
+            "Current time: 1900-01-01 00:00:00",
+        )]);
+        let refreshed = engine
+            .prepare(&opportunity(), &exact, &empty_background().1)
+            .expect("Time refresh threshold is inclusive");
+        assert_eq!(refreshed.generated_at, now);
+        assert!(render_agent_status(&refreshed).contains("2026-08-27 14:32:18"));
+    }
+
+    #[test]
+    fn background_policy_uses_authoritative_active_work_and_message_distance() {
+        let now = DateTime::from_timestamp(1_754_000_000, 0).expect("timestamp");
+        let execution = background_snapshot(0, "active");
+        let evaluate = |view: AgentStatusSurfaceView| {
+            BackgroundStatusModule::evaluate(&BackgroundStatusSnapshot {
+                executions: Arc::from(vec![execution.clone()].into_boxed_slice()),
+                latest_visible: view.latest_status(AgentStatusModuleId::Background).cloned(),
+                non_status_messages_since: view
+                    .latest_status(AgentStatusModuleId::Background)
+                    .and_then(|latest| view.non_status_messages_since(&latest.message_id)),
+            })
+        };
+
+        assert!(evaluate(empty_surface()).is_some());
+        let seven = surface(
+            std::iter::once(status_surface_message(
+                "background-1",
+                now,
+                &[AgentStatusModuleId::Background],
+                "old reminder",
+            ))
+            .chain((0..7).map(|index| plain_surface_message(&format!("message-{index}"))))
+            .collect(),
+        );
+        assert!(evaluate(seven).is_none());
+
+        let eight = surface(
+            std::iter::once(status_surface_message(
+                "background-2",
+                now,
+                &[AgentStatusModuleId::Background],
+                "old reminder",
+            ))
+            .chain((0..4).map(|index| plain_surface_message(&format!("message-{index}"))))
+            .chain(std::iter::once(status_surface_message(
+                "time-between",
+                now,
+                &[AgentStatusModuleId::Time],
+                "status does not count",
+            )))
+            .chain((4..8).map(|index| plain_surface_message(&format!("message-{index}"))))
+            .collect(),
+        );
+        assert!(
+            evaluate(eight).is_some(),
+            "exactly eight non-status messages"
+        );
+
+        let empty_authority = BackgroundStatusModule::evaluate(&BackgroundStatusSnapshot {
+            executions: Arc::from(Vec::<BackgroundExecutionSnapshot>::new().into_boxed_slice()),
+            latest_visible: None,
+            non_status_messages_since: None,
+        });
+        assert!(empty_authority.is_none());
+    }
+
+    #[test]
+    fn compaction_retiring_visible_status_reopens_surface_eligibility() {
+        let now = DateTime::from_timestamp(1_754_000_000, 0).expect("timestamp");
+        let time_id = MessageId::new("time-visible");
+        let background_id = MessageId::new("background-visible");
+        let mut conversation = ConversationState::from_messages([
+            status_surface_message(
+                time_id.as_str(),
+                now - ChronoDuration::minutes(10),
+                &[AgentStatusModuleId::Time],
+                "presentation only",
+            )
+            .message,
+            status_surface_message(
+                background_id.as_str(),
+                now,
+                &[AgentStatusModuleId::Background],
+                "presentation only",
+            )
+            .message,
+        ])
+        .expect("conversation with two status generations");
+        let (_fixture, registry) = empty_background();
+
+        let before = AgentStatusSurfaceView::from_snapshot(
+            conversation
+                .freeze_active_surface()
+                .expect("freeze before compaction"),
+        )
+        .expect("valid pre-compaction Surface view");
+        let execution = background_snapshot(0, "still active");
+        let background_snapshot_for = |view: &AgentStatusSurfaceView| BackgroundStatusSnapshot {
+            executions: Arc::from(vec![execution.clone()].into_boxed_slice()),
+            latest_visible: view.latest_status(AgentStatusModuleId::Background).cloned(),
+            non_status_messages_since: view
+                .latest_status(AgentStatusModuleId::Background)
+                .and_then(|latest| view.non_status_messages_since(&latest.message_id)),
+        };
+        assert!(
+            BackgroundStatusModule::evaluate(&background_snapshot_for(&before)).is_none(),
+            "the visible Background generation suppresses a reminder before compaction"
+        );
+
+        let command = conversation
+            .prepare_compaction(
+                compaction_summary("summary-status", "retired status generations"),
+                crate::conversation::SurfaceSpan::new(time_id, background_id),
+            )
+            .expect("prepare compaction");
+        conversation
+            .commit_compaction(command)
+            .expect("commit compaction");
+
+        let after = AgentStatusSurfaceView::from_snapshot(
+            conversation
+                .freeze_active_surface()
+                .expect("freeze after compaction"),
+        )
+        .expect("valid post-compaction Surface view");
+        assert!(!after.contains_status(AgentStatusModuleId::Time));
+        assert!(!after.contains_status(AgentStatusModuleId::Background));
+        assert!(
+            BackgroundStatusModule::evaluate(&background_snapshot_for(&after)).is_some(),
+            "active work is immediately eligible when compaction retires the visible reminder"
+        );
+
+        let mut time_engine = AgentStatusEngine::new(
+            AgentStatusConfig {
+                time: TimeStatusConfig {
+                    enabled: true,
+                    timezone: None,
+                },
+                background: BackgroundStatusConfig { enabled: false },
+            },
+            Arc::new(FixedClock(now)),
+        );
+        assert!(
+            time_engine
+                .prepare(&opportunity(), &before, &registry)
+                .is_none(),
+            "the recent visible Time generation is still fresh"
+        );
+        assert!(
+            time_engine
+                .prepare(&opportunity(), &after, &registry)
+                .is_some(),
+            "retiring the visible Time generation reopens eligibility"
+        );
+        assert!(
+            conversation
+                .ledger()
+                .get(&MessageId::new("time-visible"))
+                .is_some(),
+            "compaction retires visibility but never mutates the canonical Ledger"
+        );
+    }
+
+    #[test]
+    fn latest_visible_background_generation_owns_reminder_distance() {
+        let now = DateTime::from_timestamp(1_754_000_000, 0).expect("timestamp");
+        let execution = background_snapshot(0, "active");
+        let view = surface(
+            std::iter::once(status_surface_message(
+                "background-old",
+                now,
+                &[AgentStatusModuleId::Background],
+                "old reminder",
+            ))
+            .chain((0..8).map(|index| plain_surface_message(&format!("old-{index}"))))
+            .chain(std::iter::once(status_surface_message(
+                "background-latest",
+                now,
+                &[AgentStatusModuleId::Background],
+                "latest reminder",
+            )))
+            .chain((0..7).map(|index| plain_surface_message(&format!("latest-{index}"))))
+            .collect(),
+        );
+        assert_eq!(
+            view.latest_status(AgentStatusModuleId::Background)
+                .expect("latest Background generation")
+                .message_id,
+            MessageId::new("background-latest")
+        );
+        let snapshot = BackgroundStatusSnapshot {
+            executions: Arc::from(vec![execution].into_boxed_slice()),
+            latest_visible: view.latest_status(AgentStatusModuleId::Background).cloned(),
+            non_status_messages_since: view
+                .latest_status(AgentStatusModuleId::Background)
+                .and_then(|latest| view.non_status_messages_since(&latest.message_id)),
+        };
+        assert_eq!(snapshot.non_status_messages_since, Some(7));
+        assert!(BackgroundStatusModule::evaluate(&snapshot).is_none());
+    }
+
+    #[test]
+    fn one_status_evaluation_samples_the_clock_once() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let now = DateTime::from_timestamp(1_754_000_000, 0).expect("timestamp");
+        let clock = CountingClock {
+            now,
+            calls: Arc::clone(&calls),
+        };
+        let mut engine = AgentStatusEngine::new(AgentStatusConfig::default(), Arc::new(clock));
+        let registry = empty_background().1;
+        let status = engine
+            .prepare(&opportunity(), &empty_surface(), &registry)
+            .expect("Time status");
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(status.generated_at, now);
+        assert!(matches!(
+            status.sections[0].data,
+            AgentStatusSectionData::Temporal { current_time, .. } if current_time == now
+        ));
+    }
+
+    #[test]
+    fn thresholds_are_evaluation_only_and_do_not_create_background_work() {
+        let (_fixture, registry) = empty_background();
+        let mut engine = AgentStatusEngine::new(
+            AgentStatusConfig {
+                time: TimeStatusConfig {
+                    enabled: false,
+                    timezone: None,
+                },
+                background: BackgroundStatusConfig::default(),
+            },
+            Arc::new(FixedClock(
+                DateTime::from_timestamp(1_754_000_000, 0).expect("timestamp"),
+            )),
+        );
+        let before = registry.all_snapshots();
+        assert!(
+            engine
+                .prepare(
+                    &AgentStatusOpportunitySet::default(),
+                    &empty_surface(),
+                    &registry
+                )
+                .is_none()
+        );
+        assert_eq!(registry.all_snapshots(), before);
+        assert!(
+            engine
+                .prepare(&opportunity(), &empty_surface(), &registry)
+                .is_none(),
+            "empty authoritative active work cannot produce a Background generation"
+        );
+        assert_eq!(registry.all_snapshots(), before);
     }
 
     #[test]
@@ -1141,7 +2124,9 @@ mod tests {
             .map(|index| background_snapshot(index, &"😀".repeat(400)))
             .collect::<Vec<_>>();
         let payload = BackgroundStatusModule::evaluate(&BackgroundStatusSnapshot {
-            executions: snapshots,
+            executions: Arc::from(snapshots.into_boxed_slice()),
+            latest_visible: None,
+            non_status_messages_since: None,
         })
         .expect("background contribution");
         let AgentStatusPayload::BackgroundExecution {
@@ -1184,11 +2169,12 @@ mod tests {
             data: AgentStatusSectionData::Temporal {
                 current_time: DateTime::from_timestamp(1_754_000_001, 0).expect("timestamp"),
                 timezone: None,
-                inbound_message_time: DateTime::from_timestamp(1_754_000_000, 0)
-                    .expect("timestamp"),
             },
         };
-        let status = admit_sections(vec![oversized, small]);
+        let status = admit_sections(
+            vec![oversized, small],
+            DateTime::from_timestamp(1_754_000_001, 0).expect("timestamp"),
+        );
         assert_eq!(status.sections.len(), 1);
         assert_eq!(status.sections[0].id.as_str(), "small");
         let rendered = render_agent_status(&status);
@@ -1235,10 +2221,11 @@ mod tests {
             .commit_dispatch(prepared, &crate::runtime::CancellationSignal::new())
             .expect("background dispatch commits");
         let registry = fixture.background().clone();
+        let surface = empty_surface();
 
         let mut ordered = engine(AgentStatusConfig::default());
         let status = ordered
-            .prepare(&opportunity(), &registry)
+            .prepare(&opportunity(), &surface, &registry)
             .expect("Time and Background contribute");
         let ids = status
             .sections
@@ -1262,7 +2249,7 @@ mod tests {
             background: BackgroundStatusConfig::default(),
         });
         let time_disabled_status = time_disabled
-            .prepare(&opportunity(), &registry)
+            .prepare(&opportunity(), &surface, &registry)
             .expect("Background survives with Time disabled");
         assert_eq!(
             time_disabled_status.sections[0].id.as_str(),
@@ -1274,7 +2261,7 @@ mod tests {
             background: BackgroundStatusConfig { enabled: false },
         });
         let background_disabled_status = background_disabled
-            .prepare(&opportunity(), &registry)
+            .prepare(&opportunity(), &surface, &registry)
             .expect("Time survives with Background disabled");
         assert_eq!(background_disabled_status.sections.len(), 1);
         assert_eq!(
@@ -1301,7 +2288,7 @@ mod tests {
             }
             let mut failing = engine(AgentStatusConfig::default()).with_test_seam(seam);
             let surviving = failing
-                .prepare(&opportunity(), &registry)
+                .prepare(&opportunity(), &surface, &registry)
                 .expect("Time survives a Background failure");
             assert_eq!(surviving.sections.len(), 1);
             assert_eq!(surviving.sections[0].id.as_str(), "temporal");

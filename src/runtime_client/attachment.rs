@@ -1,7 +1,7 @@
 //! The Runtime Client attachment: the at-most-one active client session of
-//! Protocol v3.
+//! Protocol v4.
 //!
-//! An attachment is the semantic session of one client. Protocol v3 admits
+//! An attachment is the semantic session of one client. Protocol v4 admits
 //! exactly one active attachment per runtime instance:
 //!
 //! - the first attachment succeeds;

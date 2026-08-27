@@ -121,7 +121,7 @@ impl PreStepPolicy for ScriptedPolicy {
             .map(|message| {
                 (
                     message.source.clone(),
-                    message.kind,
+                    message.kind.clone(),
                     text_of(&message.content),
                 )
             })
@@ -2402,7 +2402,7 @@ fn committed_context(
         .filter_map(|message| match message {
             MessageBlock::User(user) => match &user.kind {
                 InboundKind::Context(kind) => {
-                    Some((user.source.clone(), *kind, text_of(&user.content)))
+                    Some((user.source.clone(), kind.clone(), text_of(&user.content)))
                 }
                 _ => None,
             },

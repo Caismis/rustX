@@ -13,7 +13,9 @@ use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 
 use crate::conversation::SurfaceRevision;
-use crate::message::types::{ContextKind, MessageBlock, UserContentBlock, UserSource};
+use crate::message::types::{
+    AgentStatusGenerationMetadata, ContextKind, MessageBlock, UserContentBlock, UserSource,
+};
 use crate::runtime::identity::{
     AttemptId, CapabilityRevision, CertifiedExtensionIdentity, ContextContributorIdentity,
     ConversationId, NativeContextContributor,
@@ -158,6 +160,11 @@ pub struct NativeContextInput {
     pub skill_guidance: Option<String>,
     /// The canonical rendered Agent Status snapshot.
     pub agent_status: Option<String>,
+    /// The structured generation identity belonging to `agent_status`.
+    ///
+    /// The text and descriptor are admitted together so canonical history can
+    /// later answer Surface-visibility questions without parsing presentation.
+    pub agent_status_metadata: Option<AgentStatusGenerationMetadata>,
     /// Core runtime/system identity content for the effective system prompt.
     pub core_runtime_identity: Option<String>,
     /// Agent profile/persona content for the effective system prompt.
@@ -254,17 +261,13 @@ fn user_semantics(
 ) -> Option<(UserContextLane, UserSource, ContextKind)> {
     match identity {
         ContextContributorIdentity::Native(owner) => match owner {
-            NativeContextContributor::AgentStatus => Some((
-                UserContextLane::AgentStatus,
-                UserSource::Runtime,
-                ContextKind::AgentStatus,
-            )),
             NativeContextContributor::RuntimeToolObservation => Some((
                 UserContextLane::RuntimeToolObservation,
                 UserSource::Runtime,
                 ContextKind::RuntimeToolObservation,
             )),
-            NativeContextContributor::WorkspaceInstructions
+            NativeContextContributor::AgentStatus
+            | NativeContextContributor::WorkspaceInstructions
             | NativeContextContributor::SkillGuidance
             | NativeContextContributor::CoreSystemIdentity
             | NativeContextContributor::AgentProfile => None,
@@ -817,7 +820,12 @@ impl ContextAssembly {
             entries.push(ContributionEntry::native_user(
                 NativeContextContributor::AgentStatus,
                 text.clone(),
+                native.agent_status_metadata.clone(),
             )?);
+        } else if native.agent_status_metadata.is_some() {
+            return Err(ContextAssemblyError::InvalidProposal(
+                "Agent Status metadata requires Agent Status text".to_owned(),
+            ));
         }
 
         let mut extensions = self.extensions.clone();
@@ -916,10 +924,21 @@ impl ContributionEntry {
     fn native_user(
         contributor: NativeContextContributor,
         text: String,
+        agent_status_metadata: Option<AgentStatusGenerationMetadata>,
     ) -> Result<Self, ContextAssemblyError> {
         let identity = ContextContributorIdentity::Native(contributor);
-        let (lane, source, kind) =
-            user_semantics(&identity).expect("this native owner publishes User context");
+        let (lane, source, kind) = match contributor {
+            NativeContextContributor::AgentStatus => (
+                UserContextLane::AgentStatus,
+                UserSource::Runtime,
+                ContextKind::AgentStatus(agent_status_metadata.ok_or_else(|| {
+                    ContextAssemblyError::InvalidProposal(
+                        "Agent Status text requires generation metadata".to_owned(),
+                    )
+                })?),
+            ),
+            _ => user_semantics(&identity).expect("this native owner publishes User context"),
+        };
         validate_text(&text, "native context")?;
         Ok(Self {
             lane,
@@ -1220,6 +1239,13 @@ mod tests {
                 &input(),
                 &NativeContextInput {
                     agent_status: Some("same bytes".to_owned()),
+                    agent_status_metadata: Some(
+                        AgentStatusGenerationMetadata::new(
+                            chrono::DateTime::from_timestamp(0, 0).expect("timestamp"),
+                            vec![crate::message::types::AgentStatusModuleId::Time],
+                        )
+                        .expect("valid Agent Status metadata"),
+                    ),
                     ..NativeContextInput::default()
                 },
                 &[],
@@ -1227,7 +1253,10 @@ mod tests {
             .await
             .expect("native proposal");
         assert_eq!(accepted.user_messages[0].source, UserSource::Runtime);
-        assert_eq!(accepted.user_messages[0].kind, ContextKind::AgentStatus);
+        assert!(matches!(
+            &accepted.user_messages[0].kind,
+            ContextKind::AgentStatus(_)
+        ));
     }
 
     #[tokio::test]
@@ -1405,7 +1434,7 @@ mod tests {
             accepted
                 .user_messages
                 .iter()
-                .map(|message| (message.source.clone(), message.kind))
+                .map(|message| (message.source.clone(), message.kind.clone()))
                 .collect::<Vec<_>>(),
             vec![
                 (UserSource::Runtime, ContextKind::RuntimeToolObservation),
@@ -1647,7 +1676,7 @@ mod tests {
             accepted
                 .user_messages
                 .iter()
-                .map(|message| (message.source.clone(), message.kind))
+                .map(|message| (message.source.clone(), message.kind.clone()))
                 .collect::<Vec<_>>()
         };
         assert_eq!(
@@ -1722,6 +1751,13 @@ mod tests {
                 &NativeContextInput {
                     workspace_instructions: Some("workspace".to_owned()),
                     agent_status: Some("status".to_owned()),
+                    agent_status_metadata: Some(
+                        AgentStatusGenerationMetadata::new(
+                            chrono::DateTime::from_timestamp(0, 0).expect("timestamp"),
+                            vec![crate::message::types::AgentStatusModuleId::Time],
+                        )
+                        .expect("valid Agent Status metadata"),
+                    ),
                     ..NativeContextInput::default()
                 },
                 &[
@@ -1736,7 +1772,7 @@ mod tests {
             accepted
                 .user_messages
                 .iter()
-                .map(|message| (message.kind, message.source.clone()))
+                .map(|message| (message.kind.clone(), message.source.clone()))
                 .collect::<Vec<_>>(),
             vec![
                 (ContextKind::RuntimeToolObservation, UserSource::Runtime),
@@ -1749,7 +1785,16 @@ mod tests {
                     ContextKind::ExtensionEnvironment,
                     extension_source("example.extension")
                 ),
-                (ContextKind::AgentStatus, UserSource::Runtime),
+                (
+                    ContextKind::AgentStatus(
+                        AgentStatusGenerationMetadata::new(
+                            chrono::DateTime::from_timestamp(0, 0).expect("timestamp"),
+                            vec![crate::message::types::AgentStatusModuleId::Time],
+                        )
+                        .expect("valid Agent Status metadata"),
+                    ),
+                    UserSource::Runtime,
+                ),
             ],
             "the native observation lane is early; an extension's deferred fact stays in its own lane"
         );

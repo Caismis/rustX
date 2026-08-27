@@ -3190,7 +3190,7 @@ impl ConversationRuntime {
     /// Claims the one-time Runtime Client binding of the tool runtime and of
     /// the capability coordinator.
     ///
-    /// Protocol v3 binds one runtime identity to at most one Runtime Client
+    /// Protocol v4 binds one runtime identity to at most one Runtime Client
     /// adapter for that identity's lifetime, so cloning a runtime never
     /// yields a second bindable identity and dropping the bound adapter
     /// never makes it bindable again. Reconnect replaces the attachment,
@@ -6323,8 +6323,9 @@ mod tests {
             first_ledger.iter().all(|message| !matches!(
                 message,
                 MessageBlock::User(user)
-                    if user.kind == InboundKind::Context(
-                        crate::message::types::ContextKind::AgentStatus
+                    if matches!(
+                        &user.kind,
+                        InboundKind::Context(crate::message::types::ContextKind::AgentStatus(_))
                     )
             )),
             "the failed module contributes no status message"
@@ -6343,8 +6344,9 @@ mod tests {
             second_ledger.iter().any(|message| matches!(
                 message,
                 MessageBlock::User(user)
-                    if user.kind == InboundKind::Context(
-                        crate::message::types::ContextKind::AgentStatus
+                    if matches!(
+                        &user.kind,
+                        InboundKind::Context(crate::message::types::ContextKind::AgentStatus(_))
                     )
             )),
             "the retried Time module contributes through the normal runtime path"

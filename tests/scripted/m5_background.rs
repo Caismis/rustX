@@ -1204,13 +1204,13 @@ fn agent_status_background_section_rendering() {
         },
     ];
     let status = AgentStatus {
+        generated_at: utc("2026-08-09T12:00:00Z"),
         sections: vec![
             AgentStatusSection {
                 id: AgentStatusSectionId::new("temporal"),
                 data: AgentStatusSectionData::Temporal {
                     current_time: utc("2026-08-09T12:00:00Z"),
                     timezone: None,
-                    inbound_message_time: utc("2026-08-09T12:00:00Z"),
                 },
             },
             AgentStatusSection {
@@ -1409,10 +1409,12 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
         matches!(
             message,
             MessageBlock::User(user)
-                if user.kind
-                    == rustx::message::types::InboundKind::Context(
-                        rustx::message::types::ContextKind::AgentStatus,
+                if matches!(
+                    &user.kind,
+                    rustx::message::types::InboundKind::Context(
+                        rustx::message::types::ContextKind::AgentStatus(_)
                     )
+                )
         )
     }));
     // Request 3 is the fresh terminal inbound turn: its canonical Agent
@@ -1423,10 +1425,12 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
         .iter()
         .find_map(|message| match message {
             MessageBlock::User(user)
-                if user.kind
-                    == rustx::message::types::InboundKind::Context(
-                        rustx::message::types::ContextKind::AgentStatus,
-                    ) =>
+                if matches!(
+                    &user.kind,
+                    rustx::message::types::InboundKind::Context(
+                        rustx::message::types::ContextKind::AgentStatus(_)
+                    )
+                ) =>
             {
                 user.content.first().and_then(|content| match content {
                     rustx::message::types::UserContentBlock::Text(text) => Some(text.text.clone()),
@@ -1518,10 +1522,12 @@ async fn foreground_tool_continuation_has_no_agent_status() {
             matches!(
                 message,
                 MessageBlock::User(user)
-                    if user.kind
-                        == rustx::message::types::InboundKind::Context(
-                            rustx::message::types::ContextKind::AgentStatus,
-                        )
+                if matches!(
+                    &user.kind,
+                    rustx::message::types::InboundKind::Context(
+                        rustx::message::types::ContextKind::AgentStatus(_)
+                    )
+                )
             )
         }),
         "foreground tool-result continuation carries no Agent Status"
@@ -1550,13 +1556,13 @@ fn background_status_accounting() {
     )
     .expect("engine");
     let rendered = render_agent_status(&AgentStatus {
+        generated_at: utc("2026-08-09T12:00:00Z"),
         sections: vec![
             AgentStatusSection {
                 id: AgentStatusSectionId::new("temporal"),
                 data: AgentStatusSectionData::Temporal {
                     current_time: utc("2026-08-09T12:00:00Z"),
                     timezone: None,
-                    inbound_message_time: utc("2026-08-09T12:00:00Z"),
                 },
             },
             AgentStatusSection {

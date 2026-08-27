@@ -2133,8 +2133,9 @@ mod tests {
     use crate::local_runtime::CurrentRuntimeConfig;
     use crate::message::content::TextBlock;
     use crate::message::types::{
-        AssistantContentBlock, AssistantMessageBlock, ContextKind, InboundKind, MessageBlock,
-        ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+        AgentStatusGenerationMetadata, AgentStatusModuleId, AssistantContentBlock,
+        AssistantMessageBlock, ContextKind, InboundKind, MessageBlock, ToolMessageBlock,
+        UserContentBlock, UserMessageBlock, UserSource,
     };
     use crate::runtime::identity::{ConversationId, MessageId, ToolCallId, ToolId};
     use crate::runtime::types::{TokenMeasurement, TokenMeasurementSource};
@@ -2179,7 +2180,13 @@ mod tests {
             id: MessageId::new(id),
             content: vec![text(value)],
             source: UserSource::Runtime,
-            kind: InboundKind::Context(ContextKind::AgentStatus),
+            kind: InboundKind::Context(ContextKind::AgentStatus(
+                AgentStatusGenerationMetadata::new(
+                    chrono::DateTime::from_timestamp(0, 0).expect("timestamp"),
+                    vec![AgentStatusModuleId::Time],
+                )
+                .expect("valid Agent Status metadata"),
+            )),
             timestamp: None,
         })
     }
@@ -3713,7 +3720,10 @@ mod tests {
         assert!(matches!(
             &prefix[1],
             MessageBlock::User(message)
-                if message.kind == InboundKind::Context(ContextKind::AgentStatus)
+                if matches!(
+                    &message.kind,
+                    InboundKind::Context(ContextKind::AgentStatus(_))
+                )
                     && message.content == vec![text("Status1")]
         ));
         assert!(prefix.iter().all(|message| {

@@ -1,4 +1,4 @@
-//! Issue #38: transport-independent Runtime Client Protocol v3 conformance.
+//! Issue #38: transport-independent Runtime Client Protocol v4 conformance.
 //!
 //! Every scenario below runs unchanged through two framings:
 //!
