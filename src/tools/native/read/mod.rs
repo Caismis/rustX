@@ -1106,9 +1106,16 @@ mod tests {
         assert_eq!(hook.starts(), 0, "a cancelled read must never decode");
     }
 
-    /// Cancellation observed after decode admission: the same blocking
-    /// task is awaited to physical settlement, its successful semantic
-    /// result is discarded, and the tool settles as cancelled.
+    /// Cancellation observed after decode admission: Read stays pending at
+    /// the exact cut where cancellation is observable and the admitted
+    /// blocking decode is still physically blocked, waits for that same
+    /// task to physically settle, discards its successful semantic result,
+    /// and settles as the normalized cancelled result.
+    ///
+    /// The synchronization is fully deterministic (rendezvous edges and
+    /// explicit probes, no sleeps): an implementation that returned
+    /// `Cancelled` immediately without awaiting the blocking task would be
+    /// `Ready` at the post-cancellation pre-release probe and fail here.
     // The session guard deliberately spans the awaits: it serializes the
     // hook-using tests within this single-threaded test runtime.
     #[allow(clippy::await_holding_lock)]
@@ -1124,24 +1131,17 @@ mod tests {
         let mut read_future =
             read.execute_with_signal("doc", serde_json::json!({ "path": path }), &signal);
 
-        // Drive the future until the decoder has demonstrably started and
-        // is blocked in the gate. No sleeps: every iteration is a yield.
-        let started = loop {
-            if let std::task::Poll::Ready(early) =
-                std::future::poll_fn(|cx| std::task::Poll::Ready(read_future.as_mut().poll(cx)))
-                    .await
-            {
-                panic!("read settled before the decoder was released: {early:?}");
-            }
-            if hook.starts() >= 1 {
-                break true;
-            }
-            tokio::task::yield_now().await;
-        };
-        assert!(started, "the decoder never started");
+        // 1. First poll: admits the decode (spawns the blocking task).
+        let probed =
+            std::future::poll_fn(|cx| std::task::Poll::Ready(read_future.as_mut().poll(cx))).await;
+        assert!(probed.is_pending(), "read must not settle immediately");
 
-        // While the decoder is still physically paused, Read must not
-        // report any semantic result.
+        // 2. Start rendezvous: the decoder has definitely entered the xberg
+        //    pipeline and is about to block in the gate.
+        hook.wait_started().await;
+
+        // 3. While the decoder is physically blocked, Read must not report
+        //    any semantic result.
         let probed =
             std::future::poll_fn(|cx| std::task::Poll::Ready(read_future.as_mut().poll(cx))).await;
         assert!(
@@ -1149,11 +1149,31 @@ mod tests {
             "a gated decode must not settle: {probed:?}"
         );
 
-        // Cancellation wins while the decode is paused; releasing it lets
-        // the decode complete successfully — and the success must be
-        // discarded in favor of the normalized cancelled result.
+        // 4. Cancellation becomes observable while the decode is paused.
         signal.cancel();
+
+        // 5. The critical cut: cancellation observable AND the admitted
+        //    blocking decode still physically blocked. Read must remain
+        //    pending here — it may only settle after the blocking task has
+        //    physically settled.
+        let probed =
+            std::future::poll_fn(|cx| std::task::Poll::Ready(read_future.as_mut().poll(cx))).await;
+        assert!(
+            probed.is_pending(),
+            "Read must not settle while the admitted blocking decode is still physically running: {probed:?}"
+        );
+
+        // 6. The decoder has not physically finished yet.
+        assert!(!hook.physically_finished());
+
+        // 7–8. Release the gate, then rendezvous on the decoder's physical
+        //       completion. Without the physical-settlement await this
+        //       rendezvous would race an already-settled (abandoned) tool.
         hook.release();
+        hook.wait_physically_finished().await;
+
+        // 9. Read settles as the normalized cancelled result: the decode's
+        //    success is discarded.
         let result = read_future.await;
         assert_eq!(
             result.status,
@@ -1161,6 +1181,9 @@ mod tests {
                 reason: crate::runtime::types::CancellationReason::UserRequested,
             }
         );
+
+        // 10. Exactly one admission and exactly one physical finish.
         assert_eq!(hook.starts(), 1);
+        assert_eq!(hook.finished_count(), 1);
     }
 }

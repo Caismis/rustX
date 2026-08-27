@@ -272,6 +272,10 @@ pub(super) fn decode_document(target: &Path, format: DocumentFormat) -> Result<S
             target.display()
         ));
     }
+    // The physical-finish fact: the blocking decode is done with xberg and
+    // is returning its result.
+    #[cfg(test)]
+    decode_hooks::record_finish(target);
     Ok(content.to_owned())
 }
 
@@ -285,11 +289,15 @@ pub(super) mod decode_hooks {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
     use std::sync::{Arc, Mutex};
+    use tokio::sync::oneshot;
 
     struct Hook {
         watch: PathBuf,
         starts: Arc<AtomicUsize>,
+        finishes: Arc<AtomicUsize>,
         gate: Mutex<Option<mpsc::Receiver<()>>>,
+        started: Mutex<Option<oneshot::Sender<()>>>,
+        finished: Mutex<Option<oneshot::Sender<()>>>,
     }
 
     static HOOK: Mutex<Option<Hook>> = Mutex::new(None);
@@ -304,10 +312,14 @@ pub(super) mod decode_hooks {
 
     static SESSION: Mutex<()> = Mutex::new(());
 
-    /// The installed hook: a start counter plus, for gated installs, the
-    /// release handle. Uninstalling on drop keeps other tests unaffected.
+    /// The installed hook: start/finish counters, start/finish rendezvous
+    /// receivers, and — for gated installs — the release handle.
+    /// Uninstalling on drop keeps other tests unaffected.
     pub struct Installed {
         starts: Arc<AtomicUsize>,
+        finishes: Arc<AtomicUsize>,
+        started: Option<oneshot::Receiver<()>>,
+        finished: Option<oneshot::Receiver<()>>,
         release: Option<mpsc::Sender<()>>,
     }
 
@@ -315,6 +327,32 @@ pub(super) mod decode_hooks {
         /// How many times the watched document entered the decoder.
         pub fn starts(&self) -> usize {
             self.starts.load(Ordering::SeqCst)
+        }
+
+        /// How many times the watched decoder physically finished.
+        pub fn finished_count(&self) -> usize {
+            self.finishes.load(Ordering::SeqCst)
+        }
+
+        /// Resolves when the watched decoder has recorded its start.
+        pub async fn wait_started(&mut self) {
+            if let Some(receiver) = self.started.take() {
+                let _ = receiver.await;
+            }
+        }
+
+        /// Whether the watched decoder has already physically finished.
+        pub fn physically_finished(&mut self) -> bool {
+            self.finished
+                .as_mut()
+                .is_some_and(|receiver| receiver.try_recv().is_ok())
+        }
+
+        /// Resolves when the watched decoder has physically finished.
+        pub async fn wait_physically_finished(&mut self) {
+            if let Some(receiver) = self.finished.take() {
+                let _ = receiver.await;
+            }
         }
 
         /// Releases a gated decoder.
@@ -333,27 +371,36 @@ pub(super) mod decode_hooks {
         }
     }
 
-    /// Installs a start counter for the watched document.
+    /// Installs start/finish counters for the watched document.
     pub fn install(watch: &Path) -> Installed {
-        install_inner(watch, None, None)
+        install_inner(watch, false)
     }
 
-    /// Installs a start counter for the watched document plus a gate: the
-    /// decoder blocks right after recording its start until
-    /// [`Installed::release`] is called.
+    /// Installs start/finish counters for the watched document plus a gate:
+    /// the decoder blocks right after recording its start until
+    /// [`Installed::release`] is called. The start and finish edges are
+    /// deterministic rendezvous points ([`Installed::wait_started`],
+    /// [`Installed::wait_physically_finished`]).
     pub fn install_gated(watch: &Path) -> Installed {
-        let (sender, receiver) = mpsc::channel();
-        install_inner(watch, Some(sender), Some(receiver))
+        install_inner(watch, true)
     }
 
-    fn install_inner(
-        watch: &Path,
-        release: Option<mpsc::Sender<()>>,
-        gate: Option<mpsc::Receiver<()>>,
-    ) -> Installed {
+    fn install_inner(watch: &Path, gated: bool) -> Installed {
+        let (release, gate) = if gated {
+            let (sender, receiver) = mpsc::channel();
+            (Some(sender), Some(receiver))
+        } else {
+            (None, None)
+        };
+        let (started_sender, started_receiver) = oneshot::channel();
+        let (finished_sender, finished_receiver) = oneshot::channel();
         let starts = Arc::new(AtomicUsize::new(0));
+        let finishes = Arc::new(AtomicUsize::new(0));
         let installed = Installed {
             starts: Arc::clone(&starts),
+            finishes: Arc::clone(&finishes),
+            started: Some(started_receiver),
+            finished: Some(finished_receiver),
             release,
         };
         *HOOK
@@ -361,14 +408,18 @@ pub(super) mod decode_hooks {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Hook {
             watch: watch.to_path_buf(),
             starts,
+            finishes,
             gate: Mutex::new(gate),
+            started: Mutex::new(Some(started_sender)),
+            finished: Mutex::new(Some(finished_sender)),
         });
         installed
     }
 
-    /// Called by the decoder on entry. Counts the start for the installed
-    /// hook watching this exact path and, if that hook is gated, blocks the
-    /// decoding thread until the test releases it.
+    /// Called by the decoder when the xberg decode pipeline is entered.
+    /// Counts the start for the installed hook watching this exact path,
+    /// signals the start rendezvous, and — if that hook is gated — blocks
+    /// the decoding thread until the test releases it.
     pub fn record(target: &Path) {
         let mut hook_guard = HOOK
             .lock()
@@ -380,6 +431,14 @@ pub(super) mod decode_hooks {
             return;
         }
         hook.starts.fetch_add(1, Ordering::SeqCst);
+        if let Some(sender) = hook
+            .started
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            let _ = sender.send(());
+        }
         let receiver = hook
             .gate
             .lock()
@@ -390,6 +449,30 @@ pub(super) mod decode_hooks {
             // Blocking the dedicated decode thread is exactly the point:
             // the test controls when the decode may proceed.
             let _ = receiver.recv();
+        }
+    }
+
+    /// Called by the decoder right before it returns its result: counts and
+    /// signals the physical-finish fact for the installed hook watching
+    /// this exact path.
+    pub fn record_finish(target: &Path) {
+        let mut hook_guard = HOOK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(hook) = hook_guard.as_mut() else {
+            return;
+        };
+        if hook.watch != target {
+            return;
+        }
+        hook.finishes.fetch_add(1, Ordering::SeqCst);
+        if let Some(sender) = hook
+            .finished
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            let _ = sender.send(());
         }
     }
 }
