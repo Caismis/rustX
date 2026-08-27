@@ -1,4 +1,4 @@
-//! The Runtime Client snapshot read model (Runtime Client Protocol v4).
+//! The Runtime Client snapshot read model (Runtime Client Protocol v5).
 //!
 //! [`RuntimeClientSnapshot`] is the one deterministic external read model
 //! of authoritative runtime state. It is a projection, never a second
@@ -41,7 +41,7 @@ use crate::runtime::inbound::InboundSequence;
 use crate::runtime::interaction::InteractionRequest;
 use crate::runtime::types::{ApprovalMode, TokenMeasurement};
 use crate::tools::background::BackgroundLifecycle;
-use crate::tools::todo::TodoSnapshot;
+use crate::tools::todo::{TodoSnapshot, TodoStatus};
 use crate::tools::types::{
     ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionResult, ToolOrigin, ToolProgress,
     ToolReplayPolicy,
@@ -61,7 +61,7 @@ pub struct RuntimeDurabilityFailure {
 /// The authoritative Runtime Client snapshot of one conversation runtime.
 ///
 /// Every section is a deterministic projection of one authoritative
-/// runtime owner. The shape belongs to Runtime Client Protocol v4: internal
+/// runtime owner. The shape belongs to Runtime Client Protocol v5: internal
 /// snapshot types are projected into these external DTOs, never exposed
 /// directly.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -680,7 +680,7 @@ pub struct InboundDrainView {
 ///
 /// Projected from the authoritative [`ConversationBackgroundRegistry`]
 /// ([`crate::tools::background::ConversationBackgroundRegistry`]); the
-/// container shape belongs to Runtime Client Protocol v4 while the
+/// container shape belongs to Runtime Client Protocol v5 while the
 /// lifecycle, progress, and result leaf types are stable runtime-owned
 /// value contracts. No internal task handles or process ids ever appear.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -769,6 +769,42 @@ pub enum RuntimeClientStatusSection {
         /// Active executions omitted by the module-local bound.
         omitted_count: usize,
     },
+    /// The bounded conversation-owned Todo reminder.
+    Todo {
+        /// The first committed in-progress task, when any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current: Option<RuntimeClientTodoStatusTask>,
+        /// Remaining committed active tasks in creation order.
+        #[serde(default)]
+        tasks: Vec<RuntimeClientTodoStatusTask>,
+        /// Number of committed active tasks.
+        active_count: usize,
+        /// Number of active tasks blocked by active dependencies.
+        blocked_count: usize,
+        /// Number of committed completed tasks.
+        completed_count: usize,
+        /// Number of committed deleted tasks.
+        deleted_count: usize,
+        /// Number of active tasks omitted from the bounded view.
+        omitted_count: usize,
+    },
+}
+
+/// One bounded Todo task in the Agent Status client view.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeClientTodoStatusTask {
+    /// The conversation-owned task id.
+    pub id: u64,
+    /// The bounded task subject.
+    pub subject: String,
+    /// The bounded in-progress label, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_form: Option<String>,
+    /// The committed lifecycle status.
+    pub status: TodoStatus,
+    /// Whether an active dependency still blocks this task.
+    pub blocked: bool,
 }
 
 /// The external view of the Agent Status opportunity set.
@@ -780,6 +816,10 @@ pub struct AgentStatusOpportunityView {
     /// without making this member structurally mandatory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fresh_inbound: Option<FreshInboundStatusOpportunityView>,
+    /// The complete settled tool batch that made this existing primary step
+    /// eligible, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_tool_batch: Option<PostToolBatchStatusOpportunityView>,
 }
 
 /// The external view of one `FreshInbound` status opportunity.
@@ -789,6 +829,12 @@ pub struct FreshInboundStatusOpportunityView {
     /// The inbound message that made status generation eligible.
     pub target_message_id: MessageId,
 }
+
+/// Minimal external representation of the batch-level `PostToolBatch`
+/// opportunity. The marker has no durable or scheduling metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct PostToolBatchStatusOpportunityView {}
 
 /// The deterministic capability projection.
 ///

@@ -378,6 +378,18 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
             break;
         }
     }
+    // The Runtime Client terminal event is projected asynchronously from the
+    // durable attempt event. The runtime-owned settlement signal is the
+    // exact coordinator transition that follows it: `finish_attempt` has
+    // restored the conversation and cleared `current_attempt` before the
+    // signal fires. Waiting for both seams prevents a legitimate reload
+    // `Busy(Attempt)` result without relying on delivery timing.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        runtime.settlement_signal().notified(),
+    )
+    .await
+    .expect("the runtime settlement handoff must complete before reload");
     write_skill(&bundle.dir.path().join("workspace"), "binding-skill");
     let committed = runtime.reload_resources().await.expect("resource reload");
     // The background registry transition is published under the registry's

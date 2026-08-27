@@ -126,8 +126,11 @@ pub(crate) const SESSION_RESUME: &str = "session_resume";
 /// One turn that starts a detached background execution, then a **second**
 /// inbound turn whose Agent Status is composed while that execution is live.
 pub(crate) const BACKGROUND_STATUS: &str = "background_status";
-/// A reopened conversation that submits **nothing**, so the only work it can
-/// start is the continuation recovery permitted.
+/// A native Todo mutation followed by a continuation, used to kill the
+/// process around the Issue #130 opportunity and start boundaries.
+pub(crate) const TODO_STATUS_TURN: &str = "todo_status_turn";
+/// A reopened conversation that submits **nothing**, so recovery behavior can
+/// be observed without a new inbound request creating work.
 pub(crate) const RESUME_IDLE: &str = "resume_idle";
 
 /// A text payload larger than the coalescer's default byte threshold, so the
@@ -1248,6 +1251,32 @@ async fn scenario_body(root: &Path, scenario: &str) {
             note("settled");
             park_owning(child).await;
         }
+        TODO_STATUS_TURN => {
+            super::harness::write_runtime_config_with_todo(root);
+            let call = ScriptedCall {
+                id: "call-todo-status",
+                tool_id: crate::tools::todo::TODO_TOOL_ID,
+                name: "todo",
+                arguments: serde_json::json!({
+                    "action": "create",
+                    "subject": "Keep the Todo reminder durable"
+                }),
+            };
+            let child = Child::require(
+                root,
+                vec![
+                    calling_turn(&call),
+                    vec![started(), text("continued"), done(ModelFinishReason::Stop)],
+                ],
+                false,
+                true,
+            )
+            .await;
+            child.submit("create a Todo");
+            child.log.wait_settled(1).await;
+            note("settled");
+            park_owning(child).await;
+        }
         SESSION_FORK | SESSION_BRANCH => {
             let bash = ScriptedCall {
                 id: "call-bash-lineage",
@@ -1363,9 +1392,12 @@ async fn scenario_body(root: &Path, scenario: &str) {
             park_owning((child, supervisor)).await;
         }
         RESUME_IDLE => {
-            // Nothing is submitted here. Whatever attempt this process starts
-            // is the recovered continuation of an already-canonical turn, and
-            // nothing else can be confused for it.
+            // Nothing is submitted here. A recovery-permitted continuation,
+            // when an independent durable answer obligation allows one, is
+            // therefore distinguishable from new inbound work. The
+            // Issue #130 externally-started dead-tool case intentionally has
+            // no such continuation: it remains terminal and cannot recover
+            // the dead attempt's process-local PostToolBatch marker.
             let child = Child::require(
                 root,
                 vec![vec![

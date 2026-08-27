@@ -87,7 +87,7 @@
 //! mechanics stay internal unless they express a client-relevant semantic
 //! fact. The mapping is defined here, in one place, so internal
 //! `RuntimeEvent` evolution cannot silently break Runtime Client Protocol
-//! v4.
+//! v5.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -98,9 +98,10 @@ use super::event::{RuntimeClientAttemptFailure, RuntimeClientEvent, RuntimeClien
 use super::snapshot::{
     AgentStatusOpportunityView, AgentStatusView, CapabilityView, ForegroundToolExecution,
     ForegroundToolState, FreshInboundStatusOpportunityView, InFlightAssistantMessage,
-    InFlightBlock, InboundDiagnostics, InboundDrainView, InboundItemView, RuntimeClientAttempt,
-    RuntimeClientAttemptPhase, RuntimeClientBackgroundExecution, RuntimeClientCompactionView,
-    RuntimeClientContextView, RuntimeClientSnapshot, RuntimeClientStatusSection,
+    InFlightBlock, InboundDiagnostics, InboundDrainView, InboundItemView,
+    PostToolBatchStatusOpportunityView, RuntimeClientAttempt, RuntimeClientAttemptPhase,
+    RuntimeClientBackgroundExecution, RuntimeClientCompactionView, RuntimeClientContextView,
+    RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTodoStatusTask,
 };
 use super::types::{RuntimeClientCursor, RuntimeClientError, RuntimeClientProtocolEvent};
 use crate::agent::observer::AgentStatusObservation;
@@ -710,7 +711,7 @@ impl RuntimeClientProjection {
     }
 
     /// The explicit `RuntimeEvent` mapping policy of Runtime Client Protocol
-    /// v4.
+    /// v5.
     ///
     /// Classification (see the module documentation):
     ///
@@ -797,7 +798,8 @@ impl RuntimeClientProjection {
             RuntimeEvent::TurnCompleted
             | RuntimeEvent::ModelRequestStarted { .. }
             | RuntimeEvent::ModelRequestFailed { .. }
-            | RuntimeEvent::ModelRetryScheduled { .. } => Vec::new(),
+            | RuntimeEvent::ModelRetryScheduled { .. }
+            | RuntimeEvent::AgentStatusEmitted { .. } => Vec::new(),
             RuntimeEvent::ModelRequestCompleted { usage, .. } => {
                 if let Some(usage) = usage
                     && let Some(attempt) = &mut self.snapshot.attempt
@@ -1660,6 +1662,19 @@ pub(crate) fn status_view(observation: &AgentStatusObservation) -> AgentStatusVi
                 executions: executions.iter().map(background_view).collect(),
                 omitted_count: *omitted_count,
             },
+            AgentStatusSectionData::Todo { presentation } => RuntimeClientStatusSection::Todo {
+                current: presentation.current.as_ref().map(todo_status_task_view),
+                tasks: presentation
+                    .tasks
+                    .iter()
+                    .map(todo_status_task_view)
+                    .collect(),
+                active_count: presentation.active_count,
+                blocked_count: presentation.blocked_count,
+                completed_count: presentation.completed_count,
+                deleted_count: presentation.deleted_count,
+                omitted_count: presentation.omitted_count,
+            },
         })
         .collect();
     let fresh_inbound = observation
@@ -1669,13 +1684,32 @@ pub(crate) fn status_view(observation: &AgentStatusObservation) -> AgentStatusVi
         .map(|fresh| FreshInboundStatusOpportunityView {
             target_message_id: fresh.target_message_id.clone(),
         });
+    let post_tool_batch = observation
+        .opportunities
+        .post_tool_batch
+        .map(|_| PostToolBatchStatusOpportunityView::default());
     AgentStatusView {
         attempt_id: observation.attempt_id.clone(),
         turn: observation.turn,
         status_message_id: observation.status_message_id.clone(),
-        opportunities: AgentStatusOpportunityView { fresh_inbound },
+        opportunities: AgentStatusOpportunityView {
+            fresh_inbound,
+            post_tool_batch,
+        },
         rendered: render_agent_status(&observation.status),
         sections,
+    }
+}
+
+fn todo_status_task_view(
+    task: &crate::context::status::TodoStatusTask,
+) -> RuntimeClientTodoStatusTask {
+    RuntimeClientTodoStatusTask {
+        id: task.id,
+        subject: task.subject.clone(),
+        active_form: task.active_form.clone(),
+        status: task.status,
+        blocked: task.blocked,
     }
 }
 
@@ -1688,6 +1722,7 @@ mod tests {
     use crate::context::{
         AgentStatus, AgentStatusEngine, AgentStatusOpportunitySet, CompactionBudgets,
         ContextEngine, ContextError, ContextErrorKind, ContextRuntime,
+        FreshInboundStatusOpportunity, PostToolBatchStatusOpportunity,
     };
     use crate::conversation::ConversationState;
     use crate::events::interaction::{InteractionSettlement, InteractionSubject};
@@ -1717,7 +1752,7 @@ mod tests {
     use crate::runtime_client::event::{RuntimeClientEvent, RuntimeClientOutcome};
     use crate::runtime_client::snapshot::{
         AgentStatusOpportunityView, ForegroundToolState, InFlightBlock, RuntimeClientAttemptPhase,
-        RuntimeClientTranscriptCursor,
+        RuntimeClientStatusSection, RuntimeClientTranscriptCursor,
     };
     use crate::runtime_client::types::RuntimeClientCursor;
     use crate::scripted_suites::support::context::{
@@ -1836,6 +1871,79 @@ mod tests {
         let decoded: AgentStatusOpportunityView =
             serde_json::from_value(encoded).expect("deserialize opportunity");
         assert_eq!(decoded, view.opportunities);
+    }
+
+    #[test]
+    fn agent_status_opportunity_view_publishes_one_combined_observation() {
+        let status_message_id = MessageId::new("status-combined");
+        let observation = AgentStatusObservation {
+            attempt_id: attempt(),
+            turn: 2,
+            status_message_id: status_message_id.clone(),
+            opportunities: AgentStatusOpportunitySet {
+                fresh_inbound: Some(FreshInboundStatusOpportunity {
+                    target_message_id: MessageId::new("fresh-inbound"),
+                }),
+                post_tool_batch: Some(PostToolBatchStatusOpportunity),
+            },
+            status: AgentStatus {
+                generated_at: chrono::DateTime::from_timestamp(0, 0).expect("timestamp"),
+                sections: Vec::new(),
+            },
+        };
+
+        let view = super::status_view(&observation);
+        assert_eq!(view.status_message_id, status_message_id);
+        assert_eq!(
+            view.opportunities
+                .fresh_inbound
+                .as_ref()
+                .expect("FreshInbound view")
+                .target_message_id
+                .clone(),
+            MessageId::new("fresh-inbound")
+        );
+        assert!(view.opportunities.post_tool_batch.is_some());
+        let encoded = serde_json::to_value(&view).expect("serialize combined status view");
+        assert_eq!(
+            encoded["opportunities"]["post_tool_batch"],
+            serde_json::json!({})
+        );
+        assert_eq!(
+            encoded["status_message_id"],
+            serde_json::json!("status-combined")
+        );
+    }
+
+    #[test]
+    fn todo_status_section_round_trips_the_v5_wire_shape() {
+        let wire = serde_json::json!({
+            "type": "todo",
+            "current": {
+                "id": 7,
+                "subject": "Review the boundary",
+                "active_form": "Reviewing the boundary",
+                "status": "in_progress",
+                "blocked": false
+            },
+            "tasks": [{
+                "id": 8,
+                "subject": "Write the regression",
+                "status": "pending",
+                "blocked": true
+            }],
+            "active_count": 2,
+            "blocked_count": 1,
+            "completed_count": 3,
+            "deleted_count": 1,
+            "omitted_count": 0
+        });
+        let section: RuntimeClientStatusSection =
+            serde_json::from_value(wire.clone()).expect("decode the v5 Todo section");
+        assert_eq!(
+            serde_json::to_value(section).expect("encode the v5 Todo section"),
+            wire
+        );
     }
 
     fn collect(

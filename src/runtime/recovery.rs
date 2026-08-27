@@ -39,6 +39,13 @@
 //! external outcome known           !=  never externally started
 //! ```
 //!
+//! In particular, a structurally settled canonical `ToolResult` does not
+//! grant permission to continue the dead attempt. The earlier durable
+//! `ToolExecutionStarted` fact remains evidence of an irreversible external
+//! side effect, so recovery intentionally blocks that attempt rather than
+//! replaying its next model step. Any `PostToolBatch` eligibility that lived
+//! in the dead process is attempt-local and is never reconstructed.
+//!
 //! The evidence model keeps the **external execution lifecycle** and the
 //! **canonical structure lifecycle** on separate axes. A committed canonical
 //! `ToolResult` means the Surface no longer needs that repair; it never
@@ -1090,7 +1097,10 @@ pub enum ResumeDisposition {
     /// Continuation is blocked because an external outcome is indeterminate
     /// (Class C). Pending Inbound remains admissible — that is new
     /// user/producer-driven work, not a replay of the ambiguous request — but
-    /// recovery itself starts nothing.
+    /// recovery itself starts nothing. A canonical `ToolResult` that settled
+    /// before death does not change this: its owning `ToolExecutionStarted`
+    /// evidence still makes the abandoned continuation unsafe to replay, and
+    /// its dead attempt-local `PostToolBatch` marker is never restored.
     BlockedIndeterminate,
 }
 

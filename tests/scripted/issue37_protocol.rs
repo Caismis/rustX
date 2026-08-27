@@ -1,4 +1,4 @@
-//! Issue #37: Runtime Client Protocol v4 wire-contract tests.
+//! Issue #37/#130: Runtime Client Protocol v5 wire-contract tests.
 //!
 //! These tests exercise the protocol boundary exclusively through the
 //! public Runtime Client surface: deterministic serialization of every
@@ -98,7 +98,7 @@ fn protocol_envelopes_round_trip_deterministically() {
 fn protocol_errors_round_trip_with_stable_categories() {
     let cases = [
         RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 4,
+            supported: 5,
             requested: 4,
         },
         RuntimeClientError::AttachmentInUse {
@@ -334,20 +334,29 @@ async fn attachment_request_correlation_and_version_negotiation() {
         assert!(response.error.is_none());
     }
 
-    // Incompatible version negotiation fails explicitly.
+    // Incompatible version negotiation fails explicitly, including the
+    // previous v4 wire contract.
     let incompatible = host.attach(7);
     assert!(matches!(
         incompatible,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 4,
+            supported: 5,
             requested: 7,
+        })
+    ));
+    let old_protocol = host.attach(4);
+    assert!(matches!(
+        old_protocol,
+        Err(RuntimeClientError::UnsupportedProtocolVersion {
+            supported: 5,
+            requested: 4,
         })
     ));
 
     // The initialize method cannot re-initialize an admitted attachment.
     let reinit = attachment.handle_request(RuntimeClientRequest::Initialize {
         id: request_id(9),
-        protocol_version: 4,
+        protocol_version: 5,
     });
     assert!(matches!(
         reinit.error,

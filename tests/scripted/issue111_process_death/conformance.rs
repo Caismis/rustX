@@ -13,7 +13,9 @@
 
 use crate::durable::{TranscriptEntry, TranscriptItem};
 use crate::events::types::RuntimeEvent;
-use crate::message::types::{AssistantContentBlock, InboundKind, MessageBlock, UserContentBlock};
+use crate::message::types::{
+    AgentStatusModuleId, AssistantContentBlock, InboundKind, MessageBlock, UserContentBlock,
+};
 use crate::publication::PublicationAuditKind;
 use crate::runtime::recovery::{AttemptRecoveryClass, ResumeDisposition};
 use crate::tools::types::ToolExecutionStatus;
@@ -144,6 +146,35 @@ fn status_texts(messages: &[MessageBlock]) -> Vec<String> {
         .collect()
 }
 
+/// The number of canonical Agent Status messages carrying the Todo module.
+fn todo_status_count(durable: &Durable) -> usize {
+    durable
+        .canonical()
+        .iter()
+        .filter(|message| {
+            message
+                .agent_status_metadata()
+                .is_some_and(|metadata| metadata.contains(AgentStatusModuleId::Todo))
+        })
+        .count()
+}
+
+/// The number of durable Todo suppression facts.
+fn todo_emission_count(durable: &Durable) -> usize {
+    durable.count_events(|event| {
+        matches!(
+            event,
+            RuntimeEvent::AgentStatusEmitted { emission, .. }
+                if emission.module_id == AgentStatusModuleId::Todo
+        )
+    })
+}
+
+/// The number of durable model-request start facts.
+fn model_request_start_count(durable: &Durable) -> usize {
+    durable.count_events(|event| matches!(event, RuntimeEvent::ModelRequestStarted { .. }))
+}
+
 /// The canonical tool results, by call id.
 fn tool_results(messages: &[MessageBlock]) -> Vec<(String, ToolExecutionStatus)> {
     messages
@@ -155,6 +186,187 @@ fn tool_results(messages: &[MessageBlock]) -> Vec<(String, ToolExecutionStatus)>
             _ => None,
         })
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Issue #130 — process-local PostToolBatch and durable Todo suppression
+// ---------------------------------------------------------------------------
+
+/// A settled tool batch leaves its `PostToolBatch` marker only in the dying
+/// attempt. Because the durable tool-start fact proves that external work
+/// happened, rustX intentionally terminalizes that attempt on recovery rather
+/// than replaying a post-tool continuation. The reopened runtime receives no
+/// inherited marker and recovery itself cannot create a model step from it.
+#[test]
+fn post_tool_batch_marker_is_not_recovered_after_external_side_effect_blocks_continuation() {
+    let lab = Lab::new();
+    let mut process = lab.spawn(
+        child::TODO_STATUS_TURN,
+        Some("after:post_tool_batch_marker"),
+    );
+    process.wait_reached("after:post_tool_batch_marker");
+    process.sigkill();
+
+    let durable = lab.durable();
+    assert_eq!(
+        durable
+            .canonical()
+            .iter()
+            .filter(|message| matches!(message, MessageBlock::Tool(_)))
+            .count(),
+        1,
+        "the complete canonical ToolResult batch committed before the marker"
+    );
+    assert_eq!(todo_status_count(&durable), 0);
+    assert_eq!(todo_emission_count(&durable), 0);
+    let starts_before = model_request_start_count(&durable);
+
+    // This crash is before the attempt's next model step. The settled
+    // ToolResult does not erase the earlier ToolExecutionStarted evidence, so
+    // recovery classifies the dead attempt as an external-outcome-known
+    // attempt and terminalizes it. This is the external-side-effect recovery
+    // contract: no post-tool continuation is replayed, and the process-local
+    // marker is not reconstructed as a way around that decision.
+    let mut resumed = lab.spawn(child::RESUME_IDLE, None);
+    assert_eq!(
+        resumed.wait_note_prefixed("recovery:"),
+        "recovery:PendingInboundOnly"
+    );
+    resumed.wait_note("idle");
+    resumed.sigkill();
+
+    let durable = lab.durable();
+    assert_eq!(
+        model_request_start_count(&durable),
+        starts_before,
+        "the marker cannot create a replacement model turn after reopen"
+    );
+    assert_eq!(todo_status_count(&durable), 0);
+    assert_eq!(todo_emission_count(&durable), 0);
+}
+
+/// A Todo reminder committed with model-turn start remains the suppression
+/// authority after a real process death and reopen. A later `FreshInbound`
+/// opportunity evaluates normally but suppresses the identical semantic
+/// reminder through the bounded latest-emission head.
+#[test]
+fn committed_todo_suppression_survives_process_death() {
+    let lab = Lab::new();
+    let mut process = lab.spawn_nth(
+        child::TODO_STATUS_TURN,
+        Some("after:commit_model_turn_start"),
+        2,
+    );
+    process.wait_reached("after:commit_model_turn_start");
+    process.sigkill();
+
+    let durable = lab.durable();
+    assert_eq!(todo_status_count(&durable), 1);
+    assert_eq!(todo_emission_count(&durable), 1);
+    let head_before = durable
+        .store()
+        .latest_agent_status_emission(
+            AgentStatusModuleId::Todo,
+            crate::context::TODO_STATUS_EMISSION_KEY,
+        )
+        .expect("Todo suppression head lookup")
+        .expect("the committed Todo emission has a head");
+    assert_eq!(
+        head_before.canonical_message_id,
+        durable
+            .canonical()
+            .iter()
+            .find_map(|message| {
+                message.agent_status_metadata().and_then(|metadata| {
+                    metadata
+                        .contains(AgentStatusModuleId::Todo)
+                        .then(|| crate::conversation::message_id_of(message))
+                })
+            })
+            .expect("the Todo status message")
+    );
+
+    let mut resumed = lab.spawn(child::COLD_RESUME, None);
+    resumed.resume_until("settled");
+    resumed.sigkill();
+
+    let durable = lab.durable();
+    assert_eq!(todo_status_count(&durable), 1);
+    assert_eq!(todo_emission_count(&durable), 1);
+    let head_after = durable
+        .store()
+        .latest_agent_status_emission(
+            AgentStatusModuleId::Todo,
+            crate::context::TODO_STATUS_EMISSION_KEY,
+        )
+        .expect("Todo suppression head lookup")
+        .expect("the Todo suppression head");
+    assert_eq!(
+        head_after.fingerprint, head_before.fingerprint,
+        "the identical semantic reminder remains suppressed after reopen"
+    );
+    assert_eq!(
+        head_after.todo_progress_origin, head_before.todo_progress_origin,
+        "restart does not reset or advance Todo cooldown progress"
+    );
+}
+
+/// A prepared Todo candidate that loses before the model-turn-start commit
+/// leaves neither canonical status nor durable suppression. After recovery
+/// settles the dead continuation, a normal `FreshInbound` opportunity may emit
+/// the same reminder exactly once.
+#[test]
+fn uncommitted_todo_emission_does_not_survive_process_death() {
+    let lab = Lab::new();
+    let mut process = lab.spawn_nth(
+        child::TODO_STATUS_TURN,
+        Some("before:commit_model_turn_start"),
+        2,
+    );
+    process.wait_reached("before:commit_model_turn_start");
+    process.sigkill();
+
+    let durable = lab.durable();
+    assert_eq!(todo_status_count(&durable), 0);
+    assert_eq!(todo_emission_count(&durable), 0);
+    assert!(
+        durable
+            .store()
+            .latest_agent_status_emission(
+                AgentStatusModuleId::Todo,
+                crate::context::TODO_STATUS_EMISSION_KEY,
+            )
+            .expect("Todo suppression head lookup")
+            .is_none(),
+        "the failed start has no durable suppression head"
+    );
+
+    // Recovery intentionally creates no replacement continuation for this
+    // externally-started dead attempt. This idle process proves that recovery
+    // has no PostToolBatch marker or other work to consume before the
+    // independent FreshInbound case below.
+    let mut recovered = lab.spawn(child::RESUME_IDLE, None);
+    recovered.wait_note("idle");
+    recovered.sigkill();
+
+    let mut resumed = lab.spawn(child::COLD_RESUME, None);
+    resumed.resume_until("settled");
+    resumed.sigkill();
+
+    let durable = lab.durable();
+    assert_eq!(todo_status_count(&durable), 1);
+    assert_eq!(todo_emission_count(&durable), 1);
+    assert!(
+        durable
+            .store()
+            .latest_agent_status_emission(
+                AgentStatusModuleId::Todo,
+                crate::context::TODO_STATUS_EMISSION_KEY,
+            )
+            .expect("Todo suppression head lookup")
+            .is_some(),
+        "the later committed FreshInbound reminder establishes suppression"
+    );
 }
 
 /// The exact rendered System authority of one persisted request.

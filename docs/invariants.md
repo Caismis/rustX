@@ -41,11 +41,14 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 11 is the only accepted schema; version 10 and every older
+schema version 12 is the only accepted schema; version 11 and every older
 development schema fail explicitly at open and are not migrated. Version 10
 froze the structured Questionnaire interaction audit vocabulary introduced by
-Issue #126. Version 11 freezes the structured Agent Status generation
-descriptor introduced by Issue #131.
+Issue #126. Version 11 froze the structured Agent Status generation
+descriptor introduced by Issue #131. Final version 12 adds the complete
+canonical-message-coupled Agent Status emission facts, bounded latest-emission
+heads, and the Todo-specific durable progress sequence. The review-only
+intermediate schema history was never a supported format.
 
 The durable request-start invariant is strict: the provider adapter cannot be
 called until the Request Snapshot and exact `ModelRequestStarted` Event
@@ -2291,16 +2294,20 @@ message role, history shape, or timestamps:
 - The first-turn execution mode is an explicit trigger
   (`InitialTurnTrigger::FreshInbound(fresh)` vs `Continuation`), never an
   `Option` used to select status behavior. A FreshInbound turn offers the
-  optional Agent Status opportunity; launch configuration may disable either
-  built-in module, and disabling both produces no status message while the
-  normal Context Assembly path still runs.
-- FreshInbound is the only production Agent Status delivery opportunity in
-  this slice. One logical primary step owns at most one Agent Status
-  generation; the trigger is consumed by the first successful model
-  invocation (including a `ToolCalls` response) and is not consumed by a
-  failed `ContextWindowExceeded` attempt. A foreground-tool-only continuation
-  with no new mailbox drain carries no Agent Status and Agent Status never
-  creates a follow-up turn.
+  optional Agent Status opportunity; launch configuration can disable the
+  configurable Time and Background modules, while the closed Todo policy
+  remains enabled and emits only for committed actionable work.
+- One logical primary step owns exactly one finite
+  `AgentStatusOpportunitySet`. Its independent `fresh_inbound` and
+  `post_tool_batch` members may coexist; they are not enum alternatives. A
+  settled finite sibling-tool batch sets the attempt-local `PostToolBatch`
+  member only after the canonical ToolResult batch commits. The marker is
+  consumed by the next already-existing primary step and never creates,
+  wakes, schedules, or prolongs a model request. FreshInbound remains pending
+  until the first successful model invocation observes it (including a
+  `ToolCalls` response); a failed `ContextWindowExceeded` attempt does not
+  consume it. A module interested in both members captures once and evaluates
+  once against the complete set.
 - At the beginning of Agent Status preparation, the runtime samples its clock
   once, freezes one current Conversation Surface head, and hydrates exactly
   the captured active `MessageId`s through keyed Message Ledger reads. The
@@ -2316,7 +2323,8 @@ message role, history shape, or timestamps:
   canonical `UserSource::Runtime` /
   `InboundKind::Context(ContextKind::AgentStatus(metadata))`
   `UserMessageBlock`. The canonical metadata carries the one UTC generation
-  instant and typed admitted module membership (`Time` and/or `Background`);
+  instant and typed admitted module membership (`Time`, `Background`, and/or
+  `Todo`);
   it is the durable source of truth for later Surface scans, including after
   restart/resume. `AgentStatusGenerationMetadata` is validated canonical truth:
   construction and deserialization reject empty, duplicate, unknown, or
@@ -2326,11 +2334,12 @@ message role, history shape, or timestamps:
   adapters never inject it. Equal rendered bytes at different admitted steps
   remain distinct facts with distinct MessageIds. If no module contributes,
   there is no empty wrapper/message and no structured status observation.
-- Time and Background are compile-time-owned modules represented by a closed
-  rustX engine in semantic source order `Time -> Background`. There is no
-  provider registration API, dynamic plugin boundary, provider listing, or
-  lexical ordering contract. The engine validates the code-owned typed
-  mapping `Time <-> Temporal` and `Background <-> BackgroundExecution`.
+- Time, Background, and Todo are compile-time-owned modules represented by a
+  closed rustX engine in semantic source order `Time -> Background -> Todo`.
+  There is no provider registration API, dynamic plugin boundary, provider
+  listing, or lexical ordering contract. The engine validates the code-owned
+  typed mapping `Time <-> Temporal`, `Background <-> BackgroundExecution`, and
+  `Todo <-> Todo`.
 - Time contributes when no visible typed Time membership exists, or when the
   latest visible Time generation is at least 30 minutes old. The threshold is
   inclusive. It renders only the configured IANA timezone (or deterministic
@@ -2345,11 +2354,36 @@ message role, history shape, or timestamps:
   produces no Background generation. The heuristic is code-owned, not JSONC
   configuration.
 - Surface visibility, authoritative domain state, and durable emission history
-  are distinct inputs. This issue supplies only the first two: compaction may
-  retire a visible Time or Background generation, making that module eligible
-  immediately on the next existing primary step. Durable generic suppression
-  history, including Todo behavior, belongs to Issue #130 and is not inferred
-  from the Surface.
+  are distinct inputs. Compaction may retire a visible Time or Background
+  generation, making that module eligible immediately on the next existing
+  primary step; it never resets Todo suppression. Todo reads only the
+  conversation-owned committed `ConversationTodoList` snapshot and performs
+  one bounded lookup of its durable latest-emission head. Suppression is not
+  inferred from active Surface membership or rendered status text.
+- Todo's concrete policy is intentionally small: any committed snapshot with
+  at least one non-terminal `Pending` or `InProgress` task is actionable;
+  blocked active tasks remain relevant and are marked/count as blocked. An
+  empty, completed-only, or deleted-only snapshot contributes nothing. The
+  first `InProgress` task is shown as `current`, remaining active tasks retain
+  creation order, at most six active tasks are shown in total, each subject and
+  active-form is bounded to 256 UTF-8 bytes, and complete-snapshot active,
+  blocked, completed, deleted, and omitted counts are included. The stable
+  semantic key is `active_actionable`; the fingerprint is a SHA-256 of that
+  bounded structured presentation. The latest durable head for
+  `(module=Todo, key=active_actionable)` suppresses an identical fingerprint
+  while fewer than four later newly committed first requests of logical
+  primary model steps have followed the reminder's durable origin; the
+  identical fingerprint is eligible again at exactly four later starts. A
+  changed fingerprint bypasses that duplicate window at the next eligible
+  opportunity. The progress coordinate is the store-owned
+  `todo_progress_sequence`, not a Surface revision: one successful
+  `retry_number == 0` model-turn-start transaction advances it once, while
+  request-scoped context, Agent Status (including Time and Background),
+  RuntimeToolObservation, compaction, provider-overflow retries, cancellation,
+  and failed transactions do not add units. The sequence survives restart and
+  compaction. There is no wall-clock polling or generic cooldown framework;
+  cooldown expiry only changes eligibility for a step that already exists.
+  FreshInbound and PostToolBatch use this same policy.
 - Each interested module captures authoritative runtime state once into a
   finite immutable snapshot, then evaluates only that snapshot plus immutable
   configuration. Capture, evaluation, and payload-validation failures are
@@ -2366,7 +2400,7 @@ message role, history shape, or timestamps:
   executions are retained, and each dynamic tool/progress text field is at
   most 256 UTF-8 bytes; omitted active entries are reported structurally.
   The final Agent Status renderer applies its defensive 4,096 UTF-8-byte cap
-  by admitting whole sections in `Time -> Background` order, re-rendering
+  by admitting whole sections in `Time -> Background -> Todo` order, re-rendering
   every retained set and continuing after an omitted section; it never slices
   wrappers or strings.
 - Fresh inbound that has not been observed by a successful model invocation
@@ -2387,10 +2421,11 @@ message role, history shape, or timestamps:
   context generation. The retry cannot solve fresh-inbound protection by
   rerunning assembly, and cannot solve generation reuse by dropping the
   constraint.
-- Neither the 30-minute Time threshold nor the 8-message Background
-  threshold schedules, wakes, creates, or prolongs a model turn. They only
-  affect eligibility when an already-existing delivery opportunity reaches
-  this preparation boundary.
+- Neither the 30-minute Time threshold, the 8-message Background threshold,
+  nor the Todo four-primary-start progress reminder threshold schedules, wakes,
+  creates, or prolongs a model turn. They only affect eligibility or
+  contribution when an already-existing opportunity reaches this preparation
+  boundary.
 - The context path is mandatory: every normal `AgentExecution` carries a
   `ContextRuntime`; there is no no-context execution mode. Agent Status is
   optional enrichment inside that path.
@@ -2416,6 +2451,15 @@ message role, history shape, or timestamps:
   `ConversationStore::commit_model_turn_start` transaction (canonical
   request-scoped User context appends + `RequestSnapshot` containing the
   frozen Effective System Prompt + `ModelRequestStarted` + sequence binding).
+  When the prepared context contains Agent Status, that same transaction also
+  commits the exact canonical status message, its canonical-message-bound
+  `AgentStatusEmitted` fact(s), and the materialized latest-emission head(s).
+  The typed commit receipt contains `ModelRequestStarted` followed by every
+  newly committed `AgentStatusEmitted` fact in durable sequence order. An
+  idempotent replay returns the historical facts as a verification but does
+  not republish them through the live observer.
+  The head is a bounded projection of durable emission facts, not an
+  independently writable Todo authority.
   Accepted system sections are transient assembly values; they are not
   independently persisted. Cancellation that linearizes first commits nothing: no dynamic
   context, no Surface advancement, no RequestSnapshot, no start fact, and
@@ -2429,9 +2473,25 @@ message role, history shape, or timestamps:
   through `observe_committed` before publishing its structured `observe_status`
   projection. The structured projection carries the exact committed
   `status_message_id` and mirrors the internal opportunity set. Its
-  `opportunities.fresh_inbound` member is optional and, when present in the
-  current FreshInbound-only production path, carries the inbound
-  `target_message_id`; cancellation winning before start publishes neither.
+  `opportunities.fresh_inbound` member is optional and, when present, carries
+  the inbound `target_message_id`; its `post_tool_batch` member is optional
+  and carries only the fact that one complete batch made this existing step
+  eligible. FreshInbound and PostToolBatch therefore publish one observation,
+  never two. Cancellation winning before start publishes neither.
+- A settled tool batch by itself is not a durable answer obligation. Under the
+  current external-side-effect recovery contract, the earlier
+  `ToolExecutionStarted` evidence makes a dead attempt unsafe to replay, even
+  when its canonical ToolResult batch is complete; recovery terminalizes that
+  attempt with `PendingInboundOnly` and never creates a replacement model step
+  to consume the dead `PostToolBatch` marker. An adopted FreshInbound turn has
+  its separate durable answer obligation and follows the ordinary recovery
+  contract; the process-local PostToolBatch marker is never reconstructed.
+- Runtime Client protocol v5 carries the optional structured
+  `opportunities.post_tool_batch` member and the tagged Todo section. The
+  field is omitted when no production PostToolBatch marker existed. Adding a
+  strict tagged `Todo` variant is a breaking wire-contract change, so v4 is
+  explicitly rejected; v5 is the sole supported version and has no aliases or
+  compatibility wire paths.
 - `ModelRequest.effective_system_prompt` is the sole System authority. It is
   rustX-rendered from ordered native/extension sections; canonical history
   has no System role. Frozen project instructions occupy the
@@ -3180,8 +3240,8 @@ semantic normalization boundary. The frozen invariants:
   a model that silently stopped folding transitions.
 - **Runtime Client protocol versioning is independent from internal
   RuntimeEvent/Event Journal schema versioning.** Version negotiation is
-  explicit at attachment admission; Protocol v4 is the sole supported
-  version, and Protocol v1 is rejected explicitly.
+  explicit at attachment admission; Protocol v5 is the sole supported
+  version, and Protocol v4 is rejected explicitly.
 - **The semantic layer owns protocol negotiation and attachment
   admission; transports are framing only.** `initialize` is dispatched by
   `RuntimeClientEndpoint` and is by itself sufficient to establish the
@@ -3270,7 +3330,7 @@ semantic normalization boundary. The frozen invariants:
   no derived message mirror of its own, and deterministic regressions
   verify the projection mirror against the authoritative ledger rather
   than coordinating two histories.
-- **One active attachment.** Protocol v4 admits at most one attachment
+- **One active attachment.** Protocol v5 admits at most one attachment
   per runtime instance; a second attach fails deterministically without
   evicting the first; reconnect receives a fresh attachment identity;
   request ids are attachment-scoped; cursor/replay state belongs to the
@@ -3286,17 +3346,22 @@ semantic normalization boundary. The frozen invariants:
   terminal settlement: the Agent Loop remains the settlement authority,
   and the coordinator holds the exact cancellation trigger the attempt
   task runs against.
-- **One frozen Agent Status input per primary step.** For one FreshInbound
-  opportunity, the context preparation boundary creates exactly one finite
-  immutable Pre-Status Surface view, one clock instant, and one authoritative
-  active-Background snapshot. The closed Agent Status engine traverses its
-  code-owned `Time -> Background` modules once: each interested module
-  captures at most one module snapshot and evaluates it at most once against
-  those shared values. The accepted generation fans out to the canonical
-  Runtime context UserMessageBlock and, only after model-turn-start commit, the
-  Runtime Client projection. Overflow compact-and-retry reuses the same
-  accepted generation; no client path composes again and no projection parses
-  rendered context text to recover structure.
+- **One frozen Agent Status input per primary step.** The context preparation
+  boundary creates exactly one finite immutable Pre-Status Surface view, one
+  clock instant, one authoritative active-Background snapshot, and one
+  committed Todo snapshot for one `AgentStatusOpportunitySet`. Its independent
+  FreshInbound and PostToolBatch members may coexist. The closed Agent Status
+  engine traverses its code-owned `Time -> Background -> Todo` modules once:
+  each interested module captures at most one module snapshot and evaluates it
+  at most once against those shared values. A complete tool batch establishes
+  PostToolBatch only after canonical ToolResult batch settlement; the marker is
+  attempt-local and is not recovered. The accepted generation fans out to one
+  canonical Runtime context UserMessageBlock and, only after model-turn-start
+  commit, one Runtime Client projection. Overflow compact-and-retry reuses the
+  same accepted generation; no client path composes again and no projection
+  parses rendered context text to recover structure. RuntimeToolObservation and
+  AgentStatus remain distinct producers, with deterministic observation-before-
+  status ordering.
 - **Control responses preserve their settlement contract.** A successful
   `submit_inbound`, `cancel_current_attempt`, or `background_cancel` response
   means the runtime accepted the operation at its semantic commit point, not
@@ -3314,7 +3379,7 @@ endpoint. It frames; it never becomes a second authority.
   until one complete, in-bound-size framed record has successfully
   deserialized to the exact Runtime Client request type. A record that
   violates framing, exceeds the record limit, or fails exact
-  deserialization ends the transport having applied nothing; Protocol v4
+  deserialization ends the transport having applied nothing; Protocol v5
   has no uncorrelated error envelope, so no transport fabricates a
   protocol record for it.
 - **Transport loss is not semantic cancellation.** Runtime Client

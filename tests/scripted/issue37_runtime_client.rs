@@ -740,10 +740,23 @@ async fn agent_status_shares_one_composition() {
         id: rustx::runtime_client::RequestId::new(1),
         content: text("go"),
     });
-    let events = receive_until(&subscription, |event| {
+    let mut events = receive_until(&subscription, |event| {
         matches!(event.event, RuntimeClientEvent::AgentStatusComposed { .. })
     })
     .await;
+    let terminal_events = receive_until(&subscription, |event| {
+        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    })
+    .await;
+    events.extend(terminal_events);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event.event, RuntimeClientEvent::AgentStatusComposed { .. }))
+            .count(),
+        1,
+        "AgentStatusEmitted remains an internal fact; one composition is the only client status event"
+    );
     let status_view = events
         .iter()
         .find_map(|event| match &event.event {
@@ -751,10 +764,6 @@ async fn agent_status_shares_one_composition() {
             _ => None,
         })
         .expect("status event");
-    receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
-    })
-    .await;
     let requests = model_handle.requests();
     assert_eq!(requests.len(), 1);
     let model_rendered = requests[0]
@@ -860,11 +869,11 @@ async fn agent_status_shares_one_composition() {
     );
 }
 
-/// Disabling both compile-time-owned modules removes the optional status
-/// message and its structured observation while leaving normal execution and
-/// Context Assembly intact.
+/// Disabling the configurable Time and Background modules, with no actionable
+/// Todo state, removes the optional status message and structured observation
+/// while leaving normal execution and Context Assembly intact.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn all_agent_status_modules_disabled_emit_no_message_or_observation() {
+async fn disabled_time_and_background_with_no_actionable_todos_emit_no_status() {
     let config = AgentStatusConfig {
         time: rustx::context::TimeStatusConfig {
             enabled: false,

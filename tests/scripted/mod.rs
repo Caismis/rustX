@@ -52,6 +52,7 @@ mod issue109_interaction_audit;
 mod issue111_process_death;
 mod issue127_todo_plane;
 mod issue127_todo_transaction;
+mod issue130_agent_status;
 mod issue27_multi_compaction;
 mod issue37_binding;
 mod issue37_capability;

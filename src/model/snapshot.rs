@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::context::assembly::{AcceptedSystemSection, ContextGeneration};
 use crate::conversation::{ConversationError, ConversationState, SurfaceRevision};
+use crate::message::types::AgentStatusEmission;
 use crate::model::invocation::ModelInvocationConfig;
 use crate::model::types::ModelRequest;
 use crate::runtime::continuation::ProviderContinuationState;
@@ -61,6 +62,22 @@ impl RequestIdentity {
     }
 }
 
+/// The Agent Status portion of one prepared model-turn start.
+///
+/// The canonical message identity and the semantic emission metadata travel
+/// together inside the immutable Request Snapshot. This lets the durable
+/// start transition validate that an emission belongs to the exact status
+/// message and request that prepared it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentStatusStart {
+    /// The exact canonical Agent Status User message committed by the start.
+    pub message_id: MessageId,
+    /// Emissions represented by that one status generation.
+    #[serde(default)]
+    pub emissions: Vec<AgentStatusEmission>,
+}
+
 /// A provider-independent frozen request boundary.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RequestSnapshot {
@@ -106,6 +123,10 @@ pub struct RequestSnapshot {
     /// context equality — the complete ordered set, never just "every
     /// supplied message exists and matches".
     pub request_context_ids: Vec<MessageId>,
+    /// The exact Agent Status context and semantic emission metadata accepted
+    /// for this request, when this request started a status generation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_status: Option<AgentStatusStart>,
 }
 
 /// A historical reconstruction failure.
@@ -175,6 +196,7 @@ impl RequestSnapshot {
             context_generation,
             continuation,
             request_context_ids,
+            agent_status: None,
         }
     }
 

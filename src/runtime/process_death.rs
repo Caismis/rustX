@@ -48,7 +48,13 @@
 //! ```
 //!
 //! In each case the parked thread owns the only path that can advance that
-//! plane, so the durable world is frozen for the same reason.
+//! plane, so the durable world is frozen for the same reason. The Agent Loop
+//! also exposes one test-only attempt-local boundary,
+//! `after:post_tool_batch_marker`, after a canonical ToolResult batch has
+//! committed and before the next primary-step preparation. That boundary
+//! parks the loop before it can do more work; unlike the durable boundaries,
+//! its purpose is to prove that process-local eligibility is not reconstructed
+//! after recovery.
 //!
 //! # Why this is a `cfg(test)` seam
 //!
@@ -93,7 +99,10 @@ pub(crate) const CONTROL_ENV: &str = "RUSTX_FND06_CONTROL";
 pub(crate) use imp::{orphan_watchdog, reach, reach_event, recv_line, send_line};
 
 /// Parks the calling thread at `boundary` when the process was started to die
-/// there. Compiled away outside this crate's test build.
+/// there. Durable callers hold their transition's store or ownership lock;
+/// the attempt-local `PostToolBatch` boundary is placed after its batch commit
+/// and before the loop can begin another operation. Compiled away outside
+/// this crate's test build.
 #[cfg(not(test))]
 pub(crate) const fn reach(_boundary: &str) {}
 

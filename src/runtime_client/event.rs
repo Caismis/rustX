@@ -1,4 +1,4 @@
-//! The Runtime Client event vocabulary (Runtime Client Protocol v4).
+//! The Runtime Client event vocabulary (Runtime Client Protocol v5).
 //!
 //! [`RuntimeClientEvent`] is the provider-neutral external event shape of
 //! the Runtime Client projection. It is deliberately **not** the internal
@@ -15,7 +15,7 @@
 //!   Python worker internals, and no provider wire objects appear.
 //!
 //! The internal `RuntimeEvent` schema can therefore evolve without
-//! breaking Runtime Client Protocol v4.
+//! breaking Runtime Client Protocol v5.
 //!
 //! Every attempt-scoped event carries its `attempt_id`, so events are
 //! self-describing for clients that attach mid-attempt.
@@ -315,8 +315,8 @@ pub enum RuntimeClientEvent {
         transcript_cursor: Option<RuntimeClientTranscriptCursor>,
     },
 
-    /// The runtime published the Agent Status committed with a fresh inbound
-    /// model turn.
+    /// The runtime published the Agent Status committed with an existing
+    /// primary model turn.
     ///
     /// The carried view derives from the exact composed status used by the
     /// model path; a client never causes a second composition.
