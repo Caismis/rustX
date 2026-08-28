@@ -17,7 +17,8 @@ use rustx::agent::{
 };
 use rustx::context::{
     AgentStatusEngine, CompactionBudgets, ContextConfig, ContextEngine, ContextRuntime,
-    ContextSummarizer, ModelBackedSummarizer, SummaryRequest,
+    ContextSummarizer, DefaultTokenEstimator, ModelBackedSummarizer, SessionContextPolicy,
+    SummaryRequest,
 };
 use rustx::conversation::ConversationState;
 use rustx::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
@@ -100,6 +101,10 @@ async fn make_execution<'a>(
         request(attempt, model),
         capability.into_lease(),
         cancellation,
+        crate::agent::execution::AgentExecutionRuntimePolicy {
+            model_timeout_policy: policy,
+            monotonic_clock: Arc::clone(&clock) as Arc<dyn MonotonicClock>,
+        },
         runtime(),
         tool_runtime,
         rustx::agent::AttemptLifecycle::inert(),
@@ -532,6 +537,10 @@ async fn publication_flush_wins_before_timeout_at_the_same_cut_and_does_not_rese
         request("attempt-135-publication", &model),
         capability.into_lease(),
         &cancellation,
+        crate::agent::execution::AgentExecutionRuntimePolicy {
+            model_timeout_policy: timeout_policy(100, 5),
+            monotonic_clock: Arc::clone(&clock) as Arc<dyn MonotonicClock>,
+        },
         runtime(),
         &tool_runtime,
         rustx::agent::AttemptLifecycle::inert(),
@@ -621,6 +630,10 @@ async fn provider_event_wins_when_ready_with_response_timeout() {
         request("attempt-135-provider-cut", &model),
         capability.into_lease(),
         &cancellation,
+        crate::agent::execution::AgentExecutionRuntimePolicy {
+            model_timeout_policy: timeout_policy(10, 100),
+            monotonic_clock: Arc::clone(&clock) as Arc<dyn MonotonicClock>,
+        },
         runtime(),
         &tool_runtime,
         rustx::agent::AttemptLifecycle::inert(),
@@ -700,6 +713,10 @@ async fn cancellation_wins_same_cut_and_retains_cancellation_provenance() {
         request("attempt-135-cancellation-cut", &model),
         capability.into_lease(),
         &cancellation,
+        crate::agent::execution::AgentExecutionRuntimePolicy {
+            model_timeout_policy: timeout_policy(10, 20),
+            monotonic_clock: Arc::clone(&clock) as Arc<dyn MonotonicClock>,
+        },
         runtime(),
         &tool_runtime,
         rustx::agent::AttemptLifecycle::inert(),
@@ -916,4 +933,135 @@ async fn model_backed_summarizer_uses_the_same_deadlines_without_generic_retry()
         assert!(error.message.contains(expected));
         assert_eq!(model.requests().len(), 1, "summarizer has no generic retry");
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn runtime_composition_shares_one_clock_between_primary_and_summarizer() {
+    let (summary_release, summary_release_rx) = model_release();
+    let summary_model = fake_model(vec![vec![
+        FakeStep::Emit(started()),
+        FakeStep::ParkUntilReleased(summary_release_rx),
+    ]]);
+    let summary_snapshot =
+        support::attempt_model_with_window(summary_model.clone(), "summary-model", 10_000_000, 128);
+    let policy = timeout_policy(10, 10);
+    let clock = Arc::new(ManualMonotonicClock::new());
+    let context_runtime = ContextRuntime::for_attempt(
+        SessionContextPolicy {
+            reserve_tokens: 0,
+            keep_recent_tokens: 0,
+            summary_output_cap: None,
+        },
+        Arc::new(DefaultTokenEstimator),
+        AgentStatusEngine::default(),
+        &summary_snapshot,
+        policy,
+        Arc::clone(&clock) as Arc<dyn MonotonicClock>,
+    )
+    .expect("valid context runtime");
+
+    // Pull the provider-backed summarizer out of the context bundle only for
+    // this in-crate structural test. Its construction already received the
+    // same explicit policy/clock that the primary execution will receive.
+    let summarizer = context_runtime.summarizer.clone();
+    let mut summary_parked = summary_model.parked();
+    let mut summary_exited = summary_model.streams_exited();
+    let summary_clock = clock.clone();
+    let summary_controller = tokio::spawn(async move {
+        summary_parked
+            .wait_for(|is_parked| *is_parked)
+            .await
+            .expect("summary provider reaches its parked next pull");
+        summary_clock.advance(10);
+        summary_exited
+            .wait_for(|count| *count >= 1)
+            .await
+            .expect("summary stream exits at the shared deadline");
+        drop(summary_release);
+    });
+    let summary_error = tokio::time::timeout(
+        Duration::from_secs(2),
+        summarizer.summarize(
+            SummaryRequest {
+                retired: vec![user("retired", "old")],
+            },
+            rustx::runtime::CancellationSignal::new(),
+        ),
+    )
+    .await
+    .expect("summary deadline must settle")
+    .expect_err("summary must time out");
+    summary_controller
+        .await
+        .expect("summary clock controller completes");
+    assert_eq!(
+        summary_error.kind,
+        rustx::context::ContextErrorKind::SummaryFailed
+    );
+
+    let (primary_release, primary_release_rx) = model_release();
+    let primary_model = fake_model(vec![vec![
+        FakeStep::Emit(started()),
+        FakeStep::ParkUntilReleased(primary_release_rx),
+    ]]);
+    let mut primary_parked = primary_model.parked();
+    let mut primary_exited = primary_model.streams_exited();
+    let tool_runtime = common::tool_runtime(CONVERSATION);
+    let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
+    let cancellation =
+        AgentCancellation::new(rustx::runtime::types::CancellationReason::UserRequested);
+    let execution_policy = crate::agent::execution::AgentExecutionRuntimePolicy {
+        model_timeout_policy: policy,
+        monotonic_clock: Arc::clone(&clock) as Arc<dyn MonotonicClock>,
+    };
+    let execution = AgentExecution::new(
+        request("attempt-135-shared-clock", &primary_model),
+        capability.into_lease(),
+        &cancellation,
+        execution_policy,
+        context_runtime,
+        &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
+    )
+    .expect("conversation identity matches the tool runtime");
+    let primary_clock = clock.clone();
+    let controller_cancellation = cancellation.clone();
+    let primary_controller = tokio::spawn(async move {
+        primary_parked
+            .wait_for(|is_parked| *is_parked)
+            .await
+            .expect("primary provider reaches its parked next pull");
+        primary_clock.advance(10);
+        primary_exited
+            .wait_for(|count| *count >= 1)
+            .await
+            .expect("primary stream exits at the shared deadline");
+        // The primary timeout is retryable under Issue #134. Cancel only
+        // after its first request has settled so this structural test can
+        // finish without advancing a second retry deadline.
+        controller_cancellation.cancel();
+        drop(primary_release);
+    });
+    let result = tokio::time::timeout(Duration::from_secs(2), execution.run())
+        .await
+        .expect("primary deadline must settle");
+    primary_controller
+        .await
+        .expect("primary clock controller completes");
+    let audit = common::durable_agent_result(result, tool_runtime.durable_store().as_ref());
+    assert!(matches!(audit.outcome, AttemptOutcome::Cancelled { .. }));
+    assert_eq!(
+        audit
+            .event_history
+            .iter()
+            .filter(|event| matches!(
+                event,
+                RuntimeEvent::ModelRequestFailed { error, .. }
+                    if error.kind == rustx::model::ModelErrorKind::Timeout
+            ))
+            .count(),
+        1,
+        "the shared clock drove exactly one primary timeout before cancellation"
+    );
+    assert!(cancellation.is_cancelled());
 }

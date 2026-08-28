@@ -84,6 +84,8 @@ fn runtime(model: &std::sync::Arc<FakeModel>) -> rustx::context::ContextRuntime 
         estimator,
         rustx::context::AgentStatusEngine::default(),
         &snapshot,
+        rustx::model::ModelTimeoutPolicy::default(),
+        support::default_monotonic_clock(),
     )
     .expect("valid context runtime")
 }
@@ -101,6 +103,7 @@ async fn run(
         request("attempt-1", model),
         capability.into_lease(),
         cancellation,
+        support::default_execution_policy(),
         runtime(model),
         &tool_runtime,
         rustx::agent::AttemptLifecycle::inert(),
@@ -2499,6 +2502,7 @@ async fn run_with_mailbox(
         request("attempt-1", model),
         capability.into_lease(),
         cancellation,
+        support::default_execution_policy(),
         runtime(model),
         tool_runtime,
         rustx::agent::AttemptLifecycle::inert(),
@@ -2523,6 +2527,7 @@ async fn conversation_mismatch_with_the_tool_runtime_is_rejected() {
         request("attempt-1", &model),
         capability.into_lease(),
         &cancellation,
+        support::default_execution_policy(),
         runtime(&model),
         &tool_runtime,
         rustx::agent::AttemptLifecycle::inert(),

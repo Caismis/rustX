@@ -110,6 +110,7 @@ use crate::publication::{
     CoalescePolicy, PublicationCoalescer, PublicationFrame, PublicationPayload,
     PublicationStreamStart,
 };
+use crate::runtime::MonotonicClock;
 use crate::runtime::continuation::ProviderContinuationState;
 use crate::runtime::identity::{
     AgentId, AttemptId, ConversationId, EventId, MessageId, PublicationStreamId, RequestId,
@@ -118,7 +119,6 @@ use crate::runtime::identity::{
 use crate::runtime::inbound::{FreshInboundTurn, InitialTurnTrigger, MailboxError};
 use crate::runtime::interaction::{ApprovalDecision, InteractionOutcome, InteractionResponse};
 use crate::runtime::types::{CancellationReason, RuntimeError};
-use crate::runtime::{MonotonicClock, SystemMonotonicClock};
 use crate::tools::background::BackgroundDispatchOutcome;
 use crate::tools::executor::{
     PreflightOutcome, PreparedInvocation, ProgressReporter, ToolExecutionContext, ToolRegistry,
@@ -325,7 +325,8 @@ impl AgentExecutionResult {
 ///
 /// The runtime supplies the generic execution policy and synchronization
 /// authority explicitly at this boundary; the context plane is not queried
-/// for either value.
+/// for either value. This is a narrow admission handoff, not a second owner
+/// of runtime execution policy.
 #[derive(Clone)]
 pub(crate) struct AgentExecutionRuntimePolicy {
     /// The timeout policy frozen for this admitted attempt or operation.
@@ -726,7 +727,8 @@ impl From<ConversationError> for CanonicalCommitError {
 impl<'a> AgentExecution<'a> {
     /// Creates an attempt execution over the given adapter, the owned attempt
     /// capability lease, the cancellation signal, the mandatory M4 context
-    /// runtime, and the conversation tool runtime.
+    /// runtime, the explicitly admitted runtime execution policy, and the
+    /// conversation tool runtime.
     ///
     /// The attempt capability lease is moved into the execution and pins the
     /// immutable capability snapshot (revision, `ToolRegistry` handle, Skill
@@ -746,6 +748,11 @@ impl<'a> AgentExecution<'a> {
     /// terminal notifications always enter the mailbox the Agent Loop
     /// drains.
     ///
+    /// The runtime policy is required: the composition owner must supply the
+    /// same admitted [`AgentExecutionRuntimePolicy`] to the primary execution
+    /// boundary that it supplied to the provider-backed summarizer. This
+    /// constructor never creates a policy or monotonic clock of its own.
+    ///
     /// The context runtime is required: there is exactly one normal
     /// execution model — canonical history is always projected through the
     /// context engine. A pending `FreshInbound` turn offers the optional
@@ -763,38 +770,12 @@ impl<'a> AgentExecution<'a> {
     /// Returns [`MailboxError::ConversationMismatch`] when the request's
     /// conversation differs from the conversation tool runtime's
     /// conversation (and therefore its canonical mailbox).
-    pub fn new(
+    pub(crate) fn new(
         request: AgentExecutionRequest,
         capability: AttemptCapabilityLease,
         cancellation: &'a AgentCancellation,
-        context_runtime: ContextRuntime,
-        tool_runtime: &'a ConversationToolRuntime,
-        lifecycle: AttemptLifecycle,
-    ) -> Result<Self, MailboxError> {
-        Self::new_with_runtime_policy(
-            request,
-            capability,
-            cancellation,
-            context_runtime,
-            AgentExecutionRuntimePolicy {
-                model_timeout_policy: ModelTimeoutPolicy::default(),
-                monotonic_clock: Arc::new(SystemMonotonicClock::new()),
-            },
-            tool_runtime,
-            lifecycle,
-        )
-    }
-
-    /// Creates an attempt execution with the runtime-owned policy and
-    /// monotonic clock frozen at admission. The context runtime receives the
-    /// same values independently for its summarizer; this execution never
-    /// recovers generic execution state from the context plane.
-    pub(crate) fn new_with_runtime_policy(
-        request: AgentExecutionRequest,
-        capability: AttemptCapabilityLease,
-        cancellation: &'a AgentCancellation,
-        context_runtime: ContextRuntime,
         runtime_policy: AgentExecutionRuntimePolicy,
+        context_runtime: ContextRuntime,
         tool_runtime: &'a ConversationToolRuntime,
         lifecycle: AttemptLifecycle,
     ) -> Result<Self, MailboxError> {
@@ -5395,6 +5376,8 @@ mod tests {
             Arc::new(crate::context::DefaultTokenEstimator),
             crate::context::AgentStatusEngine::default(),
             &request(adapter).model,
+            crate::model::ModelTimeoutPolicy::default(),
+            crate::scripted_suites::support::default_monotonic_clock(),
         )
         .expect("valid context runtime")
     }
@@ -5620,6 +5603,7 @@ mod tests {
             request(&adapter),
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime(&adapter),
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -5673,6 +5657,7 @@ mod tests {
             request(&adapter),
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime(&adapter),
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -5709,6 +5694,7 @@ mod tests {
             request(&adapter),
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime(&adapter),
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -5764,6 +5750,7 @@ mod tests {
             request(&adapter),
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime(&adapter),
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -5853,6 +5840,7 @@ mod tests {
             request(&adapter),
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime(&adapter),
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -5994,6 +5982,7 @@ mod tests {
             request(&adapter),
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime(&adapter),
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -6085,6 +6074,7 @@ mod tests {
             other_request,
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime(&adapter),
             &other_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -6123,6 +6113,7 @@ mod tests {
             request(&adapter),
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime(&adapter),
             &other_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -6179,6 +6170,7 @@ mod tests {
             request,
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime,
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -6275,6 +6267,7 @@ mod tests {
             request,
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime,
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -6350,6 +6343,7 @@ mod tests {
             request_dyn(&adapter_dyn),
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime_dyn(&adapter_dyn),
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -6453,6 +6447,8 @@ mod tests {
             crate::context::AgentStatusEngine::default(),
             assembly,
             &request.model,
+            crate::model::ModelTimeoutPolicy::default(),
+            crate::scripted_suites::support::default_monotonic_clock(),
         )
         .expect("valid context runtime");
         let tool_runtime = tool_runtime_with_store("conv-1", Some(store.clone()));
@@ -6463,6 +6459,7 @@ mod tests {
             request,
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime,
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -6559,6 +6556,7 @@ mod tests {
             request(&adapter),
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime(&adapter),
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -6663,6 +6661,7 @@ mod tests {
                 request(&adapter),
                 lease,
                 &cancellation,
+                crate::scripted_suites::support::default_execution_policy(),
                 runtime(&adapter),
                 &tool_runtime,
                 lifecycle,
@@ -6750,6 +6749,8 @@ mod tests {
             crate::context::AgentStatusEngine::default(),
             assembly,
             &request.model,
+            crate::model::ModelTimeoutPolicy::default(),
+            crate::scripted_suites::support::default_monotonic_clock(),
         )
         .expect("valid context runtime");
         (request, runtime, invocation_count)
@@ -6859,6 +6860,8 @@ mod tests {
             Arc::new(crate::context::DefaultTokenEstimator),
             crate::context::AgentStatusEngine::default(),
             &request_dyn(adapter).model,
+            crate::model::ModelTimeoutPolicy::default(),
+            crate::scripted_suites::support::default_monotonic_clock(),
         )
         .expect("valid context runtime")
     }
@@ -6900,6 +6903,8 @@ mod tests {
             crate::context::AgentStatusEngine::default(),
             assembly,
             &request.model,
+            crate::model::ModelTimeoutPolicy::default(),
+            crate::scripted_suites::support::default_monotonic_clock(),
         )
         .expect("valid context runtime");
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
@@ -6919,6 +6924,7 @@ mod tests {
             request,
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime,
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -6979,6 +6985,7 @@ mod tests {
             request,
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime(&adapter),
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -7044,6 +7051,7 @@ mod tests {
             request(&adapter),
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime(&adapter),
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -7151,6 +7159,7 @@ mod tests {
             request(&adapter),
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime(&adapter),
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -7389,6 +7398,7 @@ mod tests {
             request(&adapter),
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime(&adapter),
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),

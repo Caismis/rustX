@@ -2209,6 +2209,7 @@ mod tests {
             request,
             capability.into_lease(),
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime,
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),

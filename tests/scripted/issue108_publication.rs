@@ -83,6 +83,8 @@ fn context_runtime(model: &Arc<FakeModel>) -> rustx::context::ContextRuntime {
         estimator,
         rustx::context::AgentStatusEngine::default(),
         &snapshot,
+        rustx::model::ModelTimeoutPolicy::default(),
+        support::default_monotonic_clock(),
     )
     .expect("valid context runtime")
 }
@@ -137,6 +139,7 @@ async fn run_with(
         request(conversation, model),
         capability.into_lease(),
         &cancellation,
+        support::default_execution_policy(),
         context_runtime(model),
         &tool_runtime,
         rustx::agent::AttemptLifecycle::inert(),
@@ -329,6 +332,7 @@ async fn chatty_provider_cannot_postpone_the_oldest_publication_deadline() {
         request("conv-latency-chatty", &model),
         capability.into_lease(),
         &cancellation,
+        support::default_execution_policy(),
         context_runtime(&model),
         &tool_runtime,
         rustx::agent::AttemptLifecycle::inert(),
@@ -412,6 +416,7 @@ async fn quiet_provider_is_woken_by_the_publication_deadline() {
         request("conv-latency-quiet", &model),
         capability.into_lease(),
         &cancellation,
+        support::default_execution_policy(),
         context_runtime(&model),
         &tool_runtime,
         rustx::agent::AttemptLifecycle::inert(),

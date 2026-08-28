@@ -73,11 +73,13 @@ publication latency and retry deadlines use the runtime-owned monotonic clock;
 tests inject a manually advanced clock.
 
 The Conversation Runtime owns the current `ModelTimeoutPolicy` and the shared
-`MonotonicClock`. Attempt admission copies the policy into the admitted
-execution state. `AgentExecution` and the context-plane
-`ModelBackedSummarizer` are sibling consumers: `ContextRuntime` contains the
-summarizer it needs, but it is not the owner of generic Agent Loop execution
-policy or the shared clock.
+`MonotonicClock`. Attempt admission freezes the policy and passes the same
+clock authority to both sibling consumers. `AgentExecution` and the
+context-plane `ModelBackedSummarizer` are constructed from those explicit
+admitted values: `ContextRuntime` contains the summarizer it needs, but it is
+not the owner of generic Agent Loop execution policy or the shared clock. No
+production-capable `AgentExecution` or `ContextRuntime` constructor invents a
+second clock or a fallback timeout policy.
 
 Every failed request settles its publication stream before another request can
 start. Partial text, reasoning, refusal, usage, and proposed tool calls remain

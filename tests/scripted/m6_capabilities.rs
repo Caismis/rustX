@@ -1726,6 +1726,8 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
         Arc::new(rustx::context::DefaultTokenEstimator),
         rustx::context::AgentStatusEngine::default(),
         &request.model,
+        rustx::model::ModelTimeoutPolicy::default(),
+        support::default_monotonic_clock(),
     )
     .expect("context runtime")
     .with_runtime_resources(&resources);
@@ -1733,6 +1735,7 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
         request,
         lease,
         &cancellation,
+        support::default_execution_policy(),
         runtime,
         &tool_runtime,
         rustx::agent::AttemptLifecycle::inert(),

@@ -15,9 +15,12 @@
 //! Neither seam may exist in the published API: production must have exactly
 //! one binding path ([`ModelBindingRegistry::new`](rustx::model::ModelBindingRegistry::new),
 //! which constructs the three supported protocol adapters directly) and
-//! exactly one context-runtime constructor
-//! ([`ContextRuntime::for_attempt`](rustx::context::ContextRuntime::for_attempt),
-//! which derives the summarizer from the attempt's frozen model snapshot).
+//! exactly one production context-runtime construction path
+//! ([`ContextRuntime::for_attempt_with_assembly`](rustx::context::ContextRuntime::for_attempt_with_assembly),
+//! which derives the summarizer from the attempt's frozen model snapshot and
+//! requires the admitted timeout policy and shared monotonic clock). The
+//! `cfg(test)` `for_attempt` wrapper only supplies an empty assembly for
+//! these in-crate fixtures; it also requires those explicit admitted values.
 //!
 //! An external integration-test binary can only reach `pub` items, so a seam
 //! usable from `tests/*.rs` is necessarily a seam a downstream consumer can

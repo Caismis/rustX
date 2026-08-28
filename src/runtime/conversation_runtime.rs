@@ -1596,14 +1596,14 @@ impl RuntimeInner {
         assembly: crate::context::ContextAssembly,
         model_timeout_policy: ModelTimeoutPolicy,
     ) -> Result<ContextRuntime, crate::context::ContextError> {
-        ContextRuntime::for_attempt_with_assembly_and_timeout(
+        ContextRuntime::for_attempt_with_assembly(
             self.context.policy,
             Arc::clone(&self.context.estimator),
             self.context.status_engine.for_attempt(),
             assembly,
             model,
             model_timeout_policy,
-            &self.monotonic_clock,
+            Arc::clone(&self.monotonic_clock),
         )
     }
 
@@ -2008,12 +2008,12 @@ impl RuntimeInner {
                 None => lifecycle,
             }
         };
-        let mut execution = AgentExecution::new_with_runtime_policy(
+        let mut execution = AgentExecution::new(
             request,
             lease,
             cancellation,
-            context_runtime,
             execution_policy,
+            context_runtime,
             &self.tool_runtime,
             lifecycle,
         )

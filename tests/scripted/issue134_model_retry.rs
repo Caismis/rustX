@@ -166,6 +166,7 @@ async fn make_execution<'a>(
         request,
         capability.into_lease(),
         cancellation,
+        support::default_execution_policy(),
         runtime,
         tool_runtime,
         rustx::agent::AttemptLifecycle::inert(),

@@ -68,6 +68,8 @@ fn runtime(model: &std::sync::Arc<FakeModel>) -> rustx::context::ContextRuntime 
         estimator,
         rustx::context::AgentStatusEngine::default(),
         &snapshot,
+        rustx::model::ModelTimeoutPolicy::default(),
+        support::default_monotonic_clock(),
     )
     .expect("valid context runtime")
 }
@@ -88,6 +90,7 @@ async fn run(
         request(model),
         lease,
         cancellation,
+        support::default_execution_policy(),
         runtime(model),
         &tool_runtime,
         rustx::agent::AttemptLifecycle::inert(),

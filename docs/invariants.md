@@ -306,8 +306,10 @@ stream and normally commits exactly one terminal `RuntimeEvent`:
   shared runtime `MonotonicClock`; attempt/manual-operation admission freezes
   copies for sibling Agent Loop and Context/Summarizer consumers. The policy
   is not model input, durable request state, canonical history, or provider
-  continuation state. `ConversationRuntime::new` rejects a zero deadline with
-  a typed error before store initialization or ownership transfer.
+  continuation state. No production-capable `AgentExecution` or
+  `ContextRuntime` constructor creates a fallback policy or independent clock.
+  `ConversationRuntime::new` rejects a zero deadline with a typed error before
+  store initialization or ownership transfer.
 - The request-local deadline state is
   `AwaitingGeneration → Streaming → Terminal`. The response-start deadline
   starts only after the primary `RequestSnapshot + ModelRequestStarted` commit,

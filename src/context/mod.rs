@@ -28,7 +28,10 @@
 //! trusted semantic context, the engine projects the Surface, and adapters
 //! receive the final Effective System Prompt.
 //! [`ContextRuntime`] bundles the engine, the summary service, and the
-//! attempt-owned Agent Status engine for `AgentExecution`.
+//! attempt-owned Agent Status engine for `AgentExecution`. The conversation
+//! runtime supplies the admitted model timeout policy and shared monotonic
+//! clock when it constructs this bundle; the context plane does not own or
+//! recreate either execution primitive.
 
 pub mod assembly;
 pub(crate) mod compaction;
@@ -43,7 +46,7 @@ use std::sync::Arc;
 
 use crate::model::deadline::ModelTimeoutPolicy;
 use crate::model::session::AttemptModelSnapshot;
-use crate::runtime::monotonic::{MonotonicClock, SystemMonotonicClock};
+use crate::runtime::monotonic::MonotonicClock;
 
 pub use crate::message::types::{
     AgentStatusGenerationMetadata, AgentStatusMetadataError, AgentStatusModuleId,
@@ -112,25 +115,17 @@ pub struct ContextRuntime {
 }
 
 impl ContextRuntime {
-    /// Creates the production context runtime of one admitted attempt.
-    ///
-    /// The engine's context window comes from the attempt's **immutable
-    /// model snapshot**, never from a window captured at process start, and
-    /// the summarizer is derived from that same snapshot's frozen summary
-    /// policy. The summary invocation's own window additionally bounds how
-    /// large a selected Surface span may be, so compaction can never build
-    /// an impossible summary-model request.
-    ///
-    /// # Errors
-    ///
-    /// Returns an engine construction error when the derived configuration
-    /// leaves no positive effective input budget, for the primary model or
-    /// for the summary model.
-    pub fn for_attempt(
+    /// Test-only convenience wrapper for the explicit production-capable
+    /// assembly constructor. It requires the same admitted policy and clock
+    /// that the sibling `AgentExecution` receives; it never creates either.
+    #[cfg(test)]
+    pub(crate) fn for_attempt(
         policy: SessionContextPolicy,
         estimator: Arc<dyn TokenEstimator>,
         status_engine: AgentStatusEngine,
         model: &AttemptModelSnapshot,
+        model_timeout_policy: ModelTimeoutPolicy,
+        monotonic_clock: Arc<dyn MonotonicClock>,
     ) -> Result<Self, ContextError> {
         Self::for_attempt_with_assembly(
             policy,
@@ -138,45 +133,26 @@ impl ContextRuntime {
             status_engine,
             ContextAssembly::new(),
             model,
+            model_timeout_policy,
+            monotonic_clock,
         )
     }
 
-    /// Creates a production context runtime with the supplied attempt-owned
-    /// Agent Status engine.
+    /// Creates a context runtime with the supplied attempt-owned Agent Status
+    /// engine, context assembly, timeout policy, and runtime monotonic clock.
     ///
     /// # Errors
     ///
     /// Returns a context configuration error when the primary or summary
     /// model cannot produce a valid context budget.
-    pub fn for_attempt_with_assembly(
-        policy: SessionContextPolicy,
-        estimator: Arc<dyn TokenEstimator>,
-        status_engine: AgentStatusEngine,
-        assembly: ContextAssembly,
-        model: &AttemptModelSnapshot,
-    ) -> Result<Self, ContextError> {
-        let monotonic_clock: Arc<dyn MonotonicClock> = Arc::new(SystemMonotonicClock::new());
-        Self::for_attempt_with_assembly_and_timeout(
-            policy,
-            estimator,
-            status_engine,
-            assembly,
-            model,
-            ModelTimeoutPolicy::default(),
-            &monotonic_clock,
-        )
-    }
-
-    /// Creates a production context runtime with the admitted model timeout
-    /// policy and shared runtime monotonic clock.
-    pub(crate) fn for_attempt_with_assembly_and_timeout(
+    pub(crate) fn for_attempt_with_assembly(
         policy: SessionContextPolicy,
         estimator: Arc<dyn TokenEstimator>,
         status_engine: AgentStatusEngine,
         assembly: ContextAssembly,
         model: &AttemptModelSnapshot,
         model_timeout_policy: ModelTimeoutPolicy,
-        monotonic_clock: &Arc<dyn MonotonicClock>,
+        monotonic_clock: Arc<dyn MonotonicClock>,
     ) -> Result<Self, ContextError> {
         if !model_timeout_policy.is_positive() {
             return Err(ContextError::new(
@@ -234,7 +210,7 @@ impl ContextRuntime {
             summarizer: Arc::new(ModelBackedSummarizer::new(
                 summary,
                 model_timeout_policy,
-                Arc::clone(monotonic_clock),
+                monotonic_clock,
             )),
             status_engine,
             assembly,
@@ -261,9 +237,10 @@ impl ContextRuntime {
     /// The in-crate deterministic summarizer seam.
     ///
     /// It exists only under `cfg(test)` and is `pub(crate)`, so it is not
-    /// part of the published API: [`ContextRuntime::for_attempt`] is the one
-    /// constructor a consumer of this library can call, and it derives the
-    /// summarizer from the attempt's frozen model snapshot.
+    /// part of the published API. Production-capable construction is owned
+    /// by `ConversationRuntime`, which supplies the explicit admitted policy
+    /// and shared monotonic clock to
+    /// [`ContextRuntime::for_attempt_with_assembly`].
     #[cfg(test)]
     pub(crate) fn with_scripted_summarizer(
         engine: ContextEngine,

@@ -595,7 +595,10 @@ stream and crosses the existing `SummaryFailed` context/compaction boundary;
 it does not create a primary request identity, Event Journal request facts, or
 generic model retry. `ContextRuntime` owns context projection/compaction state
 and the already-constructed summarizer, but it does not own generic primary
-execution policy or provide the policy/clock back to `AgentExecution`. Manual
+execution policy or provide the policy/clock back to `AgentExecution`; the
+runtime/composition owner injects those values directly into both siblings.
+No production-capable context construction path creates an independent
+monotonic clock. Manual
 compaction freezes the current runtime policy at its own admission boundary.
 Publication work is never treated as provider progress.
 

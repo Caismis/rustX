@@ -3479,6 +3479,12 @@ Runtime Client is a projection/control/attachment adapter over it.
   projection worker ───────► Weak<ClientInner> + Arc<PendingObservations>
   ```
 
+  The low-level construction seams are crate-private and require those
+  explicit admitted values. Neither `AgentExecution` nor `ContextRuntime`
+  creates a fallback timeout policy or an independent monotonic clock, so a
+  provider-backed primary request and summary request cannot silently enter
+  different elapsed-time semantics.
+
   Subsystem observer slots keep owning `Arc<dyn InboundObserver>` and
   friends; the concrete `RuntimeObserver` is non-owning, so installing a
   seam cannot create the cycle
@@ -4499,7 +4505,9 @@ seconds for response-start and 15 seconds for stream-idle. `ConversationRuntime`
 the Agent Loop and `ModelBackedSummarizer` receive that copy as sibling
 consumers. `ContextRuntime` owns context state and its constructed summarizer,
 but is not the authority for generic primary execution policy or clock access.
-Direct runtime composition rejects a zero timeout with a typed construction
+The crate-private low-level construction seams require the explicit admitted
+policy and clock; neither creates an independent fallback. Direct runtime
+composition rejects a zero timeout with a typed construction
 error before ownership transfer. The policy is absent from model input,
 `RequestSnapshot`, canonical history, and durable schema.
 

@@ -500,6 +500,8 @@ fn native_context_runtime(model: &Arc<support::fake::FakeModel>) -> rustx::conte
         Arc::new(rustx::context::DefaultTokenEstimator),
         rustx::context::AgentStatusEngine::default(),
         &support::attempt_model(model.clone(), "native-contract-model"),
+        rustx::model::ModelTimeoutPolicy::default(),
+        support::default_monotonic_clock(),
     )
     .expect("context runtime")
 }
@@ -516,6 +518,7 @@ async fn run_native_script(
         native_request(&model, fixture.runtime.conversation_id()),
         lease,
         &cancellation,
+        support::default_execution_policy(),
         native_context_runtime(&model),
         &fixture.runtime,
         rustx::agent::AttemptLifecycle::inert(),
