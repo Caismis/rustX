@@ -655,9 +655,13 @@ async fn model_semantics_inherit_the_invoking_attempt_or_freeze_the_explicit_sel
         SubagentResolver::resolve(&resources, &agent("explore"), &attempt_model, &registry)
             .expect("the inheriting agent resolves");
     assert_eq!(
-        inheriting.model.model.to_string(),
+        inheriting.model.primary.model.to_string(),
         "local/model-b",
         "a default child model is the invoking attempt's frozen model"
+    );
+    assert_eq!(
+        inheriting.model.configured.model.to_string(),
+        "local/model-b"
     );
 
     // And an explicit selection is independent of the invoking attempt.
@@ -668,7 +672,7 @@ async fn model_semantics_inherit_the_invoking_attempt_or_freeze_the_explicit_sel
         &registry,
     )
     .expect("the pinned agent resolves");
-    assert_eq!(pinned.model.model.to_string(), "local/model-b");
+    assert_eq!(pinned.model.primary.model.to_string(), "local/model-b");
 }
 
 /// Project-instruction policy: `inherit = true` produces the generation's
@@ -816,12 +820,12 @@ async fn the_skill_allowlist_is_exact_and_preserves_progressive_disclosure() {
         resolved
             .skills
             .iter()
-            .map(|entry| entry.name.clone())
+            .map(|skill| skill.catalog_entry.name.clone())
             .collect::<Vec<_>>(),
         vec!["alpha".to_owned()],
         "an unselected Skill is absent from the child-visible catalog"
     );
-    let entry = &resolved.skills[0];
+    let entry = &resolved.skills[0].catalog_entry;
     assert_eq!(entry.description, "the first skill");
     assert!(
         entry.location.ends_with("SKILL.md"),
@@ -1111,5 +1115,383 @@ fn the_runtime_client_projection_carries_the_named_identity() {
     assert!(
         serde_json::from_value::<RuntimeClientSubagent>(obsolete).is_err(),
         "the profile-shaped contract must fail"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The four freeze-contract regressions.
+//
+// Each one proves that a decision Issue #144 claims to freeze is really
+// decided by the parent and merely *materialized* by the child, rather than
+// re-resolved against mutable state the child can observe changing.
+// ---------------------------------------------------------------------------
+
+/// A `models.jsonc` whose `local/model-a` has materially different semantics
+/// from [`MODELS`]: a different endpoint, protocol, context window, output
+/// budget, compat metadata, and request parameters — and no `model-b` at
+/// all, so a re-resolving child would also *fail* where the parent
+/// succeeded.
+const MODELS_MUTATED: &str = r#"{
+  "providers": {
+    "local": {
+      "baseUrl": "http://127.0.0.1:10/v2",
+      "apiKey": "$RUSTX_ISSUE144_KEY",
+      "models": [
+        {
+          "id": "model-a",
+          "protocol": "anthropic_messages",
+          "contextWindow": 1000,
+          "maxOutputTokens": 64,
+          "capabilities": {"inputModalities": ["text"], "outputModalities": ["text"], "toolCalls": true, "reasoning": false},
+          "requestParams": {"temperature": 0.9}
+        }
+      ]
+    }
+  }
+}"#;
+
+/// Blocker 1: the child's model semantics are frozen by the parent, so a
+/// `models.jsonc` edit that lands between the freeze and the child's
+/// composition cannot be observed by that child.
+///
+/// The race is driven by two explicit linearizations — the resolver call
+/// returns before the file is rewritten, and the child model authority is
+/// composed after it — never by a sleep.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_frozen_child_model_never_observes_a_later_models_jsonc_edit() {
+    use rustx::model::session::SessionModelState;
+    use rustx::model::types::ModelProtocol;
+
+    let lab = Lab::new();
+    lab.write_config(&explore(&["read"]));
+    let product = lab.compose().await;
+    let resources = product.runtime().runtime_resources();
+
+    // M1: freeze the child against the catalog the parent was admitted with.
+    let resolved = SubagentResolver::resolve(
+        &resources,
+        &agent("explore"),
+        &inherited_model(),
+        &model_registry(),
+    )
+    .expect("the child resolves under M1");
+    let frozen = resolved.model.clone();
+    assert_eq!(
+        frozen.primary.protocol,
+        ModelProtocol::OpenAiChatCompletions
+    );
+    assert_eq!(frozen.primary.context_window, 128_000);
+    assert_eq!(frozen.primary.max_output_tokens, 512);
+    assert_eq!(frozen.primary.binding.base_url, "http://127.0.0.1:9/v1");
+    assert!(frozen.primary.request_params.is_empty());
+
+    // The frozen specification survives the real IPC wire unchanged.
+    let over_the_wire: rustx::runtime::subagent::ResolvedSubagentSpec =
+        serde_json::from_slice(&serde_json::to_vec(&resolved).expect("encode"))
+            .expect("decode the frozen specification");
+    assert_eq!(over_the_wire, resolved);
+
+    // M2: the catalog now says something materially different for the very
+    // same model reference, and drops `model-b` entirely.
+    std::fs::write(lab.root().join("models.jsonc"), MODELS_MUTATED).expect("mutate models.jsonc");
+
+    // A re-resolving consumer *would* observe M2 — this is what makes the
+    // assertion below meaningful rather than vacuous.
+    let mutated = ModelCatalog::from_jsonc_slice(MODELS_MUTATED.as_bytes()).expect("M2 parses");
+    let mutated_registry = ModelBindingRegistry::new(
+        mutated
+            .resolve(dependencies().credentials.as_ref())
+            .expect("M2 resolves"),
+    )
+    .expect("M2 binds");
+    let reresolved = mutated_registry
+        .resolve(&inherited_model().selection())
+        .expect("M2 still has local/model-a");
+    assert_eq!(reresolved.protocol(), ModelProtocol::AnthropicMessages);
+    assert_eq!(reresolved.context_window(), 1_000);
+    assert!(
+        mutated_registry
+            .resolve(
+                &SessionModelConfig::of(ModelRef::parse("local/model-b").expect("reference"))
+                    .selection()
+            )
+            .is_err(),
+        "M2 really did remove a model the parent could resolve"
+    );
+
+    // The child composes its model authority from the frozen specification
+    // — exactly what `compose_subagent_child` does — and observes M1.
+    let child =
+        SessionModelState::frozen(&over_the_wire.model, dependencies().credentials.as_ref())
+            .expect("the child materializes the frozen authority");
+    let attempt = child.snapshot();
+    assert_eq!(
+        attempt.primary().protocol(),
+        ModelProtocol::OpenAiChatCompletions,
+        "the child speaks the protocol the parent froze, not M2's"
+    );
+    assert_eq!(attempt.primary().context_window(), 128_000);
+    assert_eq!(attempt.primary().max_output_tokens(), 512);
+    assert_eq!(attempt.primary().model_ref().to_string(), "local/model-a");
+    assert!(
+        attempt.primary().request_params().is_empty(),
+        "M2's model default request parameters are never observed: {:?}",
+        attempt.primary().request_params()
+    );
+    assert_eq!(
+        child.catalog_view().models.len(),
+        1,
+        "a frozen authority publishes exactly the model it froze"
+    );
+    assert!(
+        child.registry().is_none(),
+        "a frozen authority owns no mutable catalog to re-resolve against"
+    );
+
+    // And a model the parent froze under M1 stays resolvable for the child
+    // even though M2 deleted it.
+    let pinned_frozen = rustx::model::frozen::FrozenModelSpec::freeze(
+        &model_registry(),
+        &SessionModelConfig::of(ModelRef::parse("local/model-b").expect("reference")),
+    )
+    .expect("the parent froze model-b under M1");
+    assert!(
+        SessionModelState::frozen(&pinned_frozen, dependencies().credentials.as_ref()).is_ok(),
+        "a child frozen on a model M2 removed still starts"
+    );
+}
+
+/// Blocker 2: the exact parent-frozen Builtin `ToolDefinition` — including a
+/// non-default invocation policy on all three axes — is what the child's
+/// `ToolRegistry` ends up holding, across the serialization boundary.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
+    use rustx::tools::executor::ToolRegistry;
+    use rustx::tools::native::register_subagent_child_tools;
+    use rustx::tools::types::{ToolApprovalPolicy, ToolConcurrencyPolicy, ToolExecutionPolicy};
+
+    let lab = Lab::new();
+    // The generation admits `grep` with a non-default policy on every axis.
+    let document = serde_json::json!({
+        "schemaVersion": 3,
+        "agentId": "agent-issue144",
+        "model": {"model": "local/model-a"},
+        "context": {"reserveTokens": 0, "keepRecentTokens": 0},
+        "defaultTools": ["read", "subagent"],
+        "nativeTools": {
+            "grep": {
+                "execution": "model_selectable",
+                "concurrency": "parallel",
+                "approval": "always",
+            }
+        },
+        "subagents": explore(&["grep"]),
+    });
+    std::fs::write(
+        lab.root().join("rustx.jsonc"),
+        serde_json::to_string_pretty(&document).expect("config document"),
+    )
+    .expect("rustx.jsonc");
+    let product = lab.compose().await;
+    let resources = product.runtime().runtime_resources();
+
+    let resolved = SubagentResolver::resolve(
+        &resources,
+        &agent("explore"),
+        &inherited_model(),
+        &model_registry(),
+    )
+    .expect("the child resolves");
+    let frozen = match &resolved.tools[0] {
+        ResolvedSubagentTool::Builtin { definition, .. } => definition.clone(),
+        other => panic!("expected a frozen Builtin, found {other:?}"),
+    };
+    assert_eq!(
+        frozen.execution_policy,
+        ToolExecutionPolicy::ModelSelectable,
+        "the generation really admitted a non-default policy"
+    );
+    assert_eq!(frozen.concurrency_policy, ToolConcurrencyPolicy::Parallel);
+    assert_eq!(frozen.approval_policy, ToolApprovalPolicy::Always);
+
+    // Cross the real wire, then materialize the child registry.
+    let over_the_wire: rustx::runtime::subagent::ResolvedSubagentSpec =
+        serde_json::from_slice(&serde_json::to_vec(&resolved).expect("encode")).expect("decode");
+    let wire_definitions: Vec<_> = over_the_wire
+        .tools
+        .iter()
+        .map(|tool| tool.definition().clone())
+        .collect();
+    let mut registry = ToolRegistry::new();
+    register_subagent_child_tools(&mut registry, &wire_definitions)
+        .expect("the child materializes the frozen definitions");
+
+    let child_definition = registry
+        .definitions()
+        .into_iter()
+        .find(|definition| definition.name == "grep")
+        .expect("the child registered grep")
+        .clone();
+    assert_eq!(
+        child_definition, frozen,
+        "the child holds the whole parent-frozen definition, not a default-policy rebuild"
+    );
+}
+
+/// Blocker 3: an unavailable optional source may block one invocation, but
+/// it must never stop admission from validating the rest of a definition's
+/// selectors. The offline MCP selector sorts first in canonical order, so a
+/// short-circuiting validator would never reach the invalid Python one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unavailable_source_cannot_hide_a_later_invalid_selector() {
+    let lab = Lab::new();
+    let document = serde_json::json!({
+        "schemaVersion": 3,
+        "agentId": "agent-issue144",
+        "model": {"model": "local/model-a"},
+        "context": {"reserveTokens": 0, "keepRecentTokens": 0},
+        "defaultTools": ["read", "subagent"],
+        "mcpServers": {
+            "offline": {"type": "stdio", "command": "/definitely/missing-rustx-issue144-mcp"}
+        },
+        "subagents": {
+            "maxConcurrent": 4,
+            "agents": {
+                "explore": {
+                    "description": "Read-only repository exploration.",
+                    "instructionsFile": "subagents/explore.md",
+                    "tools": {
+                        // `mcp:` sorts before `python:` in canonical selector
+                        // order, so the unavailable source is inspected first.
+                        "mcp": {"offline": ["get_issue"]},
+                        "python": ["not_a_python_tool"],
+                    },
+                }
+            }
+        }
+    });
+    std::fs::write(
+        lab.root().join("rustx.jsonc"),
+        serde_json::to_string_pretty(&document).expect("config document"),
+    )
+    .expect("rustx.jsonc");
+
+    let error = LocalSessionProduct::compose(&lab.paths(), &dependencies())
+        .await
+        .expect_err("a statically invalid selector rejects the candidate generation");
+    let rendered = format!("{error}");
+    assert!(
+        rendered.contains("python:not_a_python_tool"),
+        "the selector after the unavailable source is still validated: {rendered}"
+    );
+}
+
+/// Blocker 4: the exact `SkillId` + `SkillVersionId` the invoking generation
+/// admitted crosses the parent/child boundary, catalog metadata still
+/// crosses with it, no body is preloaded, and a later filesystem change
+/// never reinterprets an already-frozen specification.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn skill_version_identity_is_frozen_across_the_boundary() {
+    let lab = Lab::new();
+    lab.write_skill("alpha", "the first skill");
+    lab.write_skill("beta", "the second skill");
+    lab.write_config(&serde_json::json!({
+        "maxConcurrent": 4,
+        "agents": {"explore": {
+            "description": "Read-only repository exploration.",
+            "instructionsFile": "subagents/explore.md",
+            "skills": ["alpha"],
+        }}
+    }));
+    let product = lab.compose().await;
+    let resources = product.runtime().runtime_resources();
+
+    // The generation's own immutable binding for `alpha`.
+    let admitted = resources
+        .capability()
+        .skills()
+        .packages()
+        .iter()
+        .find(|package| package.name() == "alpha")
+        .expect("the generation admitted alpha")
+        .clone();
+
+    let resolved = SubagentResolver::resolve(
+        &resources,
+        &agent("explore"),
+        &inherited_model(),
+        &model_registry(),
+    )
+    .expect("the allowlist resolves");
+    assert_eq!(resolved.skills.len(), 1);
+    assert_eq!(&resolved.skills[0].binding.skill_id, admitted.id());
+    assert_eq!(
+        &resolved.skills[0].binding.version_id,
+        admitted.version_id()
+    );
+
+    // 1. The exact identity survives the IPC serialization boundary.
+    let over_the_wire: rustx::runtime::subagent::ResolvedSubagentSpec =
+        serde_json::from_slice(&serde_json::to_vec(&resolved).expect("encode")).expect("decode");
+    assert_eq!(over_the_wire.skills, resolved.skills);
+    assert_eq!(&over_the_wire.skills[0].binding.skill_id, admitted.id());
+    assert_eq!(
+        &over_the_wire.skills[0].binding.version_id,
+        admitted.version_id()
+    );
+
+    // 2. The model-visible catalog is exactly the selected metadata.
+    assert_eq!(over_the_wire.skills[0].catalog_entry.name, "alpha");
+    assert_eq!(
+        over_the_wire.skills[0].catalog_entry.description,
+        "the first skill"
+    );
+    let encoded = serde_json::to_string(&over_the_wire.skills).expect("encode the frozen skills");
+    assert!(
+        !encoded.contains("beta"),
+        "an unselected Skill stays invisible: {encoded}"
+    );
+
+    // 3. No SKILL.md body is preloaded.
+    assert!(
+        !encoded.contains("alpha body"),
+        "progressive disclosure is preserved: no body crosses the boundary"
+    );
+
+    // 4. Rewriting the Skill on disk does not reinterpret the frozen spec.
+    lab.write_skill("alpha", "a completely different description");
+    std::fs::write(
+        lab.workspace()
+            .join(".agents/skills/alpha")
+            .join("SKILL.md"),
+        "---\nname: alpha\ndescription: a completely different description\n---\n\nrewritten body\n",
+    )
+    .expect("rewrite SKILL.md");
+    let reloaded = LocalSessionProduct::compose(&lab.paths(), &dependencies())
+        .await
+        .expect("the rewritten workspace composes");
+    let rewritten = reloaded
+        .runtime()
+        .runtime_resources()
+        .capability()
+        .skills()
+        .packages()
+        .iter()
+        .find(|package| package.name() == "alpha")
+        .expect("alpha is still admitted")
+        .clone();
+    assert_ne!(
+        rewritten.version_id(),
+        admitted.version_id(),
+        "the rewritten Skill really is a different version"
+    );
+    assert_eq!(
+        &over_the_wire.skills[0].binding.version_id,
+        admitted.version_id(),
+        "the old frozen specification still names the version it froze"
+    );
+    assert_eq!(
+        over_the_wire.skills[0].catalog_entry.description, "the first skill",
+        "and its frozen metadata is not reinterpreted either"
     );
 }
