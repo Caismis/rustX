@@ -476,6 +476,34 @@ impl ResolvedModelInvocation {
         capped
     }
 
+    /// Rebuilds an invocation from its already-resolved frozen form.
+    ///
+    /// This is the child-side *physical* half of the freeze contract: every
+    /// semantic field is copied verbatim from the parent's decision and the
+    /// only new value is the adapter handle, which is a live client rather
+    /// than data and therefore cannot cross a process boundary.
+    #[must_use]
+    pub(crate) fn from_frozen(
+        frozen: &crate::model::frozen::FrozenModelInvocation,
+        adapter: Arc<dyn ModelAdapter>,
+    ) -> Self {
+        Self {
+            provider: frozen.binding.provider.clone(),
+            model_ref: frozen.model.clone(),
+            adapter,
+            protocol: frozen.protocol,
+            context_window: frozen.context_window,
+            model_max_output_tokens: frozen.model_max_output_tokens,
+            effective_output_tokens: frozen.max_output_tokens,
+            reasoning_profile: frozen.reasoning_profile.clone(),
+            reasoning_enabled: frozen.reasoning_enabled,
+            request_params: frozen.request_params.clone(),
+            capabilities: frozen.capabilities.clone(),
+            declared_capabilities: frozen.declared_capabilities.clone(),
+            compat: frozen.compat,
+        }
+    }
+
     /// The redacted client-facing projection of this invocation.
     #[must_use]
     pub fn view(&self) -> ModelInvocationView {
@@ -615,6 +643,12 @@ pub enum ModelInvocationError {
         /// The protocol.
         protocol: ModelProtocol,
     },
+    /// The session's model authority is frozen: it was resolved by another
+    /// process and carries no catalog to resolve a replacement against.
+    ImmutableModelAuthority {
+        /// The frozen model the session is pinned to.
+        model: ModelRef,
+    },
 }
 
 impl fmt::Display for ModelInvocationError {
@@ -656,6 +690,11 @@ impl fmt::Display for ModelInvocationError {
                 "no adapter binding for model {model} protocol {}",
                 protocol_name(*protocol)
             ),
+            Self::ImmutableModelAuthority { model } => write!(
+                f,
+                "the model authority of this session is frozen to {model}; \
+                 it owns no catalog to resolve a different model against"
+            ),
         }
     }
 }
@@ -688,6 +727,47 @@ impl fmt::Debug for ModelBindingRegistry {
     }
 }
 
+/// Constructs the protocol adapter of one provider binding.
+///
+/// This is the **one** adapter construction site of the runtime. It takes
+/// only the two physical inputs an adapter needs — an endpoint and a
+/// credential — so a binding can be built from a catalog provider or from
+/// an already-frozen [`FrozenProviderBinding`] without either path growing
+/// its own copy of the protocol table.
+///
+/// [`FrozenProviderBinding`]: crate::model::frozen::FrozenProviderBinding
+#[must_use]
+pub(crate) fn build_protocol_adapter(
+    protocol: ModelProtocol,
+    credential: &str,
+    base_url: &str,
+) -> Arc<dyn ModelAdapter> {
+    match protocol {
+        ModelProtocol::OpenAiChatCompletions => {
+            use crate::model::adapter::openai::{
+                OpenAiAdapterConfig, OpenAiChatCompletionsAdapter,
+            };
+            Arc::new(OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new(
+                credential, base_url,
+            )))
+        }
+        ModelProtocol::OpenAiResponses => {
+            use crate::model::adapter::openai::{OpenAiAdapterConfig, OpenAiResponsesAdapter};
+            Arc::new(OpenAiResponsesAdapter::new(OpenAiAdapterConfig::new(
+                credential, base_url,
+            )))
+        }
+        ModelProtocol::AnthropicMessages => {
+            use crate::model::adapter::anthropic::{
+                AnthropicAdapterConfig, AnthropicMessagesAdapter,
+            };
+            Arc::new(AnthropicMessagesAdapter::new(AnthropicAdapterConfig::new(
+                credential, base_url,
+            )))
+        }
+    }
+}
+
 impl ModelBindingRegistry {
     /// Builds every supported adapter binding directly from the resolved
     /// provider endpoint and credential.
@@ -702,35 +782,11 @@ impl ModelBindingRegistry {
             let (provider, model) = catalog.binding(&reference)?;
             let key = (provider.id().clone(), model.protocol);
             if let std::collections::btree_map::Entry::Vacant(slot) = adapters.entry(key) {
-                let credential = provider.credential().expose();
-                let base_url = provider.base_url();
-                let adapter: Arc<dyn ModelAdapter> = match model.protocol {
-                    ModelProtocol::OpenAiChatCompletions => {
-                        use crate::model::adapter::openai::{
-                            OpenAiAdapterConfig, OpenAiChatCompletionsAdapter,
-                        };
-                        Arc::new(OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new(
-                            credential, base_url,
-                        )))
-                    }
-                    ModelProtocol::OpenAiResponses => {
-                        use crate::model::adapter::openai::{
-                            OpenAiAdapterConfig, OpenAiResponsesAdapter,
-                        };
-                        Arc::new(OpenAiResponsesAdapter::new(OpenAiAdapterConfig::new(
-                            credential, base_url,
-                        )))
-                    }
-                    ModelProtocol::AnthropicMessages => {
-                        use crate::model::adapter::anthropic::{
-                            AnthropicAdapterConfig, AnthropicMessagesAdapter,
-                        };
-                        Arc::new(AnthropicMessagesAdapter::new(AnthropicAdapterConfig::new(
-                            credential, base_url,
-                        )))
-                    }
-                };
-                slot.insert(adapter);
+                slot.insert(build_protocol_adapter(
+                    model.protocol,
+                    provider.credential().expose(),
+                    provider.base_url(),
+                ));
             }
         }
         Ok(Self { catalog, adapters })
@@ -875,6 +931,56 @@ impl ModelBindingRegistry {
             capabilities,
             declared_capabilities: model.capabilities.clone(),
             compat: model.compat,
+        })
+    }
+
+    /// Resolves one selection and freezes it into its serializable form.
+    ///
+    /// The frozen value carries the resolved semantics *and* the immutable
+    /// provider binding data an adapter is constructed from, so a consumer
+    /// in another process reproduces exactly this invocation without ever
+    /// reopening the mutable catalog file.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first resolution failure.
+    pub fn freeze(
+        &self,
+        selection: &ModelSelection,
+    ) -> Result<crate::model::frozen::FrozenModelInvocation, ModelInvocationError> {
+        self.freeze_with_layer(selection, RequestParamsLayer::SessionOverrides)
+    }
+
+    /// Freezes one selection, attributing override validation failures to
+    /// the given configuration layer.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first resolution failure.
+    pub fn freeze_with_layer(
+        &self,
+        selection: &ModelSelection,
+        layer: RequestParamsLayer,
+    ) -> Result<crate::model::frozen::FrozenModelInvocation, ModelInvocationError> {
+        let resolved = self.resolve_with_layer(selection, layer)?;
+        let (provider, _) = self.catalog.binding(&selection.model)?;
+        Ok(crate::model::frozen::FrozenModelInvocation {
+            binding: crate::model::frozen::FrozenProviderBinding {
+                provider: provider.id().clone(),
+                base_url: provider.base_url().to_owned(),
+                credential: provider.credential_declaration().clone(),
+            },
+            model: resolved.model_ref.clone(),
+            protocol: resolved.protocol,
+            context_window: resolved.context_window,
+            model_max_output_tokens: resolved.model_max_output_tokens,
+            max_output_tokens: resolved.effective_output_tokens,
+            reasoning_profile: resolved.reasoning_profile.clone(),
+            reasoning_enabled: resolved.reasoning_enabled,
+            request_params: resolved.request_params.clone(),
+            capabilities: resolved.capabilities.clone(),
+            declared_capabilities: resolved.declared_capabilities.clone(),
+            compat: resolved.compat,
         })
     }
 
