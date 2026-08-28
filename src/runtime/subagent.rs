@@ -3,19 +3,32 @@
 //! A rustX v1 subagent is a **conversation-owned, asynchronous, one-shot,
 //! separate-OS-process child rustX runtime**. The child reuses the real
 //! rustX stack — `ConversationRuntime`, the Agent Loop, Context Assembly,
-//! the Tool Plane, and the ModelAdapter — headlessly, with an exact
-//! profile-frozen capability set and an isolated conversation.
+//! the Tool Plane, and the ModelAdapter — headlessly, with the exact
+//! capability set frozen by its named definition and an isolated
+//! conversation.
 //!
 //! # Ownership
 //!
 //! ```text
-//! SubagentRegistry (this module)
+//! SubagentCatalog (catalog)
+//!   owns: the immutable named definitions of one runtime resource
+//!         generation and their deterministic definition digests
+//!   never owns: live execution state of any kind
+//!
+//! SubagentResolver (resolver)
+//!   owns: definition + invoking RuntimeResourceSnapshot + invoking attempt
+//!         model authority -> frozen ResolvedSubagentSpec
+//!   never owns: the parent's active ToolRegistry, mutable runtime-current
+//!               resources, live child lifecycle
+//!
+//! SubagentRegistry (registry)
 //!   owns: SubagentId allocation/correlation, child identity correlation,
-//!         profile identity, logical lifecycle, ownership state, capacity,
-//!         cancellation intent, terminal metadata, bounded result metadata
-//!   never owns: parent Ledger/Surface, parent InboundSequence allocation,
-//!               parent AgentExecution admission, a private result queue,
-//!               the OS process handle
+//!         committed (agent, definition_digest) identity, logical lifecycle,
+//!         ownership state, capacity, cancellation intent, terminal
+//!         metadata, bounded result metadata
+//!   never owns: configuration/definition semantics, parent Ledger/Surface,
+//!               parent InboundSequence allocation, parent AgentExecution
+//!               admission, a private result queue, the OS process handle
 //!
 //! subagent process driver (subagent_process)
 //!   owns: spawn, the OS child handle, the control channel, signal
@@ -34,11 +47,18 @@
 //! failure/cancellation/interruption notices). Child-process IPC only
 //! transports bounded envelopes and control.
 
+pub mod catalog;
 mod registry;
+pub mod resolver;
 
 pub(crate) mod ipc;
 pub(crate) mod process;
 
+pub use catalog::{
+    CHILD_UNSAFE_BUILTIN_TOOLS, MAX_SUBAGENT_DEFINITIONS, SUBAGENT_DEFINITION_DIGEST_VERSION,
+    SubagentCatalog, SubagentDefinition, SubagentDefinitionDigest, SubagentDefinitionError,
+    SubagentName, SubagentNameError, SubagentProjectInstructionPolicy, SubagentToolSelector,
+};
 pub use process::SubagentSpawnPlan;
 #[cfg(test)]
 pub(crate) use registry::CommitBoundaryHook;
@@ -47,6 +67,11 @@ pub use registry::{
     SubagentRegistry, SubagentRegistryConfig, SubagentSnapshot, SubagentStartError,
     SubagentStartOutcome, SubagentStartSpec, SubagentState,
 };
+pub use resolver::{
+    ResolvedSubagentSpec, ResolvedSubagentTool, SubagentResolutionError, SubagentResolver,
+};
+
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 
@@ -60,54 +85,111 @@ use crate::runtime::identity::{
     AgentId, ConversationId, EventId, MessageId, SubagentId, ToolCallId,
 };
 
-/// The explicit v1 child profile set.
+/// The attempt-scoped subagent resolution view (Issue #144).
 ///
-/// A profile is **deny-by-construction**: it names the exact capability
-/// set the child's frozen `ToolRegistry` contains. Unknown profiles fail
-/// closed before any child ownership commit, and no v1 profile contains
-/// the `subagent` tool, so recursive delegation is structurally absent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SubagentProfile {
-    /// The read-only shared-workspace exploration profile: the child sees
-    /// exactly `Read`, `Glob`, and `Grep` against the parent workspace and
-    /// nothing else.
-    Explore,
+/// ```text
+/// AgentExecution
+///   owns Arc<RuntimeResourceSnapshot Rn>
+///         |
+///         v
+/// ToolExecutionContext::with_subagent_context(...)
+///         |
+///         v
+/// SubagentExecutor
+///         |
+///         v
+/// SubagentResolver(Rn, agent)
+/// ```
+///
+/// The invoking attempt hands the executor exactly the generation it was
+/// admitted with, plus the model authority frozen at that same admission
+/// boundary. The registered executor therefore never reads mutable
+/// runtime-current resources, so this ordering is impossible:
+///
+/// ```text
+/// attempt admitted under R1
+/// reload commits R2
+/// same attempt calls subagent
+/// executor reads current R2          <- generation tearing; ruled out
+/// ```
+///
+/// The view exposes only what resolution genuinely requires. It is not a
+/// runtime handle and grants no ability to observe, mutate, or reload
+/// runtime state.
+///
+/// The view is one shared `Arc`: it is cloned into every foreground
+/// invocation of the attempt, so the frozen generation and model authority
+/// are shared rather than copied into each execution future.
+#[derive(Clone)]
+pub struct AttemptSubagentContext {
+    inner: Arc<AttemptSubagentContextInner>,
 }
 
-impl SubagentProfile {
-    /// Every v1 profile, in definition order.
-    pub const ALL: [Self; 1] = [Self::Explore];
+struct AttemptSubagentContextInner {
+    resources: Arc<crate::runtime::resources::RuntimeResourceSnapshot>,
+    model: crate::model::session::SessionModelConfig,
+    models: crate::model::invocation::ModelBindingRegistry,
+}
 
-    /// The stable model-facing profile name.
+impl core::fmt::Debug for AttemptSubagentContext {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("AttemptSubagentContext")
+            .field("resource_revision", &self.inner.resources.revision())
+            .field("agents", &self.inner.resources.subagents().names())
+            .finish_non_exhaustive()
+    }
+}
+
+impl AttemptSubagentContext {
+    /// Binds one attempt's immutable generation and frozen model authority.
+    ///
+    /// `model` must be the invoking attempt's **frozen effective** model
+    /// configuration — the configuration captured under the same admission
+    /// linearization that froze `resources` — never live mutable session
+    /// state and never a composition-time capture.
     #[must_use]
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::Explore => "explore",
+    pub fn new(
+        resources: Arc<crate::runtime::resources::RuntimeResourceSnapshot>,
+        model: crate::model::session::SessionModelConfig,
+        models: crate::model::invocation::ModelBindingRegistry,
+    ) -> Self {
+        Self {
+            inner: Arc::new(AttemptSubagentContextInner {
+                resources,
+                model,
+                models,
+            }),
         }
     }
 
-    /// Parses a profile by its stable name.
+    /// The immutable runtime resource generation the invoking attempt owns.
     #[must_use]
-    pub fn by_name(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|profile| profile.name() == name)
+    pub fn resources(&self) -> &Arc<crate::runtime::resources::RuntimeResourceSnapshot> {
+        &self.inner.resources
     }
 
-    /// The child persona/instruction text of this profile, composed as the
-    /// child's request-time `AgentProfile` System section (never canonical
-    /// history or a forged user message).
+    /// Resolves one named agent against exactly this attempt's generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first typed [`SubagentResolutionError`].
+    pub fn resolve(
+        &self,
+        agent: &SubagentName,
+    ) -> Result<ResolvedSubagentSpec, SubagentResolutionError> {
+        SubagentResolver::resolve(
+            &self.inner.resources,
+            agent,
+            &self.inner.model,
+            &self.inner.models,
+        )
+    }
+
+    /// The bounded model-facing routing catalog of this generation.
     #[must_use]
-    pub fn persona(self) -> String {
-        match self {
-            Self::Explore => concat!(
-                "You are a read-only exploration subagent of the rustX runtime. ",
-                "You answer the delegated task by inspecting the shared workspace with ",
-                "the Read, Glob, and Grep capabilities only. You cannot modify anything: ",
-                "no write, edit, or shell capability exists in your tool set. Produce one ",
-                "bounded final answer; your runtime is one-shot and terminates with it."
-            )
-            .to_owned(),
-        }
+    pub(crate) fn routing_description(&self) -> String {
+        resolver::render_agent_routing(self.inner.resources.subagents())
     }
 }
 
@@ -154,16 +236,24 @@ pub(crate) fn subagent_ownership_event_id(subagent_id: &SubagentId) -> EventId {
 ///
 /// The fact carries exactly the identity a restart needs — the subagent,
 /// the child agent/conversation it owns, the delegating tool call, and the
-/// frozen profile — never the delegated task content, the process id, or
-/// any other process-local state. Its event identity is the canonical
-/// [`subagent_ownership_event_id`] of the embedded `SubagentId`.
+/// frozen `(agent, definition_digest)` identity — never the delegated task
+/// content, the process id, or any other process-local state. Its event
+/// identity is the canonical [`subagent_ownership_event_id`] of the
+/// embedded `SubagentId`.
+///
+/// The digest is what makes the fact self-describing across a reload: a
+/// later generation that redefines the same agent name cannot make an
+/// already-committed child appear to have the new definition, because the
+/// durable fact names the exact definition the child started with.
+#[allow(clippy::too_many_arguments)] // one durable fact, one construction boundary
 pub(crate) fn ownership_event(
     conversation_id: &ConversationId,
     subagent_id: &SubagentId,
     child_agent_id: &AgentId,
     child_conversation_id: &ConversationId,
     tool_call_id: &ToolCallId,
-    profile: SubagentProfile,
+    agent: &SubagentName,
+    definition_digest: &SubagentDefinitionDigest,
     timestamp: DateTime<Utc>,
 ) -> RuntimeEventEnvelope {
     RuntimeEventEnvelope {
@@ -179,7 +269,8 @@ pub(crate) fn ownership_event(
             child_agent_id: child_agent_id.clone(),
             child_conversation_id: child_conversation_id.clone(),
             tool_call_id: tool_call_id.clone(),
-            profile: profile.name().to_owned(),
+            agent: agent.as_str().to_owned(),
+            definition_digest: definition_digest.as_str().to_owned(),
         },
     }
 }
@@ -283,7 +374,8 @@ pub fn recovery_terminal_publication(
     conversation_id: &ConversationId,
     subagent_id: &SubagentId,
     child_agent_id: &AgentId,
-    profile: &str,
+    agent: &str,
+    definition_digest: &str,
     timestamp: DateTime<Utc>,
 ) -> (InboundDraft, RuntimeEventEnvelope) {
     terminal_publication(
@@ -293,8 +385,9 @@ pub fn recovery_terminal_publication(
         SubagentTerminalState::Interrupted,
         vec![UserContentBlock::Text(TextBlock {
             text: format!(
-                "Subagent {subagent_id} (profile {profile}) was interrupted by a runtime \
-                 restart: its actual outcome is unknown and it was not restarted."
+                "Subagent {subagent_id} (agent {agent}, definition {definition_digest}) was \
+                 interrupted by a runtime restart: its actual outcome is unknown and it was \
+                 not restarted."
             ),
         })],
         timestamp,

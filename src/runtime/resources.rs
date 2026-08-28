@@ -12,9 +12,13 @@ use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
 
-use crate::capabilities::{CapabilityCoordinator, CapabilitySnapshot, PreparedCapabilityCandidate};
+use crate::capabilities::{
+    CapabilityAvailability, CapabilityCoordinator, CapabilitySnapshot, PreparedCapabilityCandidate,
+};
 use crate::context::ContextAssembly;
 use crate::runtime::identity::{CapabilityRevision, RuntimeResourceRevision};
+use crate::runtime::subagent::catalog::SubagentCatalog;
+use crate::skills::SkillCatalogEntry;
 
 const PROJECT_CONTEXT_FILENAMES: [&str; 5] = [
     "AGENTS.override.md",
@@ -26,7 +30,12 @@ const PROJECT_CONTEXT_FILENAMES: [&str; 5] = [
 const MAX_RESOURCE_DIAGNOSTIC_BYTES: usize = 4096;
 
 /// One runtime-loaded project instruction file.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// The value carries both the canonical source identity and the exact
+/// content loaded for its generation, so a subagent child can be handed the
+/// frozen chain by value and never has to rediscover or reinterpret it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProjectContextFile {
     /// The deterministic absolute source path.
     pub path: PathBuf,
@@ -46,6 +55,20 @@ pub struct RuntimeResourceSnapshot {
     agent_profile: Option<Arc<str>>,
     context_assembly: ContextAssembly,
     capability: Arc<CapabilitySnapshot>,
+    /// The exact immutable named-subagent catalog admitted into this
+    /// generation (Issue #144).
+    subagents: Arc<SubagentCatalog>,
+    /// The capability-source availability state belonging to the *same*
+    /// generation (Issue #144).
+    ///
+    /// Subagent resolution must distinguish "this generation does not
+    /// authorize that capability" from "the optional source that would
+    /// provide it is currently unavailable". `CapabilitySnapshot` stays
+    /// focused on executable capability identity — its revision advances
+    /// only when the executable set changes — so the control-plane
+    /// availability that answers the second question is carried here,
+    /// alongside the catalog that needs it.
+    capability_availability: CapabilityAvailability,
 }
 
 impl core::fmt::Debug for RuntimeResourceSnapshot {
@@ -58,6 +81,7 @@ impl core::fmt::Debug for RuntimeResourceSnapshot {
             .field("agent_profile", &self.agent_profile)
             .field("context_assembly", &self.context_assembly)
             .field("capability_revision", &self.capability.revision())
+            .field("subagents", &self.subagents.names())
             .finish_non_exhaustive()
     }
 }
@@ -91,7 +115,44 @@ impl RuntimeResourceSnapshot {
             agent_profile: agent_profile.map(Arc::<str>::from),
             context_assembly,
             capability,
+            subagents: Arc::new(SubagentCatalog::empty()),
+            capability_availability: CapabilityAvailability::new(),
         }
+    }
+
+    /// Freezes the generation's admitted named-subagent catalog.
+    #[must_use]
+    pub fn with_subagent_catalog(mut self, catalog: SubagentCatalog) -> Self {
+        self.subagents = Arc::new(catalog);
+        self
+    }
+
+    /// Freezes the capability-source availability belonging to this exact
+    /// generation.
+    #[must_use]
+    pub fn with_capability_availability(mut self, availability: CapabilityAvailability) -> Self {
+        self.capability_availability = availability;
+        self
+    }
+
+    /// Replaces the generation's model-visible Skill catalog with an exact
+    /// frozen entry set.
+    ///
+    /// This is the subagent child composition path: a child's Skill catalog
+    /// is the parent-resolved allowlist, handed over by value. The child
+    /// therefore renders exactly the entries its invoking generation
+    /// authorized and rediscovers nothing. Progressive disclosure is
+    /// untouched: only catalog metadata is frozen, never a `SKILL.md` body.
+    #[must_use]
+    pub fn with_frozen_skill_catalog(mut self, entries: &[SkillCatalogEntry]) -> Self {
+        self.skill_catalog = (!entries.is_empty())
+            .then(|| Arc::<str>::from(crate::skills::render_skill_catalog(entries)));
+        self.skill_sources = entries
+            .iter()
+            .map(|entry| PathBuf::from(&entry.location))
+            .collect::<Vec<_>>()
+            .into();
+        self
     }
 
     /// Completes a fully prepared generation after its compatible capability
@@ -109,6 +170,8 @@ impl RuntimeResourceSnapshot {
             prepared.context_assembly,
             capability,
         )
+        .with_subagent_catalog(prepared.subagents)
+        .with_capability_availability(prepared.capability_availability)
     }
 
     /// The process-local generation identity.
@@ -165,6 +228,22 @@ impl RuntimeResourceSnapshot {
     pub fn capability_revision(&self) -> CapabilityRevision {
         self.capability.revision()
     }
+
+    /// The immutable named-subagent catalog admitted into this generation.
+    ///
+    /// A subagent invocation resolves against exactly this catalog: an
+    /// attempt that owns generation R1 keeps resolving R1 even after a
+    /// reload has committed R2 as runtime-current.
+    #[must_use]
+    pub fn subagents(&self) -> &SubagentCatalog {
+        &self.subagents
+    }
+
+    /// The capability-source availability state of this exact generation.
+    #[must_use]
+    pub const fn capability_availability(&self) -> &CapabilityAvailability {
+        &self.capability_availability
+    }
 }
 
 /// A complete off-side resource candidate. Nothing in this value is visible
@@ -173,6 +252,7 @@ pub struct PreparedRuntimeResources {
     project_context_files: Vec<ProjectContextFile>,
     agent_profile: Option<String>,
     context_assembly: ContextAssembly,
+    subagents: SubagentCatalog,
     capability: PreparedCapabilityCandidate,
 }
 
@@ -182,6 +262,8 @@ pub(crate) struct PreparedRuntimeResourceData {
     project_context_files: Vec<ProjectContextFile>,
     agent_profile: Option<String>,
     context_assembly: ContextAssembly,
+    subagents: SubagentCatalog,
+    capability_availability: CapabilityAvailability,
 }
 
 impl PreparedRuntimeResources {
@@ -197,8 +279,34 @@ impl PreparedRuntimeResources {
             project_context_files,
             agent_profile,
             context_assembly,
+            subagents: SubagentCatalog::empty(),
             capability,
         }
+    }
+
+    /// Adds the candidate generation's validated named-subagent catalog.
+    ///
+    /// A loader validates its catalog against the *same* prepared candidate
+    /// it publishes, so a definition naming an unknown capability, Skill, or
+    /// model rejects the whole candidate off-side and the previous complete
+    /// generation stays authoritative.
+    #[must_use]
+    pub fn with_subagent_catalog(mut self, catalog: SubagentCatalog) -> Self {
+        self.subagents = catalog;
+        self
+    }
+
+    /// The candidate capability plane a loader validates its catalog
+    /// against, before either half is published.
+    #[must_use]
+    pub const fn capability_candidate(&self) -> &PreparedCapabilityCandidate {
+        &self.capability
+    }
+
+    /// The candidate generation's named-subagent catalog.
+    #[must_use]
+    pub const fn subagent_catalog(&self) -> &SubagentCatalog {
+        &self.subagents
     }
 
     pub(crate) fn into_parts(self) -> (PreparedCapabilityCandidate, PreparedRuntimeResourceData) {
@@ -206,14 +314,18 @@ impl PreparedRuntimeResources {
             project_context_files,
             agent_profile,
             context_assembly,
+            subagents,
             capability,
         } = self;
+        let capability_availability = capability.availability().clone();
         (
             capability,
             PreparedRuntimeResourceData {
                 project_context_files,
                 agent_profile,
                 context_assembly,
+                subagents,
+                capability_availability,
             },
         )
     }
