@@ -353,7 +353,11 @@ impl ContextSummarizer for ModelBackedSummarizer {
             let input = request.model_input();
             let model_request = ModelRequest {
                 invocation: self.invocation.invocation_config(),
-                messages: input.messages,
+                // The summarizer has a structurally canonical-only input
+                // boundary. Request-only execution-recovery context cannot
+                // be represented by `SummaryModelInput`, so it cannot be
+                // forwarded into a summary request accidentally.
+                messages: crate::model::input::canonical_input(&input.messages),
                 tools: Vec::new(),
                 // Summary generation is not an inbound Assistant turn: it never
                 // carries primary-step dynamic context. Agent Status is a
@@ -579,6 +583,13 @@ mod tests {
         let first = request.model_input();
         assert_eq!(first, request.model_input());
         assert_eq!(first.messages.len(), 1);
+        assert!(
+            first
+                .messages
+                .iter()
+                .all(|message| matches!(message, MessageBlock::User(_))),
+            "the summary boundary is structurally canonical-only"
+        );
         let MessageBlock::User(wrapper) = &first.messages[0] else {
             panic!("summary input must use the canonical User role");
         };

@@ -257,7 +257,10 @@ pub fn inbound_adoption_event(
 /// every conversation that has never been compacted produces. The seed is
 /// intentionally limited to canonical/domain messages and Surface
 /// provenance; execution facts remain owned by the source `ConversationId`
-/// and are not copied into the destination.
+/// and are not copied into the destination. In particular, the pending
+/// unresolved-output carryover pointer is execution-recovery residue, not
+/// lineage meaning: it is never a seed field, and a destination starts with
+/// no pending carryover.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LineageSeed {
     canonical: Vec<MessageBlock>,
@@ -1032,7 +1035,10 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// inferring it from current rows. The first call atomically commits the
     /// seed and the identity; every later call must re-supply the exact
     /// original canonical history. An explicitly empty seed is valid and
-    /// remains distinguishable from an uninitialized store.
+    /// remains distinguishable from an uninitialized store. The initialization
+    /// transaction deliberately initializes the execution-recovery pointer to
+    /// `NULL`; pending unresolved-output carryover never crosses a lineage
+    /// boundary.
     ///
     /// The seed's two parts are written to their two durable homes: every
     /// canonical message becomes a Ledger row in the given order, and the
@@ -1255,7 +1261,12 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// continuation, every recovered continuation, every transient retry, and
     /// every overflow retry.
     /// A successful commit is the durable fact that the model request
-    /// started; a failure commits none of the inputs. The Agent Loop
+    /// started; a failure commits none of the inputs. When the snapshot names
+    /// the pending unresolved-output source for the initial request of its
+    /// logical step, this same transaction freezes the exact request-only
+    /// representation and anchor and clears the pending pointer. Cancellation
+    /// before this commit therefore leaves the pointer untouched; retries do
+    /// not re-read or consume it. The Agent Loop
     /// arbitrates cancellation against exactly this commit, so a
     /// `RequestSnapshot` is always evidence of an actually started model
     /// request and request-scoped context never becomes canonical without
@@ -1274,6 +1285,27 @@ pub trait ConversationStore: Send + Sync + 'static {
         snapshot: &RequestSnapshot,
         timestamp: DateTime<Utc>,
     ) -> Result<ModelTurnStartCommit, ConversationStoreError>;
+
+    /// Reads the one pending unresolved-output source, when one exists. The
+    /// pointer is durable recovery state only; its body authority remains the
+    /// keyed Publication Audit.
+    fn load_pending_unresolved_output_stream_id(
+        &self,
+    ) -> Result<Option<PublicationStreamId>, ConversationStoreError>;
+
+    /// Commits an attempt terminal together with the replacement pending
+    /// unresolved-output source selected for its terminally unresolved model
+    /// step. `None` explicitly clears a previously pending source. Live
+    /// settlement and startup recovery call the same identity-keyed selector
+    /// before entering this transition. The event and pointer are one semantic
+    /// transaction so a recovery prefix can never expose one without the
+    /// other; a newly unresolved step replaces any older pointer rather than
+    /// extending a chain.
+    fn commit_attempt_terminal_with_carryover(
+        &self,
+        event: RuntimeEventEnvelope,
+        pending_source: Option<PublicationStreamId>,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
 
     /// Reads the materialized latest Agent Status emission for one bounded
     /// semantic module/key pair. Normal status preparation never scans the

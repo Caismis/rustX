@@ -16,7 +16,9 @@ use crate::events::types::RuntimeEvent;
 use crate::message::types::{
     AgentStatusModuleId, AssistantContentBlock, InboundKind, MessageBlock, UserContentBlock,
 };
+use crate::model::UnresolvedOutputSettlement;
 use crate::publication::PublicationAuditKind;
+use crate::runtime::identity::PublicationStreamId;
 use crate::runtime::recovery::{AttemptRecoveryClass, ResumeDisposition};
 use crate::tools::types::ToolExecutionStatus;
 
@@ -1067,9 +1069,10 @@ fn an_unaccepted_proposal_never_becomes_an_execution() {
 }
 
 /// A publication audit is never conversation history: it never enters the
-/// Message Ledger, and it never appears in a later request's frozen context.
+/// Message Ledger. A terminally unresolved audit may be carried once, but only
+/// as the separately typed request-only value frozen in the later snapshot.
 #[test]
-fn a_publication_audit_never_reenters_model_context() {
+fn a_publication_audit_carryover_stays_request_only() {
     let lab = Lab::new();
     let mut process = lab.spawn(child::TEXT_TURN, Some("after:commit_publication_terminal"));
     process.wait_reached("after:commit_publication_terminal");
@@ -1088,9 +1091,26 @@ fn a_publication_audit_never_reenters_model_context() {
             .any(|message| matches!(message, MessageBlock::Assistant(_))),
         "the audit is not canonical history"
     );
+    let initial_snapshot = durable
+        .request_snapshots()
+        .into_iter()
+        .next()
+        .expect("initial request snapshot");
+    let source = PublicationStreamId::for_request(
+        &initial_snapshot.identity.attempt_id,
+        &initial_snapshot.provisional_message_id,
+    );
+    assert_eq!(
+        durable
+            .store()
+            .load_pending_unresolved_output_stream_id()
+            .expect("pending carryover source"),
+        Some(source.clone())
+    );
 
-    // A reopened runtime issues a new request; that request's frozen context
-    // must contain only canonical message identities.
+    // A reopened runtime issues a new request. Its canonical context still
+    // contains only Ledger identities, while the selected audit appears in a
+    // distinct frozen request-only field.
     let mut resumed = lab.spawn(child::COLD_RESUME, None);
     resumed.resume_until("settled");
     resumed.sigkill();
@@ -1109,9 +1129,203 @@ fn a_publication_audit_never_reenters_model_context() {
             );
         }
     }
+    let snapshots = durable.request_snapshots();
+    let resumed_snapshot = snapshots.get(1).expect("resumed request snapshot");
+    assert_eq!(
+        resumed_snapshot.unresolved_output_carryover_source,
+        Some(source.clone())
+    );
+    assert_eq!(
+        resumed_snapshot
+            .unresolved_output_carryover
+            .as_ref()
+            .map(|carryover| carryover.source_stream_id.clone()),
+        Some(source)
+    );
+    assert_eq!(
+        resumed_snapshot
+            .unresolved_output_carryover
+            .as_ref()
+            .map(|carryover| carryover.source_settlement),
+        Some(UnresolvedOutputSettlement::Unaccepted)
+    );
+    assert!(
+        resumed_snapshot
+            .request_context_ids
+            .iter()
+            .all(|id| *id != initial_snapshot.provisional_message_id),
+        "carryover has no canonical MessageId in the frozen context"
+    );
     assert!(
         audit_kinds(&durable.transcript()).contains(&PublicationAuditKind::Unaccepted),
-        "the audit remains a transcript-only fact after reopen"
+        "the audit remains publication evidence after reopen"
+    );
+}
+
+/// Publication evidence may commit before the attempt terminal transition,
+/// but the attempt terminal and pending carryover pointer are one semantic
+/// transaction. Two real process deaths prove the recovery prefix:
+/// recovery #1 can settle the audit and die before the terminal transaction;
+/// recovery #2 derives the same request identity, selects the same audit, and
+/// commits both facts together. The later primary start consumes that one
+/// pointer exactly once.
+#[test]
+fn unresolved_output_carryover_recovery_reuses_the_same_audit_across_second_crash() {
+    let lab = Lab::new();
+    let mut first = lab.spawn(
+        child::UNRESOLVED_CARRYOVER,
+        Some("before:commit_attempt_terminal"),
+    );
+    first.wait_reached("before:commit_attempt_terminal");
+    first.sigkill();
+
+    let durable = lab.durable();
+    let snapshots = durable.request_snapshots();
+    let snapshot = snapshots.first().expect("the unresolved request snapshot");
+    let source = PublicationStreamId::for_request(
+        &snapshot.identity.attempt_id,
+        &snapshot.provisional_message_id,
+    );
+    assert_eq!(
+        durable
+            .store()
+            .load_pending_unresolved_output_stream_id()
+            .expect("pending source before terminal commit"),
+        None,
+        "a rolled-back producer transition exposes no pointer"
+    );
+    assert_eq!(
+        durable
+            .store()
+            .load_publication_audit(&source)
+            .expect("publication audit lookup")
+            .expect("publication evidence committed before the producer tx")
+            .kind,
+        PublicationAuditKind::Incomplete
+    );
+    assert!(!durable.has_event(|event| matches!(event, RuntimeEvent::AttemptFailed { .. })));
+
+    // Startup recovery #1 reaches the same semantic producer transaction and
+    // is killed while it is open. Nothing from that transaction is visible.
+    let mut second = lab.spawn(child::COLD_RESUME, Some("before:commit_attempt_terminal"));
+    second.wait_reached("before:commit_attempt_terminal");
+    second.sigkill();
+    let durable = lab.durable();
+    assert!(!durable.has_event(|event| matches!(event, RuntimeEvent::AttemptFailed { .. })));
+    assert_eq!(
+        durable
+            .store()
+            .load_pending_unresolved_output_stream_id()
+            .expect("pending source after recovery #1 crash"),
+        None
+    );
+
+    // Startup recovery #2 uses the same durable last-started request and the
+    // same descending keyed selector. Its successful terminal commit installs
+    // the source; the ordinary request that follows consumes it at model start.
+    let mut third = lab.spawn(child::COLD_RESUME, None);
+    third.resume_until("settled");
+    third.sigkill();
+    let durable = lab.durable();
+    assert_eq!(
+        durable
+            .store()
+            .load_pending_unresolved_output_stream_id()
+            .expect("successful primary start consumes carryover"),
+        None
+    );
+    assert_eq!(
+        durable.count_events(|event| matches!(event, RuntimeEvent::AttemptFailed { .. })),
+        1,
+        "the interrupted attempt has exactly one recovery terminal"
+    );
+    let snapshots = durable.request_snapshots();
+    let consumer_snapshot = snapshots
+        .get(1)
+        .expect("the resumed primary request snapshot");
+    assert_eq!(
+        consumer_snapshot.unresolved_output_carryover_source,
+        Some(source),
+        "the resumed request froze the selected source before consuming it"
+    );
+}
+
+/// Internal retry generations are not unresolved logical steps. If the final
+/// retry reaches canonical acceptance and the owning attempt dies before its
+/// terminal transaction, recovery must not resurrect an earlier partial audit
+/// as carryover.
+#[test]
+fn recovery_of_internal_retry_success_does_not_install_old_carryover() {
+    let lab = Lab::new();
+    let mut process = lab.spawn(
+        child::INTERNAL_RETRY_SUCCESS,
+        Some("before:event:attempt_completed"),
+    );
+    process.wait_reached("before:event:attempt_completed");
+    process.sigkill();
+
+    let durable = lab.durable();
+    assert_eq!(
+        durable.count_events(|event| matches!(event, RuntimeEvent::ModelRequestStarted { .. })),
+        3,
+        "the two partial generations and final success all started"
+    );
+    assert_eq!(
+        durable
+            .count_events(|event| matches!(event, RuntimeEvent::AssistantMessageCommitted { .. })),
+        1,
+        "only the final retry reached canonical acceptance"
+    );
+    assert!(
+        durable
+            .transcript()
+            .iter()
+            .filter_map(|entry| match &entry.item {
+                TranscriptItem::PublicationAudit { audit } => Some(audit),
+                _ => None,
+            })
+            .count()
+            >= 2,
+        "the earlier retry generations remain publication evidence"
+    );
+    assert_eq!(
+        durable
+            .store()
+            .load_pending_unresolved_output_stream_id()
+            .expect("pending carryover source before recovery"),
+        None,
+        "the live attempt-terminal transaction had not installed carryover"
+    );
+
+    // Recovery sees the accepted final retry through durable facts. It may
+    // terminalize the interrupted attempt, but the shared selector is not
+    // allowed to choose either older audit generation for this already
+    // canonical logical step.
+    durable.recover();
+    assert_eq!(
+        durable
+            .store()
+            .load_pending_unresolved_output_stream_id()
+            .expect("pending carryover source after recovery"),
+        None
+    );
+    assert_eq!(
+        durable.count_events(|event| matches!(event, RuntimeEvent::AttemptFailed { .. })),
+        1,
+        "recovery terminalizes the interrupted attempt exactly once"
+    );
+
+    // A later primary request remains ordinary canonical input: no old retry
+    // audit is admitted as request-only context.
+    let mut resumed = lab.spawn(child::COLD_RESUME, None);
+    resumed.resume_until("settled");
+    resumed.sigkill();
+    let snapshots = lab.durable().request_snapshots();
+    assert!(
+        snapshots
+            .last()
+            .is_some_and(|snapshot| snapshot.unresolved_output_carryover_source.is_none()),
+        "the later primary request has no retry-audit carryover"
     );
 }
 

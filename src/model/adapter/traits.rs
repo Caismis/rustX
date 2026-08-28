@@ -2,7 +2,7 @@
 //!
 //! All three M2 protocols (`OpenAI` Chat Completions, `OpenAI` Responses,
 //! and `Anthropic` Messages) implement exactly this interface. The interface is
-//! provider-independent in both directions: the input is a canonical
+//! provider-independent in both directions: the input is a provider-neutral
 //! [`ModelRequest`], the output is a canonical [`ModelEvent`] stream, and no
 //! provider SDK type appears in any signature.
 

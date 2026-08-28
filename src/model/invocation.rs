@@ -986,10 +986,11 @@ fn protocol_name(protocol: ModelProtocol) -> String {
 ///
 /// Returns [`ModelErrorKind::Unsupported`] naming the unsupported modality.
 pub fn validate_content_modalities(
-    messages: &[crate::message::types::MessageBlock],
+    messages: &[crate::model::input::ModelInputMessage],
     capabilities: &ModelCapabilities,
 ) -> Result<(), ModelError> {
     use crate::message::types::{AssistantContentBlock, MessageBlock, UserContentBlock};
+    use crate::model::input::ModelInputMessage;
     use crate::tools::types::ToolResultContent;
 
     let mut required: Vec<Modality> = Vec::new();
@@ -1000,7 +1001,7 @@ pub fn validate_content_modalities(
     };
     for message in messages {
         match message {
-            MessageBlock::User(user) => {
+            ModelInputMessage::Canonical(MessageBlock::User(user)) => {
                 for content in &user.content {
                     match content {
                         UserContentBlock::Text(_) => require(Modality::Text),
@@ -1009,7 +1010,7 @@ pub fn validate_content_modalities(
                     }
                 }
             }
-            MessageBlock::Assistant(assistant) => {
+            ModelInputMessage::Canonical(MessageBlock::Assistant(assistant)) => {
                 for content in &assistant.content {
                     match content {
                         AssistantContentBlock::Image(_) => require(Modality::Image),
@@ -1020,7 +1021,7 @@ pub fn validate_content_modalities(
                     }
                 }
             }
-            MessageBlock::Tool(tool) => {
+            ModelInputMessage::Canonical(MessageBlock::Tool(tool)) => {
                 for content in &tool.result.content {
                     match content {
                         ToolResultContent::Image(_) => require(Modality::Image),
@@ -1031,6 +1032,10 @@ pub fn validate_content_modalities(
                     }
                 }
             }
+            // Every request-only context item is a runtime-authored textual
+            // narration. It never carries image/file semantics or a
+            // canonical identity.
+            ModelInputMessage::RequestOnly(_) => require(Modality::Text),
         }
     }
     for modality in required {

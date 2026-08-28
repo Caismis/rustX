@@ -1386,14 +1386,13 @@ async fn a_crash_after_the_request_start_commit_never_resends_the_request() {
                 "the historical request keeps its frozen model, not the current one"
             );
             assert!(
-                historical
-                    .messages
-                    .iter()
-                    .any(|block| matches!(block, MessageBlock::User(user)
+                historical.messages.iter().any(
+                    |block| matches!(block.as_canonical(), Some(MessageBlock::User(user))
                     if user.content.iter().any(|content| matches!(
                         content,
                         UserContentBlock::Text(text) if text.text == TURN_ONE
-                    )))),
+                    )))
+                ),
                 "the reconstruction is the exact historical request"
             );
         }

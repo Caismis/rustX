@@ -2,19 +2,28 @@
 //!
 //! A Request Snapshot owns every non-history input needed to rebuild one
 //! primary [`ModelRequest`]. The Conversation Surface revision is the only
-//! historical message reference; request-time derived values are frozen by
-//! value. Reconstruction never consults live model configuration, Skills,
-//! contributors, filesystem state, or runtime status.
+//! canonical historical message reference; request-time derived values are
+//! frozen by value. A terminally unresolved publication may contribute one
+//! explicitly request-only carryover value, also frozen here by value and
+//! without a canonical `MessageId`. Reconstruction never consults live model
+//! configuration, Skills, contributors, filesystem state, pending carryover,
+//! Publication Audit state, or runtime status.
 
 use serde::{Deserialize, Serialize};
 
 use crate::context::assembly::{AcceptedSystemSection, ContextGeneration};
 use crate::conversation::{ConversationError, ConversationState, SurfaceRevision};
 use crate::message::types::AgentStatusEmission;
+use crate::model::input::{
+    ModelInputMessage, RenderedUnresolvedOutputCarryover, RequestOnlyInsertionAnchor,
+    RequestOnlyModelContext, canonical_input,
+};
 use crate::model::invocation::ModelInvocationConfig;
 use crate::model::types::ModelRequest;
 use crate::runtime::continuation::ProviderContinuationState;
-use crate::runtime::identity::{AttemptId, CapabilityRevision, MessageId, RequestId, TurnId};
+use crate::runtime::identity::{
+    AttemptId, CapabilityRevision, MessageId, PublicationStreamId, RequestId, TurnId,
+};
 use crate::tools::types::ModelToolDefinition;
 
 /// The identity of one actual primary request attempt.
@@ -127,6 +136,18 @@ pub struct RequestSnapshot {
     /// context equality — the complete ordered set, never just "every
     /// supplied message exists and matches".
     pub request_context_ids: Vec<MessageId>,
+    /// The source identity frozen when this logical step was prepared. This
+    /// remains present even when fit degradation omits the request-only body.
+    /// It is provenance, not a canonical message identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unresolved_output_carryover_source: Option<PublicationStreamId>,
+    /// The exact admitted request-only carryover representation, if the
+    /// degradation ladder retained one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unresolved_output_carryover: Option<RenderedUnresolvedOutputCarryover>,
+    /// The exact canonical insertion anchor of the frozen carryover.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unresolved_output_carryover_anchor: Option<RequestOnlyInsertionAnchor>,
     /// The exact Agent Status context and semantic emission metadata accepted
     /// for this request, when this request started a status generation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -200,6 +221,9 @@ impl RequestSnapshot {
             context_generation,
             continuation,
             request_context_ids,
+            unresolved_output_carryover_source: None,
+            unresolved_output_carryover: None,
+            unresolved_output_carryover_anchor: None,
             agent_status: None,
         }
     }
@@ -209,15 +233,109 @@ impl RequestSnapshot {
     ///
     /// # Errors
     ///
-    /// Returns an error when the referenced Surface revision or one of its
-    /// canonical Ledger messages cannot be reconstructed.
+    /// Returns an error when the referenced Surface revision, one of its
+    /// canonical Ledger messages, or the frozen request-only insertion
+    /// boundary cannot be reconstructed.
     pub fn reconstruct(
         &self,
         conversation: &ConversationState,
     ) -> Result<ModelRequest, RequestReconstructionError> {
+        let canonical = conversation.reconstruct_messages(self.surface_revision)?;
+        self.reconstruct_from_canonical(&canonical)
+    }
+
+    /// Reconstructs this snapshot from an already hydrated canonical Surface.
+    ///
+    /// Durable stores use this boundary after validating the Surface revision.
+    /// The only request-only value considered is the immutable snapshot copy;
+    /// no pending pointer, publication audit, or current runtime state is
+    /// consulted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the frozen carryover source, insertion anchor, or
+    /// canonical Surface does not match the snapshot.
+    pub fn reconstruct_from_canonical(
+        &self,
+        canonical: &[crate::message::types::MessageBlock],
+    ) -> Result<ModelRequest, RequestReconstructionError> {
+        let mut messages = canonical_input(canonical);
+        if self.unresolved_output_carryover.is_some()
+            && self.unresolved_output_carryover_source.is_none()
+        {
+            return Err(RequestReconstructionError::Conversation(
+                "carryover representation has no frozen source stream identity".to_owned(),
+            ));
+        }
+        if self.unresolved_output_carryover_source.is_some()
+            != self.unresolved_output_carryover_anchor.is_some()
+        {
+            return Err(RequestReconstructionError::Conversation(
+                "frozen carryover source and insertion anchor must be present together".to_owned(),
+            ));
+        }
+        let Some(source) = self.unresolved_output_carryover_source.as_ref() else {
+            return Ok(ModelRequest {
+                invocation: self.invocation.clone(),
+                messages,
+                tools: self.tool_definitions.clone(),
+                effective_system_prompt: self.effective_system_prompt.clone(),
+                continuation: self.continuation.clone(),
+            });
+        };
+        let anchor = self
+            .unresolved_output_carryover_anchor
+            .as_ref()
+            .ok_or_else(|| {
+                RequestReconstructionError::Conversation(
+                    "frozen carryover source has no insertion anchor".to_owned(),
+                )
+            })?;
+        let context_len = self.request_context_ids.len();
+        if context_len > messages.len() {
+            return Err(RequestReconstructionError::Conversation(
+                "frozen request context is longer than the reconstructed Surface".to_owned(),
+            ));
+        }
+        let context_position = messages.len() - context_len;
+        let suffix_ids: Vec<MessageId> = messages[context_position..]
+            .iter()
+            .filter_map(ModelInputMessage::canonical_id)
+            .cloned()
+            .collect();
+        if suffix_ids != self.request_context_ids {
+            return Err(RequestReconstructionError::Conversation(
+                "frozen request context is not the reconstructed Surface suffix".to_owned(),
+            ));
+        }
+        let position = match anchor {
+            RequestOnlyInsertionAnchor::BeforeMessage(message_id) => messages
+                .iter()
+                .position(|message| message.canonical_id() == Some(message_id))
+                .ok_or_else(|| {
+                    RequestReconstructionError::Conversation(format!(
+                        "carryover anchor message {message_id} is absent from the frozen Surface"
+                    ))
+                })?,
+            RequestOnlyInsertionAnchor::AfterCanonical => context_position,
+        };
+        if let Some(context) = &self.unresolved_output_carryover {
+            if context.source_stream_id != *source {
+                return Err(RequestReconstructionError::Conversation(
+                    "carryover representation disagrees with its frozen source stream identity"
+                        .to_owned(),
+                ));
+            }
+            messages.insert(
+                position,
+                ModelInputMessage::RequestOnly(RequestOnlyModelContext::UnresolvedOutputCarryover(
+                    context.clone(),
+                )),
+            );
+        }
         Ok(ModelRequest {
             invocation: self.invocation.clone(),
-            messages: conversation.reconstruct_messages(self.surface_revision)?,
+            messages,
             tools: self.tool_definitions.clone(),
             effective_system_prompt: self.effective_system_prompt.clone(),
             continuation: self.continuation.clone(),

@@ -1217,7 +1217,7 @@ async fn previous_thinking_replays_from_opaque_state() {
     // thinking block whose state was captured by the adapter.
     request.messages.insert(
         0,
-        rustx::message::types::MessageBlock::Assistant(
+        rustx::model::ModelInputMessage::Canonical(rustx::message::types::MessageBlock::Assistant(
             rustx::message::types::AssistantMessageBlock {
                 id: rustx::runtime::identity::MessageId::new("msg-prev"),
                 content: vec![rustx::message::types::AssistantContentBlock::Reasoning(
@@ -1231,7 +1231,7 @@ async fn previous_thinking_replays_from_opaque_state() {
                     },
                 )],
             },
-        ),
+        )),
     );
     let events = collect_events(&adapter(&server), request).await;
     assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
@@ -1255,7 +1255,7 @@ async fn stateless_previous_thinking_fails_explicitly() {
     let mut request = simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi");
     request.messages.insert(
         0,
-        rustx::message::types::MessageBlock::Assistant(
+        rustx::model::ModelInputMessage::Canonical(rustx::message::types::MessageBlock::Assistant(
             rustx::message::types::AssistantMessageBlock {
                 id: rustx::runtime::identity::MessageId::new("msg-prev"),
                 content: vec![rustx::message::types::AssistantContentBlock::Reasoning(
@@ -1265,7 +1265,7 @@ async fn stateless_previous_thinking_fails_explicitly() {
                     },
                 )],
             },
-        ),
+        )),
     );
     let events = collect_events(&adapter(&server), request).await;
     assert_eq!(events.len(), 1, "rejected before the network");
@@ -1300,8 +1300,16 @@ async fn tool_results_merge_into_one_user_message() {
             },
         })
     };
-    request.messages.push(make_tool_message("call_a"));
-    request.messages.push(make_tool_message("call_b"));
+    request
+        .messages
+        .push(rustx::model::ModelInputMessage::Canonical(
+            make_tool_message("call_a"),
+        ));
+    request
+        .messages
+        .push(rustx::model::ModelInputMessage::Canonical(
+            make_tool_message("call_b"),
+        ));
     let events = collect_events(&adapter(&server), request).await;
     assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
     let body: serde_json::Value =
@@ -1330,7 +1338,7 @@ async fn continuation_contradiction_with_boundary_is_rejected() {
     let mut request = simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi");
     request.messages.insert(
         0,
-        rustx::message::types::MessageBlock::Assistant(
+        rustx::model::ModelInputMessage::Canonical(rustx::message::types::MessageBlock::Assistant(
             rustx::message::types::AssistantMessageBlock {
                 id: rustx::runtime::identity::MessageId::new("msg-prev"),
                 content: vec![rustx::message::types::AssistantContentBlock::Reasoning(
@@ -1344,7 +1352,7 @@ async fn continuation_contradiction_with_boundary_is_rejected() {
                     },
                 )],
             },
-        ),
+        )),
     );
     request.continuation = Some(ProviderContinuationState::Anthropic(
         AnthropicContinuation {
@@ -1432,7 +1440,7 @@ async fn redacted_thinking_replays_losslessly() {
     });
     request.messages.insert(
         0,
-        rustx::message::types::MessageBlock::Assistant(
+        rustx::model::ModelInputMessage::Canonical(rustx::message::types::MessageBlock::Assistant(
             rustx::message::types::AssistantMessageBlock {
                 id: rustx::runtime::identity::MessageId::new("msg-redacted"),
                 content: vec![rustx::message::types::AssistantContentBlock::Reasoning(
@@ -1446,7 +1454,7 @@ async fn redacted_thinking_replays_losslessly() {
                     },
                 )],
             },
-        ),
+        )),
     );
     let events = collect_events(&adapter(&server), request).await;
     assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
@@ -1622,18 +1630,20 @@ async fn tool_then_consecutive_inbound_users_translate_in_order() {
         })
     };
     request.messages = vec![
-        MessageBlock::Assistant(AssistantMessageBlock {
-            id: MessageId::new("msg-a1"),
-            content: vec![rustx::message::types::AssistantContentBlock::ToolCall(
-                rustx::tools::types::ToolCall {
-                    id: ToolCallId::new("call_1"),
-                    tool_id: rustx::runtime::identity::ToolId::new("tool-list"),
-                    name: "list_directory".to_owned(),
-                    arguments: serde_json::json!({"path": "."}),
-                },
-            )],
-        }),
-        MessageBlock::Tool(ToolMessageBlock {
+        rustx::model::ModelInputMessage::Canonical(MessageBlock::Assistant(
+            AssistantMessageBlock {
+                id: MessageId::new("msg-a1"),
+                content: vec![rustx::message::types::AssistantContentBlock::ToolCall(
+                    rustx::tools::types::ToolCall {
+                        id: ToolCallId::new("call_1"),
+                        tool_id: rustx::runtime::identity::ToolId::new("tool-list"),
+                        name: "list_directory".to_owned(),
+                        arguments: serde_json::json!({"path": "."}),
+                    },
+                )],
+            },
+        )),
+        rustx::model::ModelInputMessage::Canonical(MessageBlock::Tool(ToolMessageBlock {
             id: MessageId::new("msg-t1"),
             tool_call_id: ToolCallId::new("call_1"),
             tool_id: rustx::runtime::identity::ToolId::new("tool-list"),
@@ -1650,9 +1660,9 @@ async fn tool_then_consecutive_inbound_users_translate_in_order() {
                 truncation: None,
                 managed_output: None,
             },
-        }),
-        user("msg-a", "A"),
-        user("msg-b", "B"),
+        })),
+        rustx::model::ModelInputMessage::Canonical(user("msg-a", "A")),
+        rustx::model::ModelInputMessage::Canonical(user("msg-b", "B")),
     ];
     let events = collect_events(&adapter(&server), request).await;
     assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));

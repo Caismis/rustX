@@ -1,4 +1,4 @@
-# Context Engine and Context Assembly (M7.5b)
+# Context Engine and Context Assembly (M7.5b + Issue #137)
 
 This document defines the implemented Issue #54 conversation model and the
 Issue #55 context/request boundary. The important separation is:
@@ -22,6 +22,13 @@ provider-neutral ModelRequest
 Model Adapter
     protocol translation only
 ~~~
+
+`ModelRequest.messages` is an ordered provider-neutral list of either
+`Canonical(MessageBlock)` or the fixed `RequestOnlyModelContext` vocabulary.
+The only request-only item in this issue is the bounded unresolved-output
+carryover. It has no canonical `MessageId`; the Agent Loop resolves its source
+and insertion anchor before this boundary, while adapters only translate the
+already ordered list.
 
 Context Assembly is a sibling of the Context Engine and is coordinated by
 the Agent Loop. It is not a plugin host and it does not mutate conversation
@@ -64,7 +71,9 @@ outside the ledger.
 
 The Context Engine reads only the finite current surface, hydrates its active
 messages by identity, and owns no contributor registry, provenance decision,
-admission decision, request snapshot store, or provider adapter.
+admission decision, request snapshot store, or provider adapter. Its normal
+projection and summary planning are canonical-only; the Agent Loop supplies a
+frozen request-only carryover only to the exact mixed-request fit estimator.
 
 ## 2. Unified Context Assembly
 
@@ -386,6 +395,9 @@ struct RequestSnapshot {
     context_generation: ContextGeneration,
     continuation: Option<ProviderContinuationState>,
     request_context_ids: Vec<MessageId>,
+    unresolved_output_carryover_source: Option<PublicationStreamId>,
+    unresolved_output_carryover: Option<RenderedUnresolvedOutputCarryover>,
+    unresolved_output_carryover_anchor: Option<RequestOnlyInsertionAnchor>,
     agent_status: Option<AgentStatusStart>,
 }
 ~~~
@@ -420,6 +432,13 @@ The value/reference decisions are deliberate:
   request, if any.
 - request_context_ids records the exact request-scoped canonical context facts
   committed atomically with request start.
+- unresolved_output_carryover_source records only the selected Publication
+  Stream identity. The optional rendered value is the exact bounded
+  request-only representation that fit this request, including its frozen
+  `UnresolvedOutputSettlement` (`Incomplete` or `Unaccepted`), and the anchor
+  records where it was inserted. Neither value is canonical history or lineage
+  state. Full, Reduced, and MetadataOnly retain the settlement distinction;
+  only Omitted removes the request-only item.
 
 RequestSnapshot::reconstruct(&ConversationState) resolves only the
 referenced historical Surface revision, hydrates its canonical messages,
@@ -431,6 +450,41 @@ Historical reconstruction never reads current model/session settings,
 current model catalog, Skill discovery, contributor registration or
 execution, package contents, filesystem state, runtime status, or latest
 Surface head.
+
+### One-shot unresolved-output request context (Issue #137)
+
+The publication audit is still the sole body authority. A terminally
+unresolved `Incomplete` or `Unaccepted` audit with meaningful renderable
+content can leave only its `PublicationStreamId` in the conversation root as
+pending state. The live and recovery paths use one selector that walks the
+last durably started request's retry ordinals from `N` down to `0`, derives
+the request/provisional-message/publication-stream identities, and performs
+keyed audit loads. The highest meaningful source wins; an empty latest audit
+falls back to the next ordinal. No scan, concatenation, or latest-audit query
+is permitted.
+
+The first successfully started eligible primary step consumes the pointer in
+the same durable transaction that commits ordinary model-start semantics and
+the Request Snapshot. Before that commit, cancellation leaves the pointer
+unchanged. The snapshot freezes the exact admitted rendering and one of two
+anchors: immediately before the first canonical message of FreshInbound, or
+after the existing canonical projection and before newly staged current
+context for a continuation without fresh inbound. Reconstruction uses only
+these frozen fields and the historical canonical Surface; it never reads the
+current pointer or audit.
+
+Transient retries reuse the same frozen source, representation, and anchor.
+Overflow fit accounts for the exact current representation and can only move
+down the bounded detail ladder (full, reduced, metadata-only, omitted). The
+source identity is retained as provenance even when the body is omitted, so
+degradation cannot be reversed or replaced by a newer audit. Carryover is
+best-effort auxiliary context: it never forces compaction, causes
+`CannotFit`, or evicts protected FreshInbound.
+
+`ModelBackedSummarizer` receives a dedicated canonical-only
+`SummaryRequest::model_input()` built from the retired canonical span. It
+cannot receive `ModelInputMessage` request-only items, so carryover cannot be
+canonicalized indirectly through compaction.
 
 ### Primary request lineage and the summary side request
 
@@ -806,11 +860,16 @@ compactions, restart, and configuration changes.
 
 ## 10. Provider boundary
 
-Adapters receive the final canonical projection and frozen request values.
-They may translate provider protocol details, serialize the effective system
-prompt, encode tools, handle continuation fields, and merge consecutive
-user-role messages when a provider requires it. Such wire merging does not
-change canonical message identity, order, provenance, or semantic kind.
+Adapters receive the final ordered provider-neutral request and frozen request
+values. `ModelRequest.messages` distinguishes `Canonical(MessageBlock)` from
+`RequestOnly(RequestOnlyModelContext)`. They may translate provider protocol
+details, serialize the effective system prompt, encode tools, handle
+continuation fields, and merge consecutive user-role messages when a provider
+requires it. Such wire merging does not change canonical message identity,
+order, provenance, or semantic kind. A request-only carryover item has no
+canonical identity, and adapters never select its source, choose its anchor,
+load Publication Audit, infer reasoning provenance, promote a tool proposal,
+or consume the pending pointer.
 
 Adapters must not sample Agent Status, discover Skills, read current
 configuration, invoke contributors, allocate canonical IDs, mutate the

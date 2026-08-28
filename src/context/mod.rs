@@ -81,7 +81,8 @@ pub use status::{
 pub use summarizer::{ContextSummarizer, ModelBackedSummarizer, SummaryModelInput, SummaryRequest};
 pub use tokens::{
     ClosureTokenEstimator, DefaultTokenEstimator, ObservedAnchor, ProviderObservedInput,
-    TokenEstimator, bytes_to_tokens, non_conversation_fingerprint, request_identity_fingerprint,
+    TokenEstimator, bytes_to_tokens, model_input_fingerprint, non_conversation_fingerprint,
+    request_identity_fingerprint,
 };
 
 /// The context runtime bundle handed to an `AgentExecution`.

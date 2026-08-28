@@ -30,7 +30,7 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 14. An incompatible database
+The SQLite schema is development schema version 15. An incompatible database
 fails explicitly; there is no migration chain, legacy reader, compatibility
 fallback, dual write, or old storage mode. Version 10 froze the structured
 Questionnaire interaction audit vocabulary introduced by Issue #126. Version
@@ -39,9 +39,11 @@ instant and admitted module membership are durable with the canonical status
 message. Version 12 added the complete canonical-message-coupled Agent
 Status emission facts, bounded latest-emission heads, and the Todo-specific
 durable progress sequence. Version 14 freezes the typed
-`ToolCancellationPhase` carried by canonical cancelled tool results; version
-13 and every older development schema are rejected rather than decoded with a
-missing or default phase. The review-only intermediate schema history is not
+`ToolCancellationPhase` carried by canonical cancelled tool results. Version
+15 adds the one-shot unresolved-output pending source and the frozen
+request-only carryover representation/anchor in Request Snapshots; version 14
+and every older development schema are rejected rather than decoded with a
+missing carryover contract. The review-only intermediate schema history is not
 a supported format.
 File-backed stores
 use WAL, `synchronous=FULL`, foreign-key enforcement, and a busy timeout. A
@@ -62,11 +64,11 @@ answers, an explicit decline, or owning-attempt cancellation. A v9 journal may
 contain the obsolete Question/Answered payloads and is rejected rather than
 decoded or migrated.
 
-The version-12 physical tables are deliberately semantic rather than generic:
+The physical tables are deliberately semantic rather than generic:
 
 | Table | Purpose and constraints |
 | --- | --- |
-| `rustx_store` | One-row conversation binding, schema version, durable next `InboundSequence` / Event Journal / transcript position counters, and the Todo-specific logical-primary-start progress sequence. |
+| `rustx_store` | One-row conversation binding, schema version, durable next `InboundSequence` / Event Journal / transcript position counters, the Todo-specific logical-primary-start progress sequence, and the pending unresolved-output `PublicationStreamId` pointer. |
 | `pending_inbound` | Pending deliveries keyed by `InboundSequence`, with unique `MessageId`, serialized User body, and optional correlation. |
 | `inbound_correlation` | Exactly-once correlation mapping to the accepted sequence and unique `MessageId`. |
 | `message_ledger` | Append-only canonical bodies keyed by commit `position` and unique `MessageId`. |
@@ -74,7 +76,7 @@ The version-12 physical tables are deliberately semantic rather than generic:
 | `surface_ops` | One immutable `Append` or `Replace` operation per `SurfaceRevision`, with compaction generation. |
 | `surface_head` | Current Surface revision, active identity order, and compaction generation. |
 | `context_checkpoints` | Current structural/index checkpoint matching `surface_head`; it is not message history. |
-| `request_snapshots` | One immutable non-history snapshot per `RequestId`, its frozen provisional Assistant identity, Surface revision, and committed start sequence. |
+| `request_snapshots` | One immutable non-history snapshot per `RequestId`, its frozen provisional Assistant identity, Surface revision, committed start sequence, and optional request-only carryover source/representation/anchor. |
 | `events` | Append-only typed envelopes keyed by per-conversation Event Journal sequence and unique `EventId`. |
 | `agent_status_emission_heads` | One materialized latest-emission record per `(AgentStatusModuleId, semantic key)`, including the store-assigned Todo cooldown origin, maintained only by the combined model-turn-start transaction. |
 | `lifecycle_state` | Durable terminal markers enforcing zero-or-one terminal event and terminal absorption for attempt, turn, and background-execution lifecycles. |
@@ -111,8 +113,10 @@ transaction; committed-message events share that transaction. Compaction
 commits the summary body, Surface Replace revision, generation/checkpoint
 metadata, and `CompactionCompleted` reference together. Request start commits
 the immutable Request Snapshot and `ModelRequestStarted` fact together before
-the provider adapter is called. Background terminal publication commits its
-terminal inbound row and reference fact together.
+the provider adapter is called. When that snapshot carries unresolved-output
+carryover, the same start transaction clears its pending source pointer.
+Background terminal publication commits its terminal inbound row and reference
+fact together.
 
 Publication opening is a second durable admission boundary: the store decodes
 the named Request Snapshot and its exact start event before it can insert or
@@ -1656,13 +1660,18 @@ and are not rolled back by provider failure or cancellation.
 provider-neutral request: `RequestIdentity`, exact `SurfaceRevision`, the
 rendered Effective System Prompt, effective `ModelInvocationConfig`, model
 window, reasoning values, tool definitions, capability revision,
-`ContextGeneration`, and opaque continuation state. The Surface revision is
-an exact historical reference; request-time rendered/configuration values
-are stored by value. `RequestSnapshot::reconstruct` hydrates only that
-historical Surface revision and the frozen values, and the Agent Loop checks
-structural equality with the actual `ModelRequest` before adapter
-translation. Current contributors, Skills, configuration, filesystem, and
-runtime status are never consulted.
+`ContextGeneration`, and opaque continuation state. It also freezes, when a
+logical step consumes carryover, the source `PublicationStreamId`, the
+bounded request-only rendering that fit admitted, and its
+`RequestOnlyInsertionAnchor`; the source remains provenance and never becomes
+a canonical `MessageId`. The Surface revision is an exact historical
+reference; request-time rendered/configuration values are stored by value.
+`RequestSnapshot::reconstruct` hydrates only that historical Surface revision
+and the frozen values, including the frozen request-only item when present;
+it never reads the current pending pointer, Publication Audit, Surface head,
+or runtime state. The Agent Loop checks structural equality with the actual
+`ModelRequest` before adapter translation. Current contributors, Skills,
+configuration, filesystem, and runtime status are never consulted.
 
 During execution, `AgentExecution` keeps only the current attempt's bounded
 request references. At request start the ConversationStore durably commits
@@ -1681,7 +1690,8 @@ status, and current conversation only; historical events are inspected from
 `ConversationStore::read_events` through bounded pages.
 
 An overflow retry reuses the staged ContextGeneration and canonical
-context facts. `ContextWindowExceeded` does not prove that fresh inbound was
+context facts, and reuses the same frozen carryover source/anchor semantics.
+`ContextWindowExceeded` does not prove that fresh inbound was
 observed, so compaction still protects the pending `FreshInboundTurn`. Only
 compaction-dependent Surface/request fields may change; contributors are not
 reinvoked, the pre-step policy is not re-evaluated, tool-result observations
@@ -2601,6 +2611,24 @@ request timeout. The Agent Loop always owns retryability policy, budget,
 scheduling, and execution, and never derives it from provider strings or HTTP
 prose. `ModelRequestFailed.usage` retains only the latest trustworthy
 cumulative pre-failure evidence for that request, or `None`.
+
+Issue #137 adds one fixed request-only input item to this boundary. After a
+logical step is terminally unresolved, live settlement and startup recovery
+derive the last durably started `RequestIdentity`, walk its ordinals from the
+highest through zero, and keyed-load only the identities derived from each
+candidate. The shared selector chooses at most one meaningful `Incomplete` or
+`Unaccepted` Publication Audit; it does not scan, concatenate, or choose a
+conversation-wide latest audit. An eventually successful internal retry makes
+all earlier retry audits internal generations and installs no pending source.
+
+The durable producer transition commits the attempt terminal and the
+replacement/clear of `pending_unresolved_output_stream_id` together. The
+first eligible primary start is the consumer: its start transaction freezes
+the selected bounded rendering and `RequestOnlyInsertionAnchor` in the
+Request Snapshot and clears the pointer in the same commit. A cancellation
+before that commit preserves the pointer. Transient retries reuse the frozen
+snapshot semantics; overflow only moves the request-only value down its
+full → reduced → metadata-only → omitted ladder.
 
 #### OpenAI adapters (async-openai)
 
@@ -4151,6 +4179,13 @@ durability barrier. A pre-rename failure leaves at most an unreferenced
 private directory, while a post-rename barrier failure is the explicit
 visible-but-durability-uncertain outcome described below.
 
+The execution-recovery pending unresolved-output pointer is deliberately not
+part of `LineageSeed`. It is neither canonical history nor Surface meaning.
+`initialize_lineage` creates every clone, fork, and tree destination with
+`pending_unresolved_output_stream_id = NULL`, even when the source has an
+unresolved audit waiting for a later primary request. Carryover belongs only
+to the source lineage's own next eligible request.
+
 The Runtime Client exposes three different transition outcomes. A
 pre-rename failure has no transition result: the source remains authoritative,
 and a quiesced old attachment still requires replacement. A successful
@@ -5083,13 +5118,101 @@ A publication audit records the semantic output rustX durably committed **for
 release**. It is an upper bound on what may have been displayed and never
 proof of perception; rustX adds no Runtime Client ACK protocol.
 
-A publication audit never enters:
+### 6.1.7a One-shot unresolved-output carryover (Issue #137)
 
-- the Message Ledger as an Assistant conversation fact;
-- the active Surface;
-- a `RequestSnapshot` model input;
-- a tree/fork/clone seed;
-- any future `ModelRequest` context.
+Publication Audit remains the sole body authority. A terminally unresolved
+audit may be selected once as a bounded `UnresolvedOutputCarryover` for the
+first later eligible primary model start, but that projection is explicitly
+request-only. The durable root stores only
+`pending_unresolved_output_stream_id`; the bounded rendering is frozen by
+value in the consuming Request Snapshot. No canonical Assistant or User
+message, Ledger row, Surface identity, fabricated `MessageId`, lineage seed,
+transcript entry, Runtime Client field, or carryover event is created.
+
+The provider-neutral request type is:
+
+```rust
+enum ModelInputMessage {
+    Canonical(MessageBlock),
+    RequestOnly(RequestOnlyModelContext),
+}
+
+enum RequestOnlyModelContext {
+    UnresolvedOutputCarryover(RenderedUnresolvedOutputCarryover),
+}
+
+struct RenderedUnresolvedOutputCarryover {
+    source_stream_id: PublicationStreamId,
+    source_settlement: UnresolvedOutputSettlement,
+    records: Vec<RenderedCarryoverRecord>,
+    omitted_blocks: CarryoverOmissionCounts,
+}
+
+enum UnresolvedOutputSettlement {
+    Incomplete,
+    Unaccepted,
+}
+```
+
+Canonical identities remain real Ledger identities; the request-only variant
+has no canonical identity. The Agent Loop assembles the order before adapter
+translation. For FreshInbound it inserts the carryover immediately before the
+first canonical message of the pending fresh turn. For a Continuation with no
+fresh inbound it inserts it after the existing canonical projection and before
+newly staged current context. This anchor and the exact admitted bounded
+representation are frozen in the Request Snapshot, so reconstruction does not
+consult the current pointer, audit, Surface head, or runtime.
+
+The publication boundary converts `PublicationAuditKind::Incomplete` or
+`PublicationAuditKind::Unaccepted` once into the model-input-owned
+`UnresolvedOutputSettlement`. The frozen representation preserves that
+settlement and renders `source_settlement=incomplete` or
+`source_settlement=unaccepted` in Full, Reduced, and MetadataOnly forms.
+Historical reconstruction copies the frozen value without another audit load;
+only Omitted removes the request-only item.
+
+The shared selector takes the last durably started `RequestIdentity` and
+checks retry ordinals `N, N-1, ..., 0`, deriving each request, provisional
+message, and publication-stream identity before a keyed audit load. It accepts
+only `Incomplete`/`Unaccepted` audits with meaningful renderable content,
+falls back from an empty latest audit, and never scans or concatenates audits.
+Live settlement and crash recovery call this same implementation. An internal
+retry that eventually reaches canonical Assistant acceptance installs no
+carryover from its earlier failed generations.
+
+Producer and consumer boundaries are separate durable linearization points:
+
+```text
+durable publication evidence
+  → shared selector
+  → one transaction: attempt terminal + replace/clear pending source
+
+eligible primary start
+  → one transaction: freeze snapshot representation/anchor
+                  + commit ModelRequestStarted semantics
+                  + clear pending source
+```
+
+If the producer transaction does not commit, neither terminal nor pointer
+change is visible. Cancellation before the consumer start commit preserves the
+pointer; a committed start consumes it exactly once. Actual-request retries
+reuse frozen logical-step semantics and never reread the pointer or audit.
+Overflow fit may only degrade carryover from full to reduced, metadata-only,
+or omitted. It is auxiliary best-effort context: it cannot force compaction,
+cause `CannotFit`, evict protected fresh inbound, or move back toward detail.
+
+Rendering uses a 4096-byte final UTF-8 bound, 2048-byte per-text-block tail
+bound, and 512-byte whole-tool-argument bound. Whole records are admitted
+newest-first and restored to source order with structural omission metadata.
+Reasoning is runtime-authored narration, never provider-thinking continuation;
+tool proposals remain explicitly complete/incomplete, unaccepted, and not
+executed. Payload is escaped as data inside deterministic non-closable records.
+Carryover is excluded structurally from `ModelBackedSummarizer` input and from
+`LineageSeed`; it has no relationship to Agent Status or provider continuation
+state. This durable-state change is local to development schema version 15;
+`EVENT_SCHEMA_VERSION` remains 1 because no Event Journal envelope changed,
+and the Runtime Client protocol remains unchanged because carryover has no
+wire field or consumption event.
 
 ### 6.1.8 Model-proposed tool calls versus Tool Plane execution
 
@@ -5355,8 +5478,29 @@ terminal, so a crash inside the remaining reconciliation still leaves a state
 the next startup classifies exactly as truthfully (see section 7.11).
 
 An audit is never a canonical Assistant message: recovery produces no Ledger
-row, no Surface advance, and no model-visible context from it. Any tool
-proposal it records may never acquire a dependent Tool Plane execution fact.
+row, no Surface advance, and no canonical model-visible context from it. Any
+tool proposal it records may never acquire a dependent Tool Plane execution
+fact. The narrow Issue #137 exception is the later request-only carryover
+projection described below; it is runtime-authored context, not the audit
+body becoming canonical or provider continuation.
+
+For Issue #137, an unresolved logical model step may also leave one pending
+carryover source. After publication streams are terminalized, recovery loads
+the Request Snapshot of the last durably started request and invokes the same
+keyed descending-ordinal selector used by live settlement. If a later retry
+already committed the canonical Assistant, recovery selects no older audit;
+otherwise it selects the highest meaningful `Incomplete`/`Unaccepted` audit,
+falling back deterministically from an empty latest generation. The source is
+never selected by a conversation-wide audit query or by hot memory alone.
+
+The selected source (including the explicit `None` result) is passed to one
+durable semantic terminal transition that commits the recovery attempt
+terminal and replaces/clears `pending_unresolved_output_stream_id` together.
+If recovery crashes before that commit, the audits and Request Snapshot facts
+remain durable but no half-transition is exposed. A second recovery derives
+the same request identity, loads the same keyed audits, selects the same
+source, and can commit the same terminal/pointer transition. Every committed
+recovery prefix is therefore a valid input to the next recovery.
 
 ### 7.6 Terminal uniqueness and repeated-restart idempotence
 

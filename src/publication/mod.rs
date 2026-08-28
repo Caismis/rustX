@@ -71,8 +71,13 @@
 //! **for release**. It is an upper bound on what may have been displayed and
 //! never proof of perception; rustX adds no Runtime Client ACK protocol.
 //!
-//! An audit never enters the Message Ledger, the active Surface, a
-//! `RequestSnapshot`, a tree/fork/clone seed, or any future model request.
+//! An audit never becomes canonical Assistant content, acquires Message
+//! Ledger or Surface identity, enters lineage meaning, or becomes a generic
+//! part of future model context. The sole narrow exception is a bounded,
+//! explicitly request-only projection of a terminally unresolved audit: one
+//! selected source may be frozen by value into exactly one later eligible
+//! primary request (and its `RequestSnapshot`), with no fabricated
+//! `MessageId`. See [`carryover`] for the shared selector and renderer.
 //!
 //! # Tool proposals are not executions
 //!
@@ -86,9 +91,15 @@
 //! stream-local block/tool/name identity, arguments require Started, and
 //! Completion advances it exactly once to Completed.
 
+pub mod carryover;
 pub mod coalescer;
 pub mod frame;
 
+pub use carryover::{
+    MAX_CARRYOVER_TEXTUAL_BLOCK_BYTES, MAX_CARRYOVER_TOOL_ARGUMENT_BYTES,
+    MAX_UNRESOLVED_OUTPUT_CARRYOVER_BYTES, render_unresolved_output_carryover,
+    select_unresolved_output_source,
+};
 pub use coalescer::{CoalescePolicy, PublicationCoalescer};
 pub use frame::{
     PublicationAudit, PublicationAuditBlock, PublicationAuditKind, PublicationFrame,

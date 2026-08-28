@@ -116,7 +116,9 @@ use crate::conversation::{RecoverySafetyError, recovery_safety};
 use crate::durable::{ConversationStore, ConversationStoreError, PendingInboundItem};
 use crate::events::types::{AttemptFailure, RuntimeEvent, RuntimeEventEnvelope};
 use crate::message::types::{AssistantContentBlock, MessageBlock, ToolMessageBlock};
-use crate::publication::{PublicationAuditKind, PublicationStreamRecord};
+use crate::publication::{
+    PublicationAuditKind, PublicationStreamRecord, select_unresolved_output_source,
+};
 use crate::runtime::identity::{
     AttemptId, ConversationId, EventId, MessageId, PublicationStreamId, RequestId, SubagentId,
     ToolCallId, ToolExecutionId, ToolId,
@@ -223,12 +225,24 @@ pub enum RequestOutcome {
 struct AttemptEvidence {
     /// The durable model-request lifecycle of this attempt.
     request: ExternalRequestLifecycle,
+    /// The last request start belonging to the currently open logical model
+    /// step. A later inbound adoption opens a new answer obligation and
+    /// clears this boundary until that step actually starts; retaining the
+    /// previous request here would let recovery select an audit from an
+    /// already completed logical step.
+    last_started_request: Option<RequestId>,
     /// The bounded summary of the attempt's foreground-tool external history.
     ///
     /// Independent of the per-call repair evidence: it keeps proving that
     /// external tool execution happened — and whether any external outcome
     /// remains unknown — after every detailed entry has been released.
     tools: ToolExternalSummary,
+    /// The most recent canonical Assistant acceptance attributed to this
+    /// attempt, if any. Keeping only the latest identity is sufficient: the
+    /// last started request's provisional identity decides whether that
+    /// logical step was accepted, while retaining a whole acceptance history
+    /// would make recovery memory grow with the conversation.
+    last_accepted_assistant: Option<MessageId>,
 }
 
 /// The external execution lifecycle of one tool call, as retained by the
@@ -503,7 +517,9 @@ impl RecoveryEvidence {
                     .entry(attempt_id.clone())
                     .or_insert(AttemptEvidence {
                         request: ExternalRequestLifecycle::NeverStarted,
+                        last_started_request: None,
                         tools: ToolExternalSummary::default(),
+                        last_accepted_assistant: None,
                     });
             }
             RuntimeEvent::InboundTurnAdopted { message_ids } => {
@@ -512,6 +528,15 @@ impl RecoveryEvidence {
                 // yes/no fact plus the turn it names, never the batch.
                 if let Some(last) = message_ids.last() {
                     self.unanswered_adopted_turn = Some(last.clone());
+                }
+                // Adoption is the durable boundary of a new logical model
+                // step. An existing attempt may have already completed a
+                // previous request and then accepted fresh inbound at a safe
+                // boundary; that previous request must not be used as the
+                // carryover selector input if this process dies before the
+                // new step crosses model start.
+                for attempt in self.unsettled_attempts.values_mut() {
+                    attempt.last_started_request = None;
                 }
             }
             RuntimeEvent::AttemptCompleted { attempt_id, .. }
@@ -556,6 +581,7 @@ impl RecoveryEvidence {
                     attempt.request = ExternalRequestLifecycle::StartedOutcomeUnknown {
                         request_id: request_id.clone(),
                     };
+                    attempt.last_started_request = Some(request_id.clone());
                 }
             }
             RuntimeEvent::ModelRequestCompleted { .. }
@@ -598,6 +624,11 @@ impl RecoveryEvidence {
                 }
             }
             RuntimeEvent::AssistantMessageCommitted { message_id } => {
+                if let Some(attempt) = envelope.attempt_id.as_ref()
+                    && let Some(evidence) = self.unsettled_attempts.get_mut(attempt)
+                {
+                    evidence.last_accepted_assistant = Some(message_id.clone());
+                }
                 // Attribute every **active** Assistant message to the attempt
                 // that committed it. A message retired from the Surface is
                 // not retained, so the map is bounded by the active working
@@ -1133,6 +1164,15 @@ pub struct RecoveryPlan {
     /// The classification itself is fully determined by the enum; this field
     /// is diagnostic context, never class evidence.
     tool_summary: Option<ToolExternalSummary>,
+    /// The latest canonical Assistant accepted by the classified attempt.
+    /// Recovery compares this identity with the last durably started request's
+    /// provisional identity so an internally recovered retry that eventually
+    /// reached canonical acceptance cannot create carryover from an older
+    /// retry audit.
+    last_accepted_assistant: Option<MessageId>,
+    /// The request start of the currently open logical model step, when that
+    /// step crossed the durable model-start frontier.
+    last_started_request: Option<RequestId>,
     /// The publication streams that must terminalize as audits, with the kind
     /// derived from durable P/U evidence alone.
     publications: Vec<PublicationRecoveryClass>,
@@ -1181,6 +1221,14 @@ impl RecoveryPlan {
     pub fn classify(evidence: &RecoveryEvidence) -> Self {
         let tool_repairs = Self::plan_tool_repairs(evidence);
         let attempt = Self::classify_attempt(evidence);
+        let attempt_id = match &attempt {
+            AttemptRecoveryClass::AdmittedWithoutExternalStart { attempt_id }
+            | AttemptRecoveryClass::IndeterminateExternalOutcome { attempt_id, .. }
+            | AttemptRecoveryClass::ExternalOutcomeKnown { attempt_id, .. } => {
+                Some(attempt_id.clone())
+            }
+            AttemptRecoveryClass::NotStarted | AttemptRecoveryClass::AlreadyTerminal => None,
+        };
         // Continuation follows from two independent durable questions, and
         // from nothing else — no canonical-shape inference, no attempt class
         // special case, no bootstrap-prefix probe:
@@ -1233,6 +1281,14 @@ impl RecoveryPlan {
             pending_inbound: evidence.pending.len(),
             unsettled_attempts: evidence.unsettled_attempts.keys().cloned().collect(),
             tool_summary: evidence.unsettled_attempts.values().next().map(|a| a.tools),
+            last_accepted_assistant: attempt_id
+                .as_ref()
+                .and_then(|attempt_id| evidence.unsettled_attempts.get(attempt_id))
+                .and_then(|attempt| attempt.last_accepted_assistant.clone()),
+            last_started_request: attempt_id
+                .as_ref()
+                .and_then(|attempt_id| evidence.unsettled_attempts.get(attempt_id))
+                .and_then(|attempt| attempt.last_started_request.clone()),
             publications: evidence
                 .unsettled_publications
                 .iter()
@@ -1749,9 +1805,38 @@ impl RecoveryPlan {
                 return Ok(());
             }
         };
-        self.terminalize(store, attempt_id, clock.now(), &diagnostic)?;
+        // A started model request is the durable identity of the unresolved
+        // logical step. Publication audits are terminalized before this
+        // point, so the same keyed descending-ordinal selector used by live
+        // settlement can now choose the one source (or prove there is none).
+        // An admitted attempt that never reached a primary model start must
+        // preserve an older pending source: it has not crossed the consumer
+        // frontier and therefore is not allowed to consume or clear it.
+        let pending_source = self
+            .last_started_request_id()
+            .map(|request_id| {
+                let snapshot = store.load_request_snapshot(&request_id)?;
+                if self.last_accepted_assistant.as_ref() == Some(&snapshot.provisional_message_id) {
+                    // The latest logical model step reached canonical
+                    // Assistant acceptance. Any older retry audits are
+                    // internal generations of that recovered step, not a
+                    // pending carryover source.
+                    Ok(None)
+                } else {
+                    select_unresolved_output_source(&snapshot.identity, |stream_id| {
+                        store.load_publication_audit(stream_id)
+                    })
+                }
+            })
+            .transpose()?
+            .flatten();
+        self.terminalize(store, attempt_id, clock.now(), &diagnostic, pending_source)?;
         committed.attempt_terminal = Some(attempt_id.clone());
         Ok(())
+    }
+
+    fn last_started_request_id(&self) -> Option<RequestId> {
+        self.last_started_request.clone()
     }
 
     /// **Reconciliation 3.** Publishes the terminal notification of every
@@ -1819,6 +1904,7 @@ impl RecoveryPlan {
         attempt_id: &AttemptId,
         timestamp: DateTime<Utc>,
         diagnostic: &str,
+        pending_source: Option<PublicationStreamId>,
     ) -> Result<(), RecoveryError> {
         // The one terminal fact of the interrupted attempt. Its envelope
         // carries the attempt identity so the durable
@@ -1843,7 +1929,11 @@ impl RecoveryPlan {
                 },
             },
         };
-        store.append_event(envelope)?;
+        if self.last_started_request_id().is_some() {
+            store.commit_attempt_terminal_with_carryover(envelope, pending_source)?;
+        } else {
+            store.append_event(envelope)?;
+        }
         Ok(())
     }
 

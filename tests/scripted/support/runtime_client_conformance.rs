@@ -1305,7 +1305,8 @@ pub async fn foreground_tool_lifecycle(factory: &dyn DriverFactory) {
     assert!(
         requests[1].messages.iter().any(|message| matches!(
             message,
-            MessageBlock::Tool(tool) if tool.tool_call_id.as_str() == "call-1"
+            rustx::model::ModelInputMessage::Canonical(MessageBlock::Tool(tool))
+                if tool.tool_call_id.as_str() == "call-1"
         )),
         "the continuation carries the committed tool result"
     );

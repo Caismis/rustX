@@ -1929,6 +1929,10 @@ fn initialize_database(
     })?;
     let store = SqliteConversationStore::open(conversation_id.clone(), path)
         .map_err(SessionError::Store)?;
+    // LineageSeed contains canonical meaning and Surface provenance only.
+    // Execution-recovery residue, including a pending unresolved-output
+    // carryover source, belongs exclusively to the source conversation and is
+    // initialized as NULL in this new destination store.
     store.initialize_lineage(seed).map_err(SessionError::Store)
 }
 
@@ -2961,6 +2965,13 @@ mod tests {
         let destination_conversation = prepared.conversation_id.clone();
         let destination_store =
             store_for(&catalog, &destination_session, &destination_conversation);
+        assert_eq!(
+            destination_store
+                .load_pending_unresolved_output_stream_id()
+                .expect("clone carryover state"),
+            None,
+            "clone destinations never inherit execution-recovery carryover"
+        );
         let cloned_before_source_mutation = destination_store
             .load_canonical()
             .expect("clone canonical history");
@@ -3081,6 +3092,13 @@ mod tests {
             .expect("prepare clone");
         let destination_store =
             store_for(&catalog, &prepared.session_id, &prepared.conversation_id);
+        assert_eq!(
+            destination_store
+                .load_pending_unresolved_output_stream_id()
+                .expect("clone carryover state"),
+            None,
+            "clone destinations never inherit execution-recovery carryover"
+        );
 
         assert_eq!(todo_list_of(&destination_store), expected_todo);
         assert_eq!(destination_store.current_todo_progress().unwrap(), 0);
@@ -3227,6 +3245,13 @@ mod tests {
             &catalog,
             &prepared_fork.session_id,
             &prepared_fork.conversation_id,
+        );
+        assert_eq!(
+            fork_store
+                .load_pending_unresolved_output_stream_id()
+                .expect("fork carryover state"),
+            None,
+            "fork destinations never inherit execution-recovery carryover"
         );
         assert_eq!(
             fork_store.load_canonical().expect("fork history").len(),
@@ -3692,6 +3717,13 @@ mod tests {
             &clone_fork.session_id,
             &clone_fork.conversation_id,
         );
+        assert_eq!(
+            clone_fork_store
+                .load_pending_unresolved_output_stream_id()
+                .expect("fork carryover state"),
+            None,
+            "fork destinations never inherit execution-recovery carryover"
+        );
 
         assert_eq!(clone_editor, vec![text("C")]);
         assert_eq!(
@@ -3773,6 +3805,13 @@ mod tests {
             &catalog,
             &clone_node.session_id,
             &clone_node.conversation_id,
+        );
+        assert_eq!(
+            clone_node_store
+                .load_pending_unresolved_output_stream_id()
+                .expect("tree carryover state"),
+            None,
+            "tree destinations never inherit execution-recovery carryover"
         );
         assert_eq!(
             canonical_shapes(&clone_node_store),

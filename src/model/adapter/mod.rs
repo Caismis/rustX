@@ -1,7 +1,7 @@
 //! Model execution adapters (M2).
 //!
 //! This is the model-plane implementation layer. It converts between the
-//! canonical runtime contracts ([`ModelRequest`] in, [`ModelEvent`] stream
+//! provider-neutral runtime contracts ([`ModelRequest`] in, [`ModelEvent`] stream
 //! out) and provider protocols. Provider SDK and wire types terminate inside
 //! the `openai` and `anthropic` submodules; nothing here exposes a provider
 //! type through a public interface.

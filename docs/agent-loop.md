@@ -1,4 +1,4 @@
-# Agent Loop (M3 + Issue #22 + Issue #55 + Issue #56 + Issue #130 + Issue #136)
+# Agent Loop (M3 + Issue #22 + Issue #55 + Issue #56 + Issue #130 + Issue #136 + Issue #137)
 
 This document describes the runtime boundary implemented by the M3
 deterministic agent loop, mirroring the M2 model-plane documentation in
@@ -38,6 +38,9 @@ The loop (`src/agent`) executes one attempt to its single terminal outcome:
 - logical model-step retry orchestration: one admitted/frozen logical step may
   own several actual provider requests, while every request crosses the
   ordinary durable start frontier
+- one-shot unresolved Publication Audit carryover: source selection,
+  request-only ordering, frozen representation/anchor, and the fit
+  degradation ladder; it never becomes canonical history or lineage state
 - the two typed lifecycle interception seams of Issue #56 (`PreStepPolicy`
   and `ToolResultObserver`), the deferred context buffer they feed, and the
   split between lifecycle *timing* and semantic *ownership*
@@ -88,6 +91,33 @@ Only the successfully completed request can commit the canonical Assistant.
 `ModelRequestFailed.usage` retains the latest trustworthy cumulative usage
 snapshot observed before that exact request failed; absent evidence remains
 `None`.
+
+### One-shot unresolved-output carryover (Issue #137)
+
+Publication Audit remains the only body authority. When the logical step is
+terminally unresolved, the loop first settles publication evidence and then
+uses the shared keyed selector with the last durably started `RequestIdentity`.
+The selector derives request, provisional-message, and publication-stream
+identities for `N, N-1, ..., 0`, choosing at most one meaningful
+`Incomplete`/`Unaccepted` audit. An empty latest generation falls back to the
+next ordinal; retry generations are never concatenated. An internal retry that
+eventually commits the canonical Assistant produces no pending carryover.
+
+The selected `PublicationStreamId` is the only pending durable state. Live
+settlement and recovery pass the same selected source into one terminal
+transaction that commits the attempt terminal and replaces/clears the pending
+pointer together. Recovery repeats that exact selection from the durable last
+request snapshot, so a crash before the transaction and a second recovery form
+valid, equivalent prefixes.
+
+The first successfully started eligible primary step consumes the pointer in
+the model-start transaction. The snapshot freezes the exact bounded
+request-only rendering and insertion anchor before that commit: immediately
+before the first canonical message of FreshInbound, or after the existing
+canonical projection and before newly staged context for a continuation with
+no FreshInbound. Cancellation before start preserves the pointer. Transient
+retries reuse the frozen carryover and never reread live pending/audit state;
+overflow can only degrade it full → reduced → metadata-only → omitted.
 
 ### Runtime-owned provider request deadlines (Issue #135)
 
@@ -946,6 +976,23 @@ the current lifecycle configuration. The `ContextGeneration` frozen in the
 snapshot names the deferred-context owner, which is an explanation of the
 assembly, never a re-execution handle.
 
+The same snapshot also freezes the optional unresolved-output carryover
+source, the exact bounded `RenderedUnresolvedOutputCarryover` admitted after
+fit degradation, and its `RequestOnlyInsertionAnchor`. `ModelRequest.messages`
+contains `Canonical(MessageBlock)` and, at most for this feature,
+`RequestOnly(UnresolvedOutputCarryover)`. The latter has no canonical
+`MessageId`. Reconstruction inserts that value at the frozen anchor from the
+historical canonical Surface and does not consult pending state or the
+Publication Audit. The start transaction commits this snapshot, ordinary
+model-start facts, and one-shot pointer consumption atomically.
+
+`RenderedUnresolvedOutputCarryover` freezes a model-input-owned
+`UnresolvedOutputSettlement` converted from the source audit's
+`PublicationAuditKind`. Its provider-visible runtime record says
+`source_settlement=incomplete` or `source_settlement=unaccepted`, and the
+settlement survives Full, Reduced, MetadataOnly, and historical snapshot
+reconstruction. Only Omitted removes the request-only item.
+
 ### Authority matrix
 
 | Phase | Can observe | Can propose/decide | Cannot mutate | Owner |
@@ -1030,6 +1077,24 @@ assembly rejection, preflight rejection, a durable failure — leaves the stream
 open and it terminalizes as an audit whose kind the durable store derives from
 the P/U evidence. Canonical acceptance and audit terminalization can therefore
 never both happen for one stream.
+
+For a terminally unresolved logical step, publication settlement is followed
+by the one shared carryover selector, not by a conversation-wide audit query.
+The selected source is passed to the same durable terminal transaction in live
+execution and recovery. That transaction commits the attempt terminal and
+replaces or clears the pending source as one semantic transition. A failed
+transaction leaves neither half committed; recovery can repeat the keyed
+selection from the last durable request snapshot. A later canonical Assistant
+acceptance suppresses all internal retry-generation audits from carryover.
+
+At the next eligible primary start, the loop freezes the selected bounded
+audit projection by value in the Request Snapshot and clears the pointer in
+that same start commit. FreshInbound anchors the request-only item immediately
+before its first canonical inbound message. A continuation with no fresh
+inbound anchors it after the existing canonical projection and before newly
+staged current context. The representation is request-only and carries no
+canonical identity. Cancellation before start leaves the pointer for a later
+eligible start; transient retries reuse the frozen value and never reread it.
 
 Each recovery retry starts a new actual provider request inside one logical
 turn. The abandoned request's stream never reached canonical acceptance, so the

@@ -2584,12 +2584,12 @@ mod tests {
         let requests = adapter.requests();
         assert_eq!(requests.len(), 1);
         assert!(requests[0].messages.iter().any(|message| {
-            matches!(message, MessageBlock::User(user) if user.id == message_id)
+            matches!(message, crate::model::ModelInputMessage::Canonical(MessageBlock::User(user)) if user.id == message_id)
         }));
         assert!(requests[0].messages.iter().any(|message| {
             matches!(
                 message,
-                MessageBlock::User(user)
+                crate::model::ModelInputMessage::Canonical(MessageBlock::User(user))
                     if matches!(
                         &user.kind,
                         crate::message::types::InboundKind::Context(
@@ -2756,7 +2756,7 @@ mod tests {
             provider_requests[3].messages.iter().any(|message| {
                 matches!(
                     message,
-                    MessageBlock::User(user) if user.id.as_str() == "conv-host-inbound-2"
+                    crate::model::ModelInputMessage::Canonical(MessageBlock::User(user)) if user.id.as_str() == "conv-host-inbound-2"
                 )
             }),
             "the retry still observes the pending fresh inbound"
@@ -2948,7 +2948,7 @@ mod tests {
             requests[1]
                 .messages
                 .iter()
-                .any(|message| matches!(message, MessageBlock::User(user) if user.id == second_id))
+                .any(|message| matches!(message, crate::model::ModelInputMessage::Canonical(MessageBlock::User(user)) if user.id == second_id))
         );
         let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
         assert!(
@@ -4805,8 +4805,8 @@ mod tests {
         let model_rendered = requests[0]
             .messages
             .iter()
-            .find_map(|message| match message {
-                MessageBlock::User(user)
+            .find_map(|message| match message.as_canonical() {
+                Some(MessageBlock::User(user))
                     if matches!(
                         &user.kind,
                         crate::message::types::InboundKind::Context(
@@ -5105,8 +5105,8 @@ mod tests {
         let inbound_ids: Vec<&str> = requests[0]
             .messages
             .iter()
-            .filter_map(|message| match message {
-                MessageBlock::User(user)
+            .filter_map(|message| match message.as_canonical() {
+                Some(MessageBlock::User(user))
                     if user.kind == crate::message::types::InboundKind::Message =>
                 {
                     Some(user.id.as_str())
@@ -5196,8 +5196,8 @@ mod tests {
         );
         assert!(
             requests[1].messages.iter().any(|message| matches!(
-                message,
-                MessageBlock::User(user) if user.id.as_str() == "conv-host-async-2"
+                message.as_canonical(),
+                Some(MessageBlock::User(user)) if user.id.as_str() == "conv-host-async-2"
             )),
             "the racing inbound was consumed exactly once by the next attempt"
         );
@@ -5336,9 +5336,9 @@ mod tests {
         let roles: Vec<&str> = requests[1]
             .messages
             .iter()
-            .filter_map(|message| match message {
-                MessageBlock::Tool(_) => Some("tool"),
-                MessageBlock::User(user)
+            .filter_map(|message| match message.as_canonical() {
+                Some(MessageBlock::Tool(_)) => Some("tool"),
+                Some(MessageBlock::User(user))
                     if user.kind == crate::message::types::InboundKind::Message =>
                 {
                     Some("user")
@@ -5353,8 +5353,8 @@ mod tests {
         );
         assert!(
             requests[1].messages.iter().any(|message| matches!(
-                message,
-                MessageBlock::User(user) if user.id.as_str() == "conv-host-async-2"
+                message.as_canonical(),
+                Some(MessageBlock::User(user)) if user.id.as_str() == "conv-host-async-2"
             )),
             "the drained inbound is the async one"
         );

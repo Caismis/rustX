@@ -167,15 +167,17 @@ fn build_request(protocol: &str, model: &str, prompt: &str) -> ModelRequest {
             capabilities: ModelCapabilities::text_only(true, true),
             compat: ModelCompat::default(),
         },
-        messages: vec![MessageBlock::User(UserMessageBlock {
-            id: MessageId::new("msg-smoke-1"),
-            content: vec![UserContentBlock::Text(TextBlock {
-                text: prompt.to_owned(),
-            })],
-            source: UserSource::Human,
-            kind: InboundKind::Message,
-            timestamp: None,
-        })],
+        messages: vec![rustx::model::ModelInputMessage::Canonical(
+            MessageBlock::User(UserMessageBlock {
+                id: MessageId::new("msg-smoke-1"),
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: prompt.to_owned(),
+                })],
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                timestamp: None,
+            }),
+        )],
         tools: Vec::new(),
         effective_system_prompt: String::new(),
         continuation: None,

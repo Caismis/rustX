@@ -1,4 +1,4 @@
-//! Canonical model request and usage contracts.
+//! Provider-neutral model request and usage contracts.
 //!
 //! These types are provider-independent: they express the normalized
 //! information the runtime owns, and future adapters translate them to and
@@ -12,7 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::message::types::MessageBlock;
+use crate::model::input::ModelInputMessage;
 use crate::model::invocation::ModelInvocationConfig;
 use crate::runtime::continuation::ProviderContinuationState;
 use crate::tools::types::ModelToolDefinition;
@@ -31,13 +31,14 @@ pub enum ModelProtocol {
     AnthropicMessages,
 }
 
-/// A canonical, provider-independent model request.
+/// A provider-neutral model request.
 ///
 /// A request has final provider-neutral values plus an explicit effective
 /// system prompt. The separation is deliberate:
 ///
-/// - **canonical content** — the complete projected messages and compiled
-///   model-facing tool definitions;
+/// - **ordered model input** — the complete projected canonical messages plus
+///   any explicitly request-only context, and compiled model-facing tool
+///   definitions;
 /// - **request-time system content** — the exact Effective System Prompt;
 /// - **immutable resolved invocation configuration** —
 ///   [`ModelInvocationConfig`], the one channel through which provider wire
@@ -52,8 +53,10 @@ pub struct ModelRequest {
     /// model identity, protocol, output budget, opaque provider request
     /// parameters, effective capabilities, and structural compat metadata.
     pub invocation: ModelInvocationConfig,
-    /// Canonical context/messages to send.
-    pub messages: Vec<MessageBlock>,
+    /// The already ordered provider-neutral input items to send. Canonical
+    /// items retain their Ledger identity; request-only items are explicitly
+    /// noncanonical and have no `MessageId`.
+    pub messages: Vec<ModelInputMessage>,
     /// Compiled model-facing tool definitions the model may call. Runtime
     /// execution, replay, and origin policy never reach provider adapters.
     #[serde(default)]

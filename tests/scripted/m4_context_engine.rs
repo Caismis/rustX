@@ -36,6 +36,7 @@ use rustx::message::types::{
     AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, ContextKind, InboundKind,
     MessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
+use rustx::model::ModelInputMessage;
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
 use rustx::model::types::{ModelRequest, ModelUsage};
@@ -1058,11 +1059,12 @@ fn default_estimator_formula_is_frozen() {
     let projection = engine
         .build_projection(&history, &[], None, "")
         .expect("projection");
-    let expected = rustx::context::bytes_to_tokens(
-        serde_json::to_vec(&projection.messages)
-            .expect("serialize")
-            .len() as u64,
-    );
+    let expected =
+        rustx::context::bytes_to_tokens(rustx::context::DefaultTokenEstimator::serialized_bytes(
+            &rustx::model::input::canonical_input(&projection.messages),
+            "",
+            &[],
+        ));
     assert_eq!(projection.estimated_input.input_tokens, expected);
 }
 
@@ -1228,13 +1230,18 @@ fn compaction_uses_larger_explicit_summary_reservation_for_hard_fit() {
 #[test]
 fn staged_context_is_evaluated_exactly_per_compaction_candidate() {
     let estimator: Arc<dyn TokenEstimator> = Arc::new(ClosureTokenEstimator::new(
-        |messages: &[MessageBlock],
+        |messages: &[ModelInputMessage],
          _effective_system_prompt: &str,
          _tools: &[rustx::tools::types::ModelToolDefinition]| {
-            let marker_active = messages
+            let canonical = messages
+                .iter()
+                .filter_map(ModelInputMessage::as_canonical)
+                .cloned()
+                .collect::<Vec<_>>();
+            let marker_active = canonical
                 .iter()
                 .any(|message| message_id_of(message) == "marker");
-            messages
+            canonical
                 .iter()
                 .map(|message| match message_id_of(message).as_str() {
                     "marker" => 100,
@@ -1280,6 +1287,8 @@ fn staged_context_is_evaluated_exactly_per_compaction_candidate() {
                 must_cover_through: None,
                 fresh_inbound: None,
                 staged_request_context: &staged,
+                carryover: None,
+                carryover_anchor: None,
                 estimate_correction: None,
             },
         )
@@ -2987,19 +2996,19 @@ async fn proactive_compaction_before_the_next_turn() {
         "first request carries the initial history"
     );
     assert_eq!(requests[1].messages.len(), 3);
-    let MessageBlock::User(summary) = &requests[1].messages[0] else {
+    let Some(MessageBlock::User(summary)) = requests[1].messages[0].as_canonical() else {
         panic!("first projected message must be the summary");
     };
     assert_eq!(summary.id, summary_id(1));
     assert_eq!(summary.source, UserSource::Runtime);
     assert_eq!(summary.kind, InboundKind::CompactionSummary);
     assert!(matches!(
-        &requests[1].messages[1],
-        MessageBlock::Assistant(assistant) if assistant.id.as_str() == "attempt-1-agent-1"
+        requests[1].messages[1].as_canonical(),
+        Some(MessageBlock::Assistant(assistant)) if assistant.id.as_str() == "attempt-1-agent-1"
     ));
     assert!(matches!(
-        &requests[1].messages[2],
-        MessageBlock::Tool(tool) if tool.id.as_str() == "attempt-1-tool-1-call-1"
+        requests[1].messages[2].as_canonical(),
+        Some(MessageBlock::Tool(tool)) if tool.id.as_str() == "attempt-1-tool-1-call-1"
     ));
 
     // The Message Ledger keeps every original fact and gains exactly one
@@ -3218,8 +3227,8 @@ async fn overflow_compact_and_retry_succeeds() {
     let requests = model.requests();
     assert_eq!(requests.len(), 2);
     assert!(matches!(
-        &requests[1].messages[0],
-        MessageBlock::User(user) if user.kind == InboundKind::CompactionSummary
+        requests[1].messages[0].as_canonical(),
+        Some(MessageBlock::User(user)) if user.kind == InboundKind::CompactionSummary
     ));
     assert_eq!(requests[1].messages.len(), 1);
     assert_eq!(requests[1].continuation, None);
@@ -3595,8 +3604,8 @@ async fn overflow_retry_reuses_the_admitted_context_generation() {
                 .iter()
                 .filter(|message| {
                     matches!(
-                        message,
-                        MessageBlock::User(user)
+                        message.as_canonical(),
+                        Some(MessageBlock::User(user))
                             if user.kind == InboundKind::Context(
                                 rustx::message::types::ContextKind::ExtensionEnvironment
                             )
@@ -3781,8 +3790,8 @@ async fn overflow_retry_preserves_pending_fresh_inbound_and_context_generation()
     assert!(
         retry.messages.iter().any(|message| {
             matches!(
-                message,
-                MessageBlock::User(user) if user.id == MessageId::new("msg-inbound-1")
+                message.as_canonical(),
+                Some(MessageBlock::User(user)) if user.id == MessageId::new("msg-inbound-1")
             )
         }),
         "the retry still presents pending fresh inbound"
@@ -4881,13 +4890,13 @@ async fn continuation_is_invalidated_by_compaction() {
         // The continuation-owning turn was fully retired into the summary:
         // the projected request contains no literal part of it.
         assert!(requests[1].messages.iter().any(|message| matches!(
-            message,
-            MessageBlock::User(user) if user.kind == InboundKind::CompactionSummary
+            message.as_canonical(),
+            Some(MessageBlock::User(user)) if user.kind == InboundKind::CompactionSummary
         )));
         assert!(
             !requests[1].messages.iter().any(|message| matches!(
-                message,
-                MessageBlock::Assistant(assistant) if assistant.id == assistant_message_id(1)
+                message.as_canonical(),
+                Some(MessageBlock::Assistant(assistant)) if assistant.id == assistant_message_id(1)
             )),
             "the continuation-owning Assistant message may not remain literal"
         );
@@ -4951,7 +4960,7 @@ async fn model_backed_summarizer_issues_a_canonical_request() {
     assert!(requests[0].tools.is_empty());
     assert_eq!(requests[0].effective_system_prompt, "");
     assert_eq!(requests[0].continuation, None);
-    let MessageBlock::User(user) = &requests[0].messages[0] else {
+    let Some(MessageBlock::User(user)) = requests[0].messages[0].as_canonical() else {
         panic!("summary instruction must be a user message");
     };
     let text = match &user.content[0] {
@@ -4984,7 +4993,10 @@ async fn model_backed_summarizer_issues_a_canonical_request() {
         text.contains("<retired-conversation>"),
         "the retired span must be delimited for the summary model"
     );
-    assert_eq!(requests[0].messages, request.model_input().messages);
+    assert_eq!(
+        requests[0].messages,
+        rustx::model::input::canonical_input(&request.model_input().messages)
+    );
 }
 
 /// A refusal, a tool request, and a model failure are compaction failures,
@@ -5223,8 +5235,8 @@ async fn model_backed_summarizer_does_not_contaminate_the_execution() {
     // The retry request carries the summary projection and no continuation.
     assert_eq!(requests[2].continuation, None);
     assert!(matches!(
-        &requests[2].messages[0],
-        MessageBlock::User(user) if user.kind == InboundKind::CompactionSummary
+        requests[2].messages[0].as_canonical(),
+        Some(MessageBlock::User(user)) if user.kind == InboundKind::CompactionSummary
     ));
     assert_single_terminal(&result.event_history);
     assert_outcome(
@@ -5450,7 +5462,12 @@ async fn m4_projection_contains_drained_batch_before_request() {
     // The captured ModelRequest of the next model turn contains A and B.
     let requests = model.requests();
     assert_eq!(requests.len(), 2);
-    let request_ids: Vec<String> = requests[1].messages.iter().map(block_id).collect();
+    let request_ids: Vec<String> = requests[1]
+        .messages
+        .iter()
+        .filter_map(ModelInputMessage::as_canonical)
+        .map(block_id)
+        .collect();
     assert_eq!(
         request_ids,
         vec![
@@ -5547,7 +5564,12 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
     // from compaction and remains literal.
     let requests = model.requests();
     assert_eq!(requests.len(), 2);
-    let request_ids: Vec<String> = requests[1].messages.iter().map(block_id).collect();
+    let request_ids: Vec<String> = requests[1]
+        .messages
+        .iter()
+        .filter_map(ModelInputMessage::as_canonical)
+        .map(block_id)
+        .collect();
     assert_eq!(
         request_ids,
         vec![
@@ -5564,8 +5586,8 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
     let status_messages = requests[1]
         .messages
         .iter()
-        .filter_map(|message| match message {
-            MessageBlock::User(user)
+        .filter_map(|message| match message.as_canonical() {
+            Some(MessageBlock::User(user))
                 if matches!(
                     &user.kind,
                     rustx::message::types::InboundKind::Context(
@@ -5700,7 +5722,7 @@ async fn m4_drain_retains_continuation_without_compaction() {
         requests[1]
             .messages
             .iter()
-            .any(|block| matches!(block, MessageBlock::User(user) if user.id == MessageId::new("msg-inbound-a"))),
+            .any(|block| matches!(block.as_canonical(), Some(MessageBlock::User(user)) if user.id == MessageId::new("msg-inbound-a"))),
         "the drained message is part of the projection"
     );
 }

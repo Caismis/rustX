@@ -1,5 +1,5 @@
 //! Anthropic Messages normalization: errors, usage, finish reasons, and
-//! canonical request translation.
+//! provider-neutral request translation.
 
 use reqwest::{StatusCode, header::HeaderMap};
 
@@ -9,6 +9,7 @@ use crate::model::error::{
     ModelError, ModelErrorKind, ModelRetryDisposition, is_context_window_error,
 };
 use crate::model::finish::ModelFinishReason;
+use crate::model::input::{ModelInputMessage, RequestOnlyModelContext};
 use crate::model::invocation::finalize_provider_request;
 use crate::model::types::{ModelProtocol, ModelUsage, UsageDetails};
 use crate::runtime::continuation::{AnthropicContinuation, ProviderContinuationState};
@@ -311,7 +312,7 @@ pub(crate) struct WireTool {
     pub input_schema: serde_json::Value,
 }
 
-/// Translates a canonical request into the final Anthropic request JSON.
+/// Translates a provider-neutral request into the final Anthropic request JSON.
 ///
 /// Canonical translation produces the typed runtime-owned [`WireRequest`];
 /// it is then serialized to a JSON object and shallow-overlaid with the
@@ -398,7 +399,7 @@ fn translate_messages(
 
     for (position, block) in request.messages.iter().enumerate() {
         match block {
-            MessageBlock::User(user) => {
+            ModelInputMessage::Canonical(MessageBlock::User(user)) => {
                 flush_tool_results(&mut pending_tool_results, &mut messages);
                 let mut content = Vec::new();
                 for user_content in &user.content {
@@ -421,11 +422,14 @@ fn translate_messages(
                     content,
                 });
             }
-            MessageBlock::Assistant(assistant) => {
+            ModelInputMessage::Canonical(MessageBlock::Assistant(assistant)) => {
                 flush_tool_results(&mut pending_tool_results, &mut messages);
-                let is_last_assistant = request.messages[position + 1..]
-                    .iter()
-                    .all(|later| !matches!(later, MessageBlock::Assistant(_)));
+                let is_last_assistant = request.messages[position + 1..].iter().all(|later| {
+                    !matches!(
+                        later,
+                        ModelInputMessage::Canonical(MessageBlock::Assistant(_))
+                    )
+                });
                 let content =
                     translate_assistant_content(assistant, tools, continuation, is_last_assistant)?;
                 messages.push(WireRequestMessage {
@@ -433,8 +437,20 @@ fn translate_messages(
                     content,
                 });
             }
-            MessageBlock::Tool(tool_message) => {
+            ModelInputMessage::Canonical(MessageBlock::Tool(tool_message)) => {
                 pending_tool_results.push(translate_tool_result(tool_message)?);
+            }
+            ModelInputMessage::RequestOnly(RequestOnlyModelContext::UnresolvedOutputCarryover(
+                carryover,
+            )) => {
+                flush_tool_results(&mut pending_tool_results, &mut messages);
+                messages.push(WireRequestMessage {
+                    role: "user",
+                    content: vec![serde_json::json!({
+                        "type": "text",
+                        "text": carryover.render(),
+                    })],
+                });
             }
         }
     }

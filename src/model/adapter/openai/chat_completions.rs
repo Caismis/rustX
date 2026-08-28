@@ -61,6 +61,7 @@ use crate::model::adapter::validation::{ValidatedTools, validate_request};
 use crate::model::catalog::{ChatReasoningReplay, ChatStreamUsage};
 use crate::model::error::{ModelError, ModelErrorKind, is_context_window_error};
 use crate::model::event::ModelEvent;
+use crate::model::input::{ModelInputMessage, RequestOnlyModelContext};
 use crate::model::invocation::finalize_provider_request;
 use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage};
 use crate::runtime::cancellation::CancellationSignal;
@@ -1124,7 +1125,7 @@ fn chat_stream_error(error: &serde_json::Value) -> ModelError {
     .normalized()
 }
 
-/// Translates a canonical request into the final Chat Completions request
+/// Translates a provider-neutral request into the final Chat Completions request
 /// JSON.
 ///
 /// Canonical translation uses the typed SDK builder; the runtime-owned
@@ -1260,16 +1261,21 @@ fn translate_messages(request: &ModelRequest) -> Result<Vec<TranslatedChatMessag
     }
     for block in &request.messages {
         let (translated, reasoning) = match block {
-            MessageBlock::User(user) => (translate_user_message(user)?, None),
-            MessageBlock::Assistant(assistant) => {
+            ModelInputMessage::Canonical(MessageBlock::User(user)) => {
+                (translate_user_message(user)?, None)
+            }
+            ModelInputMessage::Canonical(MessageBlock::Assistant(assistant)) => {
                 let (message, reasoning) =
                     translate_assistant_message(assistant, reasoning_replay)?;
                 (ChatCompletionRequestMessage::Assistant(message), reasoning)
             }
-            MessageBlock::Tool(tool_message) => (
+            ModelInputMessage::Canonical(MessageBlock::Tool(tool_message)) => (
                 ChatCompletionRequestMessage::Tool(translate_tool_message(tool_message)?),
                 None,
             ),
+            ModelInputMessage::RequestOnly(RequestOnlyModelContext::UnresolvedOutputCarryover(
+                carryover,
+            )) => (translate_runtime_context(&carryover.render()), None),
         };
         let translated = TranslatedChatMessage {
             message: translated,
@@ -1289,6 +1295,19 @@ fn translate_messages(request: &ModelRequest) -> Result<Vec<TranslatedChatMessag
         ));
     }
     Ok(messages)
+}
+
+fn translate_runtime_context(text: &str) -> ChatCompletionRequestMessage {
+    ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage {
+        content: ChatCompletionRequestUserMessageContent::Array(vec![
+            ChatCompletionRequestUserMessageContentPart::Text(
+                ChatCompletionRequestMessageContentPartText {
+                    text: text.to_owned(),
+                },
+            ),
+        ]),
+        name: None,
+    })
 }
 
 fn translate_user_message(

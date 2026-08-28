@@ -32,6 +32,7 @@ use crate::model::catalog::ResponsesStorageMode;
 use crate::model::error::{ModelError, ModelErrorKind, is_context_window_error};
 use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
+use crate::model::input::{ModelInputMessage, RequestOnlyModelContext};
 use crate::model::invocation::finalize_provider_request;
 use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage, UsageDetails};
 use crate::runtime::cancellation::CancellationSignal;
@@ -1160,7 +1161,7 @@ fn parse_usage(usage: &serde_json::Value) -> Option<ModelUsage> {
     })
 }
 
-/// Translates a canonical request into a raw Responses request JSON value.
+/// Translates a provider-neutral request into a raw Responses request JSON value.
 fn translate_request(
     request: &ModelRequest,
     tools: &ValidatedTools,
@@ -1247,7 +1248,7 @@ fn translate_inputs(
         vec![request.effective_system_prompt.clone()]
     };
     let mut previous_response_id: Option<String> = None;
-    let blocks: &[MessageBlock] = match continuation_variant {
+    let blocks: &[ModelInputMessage] = match continuation_variant {
         None => &request.messages,
         Some(OpenAiResponsesContinuation::Stored {
             previous_response_id: stored_id,
@@ -1268,14 +1269,26 @@ fn translate_inputs(
     };
     for block in blocks {
         match block {
-            MessageBlock::User(user) => {
+            ModelInputMessage::Canonical(MessageBlock::User(user)) => {
                 input_items.push(translate_user_input(user)?);
             }
-            MessageBlock::Assistant(assistant) => {
+            ModelInputMessage::Canonical(MessageBlock::Assistant(assistant)) => {
                 input_items.extend(translate_assistant_inputs(assistant)?);
             }
-            MessageBlock::Tool(tool) => {
+            ModelInputMessage::Canonical(MessageBlock::Tool(tool)) => {
                 input_items.push(translate_tool_result(tool)?);
+            }
+            ModelInputMessage::RequestOnly(RequestOnlyModelContext::UnresolvedOutputCarryover(
+                carryover,
+            )) => {
+                input_items.push(serde_json::json!({
+                    "type": "message",
+                    "role": "user",
+                    "content": [{
+                        "type": "input_text",
+                        "text": carryover.render(),
+                    }]
+                }));
             }
         }
     }
@@ -1286,11 +1299,16 @@ fn translate_inputs(
 /// latest preceding `AssistantMessageBlock` is the boundary, and everything after
 /// it is the tail. Requests with continuation state but no preceding Assistant
 /// boundary fail explicitly rather than guessing.
-fn tail_after_boundary(request: &ModelRequest) -> Result<&[MessageBlock], ModelError> {
+fn tail_after_boundary(request: &ModelRequest) -> Result<&[ModelInputMessage], ModelError> {
     let boundary = request
         .messages
         .iter()
-        .rposition(|block| matches!(block, MessageBlock::Assistant(_)))
+        .rposition(|block| {
+            matches!(
+                block,
+                ModelInputMessage::Canonical(MessageBlock::Assistant(_))
+            )
+        })
         .ok_or_else(|| {
             invalid_request(
                 "continuation request has no preceding Assistant message to use as the \
