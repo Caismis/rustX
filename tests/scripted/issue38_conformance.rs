@@ -52,6 +52,7 @@ conformance_scenarios!(
     inbound_batches_and_drains,
     cancellation_is_acceptance_not_settlement,
     // Tools
+    before_start_cancellation_repairs_runtime_client,
     foreground_tool_lifecycle,
     parallel_tools_keep_independent_identities,
     background_execution_lifecycle,

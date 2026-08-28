@@ -417,7 +417,10 @@ impl ManagedOutputContinuation {
 /// result contract and shared by foreground and background runtime-owned
 /// results. The foreground Agent Loop selects it from its per-call executor
 /// start frontier; the background registry selects it from its detached-runner
-/// frontier. Executors and clients never infer it.
+/// frontier. Executors may report a provisional physical cancellation status,
+/// but they do not own the canonical phase classification. Clients only
+/// consume or project the canonical typed fact; provider adapters likewise
+/// translate that fact without inferring its phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolCancellationPhase {

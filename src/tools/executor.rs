@@ -206,7 +206,10 @@ impl<'a> ToolExecutionContext<'a> {
 /// cancellation reason and phase from its authoritative winner and start
 /// frontier. The canonical [`ToolExecutionResult`] is the final
 /// provider-independent authority, so callers must not rely on the executor
-/// return being copied verbatim into history.
+/// return being copied verbatim into history. An executor may return a
+/// provisional [`ToolExecutionStatus::Cancelled`] value, including a phase
+/// supplied by its physical operation, but the owning scheduler or registry
+/// remains authoritative for the canonical phase.
 ///
 /// An executor must settle after cancellation: when the [`ExecutionCancellation`]
 /// in its context fires, a cancellable executor physically settles its

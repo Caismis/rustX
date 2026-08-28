@@ -1182,9 +1182,11 @@ The frontier is the existing `CallSlot.executor_started` fact in
 `AgentExecution::execute_tools_staged`. The Agent Loop sets it immediately
 before publishing `ToolExecutionStarted`, and only started slots receive an
 executor future. The loop chooses the phase at that frontier/settlement
-boundary. Executors continue to own physical work and cleanup but do not
-classify cancellation phase; provider adapters and Runtime Client/TUI
-projection consume the typed result and never infer it from output or timing.
+boundary. Executors continue to own physical work and cleanup and may report
+a provisional physical cancellation status, but they do not classify the
+canonical cancellation phase. Provider adapters and Runtime Client/TUI
+projection consume the typed result and never infer it from output or timing;
+the background registry owns the equivalent classification for detached work.
 
 Physical completion and cancellation remain one race and one terminal slot
 assignment. A completion that wins remains the real result. If cancellation

@@ -691,8 +691,10 @@ Cancellation is a typed canonical result with independent reason and phase:
 means that frontier was crossed and cancellation won before ordinary
 completion. `DuringExecution` does not promise rollback or absence of side
 effects. The Agent Loop selects the phase and settles the one result slot;
-executors, provider adapters, Runtime Client projection, and TUI only perform
-physical cleanup or project the already-authoritative typed fact. The
+executors own physical work and cleanup and may report a provisional physical
+cancellation status, but the owning scheduler or registry derives and
+normalizes the canonical phase. Provider adapters, Runtime Client projection,
+and TUI only project the already-authoritative typed fact. The
 foreground projection has one at-most-once slot transition: a live execution
 settlement closes it when that fact arrives, while a canonical ToolMessage
 commit closes an otherwise-unsettled slot (including `BeforeStart`) without

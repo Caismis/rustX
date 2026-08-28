@@ -303,10 +303,13 @@ stream and normally commits exactly one terminal `RuntimeEvent`:
   `run_foreground` cancellation is normalized to `DuringExecution`. Physical
   completion and cancellation still settle through the existing one result
   assignment: a completed result is never rolled back, and a late physical
-  completion cannot replace a cancellation winner. Providers, executors,
-  Runtime Client projection, and TUI only consume/project the typed fact.
-  The background registry owns the detached-runner frontier for background
-  results; it does not change foreground Agent Loop ownership. A canonical
+  completion cannot replace a cancellation winner. Executors may report
+  physical outcomes, including a provisional cancellation status, but they do
+  not own canonical phase classification. Provider adapters, Runtime Client
+  projection, and TUI only consume/project the typed fact. The foreground
+  Agent Loop owns the foreground executor-start frontier, while the background
+  registry owns the detached-runner frontier for background results; the latter
+  does not change foreground Agent Loop ownership. A canonical
   ToolMessage commit repairs an unsettled Runtime Client foreground slot for
   `BeforeStart` without fabricating `ToolExecutionStarted` or physical
   completion, while a live settlement and the commit share an at-most-once

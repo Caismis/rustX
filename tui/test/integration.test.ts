@@ -36,6 +36,7 @@ import { RuntimeClientConnection } from "../src/runtime/connection.ts";
 import { RuntimeClientAttachment } from "../src/runtime/attachment.ts";
 import { CommandDispatcher } from "../src/commands/dispatcher.ts";
 import { QuestionnaireOverlay } from "../src/ui/components/questionnaire.ts";
+import type { RuntimeClientProtocolEvent } from "../src/protocol/types.ts";
 import { ProviderEmulator } from "./support/provider-emulator.ts";
 import { TempFixture } from "./support/temp-fixture.ts";
 import { until } from "./support/scripted-peer.ts";
@@ -102,6 +103,17 @@ const RUNTIME_CONFIG_JSON = JSON.stringify({
   agentId: "agent-tui-integration",
   model: { model: "fixture/integration-model" },
   context: { reserveTokens: 1024, keepRecentTokens: 8192 },
+});
+
+const BEFORE_START_RUNTIME_CONFIG_JSON = JSON.stringify({
+  schemaVersion: 3,
+  agentId: "agent-tui-before-start",
+  model: { model: "fixture/integration-model" },
+  context: { reserveTokens: 1024, keepRecentTokens: 8192 },
+  // Requiring approval gives the test a deterministic pre-tool boundary. The
+  // client cancels while the runtime is waiting there, before Bash can start.
+  nativeTools: { bash: { approval: "always" } },
+  defaultTools: ["bash"],
 });
 
 interface Harness {
@@ -350,6 +362,176 @@ describe("real rustx child integration", { skip: SKIP }, () => {
 
     // After the process is gone, requests fail immediately rather than hang.
     await assert.rejects(session.modelGet());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BeforeStart cancellation through the real Runtime Client/TUI boundary
+// ---------------------------------------------------------------------------
+
+describe("real rustx BeforeStart cancellation projection", { skip: SKIP }, () => {
+  let harness: Harness | undefined;
+  let fixture: TempFixture | undefined;
+  const wireEvents: RuntimeClientProtocolEvent[] = [];
+  let removeEventListener: (() => void) | undefined;
+
+  before(async () => {
+    const provider = await ProviderEmulator.start("tui_before_start_cancellation");
+    fixture = TempFixture.create("rustx-tui-before-start-");
+    const workspace = fixture.path("workspace");
+    mkdirSync(workspace, { recursive: true });
+    writeFileSync(fixture.path("models.json"), modelsJson(provider.url("/v1")));
+    writeFileSync(
+      fixture.path("rustx.json"),
+      BEFORE_START_RUNTIME_CONFIG_JSON,
+    );
+
+    const child = ChildRuntimeProcess.spawn({
+      binary: BINARY,
+      paths: {
+        models: fixture.path("models.json"),
+        config: fixture.path("rustx.json"),
+        workspace,
+        runtimeRoot: fixture.path("private"),
+      },
+      env: { ...process.env, [CREDENTIAL_VARIABLE]: CREDENTIAL_VALUE },
+    });
+    const connection = new RuntimeClientConnection({
+      input: child.stdout,
+      output: child.stdin,
+    });
+    void child
+      .wait()
+      .then((exit) =>
+        connection.reportProcessExit(exit.code, exit.signal, exit.spawnError),
+      );
+    removeEventListener = connection.onEvent((event) => wireEvents.push(event));
+    const session = new RuntimeClientAttachment({ connection });
+    harness = { child, connection, session, provider };
+  });
+
+  after(async () => {
+    removeEventListener?.();
+    if (harness !== undefined) {
+      harness.child.closeStdin();
+      await harness.child.waitOrTerminate(10_000);
+      await harness.provider.finish();
+    }
+    fixture?.cleanup();
+  });
+
+  it("keeps incremental and fresh snapshot foreground state identical", async () => {
+    assert.ok(harness);
+    const { session } = harness;
+    await session.attach();
+    await session.submitInbound([
+      { type: "text", text: "cancel before executor start" },
+    ]);
+
+    await until(
+      () =>
+        (session.state?.pendingInteractions ?? []).length === 1 &&
+        session.state?.attempt !== undefined,
+      "the real runtime to reach the pre-tool approval boundary",
+    );
+    const admitted = session.state;
+    assert.ok(admitted?.attempt);
+    const attemptId = admitted.attempt.attemptId;
+    assert.equal(admitted.pendingInteractions.length, 1);
+
+    await session.cancelCurrentAttempt();
+    const outcome = await session.waitForAttemptSettlement(attemptId);
+    assert.deepEqual(outcome, {
+      type: "cancelled",
+      reason: "user_requested",
+    });
+
+    await until(
+      () =>
+        session.state?.transcript.some(
+          (entry) =>
+            entry.kind === "committed" &&
+            entry.message.role === "tool" &&
+            entry.message.tool_call_id === "call-tui-before-start",
+        ) === true,
+      "the canonical BeforeStart ToolMessage to commit",
+    );
+
+    const incremental = session.state;
+    assert.ok(incremental?.attempt);
+    const incrementalForeground = incremental.attempt.foreground.find(
+      (entry) => entry.call_id === "call-tui-before-start",
+    );
+    assert.ok(incrementalForeground);
+    assert.deepEqual(incrementalForeground.state.type, "settled");
+    if (incrementalForeground.state.type !== "settled") {
+      throw new Error("the incremental foreground slot did not settle");
+    }
+    assert.deepEqual(incrementalForeground.state.result.status, {
+      type: "cancelled",
+      reason: "user_requested",
+      phase: "before_start",
+    });
+
+    const incrementalToolMessage = incremental.transcript.find(
+      (entry) =>
+        entry.kind === "committed" &&
+        entry.message.role === "tool" &&
+        entry.message.tool_call_id === "call-tui-before-start",
+    );
+    assert.ok(incrementalToolMessage?.kind === "committed");
+    assert.equal(incrementalToolMessage.message.role, "tool");
+    assert.deepEqual(
+      incrementalToolMessage.message.result,
+      incrementalForeground.state.result,
+    );
+
+    const executionStarted = wireEvents.filter(
+      (event) => event.event.type === "tool_execution_started",
+    );
+    const executionSettled = wireEvents.filter(
+      (event) => event.event.type === "tool_execution_settled",
+    );
+    assert.equal(
+      executionStarted.length,
+      0,
+      "BeforeStart does not fabricate ToolExecutionStarted",
+    );
+    assert.equal(
+      executionSettled.length,
+      1,
+      "the canonical commit exposes exactly one client settlement",
+    );
+    assert.equal(
+      wireEvents.filter(
+        (event) =>
+          event.event.type === "message_committed" &&
+          event.event.message.role === "tool",
+      ).length,
+      1,
+      "the canonical ToolMessage is committed exactly once",
+    );
+
+    // This is the real Runtime Client snapshot_get response, consumed over
+    // the same JSONL connection. No TypeScript-side snapshot is constructed.
+    await session.resync();
+    const fresh = session.state;
+    assert.ok(fresh?.attempt);
+    const freshForeground = fresh.attempt.foreground.find(
+      (entry) => entry.call_id === "call-tui-before-start",
+    );
+    assert.ok(freshForeground);
+    assert.deepEqual(freshForeground, incrementalForeground);
+    assert.deepEqual(fresh.attempt.phase, incremental.attempt.phase);
+    const freshToolMessage = fresh.transcript.find(
+      (entry) =>
+        entry.kind === "committed" &&
+        entry.message.role === "tool" &&
+        entry.message.tool_call_id === "call-tui-before-start",
+    );
+    assert.ok(freshToolMessage?.kind === "committed");
+    assert.equal(freshToolMessage.message.role, "tool");
+    assert.deepEqual(freshToolMessage.message, incrementalToolMessage.message);
   });
 });
 
