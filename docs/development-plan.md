@@ -1087,7 +1087,7 @@ tool-start capability. The real ConversationRuntime shutdown path proves that
 pending-map removal is not waiter or attempt settlement: Quiescent waits for
 the waiter handoff, projection callback, AgentExecution, and attempt task.
 
-Runtime Client v6 carries `interaction_respond`, typed acceptance/errors,
+Runtime Client v7 carries `interaction_respond`, typed acceptance/errors,
 pending/settled events, and `snapshot.pending_interactions`. It also projects
 authoritative effective and pending ApprovalMode state and accepts mode
 changes through runtime control. The TUI remains a projection/client: it
@@ -1317,7 +1317,7 @@ the repeated terminal payload.
 
 Capabilities are deny-by-construction: the child composes the base tool
 plane only (v1 profile `explore`: Read/Glob/Grep) and has no `subagent`
-tool, so recursion is impossible by construction. Runtime Client v6 carries
+tool, so recursion is impossible by construction. Runtime Client v7 carries
 `subagent_status`, `subagent_cancel`, the `SubagentUpdated` event, and
 `snapshot.subagents`; the TUI renders the same projection.
 

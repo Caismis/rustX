@@ -8,6 +8,15 @@
 //! is still active, it is simply one canonical
 //! `User(Runtime / CompactionSummary)` message inside the selected span.
 //!
+//! Since Issue #140 the production instruction requires one fixed structured
+//! Markdown contract (Goal, Constraints & Preferences, Progress, Key
+//! Decisions, Next Steps, Critical Context). The generated body is semantic
+//! content only: the cumulative file-operation facts of the transition are
+//! extracted deterministically from the retired span's canonical tool calls
+//! into typed `CompactionSummaryMetadata` (see
+//! [`crate::context::compaction_metadata`]), and the generated prose is never
+//! parsed back into facts.
+//!
 //! Summary generation is runtime compaction activity only: it never recurses
 //! into `AgentExecution`, never exposes tools, never carries Agent Status or
 //! the Skill catalog, never carries provider continuation, and never commits
@@ -150,7 +159,7 @@ fn truncate_for_summary(text: &str, max_chars: usize) -> String {
 /// The transcript label of one inbound message's provenance and kind.
 fn user_label(user: &UserMessageBlock) -> String {
     match (&user.kind, &user.source) {
-        (InboundKind::CompactionSummary, _) => "Earlier summary".to_owned(),
+        (InboundKind::CompactionSummary(_), _) => "Earlier summary".to_owned(),
         (InboundKind::Context(kind), _) => format!("Runtime context ({kind:?})"),
         (_, UserSource::Runtime) => "Runtime".to_owned(),
         (_, UserSource::Agent { agent_id }) => format!("Agent {agent_id}"),
@@ -270,6 +279,12 @@ fn render_tool(tool: &ToolMessageBlock, parts: &mut Vec<String>) {
 pub trait ContextSummarizer: Send + Sync {
     /// Generates the textual summary of one request.
     ///
+    /// The returned text is the structured Markdown summary body only. The
+    /// deterministic file half of the transition — typed
+    /// `CompactionSummaryMetadata` extraction and the derived
+    /// `<read-files>`/`<modified-files>` rendering — is applied by the
+    /// compaction preparation, never by this service.
+    ///
     /// The returned future is owned by the summarizer and must observe
     /// `cancellation`; cancellation may abort the summary.
     fn summarize(
@@ -302,7 +317,55 @@ pub struct ModelBackedSummarizer {
     monotonic_clock: Arc<dyn MonotonicClock>,
 }
 
-const SUMMARY_INSTRUCTION: &str = "Summarize the following retired conversation history so a later primary model turn can continue the work. Preserve, where applicable, the user's goal; important constraints and preferences; progress and completed work; current work and blockers; key decisions and rationale; important tool outcomes; unresolved threads; next steps; important files, artifacts, paths, and references; and relevant historical runtime observations. Treat Agent Status and other runtime observations as historical evidence, not live authority: for example, observations that a task was running at one time and completed later may be summarized as having run earlier and completed, never as a claim about what is currently running or completed. If an Agent Status section is absent from a later observation, do not infer lifecycle completion or disappearance unless that section's explicit contract says absence has that meaning. Use concise factual free-form text. Any organization or headings are prompt guidance only, not a required schema; output only the summary text.";
+/// The fixed structured summary instruction (Issue #140).
+///
+/// The production summarizer requires one exact Markdown contract — Goal,
+/// Constraints & Preferences, Progress (Done / In Progress / Blocked), Key
+/// Decisions, Next Steps, Critical Context — rather than free-form text.
+/// Structured means this fixed contract only: rustX does not parse the
+/// headings back into fields, and the file-operation facts of the transition
+/// come from canonical tool-call extraction, never from the generated prose.
+const SUMMARY_INSTRUCTION: &str = r#"Summarize the following retired conversation history so a later primary model turn can continue the work without re-reading the retired span. When the retired history contains an earlier summary, update and merge it into one coherent new summary; do not repeat it verbatim as a separate section.
+
+Output the summary in EXACTLY this Markdown structure, with these exact headings and nothing before the first heading or after the last section:
+
+## Goal
+
+[What is the user trying to accomplish?]
+
+## Constraints & Preferences
+
+- [Constraints, preferences, requirements]
+- [Or "(none)"]
+
+## Progress
+
+### Done
+
+- [x] [Completed work]
+
+### In Progress
+
+- [ ] [Current work]
+
+### Blocked
+
+- [Current blockers]
+
+## Key Decisions
+
+- **[Decision]**: [Brief rationale]
+
+## Next Steps
+
+1. [Ordered next action]
+
+## Critical Context
+
+- [Important data, examples, references]
+- [Or "(none)"]
+
+Preserve relevant exact details: file paths, type and function names, important error strings, critical values, user constraints, and the rationale behind key decisions. Treat Agent Status and other runtime observations as historical evidence, not live authority: for example, observations that a task was running at one time and completed later may be summarized as having run earlier and completed, never as a claim about what is currently running or completed. If an Agent Status section is absent from a later observation, do not infer lifecycle completion or disappearance unless that section's explicit contract says absence has that meaning. Output only the summary Markdown; do not wrap it in code fences."#;
 
 impl ModelBackedSummarizer {
     /// Creates a summarizer over one resolved summary invocation.
@@ -694,5 +757,49 @@ mod tests {
         assert!(truncated.starts_with("汉汉汉汉\n[..."));
         assert_eq!(super::truncate_for_summary(&text, 10), text);
         assert_eq!(super::truncate_for_summary(&text, 99), text);
+    }
+
+    /// The production instruction requires the fixed Pi-style structured
+    /// Markdown contract (Issue #140) and no longer advertises free-form
+    /// output.
+    #[test]
+    fn summary_instruction_requires_the_structured_contract() {
+        let instruction = ModelBackedSummarizer::instruction();
+        for section in [
+            "## Goal",
+            "## Constraints & Preferences",
+            "## Progress",
+            "### Done",
+            "### In Progress",
+            "### Blocked",
+            "## Key Decisions",
+            "## Next Steps",
+            "## Critical Context",
+        ] {
+            assert!(
+                instruction.contains(section),
+                "the structured summary contract requires {section}"
+            );
+        }
+        assert!(
+            instruction.contains("EXACTLY this Markdown structure"),
+            "the structure is a fixed contract, not guidance"
+        );
+        assert!(
+            !instruction.contains("free-form"),
+            "free-form output is no longer advertised"
+        );
+        for exact_detail in [
+            "file paths",
+            "type and function names",
+            "error strings",
+            "critical values",
+            "user constraints",
+        ] {
+            assert!(
+                instruction.contains(exact_detail),
+                "the contract requires preserving {exact_detail}"
+            );
+        }
     }
 }

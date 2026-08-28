@@ -150,9 +150,17 @@ use super::inbox::{
 /// and canonical insertion anchor. The audit remains the sole body authority;
 /// no raw carryover body is stored in the conversation schema.
 ///
-/// A v3/v4/v5/v6/v7/v8/v9/v10/v11/v12/v13/v14 database must fail at store open;
-/// there is no migration or compatibility path.
-pub const SQLITE_SCHEMA_VERSION: i64 = 15;
+/// Version 16 freezes Issue #140's typed compaction-summary metadata: a
+/// canonical compaction summary now carries validated cumulative
+/// file-operation metadata on its kind, and the summary text follows the
+/// fixed structured Markdown contract with metadata-derived file sections.
+/// A v15 Ledger records the obsolete unit-kind summary, which cannot be
+/// interpreted as typed metadata, so it is rejected rather than decoded with
+/// invented empty metadata.
+///
+/// A v3/v4/v5/v6/v7/v8/v9/v10/v11/v12/v13/v14/v15 database must fail at store
+/// open; there is no migration or compatibility path.
+pub const SQLITE_SCHEMA_VERSION: i64 = 16;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -1173,7 +1181,7 @@ impl ConversationStore for SqliteConversationStore {
             )));
         }
         if input.summary.source != UserSource::Runtime
-            || input.summary.kind != InboundKind::CompactionSummary
+            || !input.summary.kind.is_compaction_summary()
         {
             return Err(ConversationStoreError::InvalidReference(
                 "compaction requires a User(Runtime / CompactionSummary) Ledger message".to_owned(),
@@ -3101,7 +3109,7 @@ fn accept_inbound_tx(
     if draft.content.is_empty() {
         return Err(ConversationStoreError::EmptyContent);
     }
-    if draft.kind == InboundKind::CompactionSummary {
+    if draft.kind.is_compaction_summary() {
         return Err(ConversationStoreError::InvalidReference(
             "compaction summaries must use the atomic commit_compaction transition".to_owned(),
         ));
@@ -4335,7 +4343,7 @@ fn append_message_and_surface_internal(
     if matches!(
         message,
         MessageBlock::User(user)
-            if user.kind == crate::message::types::InboundKind::CompactionSummary
+            if user.kind.is_compaction_summary()
     ) {
         return Err(ConversationStoreError::InvalidReference(
             "a compaction summary must use the atomic commit_compaction transition".to_owned(),
@@ -5059,7 +5067,7 @@ fn validate_surface_operation_references_from_ledger(
             message,
             MessageBlock::User(user)
                 if user.source == UserSource::Runtime
-                    && user.kind == InboundKind::CompactionSummary
+                    && user.kind.is_compaction_summary()
         ) {
             return Err(ConversationStoreError::InvalidReference(format!(
                 "Surface Replace replacement {replacement} is not a User(Runtime / CompactionSummary) message"
@@ -5201,7 +5209,7 @@ fn validate_surface_operation_references(
             message,
             MessageBlock::User(user)
                 if user.source == UserSource::Runtime
-                    && user.kind == InboundKind::CompactionSummary
+                    && user.kind.is_compaction_summary()
         ) {
             return Err(ConversationStoreError::InvalidReference(format!(
                 "Surface Replace replacement {replacement} is not a User(Runtime / CompactionSummary) message"
@@ -6403,7 +6411,7 @@ fn validate_event_reference(
                 summary,
                 MessageBlock::User(user)
                     if user.source == UserSource::Runtime
-                        && user.kind == crate::message::types::InboundKind::CompactionSummary
+                        && user.kind.is_compaction_summary()
             ) {
                 return Err(ConversationStoreError::InvalidReference(format!(
                     "compaction event references a non-summary message {summary_message_id}"
@@ -6909,8 +6917,9 @@ mod tests {
     use crate::message::content::TextBlock;
     use crate::message::types::{
         AgentStatusEmission, AgentStatusGenerationMetadata, AgentStatusModuleId,
-        AssistantContentBlock, AssistantMessageBlock, ContextKind, InboundKind, MessageBlock,
-        ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+        AssistantContentBlock, AssistantMessageBlock, CompactionSummaryMetadata, ContextKind,
+        InboundKind, MessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock,
+        UserSource,
     };
     use crate::model::catalog::ModelCapabilities;
     use crate::model::catalog::ModelCompat;
@@ -6992,7 +7001,15 @@ mod tests {
                 text: text.to_owned(),
             })],
             source: UserSource::Runtime,
-            kind: InboundKind::CompactionSummary,
+            // Non-empty Issue #140 metadata so every durable compaction
+            // round trip exercises the typed canonical encoding.
+            kind: InboundKind::CompactionSummary(
+                CompactionSummaryMetadata::new(
+                    vec!["/read/retired.rs".to_owned()],
+                    vec!["/modified/retired.rs".to_owned()],
+                )
+                .expect("valid metadata"),
+            ),
             timestamp: None,
         }
     }
@@ -7320,6 +7337,15 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|message| crate::conversation::message_id_of(message) == MessageId::new("a"))
+        );
+        assert!(
+            reopened
+                .load_canonical()
+                .unwrap()
+                .iter()
+                .any(|message| message
+                    == &MessageBlock::User(summary_message("summary-2", "Summary 2"))),
+            "a reopen recovers the summary's text and typed metadata exactly"
         );
     }
 

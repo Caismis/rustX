@@ -5122,7 +5122,9 @@ mod tests {
     use crate::durable::inbox::{CompactionCommitInput, ConversationStore};
     use crate::events::types::RuntimeEvent;
     use crate::message::content::TextBlock;
-    use crate::message::types::{InboundKind, MessageBlock, UserContentBlock, UserSource};
+    use crate::message::types::{
+        CompactionSummaryMetadata, InboundKind, MessageBlock, UserContentBlock, UserSource,
+    };
     use crate::model::adapter::ModelAdapter;
     use crate::runtime::ApprovalMode;
     use crate::runtime::identity::{
@@ -6485,7 +6487,7 @@ mod tests {
                 message,
                 MessageBlock::User(user)
                     if user.id == outcome.summary_message_id
-                        && user.kind == InboundKind::CompactionSummary
+                        && user.kind.is_compaction_summary()
             )
         }));
         assert_eq!(model.requests().len(), 2, "turn plus summary request");
@@ -6531,7 +6533,7 @@ mod tests {
                             if matches!(
                                 message,
                                 crate::model::ModelInputMessage::Canonical(MessageBlock::User(user))
-                                    if user.kind == InboundKind::CompactionSummary
+                                    if user.kind.is_compaction_summary()
                             ) {
                                 10_000
                             } else {
@@ -7034,7 +7036,7 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn headless_tool_cycle_with_zero_attachments() {
-        use crate::message::types::{ContentBlockIndex, InboundKind};
+        use crate::message::types::ContentBlockIndex;
         use crate::model::event::ModelEvent;
         use crate::model::finish::ModelFinishReason;
         use crate::runtime::identity::{ToolCallId, ToolId};
@@ -7137,9 +7139,7 @@ mod tests {
         let roles: Vec<&str> = ledger
             .iter()
             .map(|message| match message {
-                MessageBlock::User(user) if user.kind == InboundKind::CompactionSummary => {
-                    "summary"
-                }
+                MessageBlock::User(user) if user.kind.is_compaction_summary() => "summary",
                 MessageBlock::User(_) => "user",
                 MessageBlock::Assistant(_) => "assistant",
                 MessageBlock::Tool(_) => "tool",
@@ -7555,7 +7555,7 @@ mod tests {
                     message,
                     MessageBlock::User(user)
                         if user.id == outcome.summary_message_id
-                            && user.kind == InboundKind::CompactionSummary
+                            && user.kind.is_compaction_summary()
                 )
             })
             .cloned()
@@ -7606,7 +7606,7 @@ mod tests {
                             message,
                             MessageBlock::User(user)
                                 if user.id == outcome.summary_message_id
-                                    && user.kind == InboundKind::CompactionSummary
+                                    && user.kind.is_compaction_summary()
                         )
                     })
                     .expect("reopened summary A")
@@ -7714,7 +7714,12 @@ mod tests {
                     automatic_roots: Vec::new(),
                     explicit_paths: vec![skill.clone()],
                 },
-                initial_messages: vec![seed_user("old", "old history")],
+                initial_messages: vec![seed_user(
+                    "old",
+                    "old history that the overflow compaction retires: this seed carries enough \
+                     retired content that replacing it with the compact summary is measurable \
+                     progress even with the typed metadata the canonical summary now carries",
+                )],
                 project_context_files: vec![project_file(
                     &project_path,
                     "project authority generation A",
@@ -14581,7 +14586,7 @@ mod tests {
                 id: crate::runtime::identity::MessageId::new("conv-recovery-compact-summary-1"),
                 content: text_content("earlier context"),
                 source: UserSource::Runtime,
-                kind: InboundKind::CompactionSummary,
+                kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
                 timestamp: None,
             };
             store

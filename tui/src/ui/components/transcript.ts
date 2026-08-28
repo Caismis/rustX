@@ -350,7 +350,7 @@ function renderCommitted(
       if (message.source !== "human") {
         labels.push(sourceLabel(message.source));
       }
-      if (message.kind === "compaction_summary") {
+      if (typeof message.kind === "object" && "compaction_summary" in message.kind) {
         labels.push("compaction summary");
       }
       const body = message.content

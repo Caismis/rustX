@@ -59,7 +59,7 @@ impl MessageBlock {
         match self {
             Self::User(user) => match &user.kind {
                 InboundKind::Context(kind) => kind.agent_status_metadata(),
-                InboundKind::Message | InboundKind::CompactionSummary => None,
+                InboundKind::Message | InboundKind::CompactionSummary(_) => None,
             },
             Self::Assistant(_) | Self::Tool(_) => None,
         }
@@ -114,8 +114,8 @@ impl core::fmt::Display for ContentBlockIndex {
 ///
 /// A `UserMessageBlock` does not necessarily mean a human spoke: it is the
 /// canonical home for anything inbound, including messages from other agents
-/// (with [`UserSource::Agent`] provenance) and, in the future, runtime
-/// compaction summaries (with [`InboundKind::CompactionSummary`] kind). It
+/// (with [`UserSource::Agent`] provenance) and runtime compaction summaries
+/// (with [`InboundKind::CompactionSummary`] kind). It
 /// must never become `AssistantMessageBlock` or `ToolMessageBlock`, which are
 /// reserved for output and actions of the current agent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -185,6 +185,209 @@ impl UserSource {
     ];
 }
 
+/// The cumulative native file-operation facts of one compaction summary
+/// (Issue #140).
+///
+/// This is the typed canonical authority for *which files the retired history
+/// read and which files it modified*. It is derived deterministically from
+/// the canonical tool calls of the selected retired span — native
+/// `read(path)` contributes a read, native `edit(path)` and `write(path)`
+/// contribute a modification — merged with the metadata of every earlier
+/// compaction summary inside that same span. It records conversation facts,
+/// never current filesystem state: a path stays listed even when the file has
+/// since been deleted, and the rendered `<read-files>`/`<modified-files>`
+/// sections of the summary text are a model-visible projection of this value,
+/// never its source.
+///
+/// The fields are private so every value, including one decoded from durable
+/// JSON, satisfies the canonical invariants: both lists are unique and in
+/// ascending byte order, and `read_files ∩ modified_files = ∅` (modification
+/// wins over read).
+///
+/// ```compile_fail
+/// use rustx::message::types::CompactionSummaryMetadata;
+///
+/// fn mutate(metadata: &mut CompactionSummaryMetadata) {
+///     metadata.read_files = Vec::new();
+/// }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CompactionSummaryMetadata {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    read_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    modified_files: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CompactionSummaryMetadataRepr {
+    #[serde(default)]
+    read_files: Vec<String>,
+    #[serde(default)]
+    modified_files: Vec<String>,
+}
+
+impl<'de> Deserialize<'de> for CompactionSummaryMetadata {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let repr = CompactionSummaryMetadataRepr::deserialize(deserializer)?;
+        Self::new(repr.read_files, repr.modified_files).map_err(serde::de::Error::custom)
+    }
+}
+
+/// An invalid canonical compaction summary metadata value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompactionSummaryMetadataError {
+    /// One path appeared more than once within a single list.
+    DuplicatePath(String),
+    /// A list was not in the canonical ascending byte order.
+    NonCanonicalOrder {
+        /// The path that appeared first.
+        previous: String,
+        /// The path that appeared after it.
+        next: String,
+    },
+    /// One path appeared in both lists. Modification wins over read, so an
+    /// overlapping value is never canonical.
+    ReadModifiedOverlap(String),
+}
+
+impl core::fmt::Display for CompactionSummaryMetadataError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::DuplicatePath(path) => {
+                write!(f, "compaction summary metadata lists the path {path} twice")
+            }
+            Self::NonCanonicalOrder { previous, next } => write!(
+                f,
+                "compaction summary metadata paths are not in ascending order: \
+                 {previous} precedes {next}"
+            ),
+            Self::ReadModifiedOverlap(path) => write!(
+                f,
+                "compaction summary metadata lists {path} as both read and modified"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for CompactionSummaryMetadataError {}
+
+impl CompactionSummaryMetadata {
+    /// Creates canonical metadata from already-canonical lists.
+    ///
+    /// The constructor validates, it never normalizes: both lists must be
+    /// duplicate-free, in ascending byte order, and disjoint. Builders that
+    /// hold unordered observations use
+    /// [`CompactionSummaryMetadata::accumulate`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`CompactionSummaryMetadataError`] of the first violated
+    /// invariant.
+    pub fn new(
+        read_files: Vec<String>,
+        modified_files: Vec<String>,
+    ) -> Result<Self, CompactionSummaryMetadataError> {
+        validate_ordered_unique(&read_files)?;
+        validate_ordered_unique(&modified_files)?;
+        for path in &modified_files {
+            if read_files.binary_search(path).is_ok() {
+                return Err(CompactionSummaryMetadataError::ReadModifiedOverlap(
+                    path.clone(),
+                ));
+            }
+        }
+        Ok(Self {
+            read_files,
+            modified_files,
+        })
+    }
+
+    /// The empty metadata of a compaction whose retired span performed no
+    /// native file operation.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            read_files: Vec::new(),
+            modified_files: Vec::new(),
+        }
+    }
+
+    /// Accumulates the cumulative metadata of one new compaction.
+    ///
+    /// `inherited` carries the metadata of the earlier compaction summaries
+    /// that are inside the selected retired span — and only those; a summary
+    /// outside the selected span contributes nothing. The merge is set
+    /// semantics over the lineage:
+    ///
+    /// ```text
+    /// read     = inherited_read ∪ new_read
+    /// modified = inherited_modified ∪ new_modified
+    /// read    -= modified
+    /// ```
+    ///
+    /// The result is canonical by construction: unique, ascending, disjoint.
+    #[must_use]
+    pub fn accumulate<'a>(
+        inherited: impl IntoIterator<Item = &'a Self>,
+        new_read: impl IntoIterator<Item = String>,
+        new_modified: impl IntoIterator<Item = String>,
+    ) -> Self {
+        let mut read = std::collections::BTreeSet::new();
+        let mut modified = std::collections::BTreeSet::new();
+        for summary in inherited {
+            read.extend(summary.read_files.iter().cloned());
+            modified.extend(summary.modified_files.iter().cloned());
+        }
+        read.extend(new_read);
+        modified.extend(new_modified);
+        for path in &modified {
+            read.remove(path);
+        }
+        Self {
+            read_files: read.into_iter().collect(),
+            modified_files: modified.into_iter().collect(),
+        }
+    }
+
+    /// The files the retired lineage read without later modifying, in
+    /// canonical ascending order.
+    #[must_use]
+    pub fn read_files(&self) -> &[String] {
+        &self.read_files
+    }
+
+    /// The files the retired lineage modified, in canonical ascending order.
+    #[must_use]
+    pub fn modified_files(&self) -> &[String] {
+        &self.modified_files
+    }
+}
+
+/// Validates one metadata list: duplicate-free and in ascending byte order.
+fn validate_ordered_unique(paths: &[String]) -> Result<(), CompactionSummaryMetadataError> {
+    for pair in paths.windows(2) {
+        let [previous, next] = pair else {
+            unreachable!("windows(2) yields exactly two elements");
+        };
+        if previous == next {
+            return Err(CompactionSummaryMetadataError::DuplicatePath(
+                previous.clone(),
+            ));
+        }
+        if previous > next {
+            return Err(CompactionSummaryMetadataError::NonCanonicalOrder {
+                previous: previous.clone(),
+                next: next.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Typed kind of inbound information.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -194,10 +397,29 @@ pub enum InboundKind {
     Message,
     /// A runtime-provided compaction summary. It remains a `User` message so
     /// no fifth canonical message role is needed for runtime-derived context.
-    CompactionSummary,
+    /// The typed metadata is the cumulative canonical record of the native
+    /// file operations of the retired lineage.
+    CompactionSummary(CompactionSummaryMetadata),
     /// A model-visible context fact admitted through the rustX Context
     /// Assembly path.
     Context(ContextKind),
+}
+
+impl InboundKind {
+    /// Whether this inbound fact is a runtime compaction summary.
+    #[must_use]
+    pub const fn is_compaction_summary(&self) -> bool {
+        matches!(self, Self::CompactionSummary(_))
+    }
+
+    /// The cumulative file-operation metadata of a compaction summary.
+    #[must_use]
+    pub const fn compaction_summary_metadata(&self) -> Option<&CompactionSummaryMetadata> {
+        match self {
+            Self::CompactionSummary(metadata) => Some(metadata),
+            _ => None,
+        }
+    }
 }
 
 /// The stable identity of one code-owned Agent Status module.
@@ -495,7 +717,8 @@ pub struct ToolMessageBlock {
 mod tests {
     use super::{
         AgentStatusGenerationMetadata, AgentStatusMetadataError, AgentStatusModuleId,
-        AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, ToolMessageBlock,
+        AssistantContentBlock, AssistantMessageBlock, CompactionSummaryMetadata,
+        CompactionSummaryMetadataError, InboundKind, MessageBlock, ToolMessageBlock,
         UserContentBlock, UserMessageBlock, UserSource,
     };
     use crate::message::content::TextBlock;
@@ -580,16 +803,22 @@ mod tests {
     }
 
     /// A runtime compaction summary remains a `UserMessageBlock`; no fifth
-    /// canonical role is required.
+    /// canonical role is required. Its typed cumulative file-operation
+    /// metadata rides on the kind and round-trips exactly.
     #[test]
     fn compaction_summary_is_user_role() {
+        let metadata = CompactionSummaryMetadata::new(
+            vec!["/src/a.rs".to_owned()],
+            vec!["/src/b.rs".to_owned()],
+        )
+        .expect("valid metadata");
         let block = MessageBlock::User(UserMessageBlock {
             id: MessageId::new("msg-summary-1"),
             content: vec![UserContentBlock::Text(TextBlock {
                 text: "Earlier in the conversation the agent listed files.".to_owned(),
             })],
             source: UserSource::Runtime,
-            kind: InboundKind::CompactionSummary,
+            kind: InboundKind::CompactionSummary(metadata),
             timestamp: None,
         });
         let json = serde_json::to_string(&block).expect("serialize block");
@@ -598,11 +827,88 @@ mod tests {
         assert!(matches!(
             decoded,
             MessageBlock::User(UserMessageBlock {
-                kind: InboundKind::CompactionSummary,
+                kind: InboundKind::CompactionSummary(_),
                 source: UserSource::Runtime,
                 ..
             })
         ));
+    }
+
+    /// Valid metadata keeps its exact lists; invalid values are rejected
+    /// without normalization.
+    #[test]
+    fn compaction_metadata_validates_the_canonical_invariants() {
+        let valid = CompactionSummaryMetadata::new(
+            vec!["/a".to_owned(), "/b".to_owned()],
+            vec!["/c".to_owned()],
+        )
+        .expect("valid metadata");
+        assert_eq!(valid.read_files(), &["/a".to_owned(), "/b".to_owned()]);
+        assert_eq!(valid.modified_files(), &["/c".to_owned()]);
+        assert!(CompactionSummaryMetadata::empty().read_files().is_empty());
+
+        assert_eq!(
+            CompactionSummaryMetadata::new(vec!["/a".to_owned(), "/a".to_owned()], Vec::new()),
+            Err(CompactionSummaryMetadataError::DuplicatePath(
+                "/a".to_owned()
+            ))
+        );
+        assert_eq!(
+            CompactionSummaryMetadata::new(vec!["/b".to_owned(), "/a".to_owned()], Vec::new()),
+            Err(CompactionSummaryMetadataError::NonCanonicalOrder {
+                previous: "/b".to_owned(),
+                next: "/a".to_owned(),
+            })
+        );
+        assert_eq!(
+            CompactionSummaryMetadata::new(vec!["/a".to_owned()], vec!["/a".to_owned()]),
+            Err(CompactionSummaryMetadataError::ReadModifiedOverlap(
+                "/a".to_owned()
+            ))
+        );
+    }
+
+    /// Accumulation is lineage set semantics: union, deterministic ascending
+    /// order, and modification wins over read.
+    #[test]
+    fn compaction_metadata_accumulates_over_the_lineage() {
+        let inherited = CompactionSummaryMetadata::new(
+            vec!["/a".to_owned(), "/b".to_owned()],
+            vec!["/c".to_owned()],
+        )
+        .expect("valid metadata");
+        let merged = CompactionSummaryMetadata::accumulate(
+            [&inherited],
+            ["/d".to_owned(), "/a".to_owned()],
+            ["/a".to_owned()],
+        );
+        assert_eq!(merged.read_files(), &["/b".to_owned(), "/d".to_owned()]);
+        assert_eq!(merged.modified_files(), &["/a".to_owned(), "/c".to_owned()]);
+    }
+
+    /// Durable JSON of invalid metadata fails closed instead of decoding
+    /// into a non-canonical value.
+    #[test]
+    fn compaction_metadata_serde_rejects_invalid_values() {
+        for value in [
+            serde_json::json!({"read_files": ["/a", "/a"], "modified_files": []}),
+            serde_json::json!({"read_files": ["/b", "/a"], "modified_files": []}),
+            serde_json::json!({"read_files": ["/a"], "modified_files": ["/a"]}),
+        ] {
+            assert!(
+                serde_json::from_value::<CompactionSummaryMetadata>(value).is_err(),
+                "invalid metadata must fail closed"
+            );
+        }
+        let metadata =
+            CompactionSummaryMetadata::new(vec![], vec!["/a".to_owned()]).expect("valid metadata");
+        let value = serde_json::to_value(&metadata).expect("serialize");
+        assert_eq!(value, serde_json::json!({"modified_files": ["/a"]}));
+        assert_eq!(
+            serde_json::from_value::<CompactionSummaryMetadata>(value).expect("decode"),
+            metadata,
+            "a durable round trip preserves the validated value exactly"
+        );
     }
 
     fn status_timestamp() -> DateTime<Utc> {

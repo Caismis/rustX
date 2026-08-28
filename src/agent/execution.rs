@@ -6347,7 +6347,7 @@ mod tests {
         assert!(
             !result.messages().iter().any(|message| matches!(
                 message,
-                MessageBlock::User(user) if user.kind == InboundKind::CompactionSummary
+                MessageBlock::User(user) if user.kind.is_compaction_summary()
             )),
             "no durable compaction summary is created"
         );

@@ -39,3 +39,15 @@ impl ReadInput {
         self.offset.unwrap_or(DEFAULT_OFFSET).max(DEFAULT_OFFSET)
     }
 }
+
+/// The path of one historical canonical Read call, when its recorded
+/// arguments identify one.
+///
+/// This decodes only what compaction file-operation metadata needs — the
+/// path — and deliberately not the full input contract: a historical call may
+/// have been rejected by a later validation rule, yet the path it named is
+/// still a conversation fact. Execution validation stays with
+/// [`ReadInput::parse`].
+pub(crate) fn operation_path(arguments: &serde_json::Value) -> Option<String> {
+    crate::tools::native::input::file_path_argument(arguments)
+}

@@ -48,9 +48,11 @@ lineage. It is assembled from the runtime-owned summary instruction and the
 exact planned retired historical messages only. It sends no Tools, primary
 Effective System Prompt, project instructions, Skill catalog, extension Tool
 definitions, or primary continuation; it does not share a provider prefix or
-KV cache and does not recurse through the Agent Loop. Its result is opaque
-free-form text. Any suggested Pi-style organization is prompt guidance, not a
-durable schema or parser. Historical Status observations may be summarized as
+KV cache and does not recurse through the Agent Loop. Its result is the body
+of the fixed structured Markdown summary contract (Issue #140); the committed
+summary additionally carries typed cumulative file-operation metadata derived
+from the retired span's canonical tool calls, never from the generated prose.
+Historical Status observations may be summarized as
 past evidence, but the summary is never current runtime authority.
 
 ## Project instruction discovery

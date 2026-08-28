@@ -35,6 +35,7 @@
 
 pub mod assembly;
 pub(crate) mod compaction;
+pub(crate) mod compaction_metadata;
 pub mod engine;
 pub mod error;
 pub mod projection;

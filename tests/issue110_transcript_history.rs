@@ -32,8 +32,8 @@ use rustx::local_runtime::composition::{
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
     AgentStatusGenerationMetadata, AgentStatusModuleId, AssistantContentBlock,
-    AssistantMessageBlock, ContextKind, InboundKind, MessageBlock, ToolMessageBlock,
-    UserContentBlock, UserMessageBlock, UserSource,
+    AssistantMessageBlock, CompactionSummaryMetadata, ContextKind, InboundKind, MessageBlock,
+    ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
 use rustx::model::catalog::{MapCredentialEnvironment, ModelCapabilities, ModelCompat};
 use rustx::model::{
@@ -88,7 +88,7 @@ fn summary_message(id: &str, text: &str) -> UserMessageBlock {
             text: text.to_owned(),
         })],
         source: UserSource::Runtime,
-        kind: InboundKind::CompactionSummary,
+        kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
         timestamp: None,
     }
 }

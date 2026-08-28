@@ -44,6 +44,7 @@ pub(crate) struct ExecutedCompaction {
 }
 
 /// A compaction pipeline failure, split at the durable commit boundary.
+#[derive(Debug)]
 pub(crate) enum CompactionExecutionError {
     /// No durable transition occurred; the previous conversation remains
     /// authoritative and may continue normally.
@@ -63,8 +64,10 @@ impl From<ContextError> for CompactionExecutionError {
 ///
 /// The caller exclusively owns `conversation` for the whole future. A
 /// cancellation or context error installs nothing. Success means the summary
-/// Ledger fact, Surface replacement, checkpoint, and `CompactionCompleted`
-/// event were committed atomically before the hot state was updated.
+/// Ledger fact (structured body + deterministic metadata-derived file
+/// sections + typed `CompactionSummaryMetadata`), Surface replacement,
+/// checkpoint, and `CompactionCompleted` event were committed atomically
+/// before the hot state was updated.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub(crate) async fn execute_compaction(
     conversation: &mut ConversationState,

@@ -672,7 +672,7 @@ underneath the waiter. Only after settlement and attempt completion may a
 reload publish a new generation, and that generation affects a later admitted
 attempt only.
 
-Runtime Client v6 carries the same semantic plane through
+Runtime Client v7 carries the same semantic plane through
 `interaction_respond`, typed acceptance/errors, `interaction_pending` and
 `interaction_settled` events, and `snapshot.pending_interactions`. Snapshot
 plus cursor and subscribe-after-cursor retain the existing repair invariant.
@@ -1465,8 +1465,11 @@ Key contracts:
   one-off side request containing only runtime-owned summary guidance and the
   exact planned retired messages. It does not inherit primary System/project/
   Skill/extension guidance, Tools, continuation, prompt-prefix/cache
-  continuity, or Agent Loop execution. Pi-inspired headings are optional
-  prompt guidance only; the returned summary remains opaque free-form text.
+  continuity, or Agent Loop execution. The guidance requires one fixed
+  structured Markdown contract (Goal, Constraints & Preferences, Progress,
+  Key Decisions, Next Steps, Critical Context), and the committed summary
+  carries typed cumulative file-operation metadata extracted from the retired
+  span's canonical native Read/Edit/Write calls (Issue #140).
   Runtime/Agent Status observations remain historical evidence and are never
   reconstructed as live state from summary text.
 - The mandatory progress rule (coverage advances and projected estimate
@@ -3097,7 +3100,7 @@ environment, finite timeout, bounded diagnostics, and no generic
 
 The outermost layer exposes the runtime to humans and other systems:
 
-- Runtime Client Protocol v6 (semantic client boundary)
+- Runtime Client Protocol v7 (semantic client boundary)
 - Local interactive CLI
 - Runtime command interface
 - HTTP control interface
@@ -3106,7 +3109,7 @@ The outermost layer exposes the runtime to humans and other systems:
 
 AG-UI is an output projection, not the internal durable event model.
 
-#### Runtime Client Protocol v6 implementation (Issue #37, revised by Issues #131, #130, and #136)
+#### Runtime Client Protocol v7 implementation (Issue #37, revised by Issues #131, #130, #136, and #140)
 
 Issue #37 implements the one external semantic normalization boundary in
 `src/runtime_client`:
@@ -3121,7 +3124,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-      Runtime Client Protocol v6
+      Runtime Client Protocol v7
 ```
 
 The governing invariant is that all authoritative execution and
@@ -3191,7 +3194,7 @@ runtime_client/attachment.rs   RuntimeAttachment: at-most-one attachment,
                                event subscription delivery
 runtime_client/endpoint.rs     RuntimeClientEndpoint: the transport-neutral
                                semantic entry point that dispatches every
-                               v6 request, `initialize` included
+                               v7 request, `initialize` included
 runtime_client/transport/      byte-stream adapters beneath the semantic
                                layer (Issue #38); `stdio.rs` is the strict
                                stdio/JSONL transport
@@ -3229,7 +3232,7 @@ Runtime Client is a projection/control/attachment adapter over it.
 
 - **The semantic endpoint owns `initialize`.** `RuntimeClientEndpoint` is
   the boundary a transport wraps. It starts unattached and accepts every
-  v6 request; `initialize` performs version negotiation, single-attachment
+  v7 request; `initialize` performs version negotiation, single-attachment
   admission, `AttachmentId` allocation, and the linearized initial
   snapshot, storing the resulting attachment. Non-`initialize` requests
   before that are `not_attached`; a successful `detach` (or dropping the
@@ -3627,7 +3630,7 @@ Runtime Client is a projection/control/attachment adapter over it.
   compaction start, failure, and committed completion project with optional
   attempt attribution and update the shared context read model. Internal
   `RuntimeEvent` evolution therefore cannot silently break Runtime Client
-  Protocol v6.
+  Protocol v7.
 - **Streaming repair.** The snapshot carries an in-flight Assistant output
   view (accumulated blocks) and foreground tool views keyed by the
   logical tool-call identity, so a client repairing after `resync`
@@ -3662,7 +3665,7 @@ Runtime Client is a projection/control/attachment adapter over it.
   subscribe, and subscription polls) then fails with
   `projection_exhausted`. A read never hands back a model that silently
   stopped folding authoritative transitions.
-- **Attachment lifecycle.** Protocol v6 admits at most one active
+- **Attachment lifecycle.** Protocol v7 admits at most one active
   attachment: the first attach succeeds, a second fails with
   `attachment_in_use` and never evicts the first, detach (explicit or
   RAII drop) releases ownership, reconnects receive a fresh attachment
@@ -3758,7 +3761,7 @@ Runtime Client is a projection/control/attachment adapter over it.
 - **Protocol envelope.** A transport-neutral JSON-RPC-style envelope:
   `request(id, method + typed params)`, `response(id, result | error)`,
   and `event(cursor + typed payload)` with no request ids on
-  notifications. Every v6 method is client-initiated
+  notifications. Every v7 method is client-initiated
   (`initialize`, `submit_inbound`, `cancel_current_attempt`,
   `snapshot_get`, `subscribe_events`, `capability_get`,
   `background_status`, `background_cancel`, `detach`, `shutdown`).
@@ -3784,7 +3787,7 @@ rustX Runtime
 Runtime Client projection
       |
       v
-Runtime Client Protocol v6        semantic; Issue #37/#131/#130/#136
+Runtime Client Protocol v7        semantic; Issue #37/#131/#130/#136/#140
       |
       v
 transport adapters                framing only; src/runtime_client/transport
@@ -3830,10 +3833,10 @@ means adding a sibling module there; no semantic module moves.
   string stays in one record and multiline pretty-printed JSON is not
   supported. CRLF input is accepted by removing exactly one `\r` before
   the terminating LF; no other whitespace is touched.
-- **Malformed and oversized input is transport-fatal.** Protocol v6 has
+- **Malformed and oversized input is transport-fatal.** Protocol v7 has
   no uncorrelated error envelope, and a malformed frame may not even
   carry a request id, so the transport invents none. Any complete
-  in-bound-size record that does not deserialize to the exact v6 request
+  in-bound-size record that does not deserialize to the exact v7 request
   type — malformed JSON, unknown method, unknown field, wrong parameter
   type, empty or whitespace-only record — ends the session with a
   framing error, applies nothing, and writes no protocol record. An
@@ -3851,7 +3854,7 @@ means adding a sibling module there; no semantic module moves.
   background execution, and capability state continue under their own
   owners, and no projection lock is held across any transport await.
 - **Active-subscription lag closes the transport.** After a stall the
-  subscription may fall behind the bounded replay ring. Protocol v6 has
+  subscription may fall behind the bounded replay ring. Protocol v7 has
   no uncorrelated stream-error record, so the session ends with a typed
   local `SubscriptionLagged` error carrying the cursor information and
   the client repairs from an authoritative snapshot after reconnecting.
@@ -4632,7 +4635,7 @@ beside it:
 rustX Runtime semantics
         |
         v
-Runtime Client Protocol v6
+Runtime Client Protocol v7
         |
         v
 rustX TypeScript projection

@@ -252,7 +252,7 @@ fn compaction_summaries(messages: &[MessageBlock]) -> usize {
         .filter(|message| {
             matches!(
                 message,
-                MessageBlock::User(user) if user.kind == InboundKind::CompactionSummary
+                MessageBlock::User(user) if user.kind.is_compaction_summary()
             )
         })
         .count()
@@ -265,7 +265,7 @@ fn mixed_compaction_summaries(messages: &[rustx::model::ModelInputMessage]) -> u
         .filter(|message| {
             matches!(
                 message.as_canonical(),
-                Some(MessageBlock::User(user)) if user.kind == InboundKind::CompactionSummary
+                Some(MessageBlock::User(user)) if user.kind.is_compaction_summary()
             )
         })
         .count()
@@ -532,15 +532,11 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     assert!(is_agent_status(&ledger[1]));
     assert!(matches!(&ledger[2], MessageBlock::Assistant(_)));
     assert!(matches!(&ledger[3], MessageBlock::User(u) if u.kind == InboundKind::Message));
-    assert!(
-        matches!(&ledger[4], MessageBlock::User(u) if u.kind == InboundKind::CompactionSummary)
-    );
+    assert!(matches!(&ledger[4], MessageBlock::User(u) if u.kind.is_compaction_summary()));
     assert!(is_agent_status(&ledger[5]));
     assert!(matches!(&ledger[6], MessageBlock::Assistant(_)));
     assert!(matches!(&ledger[7], MessageBlock::User(u) if u.kind == InboundKind::Message));
-    assert!(
-        matches!(&ledger[8], MessageBlock::User(u) if u.kind == InboundKind::CompactionSummary)
-    );
+    assert!(matches!(&ledger[8], MessageBlock::User(u) if u.kind.is_compaction_summary()));
     assert!(is_agent_status(&ledger[9]));
     assert!(matches!(&ledger[10], MessageBlock::Assistant(_)));
     let ledger_wire = wire(&ledger);

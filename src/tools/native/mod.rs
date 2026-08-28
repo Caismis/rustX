@@ -79,7 +79,50 @@ pub use bash::supervisor as bash_supervisor;
 
 use crate::tools::background::ConversationBackgroundRegistry;
 use crate::tools::executor::{ToolRegistry, ToolRegistryError};
-use crate::tools::types::ToolInvocationPolicy;
+use crate::tools::types::{ToolCall, ToolInvocationPolicy};
+
+/// The normalized file-operation fact of one native file tool call recorded
+/// in canonical conversation history (Issue #140).
+///
+/// This is the rustX-owned extraction boundary between the native file tools
+/// and context compaction: the tool modules own the decoding that identifies
+/// the path, and compaction aggregates these normalized facts without
+/// learning tool argument formats. Classification is by the canonical
+/// [`ToolCall::tool_id`], never by the model-facing name, so an unrelated
+/// foreign tool named `read` can never contribute a file fact. The fact is
+/// the call itself: whether the call later failed, was denied, or was
+/// cancelled does not rewrite what the retired conversation asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NativeFileOperation {
+    /// A native `read(path)` call.
+    Read {
+        /// The path argument of the call.
+        path: String,
+    },
+    /// A native `edit(path)` or `write(path)` call.
+    Modified {
+        /// The path argument of the call.
+        path: String,
+    },
+}
+
+/// Classifies one canonical tool call as a native file operation, decoding
+/// the path through the owning tool module.
+///
+/// Returns `None` for any non-file native tool, any non-native tool, and any
+/// native file call whose recorded arguments do not identify a path.
+pub(crate) fn native_file_operation(call: &ToolCall) -> Option<NativeFileOperation> {
+    let tool_id = call.tool_id.as_str();
+    if tool_id == read::TOOL_ID {
+        read::operation_path(&call.arguments).map(|path| NativeFileOperation::Read { path })
+    } else if tool_id == edit::TOOL_ID {
+        edit::operation_path(&call.arguments).map(|path| NativeFileOperation::Modified { path })
+    } else if tool_id == write::TOOL_ID {
+        write::operation_path(&call.arguments).map(|path| NativeFileOperation::Modified { path })
+    } else {
+        None
+    }
+}
 
 /// The conversation-owned resources native tools need beyond their
 /// execution context.

@@ -16,8 +16,8 @@ use rustx::durable::{
 };
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
-    AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, ToolMessageBlock,
-    UserContentBlock, UserSource,
+    AssistantContentBlock, AssistantMessageBlock, CompactionSummaryMetadata, InboundKind,
+    MessageBlock, ToolMessageBlock, UserContentBlock, UserSource,
 };
 use rustx::runtime::identity::{AgentId, ConversationId, MessageId, ToolCallId, ToolId};
 use rustx::tools::types::{ToolExecutionResult, ToolExecutionStatus};
@@ -521,7 +521,7 @@ fn a_seeded_lineage_keeps_canonical_facts_its_surface_does_not_show() {
         id: MessageId::new("msg-summary"),
         content: text_blocks("earlier work, summarized"),
         source: UserSource::Runtime,
-        kind: InboundKind::CompactionSummary,
+        kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
         timestamp: None,
     });
     let dir = tempdir().expect("temp dir");
@@ -980,7 +980,7 @@ fn recovery_safety_fails_closed_on_incomplete_or_compacted_prefixes() {
         id: MessageId::new("summary-1"),
         content: text_blocks("earlier context"),
         source: UserSource::Runtime,
-        kind: InboundKind::CompactionSummary,
+        kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
         timestamp: None,
     });
     recovery_safety(&[user("u0"), user("u1"), summary])

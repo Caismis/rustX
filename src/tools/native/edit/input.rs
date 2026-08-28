@@ -41,7 +41,6 @@ impl EditInput {
         input.validate()?;
         Ok(input)
     }
-
     fn validate(&self) -> Result<(), String> {
         if self.edits.is_empty() {
             return Err("edit requires at least one replacement".to_owned());
@@ -57,6 +56,18 @@ impl EditInput {
         }
         Ok(())
     }
+}
+
+/// The path of one historical canonical Edit call, when its recorded
+/// arguments identify one.
+///
+/// This decodes only what compaction file-operation metadata needs — the
+/// path. The tool-owned argument normalizer above never rewrites `path`, so
+/// the recorded field is authoritative even for the malformed spellings the
+/// normalizer exists to repair. Execution validation stays with
+/// [`EditInput::parse`].
+pub(crate) fn operation_path(arguments: &serde_json::Value) -> Option<String> {
+    crate::tools::native::input::file_path_argument(arguments)
 }
 
 /// Normalizes known model-output deviations into the one canonical Edit

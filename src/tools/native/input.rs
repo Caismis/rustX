@@ -54,3 +54,23 @@ pub(crate) fn decode<I: DeserializeOwned>(
     serde_json::from_value(arguments.clone())
         .map_err(|error| format!("invalid {tool} arguments: {error}"))
 }
+
+/// Decodes only the `path` field of one native file tool's recorded
+/// arguments.
+///
+/// Compaction file-operation metadata (Issue #140) extracts the path a
+/// historical canonical tool call named without re-running the full input
+/// contract: the call may predate a current validation rule or have been
+/// rejected by it, yet the path remains a conversation fact. Each native file
+/// tool owns its own wrapper around this shared field decode, so the answer
+/// to "which argument names the file" stays in the tool module that owns the
+/// argument contract.
+pub(crate) fn file_path_argument(arguments: &serde_json::Value) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct PathOnly {
+        path: String,
+    }
+    serde_json::from_value::<PathOnly>(arguments.clone())
+        .ok()
+        .map(|decoded| decoded.path)
+}

@@ -52,7 +52,7 @@ fn shapes(messages: &[MessageBlock]) -> Vec<&'static str> {
         .iter()
         .map(|message| match message {
             MessageBlock::User(user) => match user.kind {
-                InboundKind::CompactionSummary => "summary",
+                InboundKind::CompactionSummary(_) => "summary",
                 InboundKind::Context(_) => "context",
                 InboundKind::Message => "user",
             },

@@ -346,7 +346,7 @@ impl LineageSeed {
                     known.get(replacement),
                     Some(MessageBlock::User(user))
                         if user.source == UserSource::Runtime
-                            && user.kind == InboundKind::CompactionSummary
+                            && user.kind.is_compaction_summary()
                 );
                 if !is_summary {
                     return Err(ConversationStoreError::InvalidReference(format!(

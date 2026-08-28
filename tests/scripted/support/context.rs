@@ -13,7 +13,7 @@ use futures_util::future::BoxFuture;
 use rustx::context::{
     ContextError, ContextErrorKind, ContextSummarizer, SummaryRequest, TokenEstimator,
 };
-use rustx::message::types::{InboundKind, MessageBlock};
+use rustx::message::types::MessageBlock;
 use rustx::model::ModelInputMessage;
 use rustx::tools::types::ModelToolDefinition;
 use tokio::sync::watch;
@@ -211,7 +211,7 @@ fn message_id(message: &MessageBlock) -> rustx::runtime::identity::MessageId {
 fn is_summary(message: &MessageBlock) -> bool {
     matches!(
         message,
-        MessageBlock::User(user) if user.kind == InboundKind::CompactionSummary
+        MessageBlock::User(user) if user.kind.is_compaction_summary()
     )
 }
 

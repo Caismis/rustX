@@ -216,7 +216,12 @@ pub enum RuntimeClientSessionRequest {
 /// Deliberately independent from the internal event schema version, the
 /// manifest schema version, and the crate version: representing or changing
 /// this version never implies anything about internal schemas.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 6;
+///
+/// Version 7 carries Issue #140's typed compaction-summary metadata: the
+/// canonical `InboundKind::CompactionSummary` message kind now transports
+/// its validated cumulative file-operation metadata, and clients mirror the
+/// payload shape.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 7;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1093,7 +1098,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 6);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 7);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

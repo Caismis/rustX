@@ -23,7 +23,7 @@
  * camelCase.
  */
 
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 6;
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 7;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -108,7 +108,7 @@ export type UserSource =
 
 export type InboundKind =
   | "message"
-  | "compaction_summary"
+  | { compaction_summary: CompactionSummaryMetadata }
   | {
       context:
         | "runtime_tool_observation"
@@ -117,6 +117,18 @@ export type InboundKind =
             agent_status: AgentStatusGenerationMetadata;
           };
     };
+
+/**
+ * The cumulative native file-operation facts of one compaction summary
+ * (Issue #140). Both lists are unique, in canonical ascending order, and
+ * disjoint: a file the retired lineage modified never also appears as read.
+ * The lists record conversation facts, not current filesystem state. An empty
+ * list is omitted from the wire shape entirely.
+ */
+export interface CompactionSummaryMetadata {
+  read_files?: string[];
+  modified_files?: string[];
+}
 
 export type AgentStatusModuleId = "time" | "background" | "todo";
 

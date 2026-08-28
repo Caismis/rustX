@@ -731,8 +731,8 @@ mod tests {
     use crate::message::content::TextBlock;
     use crate::message::types::{
         AgentStatusGenerationMetadata, AgentStatusModuleId, AssistantContentBlock,
-        AssistantMessageBlock, ContextKind, InboundKind, MessageBlock, ToolMessageBlock,
-        UserContentBlock, UserMessageBlock, UserSource,
+        AssistantMessageBlock, CompactionSummaryMetadata, ContextKind, InboundKind, MessageBlock,
+        ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
     use crate::runtime::identity::{ConversationId, MessageId, ToolCallId, ToolId};
     use crate::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus};
@@ -794,7 +794,7 @@ mod tests {
                 text: text.to_owned(),
             })],
             source: UserSource::Runtime,
-            kind: InboundKind::CompactionSummary,
+            kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
             timestamp: None,
         }
     }
