@@ -1578,7 +1578,6 @@ mod tests {
             clock: Arc::new(SystemClock),
             spawn: SubagentSpawnPlan {
                 program: std::path::PathBuf::from("/nonexistent/rustx"),
-                models: std::path::PathBuf::from("/nonexistent/models.jsonc"),
                 workspace,
                 runtime_root: runtime_root.clone(),
                 agent_status: crate::context::AgentStatusConfig::default(),
@@ -1673,7 +1672,7 @@ mod tests {
             ))
             .expect("digest"),
             instructions: "instructions".to_owned(),
-            model: crate::model::session::SessionModelConfig::of(
+            model: crate::model::frozen::test_frozen_model_spec(
                 serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),
             ),
             tools: Vec::new(),

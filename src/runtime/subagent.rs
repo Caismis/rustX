@@ -68,7 +68,8 @@ pub use registry::{
     SubagentStartOutcome, SubagentStartSpec, SubagentState,
 };
 pub use resolver::{
-    ResolvedSubagentSpec, ResolvedSubagentTool, SubagentResolutionError, SubagentResolver,
+    ResolvedSubagentSkill, ResolvedSubagentSpec, ResolvedSubagentTool, SubagentResolutionError,
+    SubagentResolver,
 };
 
 use std::sync::Arc;

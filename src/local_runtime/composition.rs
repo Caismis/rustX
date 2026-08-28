@@ -135,6 +135,7 @@ use crate::tools::environment::ToolEnvironment;
 use crate::tools::executor::ToolRegistry;
 use crate::tools::native::{NativeToolResources, register_native_tools};
 use crate::tools::runtime::ConversationToolRuntime;
+use crate::tools::types::ToolDefinition;
 
 use super::config::{CurrentRuntimeConfig, CurrentRuntimeConfigError, SubagentsDocument};
 use super::session::{
@@ -414,21 +415,23 @@ fn subagent_child_registry(
             ),
         });
     }
-    let builtin: Vec<String> = resolved
+    // The exact parent-frozen definitions — identity, description, input
+    // schema, and all three invocation-policy axes — never just their
+    // names. Rebuilding a definition from a default policy table here would
+    // silently substitute different semantics for the ones the invoking
+    // generation admitted.
+    let builtin: Vec<ToolDefinition> = resolved
         .tools
         .iter()
         .filter(|tool| matches!(tool, ResolvedSubagentTool::Builtin { .. }))
-        .map(|tool| tool.name().to_owned())
+        .map(|tool| tool.definition().clone())
         .collect();
     let mut registry = ToolRegistry::new();
-    crate::tools::native::register_subagent_child_tools(
-        &mut registry,
-        crate::tools::native::NativeToolPolicies::default(),
-        &builtin,
-    )
-    .map_err(|error| LocalRuntimeError::NativeTools {
-        detail: format!("{error:?}"),
-    })?;
+    crate::tools::native::register_subagent_child_tools(&mut registry, &builtin).map_err(
+        |error| LocalRuntimeError::NativeTools {
+            detail: format!("{error:?}"),
+        },
+    )?;
     Ok(registry)
 }
 
@@ -632,7 +635,7 @@ impl LocalConversationCore {
         // for direct low-level callers, while the selected durable Session
         // model remains an independent Session-local choice.
         SessionModelState::new(registry.clone(), runtime_config.model.clone())?;
-        let model = SessionModelState::new(registry, session_state.model.clone())?;
+        let model = SessionModelState::new(registry.clone(), session_state.model.clone())?;
 
         // 5-6. The conversation identity authority and the one conversation
         // tool runtime (workspace, runtime-private artifact root, canonical
@@ -672,7 +675,6 @@ impl LocalConversationCore {
                         path: PathBuf::from("<current exe>"),
                         detail: error.to_string(),
                     })?,
-                    models: paths.models.clone(),
                     workspace: paths.workspace.clone(),
                     runtime_root: artifacts_root.clone(),
                     agent_status: runtime_config.agent_status.clone(),
@@ -792,18 +794,15 @@ impl LocalConversationCore {
                 capability.current_snapshot().available_tools(),
                 resources.capability_availability(),
                 &skills,
-                model.registry(),
+                &registry,
             )
             .map_err(|(agent, error)| LocalRuntimeError::Capability {
                 detail: format!("subagents.agents.{agent}: {error}"),
             })?;
         }
-        let resource_loader: Arc<dyn RuntimeResourceLoader> =
-            Arc::new(LocalRuntimeResourceLoader::new(
-                paths.clone(),
-                native_resources,
-                model.registry().clone(),
-            ));
+        let resource_loader: Arc<dyn RuntimeResourceLoader> = Arc::new(
+            LocalRuntimeResourceLoader::new(paths.clone(), native_resources, registry),
+        );
 
         // Reopening a selected lineage must re-supply only its immutable
         // bootstrap prefix to ConversationRuntime. Later canonical turns are
@@ -893,18 +892,19 @@ impl LocalConversationCore {
         spec: &crate::runtime::subagent::ipc::SubagentChildSpec,
         dependencies: &LocalRuntimeDependencies,
     ) -> Result<Self, LocalRuntimeError> {
-        // 1-3. The model catalog/binding plane, identical to the ordinary
-        // composition: the catalog file path is inherited from the parent.
-        let catalog_bytes = read_file(&spec.models)?;
-        let catalog = ModelCatalog::from_jsonc_slice(&catalog_bytes)?;
-        let resolved = catalog.resolve(dependencies.credentials.as_ref())?;
-        let registry = ModelBindingRegistry::new(resolved)?;
-
-        // 4. The child's session model state, from the frozen spec. The
-        // parent already decided this — explicitly configured, or inherited
-        // from the invoking attempt's own frozen configuration — so the
-        // child re-chooses nothing.
-        let model = SessionModelState::new(registry, spec.resolved.model.clone())?;
+        // 1-4. The child's model authority, materialized from the
+        // parent-frozen resolved invocation. There is deliberately no model
+        // catalog step here: `models.jsonc` is mutable, and reopening it
+        // would let a catalog edit between the parent's freeze and this
+        // composition silently change the child's provider binding,
+        // protocol, context window, output budget, reasoning semantics,
+        // request parameters, compat metadata, or effective capabilities —
+        // or fail to resolve a model that was valid when the child was
+        // authorized. The only work done here is physical: adapter
+        // construction and credential resolution through this process's own
+        // ordinary credential boundary.
+        let model =
+            SessionModelState::frozen(&spec.resolved.model, dependencies.credentials.as_ref())?;
 
         // 5-6. The child conversation tool runtime over the shared
         // read-only workspace and the child-private runtime root. The
@@ -966,7 +966,14 @@ impl LocalConversationCore {
                 crate::context::ContextAssembly::new(),
                 capability.current_snapshot(),
             )
-            .with_frozen_skill_catalog(&spec.resolved.skills),
+            .with_frozen_skill_catalog(
+                &spec
+                    .resolved
+                    .skills
+                    .iter()
+                    .map(|skill| skill.catalog_entry.clone())
+                    .collect::<Vec<_>>(),
+            ),
         );
         let resource_loader: Arc<dyn RuntimeResourceLoader> =
             Arc::new(FrozenSubagentResourceLoader {
@@ -1595,15 +1602,14 @@ mod subagent_child_tests {
 
     use super::{LocalConversationCore, LocalRuntimeDependencies};
     use crate::model::catalog::MapCredentialEnvironment;
-    use crate::model::session::SessionModelConfig;
     use crate::runtime::identity::{AgentId, ConversationId, SubagentId, ToolId};
     use crate::runtime::resources::ProjectContextFile;
     use crate::runtime::subagent::catalog::SubagentName;
     use crate::runtime::subagent::ipc::{SUBAGENT_IPC_VERSION, SubagentChildSpec};
     use crate::runtime::subagent::resolver::{ResolvedSubagentSpec, ResolvedSubagentTool};
     use crate::tools::types::{
-        ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin,
-        ToolReplayPolicy,
+        ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
+        ToolInvocationPolicy, ToolOrigin, ToolReplayPolicy,
     };
 
     const MODELS: &str = r#"{
@@ -1635,29 +1641,29 @@ mod subagent_child_tests {
         }
     }
 
-    fn builtin(name: &str) -> ResolvedSubagentTool {
+    /// A frozen Builtin capability carrying the **real** admitted native
+    /// definition under the given policy: the child plane materializes the
+    /// exact frozen definition, so a synthetic stand-in would (correctly)
+    /// fail to materialize.
+    fn builtin_with_policy(name: &str, policy: ToolInvocationPolicy) -> ResolvedSubagentTool {
+        let definition = crate::tools::native::subagent_child_definition(name, policy)
+            .expect("the child plane implements this native capability");
         ResolvedSubagentTool::Builtin {
-            tool_id: ToolId::new(format!("tool-{name}")),
-            name: name.to_owned(),
-            definition: ToolDefinition {
-                id: ToolId::new(format!("tool-{name}")),
-                name: name.to_owned(),
-                description: format!("{name} tool"),
-                input_schema: serde_json::json!({"type": "object"}),
-                execution_policy: ToolExecutionPolicy::ForegroundOnly,
-                concurrency_policy: ToolConcurrencyPolicy::Sequential,
-                approval_policy: ToolApprovalPolicy::Never,
-                replay_policy: ToolReplayPolicy::Never,
-                origin: ToolOrigin::Builtin,
-            },
+            tool_id: definition.id.clone(),
+            name: definition.name.clone(),
+            definition,
         }
+    }
+
+    fn builtin(name: &str) -> ResolvedSubagentTool {
+        builtin_with_policy(name, ToolInvocationPolicy::default())
     }
 
     fn spec(
         root: &std::path::Path,
         tools: Vec<ResolvedSubagentTool>,
         project_instructions: Vec<ProjectContextFile>,
-        skills: Vec<crate::skills::SkillCatalogEntry>,
+        skills: Vec<crate::runtime::subagent::ResolvedSubagentSkill>,
     ) -> SubagentChildSpec {
         SubagentChildSpec {
             protocol_version: SUBAGENT_IPC_VERSION,
@@ -1670,14 +1676,13 @@ mod subagent_child_tests {
                 definition_digest: serde_json::from_value(serde_json::json!("sha256:frozen"))
                     .expect("digest"),
                 instructions: "frozen child instructions".to_owned(),
-                model: SessionModelConfig::of(
+                model: crate::model::frozen::test_frozen_model_spec(
                     serde_json::from_value(serde_json::json!("local/model-a")).expect("model ref"),
                 ),
                 tools,
                 skills,
                 project_instructions,
             },
-            models: root.join("models.jsonc"),
             agent_status: crate::context::AgentStatusConfig::default(),
             context: crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
@@ -1767,10 +1772,16 @@ mod subagent_child_tests {
                 dir.path(),
                 vec![builtin("read"), builtin("grep")],
                 Vec::new(),
-                vec![crate::skills::SkillCatalogEntry {
-                    name: "selected".to_owned(),
-                    description: "the selected skill".to_owned(),
-                    location: "/w/.agents/skills/selected/SKILL.md".to_owned(),
+                vec![crate::runtime::subagent::ResolvedSubagentSkill {
+                    binding: crate::protocol::manifest::SkillBinding {
+                        skill_id: crate::runtime::identity::SkillId::new("skill-selected"),
+                        version_id: crate::runtime::identity::SkillVersionId::new("sha256:v1"),
+                    },
+                    catalog_entry: crate::skills::SkillCatalogEntry {
+                        name: "selected".to_owned(),
+                        description: "the selected skill".to_owned(),
+                        location: "/w/.agents/skills/selected/SKILL.md".to_owned(),
+                    },
                 }],
             ),
             &dependencies(),

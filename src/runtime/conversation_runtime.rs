@@ -1964,7 +1964,7 @@ impl RuntimeInner {
         approval_mode: ApprovalMode,
         resources: Arc<RuntimeResourceSnapshot>,
         model_config: crate::model::session::SessionModelConfig,
-        model_registry: crate::model::invocation::ModelBindingRegistry,
+        model_registry: Option<crate::model::invocation::ModelBindingRegistry>,
         lease: crate::capabilities::AttemptCapabilityLease,
     ) -> crate::agent::AgentExecutionResult {
         let observer = RuntimeObserver::new(self);
@@ -1989,13 +1989,22 @@ impl RuntimeInner {
             // invoked by this attempt resolves exactly that generation — not
             // whatever generation happens to be runtime-current when the
             // model issues the call.
-            subagent_context: self.subagents.is_some().then(|| {
-                crate::runtime::subagent::AttemptSubagentContext::new(
-                    Arc::clone(&resources),
-                    model_config,
-                    model_registry,
-                )
-            }),
+            // A runtime whose model authority is frozen (a subagent child)
+            // owns neither a subagent registry nor a catalog to resolve a
+            // named definition's explicit model against, so the seam is
+            // absent on both counts rather than half-present.
+            subagent_context: self
+                .subagents
+                .is_some()
+                .then_some(model_registry)
+                .flatten()
+                .map(|models| {
+                    crate::runtime::subagent::AttemptSubagentContext::new(
+                        Arc::clone(&resources),
+                        model_config,
+                        models,
+                    )
+                }),
         };
         let request = AgentExecutionRequest {
             agent_id: self.agent_id.clone(),
@@ -2566,7 +2575,7 @@ impl RuntimeInner {
         // subagent with no explicit model inherits exactly this — never live
         // mutable session state, and never a composition-time capture.
         let model_config = state.model.config().clone();
-        let model_registry = state.model.registry().clone();
+        let model_registry = state.model.registry().cloned();
         // Freeze runtime execution policy at the same admission boundary as
         // the attempt's model snapshot. A later configuration change can
         // therefore affect only a future admitted attempt.
@@ -5140,7 +5149,7 @@ mod tests {
             ))
             .expect("digest"),
             instructions: "instructions".to_owned(),
-            model: crate::model::session::SessionModelConfig::of(
+            model: crate::model::frozen::test_frozen_model_spec(
                 serde_json::from_value(serde_json::json!("local/model")).expect("model reference"),
             ),
             tools: Vec::new(),
@@ -5742,7 +5751,6 @@ mod tests {
                 clock: Arc::new(crate::runtime::types::SystemClock),
                 spawn: crate::runtime::subagent::SubagentSpawnPlan {
                     program: std::path::PathBuf::from("/nonexistent/rustx"),
-                    models: std::path::PathBuf::from("/nonexistent/models.jsonc"),
                     workspace: workspace.clone(),
                     runtime_root: dir.path().join("subagents"),
                     agent_status: crate::context::AgentStatusConfig::default(),
@@ -5847,7 +5855,6 @@ mod tests {
                 clock: Arc::new(crate::runtime::types::SystemClock),
                 spawn: crate::runtime::subagent::SubagentSpawnPlan {
                     program: std::path::PathBuf::from("/nonexistent/rustx"),
-                    models: std::path::PathBuf::from("/nonexistent/models.jsonc"),
                     workspace: workspace.clone(),
                     runtime_root: dir.path().join("subagents"),
                     agent_status: crate::context::AgentStatusConfig::default(),

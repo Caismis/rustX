@@ -73,8 +73,6 @@ pub struct SubagentSpawnPlan {
     /// The rustX program executed as the child (the current executable in
     /// production; the test binary's sibling `rustx` in tests).
     pub program: std::path::PathBuf,
-    /// The model catalog path handed to the child.
-    pub models: std::path::PathBuf,
     /// The shared read-only workspace root.
     pub workspace: std::path::PathBuf,
     /// The **parent** runtime-private root; each child gets a disjoint
@@ -99,9 +97,12 @@ impl SubagentSpawnPlan {
     ///
     /// The spawn plan contributes only launch-scoped physical locations and
     /// inherited launch policy. Every semantic decision — agent identity,
-    /// instructions, model, capabilities, Skills, project instructions —
-    /// comes from the already-frozen [`ResolvedSubagentSpec`] the invoking
-    /// attempt's generation produced.
+    /// instructions, the resolved model invocation, capabilities, Skills,
+    /// project instructions — comes from the already-frozen
+    /// [`ResolvedSubagentSpec`] the invoking attempt's generation produced.
+    /// The plan deliberately carries no model catalog path: a child that
+    /// could open one could observe a catalog edit the parent never
+    /// authorized.
     #[must_use]
     pub(crate) fn child_spec(
         &self,
@@ -118,7 +119,6 @@ impl SubagentSpawnPlan {
             child_agent_id: child_agent_id.clone(),
             parent_agent_id: parent_agent_id.clone(),
             resolved: resolved.clone(),
-            models: self.models.clone(),
             agent_status: self.agent_status.clone(),
             context: self.context,
             workspace: self.workspace.clone(),

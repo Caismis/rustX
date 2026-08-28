@@ -73,21 +73,22 @@ const KIND_DIAGNOSTIC: u8 = 104;
 ///
 /// This is the one typed composition boundary between the parent and the
 /// child runtime: the child composes its headless `ConversationRuntime`
-/// from exactly this typed input plus the model catalog file at
-/// [`SubagentChildSpec::models`]. No temporary runtime configuration file
-/// is ever written.
+/// from exactly this typed input and nothing else. No configuration file of
+/// any kind is opened by the child, and no temporary runtime configuration
+/// file is ever written.
 ///
 /// # The parent resolves; the child consumes
 ///
 /// [`SubagentChildSpec::resolved`] is the complete frozen result of
 /// parent-side resolution against the invoking attempt's runtime resource
 /// generation: the named-agent identity and its definition digest, the child
-/// instruction document, the exact model configuration, the exact
-/// source-qualified capability identities, the exact Skill catalog metadata,
-/// and the exact project instruction chain. The child therefore never reads
-/// `rustx.jsonc` to look up the agent, never rediscovers project
-/// instructions or Skills, never re-chooses model policy, and never widens
-/// or substitutes Tool identity.
+/// instruction document, the completely resolved model invocation, the exact
+/// source-qualified capability identities with their exact admitted
+/// `ToolDefinition`s, the exact Skill version identities with their
+/// model-visible metadata, and the exact project instruction chain. The
+/// child therefore never reads `rustx.jsonc` to look up the agent, never
+/// reopens `models.jsonc` to re-resolve a model, never rediscovers project
+/// instructions or Skills, and never widens or substitutes Tool identity.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct SubagentChildSpec {
@@ -104,8 +105,6 @@ pub(crate) struct SubagentChildSpec {
     /// The complete frozen named-agent specification resolved by the parent
     /// against the invoking attempt's runtime resource generation.
     pub resolved: ResolvedSubagentSpec,
-    /// The model catalog file path (inherited from parent startup).
-    pub models: PathBuf,
     /// The launch-scoped Agent Status configuration of the child.
     pub agent_status: AgentStatusConfig,
     /// The session context policy of the child.
@@ -376,8 +375,6 @@ pub(crate) async fn read_parent_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::session::SessionModelConfig;
-
     use crate::runtime::identity::{McpServerId, ToolId, ToolVersionId};
     use crate::runtime::subagent::catalog::SubagentName;
     use crate::runtime::subagent::resolver::ResolvedSubagentTool;
@@ -412,7 +409,7 @@ mod tests {
             definition_digest: serde_json::from_value(serde_json::json!("sha256:abc"))
                 .expect("digest"),
             instructions: "instructions".to_owned(),
-            model: SessionModelConfig::of(
+            model: crate::model::frozen::test_frozen_model_spec(
                 serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),
             ),
             tools: vec![
@@ -444,10 +441,16 @@ mod tests {
                     ),
                 },
             ],
-            skills: vec![crate::skills::SkillCatalogEntry {
-                name: "repository-navigation".to_owned(),
-                description: "Navigate the repository.".to_owned(),
-                location: "/w/.rustx/skills/nav/SKILL.md".to_owned(),
+            skills: vec![crate::runtime::subagent::ResolvedSubagentSkill {
+                binding: crate::protocol::manifest::SkillBinding {
+                    skill_id: crate::runtime::identity::SkillId::new("skill-repository-navigation"),
+                    version_id: crate::runtime::identity::SkillVersionId::new("sha256:skill-v1"),
+                },
+                catalog_entry: crate::skills::SkillCatalogEntry {
+                    name: "repository-navigation".to_owned(),
+                    description: "Navigate the repository.".to_owned(),
+                    location: "/w/.rustx/skills/nav/SKILL.md".to_owned(),
+                },
             }],
             project_instructions: vec![crate::runtime::resources::ProjectContextFile {
                 path: PathBuf::from("/w/AGENTS.md"),
@@ -483,7 +486,6 @@ mod tests {
             child_agent_id: AgentId::new("agent-subagent-1"),
             parent_agent_id: AgentId::new("agent-parent"),
             resolved: resolved_spec(),
-            models: PathBuf::from("/tmp/models.jsonc"),
             agent_status: AgentStatusConfig::default(),
             context: SessionContextPolicy {
                 reserve_tokens: 1,
