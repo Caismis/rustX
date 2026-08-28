@@ -86,13 +86,57 @@ generation, so a reload that commits a newer generation cannot be observed by
 an in-flight attempt. A reload additionally refuses while an attempt is live.
 
 A resolved specification freezes everything the child needs: the
-`(agent, definition_digest)` identity, the instruction document, the exact
-model configuration, the exact source-qualified capability identities across
-Builtin/MCP/Python, the selected Skill catalog metadata, and the exact
-project-instruction chain. The child consumes that value and reinterprets
-nothing — it never reads `rustx.jsonc`, never runs the ancestor discovery
-described below, never re-chooses model policy, never rediscovers Skills, and
-never widens or substitutes Tool identity.
+`(agent, definition_digest)` identity, the instruction document, the
+completely resolved model invocation, the exact source-qualified capability
+identities across Builtin/MCP/Python together with the exact admitted
+`ToolDefinition` of each, the selected Skills' immutable
+`SkillId` + `SkillVersionId` bindings with their model-visible catalog
+metadata, and the exact project-instruction chain. The child consumes that
+value and reinterprets nothing — it never reads `rustx.jsonc`, never reopens
+`models.jsonc`, never runs the ancestor discovery described below, never
+rediscovers Skills, and never widens or substitutes Tool identity.
+
+Parent resolution is **semantic authority**; child composition is **physical
+materialization**. The distinction is what makes "frozen" true rather than
+nominal:
+
+- the model crosses as a `FrozenModelSpec` — a resolved invocation carrying
+  the provider binding, protocol, context window, output budget, reasoning
+  profile and its semantic enabled state, effective request parameters,
+  effective capabilities, and compat metadata — not as a
+  `SessionModelConfig` plus a catalog path. The child builds the provider
+  adapter from the frozen binding and resolves the declared credential
+  source against its own process environment, which is rustX's existing
+  credential boundary; it never re-resolves a model against a mutable
+  catalog file that may have changed since the parent froze it;
+- each Builtin capability crosses as its exact admitted `ToolDefinition`, so
+  a generation's non-default execution, concurrency, or approval policy is
+  the policy the child actually registers. The child reconstructs the native
+  implementation for that name under the frozen policy and **fails closed**
+  if the reconstruction does not equal the frozen definition;
+- each Skill crosses as `SkillId` + `SkillVersionId` plus its catalog
+  metadata. A host path is metadata, never identity: the bytes behind a path
+  can change without the path changing, so an old frozen specification stays
+  unambiguous after the filesystem moves on.
+
+### What `definition_digest` is, and is not
+
+`SubagentDefinitionDigest` is the identity of the **named definition
+itself** — the normalized semantics configuration declares for that agent
+(name, description, instruction document, explicit model reference, selector
+set, Skill selector set, project-instruction policy). It is deliberately
+*not* a digest of the full effective child runtime.
+
+Everything the invoking generation contributes at resolution time —
+inherited project instructions, the exact admitted Skill *versions*, the
+resolved capability definitions, the resolved model invocation — is
+invoking-generation state, not definition state. Two children started from
+the same definition under two different generations therefore share a digest
+while legitimately differing in resolved resources. The durable identity
+`(agent, definition_digest)` answers "which named definition is this child
+running?", which is exactly what ownership, recovery, and the Runtime Client
+projection need; it never claims to answer "which exact effective runtime is
+this child?".
 
 ## Project instruction discovery
 

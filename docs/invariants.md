@@ -1238,28 +1238,62 @@ that a live child produced an Interrupted physical result.
   leaves the previous complete generation authoritative in every half —
   catalog, capability state, project instructions, Skills, model selection,
   and the active generation identity.
+- **Optional-source tolerance never short-circuits admission.** Admission
+  inspects *every* selector of a definition: an unavailable source is
+  tolerated for that individual selector and validation continues, so an
+  offline MCP server listed before a misspelled Builtin/Python/MCP selector
+  cannot smuggle a statically invalid definition into a published
+  generation. Invocation-time resolution stays fail-fast on the first
+  unsatisfiable selector. Both callers share one per-selector,
+  source-qualified matching core.
 - **Project instructions and Skills are parent-resolved frozen resources;
   the child does not rediscover them.** `agentsMd.inherit = true` freezes the
   generation's exact chain followed by the definition's explicit files in
   configured order; `inherit = false` freezes only the explicit files. The
-  child's Skill catalog is the parent-resolved allowlist by value, with
-  progressive disclosure intact: catalog metadata crosses the boundary, never
-  a `SKILL.md` body. The child runs no ancestor discovery, which is what makes
-  the boundary correct once a child's filesystem ancestry can differ from the
-  parent workspace.
-- **A default child model is the invoking attempt's frozen effective model.**
-  An explicitly configured model resolves through the admitted model
-  authority and fails closed; no path reads live mutable session state or a
-  composition-time capture.
+  child's Skill allowlist crosses as the immutable
+  `SkillId` + `SkillVersionId` binding of each selected package plus its
+  model-visible catalog metadata, with progressive disclosure intact: no
+  `SKILL.md` body ever crosses the boundary, and a host path is metadata
+  rather than identity, so a later filesystem change cannot reinterpret an
+  already-frozen specification. The child runs no ancestor discovery and no
+  Skill discovery, which is what makes the boundary correct once a child's
+  filesystem ancestry can differ from the parent workspace.
+- **A default child model is the invoking attempt's frozen effective model,
+  and it crosses the boundary already resolved.** An explicitly configured
+  model resolves through the admitted model authority and fails closed; no
+  path reads live mutable session state or a composition-time capture. What
+  crosses is a `FrozenModelSpec` — the resolved invocation's provider
+  binding, protocol, context window, output budget, reasoning profile and
+  enabled state, effective request parameters, effective capabilities, and
+  compat metadata — never a `SessionModelConfig` plus a `models.jsonc` path.
+  The child materializes it physically (adapter construction plus credential
+  resolution through its own `CredentialEnvironment`) and owns **no** mutable
+  model authority: `SessionModelState::registry()` is `None` there and a live
+  model replacement is refused. A catalog edit landing between the parent's
+  freeze and the child's composition is therefore unobservable to that child.
+- **A child registers the exact parent-frozen `ToolDefinition`.** Identity,
+  description, input schema, replay policy, origin, and all three invocation
+  policy axes are the ones the invoking generation admitted. The child plane
+  reconstructs the native implementation for the frozen name under the frozen
+  policy through one bounded explicit `match` — no factory, plugin loader, or
+  strategy registry — and compares the reconstruction against the frozen
+  definition, failing closed on any mismatch rather than substituting
+  different semantics under the same tool name. `subagent`, `ask_user`, and
+  `background_task` have no child-plane implementation at all.
 - **Committed child identity is `(agent, definition_digest)`.**
   `SubagentDefinitionDigest` is SHA-256 over a rustX-owned versioned
   canonical framing (`rustx-subagent-definition-v1`) of the normalized
   semantic definition — never raw JSONC bytes — so comments, whitespace, key
   order, and selector listing order cannot change it while every semantic
-  change does. The durable fact, registry snapshot, recovery diagnostic, and
-  Runtime Client projection all carry both fields, so a later reload that
-  redefines the same agent name can never reinterpret an already-running
-  child by name alone.
+  change does. It is the identity of the **named definition itself**, not of
+  the full effective child runtime: inherited project instructions, the exact
+  admitted Skill versions, the resolved capability definitions, and the
+  resolved model invocation are invoking-generation state, so two children of
+  the same definition under different generations share a digest while
+  legitimately differing in resolved resources. The durable fact, registry
+  snapshot, recovery diagnostic, and Runtime Client projection all carry both
+  fields, so a later reload that redefines the same agent name can never
+  reinterpret an already-running child by name alone.
 - **Builtin/MCP/Python selectors use one source-qualified semantic capability
   model.** One selection vocabulary and one resolution core produce frozen
   identities that keep exact source identity: Builtin freezes its `ToolId`

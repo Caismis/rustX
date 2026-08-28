@@ -2081,7 +2081,9 @@ concurrent mutations would publish racing snapshots, and there is nothing
 in a task list for a human to approve. A subagent child composes exactly the
 Builtin capabilities its named definition resolved to, so a child without an
 explicit `todo` selection has no `todo` registration at all and session
-isolation of the list is structural rather than a check.
+isolation of the list is structural rather than a check, and a child that
+does select `todo` gets the exact frozen definition its parent generation
+admitted.
 
 The dispatch ownership commit is the background linearization point: the
 registry synchronization boundary is acquired first and the final
@@ -4344,6 +4346,7 @@ RuntimeResourceSnapshot Rn         one admitted resource generation
             v
       SubagentResolver             definition + Rn + attempt model
             |                      -> frozen ResolvedSubagentSpec
+            |                         (semantic authority decided HERE)
             v
 ConversationRuntime/coordinator
         |
@@ -4393,6 +4396,63 @@ materialization of the external origins is a later issue; until it exists,
 `SubagentRegistry::prepare` refuses a specification that requires one, before
 any identity is allocated and any process is staged, rather than starting a
 child weaker than the definition it was authorized with.
+
+The two callers of that one selection core are deliberately asymmetric.
+Invocation-time resolution is fail-fast: the first selector that cannot be
+satisfied — for any reason — stops the start. Admission-time validation of a
+candidate generation instead inspects *every* selector, tolerating an
+unavailable optional source for that individual selector while continuing to
+validate the rest, so an offline MCP server listed before a misspelled
+selector can never smuggle a statically invalid definition into a published
+generation. The health/validity distinction is preserved without either
+caller re-implementing three-origin matching.
+
+#### Parent resolution is semantic authority; the child only materializes
+
+`ResolvedSubagentSpec` is only meaningfully "frozen" if the child cannot
+re-derive any of it. Three representations carry that weight:
+
+- **Model.** The child receives a `FrozenModelSpec` — a completely resolved
+  invocation (provider identity and endpoint, declared credential source,
+  protocol, context window, model and effective output limits, selected
+  reasoning profile with its semantic enabled state, effective request
+  parameters, effective capabilities, compat metadata) plus the descriptive
+  `SessionModelConfig` it was frozen from — never a `SessionModelConfig` and
+  a `models.jsonc` path. Handing over a path would let a catalog edit landing
+  between the parent's freeze and the child's composition silently change the
+  child's provider binding, protocol, limits, or reasoning semantics, or make
+  a model the parent authorized fail to resolve at all. The child's work is
+  purely physical: it builds the adapter through the runtime's one
+  adapter-construction site and resolves the declared credential source
+  against its own process `CredentialEnvironment` — rustX's existing
+  credential boundary, not a second credential system. A resolved credential
+  value and an `Arc<dyn ModelAdapter>` never cross the wire. Consequently a
+  child owns **no** mutable model authority: `SessionModelState::registry()`
+  is `None`, `catalog_view()` publishes exactly the frozen model, and a live
+  model replacement is refused with `ImmutableModelAuthority`. That is also
+  why a child cannot host subagents of its own — it holds no catalog to
+  resolve a named definition's explicit model against.
+- **Builtin capability.** The exact admitted `ToolDefinition` crosses, and
+  the child registers *that value*. A generation that admits `grep` as
+  model-selectable, parallel, and approval-required must give its children
+  that `grep`; rebuilding from a default policy table would substitute
+  different semantics under the same name. The child plane maps a frozen
+  name plus its frozen policy to a native implementation through one bounded
+  explicit `match` — no factory, plugin loader, strategy registry, or
+  reflective lookup — then compares the reconstructed definition against the
+  frozen one and fails closed on any mismatch. `subagent`, `ask_user`, and
+  `background_task` have no entry in that `match` at all, so recursion and
+  headless-unsafe surfaces are structurally absent rather than filtered.
+- **Skill.** The immutable `SkillId` + `SkillVersionId` binding of each
+  selected package crosses alongside its model-visible catalog metadata. The
+  host `SKILL.md` path remains metadata and is never treated as identity: its
+  bytes can change without the path changing, so only the version binding
+  makes an already-frozen specification unambiguous later. No `SKILL.md` body
+  is preloaded — progressive disclosure stays ordinary Skill semantics — and
+  a Skill the generation hides from model invocation fails closed rather than
+  being silently omitted. The physical materialization of these identities is
+  the later external-capability issue's work; #144 fixes the wire
+  representation it will consume.
 
 `prepare` validates the bounded task/context and stages a real child through
 its typed Hello/Ready handshake. The one ownership commit freezes one start
