@@ -1805,6 +1805,42 @@ mod subagent_child_tests {
         );
     }
 
+    /// Issue #144: the child's model authority comes from the frozen
+    /// specification, so there is no model catalog read to race with a
+    /// later edit.
+    ///
+    /// The proof is structural rather than a timing argument: the catalog
+    /// file is deleted before composition, and the child still composes with
+    /// exactly the frozen semantics. There is no code path left that could
+    /// observe a `models.jsonc` at all.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_child_composes_with_no_model_catalog_on_disk() {
+        let dir = lab();
+        std::fs::remove_file(dir.path().join("models.jsonc")).expect("remove the catalog");
+        let spec = spec(dir.path(), vec![builtin("read")], Vec::new(), Vec::new());
+        let core = LocalConversationCore::compose_subagent_child(&spec, &dependencies())
+            .expect("the child composes from the frozen model authority alone");
+
+        let model = core.runtime().model_view();
+        assert_eq!(
+            model.effective.model, spec.resolved.model.primary.model,
+            "the child runs exactly the model its parent froze"
+        );
+        assert_eq!(
+            model.effective.protocol,
+            spec.resolved.model.primary.protocol
+        );
+        assert_eq!(
+            model.effective.context_window,
+            spec.resolved.model.primary.context_window
+        );
+        assert_eq!(
+            core.runtime().model_catalog().models.len(),
+            1,
+            "a frozen authority publishes exactly the model it froze"
+        );
+    }
+
     /// A frozen specification that requires an external execution plane is
     /// refused rather than composed weaker than it was authorized.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
