@@ -123,7 +123,7 @@ async fn run(
     cancellation: &AgentCancellation,
     observer: &dyn AgentExecutionObserver,
 ) -> common::DurableExecutionAudit {
-    run_inner(model, tools, lifecycle, cancellation, observer, None).await
+    run_inner(model, tools, lifecycle, cancellation, observer, None, None).await
 }
 
 async fn run_with_tool_cancellation_settlement_pause(
@@ -134,7 +134,36 @@ async fn run_with_tool_cancellation_settlement_pause(
     observer: &dyn AgentExecutionObserver,
     pause: crate::agent::execution::test_sync::ToolCancellationSettlementPause,
 ) -> common::DurableExecutionAudit {
-    run_inner(model, tools, lifecycle, cancellation, observer, Some(pause)).await
+    run_inner(
+        model,
+        tools,
+        lifecycle,
+        cancellation,
+        observer,
+        Some(pause),
+        None,
+    )
+    .await
+}
+
+async fn run_with_tool_physical_settlement_pause(
+    model: &Arc<FakeModel>,
+    tools: ToolRegistry,
+    lifecycle: AttemptLifecycle,
+    cancellation: &AgentCancellation,
+    observer: &dyn AgentExecutionObserver,
+    pause: crate::agent::execution::test_sync::ToolPhysicalSettlementPause,
+) -> common::DurableExecutionAudit {
+    run_inner(
+        model,
+        tools,
+        lifecycle,
+        cancellation,
+        observer,
+        None,
+        Some(pause),
+    )
+    .await
 }
 
 async fn run_inner(
@@ -145,6 +174,9 @@ async fn run_inner(
     observer: &dyn AgentExecutionObserver,
     cancellation_settlement_pause: Option<
         crate::agent::execution::test_sync::ToolCancellationSettlementPause,
+    >,
+    physical_settlement_pause: Option<
+        crate::agent::execution::test_sync::ToolPhysicalSettlementPause,
     >,
 ) -> common::DurableExecutionAudit {
     let tool_runtime = common::tool_runtime("conv-136");
@@ -164,6 +196,9 @@ async fn run_inner(
     execution.observe(observer);
     if let Some(pause) = cancellation_settlement_pause {
         execution.install_tool_cancellation_settlement_pause(pause);
+    }
+    if let Some(pause) = physical_settlement_pause {
+        execution.install_tool_physical_settlement_pause(pause);
     }
     let result = tokio::time::timeout(Duration::from_secs(5), execution.run())
         .await
@@ -290,6 +325,35 @@ struct LateCompletionTool {
     side_effect: Arc<AtomicBool>,
 }
 
+/// An executor that returns a physical cancellation with its own reason. The
+/// Agent Loop must preserve that reason when the physical result wins, while
+/// still canonicalizing the phase from the executor frontier.
+struct PhysicalCancelledTool {
+    definition: rustx::tools::types::ToolDefinition,
+    started: watch::Sender<bool>,
+    result: ToolExecutionResult,
+}
+
+impl PhysicalCancelledTool {
+    fn register(self, registry: &mut ToolRegistry) {
+        registry
+            .register(self.definition.clone(), Arc::new(self))
+            .expect("physical cancellation tool registration");
+    }
+}
+
+impl ToolExecutor for PhysicalCancelledTool {
+    fn execute<'a>(
+        &'a self,
+        _invocation: ToolInvocation,
+        _context: ToolExecutionContext<'a>,
+    ) -> BoxFuture<'a, ToolExecutionResult> {
+        self.started.send_replace(true);
+        let result = self.result.clone();
+        Box::pin(async move { result })
+    }
+}
+
 impl LateCompletionTool {
     fn register(self, registry: &mut ToolRegistry) {
         registry
@@ -374,6 +438,15 @@ async fn issue136_canonical_call_cancelled_before_executor_start() {
             .count(),
         0,
         "no start fact exists before the executor frontier"
+    );
+    assert_eq!(
+        audit
+            .event_history
+            .iter()
+            .filter(|event| matches!(event, RuntimeEvent::ToolExecutionCompleted { .. }))
+            .count(),
+        0,
+        "a never-started call has no physical completion fact"
     );
     assert!(matches!(
         audit.result.outcome,
@@ -541,6 +614,97 @@ async fn issue136_cancellation_wins_and_late_completion_cannot_replace_it() {
         1,
         "late completion cannot reopen a turn"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn issue136_physical_result_winner_freezes_executor_cancellation_reason() {
+    let call = call(
+        "call-physical-cancel",
+        "tool-physical-cancel",
+        "physical-cancel",
+    );
+    let model = fake_model(tool_turn(&[call]));
+    let (started, mut started_rx) = watch::channel(false);
+    let (physical_settlement_pause, mut physical_won_rx, release_pause) =
+        crate::agent::execution::test_sync::ToolPhysicalSettlementPause::install();
+    let mut tools = ToolRegistry::new();
+    PhysicalCancelledTool {
+        definition: common::tool("physical-cancel", "tool-physical-cancel"),
+        started,
+        result: ToolExecutionResult {
+            status: ToolExecutionStatus::Cancelled {
+                reason: CancellationReason::ParentCancelled,
+                // This is intentionally only a provisional executor value;
+                // the Agent Loop owns the authoritative phase.
+                phase: ToolCancellationPhase::BeforeStart,
+            },
+            content: Vec::new(),
+            duration_ms: 4,
+            exit_code: None,
+            artifacts: Vec::new(),
+            truncation: None,
+            managed_output: None,
+        },
+    }
+    .register(&mut tools);
+
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let controller_cancellation = cancellation.clone();
+    let controller = tokio::spawn(async move {
+        started_rx
+            .wait_for(|is_started| *is_started)
+            .await
+            .expect("physical cancellation executor started");
+        physical_won_rx
+            .wait_for(|won| *won)
+            .await
+            .expect("physical result won the foreground arbitration");
+        assert!(controller_cancellation.request_cancel(CancellationReason::UserRequested));
+        release_pause
+            .send(())
+            .expect("physical settlement pause remains installed");
+    });
+
+    let audit = run_with_tool_physical_settlement_pause(
+        &model,
+        tools,
+        AttemptLifecycle::inert(),
+        &cancellation,
+        &NoopObserver,
+        physical_settlement_pause,
+    )
+    .await;
+    controller
+        .await
+        .expect("physical-result cancellation controller");
+
+    let messages = tool_messages(&audit);
+    assert_eq!(messages.len(), 1);
+    assert!(matches!(
+        messages[0].result.status,
+        ToolExecutionStatus::Cancelled {
+            reason: CancellationReason::ParentCancelled,
+            phase: ToolCancellationPhase::DuringExecution,
+        }
+    ));
+    assert_eq!(
+        audit
+            .event_history
+            .iter()
+            .filter_map(|event| match event {
+                RuntimeEvent::ToolExecutionCompleted { result, .. } => Some(&result.status),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        vec![&messages[0].result.status],
+        "the physical winner's result is the completed execution fact"
+    );
+    assert!(matches!(
+        audit.result.outcome,
+        AttemptOutcome::Cancelled {
+            reason: CancellationReason::UserRequested
+        }
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

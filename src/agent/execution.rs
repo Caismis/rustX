@@ -502,6 +502,13 @@ pub struct AgentExecution<'a> {
     #[cfg(test)]
     tool_cancellation_settlement_pause:
         std::sync::Mutex<Option<test_sync::ToolCancellationSettlementPause>>,
+    /// Test-only control point immediately after the physical-result branch
+    /// wins foreground settlement arbitration. It lets a test request attempt
+    /// cancellation after the physical result is authoritative, before any
+    /// post-arbitration normalization runs.
+    #[cfg(test)]
+    tool_physical_settlement_pause:
+        std::sync::Mutex<Option<test_sync::ToolPhysicalSettlementPause>>,
     turn: u32,
     terminal_emitted: bool,
 }
@@ -915,6 +922,8 @@ impl<'a> AgentExecution<'a> {
             tool_start_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
             tool_cancellation_settlement_pause: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            tool_physical_settlement_pause: std::sync::Mutex::new(None),
             turn: 0,
             terminal_emitted: false,
         })
@@ -1012,6 +1021,18 @@ impl<'a> AgentExecution<'a> {
             .tool_cancellation_settlement_pause
             .lock()
             .expect("tool cancellation settlement pause lock") = Some(pause);
+    }
+
+    /// Installs the deterministic physical-result settlement pause.
+    #[cfg(test)]
+    pub(crate) fn install_tool_physical_settlement_pause(
+        &mut self,
+        pause: test_sync::ToolPhysicalSettlementPause,
+    ) {
+        *self
+            .tool_physical_settlement_pause
+            .lock()
+            .expect("tool physical settlement pause lock") = Some(pause);
     }
 
     /// Runs the attempt to its execution settlement candidate.
@@ -3841,14 +3862,29 @@ impl<'a> AgentExecution<'a> {
         }
     }
 
+    #[cfg(test)]
+    fn park_after_tool_physical_settlement(&self) {
+        if let Some(pause) = self
+            .tool_physical_settlement_pause
+            .lock()
+            .expect("tool physical settlement pause lock")
+            .as_ref()
+        {
+            pause.park();
+        }
+    }
+
     /// Runs one foreground invocation against attempt cancellation.
     ///
     /// The execution receives an `ExecutionCancellation` view of the
     /// attempt's signal in its context. Native foreground work derives child
     /// signals from that view, so observable attempt cancellation physically
     /// reaches the subordinate operation without handing it cancellation
-    /// authority over the attempt. Cancelled results produced while attempt
-    /// cancellation is observable are normalized to the attempt's reason.
+    /// authority over the attempt. The winner of the physical-result/
+    /// cancellation arbitration freezes cancellation provenance: an attempt
+    /// cancellation winner uses its reason, while a physical-result winner
+    /// preserves an executor's cancellation reason and only normalizes its
+    /// phase.
     async fn run_foreground(
         &self,
         invocation: &ToolInvocation,
@@ -3884,36 +3920,47 @@ impl<'a> AgentExecution<'a> {
         };
         let future = executor.execute(invocation.clone(), context);
         tokio::pin!(future);
-        let (cancellation_won, mut result) = tokio::select! {
+        let (winner, mut result) = tokio::select! {
             biased;
             () = self.cancellation.cancelled() => {
+                // Read the absorbing reason at the same boundary that makes
+                // cancellation the winner. The later physical await is only
+                // cleanup and must not consult mutable attempt cancellation
+                // state again.
+                let reason = self.cancellation.reason();
                 #[cfg(test)]
                 self.park_after_tool_cancellation_settlement();
-                (true, future.as_mut().await)
+                (ToolSettlementWinner::Cancellation(reason), future.as_mut().await)
             },
-            result = future.as_mut() => (false, result),
+            result = future.as_mut() => {
+                // This pause is after the select branch has won and before
+                // result normalization, so a cancellation requested here is
+                // provably too late to reclaim physical settlement authority.
+                #[cfg(test)]
+                self.park_after_tool_physical_settlement();
+                (ToolSettlementWinner::Physical, result)
+            },
         };
-        if cancellation_won {
-            result.status = ToolExecutionStatus::Cancelled {
-                reason: self.cancellation.reason(),
-                phase: ToolCancellationPhase::DuringExecution,
-            };
-        } else if let ToolExecutionStatus::Cancelled {
-            reason: executor_reason,
-            ..
-        } = &result.status
-        {
-            // The executor was invoked after this slot crossed the frontier,
-            // so an executor-produced cancellation is in-flight even when
-            // the attempt cancellation signal did not win this race.
-            result.status = ToolExecutionStatus::Cancelled {
-                reason: if self.cancellation.is_cancelled() {
-                    self.cancellation.reason()
-                } else {
-                    *executor_reason
-                },
-                phase: ToolCancellationPhase::DuringExecution,
-            };
+        match winner {
+            ToolSettlementWinner::Cancellation(reason) => {
+                result.status = ToolExecutionStatus::Cancelled {
+                    reason,
+                    phase: ToolCancellationPhase::DuringExecution,
+                };
+            }
+            ToolSettlementWinner::Physical => {
+                if let ToolExecutionStatus::Cancelled { reason, .. } = &result.status {
+                    // The executor was invoked after this slot crossed the
+                    // frontier, so an executor-produced cancellation is
+                    // in-flight. Its physical reason was already authoritative
+                    // when this branch won and must not be replaced by a later
+                    // attempt cancellation.
+                    result.status = ToolExecutionStatus::Cancelled {
+                        reason: *reason,
+                        phase: ToolCancellationPhase::DuringExecution,
+                    };
+                }
+            }
         }
         let progress_events = buffer.take();
         (result, progress_events)
@@ -4456,6 +4503,14 @@ struct CallSlot {
     progress: Vec<RuntimeEvent>,
 }
 
+/// The frozen winner of one foreground physical-result/cancellation race.
+/// The cancellation reason is captured with the winner so later requests
+/// cannot rewrite a physical result that already owns settlement authority.
+enum ToolSettlementWinner {
+    Cancellation(CancellationReason),
+    Physical,
+}
+
 /// The immutable facts of one settled call of a structurally settled batch.
 ///
 /// These are copies of exactly what was committed as canonical history, kept
@@ -4873,6 +4928,41 @@ pub(crate) mod test_sync {
 
         /// Announces that cancellation won the Agent Loop arbitration, then
         /// waits for the test to release the late physical future.
+        pub(super) fn park(&self) {
+            self.reached.send_replace(true);
+            let _ = self.release.recv();
+        }
+    }
+
+    /// A test-only control point after the physical-result branch wins the
+    /// foreground settlement arbitration and before post-arbitration result
+    /// normalization. The controller can request a later attempt
+    /// cancellation at that exact point and prove it cannot rewrite the
+    /// physical winner's cancellation reason.
+    #[derive(Debug)]
+    pub(crate) struct ToolPhysicalSettlementPause {
+        reached: watch::Sender<bool>,
+        release: mpsc::Receiver<()>,
+    }
+
+    impl ToolPhysicalSettlementPause {
+        /// Creates the pause and its observation/release handles.
+        #[must_use]
+        pub(crate) fn install() -> (Self, watch::Receiver<bool>, mpsc::Sender<()>) {
+            let (reached, reached_rx) = watch::channel(false);
+            let (release_tx, release_rx) = mpsc::channel();
+            (
+                Self {
+                    reached,
+                    release: release_rx,
+                },
+                reached_rx,
+                release_tx,
+            )
+        }
+
+        /// Announces that the physical result won and waits for the test to
+        /// release post-arbitration settlement.
         pub(super) fn park(&self) {
             self.reached.send_replace(true);
             let _ = self.release.recv();

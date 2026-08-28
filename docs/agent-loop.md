@@ -199,9 +199,13 @@ canonical boundary in `src/tools/executor.rs`:
   contract failure and the Assistant message is never committed; a business
   schema violation is a normal failed result slot and the executor never
   runs.
-- The loop records the returned result verbatim and feeds it back to the
-  model inside a `ToolMessageBlock`; it never fabricates, modifies, or
-  reinterprets a result.
+- Executors report physical outcomes. The owning runtime scheduler or
+  registry owns canonical cancellation settlement: it may normalize the
+  cancellation reason when its cancellation authority wins and always
+  canonicalizes the cancellation phase from its authoritative start frontier.
+  The resulting `ToolExecutionResult` in the `ToolMessageBlock` is the final
+  provider-independent authority; it is not a promise that the executor's
+  returned status was copied verbatim.
 
 A failing tool is a normal outcome: the failed `ToolExecutionResult` is
 passed back to the model, which decides the next action. Cancellable native

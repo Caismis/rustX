@@ -305,7 +305,13 @@ stream and normally commits exactly one terminal `RuntimeEvent`:
   assignment: a completed result is never rolled back, and a late physical
   completion cannot replace a cancellation winner. Providers, executors,
   Runtime Client projection, and TUI only consume/project the typed fact.
-  Canonical ToolMessages still commit exactly once in model call order.
+  The background registry owns the detached-runner frontier for background
+  results; it does not change foreground Agent Loop ownership. A canonical
+  ToolMessage commit repairs an unsettled Runtime Client foreground slot for
+  `BeforeStart` without fabricating `ToolExecutionStarted` or physical
+  completion, while a live settlement and the commit share an at-most-once
+  projection transition. Canonical ToolMessages still commit exactly once in
+  model call order.
 
 - `ModelRequestCompleted.usage` reports the completed request's canonical
   final usage: terminal `Completed.usage`, otherwise the latest `UsageUpdate`,

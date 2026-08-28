@@ -411,19 +411,22 @@ impl ManagedOutputContinuation {
     }
 }
 
-/// The semantic phase at which a foreground tool call was cancelled.
+/// The semantic phase at which a tool call was cancelled.
 ///
 /// This is a closed, provider-independent fact owned by the canonical tool
-/// result contract. The Agent Loop selects it from the per-call executor
-/// start frontier; executors and clients never infer it.
+/// result contract and shared by foreground and background runtime-owned
+/// results. The foreground Agent Loop selects it from its per-call executor
+/// start frontier; the background registry selects it from its detached-runner
+/// frontier. Executors and clients never infer it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolCancellationPhase {
-    /// The canonical call had execution authority, but its executor was
-    /// never started.
+    /// The accepted call had execution authority, but its owner's executor
+    /// start frontier was never crossed.
     BeforeStart,
-    /// The executor had started and cancellation won before normal
-    /// completion. This does not promise rollback or absence of side effects.
+    /// The owner's executor start frontier was crossed and cancellation won
+    /// before normal completion. This does not promise rollback or absence of
+    /// side effects.
     DuringExecution,
 }
 

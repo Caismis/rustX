@@ -201,7 +201,12 @@ impl<'a> ToolExecutionContext<'a> {
 /// Executors execute an already-resolved, already-validated
 /// [`ToolInvocation`] and report the actual execution outcome: a failure is
 /// a normalized [`ToolExecutionStatus::Failed`] result, never a fabricated
-/// success. The runtime records the returned result verbatim.
+/// success. Executors report physical outcomes; the owning runtime scheduler
+/// or registry owns canonical cancellation settlement and may normalize the
+/// cancellation reason and phase from its authoritative winner and start
+/// frontier. The canonical [`ToolExecutionResult`] is the final
+/// provider-independent authority, so callers must not rely on the executor
+/// return being copied verbatim into history.
 ///
 /// An executor must settle after cancellation: when the [`ExecutionCancellation`]
 /// in its context fires, a cancellable executor physically settles its

@@ -22,6 +22,7 @@ import {
   assistantMessage,
   approvalInteraction,
   attemptModel,
+  attemptView,
   backgroundExecution,
   contextUserMessage,
   capabilities,
@@ -31,6 +32,7 @@ import {
   runtimeCursor,
   snapshot,
   transcriptCursor,
+  foreground,
   toolMessage,
   toolResult,
   userMessage,
@@ -747,6 +749,113 @@ describe("presentation projection", () => {
     assert.equal(state.background.length, 1, "updates replace, never duplicate");
     assert.equal(state.background[0]?.state, "succeeded");
     assert.equal(state.transcript.length, 1);
+  });
+
+  it("settles a never-started foreground call from its canonical ToolMessage", () => {
+    const result = toolResult({
+      status: {
+        type: "cancelled",
+        reason: "runtime_shutdown",
+        phase: "before_start",
+      },
+    });
+    const message = toolMessage("m2", "c1", "tool-bash", result);
+    const assembled = fold(initial(), [
+      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      {
+        type: "tool_call_started",
+        attempt_id: "a1",
+        message_id: "m1",
+        block_index: 0,
+        call: { id: "c1", tool_id: "tool-bash", name: "bash" },
+      },
+    ]);
+    const incremental = fold(assembled, [
+      {
+        type: "message_committed",
+        attempt_id: "a1",
+        message,
+        transcript_cursor: transcriptCursor(1),
+      },
+      {
+        type: "attempt_settled",
+        attempt_id: "a1",
+        outcome: { type: "cancelled", reason: "runtime_shutdown" },
+      },
+    ]);
+
+    const fresh = replaceFromSnapshot(
+      snapshot({
+        messages: [message],
+        attempt: attemptView({
+          turn: 0,
+          phase: {
+            type: "settled",
+            outcome: { type: "cancelled", reason: "runtime_shutdown" },
+          },
+          foreground: [
+            foreground("c1", "tool-bash", "bash", {
+              type: "settled",
+              arguments: "",
+              result,
+            }),
+          ],
+        }),
+      }),
+      incremental.cursor,
+    );
+
+    // A live commit carries its committing attempt for streaming cleanup;
+    // the durable transcript page intentionally does not. Compare the
+    // canonical transcript facts that both views expose.
+    const canonicalTranscript = (state: PresentationState) =>
+      state.transcript.map((entry) => {
+        if (entry.kind !== "committed") {
+          return entry;
+        }
+        const { attemptId: _attemptId, ...canonical } = entry;
+        return canonical;
+      });
+    assert.deepEqual(canonicalTranscript(incremental), canonicalTranscript(fresh));
+    // Optional wire fields may be absent in a live fold but materialize as
+    // `undefined` while rebuilding the same view from a snapshot.
+    const comparableAttempt = (state: PresentationState) => {
+      const attempt = state.attempt;
+      if (attempt === undefined) {
+        return undefined;
+      }
+      return {
+        attemptId: attempt.attemptId,
+        phase: attempt.phase,
+        turn: attempt.turn,
+        ...(attempt.lastUsage === undefined
+          ? {}
+          : { lastUsage: attempt.lastUsage }),
+        model: attempt.model,
+        foreground: attempt.foreground,
+      };
+    };
+    assert.deepEqual(comparableAttempt(incremental), comparableAttempt(fresh));
+    assert.equal(incremental.attempt?.foreground.length, 1);
+    assert.deepEqual(incremental.attempt?.foreground[0]?.state, {
+      type: "settled",
+      arguments: "",
+      result,
+    });
+
+    // A late live lifecycle settlement cannot replace the canonical result,
+    // so the reducer's at-most-once rule also holds for an out-of-order
+    // stream. The TUI copies the typed phase; it never derives one.
+    const afterLateEvent = fold(incremental, [
+      {
+        type: "tool_execution_settled",
+        attempt_id: "a1",
+        tool_call_id: "c1",
+        tool_id: "tool-bash",
+        result: toolResult(),
+      },
+    ]);
+    assert.deepEqual(afterLateEvent.attempt, incremental.attempt);
   });
 
   it("folds inbound enqueue and finite drain from runtime facts", () => {

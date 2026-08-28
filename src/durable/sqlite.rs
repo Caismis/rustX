@@ -140,7 +140,7 @@ use super::inbox::{
 /// request usage payload. The journal remains envelope-version 1, but an old
 /// store cannot be interpreted under the new request-recovery vocabulary.
 ///
-/// Version 14 freezes Issue #136's typed foreground tool cancellation phase.
+/// Version 14 freezes Issue #136's typed tool cancellation phase.
 /// A version-13 store has only the undifferentiated cancellation status, so it
 /// is rejected rather than decoded with an invented or default phase.
 ///

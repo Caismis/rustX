@@ -286,7 +286,10 @@ pub enum RuntimeClientEvent {
     },
     /// A tool execution or pre-tool policy settled with its normalized result
     /// (success, failure, denial, cancellation, timeout, or validation
-    /// rejection all settle through this one shape).
+    /// rejection all settle through this one shape). For an accepted call
+    /// without a live execution settlement, the canonical `ToolMessage` commit
+    /// may publish this event directly (notably for `BeforeStart`
+    /// cancellation); the projection's slot transition remains at-most-once.
     ToolExecutionSettled {
         /// The attempt executing the call.
         attempt_id: AttemptId,
