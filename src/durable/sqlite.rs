@@ -158,9 +158,15 @@ use super::inbox::{
 /// interpreted as typed metadata, so it is rejected rather than decoded with
 /// invented empty metadata.
 ///
-/// A v3/v4/v5/v6/v7/v8/v9/v10/v11/v12/v13/v14/v15 database must fail at store
-/// open; there is no migration or compatibility path.
-pub const SQLITE_SCHEMA_VERSION: i64 = 16;
+/// Version 17 freezes Issue #144's named-subagent ownership identity: the
+/// durable `SubagentOwnershipCommitted` fact carries `(agent,
+/// definition_digest)` instead of a profile name, so an already-committed
+/// child stays bound to the definition it actually started with even after a
+/// resource reload redefines that agent name.
+///
+/// A v3/v4/v5/v6/v7/v8/v9/v10/v11/v12/v13/v14/v15/v16 database must fail at
+/// store open; there is no migration or compatibility path.
+pub const SQLITE_SCHEMA_VERSION: i64 = 17;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -8797,7 +8803,8 @@ mod tests {
                         subagent_id.as_str(),
                     ),
                     tool_call_id: crate::runtime::identity::ToolCallId::new("call-sub"),
-                    profile: "explore".to_owned(),
+                    agent: "explore".to_owned(),
+                    definition_digest: "sha256:definition".to_owned(),
                 },
             ))
             .unwrap();
@@ -8923,7 +8930,8 @@ mod tests {
                         tool_call_id: crate::runtime::identity::ToolCallId::new(format!(
                             "call-{ordinal}"
                         )),
-                        profile: "explore".to_owned(),
+                        agent: "explore".to_owned(),
+                        definition_digest: "sha256:definition".to_owned(),
                     },
                 ))
                 .expect("ownership fact");
@@ -9077,7 +9085,8 @@ mod tests {
                 child_agent_id: AgentId::new("agent-a"),
                 child_conversation_id: crate::runtime::identity::ConversationId::new("child-a"),
                 tool_call_id: crate::runtime::identity::ToolCallId::new("call-a"),
-                profile: "explore".to_owned(),
+                agent: "explore".to_owned(),
+                definition_digest: "sha256:definition".to_owned(),
             },
         );
         assert!(matches!(
@@ -9102,7 +9111,8 @@ mod tests {
                 child_agent_id: AgentId::new("agent-a"),
                 child_conversation_id: crate::runtime::identity::ConversationId::new("child-a"),
                 tool_call_id: crate::runtime::identity::ToolCallId::new("call-a"),
-                profile: "explore".to_owned(),
+                agent: "explore".to_owned(),
+                definition_digest: "sha256:definition".to_owned(),
             },
         );
         store
@@ -9134,7 +9144,8 @@ mod tests {
                 child_agent_id: AgentId::new("agent-b"),
                 child_conversation_id: crate::runtime::identity::ConversationId::new("child-b"),
                 tool_call_id: crate::runtime::identity::ToolCallId::new("call-b"),
-                profile: "explore".to_owned(),
+                agent: "explore".to_owned(),
+                definition_digest: "sha256:definition".to_owned(),
             },
         );
         {

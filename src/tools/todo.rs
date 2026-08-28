@@ -42,9 +42,11 @@
 //!
 //! The list is conversation-owned state, keyed by [`ConversationId`], and it
 //! is reachable only through the tool registration of that conversation's own
-//! tool plane. A subagent child composes the read-only `explore` profile and
-//! has no `todo` registration at all, so a child can neither read nor
+//! tool plane. A subagent child composes exactly the Builtin capabilities its
+//! named definition resolved to, so a child without an explicit `todo`
+//! selection has no `todo` registration at all and can neither read nor
 //! overwrite its parent's list — the isolation is structural, not a check.
+//! Even a child that does select `todo` owns its own conversation's list.
 //!
 //! # A mutation is provisional until its own result is durable
 //!

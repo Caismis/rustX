@@ -221,7 +221,11 @@ pub enum RuntimeClientSessionRequest {
 /// canonical `InboundKind::CompactionSummary` message kind now transports
 /// its validated cumulative file-operation metadata, and clients mirror the
 /// payload shape.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 7;
+///
+/// Version 8 carries Issue #144's named-subagent projection: a subagent is
+/// identified by `(agent, definition_digest)` instead of a profile name.
+/// There is no compatibility decoding of the obsolete shape.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 8;
 
 /// The external cursor of the Runtime Client observation stream.
 ///

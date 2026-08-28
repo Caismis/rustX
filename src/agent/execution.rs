@@ -337,6 +337,16 @@ pub(crate) struct AgentExecutionRuntimePolicy {
     pub(crate) model_timeout_policy: ModelTimeoutPolicy,
     /// The shared runtime monotonic clock.
     pub(crate) monotonic_clock: Arc<dyn MonotonicClock>,
+    /// The attempt-scoped subagent resolution view (Issue #144): the
+    /// immutable runtime resource generation this attempt was admitted with,
+    /// plus the model authority frozen at the same admission boundary.
+    ///
+    /// It is frozen here rather than read by the registered `subagent`
+    /// executor, so an attempt admitted under generation R1 keeps resolving
+    /// R1 even after a reload has committed R2 as runtime-current. `None`
+    /// means the composition owns no subagent plane at all — a standalone
+    /// execution fixture, or a subagent child itself.
+    pub(crate) subagent_context: Option<crate::runtime::subagent::AttemptSubagentContext>,
 }
 
 /// One agent attempt execution.
@@ -380,6 +390,9 @@ pub struct AgentExecution<'a> {
     /// preparation and is never persisted or reconstructed.
     pending_post_tool_batch: Option<PostToolBatchStatusOpportunity>,
     context_runtime: ContextRuntime,
+    /// The attempt-scoped subagent resolution view, frozen at admission
+    /// together with the attempt's model snapshot and capability lease.
+    subagent_context: Option<crate::runtime::subagent::AttemptSubagentContext>,
     /// The transient accepted context for the current admitted logical model
     /// step. It is retained across every actual-request retry and discarded
     /// only when the next logical step begins.
@@ -962,6 +975,7 @@ impl<'a> AgentExecution<'a> {
             pending_fresh_inbound: None,
             pending_post_tool_batch: None,
             context_runtime,
+            subagent_context: runtime_policy.subagent_context,
             accepted_context: None,
             frozen_agent_status: None,
             frozen_carryover: None,
@@ -4267,6 +4281,14 @@ impl<'a> AgentExecution<'a> {
         // one, and therefore never writes provisional list state.
         let context = match todos {
             Some(todos) => context.with_todos(todos),
+            None => context,
+        };
+        // The attempt's *own* immutable generation, named rather than
+        // ambient. A registered executor never reaches runtime-current
+        // resources, so a reload that commits a newer generation mid-attempt
+        // cannot be observed by this invocation.
+        let context = match &self.subagent_context {
+            Some(subagent) => context.with_subagent_context(subagent.clone()),
             None => context,
         };
         let future = executor.execute(invocation.clone(), context);

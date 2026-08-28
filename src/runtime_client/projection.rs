@@ -1661,7 +1661,8 @@ pub(crate) fn subagent_view(
         subagent_id: snapshot.subagent_id.clone(),
         child_agent_id: snapshot.child_agent_id.clone(),
         child_conversation_id: snapshot.child_conversation_id.clone(),
-        profile: snapshot.profile.clone(),
+        agent: snapshot.agent.clone(),
+        definition_digest: snapshot.definition_digest.clone(),
         state: snapshot.state,
         detail: snapshot.detail.clone(),
     }

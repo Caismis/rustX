@@ -1,14 +1,19 @@
-//! The `subagent` runtime intrinsic (Issue #60).
+//! The `subagent` runtime intrinsic (Issue #60, renamed to named
+//! attempt-scoped definitions by Issue #144).
 //!
 //! The model-facing surface of the native async one-shot subagent plane:
 //!
 //! ```json
 //! {
-//!   "profile": "explore",
+//!   "agent": "explore",
 //!   "task": "...",
 //!   "context": "..."   // optional, bounded
 //! }
 //! ```
+//!
+//! The obsolete `profile` field is gone and is not accepted: the schema
+//! denies unknown fields, so the old contract fails deterministically rather
+//! than being silently reinterpreted.
 //!
 //! The call returns **immediately after the ownership commit** with a
 //! running handle — the child runtime works asynchronously and its bounded
@@ -16,16 +21,31 @@
 //! agent. There is no wait/poll mode and no result channel outside the
 //! conversation's own message bus.
 //!
-//! The executor is a thin adapter over the conversation-owned
-//! [`SubagentRegistry`]: input validation, profile resolution, the
+//! # Where the authority comes from
+//!
+//! The registered executor is long-lived, but the *authority* it resolves
+//! against is not: each invocation receives the immutable
+//! `RuntimeResourceSnapshot` owned by the invoking `AgentExecution` through
+//! the crate-private [`ToolExecutionContext`] seam. The executor therefore
+//! never reads mutable runtime-current resources, and never derives child
+//! capabilities from the parent model's active `ToolRegistry`.
+//!
+//! The model chooses only *which named agent* runs. Model, tools, Skills,
+//! project instructions, and workspace policy belong to the named
+//! definition and are deliberately not per-call arguments.
+//!
+//! The executor stays a thin adapter over the conversation-owned
+//! [`SubagentRegistry`]: input validation, attempt-scoped resolution, the
 //! two-stage prepare/commit boundary, and the cancellation-race outcome
 //! mapping. All lifecycle, durability, and supervision semantics live in
-//! the registry.
+//! the registry; all configuration semantics live in the catalog/resolver.
 
 use futures_util::future::BoxFuture;
 
+use crate::runtime::subagent::catalog::{SubagentCatalog, SubagentName};
+use crate::runtime::subagent::resolver::render_agent_routing;
 use crate::runtime::subagent::{
-    SubagentProfile, SubagentRegistry, SubagentStartError, SubagentStartOutcome, SubagentStartSpec,
+    SubagentRegistry, SubagentStartError, SubagentStartOutcome, SubagentStartSpec,
 };
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, input_schema};
@@ -45,26 +65,36 @@ pub const SUBAGENT_TOOL_NAME: &str = "subagent";
 /// The intrinsic owns its own fixed policies (foreground-only, sequential):
 /// the async boundary is the child runtime, not the tool execution.
 #[must_use]
-pub(super) fn registration(subagents: SubagentRegistry) -> NativeToolRegistration {
+pub(super) fn registration(
+    subagents: SubagentRegistry,
+    catalog: &SubagentCatalog,
+) -> NativeToolRegistration {
     NativeToolRegistration::new(
-        definition(),
+        definition(catalog),
         std::sync::Arc::new(SubagentExecutor { subagents }),
     )
 }
 
 /// The canonical schema of the `subagent` intrinsic.
-fn definition() -> ToolDefinition {
+///
+/// The description is generated from the admitted catalog of the same
+/// resource generation this registration belongs to, so the model is told
+/// exactly which agents exist and what each is for. Generation is
+/// deterministic and bounded: names appear in canonical order and each
+/// routing description is already bounded by definition admission.
+fn definition(catalog: &SubagentCatalog) -> ToolDefinition {
     ToolDefinition {
         id: crate::runtime::identity::ToolId::new("tool-subagent"),
         name: SUBAGENT_TOOL_NAME.to_owned(),
-        description: concat!(
-            "Delegate a bounded read-only task to a one-shot child agent runtime. ",
-            "The child runs asynchronously in its own isolated conversation and process; ",
-            "this call returns as soon as the child is durably started, and the child's ",
-            "final answer arrives later as a new message from the child agent. The v1 ",
-            "'explore' profile can inspect the workspace with Read/Glob/Grep only."
-        )
-        .to_owned(),
+        description: format!(
+            "Delegate a bounded task to a one-shot child agent runtime. The child runs \
+             asynchronously in its own isolated conversation and process; this call returns \
+             as soon as the child is durably started, and the child's final answer arrives \
+             later as a new message from the child agent. Each named agent has its own \
+             fixed instructions, model, capabilities, and Skills, which this call cannot \
+             override.\n\n{}",
+            render_agent_routing(catalog)
+        ),
         input_schema: input_schema::<SubagentInput>(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         concurrency_policy: ToolConcurrencyPolicy::Sequential,
@@ -75,11 +105,14 @@ fn definition() -> ToolDefinition {
 }
 
 /// The typed model-facing input contract of the `subagent` intrinsic.
+///
+/// `deny_unknown_fields` is the whole compatibility posture: the obsolete
+/// `profile` field is not a recognized argument and never becomes one.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SubagentInput {
-    /// The execution profile of the child. v1 supports exactly `explore`.
-    pub profile: String,
+    /// The named agent to run, from this runtime's admitted catalog.
+    pub agent: String,
     /// The delegated task, in natural language.
     pub task: String,
     /// An explicit bounded context package for the child.
@@ -115,14 +148,30 @@ impl ToolExecutor for SubagentExecutor {
                 Ok(input) => input,
                 Err(error) => return failed_result(error),
             };
-            let Some(profile) = SubagentProfile::by_name(&input.profile) else {
-                return failed_result(format!(
-                    "unknown subagent profile {:?}: v1 supports exactly \"explore\"",
-                    input.profile
-                ));
+            // Without an attempt-scoped view there is no generation to
+            // resolve against, and guessing one would be exactly the
+            // tearing this seam exists to prevent.
+            let Some(subagent_context) = context.subagent_context() else {
+                return failed_result(
+                    "the subagent capability is not available outside an agent attempt",
+                );
+            };
+            let agent = match SubagentName::parse(&input.agent) {
+                Ok(agent) => agent,
+                Err(error) => {
+                    return failed_result(format!(
+                        "invalid subagent name {:?}: {error}. {}",
+                        input.agent,
+                        subagent_context.routing_description()
+                    ));
+                }
+            };
+            let resolved = match subagent_context.resolve(&agent) {
+                Ok(resolved) => resolved,
+                Err(error) => return failed_result(error.to_string()),
             };
             let spec = SubagentStartSpec {
-                profile,
+                resolved,
                 task: input.task,
                 context: input.context,
                 tool_call_id: invocation.call_id.clone(),
@@ -139,7 +188,9 @@ impl ToolExecutor for SubagentExecutor {
                         serde_json::Value::String(accepted.subagent_id.to_string());
                     result["child_agent_id"] =
                         serde_json::Value::String(accepted.child_agent_id.to_string());
-                    result["profile"] = serde_json::Value::String(accepted.profile);
+                    result["agent"] = serde_json::Value::String(accepted.agent);
+                    result["definition_digest"] =
+                        serde_json::Value::String(accepted.definition_digest);
                     success_json(result)
                 }
                 // The attempt cancellation won the race against the
@@ -164,5 +215,123 @@ impl ToolExecutor for SubagentExecutor {
                 Err(error) => failed_result(error.to_string()),
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SubagentInput, definition};
+    use crate::runtime::subagent::catalog::{
+        SubagentCatalog, SubagentDefinition, SubagentName, SubagentProjectInstructionPolicy,
+    };
+
+    fn catalog() -> SubagentCatalog {
+        SubagentCatalog::new([
+            SubagentDefinition::new(
+                SubagentName::parse("research").expect("name"),
+                "Deep multi-source research.".to_owned(),
+                "instructions".to_owned(),
+                std::path::PathBuf::from("/w/research.md"),
+                None,
+                Vec::new(),
+                Vec::new(),
+                SubagentProjectInstructionPolicy {
+                    inherit: true,
+                    files: Vec::new(),
+                },
+            )
+            .expect("definition"),
+            SubagentDefinition::new(
+                SubagentName::parse("explore").expect("name"),
+                "Read-only repository exploration.".to_owned(),
+                "instructions".to_owned(),
+                std::path::PathBuf::from("/w/explore.md"),
+                None,
+                Vec::new(),
+                Vec::new(),
+                SubagentProjectInstructionPolicy {
+                    inherit: true,
+                    files: Vec::new(),
+                },
+            )
+            .expect("definition"),
+        ])
+        .expect("catalog")
+    }
+
+    #[test]
+    fn the_input_contract_accepts_agent_and_rejects_the_obsolete_profile_field() {
+        let accepted = SubagentInput::parse(&serde_json::json!({
+            "agent": "explore",
+            "task": "inspect the tool plane",
+        }))
+        .expect("the named-agent contract is accepted");
+        assert_eq!(accepted.agent, "explore");
+        assert_eq!(accepted.context, None);
+
+        let rejected = SubagentInput::parse(&serde_json::json!({
+            "profile": "explore",
+            "task": "inspect the tool plane",
+        }))
+        .expect_err("the obsolete profile contract is rejected");
+        assert!(
+            rejected.contains("profile") || rejected.contains("agent"),
+            "the rejection names the contract violation: {rejected}"
+        );
+
+        // Not even alongside the new field: there is exactly one contract.
+        assert!(
+            SubagentInput::parse(&serde_json::json!({
+                "agent": "explore",
+                "profile": "explore",
+                "task": "inspect",
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn per_call_capability_overrides_are_not_representable() {
+        for field in ["model", "tools", "skills", "instructions", "agents_md"] {
+            assert!(
+                SubagentInput::parse(&serde_json::json!({
+                    "agent": "explore",
+                    "task": "inspect",
+                    field: serde_json::json!("anything"),
+                }))
+                .is_err(),
+                "{field} must not be a per-call argument"
+            );
+        }
+    }
+
+    #[test]
+    fn the_tool_description_is_derived_from_the_admitted_catalog() {
+        let described = definition(&catalog());
+        assert!(
+            described
+                .description
+                .contains("- explore: Read-only repository exploration.")
+        );
+        assert!(
+            described
+                .description
+                .contains("- research: Deep multi-source research.")
+        );
+        assert!(
+            !described.description.contains("profile"),
+            "no hard-coded profile prose survives: {}",
+            described.description
+        );
+        let empty = definition(&SubagentCatalog::empty());
+        assert!(empty.description.contains("admits no named subagent"));
+
+        // The schema stays small: exactly agent/task/context.
+        let properties = described.input_schema["properties"]
+            .as_object()
+            .expect("object schema");
+        let mut names = properties.keys().cloned().collect::<Vec<_>>();
+        names.sort();
+        assert_eq!(names, vec!["agent", "context", "task"]);
     }
 }

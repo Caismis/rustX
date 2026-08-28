@@ -67,6 +67,8 @@ pub(crate) use read::ReadTool;
 
 use registration::NativeToolRegistration;
 
+pub use subagent::SUBAGENT_TOOL_NAME;
+
 // The per-invocation Bash supervisor process entry points are reachable
 // only from the supervisor binary and from test binaries via self-exec;
 // they are documented-hidden binary entry points, never tool-plane API. The
@@ -136,6 +138,13 @@ pub struct NativeToolResources {
     /// means the intrinsic is not registered at all, so recursive
     /// delegation is absent by construction.
     pub subagents: Option<crate::runtime::subagent::SubagentRegistry>,
+    /// The named-subagent catalog of the resource generation this
+    /// registration set belongs to (Issue #144).
+    ///
+    /// It supplies the model-facing routing description of the `subagent`
+    /// intrinsic, so the description a generation publishes always names
+    /// exactly the agents that generation admits.
+    pub subagent_catalog: crate::runtime::subagent::SubagentCatalog,
 }
 
 /// The concrete, bounded per-tool policy configuration of the six ordinary
@@ -232,6 +241,7 @@ pub(crate) fn native_tool_registrations(
     let NativeToolResources {
         background,
         subagents,
+        subagent_catalog,
     } = resources;
     let mut registrations = vec![
         background_task::registration(background),
@@ -247,41 +257,61 @@ pub(crate) fn native_tool_registrations(
     // The `subagent` intrinsic exists only in a runtime that owns a
     // subagent registry (never inside a child runtime).
     if let Some(subagents) = subagents {
-        registrations.push(subagent::registration(subagents));
+        registrations.push(subagent::registration(subagents, &subagent_catalog));
     }
     registrations
 }
 
-/// Registers exactly the deny-by-construction capability set of a subagent
-/// child (Issue #60).
+/// Registers exactly the Builtin capability set one named subagent
+/// definition resolved to (Issue #144).
 ///
-/// The v1 `explore` profile is read-only: the child's `ToolRegistry`
-/// contains `Read`, `Glob`, and `Grep` and nothing else. There is no
-/// `subagent` tool in the child, so recursive delegation is structurally
-/// absent; there is no Write/Edit/Bash, no background execution, and no
-/// MCP/Python capability in the child composition path at all.
+/// The child's `ToolRegistry` is the exact frozen selection and nothing
+/// else — never "every currently active native tool". The set is
+/// deny-by-construction in both directions:
+///
+/// - the `subagent` intrinsic is never registrable here, so recursive
+///   delegation is structurally absent even if a definition somehow named
+///   it (definition admission already rejects that selector);
+/// - `ask_user` is likewise absent, because a headless child has no Runtime
+///   Client questionnaire authority to satisfy it;
+/// - no registration is marked mandatory, so the child's active set equals
+///   its authorized set exactly rather than gaining an implicit Read.
 ///
 /// # Errors
 ///
-/// Returns the specific [`ToolRegistryError`] of the first registration
-/// violation.
+/// Returns [`ToolRegistryError::InvalidIdentity`] when the resolved set
+/// names a capability the child plane does not implement, and the specific
+/// [`ToolRegistryError`] of the first registration violation otherwise.
 pub fn register_subagent_child_tools(
     registry: &mut ToolRegistry,
     policies: NativeToolPolicies,
+    selected: &[String],
 ) -> Result<(), ToolRegistryError> {
-    let registrations = [
-        read::registration(policies.read),
-        glob::registration(policies.glob),
-        grep::registration(policies.grep),
-    ];
-    for NativeToolRegistration {
-        definition,
-        executor,
-        normalizer,
-        mandatory,
-    } in registrations
-    {
-        registry.register_with_activation_metadata(definition, executor, normalizer, mandatory)?;
+    for name in selected {
+        let registration = match name.as_str() {
+            "read" => read::registration(policies.read),
+            "write" => write::registration(policies.write),
+            "edit" => edit::registration(policies.edit),
+            "glob" => glob::registration(policies.glob),
+            "grep" => grep::registration(policies.grep),
+            "bash" => bash::registration(policies.bash),
+            "todo" => todo::registration(),
+            other => {
+                return Err(ToolRegistryError::InvalidIdentity(format!(
+                    "the subagent child plane does not implement the built-in capability                      {other:?}"
+                )));
+            }
+        };
+        let NativeToolRegistration {
+            definition,
+            executor,
+            normalizer,
+            ..
+        } = registration;
+        // The child's active set is exactly its authorized set: nothing is
+        // mandatory, so no capability is force-activated beside the ones the
+        // definition selected.
+        registry.register_with_activation_metadata(definition, executor, normalizer, false)?;
     }
     Ok(())
 }
@@ -292,19 +322,22 @@ mod tests {
     use crate::tools::executor::ToolRegistry;
 
     #[test]
-    fn subagent_child_registry_is_exactly_the_explore_profile() {
+    fn the_child_registry_is_exactly_the_resolved_selection() {
         let mut registry = ToolRegistry::new();
-        register_subagent_child_tools(&mut registry, NativeToolPolicies::default())
-            .expect("explore tools register");
+        register_subagent_child_tools(
+            &mut registry,
+            NativeToolPolicies::default(),
+            &["read".to_owned(), "glob".to_owned(), "grep".to_owned()],
+        )
+        .expect("selected tools register");
         assert_eq!(registry.names(), vec!["read", "glob", "grep"]);
         assert_eq!(registry.len(), 3);
         assert!(
             registry
                 .registrations()
                 .iter()
-                .find(|registration| registration.definition.name == "read")
-                .is_some_and(|registration| registration.mandatory),
-            "native Read is marked mandatory by the native composition"
+                .all(|registration| !registration.mandatory),
+            "a child activates exactly its authorized set, with nothing forced in"
         );
         assert!(
             registry
@@ -312,5 +345,32 @@ mod tests {
                 .iter()
                 .all(|definition| definition.origin == crate::tools::types::ToolOrigin::Builtin)
         );
+
+        let mut narrower = ToolRegistry::new();
+        register_subagent_child_tools(
+            &mut narrower,
+            NativeToolPolicies::default(),
+            &["grep".to_owned()],
+        )
+        .expect("a narrower selection registers");
+        assert_eq!(narrower.names(), vec!["grep"]);
+    }
+
+    /// Child-unsafe and recursive capabilities are structurally
+    /// unregistrable in a child, independently of definition admission.
+    #[test]
+    fn child_unsafe_capabilities_are_structurally_absent() {
+        for name in ["subagent", "ask_user", "background_task"] {
+            let mut registry = ToolRegistry::new();
+            assert!(
+                register_subagent_child_tools(
+                    &mut registry,
+                    NativeToolPolicies::default(),
+                    &[name.to_owned()],
+                )
+                .is_err(),
+                "{name} must not be registrable in a subagent child"
+            );
+        }
     }
 }

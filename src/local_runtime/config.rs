@@ -16,12 +16,14 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::context::{AgentStatusConfig, SessionContextPolicy};
+use crate::model::catalog::ModelRef;
 use crate::model::deadline::{
     DEFAULT_RESPONSE_START_TIMEOUT, DEFAULT_STREAM_IDLE_TIMEOUT, ModelTimeoutPolicy,
 };
 use crate::model::session::SessionModelConfig;
 use crate::runtime::ApprovalMode;
 use crate::runtime::identity::{AgentId, McpServerId};
+use crate::runtime::subagent::{MAX_SUBAGENT_DEFINITIONS, SubagentName, SubagentToolSelector};
 use crate::tools::environment::{ToolEnvironment, ToolEnvironmentError};
 use crate::tools::mcp::{McpServerBinding, McpServerBindings, McpTransportConfig};
 use crate::tools::native::NativeToolPolicies;
@@ -85,6 +87,133 @@ pub struct CurrentRuntimeConfig {
     /// Explicit Skill roots or package paths supplied by the project config.
     #[serde(default)]
     pub skills: Vec<PathBuf>,
+    /// The named subagent definitions and their launch-scoped capacity
+    /// (Issue #144).
+    #[serde(default)]
+    pub subagents: SubagentsDocument,
+}
+
+/// The JSONC representation of the named-subagent plane.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+pub struct SubagentsDocument {
+    /// The **launch-scoped** per-conversation concurrency bound.
+    ///
+    /// It is read once, at composition, and is deliberately not resized by
+    /// resource reload: capacity is live-registry state, and shrinking it
+    /// under already-committed children would either orphan ownership or
+    /// silently lie about the bound.
+    pub max_concurrent: usize,
+    /// The named definitions, keyed by canonical [`SubagentName`].
+    ///
+    /// The key *is* the name: a definition never repeats it as a field.
+    pub agents: BTreeMap<SubagentName, SubagentDocument>,
+}
+
+impl Default for SubagentsDocument {
+    fn default() -> Self {
+        Self {
+            max_concurrent: DEFAULT_MAX_CONCURRENT_SUBAGENTS,
+            agents: BTreeMap::new(),
+        }
+    }
+}
+
+/// The launch-scoped subagent capacity used when the document omits it.
+pub const DEFAULT_MAX_CONCURRENT_SUBAGENTS: usize = 4;
+
+/// The hard upper bound of the launch-scoped subagent capacity.
+pub const MAX_MAX_CONCURRENT_SUBAGENTS: usize = 64;
+
+/// One named subagent definition, as configured.
+///
+/// Everything here is *definition* state. None of it is exposed as a
+/// per-call model argument: the model chooses which named agent runs and
+/// nothing else.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SubagentDocument {
+    /// The bounded model-facing routing description.
+    pub description: String,
+    /// The child instruction document. Relative paths resolve against the
+    /// canonical workspace root.
+    pub instructions_file: PathBuf,
+    /// The explicit model this agent runs on. Omit to inherit the invoking
+    /// attempt's frozen effective model configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<ModelRef>,
+    /// The exact source-qualified capability selection.
+    #[serde(default)]
+    pub tools: SubagentToolsDocument,
+    /// The exact Skill allowlist over the admitted Skill catalog.
+    #[serde(default)]
+    pub skills: Vec<String>,
+    /// The project-instruction policy of this agent.
+    #[serde(default)]
+    pub agents_md: SubagentAgentsMdDocument,
+}
+
+/// The three-origin capability selection of one named definition.
+///
+/// Origins are named explicitly rather than collapsed into bare strings, so
+/// a Builtin `read` and an MCP server's `read` are never interchangeable and
+/// resolution keeps exact source identity. Wildcards are deliberately
+/// absent: a selection is an exact list.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+pub struct SubagentToolsDocument {
+    /// Built-in/native capabilities, by canonical model-facing name.
+    pub builtin: Vec<String>,
+    /// MCP capabilities, keyed by server identity.
+    pub mcp: BTreeMap<McpServerId, Vec<String>>,
+    /// Custom Python capabilities, by canonical model-facing name.
+    pub python: Vec<String>,
+}
+
+impl SubagentToolsDocument {
+    /// The typed selectors this document expresses.
+    #[must_use]
+    pub fn selectors(&self) -> Vec<SubagentToolSelector> {
+        let mut selectors: Vec<SubagentToolSelector> = self
+            .builtin
+            .iter()
+            .map(|name| SubagentToolSelector::Builtin { name: name.clone() })
+            .collect();
+        for (server_id, names) in &self.mcp {
+            selectors.extend(names.iter().map(|name| SubagentToolSelector::Mcp {
+                server_id: server_id.clone(),
+                name: name.clone(),
+            }));
+        }
+        selectors.extend(
+            self.python
+                .iter()
+                .map(|name| SubagentToolSelector::Python { name: name.clone() }),
+        );
+        selectors
+    }
+}
+
+/// The project-instruction policy of one named definition.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+pub struct SubagentAgentsMdDocument {
+    /// Whether the invoking generation's normal project instruction chain is
+    /// prepended to the explicit files.
+    pub inherit: bool,
+    /// Explicit agent-owned project instruction files, in deterministic
+    /// configured order. Relative paths resolve against the canonical
+    /// workspace root.
+    pub files: Vec<PathBuf>,
+}
+
+impl Default for SubagentAgentsMdDocument {
+    fn default() -> Self {
+        Self {
+            inherit: true,
+            files: Vec::new(),
+        }
+    }
 }
 
 /// The JSONC representation of the one shared model request timeout policy.
@@ -206,6 +335,64 @@ impl CurrentRuntimeConfig {
         // runs here so a malformed entry fails at parse time rather than at
         // composition time.
         self.mcp_bindings()?;
+        self.validate_subagents()?;
+        Ok(())
+    }
+
+    /// Validates the structural constraints of the named-subagent plane.
+    ///
+    /// Capability, Skill, and model *authority* is validated later, against
+    /// the prepared resource generation that will admit the catalog: this
+    /// gate covers only what the document can decide on its own.
+    fn validate_subagents(&self) -> Result<(), CurrentRuntimeConfigError> {
+        if self.subagents.max_concurrent == 0
+            || self.subagents.max_concurrent > MAX_MAX_CONCURRENT_SUBAGENTS
+        {
+            return Err(CurrentRuntimeConfigError::Invalid {
+                detail: format!(
+                    "subagents.maxConcurrent must be between 1 and \
+                     {MAX_MAX_CONCURRENT_SUBAGENTS}, found {}",
+                    self.subagents.max_concurrent
+                ),
+            });
+        }
+        if self.subagents.agents.len() > MAX_SUBAGENT_DEFINITIONS {
+            return Err(CurrentRuntimeConfigError::Invalid {
+                detail: format!(
+                    "subagents.agents declares {} agents; at most \
+                     {MAX_SUBAGENT_DEFINITIONS} are admitted",
+                    self.subagents.agents.len()
+                ),
+            });
+        }
+        for (name, document) in &self.subagents.agents {
+            if document.instructions_file.as_os_str().is_empty() {
+                return Err(CurrentRuntimeConfigError::Invalid {
+                    detail: format!("subagents.agents.{name}.instructionsFile must be non-empty"),
+                });
+            }
+            for selector in document.tools.selectors() {
+                let empty = match &selector {
+                    SubagentToolSelector::Builtin { name }
+                    | SubagentToolSelector::Python { name } => name.trim().is_empty(),
+                    SubagentToolSelector::Mcp { server_id, name } => {
+                        server_id.as_str().is_empty() || name.trim().is_empty()
+                    }
+                };
+                if empty {
+                    return Err(CurrentRuntimeConfigError::Invalid {
+                        detail: format!(
+                            "subagents.agents.{name}.tools names an empty capability identity"
+                        ),
+                    });
+                }
+            }
+            if document.skills.iter().any(|skill| skill.trim().is_empty()) {
+                return Err(CurrentRuntimeConfigError::Invalid {
+                    detail: format!("subagents.agents.{name}.skills entries must be non-empty"),
+                });
+            }
+        }
         Ok(())
     }
 

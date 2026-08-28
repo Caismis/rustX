@@ -716,8 +716,14 @@ pub struct RuntimeClientSubagent {
     pub child_agent_id: crate::runtime::identity::AgentId,
     /// The child's own durable conversation identity.
     pub child_conversation_id: ConversationId,
-    /// The frozen profile identity.
-    pub profile: String,
+    /// The canonical named-agent identity frozen at start (Issue #144).
+    pub agent: String,
+    /// The deterministic definition digest frozen at start (Issue #144).
+    ///
+    /// A client observing an already-running child sees the definition it
+    /// actually started with, so a later resource reload that redefines the
+    /// same agent name can never be mistaken for a change to that child.
+    pub definition_digest: String,
     /// The authoritative lifecycle state.
     pub state: crate::runtime::subagent::SubagentState,
     /// The bounded terminal detail (result content, failure diagnostic, or

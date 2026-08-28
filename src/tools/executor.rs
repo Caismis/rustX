@@ -122,6 +122,20 @@ pub struct ToolExecutionContext<'a> {
     ///
     /// [`TodoBatch`]: crate::tools::todo::TodoBatch
     pub(crate) todos: Option<TodoWriter>,
+    /// The attempt-scoped subagent resolution view (Issue #144).
+    ///
+    /// This is intentionally *not* a runtime handle and intentionally not
+    /// public. The registered `subagent` executor is long-lived, so reading
+    /// mutable runtime-current resources during execution would let a
+    /// reload that committed generation R2 be observed by an attempt
+    /// admitted under R1 — same-turn generation tearing. The invoking
+    /// [`AgentExecution`] instead hands each invocation the exact immutable
+    /// generation *it* owns, through the same crate-private construction
+    /// seam the native Questionnaire and task-list authorities use, so no
+    /// generic `ToolExecutor` can acquire a runtime-resource handle at all.
+    ///
+    /// [`AgentExecution`]: crate::agent::AgentExecution
+    pub(crate) subagent: Option<crate::runtime::subagent::AttemptSubagentContext>,
 }
 
 impl<'a> ToolExecutionContext<'a> {
@@ -151,7 +165,32 @@ impl<'a> ToolExecutionContext<'a> {
             environment,
             questionnaire_requester: None,
             todos: None,
+            subagent: None,
         }
+    }
+
+    /// Binds this invocation to the immutable runtime resource generation
+    /// and frozen model authority of the invoking attempt.
+    ///
+    /// Crate-private for the same reason the Questionnaire seam is: the
+    /// authority to resolve a named subagent against a specific generation
+    /// belongs to the attempt that owns that generation, not to any
+    /// executor that happens to be registered.
+    #[must_use]
+    pub(crate) fn with_subagent_context(
+        mut self,
+        subagent: crate::runtime::subagent::AttemptSubagentContext,
+    ) -> Self {
+        self.subagent = Some(subagent);
+        self
+    }
+
+    /// Returns the attempt-scoped subagent resolution view to the native
+    /// `subagent` implementation.
+    pub(crate) fn subagent_context(
+        &self,
+    ) -> Option<&crate::runtime::subagent::AttemptSubagentContext> {
+        self.subagent.as_ref()
     }
 
     /// Binds this invocation to the task list of the `ToolResult` batch it
@@ -1528,6 +1567,7 @@ mod tests {
             environment: &ToolEnvironment::new(),
             questionnaire_requester: None,
             todos: None,
+            subagent: None,
         };
         let executor = registry.executor(&prepared.invocation.tool_id);
         let _result = executor

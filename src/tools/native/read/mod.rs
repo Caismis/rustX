@@ -428,6 +428,7 @@ mod tests {
                     environment: &environment,
                     questionnaire_requester: None,
                     todos: None,
+                    subagent: None,
                 },
             )
         };
@@ -612,6 +613,7 @@ mod tests {
                 environment: &self.environment,
                 questionnaire_requester: None,
                 todos: None,
+                subagent: None,
             };
             ReadTool.execute(invocation, context)
         }

@@ -37,11 +37,17 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::context::{AgentStatusConfig, SessionContextPolicy};
-use crate::model::session::SessionModelConfig;
 use crate::runtime::identity::{AgentId, ConversationId, SubagentId};
 
+use super::resolver::ResolvedSubagentSpec;
+
 /// The only subagent control protocol version this build speaks.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 1;
+///
+/// Version 2 replaced the profile/persona-shaped startup identity with the
+/// frozen named-agent semantic specification (Issue #144). There is no
+/// compatibility decoding: a peer that does not speak exactly this version
+/// exits before composing anything.
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 2;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -70,6 +76,18 @@ const KIND_DIAGNOSTIC: u8 = 104;
 /// from exactly this typed input plus the model catalog file at
 /// [`SubagentChildSpec::models`]. No temporary runtime configuration file
 /// is ever written.
+///
+/// # The parent resolves; the child consumes
+///
+/// [`SubagentChildSpec::resolved`] is the complete frozen result of
+/// parent-side resolution against the invoking attempt's runtime resource
+/// generation: the named-agent identity and its definition digest, the child
+/// instruction document, the exact model configuration, the exact
+/// source-qualified capability identities, the exact Skill catalog metadata,
+/// and the exact project instruction chain. The child therefore never reads
+/// `rustx.jsonc` to look up the agent, never rediscovers project
+/// instructions or Skills, never re-chooses model policy, and never widens
+/// or substitutes Tool identity.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct SubagentChildSpec {
@@ -83,15 +101,11 @@ pub(crate) struct SubagentChildSpec {
     pub child_agent_id: AgentId,
     /// The delegating parent agent identity (provenance of the task).
     pub parent_agent_id: AgentId,
-    /// The frozen profile identity.
-    pub profile: String,
-    /// The profile persona composed as the child's request-time
-    /// `AgentProfile` System section.
-    pub persona: String,
+    /// The complete frozen named-agent specification resolved by the parent
+    /// against the invoking attempt's runtime resource generation.
+    pub resolved: ResolvedSubagentSpec,
     /// The model catalog file path (inherited from parent startup).
     pub models: PathBuf,
-    /// The frozen session model configuration of the child.
-    pub model: SessionModelConfig,
     /// The launch-scoped Agent Status configuration of the child.
     pub agent_status: AgentStatusConfig,
     /// The session context policy of the child.
@@ -362,9 +376,101 @@ pub(crate) async fn read_parent_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::session::SessionModelConfig;
+
+    use crate::runtime::identity::{McpServerId, ToolId, ToolVersionId};
+    use crate::runtime::subagent::catalog::SubagentName;
+    use crate::runtime::subagent::resolver::ResolvedSubagentTool;
+    use crate::tools::types::{
+        ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin,
+        ToolReplayPolicy,
+    };
 
     fn pair() -> (tokio::net::UnixStream, tokio::net::UnixStream) {
         tokio::net::UnixStream::pair().expect("control socket pair")
+    }
+
+    fn tool_definition(name: &str, origin: ToolOrigin) -> ToolDefinition {
+        ToolDefinition {
+            id: ToolId::new(format!("tool-{name}")),
+            name: name.to_owned(),
+            description: format!("{name} tool"),
+            input_schema: serde_json::json!({"type": "object", "additionalProperties": false}),
+            execution_policy: ToolExecutionPolicy::ForegroundOnly,
+            concurrency_policy: ToolConcurrencyPolicy::Sequential,
+            approval_policy: ToolApprovalPolicy::Never,
+            replay_policy: ToolReplayPolicy::Never,
+            origin,
+        }
+    }
+
+    /// A frozen spec exercising all three capability origins, so the wire
+    /// contract is proven to preserve exact source/version identity.
+    fn resolved_spec() -> ResolvedSubagentSpec {
+        ResolvedSubagentSpec {
+            agent: SubagentName::parse("explore").expect("name"),
+            definition_digest: serde_json::from_value(serde_json::json!("sha256:abc"))
+                .expect("digest"),
+            instructions: "instructions".to_owned(),
+            model: SessionModelConfig::of(
+                serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),
+            ),
+            tools: vec![
+                ResolvedSubagentTool::Builtin {
+                    tool_id: ToolId::new("tool-read"),
+                    name: "read".to_owned(),
+                    definition: tool_definition("read", ToolOrigin::Builtin),
+                },
+                ResolvedSubagentTool::Mcp {
+                    server_id: McpServerId::new("github"),
+                    tool_id: ToolId::new("tool-get_issue"),
+                    name: "get_issue".to_owned(),
+                    definition: tool_definition(
+                        "get_issue",
+                        ToolOrigin::Mcp {
+                            server_id: McpServerId::new("github"),
+                        },
+                    ),
+                },
+                ResolvedSubagentTool::Python {
+                    tool_id: ToolId::new("tool-symbols"),
+                    tool_version_id: ToolVersionId::new("sha256:v1"),
+                    name: "repository_symbols".to_owned(),
+                    definition: tool_definition(
+                        "repository_symbols",
+                        ToolOrigin::Python {
+                            tool_version_id: ToolVersionId::new("sha256:v1"),
+                        },
+                    ),
+                },
+            ],
+            skills: vec![crate::skills::SkillCatalogEntry {
+                name: "repository-navigation".to_owned(),
+                description: "Navigate the repository.".to_owned(),
+                location: "/w/.rustx/skills/nav/SKILL.md".to_owned(),
+            }],
+            project_instructions: vec![crate::runtime::resources::ProjectContextFile {
+                path: PathBuf::from("/w/AGENTS.md"),
+                content: "workspace instructions".to_owned(),
+            }],
+        }
+    }
+
+    #[test]
+    fn the_three_origin_resolved_identity_survives_serialization() {
+        let spec = resolved_spec();
+        let encoded = serde_json::to_vec(&spec).expect("encode");
+        let decoded: ResolvedSubagentSpec = serde_json::from_slice(&encoded).expect("decode");
+        assert_eq!(decoded, spec);
+        assert!(matches!(
+            &decoded.tools[1],
+            ResolvedSubagentTool::Mcp { server_id, .. } if server_id.as_str() == "github"
+        ));
+        assert!(matches!(
+            &decoded.tools[2],
+            ResolvedSubagentTool::Python { tool_version_id, .. }
+                if tool_version_id.as_str() == "sha256:v1"
+        ));
     }
 
     #[tokio::test]
@@ -376,12 +482,8 @@ mod tests {
             child_conversation_id: ConversationId::new("conv-1-subagent-1"),
             child_agent_id: AgentId::new("agent-subagent-1"),
             parent_agent_id: AgentId::new("agent-parent"),
-            profile: "explore".to_owned(),
-            persona: "persona".to_owned(),
+            resolved: resolved_spec(),
             models: PathBuf::from("/tmp/models.jsonc"),
-            model: SessionModelConfig::of(
-                serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),
-            ),
             agent_status: AgentStatusConfig::default(),
             context: SessionContextPolicy {
                 reserve_tokens: 1,

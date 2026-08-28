@@ -424,8 +424,16 @@ pub enum RuntimeEvent {
         child_conversation_id: ConversationId,
         /// The model-issued tool call that delegated the work.
         tool_call_id: ToolCallId,
-        /// The child profile identity frozen at start.
-        profile: String,
+        /// The canonical named-agent identity frozen at start (Issue #144).
+        agent: String,
+        /// The deterministic definition digest frozen at start (Issue
+        /// #144).
+        ///
+        /// Name alone is not identity: a later resource reload may redefine
+        /// the same agent name, and this durable digest is what keeps an
+        /// already-committed child bound to the definition it actually
+        /// started with.
+        definition_digest: String,
     },
     /// A subagent child's terminal publication was durably accepted. The
     /// event is committed in the same transaction as the Pending Inbound

@@ -3050,6 +3050,7 @@ mod tests {
                 environment: tool_runtime.environment(),
                 questionnaire_requester: None,
                 todos: None,
+                subagent: None,
             },
         )
         .await

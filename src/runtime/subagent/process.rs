@@ -33,12 +33,12 @@ use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
 use crate::context::{AgentStatusConfig, SessionContextPolicy};
-use crate::model::session::SessionModelConfig;
 use crate::runtime::identity::SubagentId;
 
 use super::ipc::{
     ChildFrame, ParentFrame, ResultFrame, SubagentChildSpec, read_child_frame, write_parent_frame,
 };
+use super::resolver::ResolvedSubagentSpec;
 
 /// The liveness guard of the startup handshake. The child composes only
 /// local state before `Ready` (catalog file, durable store, capability
@@ -80,8 +80,6 @@ pub struct SubagentSpawnPlan {
     /// The **parent** runtime-private root; each child gets a disjoint
     /// `subagents/<subagent_id>` subtree under it.
     pub runtime_root: std::path::PathBuf,
-    /// The frozen session model configuration of every child.
-    pub model: SessionModelConfig,
     /// The launch-scoped Agent Status configuration inherited by the child.
     pub agent_status: AgentStatusConfig,
     /// The session context policy inherited by the child.
@@ -98,6 +96,12 @@ impl SubagentSpawnPlan {
     }
 
     /// The one typed startup specification of a child.
+    ///
+    /// The spawn plan contributes only launch-scoped physical locations and
+    /// inherited launch policy. Every semantic decision — agent identity,
+    /// instructions, model, capabilities, Skills, project instructions —
+    /// comes from the already-frozen [`ResolvedSubagentSpec`] the invoking
+    /// attempt's generation produced.
     #[must_use]
     pub(crate) fn child_spec(
         &self,
@@ -105,7 +109,7 @@ impl SubagentSpawnPlan {
         child_conversation_id: &crate::runtime::identity::ConversationId,
         child_agent_id: &crate::runtime::identity::AgentId,
         parent_agent_id: &crate::runtime::identity::AgentId,
-        profile: super::SubagentProfile,
+        resolved: &ResolvedSubagentSpec,
     ) -> SubagentChildSpec {
         SubagentChildSpec {
             protocol_version: super::ipc::SUBAGENT_IPC_VERSION,
@@ -113,10 +117,8 @@ impl SubagentSpawnPlan {
             child_conversation_id: child_conversation_id.clone(),
             child_agent_id: child_agent_id.clone(),
             parent_agent_id: parent_agent_id.clone(),
-            profile: profile.name().to_owned(),
-            persona: profile.persona(),
+            resolved: resolved.clone(),
             models: self.models.clone(),
-            model: self.model.clone(),
             agent_status: self.agent_status.clone(),
             context: self.context,
             workspace: self.workspace.clone(),

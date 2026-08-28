@@ -23,7 +23,7 @@
  * camelCase.
  */
 
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 7;
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 8;
 
 // ---------------------------------------------------------------------------
 // Identities
