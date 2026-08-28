@@ -583,6 +583,12 @@ fn translate_tool_result(
             }
         }
     }
+    if let Some(status) = tool.result.status.model_facing_text() {
+        content.push(serde_json::json!({
+            "type": "text",
+            "text": status,
+        }));
+    }
     Ok(serde_json::json!({
         "type": "tool_result",
         "tool_use_id": tool.tool_call_id,
@@ -695,9 +701,15 @@ mod questionnaire_schema_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{map_finish_reason, normalize_http_error, stream_retry_disposition};
+    use super::{
+        map_finish_reason, normalize_http_error, stream_retry_disposition, translate_tool_result,
+    };
+    use crate::message::types::ToolMessageBlock;
     use crate::model::error::{ModelErrorKind, ModelRetryDisposition};
     use crate::model::finish::ModelFinishReason;
+    use crate::runtime::identity::{MessageId, ToolCallId, ToolId};
+    use crate::runtime::types::CancellationReason;
+    use crate::tools::types::{ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus};
 
     /// The adapter — not the agent loop — recovers the provider's own
     /// measurement of a rejected oversized request, and it crosses the
@@ -770,6 +782,32 @@ mod tests {
             br#"{"error":{"type":"invalid_request_error","message":"bad input"}}"#,
         );
         assert_eq!(invalid.retry_disposition, ModelRetryDisposition::Never);
+    }
+
+    #[test]
+    fn issue136_anthropic_translation_consumes_typed_cancellation_status() {
+        let message = ToolMessageBlock {
+            id: MessageId::new("tool-result-1"),
+            tool_call_id: ToolCallId::new("call-1"),
+            tool_id: ToolId::new("tool-1"),
+            result: ToolExecutionResult {
+                status: ToolExecutionStatus::Cancelled {
+                    reason: CancellationReason::ParentCancelled,
+                    phase: ToolCancellationPhase::DuringExecution,
+                },
+                content: Vec::new(),
+                duration_ms: 0,
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+                managed_output: None,
+            },
+        };
+        let encoded = translate_tool_result(&message).expect("translate cancelled result");
+        assert_eq!(
+            encoded["content"][0]["text"],
+            "Tool call was cancelled (reason: parent_cancelled). Execution had already started, but cancellation occurred before normal completion. Partial side effects may have occurred."
+        );
     }
 
     #[test]

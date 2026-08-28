@@ -87,7 +87,7 @@
 //! mechanics stay internal unless they express a client-relevant semantic
 //! fact. The mapping is defined here, in one place, so internal
 //! `RuntimeEvent` evolution cannot silently break Runtime Client Protocol
-//! v5.
+//! v6.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -711,7 +711,7 @@ impl RuntimeClientProjection {
     }
 
     /// The explicit `RuntimeEvent` mapping policy of Runtime Client Protocol
-    /// v5.
+    /// v6.
     ///
     /// Classification (see the module documentation):
     ///
@@ -1761,7 +1761,8 @@ mod tests {
     use crate::scripted_suites::support::fake::{FakeModel, FakeStep};
     use crate::tools::executor::ToolRegistry;
     use crate::tools::types::{
-        ToolCall, ToolCallStart, ToolExecutionResult, ToolExecutionStatus, ToolProgress,
+        ToolCall, ToolCallStart, ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus,
+        ToolProgress,
     };
     use std::sync::{Arc, Mutex};
 
@@ -1916,7 +1917,7 @@ mod tests {
     }
 
     #[test]
-    fn todo_status_section_round_trips_the_v5_wire_shape() {
+    fn todo_status_section_round_trips_the_v6_wire_shape() {
         let wire = serde_json::json!({
             "type": "todo",
             "current": {
@@ -1939,9 +1940,9 @@ mod tests {
             "omitted_count": 0
         });
         let section: RuntimeClientStatusSection =
-            serde_json::from_value(wire.clone()).expect("decode the v5 Todo section");
+            serde_json::from_value(wire.clone()).expect("decode the v6 Todo section");
         assert_eq!(
-            serde_json::to_value(section).expect("encode the v5 Todo section"),
+            serde_json::to_value(section).expect("encode the v6 Todo section"),
             wire
         );
     }
@@ -2974,7 +2975,7 @@ mod tests {
             },
         );
         let (snapshot, _) = projection.snapshot().expect("snapshot");
-        let foreground = &snapshot.attempt.expect("attempt view").foreground;
+        let foreground = &snapshot.attempt.as_ref().expect("attempt view").foreground;
         assert_eq!(foreground.len(), 2);
         assert_eq!(foreground[0].call_id, ToolCallId::new("call_a"));
         assert_eq!(foreground[1].call_id, ToolCallId::new("call_b"));
@@ -2986,6 +2987,99 @@ mod tests {
             foreground[1].state,
             ForegroundToolState::Settled { .. }
         ));
+    }
+
+    /// The Runtime Client projection carries the canonical cancellation phase
+    /// verbatim and preserves it through its wire round trip.
+    #[test]
+    fn issue136_foreground_cancellation_phase_round_trips_through_projection() {
+        let mut projection = projection();
+        apply_event(
+            &mut projection,
+            RuntimeEvent::AttemptStarted {
+                attempt_id: attempt(),
+            },
+        );
+        let call = ToolCall {
+            id: ToolCallId::new("call_cancelled"),
+            tool_id: ToolId::new("tool-cancelled"),
+            name: "cancelled".to_owned(),
+            arguments: serde_json::json!({"value": 1}),
+        };
+        apply_frame(
+            &mut projection,
+            0,
+            PublicationPayload::ProposedToolCallStarted {
+                block_index: ContentBlockIndex::new(0),
+                call: ToolCallStart {
+                    id: call.id.clone(),
+                    tool_id: call.tool_id.clone(),
+                    name: call.name.clone(),
+                },
+            },
+        );
+        apply_frame(
+            &mut projection,
+            1,
+            PublicationPayload::ProposedToolCallArgumentsSuffix {
+                block_index: ContentBlockIndex::new(0),
+                call_id: call.id.clone(),
+                suffix: serde_json::to_string(&call.arguments).expect("arguments JSON"),
+            },
+        );
+        apply_frame(
+            &mut projection,
+            2,
+            PublicationPayload::ProposedToolCallCompleted {
+                block_index: ContentBlockIndex::new(0),
+                call: call.clone(),
+            },
+        );
+        apply_event(
+            &mut projection,
+            RuntimeEvent::ToolExecutionStarted {
+                tool_call_id: call.id.clone(),
+                tool_id: call.tool_id.clone(),
+            },
+        );
+        let result = ToolExecutionResult {
+            status: ToolExecutionStatus::Cancelled {
+                reason: CancellationReason::RuntimeShutdown,
+                phase: ToolCancellationPhase::DuringExecution,
+            },
+            content: Vec::new(),
+            duration_ms: 3,
+            exit_code: None,
+            artifacts: Vec::new(),
+            truncation: None,
+            managed_output: None,
+        };
+        apply_event(
+            &mut projection,
+            RuntimeEvent::ToolExecutionCompleted {
+                tool_call_id: call.id.clone(),
+                tool_id: call.tool_id.clone(),
+                result: result.clone(),
+            },
+        );
+
+        let (snapshot, _) = projection.snapshot().expect("snapshot");
+        let foreground = &snapshot.attempt.as_ref().expect("attempt view").foreground;
+        let ForegroundToolState::Settled {
+            result: projected, ..
+        } = &foreground[0].state
+        else {
+            panic!("the cancelled call must be settled");
+        };
+        assert_eq!(projected, &result);
+        let encoded = serde_json::to_value(&snapshot).expect("snapshot JSON");
+        assert_eq!(
+            encoded["attempt"]["foreground"][0]["state"]["result"]["status"]["phase"],
+            "during_execution"
+        );
+        let decoded: crate::runtime_client::snapshot::RuntimeClientSnapshot =
+            serde_json::from_value(encoded).expect("snapshot round trip");
+        assert_eq!(decoded, snapshot);
     }
 
     /// A resume after a serviceable cursor replays exactly the retained

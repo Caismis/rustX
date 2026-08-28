@@ -183,6 +183,7 @@ impl rustx::tools::executor::ToolExecutor for ParkedBackgroundTool {
             rustx::tools::types::ToolExecutionResult {
                 status: rustx::tools::types::ToolExecutionStatus::Cancelled {
                     reason: rustx::runtime::types::CancellationReason::UserRequested,
+                    phase: rustx::tools::types::ToolCancellationPhase::DuringExecution,
                 },
                 content: Vec::new(),
                 duration_ms: 0,

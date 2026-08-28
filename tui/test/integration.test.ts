@@ -6,7 +6,7 @@
  *   -> RuntimeClientConnection      (real JSONL framing)
  *   -> ChildRuntimeProcess          (real OS process)
  *   -> rustx --models ... --config ... --workspace ... --runtime-root ...
- *   -> real Runtime Client Protocol v5
+ *   -> real Runtime Client Protocol v6
  *   -> real local runtime composition (#42)
  * ```
  *

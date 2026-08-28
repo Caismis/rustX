@@ -1037,7 +1037,8 @@ fn assert_cancelled_tool_slot_without_start(
     assert!(matches!(
         &messages[0].result.status,
         ToolExecutionStatus::Cancelled {
-            reason: CancellationReason::RuntimeShutdown
+            reason: CancellationReason::RuntimeShutdown,
+            phase: rustx::tools::types::ToolCancellationPhase::BeforeStart,
         }
     ));
     assert_eq!(

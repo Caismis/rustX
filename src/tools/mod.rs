@@ -66,8 +66,9 @@ pub use todo::{
 
 pub use types::{
     ManagedOutputContinuation, ModelToolDefinition, ToolApprovalPolicy, ToolCall, ToolCallStart,
-    ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
-    ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolInvocationPolicy, ToolOrigin,
-    ToolProgress, ToolReplayPolicy, ToolResultContent, TruncationState,
+    ToolCancellationPhase, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
+    ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode,
+    ToolInvocationPolicy, ToolOrigin, ToolProgress, ToolReplayPolicy, ToolResultContent,
+    TruncationState,
 };
 pub use workspace::{Workspace, WorkspaceError};

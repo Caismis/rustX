@@ -125,8 +125,8 @@ use crate::tools::executor::{
 };
 use crate::tools::runtime::ConversationToolRuntime;
 use crate::tools::types::{
-    ToolCall, ToolConcurrencyPolicy, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
-    ToolInvocationMode, ToolOrigin, ToolProgress,
+    ToolCall, ToolCancellationPhase, ToolConcurrencyPolicy, ToolExecutionResult,
+    ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolOrigin, ToolProgress,
 };
 
 use super::assembly::ModelEventAssembler;
@@ -495,6 +495,13 @@ pub struct AgentExecution<'a> {
     /// scheduling.
     #[cfg(test)]
     tool_start_pause: std::sync::Mutex<Option<test_sync::ToolStartPause>>,
+    /// Test-only control point after cancellation wins the foreground
+    /// physical-result arbitration and before the late physical future is
+    /// awaited. It makes the cancellation linearization observable without
+    /// changing production scheduling or adding a runtime event.
+    #[cfg(test)]
+    tool_cancellation_settlement_pause:
+        std::sync::Mutex<Option<test_sync::ToolCancellationSettlementPause>>,
     turn: u32,
     terminal_emitted: bool,
 }
@@ -906,6 +913,8 @@ impl<'a> AgentExecution<'a> {
             model_arbitration_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
             tool_start_pause: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            tool_cancellation_settlement_pause: std::sync::Mutex::new(None),
             turn: 0,
             terminal_emitted: false,
         })
@@ -991,6 +1000,18 @@ impl<'a> AgentExecution<'a> {
     #[cfg(test)]
     pub(crate) fn install_tool_start_pause(&mut self, pause: test_sync::ToolStartPause) {
         *self.tool_start_pause.lock().expect("tool start pause lock") = Some(pause);
+    }
+
+    /// Installs the deterministic foreground cancellation-settlement pause.
+    #[cfg(test)]
+    pub(crate) fn install_tool_cancellation_settlement_pause(
+        &mut self,
+        pause: test_sync::ToolCancellationSettlementPause,
+    ) {
+        *self
+            .tool_cancellation_settlement_pause
+            .lock()
+            .expect("tool cancellation settlement pause lock") = Some(pause);
     }
 
     /// Runs the attempt to its execution settlement candidate.
@@ -3228,7 +3249,7 @@ impl<'a> AgentExecution<'a> {
                     origin: prepared.origin.clone(),
                     prepared: Some(prepared),
                     result: None,
-                    started: false,
+                    executor_started: false,
                     progress: Vec::new(),
                 },
                 PreflightOutcome::Rejected {
@@ -3241,7 +3262,7 @@ impl<'a> AgentExecution<'a> {
                     origin,
                     prepared: None,
                     result: Some(failed_result(&error)),
-                    started: false,
+                    executor_started: false,
                     progress: Vec::new(),
                 },
             })
@@ -3264,7 +3285,12 @@ impl<'a> AgentExecution<'a> {
                 }
                 Group::Sequential => {
                     if slots[index].result.is_none() {
-                        slots[index].started = true;
+                        // This assignment is the per-call executor-start
+                        // frontier. It is set before the existing start fact
+                        // and before constructing the executor future; once
+                        // crossed, cancellation must be classified as
+                        // `DuringExecution` for this slot.
+                        slots[index].executor_started = true;
                         self.emit(RuntimeEvent::ToolExecutionStarted {
                             tool_call_id: slots[index].call.id.clone(),
                             tool_id: slots[index].tool_id.clone(),
@@ -3305,7 +3331,12 @@ impl<'a> AgentExecution<'a> {
                             break;
                         }
                         if slot.result.is_none() {
-                            slot.started = true;
+                            // The slot crosses its authoritative start
+                            // frontier before the existing projection event.
+                            // A synchronous observer may cancel here; this
+                            // slot is still an in-flight cancellation, while
+                            // later siblings remain eligible for BeforeStart.
+                            slot.executor_started = true;
                             self.emit(RuntimeEvent::ToolExecutionStarted {
                                 tool_call_id: slot.call.id.clone(),
                                 tool_id: slot.tool_id.clone(),
@@ -3319,7 +3350,7 @@ impl<'a> AgentExecution<'a> {
                     }
                     let mut futures = futures_util::stream::FuturesUnordered::new();
                     for (slot_index, slot) in slots[index..end].iter().enumerate() {
-                        if slot.started {
+                        if slot.executor_started {
                             let invocation = slot
                                 .prepared
                                 .as_ref()
@@ -3399,7 +3430,7 @@ impl<'a> AgentExecution<'a> {
                     return Err(error);
                 }
             }
-            if slot.started {
+            if slot.executor_started {
                 self.emit(RuntimeEvent::ToolExecutionCompleted {
                     tool_call_id: slot.call.id.clone(),
                     tool_id: slot.tool_id.clone(),
@@ -3798,6 +3829,18 @@ impl<'a> AgentExecution<'a> {
         }
     }
 
+    #[cfg(test)]
+    fn park_after_tool_cancellation_settlement(&self) {
+        if let Some(pause) = self
+            .tool_cancellation_settlement_pause
+            .lock()
+            .expect("tool cancellation settlement pause lock")
+            .as_ref()
+        {
+            pause.park();
+        }
+    }
+
     /// Runs one foreground invocation against attempt cancellation.
     ///
     /// The execution receives an `ExecutionCancellation` view of the
@@ -3841,16 +3884,35 @@ impl<'a> AgentExecution<'a> {
         };
         let future = executor.execute(invocation.clone(), context);
         tokio::pin!(future);
-        let mut result = tokio::select! {
+        let (cancellation_won, mut result) = tokio::select! {
             biased;
-            () = self.cancellation.cancelled() => future.as_mut().await,
-            result = future.as_mut() => result,
+            () = self.cancellation.cancelled() => {
+                #[cfg(test)]
+                self.park_after_tool_cancellation_settlement();
+                (true, future.as_mut().await)
+            },
+            result = future.as_mut() => (false, result),
         };
-        if self.cancellation.is_cancelled()
-            && matches!(result.status, ToolExecutionStatus::Cancelled { .. })
-        {
+        if cancellation_won {
             result.status = ToolExecutionStatus::Cancelled {
                 reason: self.cancellation.reason(),
+                phase: ToolCancellationPhase::DuringExecution,
+            };
+        } else if let ToolExecutionStatus::Cancelled {
+            reason: executor_reason,
+            ..
+        } = &result.status
+        {
+            // The executor was invoked after this slot crossed the frontier,
+            // so an executor-produced cancellation is in-flight even when
+            // the attempt cancellation signal did not win this race.
+            result.status = ToolExecutionStatus::Cancelled {
+                reason: if self.cancellation.is_cancelled() {
+                    self.cancellation.reason()
+                } else {
+                    *executor_reason
+                },
+                phase: ToolCancellationPhase::DuringExecution,
             };
         }
         let progress_events = buffer.take();
@@ -4388,7 +4450,9 @@ struct CallSlot {
     origin: ToolOrigin,
     prepared: Option<PreparedInvocation>,
     result: Option<ToolExecutionResult>,
-    started: bool,
+    /// The authoritative per-call executor-start frontier. Once true, this
+    /// call can never receive a `BeforeStart` cancellation result.
+    executor_started: bool,
     progress: Vec<RuntimeEvent>,
 }
 
@@ -4491,7 +4555,10 @@ fn denied_result(reason: &str) -> ToolExecutionResult {
 /// A cancelled tool result carrying the attempt cancellation reason.
 fn cancelled_result(reason: CancellationReason) -> ToolExecutionResult {
     ToolExecutionResult {
-        status: ToolExecutionStatus::Cancelled { reason },
+        status: ToolExecutionStatus::Cancelled {
+            reason,
+            phase: ToolCancellationPhase::BeforeStart,
+        },
         content: Vec::new(),
         duration_ms: 0,
         exit_code: None,
@@ -4771,6 +4838,41 @@ pub(crate) mod test_sync {
 
         /// Signals the first announced tool start and blocks the loop until
         /// the test releases the frontier.
+        pub(super) fn park(&self) {
+            self.reached.send_replace(true);
+            let _ = self.release.recv();
+        }
+    }
+
+    /// A test-only control point after the foreground cancellation branch
+    /// won its physical-result arbitration and before the Agent Loop awaits
+    /// the deliberately late physical future. The test can therefore prove
+    /// that cancellation settled first, then release the physical operation
+    /// and verify that its result cannot replace the canonical cancellation.
+    #[derive(Debug)]
+    pub(crate) struct ToolCancellationSettlementPause {
+        reached: watch::Sender<bool>,
+        release: mpsc::Receiver<()>,
+    }
+
+    impl ToolCancellationSettlementPause {
+        /// Creates the pause and its observation/release handles.
+        #[must_use]
+        pub(crate) fn install() -> (Self, watch::Receiver<bool>, mpsc::Sender<()>) {
+            let (reached, reached_rx) = watch::channel(false);
+            let (release_tx, release_rx) = mpsc::channel();
+            (
+                Self {
+                    reached,
+                    release: release_rx,
+                },
+                reached_rx,
+                release_tx,
+            )
+        }
+
+        /// Announces that cancellation won the Agent Loop arbitration, then
+        /// waits for the test to release the late physical future.
         pub(super) fn park(&self) {
             self.reached.send_replace(true);
             let _ = self.release.recv();

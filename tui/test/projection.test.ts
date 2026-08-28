@@ -965,7 +965,7 @@ describe("presentation projection", () => {
           cursor: runtimeCursor(42),
           event: { type: "future_variant" } as unknown as RuntimeClientEvent,
         }),
-      /unreachable Runtime Client Protocol v5 event/,
+      /unreachable Runtime Client Protocol v6 event/,
     );
   });
 

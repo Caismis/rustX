@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 
 use crate::runtime::types::CancellationReason;
 use crate::tools::managed_output::ManagedToolOutput;
-use crate::tools::types::{ToolExecutionResult, ToolExecutionStatus, ToolResultContent};
+use crate::tools::types::{
+    ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus, ToolResultContent,
+};
 
 /// Interprets one model-facing file path against the authoritative execution
 /// directory and lexically normalizes it.
@@ -224,12 +226,16 @@ pub fn failed_result(error: impl Into<String>) -> ToolExecutionResult {
     }
 }
 
-/// A normalized cancelled tool result: the runtime cancellation authority
-/// owns the reason, and the executor's partial semantic work is discarded.
+/// A normalized cancelled tool result for an executor that has already been
+/// invoked. The Agent Loop remains authoritative and normalizes the final
+/// result, but this direct executor result cannot claim `BeforeStart`.
 #[must_use]
 pub fn cancelled_result(reason: CancellationReason) -> ToolExecutionResult {
     ToolExecutionResult {
-        status: ToolExecutionStatus::Cancelled { reason },
+        status: ToolExecutionStatus::Cancelled {
+            reason,
+            phase: ToolCancellationPhase::DuringExecution,
+        },
         content: Vec::new(),
         duration_ms: 0,
         exit_code: None,

@@ -1,4 +1,4 @@
-//! Issue #38/#130: transport-independent Runtime Client Protocol v5 conformance.
+//! Issue #38/#130/#136: transport-independent Runtime Client Protocol v6 conformance.
 //!
 //! Every scenario below runs unchanged through two framings:
 //!

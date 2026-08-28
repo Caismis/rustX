@@ -3261,7 +3261,7 @@ impl ConversationRuntime {
     /// Claims the one-time Runtime Client binding of the tool runtime and of
     /// the capability coordinator.
     ///
-    /// Protocol v5 binds one runtime identity to at most one Runtime Client
+    /// Protocol v6 binds one runtime identity to at most one Runtime Client
     /// adapter for that identity's lifetime, so cloning a runtime never
     /// yields a second bindable identity and dropping the bound adapter
     /// never makes it bindable again. Reconnect replaces the attachment,
@@ -9737,7 +9737,8 @@ mod tests {
         assert!(matches!(
             &tool_messages[0].result.status,
             ToolExecutionStatus::Cancelled {
-                reason: CancellationReason::RuntimeShutdown
+                reason: CancellationReason::RuntimeShutdown,
+                phase: crate::tools::types::ToolCancellationPhase::BeforeStart,
             }
         ));
         assert!(!matches!(
@@ -10312,13 +10313,15 @@ mod tests {
         assert!(matches!(
             &tool_messages[0].result.status,
             ToolExecutionStatus::Cancelled {
-                reason: CancellationReason::UserRequested
+                reason: CancellationReason::UserRequested,
+                phase: crate::tools::types::ToolCancellationPhase::BeforeStart,
             }
         ));
         assert!(!matches!(
             &tool_messages[0].result.status,
             ToolExecutionStatus::Cancelled {
-                reason: CancellationReason::RuntimeShutdown
+                reason: CancellationReason::RuntimeShutdown,
+                phase: crate::tools::types::ToolCancellationPhase::BeforeStart,
             }
         ));
         assert!(tool_calls.borrow().is_empty(), "executor was never invoked");
@@ -12764,7 +12767,10 @@ mod tests {
                 let reason = context.cancellation.reason();
                 *observed.lock().expect("observed cause lock") = Some(reason);
                 crate::tools::types::ToolExecutionResult {
-                    status: crate::tools::types::ToolExecutionStatus::Cancelled { reason },
+                    status: crate::tools::types::ToolExecutionStatus::Cancelled {
+                        reason,
+                        phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
+                    },
                     content: Vec::new(),
                     duration_ms: 0,
                     exit_code: None,
@@ -13817,7 +13823,8 @@ mod tests {
         assert!(matches!(
             terminal.result.as_ref().map(|result| &result.status),
             Some(crate::tools::types::ToolExecutionStatus::Cancelled {
-                reason: CancellationReason::RuntimeShutdown
+                reason: CancellationReason::RuntimeShutdown,
+                phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
             })
         ));
         assert_eq!(
@@ -14481,6 +14488,7 @@ mod tests {
             repaired.result.status,
             crate::tools::types::ToolExecutionStatus::Cancelled {
                 reason: CancellationReason::ParentCancelled,
+                phase: crate::tools::types::ToolCancellationPhase::BeforeStart,
             },
             "a call with no durable start evidence never ran; it is not reported as unknown"
         );

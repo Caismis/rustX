@@ -89,9 +89,9 @@ use crate::tools::output::{
     truncation_for_capture,
 };
 use crate::tools::types::{
-    ManagedOutputContinuation, ToolApprovalPolicy, ToolConcurrencyPolicy, ToolExecutionPolicy,
-    ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationPolicy,
-    ToolResultContent,
+    ManagedOutputContinuation, ToolApprovalPolicy, ToolCancellationPhase, ToolConcurrencyPolicy,
+    ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
+    ToolInvocationPolicy, ToolResultContent,
 };
 use crate::tools::workspace::Workspace;
 
@@ -1521,6 +1521,7 @@ fn translate_python_result(
             return python_empty_terminal(
                 ToolExecutionStatus::Cancelled {
                     reason: cancellation_reason,
+                    phase: ToolCancellationPhase::DuringExecution,
                 },
                 result.exit_code,
                 context,

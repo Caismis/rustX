@@ -30,7 +30,7 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 13. An incompatible database
+The SQLite schema is development schema version 14. An incompatible database
 fails explicitly; there is no migration chain, legacy reader, compatibility
 fallback, dual write, or old storage mode. Version 10 froze the structured
 Questionnaire interaction audit vocabulary introduced by Issue #126. Version
@@ -38,9 +38,11 @@ Questionnaire interaction audit vocabulary introduced by Issue #126. Version
 instant and admitted module membership are durable with the canonical status
 message. Version 12 added the complete canonical-message-coupled Agent
 Status emission facts, bounded latest-emission heads, and the Todo-specific
-durable progress sequence. Version 12 and every older development schema are
-rejected at open; the review-only intermediate schema history is not a
-supported format.
+durable progress sequence. Version 14 freezes the typed
+`ToolCancellationPhase` carried by canonical cancelled tool results; version
+13 and every older development schema are rejected rather than decoded with a
+missing or default phase. The review-only intermediate schema history is not
+a supported format.
 File-backed stores
 use WAL, `synchronous=FULL`, foreign-key enforcement, and a busy timeout. A
 successful SQLite commit is the local durability linearization point
@@ -666,7 +668,7 @@ underneath the waiter. Only after settlement and attempt completion may a
 reload publish a new generation, and that generation affects a later admitted
 attempt only.
 
-Runtime Client v5 carries the same semantic plane through
+Runtime Client v6 carries the same semantic plane through
 `interaction_respond`, typed acceptance/errors, `interaction_pending` and
 `interaction_settled` events, and `snapshot.pending_interactions`. Snapshot
 plus cursor and subscribe-after-cursor retain the existing repair invariant.
@@ -682,6 +684,15 @@ gets exactly one normal Tool Plane result slot and no `ToolExecutionStarted`
 fact or executor future. Canonical ToolCall/result order is independent of
 response timing. A denied result is typed `ToolExecutionStatus::Denied`, not
 executor `Failed`.
+
+Cancellation is a typed canonical result with independent reason and phase:
+`BeforeStart` means the accepted call owned a result slot but its
+`CallSlot.executor_started` frontier was never crossed; `DuringExecution`
+means that frontier was crossed and cancellation won before ordinary
+completion. `DuringExecution` does not promise rollback or absence of side
+effects. The Agent Loop selects the phase and settles the one result slot;
+executors, provider adapters, Runtime Client projection, and TUI only perform
+physical cleanup or project the already-authoritative typed fact.
 
 The real `ConversationRuntime::shutdown()` path is covered by a deterministic
 regression: it observes the Runtime Client pending event, linearizes
@@ -3050,7 +3061,7 @@ environment, finite timeout, bounded diagnostics, and no generic
 
 The outermost layer exposes the runtime to humans and other systems:
 
-- Runtime Client Protocol v5 (semantic client boundary)
+- Runtime Client Protocol v6 (semantic client boundary)
 - Local interactive CLI
 - Runtime command interface
 - HTTP control interface
@@ -3059,7 +3070,7 @@ The outermost layer exposes the runtime to humans and other systems:
 
 AG-UI is an output projection, not the internal durable event model.
 
-#### Runtime Client Protocol v5 implementation (Issue #37, revised by Issues #131 and #130)
+#### Runtime Client Protocol v6 implementation (Issue #37, revised by Issues #131, #130, and #136)
 
 Issue #37 implements the one external semantic normalization boundary in
 `src/runtime_client`:
@@ -3074,7 +3085,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-      Runtime Client Protocol v5
+      Runtime Client Protocol v6
 ```
 
 The governing invariant is that all authoritative execution and
@@ -3144,7 +3155,7 @@ runtime_client/attachment.rs   RuntimeAttachment: at-most-one attachment,
                                event subscription delivery
 runtime_client/endpoint.rs     RuntimeClientEndpoint: the transport-neutral
                                semantic entry point that dispatches every
-                               v5 request, `initialize` included
+                               v6 request, `initialize` included
 runtime_client/transport/      byte-stream adapters beneath the semantic
                                layer (Issue #38); `stdio.rs` is the strict
                                stdio/JSONL transport
@@ -3182,7 +3193,7 @@ Runtime Client is a projection/control/attachment adapter over it.
 
 - **The semantic endpoint owns `initialize`.** `RuntimeClientEndpoint` is
   the boundary a transport wraps. It starts unattached and accepts every
-  v5 request; `initialize` performs version negotiation, single-attachment
+  v6 request; `initialize` performs version negotiation, single-attachment
   admission, `AttachmentId` allocation, and the linearized initial
   snapshot, storing the resulting attachment. Non-`initialize` requests
   before that are `not_attached`; a successful `detach` (or dropping the
@@ -3580,7 +3591,7 @@ Runtime Client is a projection/control/attachment adapter over it.
   compaction start, failure, and committed completion project with optional
   attempt attribution and update the shared context read model. Internal
   `RuntimeEvent` evolution therefore cannot silently break Runtime Client
-  Protocol v5.
+  Protocol v6.
 - **Streaming repair.** The snapshot carries an in-flight Assistant output
   view (accumulated blocks) and foreground tool views keyed by the
   logical tool-call identity, so a client repairing after `resync`
@@ -3615,7 +3626,7 @@ Runtime Client is a projection/control/attachment adapter over it.
   subscribe, and subscription polls) then fails with
   `projection_exhausted`. A read never hands back a model that silently
   stopped folding authoritative transitions.
-- **Attachment lifecycle.** Protocol v5 admits at most one active
+- **Attachment lifecycle.** Protocol v6 admits at most one active
   attachment: the first attach succeeds, a second fails with
   `attachment_in_use` and never evicts the first, detach (explicit or
   RAII drop) releases ownership, reconnects receive a fresh attachment
@@ -3711,7 +3722,7 @@ Runtime Client is a projection/control/attachment adapter over it.
 - **Protocol envelope.** A transport-neutral JSON-RPC-style envelope:
   `request(id, method + typed params)`, `response(id, result | error)`,
   and `event(cursor + typed payload)` with no request ids on
-  notifications. Every v5 method is client-initiated
+  notifications. Every v6 method is client-initiated
   (`initialize`, `submit_inbound`, `cancel_current_attempt`,
   `snapshot_get`, `subscribe_events`, `capability_get`,
   `background_status`, `background_cancel`, `detach`, `shutdown`).
@@ -3737,7 +3748,7 @@ rustX Runtime
 Runtime Client projection
       |
       v
-Runtime Client Protocol v5        semantic; Issue #37/#131/#130
+Runtime Client Protocol v6        semantic; Issue #37/#131/#130/#136
       |
       v
 transport adapters                framing only; src/runtime_client/transport
@@ -3783,10 +3794,10 @@ means adding a sibling module there; no semantic module moves.
   string stays in one record and multiline pretty-printed JSON is not
   supported. CRLF input is accepted by removing exactly one `\r` before
   the terminating LF; no other whitespace is touched.
-- **Malformed and oversized input is transport-fatal.** Protocol v5 has
+- **Malformed and oversized input is transport-fatal.** Protocol v6 has
   no uncorrelated error envelope, and a malformed frame may not even
   carry a request id, so the transport invents none. Any complete
-  in-bound-size record that does not deserialize to the exact v5 request
+  in-bound-size record that does not deserialize to the exact v6 request
   type — malformed JSON, unknown method, unknown field, wrong parameter
   type, empty or whitespace-only record — ends the session with a
   framing error, applies nothing, and writes no protocol record. An
@@ -3804,7 +3815,7 @@ means adding a sibling module there; no semantic module moves.
   background execution, and capability state continue under their own
   owners, and no projection lock is held across any transport await.
 - **Active-subscription lag closes the transport.** After a stall the
-  subscription may fall behind the bounded replay ring. Protocol v5 has
+  subscription may fall behind the bounded replay ring. Protocol v6 has
   no uncorrelated stream-error record, so the session ends with a typed
   local `SubscriptionLagged` error carrying the cursor information and
   the client repairs from an authoritative snapshot after reconnecting.
@@ -4578,7 +4589,7 @@ beside it:
 rustX Runtime semantics
         |
         v
-Runtime Client Protocol v5
+Runtime Client Protocol v6
         |
         v
 rustX TypeScript projection
@@ -5270,7 +5281,8 @@ Per plane:
   the current Surface is answered from durable evidence only: a durably
   known outcome is used verbatim; a started call with no outcome becomes
   `ToolExecutionStatus::Interrupted`; a call with no start evidence at all
-  becomes `Cancelled { ParentCancelled }` because nothing external happened.
+  becomes `ToolExecutionStatus::Cancelled { reason: ParentCancelled,
+  phase: BeforeStart }` because nothing external happened.
   A committed canonical `ToolResult` releases the call's detailed per-call
   repair evidence; the owning attempt's **bounded external summary**
   independently keeps proving the historical `ToolExecutionStarted`, so a

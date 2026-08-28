@@ -1,4 +1,4 @@
-# Agent Loop (M3 + Issue #22 + Issue #55 + Issue #56 + Issue #130)
+# Agent Loop (M3 + Issue #22 + Issue #55 + Issue #56 + Issue #130 + Issue #136)
 
 This document describes the runtime boundary implemented by the M3
 deterministic agent loop, mirroring the M2 model-plane documentation in
@@ -1152,6 +1152,50 @@ structurally exactly once:
   runs strictly after that point (see section 4.3), so an observer failure
   can never split the batch or prevent a committed Assistant tool-call
   message from receiving its complete canonical result batch.
+
+#### 7.1.1 Typed cancellation phase (Issue #136)
+
+Issue #136 extends the existing batch contract with one closed canonical
+status shape:
+
+```rust
+ToolExecutionStatus::Cancelled {
+    reason: CancellationReason,
+    phase: ToolCancellationPhase,
+}
+```
+
+`ToolCancellationPhase::BeforeStart` means that the ToolCall had already
+become canonical and owned a result slot, but its per-call executor-start
+frontier was never crossed: no executor future or physical operation was
+started. `ToolCancellationPhase::DuringExecution` means that the frontier
+was crossed and cancellation won before ordinary completion. It does not
+claim rollback, transactional execution, or absence of partial side effects.
+The reason and phase are independent; `UserRequested`, `RuntimeShutdown`,
+and `ParentCancelled` can each be paired with either phase.
+
+The frontier is the existing `CallSlot.executor_started` fact in
+`AgentExecution::execute_tools_staged`. The Agent Loop sets it immediately
+before publishing `ToolExecutionStarted`, and only started slots receive an
+executor future. The loop chooses the phase at that frontier/settlement
+boundary. Executors continue to own physical work and cleanup but do not
+classify cancellation phase; provider adapters and Runtime Client/TUI
+projection consume the typed result and never infer it from output or timing.
+
+Physical completion and cancellation remain one race and one terminal slot
+assignment. A completion that wins remains the real result. If cancellation
+wins, the started call is `DuringExecution`; awaiting the physical future
+afterward cannot replace that result. Calls past the frontier are filled as
+`BeforeStart`, and canonical ToolMessages are still committed once, in model
+call order. The model-facing rendering states the reason independently,
+explicitly says that rustX did not start a `BeforeStart` call, and warns that
+partial side effects may exist for `DuringExecution`.
+
+This is a bounded canonical-contract refactor. Issue #136 preserves the
+existing cancellation state machine, preflight/approval ordering, foreground
+attempt ownership, exactly-once structural batch settlement, and the
+no-follow-up-model-turn terminal behavior; it does not introduce a second
+foreground lifecycle or a background execution redesign.
 
 ### 7.2 Runtime drain composition (M9c)
 

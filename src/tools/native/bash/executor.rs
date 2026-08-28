@@ -34,8 +34,8 @@ use crate::tools::limits::{
 };
 use crate::tools::native::support::failed_result;
 use crate::tools::types::{
-    ManagedOutputContinuation, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
-    ToolInvocationMode, ToolResultContent, TruncationState,
+    ManagedOutputContinuation, ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus,
+    ToolInvocation, ToolInvocationMode, ToolResultContent, TruncationState,
 };
 
 /// The native Bash executor.
@@ -726,6 +726,7 @@ async fn run_bash_unix(
         // natural exit data.
         status = ToolExecutionStatus::Cancelled {
             reason: context.cancellation.reason(),
+            phase: ToolCancellationPhase::DuringExecution,
         };
     } else if matches!(termination.intent, ProcessOutcomeIntent::TimedOut) {
         status = ToolExecutionStatus::TimedOut;

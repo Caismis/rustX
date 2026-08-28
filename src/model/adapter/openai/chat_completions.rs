@@ -1445,6 +1445,11 @@ fn translate_tool_message(
             }
         }
     }
+    if let Some(status) = message.result.status.model_facing_text() {
+        parts.push(ChatCompletionRequestToolMessageContentPart::Text(
+            ChatCompletionRequestMessageContentPartText { text: status },
+        ));
+    }
     Ok(ChatCompletionRequestToolMessage {
         content: ChatCompletionRequestToolMessageContent::Array(parts),
         tool_call_id: message.tool_call_id.as_str().to_owned(),
@@ -1496,10 +1501,15 @@ fn invalid_request(message: &str) -> ModelError {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChatStreamNormalizer, translate_tools};
+    use super::{ChatStreamNormalizer, translate_tool_message, translate_tools};
+    use crate::message::types::ToolMessageBlock;
     use crate::model::adapter::validation::ValidatedTools;
     use crate::model::error::{ModelErrorKind, ModelRetryDisposition};
-    use crate::tools::types::ModelToolDefinition;
+    use crate::runtime::identity::{MessageId, ToolCallId, ToolId};
+    use crate::runtime::types::CancellationReason;
+    use crate::tools::types::{
+        ModelToolDefinition, ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus,
+    };
     use serde_json::json;
 
     #[test]
@@ -1574,5 +1584,32 @@ mod tests {
             }))
             .expect_err("a second non-zero base response is a provider failure");
         assert_eq!(error.retry_disposition, ModelRetryDisposition::Never);
+    }
+
+    #[test]
+    fn issue136_chat_translation_consumes_typed_cancellation_status() {
+        let message = ToolMessageBlock {
+            id: MessageId::new("tool-result-1"),
+            tool_call_id: ToolCallId::new("call-1"),
+            tool_id: ToolId::new("tool-1"),
+            result: ToolExecutionResult {
+                status: ToolExecutionStatus::Cancelled {
+                    reason: CancellationReason::RuntimeShutdown,
+                    phase: ToolCancellationPhase::BeforeStart,
+                },
+                content: Vec::new(),
+                duration_ms: 0,
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+                managed_output: None,
+            },
+        };
+        let encoded = serde_json::to_string(
+            &translate_tool_message(&message).expect("translate cancelled result"),
+        )
+        .expect("serialize provider message");
+        assert!(encoded.contains("runtime_shutdown"));
+        assert!(encoded.contains("did not start execution"));
     }
 }

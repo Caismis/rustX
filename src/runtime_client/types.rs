@@ -1,4 +1,4 @@
-//! Runtime Client Protocol v5: the transport-neutral protocol contract.
+//! Runtime Client Protocol v6: the transport-neutral protocol contract.
 //!
 //! This module owns the explicit external protocol boundary of Issue #37.
 //! It is deliberately **not** the internal runtime fact vocabulary
@@ -15,7 +15,7 @@
 //! [`EVENT_SCHEMA_VERSION`](crate::events::types::EVENT_SCHEMA_VERSION),
 //! [`MANIFEST_SCHEMA_VERSION`](crate::protocol::manifest::MANIFEST_SCHEMA_VERSION),
 //! the crate version, and any future Event Journal schema. Attachment
-//! initialization performs an explicit version negotiation; v5 rejects
+//! initialization performs an explicit version negotiation; v6 rejects
 //! every other version explicitly.
 //!
 //! # Envelope
@@ -30,7 +30,7 @@
 //!
 //! Request ids are scoped to exactly one attachment. Notifications never
 //! fabricate request ids: [`RuntimeClientProtocolEvent`] structurally has
-//! no `id` field. Every concrete v5 method is client-initiated; the
+//! no `id` field. Every concrete v6 method is client-initiated; the
 //! envelope remains structurally capable of peer-initiated requests in a
 //! later protocol version.
 //!
@@ -216,7 +216,7 @@ pub enum RuntimeClientSessionRequest {
 /// Deliberately independent from the internal event schema version, the
 /// manifest schema version, and the crate version: representing or changing
 /// this version never implies anything about internal schemas.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 5;
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 6;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -319,7 +319,7 @@ impl fmt::Display for RequestId {
     }
 }
 
-/// One client-initiated Runtime Client Protocol v5 request.
+/// One client-initiated Runtime Client Protocol v6 request.
 ///
 /// The `method` tag is the stable protocol discriminator; every method
 /// carries its typed params. Unknown fields and unknown methods are
@@ -750,7 +750,7 @@ pub struct RuntimeClientResponse {
     pub error: Option<RuntimeClientError>,
 }
 
-/// The typed success payloads of Runtime Client Protocol v5.
+/// The typed success payloads of Runtime Client Protocol v6.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeClientResult {
@@ -933,7 +933,7 @@ pub enum RuntimeClientResult {
     ShutdownCompleted,
 }
 
-/// The typed protocol-visible errors of Runtime Client Protocol v5.
+/// The typed protocol-visible errors of Runtime Client Protocol v6.
 ///
 /// Every protocol-visible failure maps to one category; provider SDK
 /// errors and internal synchronization failures are never exposed as
@@ -948,7 +948,7 @@ pub enum RuntimeClientError {
         /// The version the client requested.
         requested: u16,
     },
-    /// An attachment is already active: v5 allows at most one attachment
+    /// An attachment is already active: v6 allows at most one attachment
     /// per runtime instance, and an attach never evicts the active one.
     AttachmentInUse {
         /// The identity of the active attachment.
@@ -1093,7 +1093,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 5);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 6);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
@@ -1111,7 +1111,7 @@ mod tests {
     fn requests_round_trip_deterministically() {
         let request = RuntimeClientRequest::Initialize {
             id: super::RequestId::new(7),
-            protocol_version: 5,
+            protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
         };
         let first = serde_json::to_string(&request).expect("serialize");
         let second = serde_json::to_string(&request).expect("serialize again");
@@ -1300,7 +1300,7 @@ mod tests {
     fn typed_errors_round_trip() {
         let cases = [
             RuntimeClientError::UnsupportedProtocolVersion {
-                supported: 5,
+                supported: 6,
                 requested: 9,
             },
             RuntimeClientError::NoCurrentAttempt,

@@ -1199,7 +1199,8 @@ async fn cancellation_interrupts_waiting_for_tool() {
     assert_eq!(
         completed.status,
         ToolExecutionStatus::Cancelled {
-            reason: CancellationReason::UserRequested
+            reason: CancellationReason::UserRequested,
+            phase: rustx::tools::types::ToolCancellationPhase::DuringExecution,
         },
         "the committed result slot is a cancelled result"
     );
@@ -1323,7 +1324,8 @@ async fn cancellation_interrupts_later_tool_call() {
     assert_eq!(
         second_result.status,
         ToolExecutionStatus::Cancelled {
-            reason: CancellationReason::UserRequested
+            reason: CancellationReason::UserRequested,
+            phase: rustx::tools::types::ToolCancellationPhase::DuringExecution,
         },
         "the later call receives a cancelled result slot"
     );

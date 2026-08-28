@@ -1,4 +1,4 @@
-//! The Runtime Client event vocabulary (Runtime Client Protocol v5).
+//! The Runtime Client event vocabulary (Runtime Client Protocol v6).
 //!
 //! [`RuntimeClientEvent`] is the provider-neutral external event shape of
 //! the Runtime Client projection. It is deliberately **not** the internal
@@ -15,7 +15,7 @@
 //!   Python worker internals, and no provider wire objects appear.
 //!
 //! The internal `RuntimeEvent` schema can therefore evolve without
-//! breaking Runtime Client Protocol v5.
+//! breaking Runtime Client Protocol v6.
 //!
 //! Every attempt-scoped event carries its `attempt_id`, so events are
 //! self-describing for clients that attach mid-attempt.

@@ -140,6 +140,7 @@ impl ToolExecutor for ControlledExecutor {
                         return ToolExecutionResult {
                             status: ToolExecutionStatus::Cancelled {
                                 reason: CancellationReason::UserRequested,
+                                phase: rustx::tools::types::ToolCancellationPhase::DuringExecution,
                             },
                             content: Vec::new(),
                             duration_ms: 0,
@@ -228,6 +229,7 @@ fn cancelled() -> ToolExecutionResult {
     ToolExecutionResult {
         status: ToolExecutionStatus::Cancelled {
             reason: CancellationReason::UserRequested,
+            phase: rustx::tools::types::ToolCancellationPhase::DuringExecution,
         },
         content: Vec::new(),
         duration_ms: 0,

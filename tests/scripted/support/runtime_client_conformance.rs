@@ -1,4 +1,4 @@
-//! Transport-independent Runtime Client Protocol v5 conformance fixtures
+//! Transport-independent Runtime Client Protocol v6 conformance fixtures
 //! (Issue #38).
 //!
 //! # Why this layer exists
@@ -220,7 +220,7 @@ impl StdioJsonlDriver {
 
     /// Writes one request record: JSON payload plus exactly one LF.
     async fn send(&mut self, request: &RuntimeClientRequest) {
-        let mut record = serde_json::to_vec(request).expect("a v5 request serializes");
+        let mut record = serde_json::to_vec(request).expect("a v6 request serializes");
         record.push(b'\n');
         let stream = self.to_session.as_mut().expect("the session is open");
         stream.write_all(&record).await.expect("write the record");
@@ -602,6 +602,21 @@ pub async fn unsupported_protocol_version_is_typed(factory: &dyn DriverFactory) 
         .build()
         .await;
     let mut driver = connect(&fixture, factory);
+
+    let old = driver
+        .request(RuntimeClientRequest::Initialize {
+            id: RequestId::new(6),
+            protocol_version: 5,
+        })
+        .await;
+    assert_eq!(old.id, RequestId::new(6));
+    assert_eq!(
+        error(old),
+        RuntimeClientError::UnsupportedProtocolVersion {
+            supported: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
+            requested: 5,
+        }
+    );
 
     let response = driver
         .request(RuntimeClientRequest::Initialize {

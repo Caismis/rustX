@@ -41,13 +41,16 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 13 is the only accepted schema; version 12 and every older
+schema version 14 is the only accepted schema; version 13 and every older
 development schema fail explicitly at open and are not migrated. Version 10
 froze the structured Questionnaire interaction audit vocabulary introduced by
 Issue #126. Version 11 froze the structured Agent Status generation
 descriptor introduced by Issue #131. Version 12 added the complete
 canonical-message-coupled Agent Status emission facts, bounded latest-emission
-heads, and the Todo-specific durable progress sequence. The review-only
+heads, and the Todo-specific durable progress sequence. Version 14 freezes
+the typed `ToolCancellationPhase` carried by canonical cancelled tool
+results; version 13 and every older development schema are rejected rather
+than decoded with a missing or default phase. The review-only
 intermediate schema history was never a supported format.
 
 The durable request-start invariant is strict: the provider adapter cannot be
@@ -285,6 +288,24 @@ stream and normally commits exactly one terminal `RuntimeEvent`:
   invocation observes a child signal of the attempt signal. Cancellation
   is always a terminal cancellation outcome, never completion, and no
   continuation starts after cancellation is observed.
+
+- **Canonical tool cancellation has two independent typed axes.** A canonical
+  `ToolCall` has execution authority only after Assistant `ToolCall`
+  acceptance; every accepted call owns exactly one result slot. The Agent
+  Loop's per-call `CallSlot.executor_started` frontier is the authority for
+  `ToolCancellationPhase`: `BeforeStart` means the slot was canonical but
+  the executor future/physical operation was never started, while
+  `DuringExecution` means the frontier was crossed and cancellation won
+  before normal completion. `DuringExecution` does not promise rollback or
+  absence of side effects. `CancellationReason` and phase are independent,
+  so every supported reason can occur in either phase. Pre-tool cancellation
+  fills an unstarted slot with `BeforeStart`; a started foreground
+  `run_foreground` cancellation is normalized to `DuringExecution`. Physical
+  completion and cancellation still settle through the existing one result
+  assignment: a completed result is never rolled back, and a late physical
+  completion cannot replace a cancellation winner. Providers, executors,
+  Runtime Client projection, and TUI only consume/project the typed fact.
+  Canonical ToolMessages still commit exactly once in model call order.
 
 - `ModelRequestCompleted.usage` reports the completed request's canonical
   final usage: terminal `Completed.usage`, otherwise the latest `UsageUpdate`,
@@ -2561,11 +2582,11 @@ message role, history shape, or timestamps:
   to consume the dead `PostToolBatch` marker. An adopted FreshInbound turn has
   its separate durable answer obligation and follows the ordinary recovery
   contract; the process-local PostToolBatch marker is never reconstructed.
-- Runtime Client protocol v5 carries the optional structured
+- Runtime Client protocol v6 carries the optional structured
   `opportunities.post_tool_batch` member and the tagged Todo section. The
   field is omitted when no production PostToolBatch marker existed. Adding a
-  strict tagged `Todo` variant is a breaking wire-contract change, so v4 is
-  explicitly rejected; v5 is the sole supported version and has no aliases or
+  strict tagged `Todo` variant is a breaking wire-contract change, so v5 is
+  explicitly rejected; v6 is the sole supported version and has no aliases or
   compatibility wire paths.
 - `ModelRequest.effective_system_prompt` is the sole System authority. It is
   rustX-rendered from ordered native/extension sections; canonical history
@@ -3315,8 +3336,8 @@ semantic normalization boundary. The frozen invariants:
   a model that silently stopped folding transitions.
 - **Runtime Client protocol versioning is independent from internal
   RuntimeEvent/Event Journal schema versioning.** Version negotiation is
-  explicit at attachment admission; Protocol v5 is the sole supported
-  version, and Protocol v4 is rejected explicitly.
+  explicit at attachment admission; Protocol v6 is the sole supported
+  version, and Protocol v5 is rejected explicitly.
 - **The semantic layer owns protocol negotiation and attachment
   admission; transports are framing only.** `initialize` is dispatched by
   `RuntimeClientEndpoint` and is by itself sufficient to establish the
@@ -3405,7 +3426,7 @@ semantic normalization boundary. The frozen invariants:
   no derived message mirror of its own, and deterministic regressions
   verify the projection mirror against the authoritative ledger rather
   than coordinating two histories.
-- **One active attachment.** Protocol v5 admits at most one attachment
+- **One active attachment.** Protocol v6 admits at most one attachment
   per runtime instance; a second attach fails deterministically without
   evicting the first; reconnect receives a fresh attachment identity;
   request ids are attachment-scoped; cursor/replay state belongs to the
@@ -3454,7 +3475,7 @@ endpoint. It frames; it never becomes a second authority.
   until one complete, in-bound-size framed record has successfully
   deserialized to the exact Runtime Client request type. A record that
   violates framing, exceeds the record limit, or fails exact
-  deserialization ends the transport having applied nothing; Protocol v5
+  deserialization ends the transport having applied nothing; Protocol v6
   has no uncorrelated error envelope, so no transport fabricates a
   protocol record for it.
 - **Transport loss is not semantic cancellation.** Runtime Client
@@ -3795,7 +3816,8 @@ runtime supervision/quiescence contract.
 - an unresolved foreground tool call is never automatically replayed. A
   durably known outcome is committed verbatim; a started call with an unknown
   outcome becomes `ToolExecutionStatus::Interrupted`; a call with no durable
-  start evidence becomes `Cancelled { ParentCancelled }`. The missing siblings
+  start evidence becomes `ToolExecutionStatus::Cancelled { reason:
+  ParentCancelled, phase: BeforeStart }`. The missing siblings
   of one Assistant tool turn commit as **one** atomic batch in canonical
   model-call order, so no durable prefix of a sibling batch is observable and
   the conversation is never left structurally unable to form a later model

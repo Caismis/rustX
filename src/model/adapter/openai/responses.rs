@@ -1423,6 +1423,9 @@ fn translate_tool_result(
             }
         }
     }
+    if let Some(status) = tool.result.status.model_facing_text() {
+        text_parts.push(status);
+    }
     Ok(serde_json::json!({
         "type": "function_call_output",
         "call_id": tool.tool_call_id,
@@ -1587,8 +1590,13 @@ fn unsupported(message: impl Into<String>) -> ModelError {
 
 #[cfg(test)]
 mod tests {
-    use super::translate_tools;
-    use crate::tools::types::ModelToolDefinition;
+    use super::{translate_tool_result, translate_tools};
+    use crate::message::types::ToolMessageBlock;
+    use crate::runtime::identity::{MessageId, ToolCallId, ToolId};
+    use crate::runtime::types::CancellationReason;
+    use crate::tools::types::{
+        ModelToolDefinition, ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus,
+    };
     use serde_json::json;
 
     #[test]
@@ -1639,5 +1647,31 @@ mod tests {
         assert_eq!(encoded[0]["type"], "function");
         assert_eq!(encoded[0]["name"], "ask_user");
         assert_eq!(encoded[0]["parameters"], schema);
+    }
+
+    #[test]
+    fn issue136_responses_translation_consumes_typed_cancellation_status() {
+        let message = ToolMessageBlock {
+            id: MessageId::new("tool-result-1"),
+            tool_call_id: ToolCallId::new("call-1"),
+            tool_id: ToolId::new("tool-1"),
+            result: ToolExecutionResult {
+                status: ToolExecutionStatus::Cancelled {
+                    reason: CancellationReason::UserRequested,
+                    phase: ToolCancellationPhase::DuringExecution,
+                },
+                content: Vec::new(),
+                duration_ms: 0,
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+                managed_output: None,
+            },
+        };
+        let encoded = translate_tool_result(&message).expect("translate cancelled result");
+        assert_eq!(
+            encoded["output"].as_str().expect("text output"),
+            "Tool call was cancelled (reason: user_requested). Execution had already started, but cancellation occurred before normal completion. Partial side effects may have occurred."
+        );
     }
 }

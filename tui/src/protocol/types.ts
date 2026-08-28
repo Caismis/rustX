@@ -1,5 +1,5 @@
 /**
- * Runtime Client Protocol v5 — the TypeScript mirror of the wire contract.
+ * Runtime Client Protocol v6 — the TypeScript mirror of the wire contract.
  *
  * These declarations describe the JSON rustX already speaks. They are a
  * *transcription* of the Rust types in `src/runtime_client/`, never a second
@@ -11,7 +11,7 @@
  * - nothing in this file interprets a value. `requestParams` stays opaque
  *   provider-owned JSON, capability sets are read as published, and tool
  *   arguments/results are carried, not parsed for meaning;
- * - Runtime Client Protocol v5 event discriminators are a closed vocabulary at
+ * - Runtime Client Protocol v6 event discriminators are a closed vocabulary at
  *   the connection boundary: an unknown event is a protocol error, not a
  *   presentation fact; other open values remain opaque or are checked at
  *   their owning boundary.
@@ -23,7 +23,7 @@
  * camelCase.
  */
 
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 5;
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 6;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -193,11 +193,13 @@ export type CancellationReason =
   | "runtime_shutdown"
   | "parent_cancelled";
 
+export type ToolCancellationPhase = "before_start" | "during_execution";
+
 export type ToolExecutionStatus =
   | { type: "success" }
   | { type: "failed"; error: string }
   | { type: "denied"; reason: string }
-  | { type: "cancelled"; reason: CancellationReason }
+  | { type: "cancelled"; reason: CancellationReason; phase: ToolCancellationPhase }
   | { type: "timed_out" }
   | { type: "interrupted" };
 
@@ -1523,11 +1525,11 @@ export type RuntimeClientOutboundRecord =
   | RuntimeClientProtocolEvent;
 
 /**
- * Checks only the discriminator of one Runtime Client Protocol v5 event.
+ * Checks only the discriminator of one Runtime Client Protocol v6 event.
  *
  * The connection owns structural protocol validation, so this deliberately
  * does not validate the event payload. Once this returns true, the reducer
- * may receive the event as a known v5 fact.
+ * may receive the event as a known v6 fact.
  */
 export function isKnownRuntimeClientEvent(
   value: unknown,
@@ -1579,7 +1581,7 @@ export function isKnownRuntimeClientEvent(
 /**
  * Classifies one decoded outbound record.
  *
- * A known notification carries a cursor and a known v5 event discriminator.
+ * A known notification carries a cursor and a known v6 event discriminator.
  * Malformed or future event-shaped records are handled separately by the
  * connection so they cannot fall through as responses.
  */
