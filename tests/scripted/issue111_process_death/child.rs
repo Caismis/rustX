@@ -27,6 +27,7 @@ use crate::local_runtime::session::{SessionCatalog, SessionPersistentState};
 use crate::local_runtime::supervisor::LocalSessionSupervisor;
 use crate::message::content::TextBlock;
 use crate::message::types::{ContentBlockIndex, UserContentBlock};
+use crate::model::error::{ModelError, ModelErrorKind, ModelRetryDisposition};
 use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
 use crate::model::types::ModelProtocol;
@@ -98,6 +99,13 @@ pub(crate) const RELOAD_BUSY_COMPACTION: &str = "reload_busy_compaction";
 pub(crate) const RELOAD_BUSY_INTERACTION: &str = "reload_busy_interaction";
 /// A reopened conversation that admits one new request.
 pub(crate) const COLD_RESUME: &str = "cold_resume";
+/// One unresolved publication whose terminal attempt transition can be
+/// killed and retried through startup recovery.
+pub(crate) const UNRESOLVED_CARRYOVER: &str = "unresolved_carryover";
+/// Two partial transient retries followed by a canonical success, killed at
+/// the final attempt-terminal boundary so recovery must not select either
+/// older retry audit as carryover.
+pub(crate) const INTERNAL_RETRY_SUCCESS: &str = "internal_retry_success";
 /// A reopened conversation whose new attempt reads the Skill file again.
 pub(crate) const COLD_RESUME_READ: &str = "cold_resume_read";
 /// Composition only: the child reports whether the current resources produced
@@ -625,6 +633,55 @@ fn wide_text_turn() -> Vec<FakeStep> {
     ]
 }
 
+/// One partial publication whose model request fails before the attempt
+/// terminal transaction. The publication audit is durable first; the parent
+/// can therefore kill the producer transition and make recovery select the
+/// same source from the same keyed audit on its second try.
+fn unresolved_output_turn() -> Vec<FakeStep> {
+    vec![
+        started(),
+        text(WIDE_TEXT),
+        FakeStep::Emit(ModelEvent::Failed {
+            error: ModelError {
+                kind: ModelErrorKind::Transport,
+                message: "connection interrupted after partial output".to_owned(),
+                retry_disposition: ModelRetryDisposition::Never,
+                retry_after_ms: None,
+                provider_code: None,
+                context_overflow: None,
+            },
+        }),
+    ]
+}
+
+/// One partial publication that is retryable, so it becomes an internal audit
+/// generation rather than an unresolved logical-step outcome.
+fn retryable_unresolved_output_turn() -> Vec<FakeStep> {
+    vec![
+        started(),
+        text(WIDE_TEXT),
+        FakeStep::Emit(ModelEvent::Failed {
+            error: ModelError {
+                kind: ModelErrorKind::Transport,
+                message: "connection interrupted after partial retry output".to_owned(),
+                retry_disposition: ModelRetryDisposition::Transient,
+                retry_after_ms: None,
+                provider_code: None,
+                context_overflow: None,
+            },
+        }),
+    ]
+}
+
+/// The final retry generation is accepted canonically.
+fn retry_success_turn() -> Vec<FakeStep> {
+    vec![
+        started(),
+        text("accepted after internal retries"),
+        done(ModelFinishReason::Stop),
+    ]
+}
+
 /// One short turn: nothing crosses the byte threshold, so the terminal
 /// transaction carries the only frame.
 fn short_text_turn() -> Vec<FakeStep> {
@@ -743,6 +800,43 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 // boundary.
                 note("submitted");
                 park_owning(child).await;
+            }
+        }
+        UNRESOLVED_CARRYOVER => {
+            let child = Child::require(root, vec![unresolved_output_turn()], false, true).await;
+            child.submit("recover unresolved output");
+            if std::env::var(process_death::GATE_ENV).is_ok() {
+                // The parent chooses a durable terminal boundary. Keeping the
+                // runtime alive here makes the process own the exact in-flight
+                // transition until SIGKILL.
+                park_owning(child).await;
+            } else {
+                child.log.wait_settled(1).await;
+                note("settled");
+            }
+        }
+        INTERNAL_RETRY_SUCCESS => {
+            let child = Child::require(
+                root,
+                vec![
+                    retryable_unresolved_output_turn(),
+                    retryable_unresolved_output_turn(),
+                    retry_success_turn(),
+                ],
+                false,
+                true,
+            )
+            .await;
+            child.submit("recover internal retry success");
+            if std::env::var(process_death::GATE_ENV).is_ok() {
+                // The final successful generation has already reached
+                // canonical acceptance when this gate is reached. The parent
+                // kills the attempt-terminal transaction so recovery must
+                // derive that fact from durable request/snapshot evidence.
+                park_owning(child).await;
+            } else {
+                child.log.wait_settled(1).await;
+                note("settled");
             }
         }
         TOOL_TURN | TOOL_APPROVAL | TOOL_APPROVAL_PENDING => {

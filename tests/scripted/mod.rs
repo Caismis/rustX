@@ -59,6 +59,7 @@ mod issue130_agent_status;
 mod issue134_model_retry;
 mod issue135_model_deadlines;
 mod issue136_tool_cancellation_phase;
+mod issue137_unresolved_output_carryover;
 mod issue27_multi_compaction;
 mod issue37_binding;
 mod issue37_capability;

@@ -248,8 +248,8 @@ async fn parallel_reversed_completion_keeps_canonical_order() {
     let tool_message_ids: Vec<&str> = next
         .messages
         .iter()
-        .filter_map(|message| match message {
-            MessageBlock::Tool(tool) => Some(tool.tool_call_id.as_str()),
+        .filter_map(|message| match message.as_canonical() {
+            Some(MessageBlock::Tool(tool)) => Some(tool.tool_call_id.as_str()),
             _ => None,
         })
         .collect();
@@ -498,8 +498,8 @@ async fn mixed_foreground_background_group_does_not_wait_for_detached_terminal()
     let tool_message_ids: Vec<&str> = next
         .messages
         .iter()
-        .filter_map(|message| match message {
-            MessageBlock::Tool(tool) => Some(tool.tool_call_id.as_str()),
+        .filter_map(|message| match message.as_canonical() {
+            Some(MessageBlock::Tool(tool)) => Some(tool.tool_call_id.as_str()),
             _ => None,
         })
         .collect();

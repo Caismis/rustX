@@ -765,10 +765,10 @@ async fn inbound_during_backoff_is_not_inserted_into_frozen_retry() {
     let requests = model.requests();
     assert_eq!(requests.len(), 3);
     assert!(!requests[1].messages.iter().any(|message| {
-        matches!(message, MessageBlock::User(message) if message.id == MessageId::new("late-inbound"))
+        matches!(message, rustx::model::ModelInputMessage::Canonical(MessageBlock::User(message)) if message.id == MessageId::new("late-inbound"))
     }));
     assert!(requests[2].messages.iter().any(|message| {
-        matches!(message, MessageBlock::User(message) if message.id == MessageId::new("late-inbound"))
+        matches!(message, rustx::model::ModelInputMessage::Canonical(MessageBlock::User(message)) if message.id == MessageId::new("late-inbound"))
     }));
     assert_eq!(
         audit

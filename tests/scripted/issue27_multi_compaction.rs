@@ -241,7 +241,7 @@ fn reconstruct_at(host: &RuntimeClientHost, index: usize) -> (RequestSnapshot, M
 }
 
 /// Serializes canonical messages for byte-content marker assertions.
-fn wire(messages: &[MessageBlock]) -> String {
+fn wire<T: serde::Serialize>(messages: &T) -> String {
     serde_json::to_string(messages).expect("canonical messages serialize")
 }
 
@@ -253,6 +253,19 @@ fn compaction_summaries(messages: &[MessageBlock]) -> usize {
             matches!(
                 message,
                 MessageBlock::User(user) if user.kind == InboundKind::CompactionSummary
+            )
+        })
+        .count()
+}
+
+/// The same assertion over the provider-neutral request representation.
+fn mixed_compaction_summaries(messages: &[rustx::model::ModelInputMessage]) -> usize {
+    messages
+        .iter()
+        .filter(|message| {
+            matches!(
+                message.as_canonical(),
+                Some(MessageBlock::User(user)) if user.kind == InboundKind::CompactionSummary
             )
         })
         .count()
@@ -272,19 +285,19 @@ fn is_agent_status(message: &MessageBlock) -> bool {
 
 /// Every tool call in one message list has its result, every result follows
 /// its call, and neither ever appears without the other.
-fn assert_tool_units_complete(messages: &[MessageBlock], context: &str) {
+fn assert_tool_units_complete(messages: &[rustx::model::ModelInputMessage], context: &str) {
     let mut calls: Vec<String> = Vec::new();
     let mut results: Vec<String> = Vec::new();
     for message in messages {
-        match message {
-            MessageBlock::Assistant(assistant) => {
+        match message.as_canonical() {
+            Some(MessageBlock::Assistant(assistant)) => {
                 for block in &assistant.content {
                     if let AssistantContentBlock::ToolCall(call) = block {
                         calls.push(call.id.as_str().to_owned());
                     }
                 }
             }
-            MessageBlock::Tool(tool) => {
+            Some(MessageBlock::Tool(tool)) => {
                 let id = tool.tool_call_id.as_str().to_owned();
                 assert!(
                     calls.contains(&id),
@@ -292,7 +305,7 @@ fn assert_tool_units_complete(messages: &[MessageBlock], context: &str) {
                 );
                 results.push(id);
             }
-            MessageBlock::User(_) => {}
+            Some(MessageBlock::User(_)) | None => {}
         }
     }
     for id in &calls {
@@ -445,10 +458,10 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     let r1_wire = wire(&requests[0].messages);
     assert!(r1_wire.contains("turn one"));
     assert!(r1_wire.contains("Current time:"));
-    assert_eq!(compaction_summaries(&requests[0].messages), 0);
+    assert_eq!(mixed_compaction_summaries(&requests[0].messages), 0);
 
     assert_eq!(requests[2].messages.len(), 3, "[sum1, in2, st2]");
-    assert_eq!(compaction_summaries(&requests[2].messages), 1);
+    assert_eq!(mixed_compaction_summaries(&requests[2].messages), 1);
     let r2_wire = wire(&requests[2].messages);
     assert!(r2_wire.contains("SUMMARY-ONE covers filler one"));
     assert!(
@@ -459,7 +472,7 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     assert!(r2_wire.contains("Current time:"));
 
     assert_eq!(requests[4].messages.len(), 3, "[sum2, in3, st3]");
-    assert_eq!(compaction_summaries(&requests[4].messages), 1);
+    assert_eq!(mixed_compaction_summaries(&requests[4].messages), 1);
     let r3_wire = wire(&requests[4].messages);
     assert!(r3_wire.contains("SUMMARY-TWO supersedes summary one"));
     assert!(

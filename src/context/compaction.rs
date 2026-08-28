@@ -135,10 +135,12 @@ pub(crate) async fn execute_compaction(
             .engine
             .prepare_compaction(conversation, conversation_id, &plan, &summary, tools)?;
     let summary_block = prepared.summary_block();
-    let exact_after = context.engine.estimate_with_staged_context(
+    let exact_after = context.engine.estimate_with_staged_context_and_carryover(
         &projection,
         constraints.staged_request_context,
         tools,
+        constraints.carryover,
+        constraints.carryover_anchor,
     );
     // The exact post-compaction fit is checked against the same corrected
     // budget the plan was built with: after a provider has proven this

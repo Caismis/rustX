@@ -1029,7 +1029,7 @@ async fn terminal_inbound_before_snapshot_joins_the_batch() {
     let inbound_in_continuation = requests[1]
         .messages
         .iter()
-        .any(|message| matches!(message, MessageBlock::User(user) if user.id.as_str() == "background-exec_1-terminal"));
+        .any(|message| matches!(message.as_canonical(), Some(MessageBlock::User(user)) if user.id.as_str() == "background-exec_1-terminal"));
     assert!(
         inbound_in_continuation,
         "the terminal inbound joined the drained batch of the tool turn"
@@ -1412,8 +1412,8 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
     // Request 2 is a foreground tool-result continuation: no Agent Status.
     assert!(!requests[1].messages.iter().any(|message| {
         matches!(
-            message,
-            MessageBlock::User(user)
+            message.as_canonical(),
+            Some(MessageBlock::User(user))
                 if matches!(
                     &user.kind,
                     rustx::message::types::InboundKind::Context(
@@ -1428,8 +1428,8 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
     let status = requests[2]
         .messages
         .iter()
-        .find_map(|message| match message {
-            MessageBlock::User(user)
+        .find_map(|message| match message.as_canonical() {
+            Some(MessageBlock::User(user))
                 if matches!(
                     &user.kind,
                     rustx::message::types::InboundKind::Context(
@@ -1461,7 +1461,7 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
         requests[2]
             .messages
             .iter()
-            .any(|message| matches!(message, MessageBlock::User(user) if user.id.as_str() == "background-exec_1-terminal")),
+            .any(|message| matches!(message.as_canonical(), Some(MessageBlock::User(user)) if user.id.as_str() == "background-exec_1-terminal")),
         "the terminal inbound waited for the next batch"
     );
     assert!(matches!(
@@ -1525,8 +1525,8 @@ async fn foreground_tool_continuation_has_no_agent_status() {
     assert!(
         !requests[1].messages.iter().any(|message| {
             matches!(
-                message,
-                MessageBlock::User(user)
+                message.as_canonical(),
+                Some(MessageBlock::User(user))
                 if matches!(
                     &user.kind,
                     rustx::message::types::InboundKind::Context(
@@ -1602,11 +1602,11 @@ fn background_status_accounting() {
     let estimator = DefaultTokenEstimator;
     assert!(
         estimator.estimate_input(
-            &with_status.messages,
+            &rustx::model::input::canonical_input(&with_status.messages),
             &with_status.effective_system_prompt,
             &tools
         ) > estimator.estimate_input(
-            &without_status.messages,
+            &rustx::model::input::canonical_input(&without_status.messages),
             &without_status.effective_system_prompt,
             &tools
         ),

@@ -23,15 +23,17 @@ fn request(protocol: ModelProtocol) -> ModelRequest {
     ModelRequest {
         invocation: common::invocation(protocol, "m6-test"),
         messages: vec![
-            MessageBlock::Assistant(AssistantMessageBlock {
-                id: MessageId::new("msg-agent-1"),
-                content: vec![rustx::message::types::AssistantContentBlock::Text(
-                    TextBlock {
-                        text: "earlier turn".to_owned(),
-                    },
-                )],
-            }),
-            MessageBlock::User(UserMessageBlock {
+            rustx::model::ModelInputMessage::Canonical(MessageBlock::Assistant(
+                AssistantMessageBlock {
+                    id: MessageId::new("msg-agent-1"),
+                    content: vec![rustx::message::types::AssistantContentBlock::Text(
+                        TextBlock {
+                            text: "earlier turn".to_owned(),
+                        },
+                    )],
+                },
+            )),
+            rustx::model::ModelInputMessage::Canonical(MessageBlock::User(UserMessageBlock {
                 id: MessageId::new("msg-user-1"),
                 content: vec![UserContentBlock::Text(TextBlock {
                     text: "hello".to_owned(),
@@ -39,7 +41,7 @@ fn request(protocol: ModelProtocol) -> ModelRequest {
                 source: UserSource::Human,
                 kind: InboundKind::Message,
                 timestamp: None,
-            }),
+            })),
         ],
         tools: Vec::new(),
         effective_system_prompt: format!("{SYSTEM_TEXT}\n\n{SKILL_TEXT}"),

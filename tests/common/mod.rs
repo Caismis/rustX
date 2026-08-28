@@ -420,15 +420,17 @@ pub fn simple_request(
     use rustx::runtime::identity::MessageId;
     rustx::model::ModelRequest {
         invocation: invocation(protocol, model),
-        messages: vec![MessageBlock::User(UserMessageBlock {
-            id: MessageId::new("msg-user-1"),
-            content: vec![UserContentBlock::Text(TextBlock {
-                text: prompt.to_owned(),
-            })],
-            source: UserSource::Human,
-            kind: rustx::message::types::InboundKind::Message,
-            timestamp: None,
-        })],
+        messages: vec![rustx::model::ModelInputMessage::Canonical(
+            MessageBlock::User(UserMessageBlock {
+                id: MessageId::new("msg-user-1"),
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: prompt.to_owned(),
+                })],
+                source: UserSource::Human,
+                kind: rustx::message::types::InboundKind::Message,
+                timestamp: None,
+            }),
+        )],
         tools: Vec::new(),
         effective_system_prompt: String::new(),
         continuation: None,

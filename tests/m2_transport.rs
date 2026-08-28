@@ -13,7 +13,12 @@ use rustx::model::{
     ModelProtocol, ModelRequest, OpenAiAdapterConfig, OpenAiChatCompletionsAdapter,
     OpenAiResponsesAdapter,
 };
+use rustx::model::{
+    CarryoverBlockKind, CarryoverOmissionCounts, ModelInputMessage, RenderedCarryoverRecord,
+    RenderedCarryoverText, RenderedUnresolvedOutputCarryover, RequestOnlyModelContext,
+};
 use rustx::runtime::CancellationSignal;
+use rustx::runtime::identity::PublicationStreamId;
 
 fn openai_chat(server: &common::FixtureServer) -> OpenAiChatCompletionsAdapter {
     OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new("test-key", server.url("/v1")))
@@ -39,6 +44,22 @@ fn anthropic_request() -> ModelRequest {
     simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi")
 }
 
+fn request_with_carryover(mut request: ModelRequest) -> ModelRequest {
+    request.messages.push(ModelInputMessage::RequestOnly(
+        RequestOnlyModelContext::UnresolvedOutputCarryover(RenderedUnresolvedOutputCarryover {
+            source_stream_id: PublicationStreamId::new("audit-stream"),
+            records: vec![RenderedCarryoverRecord::Text(RenderedCarryoverText {
+                kind: CarryoverBlockKind::Text,
+                text: Some("unresolved tail".to_owned()),
+                omitted_prefix_bytes: 0,
+                omitted_detail_bytes: 0,
+            })],
+            omitted_blocks: CarryoverOmissionCounts::default(),
+        }),
+    ));
+    request
+}
+
 async fn collect(adapter: &dyn ModelAdapter, request: ModelRequest) -> Vec<ModelEvent> {
     common::collect_events(adapter, request).await
 }
@@ -48,6 +69,90 @@ fn last_error_kind(events: &[ModelEvent]) -> ModelErrorKind {
         panic!("expected Failed terminal");
     };
     error.kind.clone()
+}
+
+/// Every provider adapter receives the already ordered provider-neutral
+/// request-only item and translates it as runtime-authored user context. The
+/// adapters do not select, order, load, or consume the Publication Audit.
+#[tokio::test]
+async fn every_adapter_translates_request_only_carryover_without_canonical_identity() {
+    let chat_server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "plain_text.sse")
+    })
+    .await;
+    let responses_server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_responses", "plain_text.sse")
+    })
+    .await;
+    let anthropic_server =
+        common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse")).await;
+
+    let chat_events = collect(
+        &openai_chat(&chat_server),
+        request_with_carryover(chat_request()),
+    )
+    .await;
+    assert!(matches!(
+        chat_events.last(),
+        Some(ModelEvent::Completed { .. })
+    ));
+    let chat_body: serde_json::Value =
+        serde_json::from_str(&chat_server.request_body(0)).expect("Chat request JSON");
+    let chat_messages = chat_body["messages"].as_array().expect("Chat messages");
+    assert_eq!(chat_messages.len(), 2);
+    assert_eq!(chat_messages[1]["role"], "user");
+    assert!(
+        chat_messages[1]["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("unresolved tail"))
+    );
+
+    let responses_events = collect(
+        &openai_responses(&responses_server),
+        request_with_carryover(responses_request()),
+    )
+    .await;
+    assert!(matches!(
+        responses_events.last(),
+        Some(ModelEvent::Completed { .. })
+    ));
+    let responses_body: serde_json::Value =
+        serde_json::from_str(&responses_server.request_body(0)).expect("Responses request JSON");
+    let responses_input = responses_body["input"].as_array().expect("Responses input");
+    assert_eq!(responses_input.len(), 2);
+    assert_eq!(responses_input[1]["role"], "user");
+    assert!(
+        responses_input[1]["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("unresolved tail"))
+    );
+
+    let anthropic_events = collect(
+        &anthropic(&anthropic_server),
+        request_with_carryover(anthropic_request()),
+    )
+    .await;
+    assert!(matches!(
+        anthropic_events.last(),
+        Some(ModelEvent::Completed { .. })
+    ));
+    let anthropic_body: serde_json::Value =
+        serde_json::from_str(&anthropic_server.request_body(0)).expect("Anthropic request JSON");
+    let anthropic_messages = anthropic_body["messages"]
+        .as_array()
+        .expect("Anthropic messages");
+    assert_eq!(anthropic_messages.len(), 2);
+    assert_eq!(anthropic_messages[1]["role"], "user");
+    assert!(
+        anthropic_messages[1]["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("unresolved tail"))
+    );
+
+    let request = request_with_carryover(chat_request());
+    assert!(request.messages.iter().any(|message| {
+        matches!(message, ModelInputMessage::RequestOnly(_)) && message.canonical_id().is_none()
+    }));
 }
 
 /// One `OpenAI` Chat invocation against a simulated retryable 429 performs

@@ -141,7 +141,35 @@ P — ModelRequestCompleted      U — publication terminal      C — canonical
 | --- | --- | --- | --- |
 | partial proposal, no C | staged proposal frames, no P | `ToolExecutionStarted`, `ToolResult` | `structural_finish_failure_is_incomplete_without_p` |
 | complete proposal, U, canonical acceptance never committed | P, U, no C | any execution fact; any repaired result slot | `an_unaccepted_proposal_never_becomes_an_execution` |
-| audited output vs. later model context | `Unaccepted` audit | the audit entering the Ledger or a later `RequestSnapshot`'s frozen context | `a_publication_audit_never_reenters_model_context` |
+| audited output vs. later model context | `Unaccepted` audit | no canonical Assistant/User/MessageId or lineage identity; a bounded request-only projection may be frozen once in a later eligible `RequestSnapshot` | `a_publication_audit_carryover_stays_request_only` |
+
+Issue #137 makes that last boundary deliberately narrow. Publication Audit is
+still the only body authority. A terminally unresolved audit can leave only
+its `PublicationStreamId` in the conversation root. Live settlement and
+recovery use the same keyed selector over the last durably started request's
+descending retry ordinals, and the selected source is installed/replaced or
+cleared in the same durable transaction as the attempt terminal. Recovery
+terminalizes publication evidence before that selection, so a crash before the
+terminal/pointer commit leaves a valid prefix.
+
+The first successfully started eligible primary model step is the only
+consumer. Its start transaction freezes the exact bounded request-only
+representation and insertion anchor in the Request Snapshot while clearing
+the pointer. Cancellation before the commit preserves the pointer. FreshInbound
+places carryover immediately before its first canonical inbound message;
+Continuation places it after canonical history and before newly staged current
+context. Transient retries reuse the frozen value, while overflow can only
+degrade it from full to reduced, metadata-only, or omitted. No carryover event,
+Runtime Client state, TUI row, canonical message, tool authority, summary
+input, or lineage seed is created.
+
+The second-crash regression
+`unresolved_output_carryover_recovery_reuses_the_same_audit_across_second_crash`
+parks recovery before the combined attempt-terminal/pointer commit twice. The
+third recovery commits it once, and the later eligible start consumes the same
+source exactly once. The retry-success regression
+`recovery_of_internal_retry_success_does_not_install_old_carryover` proves
+that an accepted later retry suppresses earlier failed-generation audits.
 
 ## 4. Tool external-outcome recovery
 

@@ -752,12 +752,14 @@ async fn stateless_continuation_replays_items_without_duplication() {
     // by the new user prompt.
     request.messages.insert(
         0,
-        MessageBlock::Assistant(rustx::message::types::AssistantMessageBlock {
-            id: rustx::runtime::identity::MessageId::new("msg-prev"),
-            content: vec![AssistantContentBlock::Text(TextBlock {
-                text: "Previous answer.".to_owned(),
-            })],
-        }),
+        rustx::model::ModelInputMessage::Canonical(MessageBlock::Assistant(
+            rustx::message::types::AssistantMessageBlock {
+                id: rustx::runtime::identity::MessageId::new("msg-prev"),
+                content: vec![AssistantContentBlock::Text(TextBlock {
+                    text: "Previous answer.".to_owned(),
+                })],
+            },
+        )),
     );
     request.continuation = Some(ProviderContinuationState::OpenAiResponses(
         OpenAiResponsesContinuation::Stateless {
@@ -839,12 +841,14 @@ async fn stored_continuation_sends_only_tail_context() {
     let mut request = simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "Continue");
     request.messages.insert(
         0,
-        MessageBlock::Assistant(rustx::message::types::AssistantMessageBlock {
-            id: rustx::runtime::identity::MessageId::new("msg-prev"),
-            content: vec![AssistantContentBlock::Text(TextBlock {
-                text: "Old generation.".to_owned(),
-            })],
-        }),
+        rustx::model::ModelInputMessage::Canonical(MessageBlock::Assistant(
+            rustx::message::types::AssistantMessageBlock {
+                id: rustx::runtime::identity::MessageId::new("msg-prev"),
+                content: vec![AssistantContentBlock::Text(TextBlock {
+                    text: "Old generation.".to_owned(),
+                })],
+            },
+        )),
     );
     request.continuation = Some(ProviderContinuationState::OpenAiResponses(
         OpenAiResponsesContinuation::Stored {
@@ -894,12 +898,14 @@ async fn storage_mode_continuation_contradiction_is_rejected() {
         let mut request = simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi");
         request.messages.insert(
             0,
-            MessageBlock::Assistant(rustx::message::types::AssistantMessageBlock {
-                id: rustx::runtime::identity::MessageId::new("msg-prev"),
-                content: vec![AssistantContentBlock::Text(TextBlock {
-                    text: "Old.".to_owned(),
-                })],
-            }),
+            rustx::model::ModelInputMessage::Canonical(MessageBlock::Assistant(
+                rustx::message::types::AssistantMessageBlock {
+                    id: rustx::runtime::identity::MessageId::new("msg-prev"),
+                    content: vec![AssistantContentBlock::Text(TextBlock {
+                        text: "Old.".to_owned(),
+                    })],
+                },
+            )),
         );
         request.continuation = Some(continuation);
         let events = collect_events(&adapter(&server), with_storage(request, mode)).await;
@@ -1010,15 +1016,17 @@ async fn reasoning_without_provider_state_is_unsupported() {
     let mut request = simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi");
     request.messages.insert(
         0,
-        MessageBlock::Assistant(rustx::message::types::AssistantMessageBlock {
-            id: rustx::runtime::identity::MessageId::new("msg-reasoning"),
-            content: vec![AssistantContentBlock::Reasoning(
-                rustx::message::types::ReasoningBlock {
-                    text: Some("Visible reasoning text.".to_owned()),
-                    provider_state: None,
-                },
-            )],
-        }),
+        rustx::model::ModelInputMessage::Canonical(MessageBlock::Assistant(
+            rustx::message::types::AssistantMessageBlock {
+                id: rustx::runtime::identity::MessageId::new("msg-reasoning"),
+                content: vec![AssistantContentBlock::Reasoning(
+                    rustx::message::types::ReasoningBlock {
+                        text: Some("Visible reasoning text.".to_owned()),
+                        provider_state: None,
+                    },
+                )],
+            },
+        )),
     );
     let events = collect_events(
         &adapter(&server),
@@ -1048,19 +1056,21 @@ async fn reasoning_with_provider_state_replays_items_verbatim() {
     })];
     request.messages.insert(
         0,
-        MessageBlock::Assistant(rustx::message::types::AssistantMessageBlock {
-            id: rustx::runtime::identity::MessageId::new("msg-reasoning"),
-            content: vec![AssistantContentBlock::Reasoning(
-                rustx::message::types::ReasoningBlock {
-                    text: None,
-                    provider_state: Some(ProviderContinuationState::OpenAiResponses(
-                        OpenAiResponsesContinuation::Stateless {
-                            items: preserved.clone(),
-                        },
-                    )),
-                },
-            )],
-        }),
+        rustx::model::ModelInputMessage::Canonical(MessageBlock::Assistant(
+            rustx::message::types::AssistantMessageBlock {
+                id: rustx::runtime::identity::MessageId::new("msg-reasoning"),
+                content: vec![AssistantContentBlock::Reasoning(
+                    rustx::message::types::ReasoningBlock {
+                        text: None,
+                        provider_state: Some(ProviderContinuationState::OpenAiResponses(
+                            OpenAiResponsesContinuation::Stateless {
+                                items: preserved.clone(),
+                            },
+                        )),
+                    },
+                )],
+            },
+        )),
     );
     let events = collect_events(
         &adapter(&server),
@@ -1150,13 +1160,15 @@ async fn continuation_tail_preserves_tool_then_users_order() {
         })
     };
     request.messages = vec![
-        MessageBlock::Assistant(AssistantMessageBlock {
-            id: MessageId::new("msg-boundary"),
-            content: vec![AssistantContentBlock::Text(TextBlock {
-                text: "Old generation.".to_owned(),
-            })],
-        }),
-        MessageBlock::Tool(ToolMessageBlock {
+        rustx::model::ModelInputMessage::Canonical(MessageBlock::Assistant(
+            AssistantMessageBlock {
+                id: MessageId::new("msg-boundary"),
+                content: vec![AssistantContentBlock::Text(TextBlock {
+                    text: "Old generation.".to_owned(),
+                })],
+            },
+        )),
+        rustx::model::ModelInputMessage::Canonical(MessageBlock::Tool(ToolMessageBlock {
             id: MessageId::new("msg-tool-1"),
             tool_call_id: ToolCallId::new("call_1"),
             tool_id: rustx::runtime::identity::ToolId::new("tool-list"),
@@ -1171,9 +1183,9 @@ async fn continuation_tail_preserves_tool_then_users_order() {
                 truncation: None,
                 managed_output: None,
             },
-        }),
-        user("A"),
-        user("B"),
+        })),
+        rustx::model::ModelInputMessage::Canonical(user("A")),
+        rustx::model::ModelInputMessage::Canonical(user("B")),
     ];
     request.continuation = Some(ProviderContinuationState::OpenAiResponses(
         OpenAiResponsesContinuation::Stored {
@@ -1240,14 +1252,16 @@ async fn continuation_no_tool_tail_preserves_both_users() {
         })
     };
     request.messages = vec![
-        MessageBlock::Assistant(AssistantMessageBlock {
-            id: MessageId::new("msg-boundary"),
-            content: vec![AssistantContentBlock::Text(TextBlock {
-                text: "Old generation.".to_owned(),
-            })],
-        }),
-        user("msg-a", "A"),
-        user("msg-b", "B"),
+        rustx::model::ModelInputMessage::Canonical(MessageBlock::Assistant(
+            AssistantMessageBlock {
+                id: MessageId::new("msg-boundary"),
+                content: vec![AssistantContentBlock::Text(TextBlock {
+                    text: "Old generation.".to_owned(),
+                })],
+            },
+        )),
+        rustx::model::ModelInputMessage::Canonical(user("msg-a", "A")),
+        rustx::model::ModelInputMessage::Canonical(user("msg-b", "B")),
     ];
     request.continuation = Some(ProviderContinuationState::OpenAiResponses(
         OpenAiResponsesContinuation::Stored {

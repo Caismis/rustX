@@ -106,6 +106,10 @@ use crate::model::finish::ModelFinishReason;
 use crate::model::session::AttemptModelSnapshot;
 use crate::model::snapshot::{AgentStatusStart, RequestIdentity, RequestSnapshot};
 use crate::model::types::{ModelRequest, ModelUsage};
+use crate::model::{
+    CarryoverDetailLevel, ModelInputMessage, RenderedUnresolvedOutputCarryover,
+    RequestOnlyInsertionAnchor,
+};
 use crate::publication::{
     CoalescePolicy, PublicationCoalescer, PublicationFrame, PublicationPayload,
     PublicationStreamStart,
@@ -384,6 +388,23 @@ pub struct AgentExecution<'a> {
     /// step. Actual-request retries copy this value into their own snapshots
     /// without regenerating or re-emitting the status.
     frozen_agent_status: Option<AgentStatusStart>,
+    /// The one publication-audit carryover frozen for the current logical
+    /// primary step. It is never reloaded for a retry.
+    frozen_carryover: Option<FrozenCarryover>,
+    /// The last request identity that durably crossed model start in the
+    /// current logical step. It is the input to the shared live/recovery
+    /// carryover selector.
+    last_started_request: Option<RequestIdentity>,
+    /// Whether the current logical step has started model execution without
+    /// reaching canonical Assistant acceptance yet.
+    logical_model_step: LogicalModelStepState,
+    /// A terminal cannot be recorded until publication evidence and the
+    /// carryover source-selection decision are durably ready.
+    terminal_commit_state: TerminalCommitState,
+    /// The producer decision frozen after the current unresolved step's audit
+    /// settles. `Some(None)` is meaningful: the new unresolved step replaces
+    /// any older pending source with an explicit clear.
+    terminal_carryover_decision: TerminalCarryoverDecision,
     /// The one required immutable lifecycle configuration of the attempt.
     /// It carries the attempt's single pre-step policy owner and its
     /// identity-registered tool-result observers; the inert configuration is
@@ -682,6 +703,57 @@ struct StagedModelTurn {
     snapshot: RequestSnapshot,
     /// The exact provider-neutral request of the staged projection.
     request: ModelRequest,
+    /// The deterministic estimate of the exact mixed request input.
+    estimated_input: u64,
+}
+
+/// Process-local frozen semantics of the one carryover source admitted by a
+/// logical primary step. The source and full bounded projection are captured
+/// once; actual retries only reuse or monotonically degrade this value.
+#[derive(Clone)]
+struct FrozenCarryover {
+    full: RenderedUnresolvedOutputCarryover,
+    level: CarryoverDetailLevel,
+    anchor: Option<RequestOnlyInsertionAnchor>,
+}
+
+impl FrozenCarryover {
+    fn admitted(&self) -> Option<RenderedUnresolvedOutputCarryover> {
+        match self.level {
+            CarryoverDetailLevel::Omitted => None,
+            level => Some(self.full.degraded(level)),
+        }
+    }
+
+    fn degrade(&mut self) -> bool {
+        let next = match self.level {
+            CarryoverDetailLevel::Full => CarryoverDetailLevel::Reduced,
+            CarryoverDetailLevel::Reduced => CarryoverDetailLevel::MetadataOnly,
+            CarryoverDetailLevel::MetadataOnly => CarryoverDetailLevel::Omitted,
+            CarryoverDetailLevel::Omitted => return false,
+        };
+        self.level = next;
+        true
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LogicalModelStepState {
+    NotStarted,
+    Unresolved,
+    CanonicalAccepted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerminalCommitState {
+    Ready,
+    Blocked,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TerminalCarryoverDecision {
+    Undecided,
+    Replace(Option<PublicationStreamId>),
 }
 
 /// The committed result of one successful compaction: the derived record
@@ -892,6 +964,11 @@ impl<'a> AgentExecution<'a> {
             context_runtime,
             accepted_context: None,
             frozen_agent_status: None,
+            frozen_carryover: None,
+            last_started_request: None,
+            logical_model_step: LogicalModelStepState::NotStarted,
+            terminal_commit_state: TerminalCommitState::Ready,
+            terminal_carryover_decision: TerminalCarryoverDecision::Undecided,
             lifecycle,
             deferred_context: Vec::new(),
             context_generation_serial: 0,
@@ -1154,9 +1231,48 @@ impl<'a> AgentExecution<'a> {
         if !self.publication_settlement_failed
             && let Err(error) = self.settle_publication_audit()
         {
+            self.terminal_commit_state = TerminalCommitState::Blocked;
             return Some(Terminal::Failed {
                 failure: AttemptFailure::Runtime { error },
             });
+        }
+        if terminal.is_some()
+            && matches!(self.logical_model_step, LogicalModelStepState::Unresolved)
+        {
+            let Some(last_started_request) = self.last_started_request.as_ref() else {
+                self.terminal_commit_state = TerminalCommitState::Blocked;
+                let message =
+                    "an unresolved logical model step has no durable last-started request";
+                self.durable_failure_kind = Some(DurableFailureKind::Publication);
+                self.durable_failure = Some(message.to_owned());
+                return Some(Terminal::Failed {
+                    failure: AttemptFailure::Runtime {
+                        error: RuntimeError::DurableStore {
+                            message: message.to_owned(),
+                        },
+                    },
+                });
+            };
+            match crate::publication::select_unresolved_output_source(last_started_request, |id| {
+                self.store.load_publication_audit(id)
+            }) {
+                Ok(source) => {
+                    self.terminal_carryover_decision = TerminalCarryoverDecision::Replace(source);
+                }
+                Err(error) => {
+                    self.terminal_commit_state = TerminalCommitState::Blocked;
+                    let message = format!(
+                        "unresolved-output carryover source selection failed before attempt terminal: {error}"
+                    );
+                    self.durable_failure_kind = Some(DurableFailureKind::Publication);
+                    self.durable_failure = Some(message.clone());
+                    return Some(Terminal::Failed {
+                        failure: AttemptFailure::Runtime {
+                            error: RuntimeError::DurableStore { message },
+                        },
+                    });
+                }
+            }
         }
         terminal
     }
@@ -1172,6 +1288,11 @@ impl<'a> AgentExecution<'a> {
         // below. Retries never re-enter dynamic context admission.
         self.accepted_context = None;
         self.frozen_agent_status = None;
+        self.frozen_carryover = None;
+        self.last_started_request = None;
+        self.logical_model_step = LogicalModelStepState::NotStarted;
+        self.terminal_commit_state = TerminalCommitState::Ready;
+        self.terminal_carryover_decision = TerminalCarryoverDecision::Undecided;
         self.emit(RuntimeEvent::TurnStarted);
         if let Some(message) = self.durable_failure.clone() {
             return Some(Terminal::Failed {
@@ -1391,6 +1512,9 @@ impl<'a> AgentExecution<'a> {
                 error,
             ));
         }
+        // C succeeded: the logical model step is no longer unresolved, even
+        // if a later tool/result phase causes the attempt itself to fail.
+        self.logical_model_step = LogicalModelStepState::CanonicalAccepted;
         if !has_tool_calls {
             self.emit(RuntimeEvent::TurnCompleted);
             if let Some(terminal) = self.durable_failure_terminal_from_state() {
@@ -1668,6 +1792,7 @@ impl<'a> AgentExecution<'a> {
                 "a primary model turn is prepared exactly once per turn",
             )));
         }
+        self.freeze_pending_carryover()?;
         // Compact already-committed history before staging this step's
         // dynamic context. This keeps an unobserved fresh inbound batch and
         // its newly staged Runtime fact from blocking a
@@ -1819,19 +1944,151 @@ impl<'a> AgentExecution<'a> {
                 status_generation.as_ref(),
                 None,
             )?;
-            if !self
-                .context_runtime
-                .engine
-                .fits_under_soft_limit(&staged.projection, budgets.primary_output_budget)
-                .map_err(|error| Self::context_failure_terminal(&error))?
-            {
+        }
+        // Carryover is auxiliary continuity context. If the canonical
+        // projection is runnable, reduce only this request-only value until
+        // the exact mixed request is runnable; it never creates a compaction
+        // trigger and never turns a canonical fit into `CannotFit`.
+        let soft_limit = self
+            .context_runtime
+            .engine
+            .soft_input_limit(budgets.primary_output_budget)
+            .map_err(|error| Self::context_failure_terminal(&error))?;
+        while staged.estimated_input >= soft_limit {
+            let canonical_fits = staged.projection.estimated_input.input_tokens < soft_limit;
+            let Some(carryover) = self.frozen_carryover.as_mut() else {
+                if canonical_fits {
+                    return Err(Self::context_failure_terminal(&ContextError::new(
+                        ContextErrorKind::CannotFit,
+                        "the staged model turn exceeds the soft input limit",
+                    )));
+                }
                 return Err(Self::context_failure_terminal(&ContextError::new(
                     ContextErrorKind::CannotFit,
                     "the staged model turn still exceeds the soft input limit after compaction",
                 )));
+            };
+            if !carryover.degrade() {
+                return Err(Self::context_failure_terminal(&ContextError::new(
+                    ContextErrorKind::CannotFit,
+                    if canonical_fits {
+                        "request-only carryover exhausted its fit degradation ladder"
+                    } else {
+                        "the staged model turn still exceeds the soft input limit after compaction"
+                    },
+                )));
             }
+            staged = self.stage_model_turn(
+                request_ordinal,
+                &staged_context,
+                status_generation.as_ref(),
+                None,
+            )?;
         }
         self.finalize_model_turn(&staged_context, staged, status_generation)
+    }
+
+    /// Freezes the pending source identity's bounded Publication Audit once
+    /// for this logical step. The audit is the sole body authority; the
+    /// process-local copy is only the immutable value later frozen into each
+    /// request snapshot of this step.
+    fn freeze_pending_carryover(&mut self) -> Result<(), Terminal> {
+        let source = self
+            .store
+            .load_pending_unresolved_output_stream_id()
+            .map_err(|error| {
+                self.durable_failure_kind = Some(DurableFailureKind::Publication);
+                self.durable_failure = Some(format!(
+                    "pending unresolved-output carryover could not be loaded: {error}"
+                ));
+                Terminal::Failed {
+                    failure: AttemptFailure::Runtime {
+                        error: RuntimeError::DurableStore {
+                            message: format!(
+                                "pending unresolved-output carryover could not be loaded: {error}"
+                            ),
+                        },
+                    },
+                }
+            })?;
+        let Some(source) = source else {
+            return Ok(());
+        };
+        let audit = self
+            .store
+            .load_publication_audit(&source)
+            .map_err(|error| {
+                self.durable_failure_kind = Some(DurableFailureKind::Publication);
+                self.durable_failure = Some(format!(
+                    "pending unresolved-output carryover audit could not be loaded: {error}"
+                ));
+                Terminal::Failed {
+                    failure: AttemptFailure::Runtime {
+                        error: RuntimeError::DurableStore {
+                            message: format!(
+                                "pending unresolved-output carryover audit could not be loaded: {error}"
+                            ),
+                        },
+                    },
+                }
+            })?
+            .ok_or_else(|| {
+                self.durable_failure_kind = Some(DurableFailureKind::Publication);
+                self.durable_failure = Some(format!(
+                    "pending unresolved-output carryover source {source} has no Publication Audit"
+                ));
+                Terminal::Failed {
+                    failure: AttemptFailure::Runtime {
+                        error: RuntimeError::DurableStore {
+                            message: format!(
+                                "pending unresolved-output carryover source {source} has no Publication Audit"
+                            ),
+                        },
+                    },
+                }
+            })?;
+        let Some(full) = crate::publication::render_unresolved_output_carryover(&audit) else {
+            self.durable_failure_kind = Some(DurableFailureKind::Publication);
+            let message = format!(
+                "pending unresolved-output carryover source {source} has no meaningful renderable audit content"
+            );
+            self.durable_failure = Some(message.clone());
+            return Err(Terminal::Failed {
+                failure: AttemptFailure::Runtime {
+                    error: RuntimeError::DurableStore { message },
+                },
+            });
+        };
+        if full.source_stream_id != source {
+            let message = format!(
+                "pending unresolved-output carryover source {source} disagrees with its audit identity {}",
+                full.source_stream_id
+            );
+            self.durable_failure_kind = Some(DurableFailureKind::Publication);
+            self.durable_failure = Some(message.clone());
+            return Err(Terminal::Failed {
+                failure: AttemptFailure::Runtime {
+                    error: RuntimeError::DurableStore { message },
+                },
+            });
+        }
+        self.frozen_carryover =
+            Some(FrozenCarryover {
+                full,
+                level: CarryoverDetailLevel::Full,
+                // The fixed native anchor is known before dynamic context is
+                // staged. Fresh inbound is the only eligible message-relative
+                // anchor; a continuation always places carryover after the
+                // existing canonical projection and before newly admitted
+                // request context.
+                anchor: Some(self.pending_fresh_inbound.as_ref().map_or(
+                    RequestOnlyInsertionAnchor::AfterCanonical,
+                    |fresh| {
+                        RequestOnlyInsertionAnchor::BeforeMessage(fresh.message_ids()[0].clone())
+                    },
+                )),
+            });
+        Ok(())
     }
 
     /// Prepares the Agent Status generation of the pending delivery
@@ -1912,8 +2169,9 @@ impl<'a> AgentExecution<'a> {
     /// Everything produced here is transient preparation: the scratch
     /// conversation shares no state with the canonical conversation, and
     /// nothing commits until the start arbitration wins.
+    #[allow(clippy::too_many_lines)] // keeps the request assembly boundary explicit
     fn stage_model_turn(
-        &self,
+        &mut self,
         retry_number: u32,
         staged_context: &[MessageBlock],
         status_generation: Option<&AgentStatusGeneration>,
@@ -1925,13 +2183,22 @@ impl<'a> AgentExecution<'a> {
                 error.to_string(),
             ))
         })?;
+        let carryover_anchor = self
+            .frozen_carryover
+            .as_ref()
+            .and_then(|carryover| carryover.anchor.as_ref());
+        let carryover = self
+            .frozen_carryover
+            .as_ref()
+            .filter(|_| carryover_anchor.is_some())
+            .and_then(FrozenCarryover::admitted);
         let frozen_status_is_active = frozen_agent_status.is_some_and(|status| {
             active
                 .iter()
                 .any(|message| message.id() == &status.message_id)
         });
         let mut scratch = ConversationState::from_durable_head(
-            active,
+            active.clone(),
             self.conversation.active_ids().to_vec(),
             self.conversation.revision(),
             self.conversation.surface().compaction_generation(),
@@ -1968,7 +2235,19 @@ impl<'a> AgentExecution<'a> {
                 &effective_system_prompt,
             )
             .map_err(|error| Self::context_failure_terminal(&error))?;
-        let request = self.model_request_from_projection(&projection);
+        let request_messages = crate::model::input::assemble_model_input(
+            &active,
+            staged_context,
+            carryover.as_ref(),
+            carryover_anchor,
+        )
+        .map_err(|error| {
+            Self::context_failure_terminal(&ContextError::new(
+                ContextErrorKind::Internal,
+                format!("request-only context cannot be assembled: {error}"),
+            ))
+        })?;
+        let request = self.model_request_from_projection(&projection, request_messages);
         let accepted = self.accepted_context.as_ref().ok_or_else(|| {
             Self::context_failure_terminal(&ContextError::new(
                 ContextErrorKind::Internal,
@@ -1999,6 +2278,14 @@ impl<'a> AgentExecution<'a> {
                 .map(crate::conversation::message_id_of)
                 .collect(),
         );
+        if let Some(frozen_carryover) = self.frozen_carryover.as_ref() {
+            snapshot.unresolved_output_carryover_source =
+                Some(frozen_carryover.full.source_stream_id.clone());
+            snapshot.unresolved_output_carryover = carryover;
+            snapshot
+                .unresolved_output_carryover_anchor
+                .clone_from(&frozen_carryover.anchor);
+        }
         if let Some(status_generation) = status_generation {
             let status_message_id = agent_status_message_id(staged_context);
             let Some(status_message_id) = status_message_id else {
@@ -2021,11 +2308,25 @@ impl<'a> AgentExecution<'a> {
         {
             snapshot.agent_status = Some(frozen_agent_status.clone());
         }
+        let estimated_input = if self
+            .frozen_carryover
+            .as_ref()
+            .is_some_and(|carryover| carryover.level != CarryoverDetailLevel::Omitted)
+        {
+            self.context_runtime.engine.estimate_model_input(
+                &request.messages,
+                &request.effective_system_prompt,
+                &request.tools,
+            )
+        } else {
+            projection.estimated_input.input_tokens
+        };
         Ok(StagedModelTurn {
             projection,
             effective_system_prompt,
             snapshot,
             request,
+            estimated_input,
         })
     }
 
@@ -2051,8 +2352,8 @@ impl<'a> AgentExecution<'a> {
                 }
             })?);
         }
-        let anchor = ObservedAnchor::of(
-            &staged.projection.messages,
+        let anchor = ObservedAnchor::of_model_input(
+            &staged.request.messages,
             &staged.projection.effective_system_prompt,
             &staged.request.tools,
         );
@@ -2092,14 +2393,33 @@ impl<'a> AgentExecution<'a> {
             }
             None => None,
         };
+        let request = staged.request;
+        // Preserve the existing canonical projection fingerprint when the
+        // provider-visible request contains no request-only item. A request
+        // that actually contains Carryover gets the mixed-input fingerprint,
+        // so a later canonical-only projection cannot reuse a measurement
+        // that included a noncanonical value.
+        let fingerprint = if request
+            .messages
+            .iter()
+            .any(|message| matches!(message, ModelInputMessage::RequestOnly(_)))
+        {
+            crate::context::model_input_fingerprint(
+                staged.projection.surface_revision,
+                &request.messages,
+                &staged.projection.effective_system_prompt,
+            )
+        } else {
+            staged.projection.fingerprint()
+        };
         Ok(PreparedModelTurn {
             context,
             snapshot: staged.snapshot,
-            request: staged.request,
-            fingerprint: staged.projection.fingerprint(),
+            request,
+            fingerprint,
             anchor,
             request_identity,
-            estimated_input: staged.projection.estimated_input.input_tokens,
+            estimated_input: staged.estimated_input,
             status_observation,
         })
     }
@@ -2194,6 +2514,8 @@ impl<'a> AgentExecution<'a> {
         // is recorded, and only after this point may the provider be
         // invoked.
         let status_observation = prepared.status_observation.clone();
+        self.last_started_request = Some(prepared.snapshot.identity.clone());
+        self.logical_model_step = LogicalModelStepState::Unresolved;
         self.frozen_agent_status
             .clone_from(&prepared.snapshot.agent_status);
         for commit in prepared.context {
@@ -2583,39 +2905,55 @@ impl<'a> AgentExecution<'a> {
                 overflow,
             ));
         }
-        match self
-            .run_compaction(
-                must_cover_through,
-                fresh_inbound,
-                effective_system_prompt,
-                staged_request_context,
-                estimate_correction,
-            )
-            .await
-        {
-            Ok(_completed) => {
-                // The semantic commit already happened: the summary is a
-                // Ledger fact and the new Surface revision exists. The
-                // opaque provider continuation is now known to be
-                // incompatible, and this is the single place that discards
-                // it. The observed provider measurement belonged to the old
-                // request context and is dropped with it.
-                self.pending_continuation = None;
-                self.continuation_owner = None;
-                self.observed = None;
-                self.observed_request_identity = None;
-                // `commit_compaction` persisted and returned the exact
-                // completion fact before this branch became observable.
+        loop {
+            match self
+                .run_compaction(
+                    must_cover_through,
+                    fresh_inbound,
+                    effective_system_prompt,
+                    staged_request_context,
+                    estimate_correction,
+                )
+                .await
+            {
+                Ok(_completed) => {
+                    // The semantic commit already happened: the summary is a
+                    // Ledger fact and the new Surface revision exists. The
+                    // opaque provider continuation is now known to be
+                    // incompatible, and this is the single place that discards
+                    // it. The observed provider measurement belonged to the old
+                    // request context and is dropped with it.
+                    self.pending_continuation = None;
+                    self.continuation_owner = None;
+                    self.observed = None;
+                    self.observed_request_identity = None;
+                    // `commit_compaction` persisted and returned the exact
+                    // completion fact before this branch became observable.
+                    break;
+                }
+                // Carryover is auxiliary. A full/reduced/metadata-only value
+                // may make a candidate fail the hard fit, but that must never
+                // turn a canonical compaction into a terminal CannotFit.
+                Err(error) if error.kind == ContextErrorKind::CannotFit => {
+                    let can_degrade = self
+                        .frozen_carryover
+                        .as_mut()
+                        .is_some_and(FrozenCarryover::degrade);
+                    if can_degrade {
+                        continue;
+                    }
+                    return Err(self.compaction_failure(&error, overflow));
+                }
+                // Cancellation never becomes a compaction failure: no
+                // `CompactionFailed` event is emitted and the attempt settles
+                // cancelled.
+                Err(error) if error.kind == ContextErrorKind::Cancelled => {
+                    return Err(Terminal::Cancelled {
+                        reason: self.cancellation.reason(),
+                    });
+                }
+                Err(error) => return Err(self.compaction_failure(&error, overflow)),
             }
-            // Cancellation never becomes a compaction failure: no
-            // `CompactionFailed` event is emitted and the attempt settles
-            // cancelled.
-            Err(error) if error.kind == ContextErrorKind::Cancelled => {
-                return Err(Terminal::Cancelled {
-                    reason: self.cancellation.reason(),
-                });
-            }
-            Err(error) => return Err(self.compaction_failure(&error, overflow)),
         }
         Ok(())
     }
@@ -2652,6 +2990,17 @@ impl<'a> AgentExecution<'a> {
         // gate reads the attempt's request identity, which the compaction
         // is about to be handed mutable access to.
         let observed = self.reusable_observation().cloned();
+        let carryover_anchor = self
+            .frozen_carryover
+            .as_ref()
+            .and_then(|carryover| carryover.anchor.as_ref());
+        let carryover = if carryover_anchor.is_some() {
+            self.frozen_carryover
+                .as_ref()
+                .and_then(FrozenCarryover::admitted)
+        } else {
+            None
+        };
         let result = execute_compaction(
             &mut self.conversation,
             &self.context_runtime,
@@ -2664,6 +3013,8 @@ impl<'a> AgentExecution<'a> {
                 must_cover_through,
                 fresh_inbound,
                 staged_request_context,
+                carryover: carryover.as_ref(),
+                carryover_anchor,
                 estimate_correction,
             },
             &cancellation,
@@ -4016,13 +4367,17 @@ impl<'a> AgentExecution<'a> {
         }
     }
 
-    /// Builds the canonical request from one finite context projection.
+    /// Builds the provider-neutral request from one finite context projection.
     ///
     /// Every projected item is already a complete canonical message, so
     /// there is nothing to materialize: the projection's messages *are* the
     /// request messages. The exact Effective System Prompt is carried as a
     /// provider-neutral request value and adapters only translate it.
-    fn model_request_from_projection(&self, projection: &ContextProjection) -> ModelRequest {
+    fn model_request_from_projection(
+        &self,
+        projection: &ContextProjection,
+        messages: Vec<ModelInputMessage>,
+    ) -> ModelRequest {
         let primary = self.request.model.primary();
         // Tool definitions are compiled only for a model whose effective
         // capabilities include tool calls: a text-only model is usable, it
@@ -4034,7 +4389,7 @@ impl<'a> AgentExecution<'a> {
         };
         ModelRequest {
             invocation: primary.invocation_config(),
-            messages: projection.messages.clone(),
+            messages,
             tools,
             effective_system_prompt: projection.effective_system_prompt.clone(),
             continuation: self.pending_continuation.clone(),
@@ -4360,6 +4715,7 @@ impl<'a> AgentExecution<'a> {
                     format!("the publication audit could not be terminalized durably: {error}");
                 self.record_publication_failure(&message);
                 self.publication_settlement_failed = true;
+                self.terminal_commit_state = TerminalCommitState::Blocked;
                 Err(RuntimeError::DurableStore { message })
             }
         }
@@ -4468,8 +4824,25 @@ impl<'a> AgentExecution<'a> {
             },
         };
         debug_assert!(!self.terminal_emitted, "exactly one terminal event");
+        if matches!(self.terminal_commit_state, TerminalCommitState::Blocked) {
+            // Publication evidence or source selection did not reach the
+            // producer boundary. Leaving the attempt terminal event absent is
+            // deliberate: recovery must finish the same semantic transition
+            // from the durable prefix.
+            return;
+        }
         self.terminal_emitted = true;
-        match self.store.append_event(self.event_envelope(event)) {
+        let envelope = self.event_envelope(event);
+        let persisted = match std::mem::replace(
+            &mut self.terminal_carryover_decision,
+            TerminalCarryoverDecision::Undecided,
+        ) {
+            TerminalCarryoverDecision::Replace(source) => self
+                .store
+                .commit_attempt_terminal_with_carryover(envelope, source),
+            TerminalCarryoverDecision::Undecided => self.store.append_event(envelope),
+        };
+        match persisted {
             Ok(envelope) => self.record_persisted_event(envelope),
             Err(error) => {
                 // The execution state machine has settled, but the durable
@@ -7621,13 +7994,13 @@ mod tests {
         let second_request = &requests[1];
         assert!(
             second_request.messages.iter().any(|message| {
-                matches!(message, MessageBlock::User(user) if user.id == MessageId::new("msg-human"))
+                matches!(message, crate::model::ModelInputMessage::Canonical(MessageBlock::User(user)) if user.id == MessageId::new("msg-human"))
             }),
             "the human message joins the second request"
         );
         assert!(
             !second_request.messages.iter().any(|message| {
-                matches!(message, MessageBlock::User(user) if user.id.as_str() == "background-exec_1-terminal")
+                matches!(message, crate::model::ModelInputMessage::Canonical(MessageBlock::User(user)) if user.id.as_str() == "background-exec_1-terminal")
             }),
             "the terminal can never appear in the first drained batch"
         );
@@ -7635,14 +8008,14 @@ mod tests {
             requests[2]
                 .messages
                 .iter()
-                .any(|message| matches!(message, MessageBlock::User(user) if user.id.as_str() == "background-exec_1-terminal")),
+                .any(|message| matches!(message, crate::model::ModelInputMessage::Canonical(MessageBlock::User(user)) if user.id.as_str() == "background-exec_1-terminal")),
             "the terminal inbound waits for the next drained batch"
         );
         let terminal_occurrences = requests
             .iter()
             .flat_map(|request| &request.messages)
             .filter(|message| {
-                matches!(message, MessageBlock::User(user) if user.id.as_str() == "background-exec_1-terminal")
+                matches!(message, crate::model::ModelInputMessage::Canonical(MessageBlock::User(user)) if user.id.as_str() == "background-exec_1-terminal")
             })
             .count();
         assert_eq!(

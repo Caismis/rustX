@@ -14,7 +14,9 @@
 //! [`ModelUsage`]: crate::model::types::ModelUsage
 //! [`TokenMeasurementSource`]: crate::runtime::types::TokenMeasurementSource
 
+use crate::conversation::SurfaceRevision;
 use crate::message::types::MessageBlock;
+use crate::model::input::ModelInputMessage;
 use crate::runtime::identity::MessageId;
 use crate::tools::types::ModelToolDefinition;
 
@@ -66,6 +68,9 @@ pub struct ProviderObservedInput {
 pub struct ObservedAnchor {
     /// The ordered canonical message identities of the measured request.
     pub message_ids: Vec<MessageId>,
+    /// The ordered identities of all provider-neutral input items. A
+    /// request-only item has a private fingerprint, never a canonical id.
+    input_items: Vec<ObservedInputIdentity>,
     /// The fingerprint of the non-conversation request input the measurement
     /// already accounts for: the exact Effective System Prompt and the
     /// compiled tool definitions.
@@ -89,11 +94,44 @@ impl ObservedAnchor {
                 .iter()
                 .map(|message| message.id().clone())
                 .collect(),
+            input_items: messages
+                .iter()
+                .map(|message| ObservedInputIdentity::Canonical(message.id().clone()))
+                .collect(),
             non_conversation_fingerprint: non_conversation_fingerprint(
                 effective_system_prompt,
                 tool_definitions,
             ),
         }
+    }
+
+    /// Creates an anchor for an already ordered mixed request.
+    #[must_use]
+    pub fn of_model_input(
+        messages: &[ModelInputMessage],
+        effective_system_prompt: &str,
+        tool_definitions: &[ModelToolDefinition],
+    ) -> Self {
+        Self {
+            message_ids: messages
+                .iter()
+                .filter_map(ModelInputMessage::canonical_id)
+                .cloned()
+                .collect(),
+            input_items: messages.iter().map(input_identity).collect(),
+            non_conversation_fingerprint: non_conversation_fingerprint(
+                effective_system_prompt,
+                tool_definitions,
+            ),
+        }
+    }
+
+    /// Whether the measured request contained request-only context.
+    #[must_use]
+    pub fn has_request_only(&self) -> bool {
+        self.input_items
+            .iter()
+            .any(|item| matches!(item, ObservedInputIdentity::RequestOnly(_)))
     }
 
     /// Whether this anchor is a prefix of `messages` under the same
@@ -108,6 +146,9 @@ impl ObservedAnchor {
         effective_system_prompt: &str,
         tool_definitions: &[ModelToolDefinition],
     ) -> Option<usize> {
+        if self.has_request_only() {
+            return None;
+        }
         if self.non_conversation_fingerprint
             != non_conversation_fingerprint(effective_system_prompt, tool_definitions)
         {
@@ -121,6 +162,52 @@ impl ObservedAnchor {
             .zip(messages)
             .all(|(measured, current)| measured == current.id())
             .then_some(self.message_ids.len())
+    }
+
+    /// Whether this anchor is an ordered prefix of a mixed request.
+    #[must_use]
+    pub fn covered_prefix_model_input(
+        &self,
+        messages: &[ModelInputMessage],
+        effective_system_prompt: &str,
+        tool_definitions: &[ModelToolDefinition],
+    ) -> Option<usize> {
+        if self.non_conversation_fingerprint
+            != non_conversation_fingerprint(effective_system_prompt, tool_definitions)
+        {
+            return None;
+        }
+        if self.input_items.len() > messages.len() {
+            return None;
+        }
+        self.input_items
+            .iter()
+            .zip(messages)
+            .all(|(measured, current)| measured == &input_identity(current))
+            .then_some(self.input_items.len())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ObservedInputIdentity {
+    Canonical(MessageId),
+    RequestOnly(u64),
+}
+
+fn input_identity(message: &ModelInputMessage) -> ObservedInputIdentity {
+    match message {
+        ModelInputMessage::Canonical(message) => {
+            ObservedInputIdentity::Canonical(message.id().clone())
+        }
+        ModelInputMessage::RequestOnly(_) => {
+            let bytes = serde_json::to_vec(message).expect("model input serializes");
+            let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+            for byte in bytes {
+                hash ^= u64::from(byte);
+                hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+            ObservedInputIdentity::RequestOnly(hash)
+        }
     }
 }
 
@@ -188,6 +275,34 @@ pub fn request_identity_fingerprint(
     hash
 }
 
+/// Fingerprints one exact ordered request input while retaining the Surface
+/// revision component used by the existing provider-measurement contract.
+/// Request-only items participate by value; they never need or receive a
+/// canonical message identity.
+///
+/// # Panics
+///
+/// Panics only if the provider-neutral input or system prompt cannot be
+/// serialized, which cannot occur for their serde-backed UTF-8 value types.
+#[must_use]
+pub fn model_input_fingerprint(
+    surface_revision: SurfaceRevision,
+    messages: &[ModelInputMessage],
+    effective_system_prompt: &str,
+) -> u64 {
+    let bytes = serde_json::to_vec(&surface_revision)
+        .expect("surface revision serializes")
+        .into_iter()
+        .chain(serde_json::to_vec(messages).expect("provider-neutral model input serializes"))
+        .chain(serde_json::to_vec(effective_system_prompt).expect("system prompt serializes"));
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
 /// The deterministic input-token estimator boundary.
 ///
 /// The engine never hard-codes a per-model token catalog; estimation is a
@@ -196,13 +311,13 @@ pub fn request_identity_fingerprint(
 /// fallback ([`DefaultTokenEstimator`]).
 ///
 /// Estimation sees only the exact provider-visible request input: the ordered
-/// canonical messages, the exact Effective System Prompt, and the tool
-/// definitions. `SurfaceRevision`, token-measurement provenance, and any other
-/// runtime or durable store state are deliberately outside this boundary, so
-/// a custom estimator can never make token cost depend on them — a
-/// hypothetical compaction candidate and the actual post-compaction request
+/// canonical/request-only messages, the exact Effective System Prompt, and
+/// the tool definitions. `SurfaceRevision`, token-measurement provenance, and
+/// any other runtime or durable store state are deliberately outside this
+/// boundary, so a custom estimator can never make token cost depend on them —
+/// a hypothetical compaction candidate and the actual post-compaction request
 /// therefore estimate identically whenever their provider-visible inputs are
-/// identical.
+/// identical. Conversation-retention estimates remain canonical-only.
 pub trait TokenEstimator: Send + Sync {
     /// The deterministic estimated input tokens of one request's
     /// provider-visible input, including non-compacted contributors such as
@@ -211,7 +326,7 @@ pub trait TokenEstimator: Send + Sync {
     /// fit.
     fn estimate_input(
         &self,
-        messages: &[MessageBlock],
+        messages: &[ModelInputMessage],
         effective_system_prompt: &str,
         tool_definitions: &[ModelToolDefinition],
     ) -> u64;
@@ -230,7 +345,7 @@ pub trait TokenEstimator: Send + Sync {
 
 /// The deterministic function behind a [`ClosureTokenEstimator`].
 pub type EstimatorFunction =
-    dyn Fn(&[MessageBlock], &str, &[ModelToolDefinition]) -> u64 + Send + Sync;
+    dyn Fn(&[ModelInputMessage], &str, &[ModelToolDefinition]) -> u64 + Send + Sync;
 
 /// The default provider-neutral fallback estimator.
 ///
@@ -240,8 +355,9 @@ pub type EstimatorFunction =
 /// ceil(deterministic UTF-8 serialized bytes / 4)
 /// ```
 ///
-/// applied over the runtime-owned canonical serialization of the canonical
-/// messages, the tool definitions, and the exact Effective System Prompt.
+/// applied over the runtime-owned serialization of the ordered
+/// canonical/request-only messages, the tool definitions, and the exact
+/// Effective System Prompt.
 /// `ceil(x / 4)` is `(bytes + 3) / 4` over `u64`, so every byte counted
 /// contributes at most 4 bytes to one token. The formula is intentionally an
 /// estimate, never provider usage. The Effective System Prompt participates
@@ -251,7 +367,7 @@ pub type EstimatorFunction =
 pub struct DefaultTokenEstimator;
 
 impl DefaultTokenEstimator {
-    /// The deterministic serialized bytes of the canonical messages, the
+    /// The deterministic serialized bytes of the provider-neutral input, the
     /// tool definitions, and the exact Effective System Prompt.
     ///
     /// # Panics
@@ -261,12 +377,12 @@ impl DefaultTokenEstimator {
     /// runtime-owned types.
     #[must_use]
     pub fn serialized_bytes(
-        messages: &[MessageBlock],
+        messages: &[ModelInputMessage],
         effective_system_prompt: &str,
         tool_definitions: &[ModelToolDefinition],
     ) -> u64 {
         let items = serde_json::to_vec(messages)
-            .expect("canonical messages serialize")
+            .expect("provider-neutral model input serializes")
             .len();
         let tools = serde_json::to_vec(tool_definitions)
             .expect("canonical tool definitions serialize")
@@ -303,7 +419,7 @@ impl DefaultTokenEstimator {
 impl TokenEstimator for DefaultTokenEstimator {
     fn estimate_input(
         &self,
-        messages: &[MessageBlock],
+        messages: &[ModelInputMessage],
         effective_system_prompt: &str,
         tool_definitions: &[ModelToolDefinition],
     ) -> u64 {
@@ -324,9 +440,9 @@ impl TokenEstimator for DefaultTokenEstimator {
 /// Tests use this to supply exact token weights and to prove that the
 /// engine's decisions (threshold triggers, cut selection, retention) follow
 /// the weights rather than raw message counts. The function receives only the
-/// provider-visible request input — messages, Effective System Prompt, and
-/// tools — so scripted estimation can never depend on `SurfaceRevision` or
-/// token-measurement provenance.
+/// provider-visible request input — canonical/request-only messages, Effective
+/// System Prompt, and tools — so scripted estimation can never depend on
+/// `SurfaceRevision` or token-measurement provenance.
 pub struct ClosureTokenEstimator {
     function: Box<EstimatorFunction>,
 }
@@ -336,7 +452,10 @@ impl ClosureTokenEstimator {
     /// exact provider-visible request input.
     #[must_use]
     pub fn new(
-        function: impl Fn(&[MessageBlock], &str, &[ModelToolDefinition]) -> u64 + Send + Sync + 'static,
+        function: impl Fn(&[ModelInputMessage], &str, &[ModelToolDefinition]) -> u64
+        + Send
+        + Sync
+        + 'static,
     ) -> Self {
         Self {
             function: Box::new(function),
@@ -347,7 +466,7 @@ impl ClosureTokenEstimator {
 impl TokenEstimator for ClosureTokenEstimator {
     fn estimate_input(
         &self,
-        messages: &[MessageBlock],
+        messages: &[ModelInputMessage],
         effective_system_prompt: &str,
         tool_definitions: &[ModelToolDefinition],
     ) -> u64 {
@@ -355,7 +474,8 @@ impl TokenEstimator for ClosureTokenEstimator {
     }
 
     fn estimate_conversation_input(&self, messages: &[MessageBlock]) -> u64 {
-        (self.function)(messages, "", &[])
+        let messages = crate::model::input::canonical_input(messages);
+        (self.function)(&messages, "", &[])
     }
 }
 
@@ -373,6 +493,7 @@ mod tests {
     use crate::message::types::{
         InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
+    use crate::model::input::canonical_input;
     use crate::runtime::identity::{MessageId, ToolId};
     use crate::tools::types::ModelToolDefinition;
 
@@ -416,7 +537,8 @@ mod tests {
     #[test]
     fn default_estimator_sees_only_provider_visible_input() {
         let estimator = DefaultTokenEstimator;
-        let messages = vec![user_message("msg-1", "hello")];
+        let canonical_messages = vec![user_message("msg-1", "hello")];
+        let messages = canonical_input(&canonical_messages);
 
         // Messages affect the estimate.
         assert!(estimator.estimate_input(&messages, "", &[]) > 0);
@@ -447,8 +569,10 @@ mod tests {
         // messages, so the Effective System Prompt can never satisfy
         // `keep_recent_tokens`.
         assert_eq!(
-            estimator.estimate_conversation_input(&messages),
-            bytes_to_tokens(DefaultTokenEstimator::conversation_bytes(&messages)),
+            estimator.estimate_conversation_input(&canonical_messages),
+            bytes_to_tokens(DefaultTokenEstimator::conversation_bytes(
+                &canonical_messages
+            )),
             "conversation-only estimation depends only on the ordered messages"
         );
     }

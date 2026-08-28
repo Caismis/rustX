@@ -21,7 +21,8 @@
 //!   cancellation, or terminal authority, and neither decides the semantic
 //!   ownership of the context it proposes.
 //!
-//! The kernel operates only on canonical contracts: it never references a
+//! The kernel operates on canonical conversation contracts plus the narrow
+//! provider-neutral request-only input contract: it never references a
 //! provider protocol, a provider SDK type, or a provider concept.
 
 mod assembly;

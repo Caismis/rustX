@@ -178,12 +178,12 @@ async fn submit_idle_admits_and_settles_asynchronously() {
         requests[0]
             .messages
             .iter()
-            .any(|message| matches!(message, MessageBlock::User(user) if user.id == message_id))
+            .any(|message| matches!(message, rustx::model::ModelInputMessage::Canonical(MessageBlock::User(user)) if user.id == message_id))
     );
     assert!(requests[0].messages.iter().any(|message| {
         matches!(
             message,
-            MessageBlock::User(user)
+            rustx::model::ModelInputMessage::Canonical(MessageBlock::User(user))
                 if matches!(
                     &user.kind,
                     rustx::message::types::InboundKind::Context(
@@ -280,7 +280,7 @@ async fn submit_while_busy_queues_for_the_next_drain() {
         requests[1]
             .messages
             .iter()
-            .any(|message| matches!(message, MessageBlock::User(user) if user.id == second_id))
+            .any(|message| matches!(message, rustx::model::ModelInputMessage::Canonical(MessageBlock::User(user)) if user.id == second_id))
     );
     let (snapshot, _) = host.snapshot().expect("snapshot");
     assert!(snapshot.inbound.pending.is_empty());
@@ -770,7 +770,7 @@ async fn agent_status_shares_one_composition() {
         .messages
         .iter()
         .find_map(|message| match message {
-            MessageBlock::User(user)
+            rustx::model::ModelInputMessage::Canonical(MessageBlock::User(user))
                 if matches!(
                     &user.kind,
                     rustx::message::types::InboundKind::Context(
@@ -915,7 +915,7 @@ async fn disabled_time_and_background_with_no_actionable_todos_emit_no_status() 
     assert!(!requests[0].messages.iter().any(|message| {
         matches!(
             message,
-            MessageBlock::User(user)
+            rustx::model::ModelInputMessage::Canonical(MessageBlock::User(user))
                 if matches!(
                     &user.kind,
                     rustx::message::types::InboundKind::Context(
@@ -989,7 +989,7 @@ async fn agent_status_is_composed_exactly_once_per_request() {
     let mut with_status: Vec<(String, String)> = Vec::new();
     for request in &requests {
         let Some((id, text)) = request.messages.iter().find_map(|message| match message {
-            MessageBlock::User(user)
+            rustx::model::ModelInputMessage::Canonical(MessageBlock::User(user))
                 if matches!(
                     &user.kind,
                     rustx::message::types::InboundKind::Context(

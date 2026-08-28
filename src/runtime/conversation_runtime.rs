@@ -6354,7 +6354,7 @@ mod tests {
         let requests = fixture.model.requests();
         assert_eq!(requests.len(), 1);
         assert!(requests[0].messages.iter().any(|message| {
-            matches!(message, MessageBlock::User(user) if user.id == admission.message_id)
+            matches!(message, crate::model::ModelInputMessage::Canonical(MessageBlock::User(user)) if user.id == admission.message_id)
         }));
         // The attempt was admitted exactly once and the runtime is idle
         // again.
@@ -6530,7 +6530,7 @@ mod tests {
                         .map(|message| {
                             if matches!(
                                 message,
-                                MessageBlock::User(user)
+                                crate::model::ModelInputMessage::Canonical(MessageBlock::User(user))
                                     if user.kind == InboundKind::CompactionSummary
                             ) {
                                 10_000
@@ -7166,13 +7166,13 @@ mod tests {
         let requests = model.requests();
         assert_eq!(requests.len(), 2, "two primary provider requests");
         assert!(requests[0].messages.iter().any(|message| {
-            matches!(message, MessageBlock::User(user) if user.id == admission.message_id)
+            matches!(message, crate::model::ModelInputMessage::Canonical(MessageBlock::User(user)) if user.id == admission.message_id)
         }));
         assert!(
             requests[1]
                 .messages
                 .iter()
-                .any(|message| matches!(message, MessageBlock::Tool(tool) if tool.tool_call_id.as_str() == call_id)),
+                .any(|message| matches!(message, crate::model::ModelInputMessage::Canonical(MessageBlock::Tool(tool)) if tool.tool_call_id.as_str() == call_id)),
             "the second provider request observes the canonical ToolResult"
         );
 
@@ -14834,7 +14834,7 @@ mod tests {
             model.requests()[0]
                 .messages
                 .iter()
-                .any(|block| crate::conversation::message_id_of(block) == adopted_id),
+                .any(|block| block.canonical_id() == Some(&adopted_id)),
             "the continuation carries the recovered canonical turn"
         );
         // The continuation is a genuinely new attempt, above every durable

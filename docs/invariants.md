@@ -41,7 +41,7 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 14 is the only accepted schema; version 13 and every older
+schema version 15 is the only accepted schema; version 14 and every older
 development schema fail explicitly at open and are not migrated. Version 10
 froze the structured Questionnaire interaction audit vocabulary introduced by
 Issue #126. Version 11 froze the structured Agent Status generation
@@ -49,8 +49,10 @@ descriptor introduced by Issue #131. Version 12 added the complete
 canonical-message-coupled Agent Status emission facts, bounded latest-emission
 heads, and the Todo-specific durable progress sequence. Version 14 freezes
 the typed `ToolCancellationPhase` carried by canonical cancelled tool
-results; version 13 and every older development schema are rejected rather
-than decoded with a missing or default phase. The review-only
+results. Version 15 adds the one-shot unresolved-output carryover pointer and
+the frozen request-only carryover/anchor fields in Request Snapshots; version
+14 and every older development schema are rejected rather than decoded with a
+missing carryover contract. The review-only
 intermediate schema history was never a supported format.
 
 The durable request-start invariant is strict: the provider adapter cannot be
@@ -2380,6 +2382,14 @@ compact-and-retry remains bounded to one retry per model turn.
 compact-and-retry per model turn — the budget never persists across turns; a
 recoverable overflow never settles the attempt.
 
+When a logical step has frozen unresolved-output carryover, the carryover is
+charged as the exact admitted request-only variant during fit planning and
+actual-request estimation. It is auxiliary continuity context: canonical
+history and protected fresh inbound retain their existing compaction
+semantics, and carryover degrades or is omitted before those mandatory
+semantics can fail. The frozen source identity does not change across
+transient retries or an overflow compaction.
+
 ## Context assembly, admission, and Agent Status
 
 Fresh inbound identity is explicit execution state, never inferred from
@@ -2617,7 +2627,11 @@ message role, history shape, or timestamps:
   capability revisions, ModelInvocationConfig, context window, reasoning
   values, exact tool definitions, ContextGeneration, and opaque continuation
   state. It references only the exact historical Surface revision; all
-  request-time derived values that are not durably addressable are values.
+  request-time derived values that are not durably addressable are values. If
+  the step consumed carryover, the snapshot also freezes its source
+  `PublicationStreamId`, request-only rendered representation when admitted,
+  and `RequestOnlyInsertionAnchor`; reconstruction uses those frozen fields
+  only and never consults current pending state or audit state.
 - RequestSnapshot::reconstruct resolves that historical Surface and combines
   it with the frozen fields. The Agent Loop compares the reconstructed
   provider-neutral ModelRequest structurally with the actual request before
@@ -3622,9 +3636,63 @@ A publication audit records the semantic output rustX durably committed **for
 release**. It is an upper bound on what may have been displayed, never proof
 of perception; there is no Runtime Client ACK protocol.
 
-A publication audit never enters the Message Ledger as an Assistant
-conversation fact, the active Surface, a `RequestSnapshot` model input, a
-tree/fork/clone seed, or any future `ModelRequest` context.
+### One-shot unresolved-output carryover (Issue #137)
+
+The isolation rule has one narrow request-only exception. A terminally
+unresolved audit may be selected as a bounded `UnresolvedOutputCarryover` for
+exactly one later eligible primary model start. The audit remains the sole
+body authority: durable state stores only its pending `PublicationStreamId`,
+and the selected rendering is frozen by value in that later Request Snapshot.
+
+Carryover is never canonical Assistant content, never a Ledger or Surface
+identity, never a `UserMessageBlock`, never a fabricated `MessageId`, and
+never lineage meaning. It is untrusted runtime-authored context with a
+separate request-only type. The provider-neutral order is:
+
+```text
+canonical history
+→ unresolved output carryover
+→ fresh inbound, if any
+→ Agent Status / other admitted current canonical context
+```
+
+The shared selector receives the last durably started `RequestIdentity` of the
+unresolved logical step and checks its request ordinals in descending order,
+deriving each `RequestIdentity`, provisional `MessageId`, and
+`PublicationStreamId` before one keyed audit load. It selects the highest
+`Incomplete` or `Unaccepted` audit with meaningful renderable content, falling
+back to an earlier ordinal when the latest audit is empty. It never scans or
+concatenates publication history. Live terminal settlement and startup
+recovery call this same selector.
+
+The producer linearization point is one semantic durable transaction after
+publication evidence is committed: attempt terminal state and the new pending
+pointer are committed together, with `None` replacing/clearing the previous
+pointer. If the transaction does not commit, neither half is visible. The
+recovery path performs the same selector and transaction, so a crash before
+that commit leaves a valid prefix and the next recovery derives the same
+source from the same durable Request Snapshot facts.
+
+The consumer is the first successfully started eligible primary model step,
+including FreshInbound work and recovery `ContinueAdoptedTurn`. The start
+transaction freezes the exact request-only value and its anchor in the
+Request Snapshot, commits ordinary model-start semantics, and clears the
+pending pointer atomically. Cancellation before that commit leaves the
+pointer untouched; a committed start consumes it once. Transient retries
+reuse the frozen value and never reread the pointer or audit. Overflow fit
+pressure can only degrade it monotonically from full bounded detail to
+reduced detail, metadata-only, or omission; carryover is best-effort and
+cannot cause `CannotFit`, force compaction, evict fresh inbound, or increase
+detail after degradation.
+
+Text uses a UTF-8-safe tail excerpt and structured omission metadata. Tool
+proposals retain complete/incomplete, unaccepted, and not-executed status;
+oversized arguments are omitted whole. Runtime-authored framing escapes
+untrusted payload data and uses non-closable records. Carryover never enters
+`ModelBackedSummarizer`, whose input is structurally canonical-only, and it is
+never placed in `LineageSeed`; every clone, fork, or tree destination starts
+with no pending carryover. No carryover event, TUI row, Runtime Client field,
+or provider continuation is introduced.
 
 ### Model proposals are not executions
 
@@ -3733,7 +3801,13 @@ runtime supervision/quiescence contract.
   a canonically accepted stream leaves no staging to classify. Recovery never
   consults the current provider, the current resource generation, the current
   Tool registry, or the workspace to decide a settlement, and it never
-  produces a canonical Assistant message from an audit;
+  produces a canonical Assistant message from an audit. For a terminally
+  unresolved logical model step, recovery derives the last durably started
+  Request Snapshot identity and invokes the same descending-ordinal keyed
+  carryover selector as live settlement. It then commits the attempt terminal
+  and replacement/clear of the pending carryover pointer in one transaction;
+  a committed recovery prefix is therefore safe to present to the next
+  recovery, including after a second crash;
 
 - **process-death conformance (FND-06 / Issue #111)**: the durable contracts of
   FND-01 through FND-05 are proved against an actual `SIGKILL` of an actual
@@ -4610,7 +4684,11 @@ canonical history.
 
 `LineageSeed` is the public durable authority both halves are admitted
 through, so it is checked against what durable transitions can *reach*, not
-merely against what replays. Every transition that adds a canonical row adds
+merely against what replays. Pending unresolved-output carryover is not part
+of either seed half: it is execution-recovery residue, not canonical
+conversation meaning. Every clone, fork, and tree destination initializes its
+own pending carryover pointer to `NULL`, regardless of the source residue.
+Every transition that adds a canonical row adds
 it together with the one Surface operation that introduces it, inside one
 transaction: an ordinary commit appends the message it committed, and a
 compaction appends its summary to the Ledger and replaces a span with that

@@ -45,6 +45,9 @@ use crate::message::content::TextBlock;
 use crate::message::types::{
     InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
+use crate::model::input::{
+    ModelInputMessage, RequestOnlyInsertionAnchor, assemble_model_input, canonical_input,
+};
 use crate::runtime::identity::{ConversationId, MessageId};
 use crate::runtime::inbound::FreshInboundTurn;
 use crate::runtime::types::{TokenMeasurement, TokenMeasurementSource};
@@ -273,6 +276,12 @@ pub struct CompactionConstraints<'a> {
     /// the Surface the plan rewrites, and it exists only for exact planning
     /// of the upcoming request.
     pub staged_request_context: &'a [MessageBlock],
+    /// The frozen bounded request-only carryover admitted to the upcoming
+    /// request, if any. It is fit-tested as the exact provider-neutral item
+    /// rather than as a guessed scalar reservation.
+    pub carryover: Option<&'a crate::model::RenderedUnresolvedOutputCarryover>,
+    /// The frozen canonical anchor of that request-only item.
+    pub carryover_anchor: Option<&'a RequestOnlyInsertionAnchor>,
     /// The measured error of this runtime's deterministic token estimate,
     /// when a provider has just proven the estimate too optimistic.
     ///
@@ -450,13 +459,59 @@ impl ContextEngine {
         staged_request_context: &[MessageBlock],
         tool_definitions: &[ModelToolDefinition],
     ) -> u64 {
-        let mut messages = projection.messages.clone();
-        messages.extend_from_slice(staged_request_context);
+        self.estimate_with_staged_context_and_carryover(
+            projection,
+            staged_request_context,
+            tool_definitions,
+            None,
+            None,
+        )
+    }
+
+    /// Estimates the exact post-compaction request including its frozen
+    /// request-only carryover, when one is admitted.
+    ///
+    /// # Panics
+    ///
+    /// Panics only when a supplied frozen anchor is absent from the assembled
+    /// request; request preparation validates anchors before calling this
+    /// method.
+    #[must_use]
+    pub fn estimate_with_staged_context_and_carryover(
+        &self,
+        projection: &ContextProjection,
+        staged_request_context: &[MessageBlock],
+        tool_definitions: &[ModelToolDefinition],
+        carryover: Option<&crate::model::RenderedUnresolvedOutputCarryover>,
+        carryover_anchor: Option<&RequestOnlyInsertionAnchor>,
+    ) -> u64 {
+        let messages = assemble_model_input(
+            &projection.messages,
+            staged_request_context,
+            carryover,
+            carryover_anchor,
+        )
+        .expect("the context engine receives a valid frozen carryover anchor");
         self.estimator.estimate_input(
             &messages,
             &projection.effective_system_prompt,
             tool_definitions,
         )
+    }
+
+    /// Estimates an already assembled provider-neutral request input. This
+    /// boundary is used for the actual mixed canonical/request-only request;
+    /// publication carryover is therefore charged at the exact detail level
+    /// that the request admits.
+    #[must_use]
+    pub fn estimate_model_input(
+        &self,
+        messages: &[ModelInputMessage],
+        effective_system_prompt: &str,
+        tool_definitions: &[ModelToolDefinition],
+    ) -> u64 {
+        self.estimator
+            .estimate_input(messages, effective_system_prompt, tool_definitions)
     }
 
     /// Builds the current projection of one conversation state.
@@ -599,8 +654,13 @@ impl ContextEngine {
             // Surface plus the non-retirable staged request-scoped context,
             // estimated as one whole projection (never as a scalar token
             // delta, which the pluggable estimator does not support).
-            let mut hypothetical = planned_items;
-            hypothetical.extend_from_slice(constraints.staged_request_context);
+            let hypothetical = assemble_model_input(
+                &planned_items,
+                constraints.staged_request_context,
+                constraints.carryover,
+                constraints.carryover_anchor,
+            )
+            .map_err(|error| malformed(&error))?;
             let planned = self
                 .estimator
                 .estimate_input(
@@ -678,7 +738,7 @@ impl ContextEngine {
             // estimate of the post-compaction context and never mixes a
             // provider-reported measurement with an estimate.
             estimated_before_tokens: self.estimator.estimate_input(
-                &current_projection.messages,
+                &canonical_input(&current_projection.messages),
                 &current_projection.effective_system_prompt,
                 tool_definitions,
             ),
@@ -825,7 +885,7 @@ impl ContextEngine {
             .and_then(|observed| self.reuse_measurement(observed, &projection, tool_definitions))
             .unwrap_or_else(|| TokenMeasurement {
                 input_tokens: self.estimator.estimate_input(
-                    &projection.messages,
+                    &canonical_input(&projection.messages),
                     &projection.effective_system_prompt,
                     tool_definitions,
                 ),

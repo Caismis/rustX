@@ -391,18 +391,20 @@ async fn unsupported_input_is_rejected_before_any_provider_request() {
     for protocol in Protocol::ALL {
         let server = protocol.server().await;
         let mut request = common::simple_request(protocol.model_protocol(), "wire-test", "hi");
-        request.messages = vec![MessageBlock::User(UserMessageBlock {
-            id: MessageId::new("msg-image-1"),
-            content: vec![UserContentBlock::Image(
-                rustx::message::content::ImageReference {
-                    artifact_id: rustx::runtime::identity::ArtifactId::new("artifact-1"),
-                    alt: None,
-                },
-            )],
-            source: UserSource::Human,
-            kind: InboundKind::Message,
-            timestamp: None,
-        })];
+        request.messages = vec![rustx::model::ModelInputMessage::Canonical(
+            MessageBlock::User(UserMessageBlock {
+                id: MessageId::new("msg-image-1"),
+                content: vec![UserContentBlock::Image(
+                    rustx::message::content::ImageReference {
+                        artifact_id: rustx::runtime::identity::ArtifactId::new("artifact-1"),
+                        alt: None,
+                    },
+                )],
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                timestamp: None,
+            }),
+        )];
         let events = common::collect_events(protocol.adapter(&server).as_ref(), request).await;
         assert_eq!(
             events.len(),

@@ -95,15 +95,17 @@ fn live_request_with_storage(
     use rustx::runtime::identity::MessageId;
     ModelRequest {
         invocation: live_invocation(protocol, model, storage),
-        messages: vec![MessageBlock::User(UserMessageBlock {
-            id: MessageId::new("msg-live-1"),
-            content: vec![UserContentBlock::Text(TextBlock {
-                text: "Reply with exactly the word: hello".to_owned(),
-            })],
-            source: UserSource::Human,
-            kind: InboundKind::Message,
-            timestamp: None,
-        })],
+        messages: vec![rustx::model::ModelInputMessage::Canonical(
+            MessageBlock::User(UserMessageBlock {
+                id: MessageId::new("msg-live-1"),
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: "Reply with exactly the word: hello".to_owned(),
+                })],
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                timestamp: None,
+            }),
+        )],
         tools: Vec::new(),
         effective_system_prompt: String::new(),
         continuation: None,
@@ -253,16 +255,18 @@ async fn live_openai_chat_tool_call() {
             &model,
             ResponsesStorageMode::Stored,
         ),
-        messages: vec![MessageBlock::User(UserMessageBlock {
-            id: MessageId::new("msg-live-2"),
-            content: vec![UserContentBlock::Text(TextBlock {
-                text: "Use the get_weather tool for location 'Berlin' and report its result."
-                    .to_owned(),
-            })],
-            source: UserSource::Human,
-            kind: InboundKind::Message,
-            timestamp: None,
-        })],
+        messages: vec![rustx::model::ModelInputMessage::Canonical(
+            MessageBlock::User(UserMessageBlock {
+                id: MessageId::new("msg-live-2"),
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: "Use the get_weather tool for location 'Berlin' and report its result."
+                        .to_owned(),
+                })],
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                timestamp: None,
+            }),
+        )],
         tools: vec![ModelToolDefinition {
             id: ToolId::new("tool-weather"),
             name: "get_weather".to_owned(),

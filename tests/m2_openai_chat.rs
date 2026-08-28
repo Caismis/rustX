@@ -1045,18 +1045,20 @@ async fn tool_then_consecutive_inbound_users_translate_in_order() {
         })
     };
     request.messages = vec![
-        MessageBlock::Assistant(AssistantMessageBlock {
-            id: MessageId::new("msg-a1"),
-            content: vec![rustx::message::types::AssistantContentBlock::ToolCall(
-                rustx::tools::types::ToolCall {
-                    id: rustx::runtime::identity::ToolCallId::new("call_1"),
-                    tool_id: rustx::runtime::identity::ToolId::new("tool-list"),
-                    name: "list_directory".to_owned(),
-                    arguments: serde_json::json!({"path": "."}),
-                },
-            )],
-        }),
-        MessageBlock::Tool(ToolMessageBlock {
+        rustx::model::ModelInputMessage::Canonical(MessageBlock::Assistant(
+            AssistantMessageBlock {
+                id: MessageId::new("msg-a1"),
+                content: vec![rustx::message::types::AssistantContentBlock::ToolCall(
+                    rustx::tools::types::ToolCall {
+                        id: rustx::runtime::identity::ToolCallId::new("call_1"),
+                        tool_id: rustx::runtime::identity::ToolId::new("tool-list"),
+                        name: "list_directory".to_owned(),
+                        arguments: serde_json::json!({"path": "."}),
+                    },
+                )],
+            },
+        )),
+        rustx::model::ModelInputMessage::Canonical(MessageBlock::Tool(ToolMessageBlock {
             id: MessageId::new("msg-t1"),
             tool_call_id: rustx::runtime::identity::ToolCallId::new("call_1"),
             tool_id: rustx::runtime::identity::ToolId::new("tool-list"),
@@ -1073,9 +1075,9 @@ async fn tool_then_consecutive_inbound_users_translate_in_order() {
                 truncation: None,
                 managed_output: None,
             },
-        }),
-        user("msg-a", "A"),
-        user("msg-b", "B"),
+        })),
+        rustx::model::ModelInputMessage::Canonical(user("msg-a", "A")),
+        rustx::model::ModelInputMessage::Canonical(user("msg-b", "B")),
     ];
     let events = collect_events(&adapter(&server), request).await;
     assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));

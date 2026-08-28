@@ -823,7 +823,9 @@ async fn tool_result_passed_back_verbatim() {
 
     let requests = model.requests();
     assert_eq!(requests.len(), 2);
-    let MessageBlock::Tool(tool_message) = &requests[1].messages[2] else {
+    let rustx::model::ModelInputMessage::Canonical(MessageBlock::Tool(tool_message)) =
+        &requests[1].messages[2]
+    else {
         panic!("second request must contain the tool message");
     };
     assert_eq!(
@@ -962,7 +964,9 @@ async fn tool_execution_failure_is_passed_back_and_continues() {
     );
     let requests = model.requests();
     assert_eq!(requests.len(), 2);
-    let MessageBlock::Tool(tool_message) = &requests[1].messages[2] else {
+    let rustx::model::ModelInputMessage::Canonical(MessageBlock::Tool(tool_message)) =
+        &requests[1].messages[2]
+    else {
         panic!("continuation must carry the failed tool result");
     };
     assert_eq!(
@@ -1021,7 +1025,12 @@ async fn multiple_ordered_tool_calls_continue_once() {
     let tool_messages: Vec<&MessageBlock> = requests[1]
         .messages
         .iter()
-        .filter(|block| matches!(block, MessageBlock::Tool(_)))
+        .filter_map(|block| match block {
+            rustx::model::ModelInputMessage::Canonical(message @ MessageBlock::Tool(_)) => {
+                Some(message)
+            }
+            _ => None,
+        })
         .collect();
     assert_eq!(tool_messages.len(), 2, "both results in the continuation");
     assert_single_terminal(&result.event_history);
@@ -2593,7 +2602,12 @@ async fn foreground_tools_with_empty_mailbox_keep_exact_behavior() {
     );
     let requests = model.requests();
     assert_eq!(requests.len(), 2);
-    let ids: Vec<String> = requests[1].messages.iter().map(block_id).collect();
+    let ids: Vec<String> = requests[1]
+        .messages
+        .iter()
+        .filter_map(rustx::model::ModelInputMessage::as_canonical)
+        .map(block_id)
+        .collect();
     assert_eq!(
         ids,
         vec!["msg-user-1", "attempt-1-agent-1", "attempt-1-tool-1-call-1"],
@@ -2690,7 +2704,9 @@ async fn foreground_tools_with_inbound_batch_attach_one_ordered_batch() {
     );
     let requests = model.requests();
     assert_eq!(requests.len(), 2, "one continuation after the batch");
-    let MessageBlock::User(user_a) = &requests[1].messages[3] else {
+    let rustx::model::ModelInputMessage::Canonical(MessageBlock::User(user_a)) =
+        &requests[1].messages[3]
+    else {
         panic!("fourth message of the continuation must be user A");
     };
     assert_eq!(user_a.id, MessageId::new("msg-inbound-a"));
@@ -2699,7 +2715,9 @@ async fn foreground_tools_with_inbound_batch_attach_one_ordered_batch() {
         user_a.timestamp.is_some(),
         "A keeps its persisted timestamp"
     );
-    let MessageBlock::User(user_b) = &requests[1].messages[4] else {
+    let rustx::model::ModelInputMessage::Canonical(MessageBlock::User(user_b)) =
+        &requests[1].messages[4]
+    else {
         panic!("fifth message of the continuation must be user B");
     };
     assert_eq!(user_b.id, MessageId::new("msg-inbound-b"));
@@ -2782,7 +2800,7 @@ async fn later_correction_ships_one_batch_and_one_continuation() {
     let ids: Vec<String> = requests[1]
         .messages
         .iter()
-        .filter_map(non_context_block_id)
+        .filter_map(|message| message.as_canonical().and_then(non_context_block_id))
         .collect();
     assert_eq!(
         ids,
@@ -2801,7 +2819,7 @@ async fn later_correction_ships_one_batch_and_one_continuation() {
             .filter(|block| {
                 matches!(
                     block,
-                    MessageBlock::User(user)
+                    rustx::model::ModelInputMessage::Canonical(MessageBlock::User(user))
                         if !matches!(
                             user.kind,
                             rustx::message::types::InboundKind::Context(_)
@@ -2884,7 +2902,7 @@ async fn stop_with_pending_inbound_does_not_settle_until_batch_consumed() {
         requests[1]
             .messages
             .iter()
-            .any(|block| matches!(block, MessageBlock::User(user) if user.id == MessageId::new("msg-stop-a"))),
+            .any(|block| matches!(block, rustx::model::ModelInputMessage::Canonical(MessageBlock::User(user)) if user.id == MessageId::new("msg-stop-a"))),
         "model request 2 contains the drained inbound message"
     );
 }

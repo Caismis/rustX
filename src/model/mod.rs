@@ -1,6 +1,6 @@
-//! Canonical model requests, model events, usage, errors, and provider adapters.
+//! Provider-neutral model requests, model events, usage, errors, and provider adapters.
 //!
-//! M1 implements the canonical model contracts: `ModelRequest`, `ModelEvent`,
+//! M1 implements the provider-neutral model contracts: `ModelRequest`, `ModelEvent`,
 //! `ModelUsage`, normalized finish reasons, normalized errors, and the model
 //! protocol enum. M2 implements the provider adapters for `OpenAI` Chat
 //! Completions, `OpenAI` Responses, and `Anthropic` Messages in
@@ -14,6 +14,7 @@ pub mod deadline;
 pub mod error;
 pub mod event;
 pub mod finish;
+pub mod input;
 pub mod invocation;
 pub mod session;
 pub mod snapshot;
@@ -37,6 +38,12 @@ pub use deadline::{
 pub use error::{ContextOverflowReport, ModelError, ModelErrorKind, ModelRetryDisposition};
 pub use event::ModelEvent;
 pub use finish::ModelFinishReason;
+pub use input::{
+    CarryoverBlockKind, CarryoverDetailLevel, CarryoverOmissionCounts, ModelInputMessage,
+    RenderedCarryoverRecord, RenderedCarryoverText, RenderedCarryoverToolCall,
+    RenderedUnresolvedOutputCarryover, RequestOnlyInsertionAnchor, RequestOnlyModelContext,
+    canonical_input,
+};
 pub use invocation::{
     ModelBindingRegistry, ModelInvocationConfig, ModelInvocationError, ModelInvocationView,
     ModelSelection, RequestParams, ResolvedModelInvocation,

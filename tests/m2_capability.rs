@@ -12,8 +12,8 @@ use rustx::message::types::{
 };
 use rustx::model::{
     AnthropicAdapterConfig, AnthropicMessagesAdapter, ChatReasoningReplay, ModelAdapter,
-    ModelErrorKind, ModelEvent, ModelProtocol, ModelRequest, OpenAiAdapterConfig,
-    OpenAiChatCompletionsAdapter, OpenAiResponsesAdapter,
+    ModelErrorKind, ModelEvent, ModelInputMessage, ModelProtocol, ModelRequest,
+    OpenAiAdapterConfig, OpenAiChatCompletionsAdapter, OpenAiResponsesAdapter,
 };
 use rustx::runtime::identity::MessageId;
 use rustx::runtime::identity::{ArtifactId, ToolCallId, ToolId};
@@ -40,7 +40,7 @@ async fn unsupported_rejected(
 
 fn image_user_request(protocol: ModelProtocol, model: &str) -> ModelRequest {
     let mut request = simple_request(protocol, model, "what is this?");
-    request.messages[0] = MessageBlock::User(UserMessageBlock {
+    request.messages[0] = ModelInputMessage::Canonical(MessageBlock::User(UserMessageBlock {
         id: rustx::runtime::identity::MessageId::new("msg-img"),
         content: vec![UserContentBlock::Image(ImageReference {
             artifact_id: ArtifactId::new("artifact-img-1"),
@@ -49,7 +49,7 @@ fn image_user_request(protocol: ModelProtocol, model: &str) -> ModelRequest {
         source: UserSource::Human,
         kind: InboundKind::Message,
         timestamp: None,
-    });
+    }));
     request
 }
 
@@ -104,7 +104,10 @@ fn history_request(protocol: ModelProtocol, model: &str) -> ModelRequest {
             kind: InboundKind::Message,
             timestamp: None,
         }),
-    ];
+    ]
+    .into_iter()
+    .map(ModelInputMessage::Canonical)
+    .collect();
     "Be concise.".clone_into(&mut request.effective_system_prompt);
     request.tools = vec![common::model_tool("list_directory", "tool-list")];
     request
@@ -176,7 +179,7 @@ async fn chat_replays_previous_reasoning() {
     request.invocation.compat.chat_reasoning_replay = Some(ChatReasoningReplay::Reasoning);
     request.messages.insert(
         2,
-        MessageBlock::Assistant(AssistantMessageBlock {
+        ModelInputMessage::Canonical(MessageBlock::Assistant(AssistantMessageBlock {
             id: MessageId::new("msg-r"),
             content: vec![AssistantContentBlock::Reasoning(
                 rustx::message::types::ReasoningBlock {
@@ -184,7 +187,7 @@ async fn chat_replays_previous_reasoning() {
                     provider_state: None,
                 },
             )],
-        }),
+        })),
     );
     let adapter =
         OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new("k", server.url("/v1")));
@@ -235,11 +238,16 @@ async fn chat_reasoning_replay_dialects_are_explicit() {
         let assistant_index = request
             .messages
             .iter()
-            .position(|message| matches!(message, MessageBlock::Assistant(_)))
+            .position(|message| {
+                matches!(
+                    message,
+                    ModelInputMessage::Canonical(MessageBlock::Assistant(_))
+                )
+            })
             .expect("assistant history");
         request.messages.insert(
             assistant_index,
-            MessageBlock::Assistant(AssistantMessageBlock {
+            ModelInputMessage::Canonical(MessageBlock::Assistant(AssistantMessageBlock {
                 id: MessageId::new(format!("msg-r-{attempt}")),
                 content: vec![AssistantContentBlock::Reasoning(
                     rustx::message::types::ReasoningBlock {
@@ -247,7 +255,7 @@ async fn chat_reasoning_replay_dialects_are_explicit() {
                         provider_state: None,
                     },
                 )],
-            }),
+            })),
         );
         let events = common::collect_events(&adapter, request).await;
         assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
@@ -281,7 +289,7 @@ async fn chat_omit_ignores_unavailable_reasoning() {
     request.invocation.compat.chat_reasoning_replay = Some(ChatReasoningReplay::Omit);
     request.messages.insert(
         2,
-        MessageBlock::Assistant(AssistantMessageBlock {
+        ModelInputMessage::Canonical(MessageBlock::Assistant(AssistantMessageBlock {
             id: MessageId::new("msg-r-omit-unavailable"),
             content: vec![
                 AssistantContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
@@ -298,7 +306,7 @@ async fn chat_omit_ignores_unavailable_reasoning() {
                     text: "Visible answer.".to_owned(),
                 }),
             ],
-        }),
+        })),
     );
 
     let events = common::collect_events(
@@ -332,7 +340,7 @@ async fn chat_omit_ignores_multiple_reasoning_blocks() {
     request.invocation.compat.chat_reasoning_replay = Some(ChatReasoningReplay::Omit);
     request.messages.insert(
         2,
-        MessageBlock::Assistant(AssistantMessageBlock {
+        ModelInputMessage::Canonical(MessageBlock::Assistant(AssistantMessageBlock {
             id: MessageId::new("msg-r-omit-multiple"),
             content: vec![
                 AssistantContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
@@ -353,7 +361,7 @@ async fn chat_omit_ignores_multiple_reasoning_blocks() {
                     arguments: serde_json::json!({"path": "."}),
                 }),
             ],
-        }),
+        })),
     );
 
     let events = common::collect_events(
@@ -392,7 +400,7 @@ async fn chat_replay_modes_reject_unavailable_reasoning_text() {
         request.invocation.compat.chat_reasoning_replay = Some(dialect);
         request.messages.insert(
             2,
-            MessageBlock::Assistant(AssistantMessageBlock {
+            ModelInputMessage::Canonical(MessageBlock::Assistant(AssistantMessageBlock {
                 id: MessageId::new(format!("msg-r-unavailable-{dialect:?}")),
                 content: vec![AssistantContentBlock::Reasoning(
                     rustx::message::types::ReasoningBlock {
@@ -400,7 +408,7 @@ async fn chat_replay_modes_reject_unavailable_reasoning_text() {
                         provider_state: None,
                     },
                 )],
-            }),
+            })),
         );
         unsupported_rejected(
             &OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new("k", server.url("/v1"))),
@@ -427,7 +435,7 @@ async fn chat_replay_modes_reject_multiple_reasoning_blocks() {
         request.invocation.compat.chat_reasoning_replay = Some(dialect);
         request.messages.insert(
             2,
-            MessageBlock::Assistant(AssistantMessageBlock {
+            ModelInputMessage::Canonical(MessageBlock::Assistant(AssistantMessageBlock {
                 id: MessageId::new(format!("msg-r-multiple-{dialect:?}")),
                 content: vec![
                     AssistantContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
@@ -439,7 +447,7 @@ async fn chat_replay_modes_reject_multiple_reasoning_blocks() {
                         provider_state: None,
                     }),
                 ],
-            }),
+            })),
         );
         unsupported_rejected(
             &OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new("k", server.url("/v1"))),
@@ -581,8 +589,9 @@ async fn file_tool_results_are_unsupported() {
         .messages
         .iter_mut()
         .find_map(|message| match message {
-            MessageBlock::Tool(tool_message) => Some(tool_message),
-            MessageBlock::User(_) | MessageBlock::Assistant(_) => None,
+            ModelInputMessage::Canonical(MessageBlock::Tool(tool_message)) => Some(tool_message),
+            ModelInputMessage::Canonical(MessageBlock::User(_) | MessageBlock::Assistant(_))
+            | ModelInputMessage::RequestOnly(_) => None,
         })
         .expect("tool message expected");
     tool_message.result.content = vec![ToolResultContent::File(

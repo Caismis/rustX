@@ -14,6 +14,7 @@ use rustx::context::{
     ContextError, ContextErrorKind, ContextSummarizer, SummaryRequest, TokenEstimator,
 };
 use rustx::message::types::{InboundKind, MessageBlock};
+use rustx::model::ModelInputMessage;
 use rustx::tools::types::ModelToolDefinition;
 use tokio::sync::watch;
 
@@ -153,7 +154,7 @@ impl ScriptedEstimator {
 impl TokenEstimator for ScriptedEstimator {
     fn estimate_input(
         &self,
-        messages: &[MessageBlock],
+        messages: &[ModelInputMessage],
         effective_system_prompt: &str,
         tool_definitions: &[ModelToolDefinition],
     ) -> u64 {
@@ -164,17 +165,23 @@ impl TokenEstimator for ScriptedEstimator {
     }
 
     fn estimate_conversation_input(&self, messages: &[MessageBlock]) -> u64 {
-        self.items_estimate(messages)
+        let messages = rustx::model::input::canonical_input(messages);
+        self.items_estimate(&messages)
     }
 }
 
 impl ScriptedEstimator {
     /// The conversation-content estimate: message/block/summary weights only,
     /// never the fixed per-tool overhead.
-    fn items_estimate(&self, messages: &[MessageBlock]) -> u64 {
+    fn items_estimate(&self, messages: &[ModelInputMessage]) -> u64 {
         messages
             .iter()
-            .map(|message| self.message_estimate(message))
+            .map(|message| match message {
+                ModelInputMessage::Canonical(message) => self.message_estimate(message),
+                ModelInputMessage::RequestOnly(context) => {
+                    (context.render().len() as u64).div_ceil(4)
+                }
+            })
             .sum()
     }
 

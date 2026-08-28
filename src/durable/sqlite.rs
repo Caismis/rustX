@@ -144,9 +144,15 @@ use super::inbox::{
 /// A version-13 store has only the undifferentiated cancellation status, so it
 /// is rejected rather than decoded with an invented or default phase.
 ///
-/// A v3/v4/v5/v6/v7/v8/v9/v10/v11/v12/v13 database must fail at store open;
+/// Version 15 freezes Issue #137's one-shot unresolved model-output carryover:
+/// the store root owns the pending Publication Stream identity, and each
+/// Request Snapshot may freeze the exact request-only bounded representation
+/// and canonical insertion anchor. The audit remains the sole body authority;
+/// no raw carryover body is stored in the conversation schema.
+///
+/// A v3/v4/v5/v6/v7/v8/v9/v10/v11/v12/v13/v14 database must fail at store open;
 /// there is no migration or compatibility path.
-pub const SQLITE_SCHEMA_VERSION: i64 = 14;
+pub const SQLITE_SCHEMA_VERSION: i64 = 15;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -604,6 +610,7 @@ impl SqliteConversationStore {
         } else {
             Vec::new()
         };
+        consume_pending_carryover_tx(transaction, snapshot)?;
         Ok(ModelTurnStartCommit {
             started: persisted.event,
             agent_status_emissions,
@@ -1386,6 +1393,71 @@ impl ConversationStore for SqliteConversationStore {
         read_agent_status_head(&connection, module_id, key)
     }
 
+    fn load_pending_unresolved_output_stream_id(
+        &self,
+    ) -> Result<Option<PublicationStreamId>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let value: Option<String> = connection
+            .query_row(
+                "SELECT pending_unresolved_output_stream_id FROM rustx_store WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| storage(format!("pending carryover lookup: {error}")))?;
+        Ok(value.map(PublicationStreamId::new))
+    }
+
+    fn commit_attempt_terminal_with_carryover(
+        &self,
+        event: RuntimeEventEnvelope,
+        pending_source: Option<PublicationStreamId>,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        if !is_terminal(&event.event)
+            || !matches!(
+                event.event,
+                RuntimeEvent::AttemptCompleted { .. }
+                    | RuntimeEvent::AttemptCancelled { .. }
+                    | RuntimeEvent::AttemptTimedOut { .. }
+                    | RuntimeEvent::AttemptLimitExceeded { .. }
+                    | RuntimeEvent::AttemptFailed { .. }
+            )
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "carryover terminal transition accepts only attempt terminal events".to_owned(),
+            ));
+        }
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("attempt terminal transaction: {error}")))?;
+        #[cfg(test)]
+        {
+            self.terminal_event_attempts.fetch_add(1, Ordering::SeqCst);
+            if Self::consume(&self.fail_terminal_event_remaining) {
+                return Err(storage("fault injected: terminal event commit"));
+            }
+            if Self::consume(&self.fail_event_remaining) {
+                return Err(storage("fault injected: event commit"));
+            }
+        }
+        validate_pending_carryover_source_tx(&transaction, &event, pending_source.as_ref())?;
+        process_death::reach_event("before:attempt_terminal", &event.event);
+        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        let source = pending_source.as_ref().map(PublicationStreamId::as_str);
+        transaction
+            .execute(
+                "UPDATE rustx_store SET pending_unresolved_output_stream_id=?1 WHERE id=1",
+                [source],
+            )
+            .map_err(|error| storage(format!("install pending carryover source: {error}")))?;
+        process_death::reach("before:commit_attempt_terminal");
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("attempt terminal commit: {error}")))?;
+        process_death::reach("after:commit_attempt_terminal");
+        Ok(persisted.event)
+    }
+
     fn current_todo_progress(&self) -> Result<u64, ConversationStoreError> {
         let connection = self.lock()?;
         let value: i64 = connection
@@ -1467,13 +1539,9 @@ impl ConversationStore for SqliteConversationStore {
         let snapshot = self.load_request_snapshot(request_id)?;
         let ids = self.reconstruct_surface(snapshot.surface_revision)?;
         let messages = self.load_messages(&ids)?;
-        Ok(ModelRequest {
-            invocation: snapshot.invocation.clone(),
-            messages,
-            tools: snapshot.tool_definitions.clone(),
-            effective_system_prompt: snapshot.effective_system_prompt.clone(),
-            continuation: snapshot.continuation.clone(),
-        })
+        snapshot
+            .reconstruct_from_canonical(&messages)
+            .map_err(|error| ConversationStoreError::InvalidReference(error.to_string()))
     }
 
     fn read_request_snapshots(
@@ -3641,7 +3709,8 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 next_inbound_sequence INTEGER NOT NULL CHECK(next_inbound_sequence >= 0),
                 next_event_sequence INTEGER NOT NULL CHECK(next_event_sequence >= 0),
                 next_transcript_position INTEGER NOT NULL CHECK(next_transcript_position >= 0),
-                todo_progress_sequence INTEGER NOT NULL CHECK(todo_progress_sequence >= 0)
+                todo_progress_sequence INTEGER NOT NULL CHECK(todo_progress_sequence >= 0),
+                pending_unresolved_output_stream_id TEXT
             );
             CREATE TABLE IF NOT EXISTS pending_inbound (
                 sequence INTEGER PRIMARY KEY,
@@ -3763,7 +3832,7 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
         .map_err(|error| storage(format!("create schema: {error}")))?;
     connection
         .execute(
-            "INSERT OR IGNORE INTO rustx_store(id,schema_version,conversation_id,next_inbound_sequence,next_event_sequence,next_transcript_position,todo_progress_sequence) VALUES(1,?1,'',0,0,0,0)",
+            "INSERT OR IGNORE INTO rustx_store(id,schema_version,conversation_id,next_inbound_sequence,next_event_sequence,next_transcript_position,todo_progress_sequence,pending_unresolved_output_stream_id) VALUES(1,?1,'',0,0,0,0,NULL)",
             params![SQLITE_SCHEMA_VERSION],
         )
         .map_err(|error| storage(format!("create schema root: {error}")))?;
@@ -3796,6 +3865,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "next_event_sequence",
                 "next_transcript_position",
                 "todo_progress_sequence",
+                "pending_unresolved_output_stream_id",
             ] as &[&str],
         ),
         (
@@ -6533,6 +6603,109 @@ fn validate_snapshot_identity(snapshot: &RequestSnapshot) -> Result<(), Conversa
             snapshot.request_id
         )));
     }
+    validate_carryover_snapshot(snapshot)?;
+    Ok(())
+}
+
+fn validate_carryover_snapshot(snapshot: &RequestSnapshot) -> Result<(), ConversationStoreError> {
+    match (
+        &snapshot.unresolved_output_carryover_source,
+        &snapshot.unresolved_output_carryover,
+        &snapshot.unresolved_output_carryover_anchor,
+    ) {
+        (None, None, None) => Ok(()),
+        (Some(source), representation, Some(_)) => {
+            if let Some(representation) = representation
+                && representation.source_stream_id != *source
+            {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "request snapshot {} carryover representation disagrees with its source",
+                    snapshot.request_id
+                )));
+            }
+            Ok(())
+        }
+        _ => Err(ConversationStoreError::InvalidReference(format!(
+            "request snapshot {} has an incomplete frozen carryover tuple",
+            snapshot.request_id
+        ))),
+    }
+}
+
+fn consume_pending_carryover_tx(
+    transaction: &Transaction<'_>,
+    snapshot: &RequestSnapshot,
+) -> Result<(), ConversationStoreError> {
+    let Some(source) = snapshot.unresolved_output_carryover_source.as_ref() else {
+        return Ok(());
+    };
+    if snapshot.identity.retry_number != 0 {
+        return Ok(());
+    }
+    let pending: Option<String> = transaction
+        .query_row(
+            "SELECT pending_unresolved_output_stream_id FROM rustx_store WHERE id=1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| storage(format!("pending carryover consume probe: {error}")))?;
+    if pending.as_deref() != Some(source.as_str()) {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request {} attempted to consume pending carryover {}, but the durable pending source is {:?}",
+            snapshot.request_id, source, pending
+        )));
+    }
+    transaction
+        .execute(
+            "UPDATE rustx_store SET pending_unresolved_output_stream_id=NULL WHERE id=1",
+            [],
+        )
+        .map_err(|error| storage(format!("consume pending carryover: {error}")))?;
+    Ok(())
+}
+
+fn validate_pending_carryover_source_tx(
+    transaction: &Transaction<'_>,
+    event: &RuntimeEventEnvelope,
+    source: Option<&PublicationStreamId>,
+) -> Result<(), ConversationStoreError> {
+    let Some(source) = source else {
+        return Ok(());
+    };
+    let Some(attempt_id) = event.attempt_id.as_ref() else {
+        return Err(ConversationStoreError::InvalidReference(
+            "pending carryover requires an attempt-scoped terminal event".to_owned(),
+        ));
+    };
+    let Some(audit_json): Option<String> = transaction
+        .query_row(
+            "SELECT audit_json FROM publication_audits WHERE stream_id=?1",
+            [source.as_str()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| storage(format!("pending carryover audit probe: {error}")))?
+    else {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "pending carryover source {source} has no durable Publication Audit"
+        )));
+    };
+    let audit: PublicationAudit = decode(&audit_json, "pending carryover audit")?;
+    if audit.stream_id != *source || audit.attempt_id != *attempt_id {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "pending carryover source {source} does not belong to terminal attempt {attempt_id}"
+        )));
+    }
+    if !matches!(
+        audit.kind,
+        crate::publication::PublicationAuditKind::Incomplete
+            | crate::publication::PublicationAuditKind::Unaccepted
+    ) || crate::publication::render_unresolved_output_carryover(&audit).is_none()
+    {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "pending carryover source {source} is not a meaningful unresolved Publication Audit"
+        )));
+    }
     Ok(())
 }
 
@@ -7494,7 +7667,7 @@ mod tests {
         ));
         let expected = ModelRequest {
             invocation,
-            messages: vec![a, b],
+            messages: crate::model::input::canonical_input(&[a.clone(), b.clone()]),
             tools: Vec::new(),
             effective_system_prompt: "system frozen before restart".to_owned(),
             continuation: None,
@@ -8139,7 +8312,10 @@ mod tests {
         let reconstructed = store
             .reconstruct_model_request(&snapshot.request_id)
             .expect("reconstruct");
-        assert_eq!(reconstructed.messages, vec![a, context.clone()]);
+        assert_eq!(
+            reconstructed.messages,
+            crate::model::input::canonical_input(&[a.clone(), context.clone()])
+        );
         // An exact retry is idempotent and returns the original start fact.
         let retried = store
             .commit_model_turn_start(std::slice::from_ref(&context), &snapshot, Utc::now())
@@ -9544,6 +9720,36 @@ mod tests {
             SqliteConversationStore::open(conversation_id, &path),
             Err(ConversationStoreError::SchemaVersionMismatch {
                 stored: 13,
+                expected: SQLITE_SCHEMA_VERSION
+            })
+        ));
+    }
+
+    /// Issue #137 adds the durable pending source pointer and frozen
+    /// request-only snapshot fields. The immediately previous development
+    /// schema is rejected explicitly; there is no legacy decoder or
+    /// migration for those fields.
+    #[test]
+    fn issue137_schema_version_is_rejected_explicitly() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("pre-issue-137.sqlite");
+        let conversation_id = ConversationId::new("conv-pre-issue-137");
+        {
+            let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
+            store
+                .conn
+                .lock()
+                .unwrap()
+                .execute(
+                    "UPDATE rustx_store SET schema_version = 14 WHERE id = 1",
+                    [],
+                )
+                .unwrap();
+        }
+        assert!(matches!(
+            SqliteConversationStore::open(conversation_id, &path),
+            Err(ConversationStoreError::SchemaVersionMismatch {
+                stored: 14,
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
