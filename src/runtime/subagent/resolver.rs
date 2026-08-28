@@ -36,14 +36,42 @@
 //! before ownership commit, and an unknown selection whose source authority
 //! *is* present is a static configuration error that rejects
 //! resource-generation preparation.
+//!
+//! The two callers of the per-selector core are therefore asymmetric, and
+//! the asymmetry is the whole point:
+//!
+//! ```text
+//! resolve_tools                   (invocation)  fail fast on the first
+//!                                               unsatisfiable selector
+//! validate_selectors_for_admission (admission)  inspect EVERY selector;
+//!                                               tolerate an unavailable
+//!                                               source only for that one
+//! ```
+//!
+//! Admission may not stop at an unavailable source: an offline MCP server
+//! listed before a misspelled selector would otherwise let a statically
+//! invalid definition into a published generation.
+//!
+//! # The parent decides; the child materializes
+//!
+//! Everything in [`ResolvedSubagentSpec`] is a decision made *here*, in the
+//! parent, against the invoking attempt's admitted authority. The child
+//! performs physical materialization only. Three representations carry that
+//! contract: the model crosses as a completely resolved
+//! [`FrozenModelSpec`] rather than a desired configuration plus a catalog
+//! path, each Builtin capability crosses as its exact admitted
+//! `ToolDefinition` rather than a name, and each Skill crosses as its
+//! immutable `SkillId` + `SkillVersionId` binding rather than a host path.
 
 use serde::{Deserialize, Serialize};
 
 use crate::capabilities::{
     AvailableToolCatalog, CapabilityAvailability, CapabilitySourceId, CapabilitySourceState,
 };
+use crate::model::frozen::FrozenModelSpec;
 use crate::model::invocation::ModelBindingRegistry;
 use crate::model::session::SessionModelConfig;
+use crate::protocol::manifest::SkillBinding;
 use crate::runtime::identity::{McpServerId, ToolId, ToolVersionId};
 use crate::runtime::resources::{ProjectContextFile, RuntimeResourceSnapshot};
 use crate::skills::{SkillCatalogEntry, SkillSnapshot};
@@ -136,6 +164,31 @@ impl ResolvedSubagentTool {
     }
 }
 
+/// One frozen Skill authorization of a resolved child.
+///
+/// Two different things travel together here, and the distinction is the
+/// point:
+///
+/// - `binding` is the **immutable identity** of the exact Skill version the
+///   invoking generation admitted (`SkillId` + `SkillVersionId`). It is what
+///   a physical Skill materialization must realize, and it is what makes an
+///   old frozen specification unambiguous after the host filesystem has
+///   moved on. A host path is *not* an identity: the bytes behind a path can
+///   change without the path changing.
+/// - `catalog_entry` is the **model-visible metadata** of that Skill: name,
+///   description, and the host `SKILL.md` location the model passes to Read.
+///   It is exactly what progressive disclosure needs and nothing more — no
+///   `SKILL.md` body and no supporting resource ever crosses this boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedSubagentSkill {
+    /// The exact immutable `SkillId` + `SkillVersionId` the generation
+    /// admitted.
+    pub binding: SkillBinding,
+    /// The model-visible catalog metadata of that same Skill.
+    pub catalog_entry: SkillCatalogEntry,
+}
+
 /// The complete frozen launch specification of one named subagent child.
 ///
 /// Every semantic identity the child needs is already decided here. The
@@ -152,15 +205,25 @@ pub struct ResolvedSubagentSpec {
     /// The exact child instruction document, composed as the child's
     /// request-time `AgentProfile` System section.
     pub instructions: String,
-    /// The frozen child model configuration: the definition's explicit
-    /// selection, or the invoking attempt's frozen effective configuration.
-    pub model: SessionModelConfig,
+    /// The frozen child model **authority**: the completely resolved
+    /// invocation (provider binding, protocol, context window, output
+    /// budget, reasoning profile, effective request parameters, effective
+    /// capabilities, compat) of the definition's explicit selection, or of
+    /// the invoking attempt's frozen effective configuration.
+    ///
+    /// A resolved invocation crosses the boundary, never a desired
+    /// `SessionModelConfig` plus a catalog path: the child materializes this
+    /// decision physically and never reopens `models.jsonc` as semantic
+    /// authority, so a catalog edit between parent freeze and child
+    /// composition cannot change what the child runs.
+    pub model: FrozenModelSpec,
     /// The frozen capability identities, in canonical order.
     pub tools: Vec<ResolvedSubagentTool>,
-    /// The frozen Skill catalog metadata the child may see. Bodies and
-    /// supporting resources are **not** included: progressive disclosure is
-    /// preserved and the child loads them through ordinary Skill semantics.
-    pub skills: Vec<SkillCatalogEntry>,
+    /// The frozen Skill authorizations: exact version identity plus the
+    /// model-visible catalog metadata. Bodies and supporting resources are
+    /// **not** included: progressive disclosure is preserved and the child
+    /// loads them through ordinary Skill semantics.
+    pub skills: Vec<ResolvedSubagentSkill>,
     /// The frozen project instruction chain, in deterministic order.
     pub project_instructions: Vec<ProjectContextFile>,
 }
@@ -371,58 +434,107 @@ impl SubagentResolver {
     ) -> Result<(), (SubagentName, SubagentResolutionError)> {
         for definition in catalog.definitions() {
             let named = |error: SubagentResolutionError| (definition.name().clone(), error);
-            match resolve_tools(definition, available_tools, availability) {
-                Ok(_) | Err(SubagentResolutionError::SourceUnavailable { .. }) => {}
-                Err(error) => return Err(named(error)),
-            }
+            validate_selectors_for_admission(definition, available_tools, availability)
+                .map_err(named)?;
             resolve_skills(definition, skills).map_err(named)?;
             if let Some(model) = definition.model() {
-                models
-                    .resolve(&SessionModelConfig::of(model.clone()).selection())
-                    .map_err(|error| {
+                // Admission validates through the same freeze path an
+                // invocation takes, so a definition can never be admitted
+                // that resolution would later refuse.
+                FrozenModelSpec::freeze(models, &SessionModelConfig::of(model.clone())).map_err(
+                    |error| {
                         named(SubagentResolutionError::UnknownModel {
                             model: model.to_string(),
                             detail: error.to_string(),
                         })
-                    })?;
+                    },
+                )?;
             }
         }
         Ok(())
     }
 }
 
-/// Resolves every typed selector through the one capability-selection core.
+/// The one per-selector capability-selection core.
+///
+/// Both callers below go through exactly this function, so there is a single
+/// source-qualified matching rule and a single place where the two typed
+/// outcomes — *the source is unavailable* and *the selection is invalid* —
+/// are distinguished.
+fn resolve_selector(
+    selector: &SubagentToolSelector,
+    available: &AvailableToolCatalog,
+    availability: &CapabilityAvailability,
+) -> Result<ResolvedSubagentTool, SubagentResolutionError> {
+    // Source availability is consulted first and only for origins that
+    // *have* an optional source. An unavailable source is a runtime health
+    // fact about this generation, not a statement that the selection is
+    // wrong, so it is reported as its own typed outcome.
+    if let Some(source) = optional_source(selector)
+        && let Some(CapabilitySourceState::Unavailable { reason }) = availability.get(&source)
+    {
+        return Err(SubagentResolutionError::SourceUnavailable {
+            selector: selector.canonical(),
+            source: source.to_string(),
+            reason: reason.clone(),
+        });
+    }
+    let definition = available
+        .tools()
+        .iter()
+        .map(|tool| &tool.definition)
+        .find(|candidate| matches_selector(candidate, selector))
+        .ok_or_else(|| SubagentResolutionError::UnknownCapability {
+            selector: selector.canonical(),
+        })?;
+    Ok(freeze_tool(selector, definition))
+}
+
+/// **Invocation-time** resolution: fail fast on the first selector that
+/// cannot be satisfied, for any reason. A child must never start weaker
+/// than the definition it was authorized with.
 fn resolve_tools(
     definition: &SubagentDefinition,
     available: &AvailableToolCatalog,
     availability: &CapabilityAvailability,
 ) -> Result<Vec<ResolvedSubagentTool>, SubagentResolutionError> {
-    let mut resolved = Vec::with_capacity(definition.tools().len());
+    definition
+        .tools()
+        .iter()
+        .map(|selector| resolve_selector(selector, available, availability))
+        .collect()
+}
+
+/// **Admission-time** validation: inspect *every* selector of a definition
+/// and reject the candidate generation for any static invalidity, wherever
+/// it appears in canonical order.
+///
+/// The two failure classes are deliberately not symmetric:
+///
+/// ```text
+/// source authority absent  -> tolerate THAT selector, keep validating
+///                             (the runtime stays healthy; only an
+///                              invocation needing it fails)
+/// source authority present
+///   but selection unknown  -> reject the candidate generation
+/// ```
+///
+/// Tolerating an unavailable source must therefore never *stop* validation:
+/// an offline MCP server listed before a misspelled Python or Builtin
+/// selector would otherwise smuggle a statically invalid definition into a
+/// published generation.
+fn validate_selectors_for_admission(
+    definition: &SubagentDefinition,
+    available: &AvailableToolCatalog,
+    availability: &CapabilityAvailability,
+) -> Result<(), SubagentResolutionError> {
     for selector in definition.tools() {
-        // Source availability is consulted first and only for origins that
-        // *have* an optional source. An unavailable source is a runtime
-        // health fact about this generation, not a statement that the
-        // selection is wrong, so it is reported as its own typed outcome.
-        if let Some(source) = optional_source(selector)
-            && let Some(CapabilitySourceState::Unavailable { reason }) = availability.get(&source)
-        {
-            return Err(SubagentResolutionError::SourceUnavailable {
-                selector: selector.canonical(),
-                source: source.to_string(),
-                reason: reason.clone(),
-            });
+        match resolve_selector(selector, available, availability) {
+            Ok(_) | Err(SubagentResolutionError::SourceUnavailable { .. }) => {}
+            Err(error) => return Err(error),
         }
-        let definition = available
-            .tools()
-            .iter()
-            .map(|tool| &tool.definition)
-            .find(|candidate| matches_selector(candidate, selector))
-            .ok_or_else(|| SubagentResolutionError::UnknownCapability {
-                selector: selector.canonical(),
-            })?;
-        resolved.push(freeze_tool(selector, definition));
     }
-    Ok(resolved)
+    Ok(())
 }
 
 /// The optional capability source one selector depends on, when its origin
@@ -490,63 +602,85 @@ fn freeze_tool(
 
 /// Applies the exact Skill allowlist over the generation's admitted Skills.
 ///
-/// Only catalog **metadata** is frozen: rustX progressive disclosure is
-/// preserved, so a selected Skill's `SKILL.md` body and supporting resources
-/// are still loaded through ordinary Skill semantics rather than preloaded
-/// into the child's system prompt.
+/// Two things are frozen per selected Skill, and only two:
+///
+/// - the immutable `SkillId` + `SkillVersionId` binding of the exact package
+///   this generation admitted, which is the identity a later physical
+///   materialization must realize;
+/// - the model-visible catalog **metadata** of that package.
+///
+/// A `SKILL.md` body and its supporting resources are deliberately absent:
+/// rustX progressive disclosure is preserved, so a selected Skill's content
+/// is still loaded through ordinary Skill semantics rather than preloaded
+/// into the child's system prompt. A Skill the generation hides from model
+/// invocation fails closed rather than being silently omitted.
 fn resolve_skills(
     definition: &SubagentDefinition,
     skills: &SkillSnapshot,
-) -> Result<Vec<SkillCatalogEntry>, SubagentResolutionError> {
+) -> Result<Vec<ResolvedSubagentSkill>, SubagentResolutionError> {
     let mut resolved = Vec::with_capacity(definition.skills().len());
     for selected in definition.skills() {
-        match skills
+        let Some(package) = skills
+            .packages()
+            .iter()
+            .find(|package| package.name() == selected)
+        else {
+            return Err(SubagentResolutionError::UnknownSkill {
+                skill: selected.clone(),
+            });
+        };
+        // Model visibility is a package-level fact of the generation, so it
+        // is read from the package rather than inferred from the metadata
+        // set the generation happened to render.
+        let Some(catalog_entry) = skills
             .catalog_entries()
             .iter()
             .find(|entry| entry.name == *selected)
-        {
-            Some(entry) => resolved.push(entry.clone()),
-            None if skills
-                .packages()
-                .iter()
-                .any(|package| package.name() == selected) =>
-            {
-                return Err(SubagentResolutionError::SkillNotModelVisible {
-                    skill: selected.clone(),
-                });
-            }
-            None => {
-                return Err(SubagentResolutionError::UnknownSkill {
-                    skill: selected.clone(),
-                });
-            }
-        }
+        else {
+            return Err(SubagentResolutionError::SkillNotModelVisible {
+                skill: selected.clone(),
+            });
+        };
+        resolved.push(ResolvedSubagentSkill {
+            binding: SkillBinding {
+                skill_id: package.id().clone(),
+                version_id: package.version_id().clone(),
+            },
+            catalog_entry: catalog_entry.clone(),
+        });
     }
     Ok(resolved)
 }
 
-/// Freezes the child's model configuration.
+/// Freezes the child's model **authority**.
 ///
 /// An explicit selection resolves through the admitted model authority and
 /// fails closed. No explicit selection inherits the invoking attempt's own
 /// frozen effective configuration — never live mutable session state and
 /// never a composition-time capture.
+///
+/// Either way the result is a completely resolved invocation, not a desired
+/// configuration: the parent decides the provider binding, protocol, context
+/// window, output budget, reasoning-profile semantics, effective request
+/// parameters, effective capabilities, and compat metadata exactly once,
+/// here, against the registry the invoking attempt was admitted with. The
+/// child can then have no opinion about a `models.jsonc` that changed in the
+/// meantime, because it never consults one.
 fn resolve_model(
     definition: &SubagentDefinition,
     attempt_model: &SessionModelConfig,
     models: &ModelBindingRegistry,
-) -> Result<SessionModelConfig, SubagentResolutionError> {
-    let Some(model) = definition.model() else {
-        return Ok(attempt_model.clone());
+) -> Result<FrozenModelSpec, SubagentResolutionError> {
+    let configured = match definition.model() {
+        None => attempt_model.clone(),
+        Some(model) => SessionModelConfig::of(model.clone()),
     };
-    let config = SessionModelConfig::of(model.clone());
-    models
-        .resolve(&config.selection())
-        .map_err(|error| SubagentResolutionError::UnknownModel {
-            model: model.to_string(),
+    FrozenModelSpec::freeze(models, &configured).map_err(|error| {
+        SubagentResolutionError::UnknownModel {
+            model: configured.model.to_string(),
             detail: error.to_string(),
-        })?;
-    Ok(config)
+        }
+    })
 }
 
 /// Composes the child's frozen project instruction chain.
@@ -596,6 +730,7 @@ pub(crate) fn render_agent_routing(catalog: &SubagentCatalog) -> String {
 mod tests {
     use super::{
         ResolvedSubagentTool, SubagentResolutionError, render_agent_routing, resolve_tools,
+        validate_selectors_for_admission,
     };
     use crate::capabilities::{
         AvailableToolCatalog, CapabilityAvailability, CapabilitySourceId, CapabilitySourceState,
@@ -836,5 +971,82 @@ mod tests {
             render_agent_routing(&SubagentCatalog::empty()),
             "This runtime admits no named subagent; the call always fails."
         );
+    }
+
+    /// Admission and invocation are asymmetric on purpose, and the
+    /// asymmetry must not degrade into "stop at the first unavailable
+    /// source".
+    ///
+    /// The definition below lists an offline MCP selector first in canonical
+    /// order followed by a statically invalid Python one. A validator that
+    /// treated the unavailable source as sufficient would never reach the
+    /// invalid selector and would admit the definition.
+    #[test]
+    fn admission_validates_every_selector_past_an_unavailable_source() {
+        let mut availability = ready();
+        availability.insert(
+            CapabilitySourceId::Mcp(McpServerId::new("github")),
+            CapabilitySourceState::Unavailable {
+                reason: "the server did not start".to_owned(),
+            },
+        );
+        let definition = definition(vec![
+            SubagentToolSelector::Mcp {
+                server_id: McpServerId::new("github"),
+                name: "get_issue".to_owned(),
+            },
+            SubagentToolSelector::Python {
+                name: "not_a_python_tool".to_owned(),
+            },
+        ]);
+        assert_eq!(
+            definition.tools().first(),
+            Some(&SubagentToolSelector::Mcp {
+                server_id: McpServerId::new("github"),
+                name: "get_issue".to_owned(),
+            }),
+            "the unavailable selector really is inspected first"
+        );
+
+        // Invocation stays fail-fast: the first unsatisfiable selector wins.
+        assert!(matches!(
+            resolve_tools(&definition, &available(), &availability),
+            Err(SubagentResolutionError::SourceUnavailable { .. })
+        ));
+
+        // Admission keeps going and rejects the static invalidity.
+        assert!(matches!(
+            validate_selectors_for_admission(&definition, &available(), &availability),
+            Err(SubagentResolutionError::UnknownCapability { selector })
+                if selector == "python:not_a_python_tool"
+        ));
+    }
+
+    /// A definition whose *only* unsatisfiable selector is an unavailable
+    /// optional source stays admissible: the runtime is healthy and only an
+    /// invocation of that agent fails.
+    #[test]
+    fn an_unavailable_source_alone_never_rejects_admission() {
+        let mut availability = ready();
+        availability.insert(
+            CapabilitySourceId::Mcp(McpServerId::new("github")),
+            CapabilitySourceState::Unavailable {
+                reason: "the server did not start".to_owned(),
+            },
+        );
+        let definition = definition(vec![
+            SubagentToolSelector::Builtin {
+                name: "read".to_owned(),
+            },
+            SubagentToolSelector::Mcp {
+                server_id: McpServerId::new("github"),
+                name: "get_issue".to_owned(),
+            },
+        ]);
+        assert!(validate_selectors_for_admission(&definition, &available(), &availability).is_ok());
+        assert!(matches!(
+            resolve_tools(&definition, &available(), &availability),
+            Err(SubagentResolutionError::SourceUnavailable { .. })
+        ));
     }
 }
