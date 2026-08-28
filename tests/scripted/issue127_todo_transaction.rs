@@ -98,6 +98,8 @@ fn context_runtime(model: &Arc<support::fake::FakeModel>) -> rustx::context::Con
         Arc::new(rustx::context::DefaultTokenEstimator),
         rustx::context::AgentStatusEngine::default(),
         &support::attempt_model(model.clone(), "todo-transaction-model"),
+        rustx::model::ModelTimeoutPolicy::default(),
+        crate::scripted_suites::support::default_monotonic_clock(),
     )
     .expect("context runtime")
 }
@@ -114,6 +116,7 @@ async fn run(
         request(&model, fixture.runtime.conversation_id()),
         lease,
         &cancellation,
+        crate::scripted_suites::support::default_execution_policy(),
         context_runtime(&model),
         &fixture.runtime,
         rustx::agent::AttemptLifecycle::inert(),

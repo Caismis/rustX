@@ -14,12 +14,37 @@
 
 #![allow(dead_code)] // every helper is used only by some suites
 
+use std::sync::{Arc, OnceLock};
+
 pub(crate) mod context;
 pub(crate) mod fake;
 pub(crate) mod model;
 pub(crate) mod runtime_client_conformance;
 pub(crate) mod runtime_client_fixture;
 pub(crate) mod todo;
+
+/// The isolated system-clock authority used by direct in-crate construction
+/// fixtures that do not need a manually advanced deadline. Production code
+/// never reaches this helper: composed runtime execution receives its clock
+/// from `ConversationRuntime`.
+pub(crate) fn default_monotonic_clock() -> Arc<dyn rustx::runtime::MonotonicClock> {
+    static CLOCK: OnceLock<Arc<dyn rustx::runtime::MonotonicClock>> = OnceLock::new();
+    Arc::clone(CLOCK.get_or_init(|| {
+        Arc::new(rustx::runtime::SystemMonotonicClock::new())
+            as Arc<dyn rustx::runtime::MonotonicClock>
+    }))
+}
+
+/// The explicit default execution authority for direct in-crate execution
+/// fixtures. The policy and clock are passed separately to context and Agent
+/// Loop construction from this same helper, so a fixture cannot accidentally
+/// create two elapsed-time authorities.
+pub(crate) fn default_execution_policy() -> crate::agent::execution::AgentExecutionRuntimePolicy {
+    crate::agent::execution::AgentExecutionRuntimePolicy {
+        model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
+        monotonic_clock: default_monotonic_clock(),
+    }
+}
 
 /// The immutable attempt model snapshot of a loop suite.
 ///

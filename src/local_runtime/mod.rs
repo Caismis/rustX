@@ -35,7 +35,7 @@ pub use composition::{
 };
 pub use config::{
     CURRENT_RUNTIME_SCHEMA_VERSION, CurrentRuntimeConfig, CurrentRuntimeConfigError,
-    McpServerDocument, McpTransportType,
+    McpServerDocument, McpTransportType, ModelTimeoutPolicyDocument,
 };
 pub use serve::{ProcessOutcome, run_process, serve};
 pub use session::{

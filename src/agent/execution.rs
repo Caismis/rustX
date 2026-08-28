@@ -68,7 +68,10 @@
 //! Cancellation is a generic Agent Loop invariant for every execution:
 //! observable cancellation is checked before every model turn begins.
 
+use std::sync::Arc;
+
 use futures_util::StreamExt;
+use futures_util::future::{BoxFuture, pending};
 
 use crate::capabilities::AttemptCapabilityLease;
 use crate::context::compaction::{
@@ -96,6 +99,7 @@ use crate::message::types::{
     AgentStatusEmission, AgentStatusModuleId, AssistantMessageBlock, MessageBlock, ToolMessageBlock,
 };
 use crate::model::adapter::ModelEventStream;
+use crate::model::deadline::{ModelDeadlinePhase, ModelRequestDeadline, ModelTimeoutPolicy};
 use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
@@ -106,6 +110,7 @@ use crate::publication::{
     CoalescePolicy, PublicationCoalescer, PublicationFrame, PublicationPayload,
     PublicationStreamStart,
 };
+use crate::runtime::MonotonicClock;
 use crate::runtime::continuation::ProviderContinuationState;
 use crate::runtime::identity::{
     AgentId, AttemptId, ConversationId, EventId, MessageId, PublicationStreamId, RequestId,
@@ -114,7 +119,6 @@ use crate::runtime::identity::{
 use crate::runtime::inbound::{FreshInboundTurn, InitialTurnTrigger, MailboxError};
 use crate::runtime::interaction::{ApprovalDecision, InteractionOutcome, InteractionResponse};
 use crate::runtime::types::{CancellationReason, RuntimeError};
-use crate::runtime::{MonotonicClock, SystemMonotonicClock};
 use crate::tools::background::BackgroundDispatchOutcome;
 use crate::tools::executor::{
     PreflightOutcome, PreparedInvocation, ProgressReporter, ToolExecutionContext, ToolRegistry,
@@ -165,6 +169,26 @@ fn transient_retry_delay_ms(retry_count: u32, retry_after_ms: Option<u64>) -> u6
         },
         |hint| hint.min(MAX_MODEL_RETRY_DELAY_MS),
     )
+}
+
+/// Builds the runtime-owned failure for a deadline that won the request
+/// arbitration. Runtime timeouts are transient model failures, so the
+/// existing Agent-Loop retry budget remains the only retry policy.
+#[must_use]
+fn model_timeout_error(phase: ModelDeadlinePhase) -> ModelError {
+    let phase_name = match phase {
+        ModelDeadlinePhase::AwaitingGeneration => "response-start",
+        ModelDeadlinePhase::Streaming => "stream-idle",
+        ModelDeadlinePhase::Terminal => "terminal",
+    };
+    ModelError {
+        kind: ModelErrorKind::Timeout,
+        message: format!("model request exceeded its {phase_name} deadline"),
+        retry_disposition: crate::model::error::ModelRetryDisposition::Transient,
+        retry_after_ms: None,
+        provider_code: None,
+        context_overflow: None,
+    }
 }
 
 /// Everything the loop needs to know about one attempt.
@@ -297,6 +321,20 @@ impl AgentExecutionResult {
     }
 }
 
+/// Runtime-owned generic execution inputs frozen for one admitted operation.
+///
+/// The runtime supplies the generic execution policy and synchronization
+/// authority explicitly at this boundary; the context plane is not queried
+/// for either value. This is a narrow admission handoff, not a second owner
+/// of runtime execution policy.
+#[derive(Clone)]
+pub(crate) struct AgentExecutionRuntimePolicy {
+    /// The timeout policy frozen for this admitted attempt or operation.
+    pub(crate) model_timeout_policy: ModelTimeoutPolicy,
+    /// The shared runtime monotonic clock.
+    pub(crate) monotonic_clock: Arc<dyn MonotonicClock>,
+}
+
 /// One agent attempt execution.
 ///
 /// The loop borrows the model adapter, the immutable tool registry, the
@@ -399,6 +437,9 @@ pub struct AgentExecution<'a> {
     publication_policy: CoalescePolicy,
     /// The monotonic clock the publication latency policy reads.
     monotonic_clock: std::sync::Arc<dyn MonotonicClock>,
+    /// The frozen runtime execution policy copied into every actual request
+    /// admitted by this attempt.
+    model_timeout_policy: ModelTimeoutPolicy,
     /// The open, not-yet-settled publication stream of the in-flight model
     /// request. Exactly one stream is open at a time: a stream settles — as
     /// canonical, unaccepted, or incomplete — before the next one opens.
@@ -438,6 +479,16 @@ pub struct AgentExecution<'a> {
     /// sleeping.
     #[cfg(test)]
     retry_backoff_pause: std::sync::Mutex<Option<test_sync::RetryBackoffPause>>,
+    /// Test-only control point after one provider event has been classified,
+    /// assembled, and published. It makes exact provider/deadline and
+    /// publication/deadline cuts observable without scheduler timing.
+    #[cfg(test)]
+    model_event_pause: std::sync::Mutex<Option<test_sync::ModelEventPause>>,
+    /// Test-only control point immediately before one provider arbitration.
+    /// The controller can make multiple branches ready while the execution is
+    /// parked, then release it to prove the explicit biased precedence.
+    #[cfg(test)]
+    model_arbitration_pause: std::sync::Mutex<Option<test_sync::ModelArbitrationPause>>,
     /// Test-only control point after a foreground tool-start fact and before
     /// the next sibling's start frontier advances. This makes cancellation
     /// during a parallel batch deterministic without changing production
@@ -676,7 +727,8 @@ impl From<ConversationError> for CanonicalCommitError {
 impl<'a> AgentExecution<'a> {
     /// Creates an attempt execution over the given adapter, the owned attempt
     /// capability lease, the cancellation signal, the mandatory M4 context
-    /// runtime, and the conversation tool runtime.
+    /// runtime, the explicitly admitted runtime execution policy, and the
+    /// conversation tool runtime.
     ///
     /// The attempt capability lease is moved into the execution and pins the
     /// immutable capability snapshot (revision, `ToolRegistry` handle, Skill
@@ -696,6 +748,11 @@ impl<'a> AgentExecution<'a> {
     /// terminal notifications always enter the mailbox the Agent Loop
     /// drains.
     ///
+    /// The runtime policy is required: the composition owner must supply the
+    /// same admitted [`AgentExecutionRuntimePolicy`] to the primary execution
+    /// boundary that it supplied to the provider-backed summarizer. This
+    /// constructor never creates a policy or monotonic clock of its own.
+    ///
     /// The context runtime is required: there is exactly one normal
     /// execution model — canonical history is always projected through the
     /// context engine. A pending `FreshInbound` turn offers the optional
@@ -713,10 +770,11 @@ impl<'a> AgentExecution<'a> {
     /// Returns [`MailboxError::ConversationMismatch`] when the request's
     /// conversation differs from the conversation tool runtime's
     /// conversation (and therefore its canonical mailbox).
-    pub fn new(
+    pub(crate) fn new(
         request: AgentExecutionRequest,
         capability: AttemptCapabilityLease,
         cancellation: &'a AgentCancellation,
+        runtime_policy: AgentExecutionRuntimePolicy,
         context_runtime: ContextRuntime,
         tool_runtime: &'a ConversationToolRuntime,
         lifecycle: AttemptLifecycle,
@@ -733,6 +791,7 @@ impl<'a> AgentExecution<'a> {
             capability,
             cancellation,
             context_runtime,
+            runtime_policy,
             tool_runtime,
             store,
             lifecycle,
@@ -750,11 +809,13 @@ impl<'a> AgentExecution<'a> {
     /// [`MailboxError::Durable`] when the supplied authority belongs to a
     /// different conversation, cannot load its current head, or cannot
     /// initialize the standalone fixture history.
+    #[allow(clippy::too_many_arguments)] // one explicit authority-binding boundary
     fn new_bound(
         request: AgentExecutionRequest,
         capability: AttemptCapabilityLease,
         cancellation: &'a AgentCancellation,
         context_runtime: ContextRuntime,
+        runtime_policy: AgentExecutionRuntimePolicy,
         tool_runtime: &'a ConversationToolRuntime,
         store: std::sync::Arc<dyn ConversationStore>,
         lifecycle: AttemptLifecycle,
@@ -828,7 +889,8 @@ impl<'a> AgentExecution<'a> {
             last_request_estimated_input: None,
             last_request_id: None,
             publication_policy: CoalescePolicy::default(),
-            monotonic_clock: std::sync::Arc::new(SystemMonotonicClock::new()),
+            monotonic_clock: runtime_policy.monotonic_clock,
+            model_timeout_policy: runtime_policy.model_timeout_policy,
             publication: None,
             publication_settlement_failed: false,
             observer: None,
@@ -838,6 +900,10 @@ impl<'a> AgentExecution<'a> {
             start_boundary_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
             retry_backoff_pause: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            model_event_pause: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            model_arbitration_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
             tool_start_pause: std::sync::Mutex::new(None),
             turn: 0,
@@ -874,6 +940,13 @@ impl<'a> AgentExecution<'a> {
         self.monotonic_clock = clock;
     }
 
+    /// Installs the deterministic request deadline policy used by this
+    /// execution's actual primary requests.
+    #[cfg(test)]
+    pub(crate) fn install_model_timeout_policy(&mut self, policy: ModelTimeoutPolicy) {
+        self.model_timeout_policy = policy;
+    }
+
     /// Installs the test-only start-boundary pause (Issue #12, M9b
     /// deterministic race tests).
     #[cfg(test)]
@@ -891,6 +964,27 @@ impl<'a> AgentExecution<'a> {
             .retry_backoff_pause
             .lock()
             .expect("retry backoff pause lock") = Some(pause);
+    }
+
+    /// Installs the deterministic post-provider-event synchronization hook.
+    #[cfg(test)]
+    pub(crate) fn install_model_event_pause(&mut self, pause: test_sync::ModelEventPause) {
+        *self
+            .model_event_pause
+            .lock()
+            .expect("model event pause lock") = Some(pause);
+    }
+
+    /// Installs the deterministic pre-arbitration synchronization hook.
+    #[cfg(test)]
+    pub(crate) fn install_model_arbitration_pause(
+        &mut self,
+        pause: test_sync::ModelArbitrationPause,
+    ) {
+        *self
+            .model_arbitration_pause
+            .lock()
+            .expect("model arbitration pause lock") = Some(pause);
     }
 
     /// Installs the test-only foreground tool-start pause for one attempt.
@@ -2613,7 +2707,12 @@ impl<'a> AgentExecution<'a> {
         // The provider binding comes from the attempt's frozen snapshot: the
         // loop never resolves an adapter and never observes a later session
         // model change.
-        let mut stream = self
+        // Start the response-start clock at the dispatch frontier, immediately
+        // after durable reconstruction verification and before entering the
+        // adapter's synchronous dispatch method.
+        let deadline =
+            ModelRequestDeadline::new(self.model_timeout_policy, self.monotonic_clock.now_millis());
+        let stream = self
             .request
             .model
             .primary()
@@ -2621,7 +2720,7 @@ impl<'a> AgentExecution<'a> {
             .stream(request, self.cancellation.model_cancellation());
         let mut assembler = ModelEventAssembler::new();
         let terminal = match self
-            .consume_model_stream(&mut assembler, &message_id, &mut stream)
+            .consume_model_stream(&mut assembler, &message_id, stream, deadline)
             .await
         {
             Ok(stream_terminal) => stream_terminal,
@@ -2823,48 +2922,96 @@ impl<'a> AgentExecution<'a> {
     /// model facts, feeds the assembler, and validates the canonical stream
     /// contract. Returns the stream terminal, or the attempt terminal when
     /// the attempt must settle before the stream finished.
+    #[allow(clippy::too_many_lines)]
     async fn consume_model_stream(
         &mut self,
         assembler: &mut ModelEventAssembler,
         assistant_message_id: &MessageId,
-        stream: &mut ModelEventStream,
+        mut stream: ModelEventStream,
+        mut deadline: ModelRequestDeadline,
     ) -> Result<StreamTerminal, Terminal> {
+        // The response-start deadline was created at the dispatch frontier,
+        // after the durable RequestSnapshot + ModelRequestStarted commit and
+        // reconstruction verification. A fresh deadline state belongs to this
+        // exact actual request; retries create another one at their own
+        // frontier.
         let mut stream_terminal = None;
+        #[cfg(test)]
+        let mut model_event_count = 0_u32;
         loop {
-            // A quiet provider must not hold committed-for-release payload
-            // hostage: while payload is buffered, the coalescer-owned
-            // absolute deadline competes with the next provider chunk. With
-            // an empty buffer there is nothing to flush and the loop simply
-            // awaits the provider. Later chunks cannot restart that deadline.
-            let next = if self.has_buffered_publication() {
-                let latency_wait = self
-                    .publication
-                    .as_ref()
-                    .and_then(|publication| publication.coalescer.latency_wait())
-                    .expect("a buffered publication has an owned latency deadline");
-                tokio::select! {
-                    biased;
-                    event = stream.next() => event,
-                    () = self.cancellation.cancelled() => {
-                        return Err(self.cancelled_terminal());
-                    }
-                    () = latency_wait => {
-                        self.flush_publication();
-                        if let Some(terminal) = self.durable_failure_terminal_from_state() {
-                            return Err(terminal);
-                        }
-                        continue;
-                    }
-                }
-            } else {
-                stream.next().await
+            // Every provider wait has the same four-way arbitration. An
+            // empty publication buffer contributes a permanently pending
+            // branch rather than changing the provider/timeout semantics.
+            let publication_wait: BoxFuture<'static, ()> = self
+                .publication
+                .as_ref()
+                .and_then(|publication| publication.coalescer.latency_wait())
+                .unwrap_or_else(|| Box::pin(pending::<()>()));
+            let timeout_wait: BoxFuture<'static, ()> = match deadline.deadline_millis() {
+                Some(deadline_millis) => self.monotonic_clock.wait_until_millis(deadline_millis),
+                None => Box::pin(pending::<()>()),
             };
-            let Some(event) = next else { break };
-            if stream_terminal.is_none() && self.cancellation.is_cancelled() {
-                return Err(Terminal::Cancelled {
-                    reason: self.cancellation.reason(),
-                });
+            let next = tokio::select! {
+                biased;
+                // This order is contractual: provider event > attempt
+                // cancellation > publication flush > request timeout.
+                event = stream.next() => event,
+                () = self.cancellation.cancelled() => {
+                    if let Some(terminal) = stream_terminal.take() {
+                        return Ok(terminal);
+                    }
+                    // Timeout never uses or mutates AgentCancellation. If
+                    // cancellation wins this cut, retain its provenance.
+                    return Err(self.cancelled_terminal());
+                }
+                () = publication_wait => {
+                    self.flush_publication();
+                    if let Some(terminal) = self.durable_failure_terminal_from_state() {
+                        return Err(terminal);
+                    }
+                    // Publication activity is not provider progress and does
+                    // not reset the request-local stream-idle deadline.
+                    continue;
+                }
+                () = timeout_wait => {
+                    // The pull-based adapter stream is the request-local
+                    // authority. Dropping it terminates adapter work without
+                    // touching the attempt cancellation authority.
+                    drop(stream);
+                    let error = model_timeout_error(deadline.phase());
+                    self.settle_model_request_failure(assembler, &error)?;
+                    return Ok(StreamTerminal::Failed { error });
+                }
+            };
+            let Some(event) = next else {
+                if let Some(terminal) = stream_terminal.take() {
+                    return Ok(terminal);
+                }
+                break;
+            };
+            #[cfg(test)]
+            {
+                model_event_count = model_event_count.saturating_add(1);
             }
+            // The provider branch is intentionally ahead of cancellation in
+            // the biased select. Do not perform a second cancellation check
+            // here: doing so would make an event ready at the same cut lose
+            // to cancellation after the arbitration already chose it.
+            // The one exception is the adapter's normalized cancellation
+            // terminal: it is evidence that the attempt cancellation caused
+            // this event, so preserve the attempt-level provenance without
+            // recording a model failure.
+            if stream_terminal.is_none()
+                && matches!(
+                    &event,
+                    ModelEvent::Failed { error }
+                        if error.kind == ModelErrorKind::Cancelled
+                            && self.cancellation.is_cancelled()
+                )
+            {
+                return Err(self.cancelled_terminal());
+            }
+            deadline.observe(&event, self.monotonic_clock.now_millis());
             if let Err(error) = assembler.push(&event) {
                 return Err(Terminal::Failed {
                     failure: AttemptFailure::Runtime { error },
@@ -2881,25 +3028,7 @@ impl<'a> AgentExecution<'a> {
                     });
                 }
                 ModelEvent::Failed { error } => {
-                    // A failed request may have emitted one or more
-                    // cumulative usage updates before the provider failure.
-                    // Retain that latest trustworthy snapshot both in the
-                    // request outcome and as compatible ProviderObservedInput
-                    // evidence; never synthesize usage from partial output.
-                    let usage = assembler.latest_usage();
-                    if let Some(usage) = usage.as_ref() {
-                        self.record_provider_observation(usage);
-                    }
-                    if let Some(request_id) = self.last_request_id.clone() {
-                        self.emit(RuntimeEvent::ModelRequestFailed {
-                            request_id,
-                            error: error.clone(),
-                            usage,
-                        });
-                    }
-                    if let Some(terminal) = self.durable_failure_terminal_from_state() {
-                        return Err(terminal);
-                    }
+                    self.settle_model_request_failure(assembler, error)?;
                     stream_terminal = Some(StreamTerminal::Failed {
                         error: error.clone(),
                     });
@@ -2915,28 +3044,91 @@ impl<'a> AgentExecution<'a> {
                     }
                 }
                 _ => {
-                    if stream_terminal.is_none() {
-                        self.publish_model_event(&event);
-                        if let Some(terminal) = self.durable_failure_terminal_from_state() {
-                            return Err(terminal);
-                        }
+                    self.publish_model_event(&event);
+                    if let Some(terminal) = self.durable_failure_terminal_from_state() {
+                        return Err(terminal);
+                    }
+                }
+            }
+            #[cfg(test)]
+            if let Some(pause) = self
+                .model_event_pause
+                .lock()
+                .expect("model event pause lock")
+                .as_ref()
+            {
+                pause.park();
+            }
+            #[cfg(test)]
+            {
+                let arbitration_pause = self
+                    .model_arbitration_pause
+                    .lock()
+                    .expect("model arbitration pause lock")
+                    .take();
+                if let Some(pause) = arbitration_pause {
+                    if pause.after_events() == model_event_count {
+                        // This one-shot hook is after event processing and
+                        // before the next provider wait. The controller can
+                        // make every competing readiness source observable
+                        // before this exact arbitration is polled.
+                        pause.wait().await;
+                    } else {
+                        *self
+                            .model_arbitration_pause
+                            .lock()
+                            .expect("model arbitration pause lock") = Some(pause);
                     }
                 }
             }
         }
-        let Some(stream_terminal) = stream_terminal else {
+        Err(Terminal::Failed {
+            failure: AttemptFailure::Runtime {
+                error: RuntimeError::ContractViolation {
+                    message: "model stream ended without a terminal event".to_owned(),
+                },
+            },
+        })
+    }
+
+    /// Settles the one durable provider failure for the current actual
+    /// request. Both adapter failures and runtime-owned timeouts use this
+    /// path, so usage retention and exactly-once `ModelRequestFailed`
+    /// emission cannot diverge between them.
+    fn settle_model_request_failure(
+        &mut self,
+        assembler: &ModelEventAssembler,
+        error: &ModelError,
+    ) -> Result<(), Terminal> {
+        // A failed request may have emitted one or more cumulative usage
+        // updates before the failure. Keep only the latest trustworthy
+        // snapshot from this exact request; never synthesize usage from
+        // partial output and never combine snapshots.
+        let usage = assembler.latest_usage();
+        if let Some(usage) = usage.as_ref() {
+            self.record_provider_observation(usage);
+        }
+        let Some(request_id) = self.last_request_id.clone() else {
             return Err(Terminal::Failed {
                 failure: AttemptFailure::Runtime {
                     error: RuntimeError::ContractViolation {
-                        message: "model stream ended without a terminal event".to_owned(),
+                        message: "a model failure has no started request".to_owned(),
                     },
                 },
             });
         };
+        // The stream is consumed or dropped by the caller before this path
+        // returns. No late adapter terminal can re-enter the loop and create
+        // a second outcome for this RequestId.
+        self.emit(RuntimeEvent::ModelRequestFailed {
+            request_id,
+            error: error.clone(),
+            usage,
+        });
         if let Some(terminal) = self.durable_failure_terminal_from_state() {
             return Err(terminal);
         }
-        Ok(stream_terminal)
+        Ok(())
     }
 
     /// Retains the latest trustworthy provider input measurement for the
@@ -4395,6 +4587,7 @@ impl ProgressReporter for ForegroundProgressBuffer {
 pub(crate) mod test_sync {
     use std::sync::mpsc;
 
+    use tokio::sync::oneshot;
     use tokio::sync::watch;
 
     /// A test-only control point at the turn-continuation boundary.
@@ -4472,6 +4665,82 @@ pub(crate) mod test_sync {
         pub(super) fn park(&self) {
             self.reached.send_modify(|count| *count += 1);
             let _ = self.release.recv();
+        }
+    }
+
+    /// A test-only control point after one provider event has completed all
+    /// Agent-Loop processing. It is used to synchronize exact readiness cuts
+    /// between provider events, publication flushes, and request deadlines.
+    #[derive(Debug)]
+    pub(crate) struct ModelEventPause {
+        reached: watch::Sender<u32>,
+        release: mpsc::Receiver<()>,
+    }
+
+    impl ModelEventPause {
+        /// Creates the pause and its observation/release handles.
+        #[must_use]
+        pub(crate) fn install() -> (Self, watch::Receiver<u32>, mpsc::Sender<()>) {
+            let (reached, reached_rx) = watch::channel(0);
+            let (release_tx, release_rx) = mpsc::channel();
+            (
+                Self {
+                    reached,
+                    release: release_rx,
+                },
+                reached_rx,
+                release_tx,
+            )
+        }
+
+        /// Announces that one event has been fully processed, then waits for
+        /// the test to release the next provider wait.
+        pub(super) fn park(&self) {
+            self.reached.send_modify(|count| *count += 1);
+            let _ = self.release.recv();
+        }
+    }
+
+    /// A one-shot test-only control point immediately before a provider wait.
+    /// It lets a controller make several branches ready before the execution
+    /// constructs and polls the biased arbitration, so simultaneous-ready
+    /// precedence tests do not depend on executor scheduling.
+    #[derive(Debug)]
+    pub(crate) struct ModelArbitrationPause {
+        after_events: u32,
+        reached: watch::Sender<bool>,
+        release: oneshot::Receiver<()>,
+    }
+
+    impl ModelArbitrationPause {
+        /// Creates the pause and its observation/release handles.
+        #[must_use]
+        pub(crate) fn install(
+            after_events: u32,
+        ) -> (Self, watch::Receiver<bool>, oneshot::Sender<()>) {
+            let (reached, reached_rx) = watch::channel(false);
+            let (release_tx, release_rx) = oneshot::channel();
+            (
+                Self {
+                    after_events,
+                    reached,
+                    release: release_rx,
+                },
+                reached_rx,
+                release_tx,
+            )
+        }
+
+        /// The provider-event count at which this pause is eligible.
+        pub(super) const fn after_events(&self) -> u32 {
+            self.after_events
+        }
+
+        /// Announces that the arbitration boundary was reached, then waits
+        /// until the controller has made the competing branches ready.
+        pub(super) async fn wait(self) {
+            self.reached.send_replace(true);
+            let _ = self.release.await;
         }
     }
 
@@ -5107,6 +5376,8 @@ mod tests {
             Arc::new(crate::context::DefaultTokenEstimator),
             crate::context::AgentStatusEngine::default(),
             &request(adapter).model,
+            crate::model::ModelTimeoutPolicy::default(),
+            crate::scripted_suites::support::default_monotonic_clock(),
         )
         .expect("valid context runtime")
     }
@@ -5332,6 +5603,7 @@ mod tests {
             request(&adapter),
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime(&adapter),
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -5385,6 +5657,7 @@ mod tests {
             request(&adapter),
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime(&adapter),
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -5421,6 +5694,7 @@ mod tests {
             request(&adapter),
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime(&adapter),
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -5476,6 +5750,7 @@ mod tests {
             request(&adapter),
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime(&adapter),
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -5565,6 +5840,7 @@ mod tests {
             request(&adapter),
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime(&adapter),
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -5706,6 +5982,7 @@ mod tests {
             request(&adapter),
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime(&adapter),
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -5797,6 +6074,7 @@ mod tests {
             other_request,
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime(&adapter),
             &other_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -5835,6 +6113,7 @@ mod tests {
             request(&adapter),
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime(&adapter),
             &other_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -5891,6 +6170,7 @@ mod tests {
             request,
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime,
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -5987,6 +6267,7 @@ mod tests {
             request,
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime,
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -6062,6 +6343,7 @@ mod tests {
             request_dyn(&adapter_dyn),
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime_dyn(&adapter_dyn),
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -6165,6 +6447,8 @@ mod tests {
             crate::context::AgentStatusEngine::default(),
             assembly,
             &request.model,
+            crate::model::ModelTimeoutPolicy::default(),
+            crate::scripted_suites::support::default_monotonic_clock(),
         )
         .expect("valid context runtime");
         let tool_runtime = tool_runtime_with_store("conv-1", Some(store.clone()));
@@ -6175,6 +6459,7 @@ mod tests {
             request,
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime,
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -6271,6 +6556,7 @@ mod tests {
             request(&adapter),
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime(&adapter),
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -6375,6 +6661,7 @@ mod tests {
                 request(&adapter),
                 lease,
                 &cancellation,
+                crate::scripted_suites::support::default_execution_policy(),
                 runtime(&adapter),
                 &tool_runtime,
                 lifecycle,
@@ -6462,6 +6749,8 @@ mod tests {
             crate::context::AgentStatusEngine::default(),
             assembly,
             &request.model,
+            crate::model::ModelTimeoutPolicy::default(),
+            crate::scripted_suites::support::default_monotonic_clock(),
         )
         .expect("valid context runtime");
         (request, runtime, invocation_count)
@@ -6571,6 +6860,8 @@ mod tests {
             Arc::new(crate::context::DefaultTokenEstimator),
             crate::context::AgentStatusEngine::default(),
             &request_dyn(adapter).model,
+            crate::model::ModelTimeoutPolicy::default(),
+            crate::scripted_suites::support::default_monotonic_clock(),
         )
         .expect("valid context runtime")
     }
@@ -6612,6 +6903,8 @@ mod tests {
             crate::context::AgentStatusEngine::default(),
             assembly,
             &request.model,
+            crate::model::ModelTimeoutPolicy::default(),
+            crate::scripted_suites::support::default_monotonic_clock(),
         )
         .expect("valid context runtime");
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
@@ -6631,6 +6924,7 @@ mod tests {
             request,
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime,
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -6691,6 +6985,7 @@ mod tests {
             request,
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime(&adapter),
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -6756,6 +7051,7 @@ mod tests {
             request(&adapter),
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime(&adapter),
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -6863,6 +7159,7 @@ mod tests {
             request(&adapter),
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime(&adapter),
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
@@ -7101,6 +7398,7 @@ mod tests {
             request(&adapter),
             lease,
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime(&adapter),
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),

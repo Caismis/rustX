@@ -50,8 +50,10 @@ bounded recovery requests, each with its own `RequestIdentity`, shared
 `RequestIdentity.retry_number`, `RequestId`, provisional Assistant
 `MessageId`, `RequestSnapshot`, `ModelRequestStarted` fact, publication stream,
 provider outcome, and publication settlement. The Agent Loop owns this state
-machine and its retry budgets; adapters only normalize provider evidence into
-`ModelRetryDisposition` and an optional `retry_after_ms`.
+machine and its retry budgets; provider adapters classify provider failures
+from their evidence, while a runtime owner may assign a disposition to a
+normalized runtime failure such as a request timeout. An optional
+`retry_after_ms` remains separate.
 
 Transient recovery replays the frozen state through the normal
 stage/finalize/cancellation-arbitration/durable-start/reconstruct/adapter
@@ -70,6 +72,15 @@ adapter-provided retry hint taking precedence and capped at 60 seconds. Both
 publication latency and retry deadlines use the runtime-owned monotonic clock;
 tests inject a manually advanced clock.
 
+The Conversation Runtime owns the current `ModelTimeoutPolicy` and the shared
+`MonotonicClock`. Attempt admission freezes the policy and passes the same
+clock authority to both sibling consumers. `AgentExecution` and the
+context-plane `ModelBackedSummarizer` are constructed from those explicit
+admitted values: `ContextRuntime` contains the summarizer it needs, but it is
+not the owner of generic Agent Loop execution policy or the shared clock. No
+production-capable `AgentExecution` or `ContextRuntime` constructor invents a
+second clock or a fallback timeout policy.
+
 Every failed request settles its publication stream before another request can
 start. Partial text, reasoning, refusal, usage, and proposed tool calls remain
 durable audit evidence, but are noncanonical and have no Tool Plane authority.
@@ -77,6 +88,59 @@ Only the successfully completed request can commit the canonical Assistant.
 `ModelRequestFailed.usage` retains the latest trustworthy cumulative usage
 snapshot observed before that exact request failed; absent evidence remains
 `None`.
+
+### Runtime-owned provider request deadlines (Issue #135)
+
+Every runtime-owned provider request has one finite, frozen
+`ModelTimeoutPolicy`. The policy is execution state, not model input: it is
+configured at the local/runtime composition boundary, copied when the actual
+request is admitted, and absent from `ModelRequest`, `RequestSnapshot`,
+canonical history, provider continuation state, and historical reconstruction.
+The same policy shape and event semantics serve the primary provider path and
+the provider-backed context summarizer.
+
+The shared request-local state machine in `src/model/deadline.rs` is:
+
+```text
+AwaitingGeneration --first generation-progress event--> Streaming
+AwaitingGeneration ------------------------------------> Timeout
+Streaming ---------no generation/liveness progress---> Timeout
+AwaitingGeneration or Streaming --Completed/Failed---> Terminal
+```
+
+`Started` is lifecycle-only and does not reset response-start. Generation
+progress is `TextDelta`, `ReasoningDelta`, `RefusalDelta`, `ToolCallStarted`,
+`ToolCallArgumentsDelta`, and `ToolCallCompleted`. `UsageUpdate` and
+`ContinuationState` are liveness progress: before generation they leave the
+response-start deadline unchanged; after generation they reset stream-idle.
+Terminal events transfer deadline ownership away. Publication flushes,
+durable frame commits, projection, status work, context work, and retry
+backoff are never provider progress.
+
+The primary loop uses one explicitly biased four-way wait for every provider
+pull, including an empty publication buffer:
+
+```text
+provider event > attempt cancellation > publication flush > request timeout
+```
+
+Thus a provider event wins a simultaneous cut, cancellation retains its
+`AgentCancellation` provenance and wins before timeout, and a committed-for-
+release publication frame flushes before a timeout at the same cut. A flush
+never resets stream-idle. When the timeout branch wins, the loop drops only
+the request-local adapter stream, normalizes `ModelErrorKind::Timeout`,
+settles exactly one `ModelRequestFailed` with the latest trustworthy usage,
+settles partial publication through the existing noncanonical path, and sends
+the error through the Issue #134 retry disposition/budget. It never signals or
+mutates `AgentCancellation`.
+
+The summarizer uses the same deadline state machine and runtime monotonic clock,
+but maps a timeout through its existing summary/context failure boundary and
+does not enter generic model retry. Both primary and summary deadlines use the
+runtime-owned shared `MonotonicClock`; `RuntimeClock` remains the wall-clock
+authority. A policy rejected at `ConversationRuntime::new` cannot reach
+attempt admission, and timeout policy is absent from all historical request
+reconstruction.
 
 Execution semantics are explicit: an `ExecutionStateMachine`
 (`Idle → RunningModel → WaitingForTool → RunningModel → Completed`, with

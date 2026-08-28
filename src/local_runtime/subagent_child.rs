@@ -498,6 +498,7 @@ mod tests {
                 agent_id: AgentId::new("agent-child"),
                 model: scripted_session_model(adapter),
                 approval_mode: crate::runtime::ApprovalMode::Policy,
+                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                 context: ConversationContextConfig {
                     policy: SessionContextPolicy {
                         reserve_tokens: 0,

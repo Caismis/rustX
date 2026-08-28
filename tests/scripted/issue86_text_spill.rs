@@ -333,6 +333,8 @@ async fn adopted_textual_terminal_inbound_reaches_the_provider_for_a_text_only_m
         Arc::new(rustx::context::DefaultTokenEstimator),
         rustx::context::AgentStatusEngine::default(),
         &model,
+        rustx::model::ModelTimeoutPolicy::default(),
+        support::default_monotonic_clock(),
     )
     .expect("context runtime");
     let result = AgentExecution::new(
@@ -357,6 +359,7 @@ async fn adopted_textual_terminal_inbound_reaches_the_provider_for_a_text_only_m
         },
         capability.into_lease(),
         &cancellation,
+        support::default_execution_policy(),
         context_runtime,
         &fixture.runtime,
         rustx::agent::AttemptLifecycle::inert(),
@@ -495,6 +498,8 @@ async fn the_background_live_output_path_reaches_the_provider_before_completion(
         Arc::new(rustx::context::DefaultTokenEstimator),
         rustx::context::AgentStatusEngine::default(),
         &model,
+        rustx::model::ModelTimeoutPolicy::default(),
+        support::default_monotonic_clock(),
     )
     .expect("context runtime");
     let result = AgentExecution::new(
@@ -519,6 +524,7 @@ async fn the_background_live_output_path_reaches_the_provider_before_completion(
         },
         capability.into_lease(),
         &cancellation,
+        support::default_execution_policy(),
         context_runtime,
         &fixture.runtime,
         rustx::agent::AttemptLifecycle::inert(),
@@ -669,6 +675,8 @@ async fn a_genuine_file_block_is_still_rejected_locally_for_a_text_only_model() 
         Arc::new(rustx::context::DefaultTokenEstimator),
         rustx::context::AgentStatusEngine::default(),
         &model,
+        rustx::model::ModelTimeoutPolicy::default(),
+        support::default_monotonic_clock(),
     )
     .expect("context runtime");
     let result = AgentExecution::new(
@@ -701,6 +709,7 @@ async fn a_genuine_file_block_is_still_rejected_locally_for_a_text_only_model() 
         },
         capability.into_lease(),
         &cancellation,
+        support::default_execution_policy(),
         context_runtime,
         &fixture.runtime,
         rustx::agent::AttemptLifecycle::inert(),

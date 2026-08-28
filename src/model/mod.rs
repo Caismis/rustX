@@ -10,6 +10,7 @@
 
 pub mod adapter;
 pub mod catalog;
+pub mod deadline;
 pub mod error;
 pub mod event;
 pub mod finish;
@@ -28,6 +29,10 @@ pub use catalog::{
     CredentialSourceView, Modality, ModelCapabilities, ModelCatalog, ModelCatalogError,
     ModelCatalogView, ModelCompat, ModelDefinition, ModelId, ModelRef, ProviderId,
     ReasoningProfile, ReasoningProfileId, ResolvedModelCatalog, ResponsesStorageMode,
+};
+pub use deadline::{
+    DEFAULT_RESPONSE_START_TIMEOUT, DEFAULT_STREAM_IDLE_TIMEOUT, ModelDeadlinePhase,
+    ModelEventProgress, ModelRequestDeadline, ModelTimeoutPolicy,
 };
 pub use error::{ContextOverflowReport, ModelError, ModelErrorKind, ModelRetryDisposition};
 pub use event::ModelEvent;

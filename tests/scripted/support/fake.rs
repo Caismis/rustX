@@ -74,6 +74,7 @@ pub struct FakeModel {
     requests: Arc<Mutex<Vec<ModelRequest>>>,
     emitted: watch::Sender<u64>,
     parked: watch::Sender<bool>,
+    streams_started: watch::Sender<u64>,
     /// The number of invocation streams whose owner has left: the stream ran
     /// to completion or the loop dropped it. Once this reaches the number of
     /// invocations, no stream owner exists that could still observe a stale
@@ -103,6 +104,7 @@ impl FakeModel {
             requests: Arc::new(Mutex::new(Vec::new())),
             emitted: watch::Sender::new(0),
             parked: watch::Sender::new(false),
+            streams_started: watch::Sender::new(0),
             streams_exited: watch::Sender::new(0),
         }
     }
@@ -141,6 +143,12 @@ impl FakeModel {
         self.parked.subscribe()
     }
 
+    /// A receiver observing how many invocation streams have opened.
+    #[must_use]
+    pub fn streams_started(&self) -> watch::Receiver<u64> {
+        self.streams_started.subscribe()
+    }
+
     /// The number of events yielded so far.
     #[must_use]
     pub fn emitted_count(&self) -> u64 {
@@ -177,6 +185,11 @@ impl ModelAdapter for FakeModel {
         request: ModelRequest,
         cancellation: CancellationSignal,
     ) -> rustx::model::ModelEventStream {
+        // The watch describes the current invocation. Reset it before the
+        // next stream so sequential tests can use the parked frontier for
+        // each request rather than inheriting a previous invocation's state.
+        self.parked.send_replace(false);
+        self.streams_started.send_modify(|count| *count += 1);
         self.requests
             .lock()
             .expect("fake model request lock")

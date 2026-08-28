@@ -630,6 +630,7 @@ async fn proactive_compaction_accounts_for_frozen_extension_system_sections() {
             ),
             capability.into_lease(),
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime,
             &tool_runtime,
             rustx::agent::AttemptLifecycle::inert(),
@@ -1921,6 +1922,7 @@ async fn summary_model_cannot_fit_leaves_execution_uncommitted() {
             request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
             capability.into_lease(),
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime,
             &tool_runtime,
             rustx::agent::AttemptLifecycle::inert(),
@@ -1998,6 +2000,7 @@ async fn a_rejected_summary_request_replans_against_a_smaller_budget() {
             request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
             capability.into_lease(),
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime,
             &tool_runtime,
             rustx::agent::AttemptLifecycle::inert(),
@@ -2877,6 +2880,7 @@ async fn proactive_compaction_before_the_next_turn() {
             request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
             capability.into_lease(),
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime,
             &tool_runtime,
             rustx::agent::AttemptLifecycle::inert(),
@@ -3063,6 +3067,7 @@ async fn below_threshold_runs_without_compaction() {
             request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
             capability.into_lease(),
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime,
             &tool_runtime,
             rustx::agent::AttemptLifecycle::inert(),
@@ -3124,6 +3129,7 @@ async fn overflow_compact_and_retry_succeeds() {
             request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
             capability.into_lease(),
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime,
             &tool_runtime,
             rustx::agent::AttemptLifecycle::inert(),
@@ -3270,6 +3276,7 @@ async fn cancellation_before_overflow_retry_start_stops_the_retry() {
         request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
         capability.into_lease(),
         &cancellation,
+        crate::scripted_suites::support::default_execution_policy(),
         runtime,
         &tool_runtime,
         rustx::agent::AttemptLifecycle::inert(),
@@ -3384,6 +3391,7 @@ async fn cancellation_after_preparation_compaction_keeps_it_and_discards_staged_
         request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
         capability.into_lease(),
         &cancellation,
+        crate::scripted_suites::support::default_execution_policy(),
         runtime,
         &tool_runtime,
         rustx::agent::AttemptLifecycle::inert(),
@@ -3517,6 +3525,7 @@ async fn overflow_retry_reuses_the_admitted_context_generation() {
         request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
         capability.into_lease(),
         &cancellation,
+        crate::scripted_suites::support::default_execution_policy(),
         runtime,
         &tool_runtime,
         rustx::agent::AttemptLifecycle::inert(),
@@ -3728,6 +3737,7 @@ async fn overflow_retry_preserves_pending_fresh_inbound_and_context_generation()
             ),
             capability.into_lease(),
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime,
             &tool_runtime,
             rustx::agent::AttemptLifecycle::inert().with_pre_step_policy(Arc::new(
@@ -3858,6 +3868,7 @@ async fn overflow_retry_exhausted_after_one_retry() {
             request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
             capability.into_lease(),
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime,
             &tool_runtime,
             rustx::agent::AttemptLifecycle::inert(),
@@ -3934,6 +3945,7 @@ async fn overflow_retry_never_commits_provisional_failed_content() {
             request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
             capability.into_lease(),
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime,
             &tool_runtime,
             rustx::agent::AttemptLifecycle::inert(),
@@ -4012,6 +4024,7 @@ async fn overflow_retry_never_commits_or_executes_failed_tool_calls() {
             request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
             capability.into_lease(),
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime,
             &tool_runtime,
             rustx::agent::AttemptLifecycle::inert(),
@@ -4091,6 +4104,7 @@ async fn overflow_retry_budget_is_per_model_turn() {
             request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
             capability.into_lease(),
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime,
             &tool_runtime,
             rustx::agent::AttemptLifecycle::inert(),
@@ -4169,6 +4183,7 @@ async fn invalid_summary_fails_without_commit_or_retry() {
                 request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
                 capability.into_lease(),
                 &cancellation,
+                crate::scripted_suites::support::default_execution_policy(),
                 runtime,
                 &tool_runtime,
                 rustx::agent::AttemptLifecycle::inert(),
@@ -4241,6 +4256,7 @@ async fn compaction_failure_after_overflow_preserves_the_overflow() {
             request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
             capability.into_lease(),
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime,
             &tool_runtime,
             rustx::agent::AttemptLifecycle::inert(),
@@ -4369,6 +4385,7 @@ async fn failing_status_module_is_quarantined_not_preparation_failure() {
             ),
             capability.into_lease(),
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             rustx::context::ContextRuntime::with_scripted_summarizer(
                 engine(10_000_000, 0, 0, weighted(10, 10, 10)),
                 Arc::new(FakeContextSummarizer::new(Vec::new())),
@@ -4473,6 +4490,7 @@ async fn proactive_compaction_failure_is_context_compaction_failed() {
             fresh_request("attempt-1", initial, &model),
             capability.into_lease(),
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime_with(250, 0, 0, weighted(100, 10, 0), summarizer),
             &tool_runtime,
             rustx::agent::AttemptLifecycle::inert(),
@@ -4548,6 +4566,7 @@ async fn no_progress_compaction_fails_without_retry() {
             request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
             capability.into_lease(),
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime,
             &tool_runtime,
             rustx::agent::AttemptLifecycle::inert(),
@@ -4622,6 +4641,7 @@ async fn cancel_before_proactive_compaction() {
         request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
         capability.into_lease(),
         &cancellation,
+        crate::scripted_suites::support::default_execution_policy(),
         runtime,
         &tool_runtime,
         rustx::agent::AttemptLifecycle::inert(),
@@ -4683,6 +4703,7 @@ async fn cancel_while_summary_generation_is_pending() {
         request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
         capability.into_lease(),
         &cancellation,
+        crate::scripted_suites::support::default_execution_policy(),
         runtime,
         &tool_runtime,
         rustx::agent::AttemptLifecycle::inert(),
@@ -4778,6 +4799,7 @@ async fn run_continuation_case(
             request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
             capability.into_lease(),
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime,
             &tool_runtime,
             rustx::agent::AttemptLifecycle::inert(),
@@ -4904,7 +4926,11 @@ async fn model_backed_summarizer_issues_a_canonical_request() {
         FakeStep::Emit(text_delta(0, "text")),
         FakeStep::Emit(done_with_usage(ModelFinishReason::Stop, 9)),
     ]]);
-    let summarizer = ModelBackedSummarizer::new(summary_invocation(&model, 128));
+    let summarizer = ModelBackedSummarizer::new(
+        summary_invocation(&model, 128),
+        rustx::model::ModelTimeoutPolicy::default(),
+        Arc::new(rustx::runtime::SystemMonotonicClock::new()),
+    );
     let request = SummaryRequest {
         retired: vec![user("u1", "hi")],
     };
@@ -4998,7 +5024,11 @@ async fn model_backed_summarizer_rejects_invalid_streams() {
     ];
     for (events, expected) in cases {
         let model = fake_model(vec![events]);
-        let summarizer = ModelBackedSummarizer::new(summary_invocation(&model, 64));
+        let summarizer = ModelBackedSummarizer::new(
+            summary_invocation(&model, 64),
+            rustx::model::ModelTimeoutPolicy::default(),
+            Arc::new(rustx::runtime::SystemMonotonicClock::new()),
+        );
         let request = SummaryRequest {
             retired: vec![user("u1", "hi")],
         };
@@ -5035,7 +5065,11 @@ async fn model_backed_summarizer_rejects_refusal_without_delta_and_empty_output(
     ];
     for events in cases {
         let model = fake_model(vec![events]);
-        let summarizer = ModelBackedSummarizer::new(summary_invocation(&model, 64));
+        let summarizer = ModelBackedSummarizer::new(
+            summary_invocation(&model, 64),
+            rustx::model::ModelTimeoutPolicy::default(),
+            Arc::new(rustx::runtime::SystemMonotonicClock::new()),
+        );
         let request = SummaryRequest {
             retired: vec![user("u1", "hi")],
         };
@@ -5076,7 +5110,11 @@ async fn model_backed_summarizer_rejects_malformed_stream_orderings() {
     ];
     for events in cases {
         let model = fake_model(vec![events]);
-        let summarizer = ModelBackedSummarizer::new(summary_invocation(&model, 64));
+        let summarizer = ModelBackedSummarizer::new(
+            summary_invocation(&model, 64),
+            rustx::model::ModelTimeoutPolicy::default(),
+            Arc::new(rustx::runtime::SystemMonotonicClock::new()),
+        );
         let request = SummaryRequest {
             retired: vec![user("u1", "hi")],
         };
@@ -5092,7 +5130,11 @@ async fn model_backed_summarizer_rejects_malformed_stream_orderings() {
 #[tokio::test]
 async fn model_backed_summarizer_aborts_on_cancellation() {
     let model = fake_model(vec![vec![FakeStep::ParkUntilCancelled]]);
-    let summarizer = ModelBackedSummarizer::new(summary_invocation(&model, 64));
+    let summarizer = ModelBackedSummarizer::new(
+        summary_invocation(&model, 64),
+        rustx::model::ModelTimeoutPolicy::default(),
+        Arc::new(rustx::runtime::SystemMonotonicClock::new()),
+    );
     let cancellation = rustx::runtime::CancellationSignal::new();
     let request = SummaryRequest {
         retired: vec![user("u1", "hi")],
@@ -5148,6 +5190,8 @@ async fn model_backed_summarizer_does_not_contaminate_the_execution() {
         weighted(100, 10, 0),
         rustx::context::AgentStatusEngine::default(),
         &snapshot,
+        rustx::model::ModelTimeoutPolicy::default(),
+        support::default_monotonic_clock(),
     )
     .expect("runtime");
     let tool_runtime = common::tool_runtime("conv-1");
@@ -5159,6 +5203,7 @@ async fn model_backed_summarizer_does_not_contaminate_the_execution() {
             attempt_request,
             capability.into_lease(),
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime,
             &tool_runtime,
             rustx::agent::AttemptLifecycle::inert(),
@@ -5363,6 +5408,7 @@ async fn m4_projection_contains_drained_batch_before_request() {
             request("attempt-1", vec![user("msg-u0", "start")], 0, &model),
             capability.into_lease(),
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime,
             &tool_runtime,
             rustx::agent::AttemptLifecycle::inert(),
@@ -5444,6 +5490,7 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
             request("attempt-1", vec![user("msg-u0", "start")], 0, &model),
             capability.into_lease(),
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime,
             &tool_runtime,
             rustx::agent::AttemptLifecycle::inert(),
@@ -5622,6 +5669,7 @@ async fn m4_drain_retains_continuation_without_compaction() {
             request("attempt-1", vec![user("msg-u0", "hi")], 0, &model),
             capability.into_lease(),
             &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
             runtime,
             &tool_runtime,
             rustx::agent::AttemptLifecycle::inert(),

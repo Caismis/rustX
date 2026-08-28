@@ -855,6 +855,8 @@ fn context_runtime(model: &Arc<FakeModel>, assembly: ContextAssembly) -> Context
         rustx::context::AgentStatusEngine::default(),
         assembly,
         &support::attempt_model(model.clone(), "fake-model"),
+        rustx::model::ModelTimeoutPolicy::default(),
+        support::default_monotonic_clock(),
     )
     .expect("valid context runtime")
 }
@@ -885,6 +887,7 @@ async fn run(
         request(tool_runtime.conversation_id().clone(), model),
         capability.into_lease(),
         cancellation,
+        support::default_execution_policy(),
         context_runtime(model, assembly),
         &tool_runtime,
         lifecycle,
@@ -2144,6 +2147,7 @@ async fn native_read_is_distinguished_from_a_non_native_tool_named_read() {
         request(fixture.runtime.conversation_id().clone(), &model),
         capability.into_lease(),
         &cancellation,
+        support::default_execution_policy(),
         context_runtime(&model, ContextAssembly::new()),
         &fixture.runtime,
         native_lifecycle(native_observer),
@@ -2790,6 +2794,7 @@ async fn observer_reads_the_native_read_target_from_validated_arguments() {
         request(fixture.runtime.conversation_id().clone(), &model),
         capability.into_lease(),
         &cancellation,
+        support::default_execution_policy(),
         context_runtime(&model, ContextAssembly::new()),
         &fixture.runtime,
         native_lifecycle(observer),
@@ -2864,6 +2869,7 @@ async fn a_preflight_rejected_call_exposes_no_invocation_arguments() {
         request(fixture.runtime.conversation_id().clone(), &model),
         capability.into_lease(),
         &cancellation,
+        support::default_execution_policy(),
         context_runtime(&model, ContextAssembly::new()),
         &fixture.runtime,
         native_lifecycle(observer),

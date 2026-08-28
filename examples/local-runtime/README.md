@@ -128,6 +128,13 @@ attempt's primary model.
 `keepRecentTokens`, and `summaryOutputCap`). The selected model's
 `contextWindow` remains in `models.jsonc`.
 
+`modelTimeoutPolicy` contains the two finite elapsed-time deadlines shared by
+primary provider requests and compaction summary requests:
+`responseStartTimeoutMs` defaults to 30 seconds and
+`streamIdleTimeoutMs` defaults to 15 seconds. The policy is frozen for each
+admitted request and is not part of Session history or the provider model
+input.
+
 `approvalMode` is the current runtime-wide HITL mode. It defaults to `policy`;
 `full_access` suppresses only approval prompts for the current runtime and is
 never restored from Session history. The runtime applies it at attempt

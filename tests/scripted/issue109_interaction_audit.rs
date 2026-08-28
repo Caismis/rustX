@@ -368,6 +368,8 @@ fn context_runtime(model: &Arc<FakeModel>) -> ContextRuntime {
         rustx::context::AgentStatusEngine::default(),
         ContextAssembly::new(),
         &support::attempt_model(model.clone(), "fake-model"),
+        rustx::model::ModelTimeoutPolicy::default(),
+        support::default_monotonic_clock(),
     )
     .expect("valid context runtime")
 }
@@ -442,6 +444,7 @@ async fn run_approval(
         request(ConversationId::new(conversation), &model),
         capability.into_lease(),
         &cancellation,
+        support::default_execution_policy(),
         context_runtime(&model),
         &tool_runtime,
         AttemptLifecycle::inert()
@@ -780,6 +783,7 @@ async fn a_headless_attempt_records_no_interaction_audit_and_fails_closed() {
         request(ConversationId::new(conversation), &model),
         capability.into_lease(),
         &cancellation,
+        support::default_execution_policy(),
         context_runtime(&model),
         &tool_runtime,
         AttemptLifecycle::inert()

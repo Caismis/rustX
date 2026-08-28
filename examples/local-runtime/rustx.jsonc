@@ -79,6 +79,14 @@
     "summaryOutputCap": 1024,
   },
 
+  // One finite runtime-owned policy shared by primary model requests and
+  // compaction summary requests. These fields are elapsed milliseconds;
+  // they are not part of ModelRequest or Session history.
+  "modelTimeoutPolicy": {
+    "responseStartTimeoutMs": 30000,
+    "streamIdleTimeoutMs": 15000,
+  },
+
   // Native tool policy. Three independent axes per tool, each with a
   // deterministic default, so a tool listed here only to change one axis
   // still reads explicitly:

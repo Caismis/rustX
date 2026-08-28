@@ -583,6 +583,25 @@ tool-call/result pair. It appends one canonical runtime summary and applies
 one complete-message Surface replacement. Historical ledger facts remain
 addressable, while normal reads hydrate only finite active surface IDs.
 
+The provider-backed `ModelBackedSummarizer` is a runtime-owned request path,
+so the Conversation Runtime injects the same finite, frozen
+`ModelTimeoutPolicy` and shared `MonotonicClock` that it injects into the
+primary Agent Loop. Its response-start deadline begins at summary adapter dispatch;
+the first generation event changes it to stream-idle, generation/liveness
+events reset stream-idle only after that transition, and terminal events end
+deadline ownership. `Started` and pre-generation usage/continuation do not
+prove response progress. A summary timeout drops only the request-local
+stream and crosses the existing `SummaryFailed` context/compaction boundary;
+it does not create a primary request identity, Event Journal request facts, or
+generic model retry. `ContextRuntime` owns context projection/compaction state
+and the already-constructed summarizer, but it does not own generic primary
+execution policy or provide the policy/clock back to `AgentExecution`; the
+runtime/composition owner injects those values directly into both siblings.
+No production-capable context construction path creates an independent
+monotonic clock. Manual
+compaction freezes the current runtime policy at its own admission boundary.
+Publication work is never treated as provider progress.
+
 ## 7. Model-turn start and cancellation
 
 The Agent Loop owns the model-turn start boundary in

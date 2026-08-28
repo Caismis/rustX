@@ -14,9 +14,10 @@
 //! anything to the Message Ledger.
 
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 use futures_util::StreamExt;
-use futures_util::future::BoxFuture;
+use futures_util::future::{BoxFuture, pending};
 use serde::{Deserialize, Serialize};
 
 use crate::context::error::{ContextError, ContextErrorKind};
@@ -25,11 +26,13 @@ use crate::message::types::{
     AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, ToolMessageBlock,
     UserContentBlock, UserMessageBlock, UserSource,
 };
+use crate::model::deadline::{ModelRequestDeadline, ModelTimeoutPolicy};
 use crate::model::event::ModelEvent;
 use crate::model::invocation::ResolvedModelInvocation;
 use crate::model::types::ModelRequest;
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::MessageId;
+use crate::runtime::monotonic::MonotonicClock;
 use crate::tools::types::{ToolExecutionStatus, ToolResultContent};
 
 /// One summarizer request.
@@ -291,6 +294,8 @@ pub trait ContextSummarizer: Send + Sync {
 /// activity never contaminates the attempt's continuation or usage state.
 pub struct ModelBackedSummarizer {
     invocation: ResolvedModelInvocation,
+    model_timeout_policy: ModelTimeoutPolicy,
+    monotonic_clock: Arc<dyn MonotonicClock>,
 }
 
 const SUMMARY_INSTRUCTION: &str = "Summarize the following retired conversation history so a later primary model turn can continue the work. Preserve, where applicable, the user's goal; important constraints and preferences; progress and completed work; current work and blockers; key decisions and rationale; important tool outcomes; unresolved threads; next steps; important files, artifacts, paths, and references; and relevant historical runtime observations. Treat Agent Status and other runtime observations as historical evidence, not live authority: for example, observations that a task was running at one time and completed later may be summarized as having run earlier and completed, never as a claim about what is currently running or completed. If an Agent Status section is absent from a later observation, do not infer lifecycle completion or disappearance unless that section's explicit contract says absence has that meaning. Use concise factual free-form text. Any organization or headings are prompt guidance only, not a required schema; output only the summary text.";
@@ -298,8 +303,16 @@ const SUMMARY_INSTRUCTION: &str = "Summarize the following retired conversation 
 impl ModelBackedSummarizer {
     /// Creates a summarizer over one resolved summary invocation.
     #[must_use]
-    pub const fn new(invocation: ResolvedModelInvocation) -> Self {
-        Self { invocation }
+    pub fn new(
+        invocation: ResolvedModelInvocation,
+        model_timeout_policy: ModelTimeoutPolicy,
+        monotonic_clock: Arc<dyn MonotonicClock>,
+    ) -> Self {
+        Self {
+            invocation,
+            model_timeout_policy,
+            monotonic_clock,
+        }
     }
 
     /// The resolved invocation this summarizer sends with.
@@ -326,6 +339,7 @@ impl ModelBackedSummarizer {
 }
 
 impl ContextSummarizer for ModelBackedSummarizer {
+    #[allow(clippy::too_many_lines)] // one explicit summary stream/failure boundary
     fn summarize(
         &self,
         request: SummaryRequest,
@@ -344,14 +358,48 @@ impl ContextSummarizer for ModelBackedSummarizer {
                 effective_system_prompt: String::new(),
                 continuation: None,
             };
+            // Summary dispatch has its own request-local deadline. It starts
+            // before the synchronous adapter dispatch and never uses the
+            // primary AgentCancellation authority.
+            let mut deadline = ModelRequestDeadline::new(
+                self.model_timeout_policy,
+                self.monotonic_clock.now_millis(),
+            );
             let mut stream = self
                 .invocation
                 .adapter()
-                .stream(model_request, cancellation);
+                .stream(model_request, cancellation.clone());
             let mut text = String::new();
             let mut state = SummaryStreamState::default();
             let mut finish_reason = None;
-            while let Some(event) = stream.next().await {
+            loop {
+                let timeout_wait: BoxFuture<'static, ()> = match deadline.deadline_millis() {
+                    Some(deadline_millis) => {
+                        self.monotonic_clock.wait_until_millis(deadline_millis)
+                    }
+                    None => Box::pin(pending()),
+                };
+                let next = tokio::select! {
+                    biased;
+                    event = stream.next() => event,
+                    () = cancellation.cancelled() => {
+                        return Err(ContextError::new(
+                            ContextErrorKind::Cancelled,
+                            "summary generation cancelled",
+                        ));
+                    }
+                    () = timeout_wait => {
+                        drop(stream);
+                        return Err(summary_failed("summary generation timed out"));
+                    }
+                };
+                let Some(event) = next else {
+                    break;
+                };
+                // The shared state machine owns event classification and
+                // phase transitions. Publication/compaction work never
+                // reaches this call and therefore cannot reset a deadline.
+                deadline.observe(&event, self.monotonic_clock.now_millis());
                 // Malformed canonical orderings are compaction failures,
                 // never silently folded into a canonical message.
                 state.accept(&event)?;

@@ -2575,11 +2575,13 @@ Assistant.
 The transient budget is three retries and the overflow budget is one, for an
 additive maximum of five primary provider requests per logical step. Backoff
 uses the runtime-owned monotonic clock: 2, 4, and 8 seconds, overridden by an
-adapter-normalized `retry_after_ms` hint capped at 60 seconds. Adapter
-normalization supplies `ModelRetryDisposition`; the Agent Loop never decides
-retryability from provider strings or HTTP prose. `ModelRequestFailed.usage`
-retains only the latest trustworthy cumulative pre-failure evidence for that
-request, or `None`.
+adapter-normalized `retry_after_ms` hint capped at 60 seconds. Provider
+adapters classify provider failures with `ModelRetryDisposition`; a runtime
+owner may assign the disposition for a normalized runtime failure such as a
+request timeout. The Agent Loop always owns retryability policy, budget,
+scheduling, and execution, and never derives it from provider strings or HTTP
+prose. `ModelRequestFailed.usage` retains only the latest trustworthy
+cumulative pre-failure evidence for that request, or `None`.
 
 #### OpenAI adapters (async-openai)
 
@@ -3459,6 +3461,11 @@ Runtime Client is a projection/control/attachment adapter over it.
   RuntimeInner ──► authoritative subsystems (tool runtime, mailbox,
                    capability coordinator)
   RuntimeInner ──► shared leaf observation queue (PendingObservations)
+  RuntimeInner ──► current ModelTimeoutPolicy + shared MonotonicClock
+
+  attempt/manual admission ──► frozen policy/clock copies
+                              ├─► AgentExecution
+                              └─► ContextRuntime ──► ModelBackedSummarizer
 
   RuntimeClientHost ──► Arc<ClientInner>
   ClientInner ──► Arc<ConversationRuntime> (control + bootstrap reads)
@@ -3471,6 +3478,12 @@ Runtime Client is a projection/control/attachment adapter over it.
   admission worker ────────► Weak<RuntimeInner> + Arc<WakeGate>
   projection worker ───────► Weak<ClientInner> + Arc<PendingObservations>
   ```
+
+  The low-level construction seams are crate-private and require those
+  explicit admitted values. Neither `AgentExecution` nor `ContextRuntime`
+  creates a fallback timeout policy or an independent monotonic clock, so a
+  provider-backed primary request and summary request cannot silently enter
+  different elapsed-time semantics.
 
   Subsystem observer slots keep owning `Arc<dyn InboundObserver>` and
   friends; the concrete `RuntimeObserver` is non-owning, so installing a
@@ -4455,6 +4468,10 @@ Representative current runtime/project configuration:
     "keepRecentTokens": 20000,
     "summaryOutputCap": 2048
   },
+  "modelTimeoutPolicy": {
+    "responseStartTimeoutMs": 30000,
+    "streamIdleTimeoutMs": 15000
+  },
   "mcpServers": {
     "exa": {
       "type": "http",
@@ -4479,6 +4496,20 @@ Representative current runtime/project configuration:
   "skills": [".rustx/skills"]
 }
 ```
+
+`modelTimeoutPolicy` is current runtime execution policy shared by primary
+model requests and context-compaction summaries. The finite defaults are 30
+seconds for response-start and 15 seconds for stream-idle. `ConversationRuntime`
+(`RuntimeInner`) owns the current policy and the shared runtime
+`MonotonicClock`. Each attempt or manual-compaction admission freezes a copy;
+the Agent Loop and `ModelBackedSummarizer` receive that copy as sibling
+consumers. `ContextRuntime` owns context state and its constructed summarizer,
+but is not the authority for generic primary execution policy or clock access.
+The crate-private low-level construction seams require the explicit admitted
+policy and clock; neither creates an independent fallback. Direct runtime
+composition rejects a zero timeout with a typed construction
+error before ownership transfer. The policy is absent from model input,
+`RequestSnapshot`, canonical history, and durable schema.
 
 `mcpServers` is an ecosystem-compatible named map keyed by MCP server
 identity: an entry is the same object an MCP server's own documentation

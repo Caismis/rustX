@@ -297,6 +297,51 @@ stream and normally commits exactly one terminal `RuntimeEvent`:
   identical cancellation conditions, the loop produces an identical
   ordered `RuntimeEvent` stream and an identical terminal outcome.
 
+### Runtime-owned model request deadlines (Issue #135)
+
+- Every runtime-owned provider request path has a finite owner-appropriate
+  `ModelTimeoutPolicy`: primary Agent Loop requests and
+  `ModelBackedSummarizer` requests share one response-start and stream-idle
+  policy shape. The Conversation Runtime owns the current policy and the
+  shared runtime `MonotonicClock`; attempt/manual-operation admission freezes
+  copies for sibling Agent Loop and Context/Summarizer consumers. The policy
+  is not model input, durable request state, canonical history, or provider
+  continuation state. No production-capable `AgentExecution` or
+  `ContextRuntime` constructor creates a fallback policy or independent clock.
+  `ConversationRuntime::new` rejects a zero deadline with a typed error before
+  store initialization or ownership transfer.
+- The request-local deadline state is
+  `AwaitingGeneration → Streaming → Terminal`. The response-start deadline
+  starts only after the primary `RequestSnapshot + ModelRequestStarted` commit,
+  reconstruction verification, and adapter dispatch begin. It changes to
+  stream-idle exactly once on the first generation-progress event. `Started`
+  is lifecycle evidence only. `TextDelta`, `ReasoningDelta`, `RefusalDelta`,
+  `ToolCallStarted`, `ToolCallArgumentsDelta`, and `ToolCallCompleted` are
+  generation progress. `UsageUpdate` and `ContinuationState` are liveness
+  progress only: before generation they leave response-start unchanged, and
+  afterward they reset stream-idle. `Completed` and `Failed` terminate
+  deadline ownership. Publication activity is never provider progress.
+- Every primary provider pull, whether publication has buffered payload or
+  not, participates in one explicitly biased arbitration:
+  `provider event > attempt cancellation > publication flush > request
+  timeout`. At an exact ready cut, provider evidence wins first, observable
+  cancellation retains cancellation provenance and wins before timeout, and a
+  committed-for-release publication flush happens before timeout. Publication
+  flush never resets stream-idle.
+- A primary runtime timeout is request-local: it drops the adapter stream,
+  normalizes as `ModelErrorKind::Timeout`, emits and durably settles exactly
+  one `ModelRequestFailed` for that started `RequestId`, preserves the latest
+  trustworthy cumulative usage, and settles partial publication through the
+  existing noncanonical path. It never calls, mutates, or reuses
+  `AgentCancellation`; cancellation at the timeout cut is not relabeled as a
+  timeout. The normalized error enters the existing Issue #134 generic retry
+  disposition and bounded request budget.
+- A summarizer timeout uses the same event semantics and runtime monotonic
+  clock, but maps through the existing context/compaction `SummaryFailed`
+  boundary and never schedules generic model retry. No primary request
+  identity, request-start fact, Event Journal contract, or Runtime Client
+  protocol is invented for summary deadlines.
+
 ## Native interaction and HITL coordination (M9.2 / Issue #100)
 
 The native interaction plane is one conversation-owned rendezvous. It is not

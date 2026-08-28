@@ -244,6 +244,8 @@ fn context_runtime(model: &Arc<FakeModel>) -> ContextRuntime {
         Arc::new(DefaultTokenEstimator),
         AgentStatusEngine::new(AgentStatusConfig::default(), Arc::new(FixedStatusClock)),
         &snapshot,
+        rustx::model::ModelTimeoutPolicy::default(),
+        support::default_monotonic_clock(),
     )
     .expect("valid context runtime")
 }
@@ -273,6 +275,7 @@ async fn run_attempt(
         request,
         lease,
         &cancellation,
+        support::default_execution_policy(),
         context_runtime(&model),
         tool_runtime,
         rustx::agent::AttemptLifecycle::inert(),
