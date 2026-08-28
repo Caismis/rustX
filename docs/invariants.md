@@ -1540,9 +1540,85 @@ that a live child produced an Interrupted physical result.
   service.
 - **Anchor acknowledgements route by exact typed identity.** Two units with
   outstanding offers cannot open each other's start gates.
-- **The subagent IPC version is 3 and there is no compatibility decoding.** A
+- **The subagent IPC version is 4 and there is no compatibility decoding.** A
   peer that does not speak exactly this version exits before composing
   anything.
+
+## Subagent recovery-semantics conformance (Issue #138)
+
+A subagent child runs the ordinary `ConversationRuntime`/Agent-Loop stack,
+so the generic model retry (#134), model request deadlines (#135), tool
+cancellation phases (#136), and unresolved-output carryover (#137) apply
+inside the child unchanged. The parent subagent plane never owns any of
+those concerns. These invariants are proven by driving a real child runtime
+over the real control IPC behind the real registry/driver settlement path,
+with deterministic in-process synchronization (durable-journal facts,
+watch channels, a manual monotonic clock), plus one real-process test for
+the launch-boundary policy inheritance.
+
+- **Retry remains child-local.** A transient child provider failure uses
+  the same Agent-Loop retry implementation as an ordinary primary agent.
+  The parent receives exactly one terminal result; it never schedules a
+  retry, never receives a retry attempt as semantic inbound, and exposes no
+  retry ordinal, delay, or `retrying` lifecycle state. The parent durable
+  journal of a retried child contains the ownership fact and one terminal
+  publication, never a `ModelRequestStarted`/`ModelRetryScheduled` pair.
+- **The frozen timeout policy is inherited, not re-enforced.** The launched
+  child receives the parent runtime's effective frozen `ModelTimeoutPolicy`
+  through the typed `SubagentChildSpec` and applies it independently to
+  response-start deadlines, stream-idle deadlines, and child model-backed
+  summarization during compaction. No parent watchdog wraps child provider
+  requests. A child deadline timeout is an ordinary transient model failure
+  that enters the child's generic retry when budget permits; a child
+  summarizer timeout follows Issue #135 semantics and is never converted
+  into generic primary-model retry.
+- **Cancellation during retry backoff uses ordinary child cancellation.**
+  Parent cancellation commits registry intent and forwards the one `Cancel`
+  control frame into the child's ordinary cancellation authority; the retry
+  backoff loses the cancellation race, no next `ModelRequestStarted`
+  commits, and the child settles `AttemptCancelled` -> one parent-facing
+  `Cancelled` terminal. There is no retry-specific control message, and the
+  parent/child cancellation authorities remain separate.
+- **Runtime drain during retry backoff preserves `RuntimeShutdown`.** A
+  drain that wins while a child sleeps in backoff prevents any subsequent
+  provider request, reaches quiescence by awaiting the child's settlement,
+  and publishes the terminal with shutdown provenance (`the runtime is
+  shutting down`); the cause is never rewritten to `UserRequested` because
+  cancellation machinery woke the backoff. `RuntimeShutdown` is the
+  absorbing authoritative cause once the drain transition owns shutdown.
+- **Tool cancellation phases are unchanged in children.** The child runtime
+  owns the phase fact: cancelled before the executor-start frontier
+  commits `Cancelled { phase: BeforeStart }` with zero executor
+  invocations; cancelled after commits `Cancelled { phase:
+  DuringExecution }`. No child-specific `ToolResult` shape, rendering, or
+  rollback claim exists.
+- **Unresolved-output carryover never crosses the boundary.** The child
+  conversation's pending pointer, publication audit, and rendering state
+  stay in the child's durable authority. A retry-exhausted child may
+  durably retain its pending pointer as child-local residue; the parent
+  conversation never gains a carryover pointer and no parent model request
+  ever contains child carryover content.
+- **Failed children expose no partial output — structurally.** A
+  retry-exhausted one-shot child reports only the bounded runtime-authored
+  failure diagnostic. The parent-facing notice cannot contain partial
+  assistant text, reasoning excerpts, proposed tool-call arguments,
+  audit payload, or carryover projections, because the terminal-candidate
+  boundary never transports them; this is a provenance boundary, not
+  string filtering.
+- **Process interruption is not provider retry.** A transient provider
+  failure inside a live child is child Agent-Loop retry; a terminal child
+  model failure is a child `Failed` result; child process/IPC/runtime loss
+  is the existing recovery classification (`Failed` live, `Interrupted` at
+  restart). The delegated task is never automatically relaunched after
+  process loss, and unknown external outcome remains fail-closed.
+- **Exactly one parent-facing terminal publication.** Internal retries,
+  timeouts, cancellation paths, and child-local carryover never weaken the
+  terminal contract: each child ownership record publishes exactly one
+  `Succeeded | Failed | Cancelled | Interrupted` result, and a
+  cancellation arriving after terminalization cannot rewrite it. Parent
+  cancellation and runtime drain have exactly one winning cause — the
+  first committed intent owns the record's cancel reason and the loser
+  cannot rewrite it.
 
 ## Issue #96: Session/configuration and capability activation
 

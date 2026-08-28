@@ -5758,6 +5758,7 @@ mod tests {
                     program: std::path::PathBuf::from("/nonexistent/rustx"),
                     workspace: workspace.clone(),
                     runtime_root: dir.path().join("subagents"),
+                    model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                     agent_status: crate::context::AgentStatusConfig::default(),
                     context: crate::context::SessionContextPolicy {
                         reserve_tokens: 0,
@@ -5863,6 +5864,7 @@ mod tests {
                     program: std::path::PathBuf::from("/nonexistent/rustx"),
                     workspace: workspace.clone(),
                     runtime_root: dir.path().join("subagents"),
+                    model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                     agent_status: crate::context::AgentStatusConfig::default(),
                     context: crate::context::SessionContextPolicy {
                         reserve_tokens: 0,

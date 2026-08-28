@@ -95,6 +95,9 @@ pub struct SubagentSpawnPlan {
     /// `subagents/<semantic_subagent_id>/`, and only that directory is ever
     /// given to the child as mutable authority.
     pub runtime_root: std::path::PathBuf,
+    /// The parent runtime's frozen model timeout policy, inherited by every
+    /// child unchanged (Issue #138).
+    pub model_timeout_policy: crate::model::ModelTimeoutPolicy,
     /// The launch-scoped Agent Status configuration inherited by the child.
     pub agent_status: AgentStatusConfig,
     /// The session context policy inherited by the child.
@@ -143,6 +146,7 @@ impl SubagentSpawnPlan {
             child_agent_id: child_agent_id.clone(),
             parent_agent_id: parent_agent_id.clone(),
             resolved: resolved.clone(),
+            model_timeout_policy: self.model_timeout_policy,
             agent_status: self.agent_status.clone(),
             context: self.context,
             workspace: self.workspace.clone(),

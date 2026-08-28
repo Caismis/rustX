@@ -4915,7 +4915,68 @@ order, so two units with outstanding offers cannot open each other's gates.
 The read half remains the parent-liveness authority, and its EOF is what
 `ChildPreparation` observes during composition. Channels are bounded, there
 is no second socket, no listener, and no network service. The subagent IPC
-version is **3**; there is no compatibility decoding for older versions.
+version is **4**; there is no compatibility decoding for older versions.
+
+##### Recovery-semantics conformance (Issue #138)
+
+The conformance path starts with the invoking attempt's immutable
+`RuntimeResourceSnapshot`, resolves a named definition into a frozen
+`ResolvedSubagentSpec`, and launches through the same registry, child
+preparation, capability materialization, nested-containment, and control-IPC
+boundaries described above. The resulting child is an ordinary
+`ConversationRuntime`/Agent Loop; the parent never orchestrates its recovery:
+
+- **Retry is child-local (Issue #134).** A transient provider failure inside
+  a live child is retried by the child's own Agent Loop with the shared
+  actual-request ordinal, frozen replay, and bounded budget. The parent
+  receives exactly one terminal result per child; no retry ordinal, delay,
+  schedule, or provider attempt ever appears in the parent's durable
+  journal, lifecycle projection (`Running` goes straight to a terminal
+  state), or inbound.
+- **The frozen `ModelTimeoutPolicy` is inherited (Issue #135).** The
+  composition root resolves the policy once and shares that frozen value with
+  the parent runtime and `SubagentSpawnPlan`, which carries it into the typed
+  `SubagentChildSpec` (subagent control protocol version 4); the child
+  composition applies it to its own response-start deadlines, stream-idle
+  deadlines, and model-backed compaction summarization. There is no
+  parent-side watchdog around child provider requests. A child deadline
+  timeout is an ordinary transient model failure inside the child and
+  enters the child's generic retry when budget permits; the summarizer
+  follows Issue #135 semantics and is never converted into generic
+  primary-model retry.
+- **Cancellation is the ordinary explicit path.** Parent cancellation or
+  runtime drain commits registry intent and forwards the one `Cancel`
+  control frame into the child's ordinary cancellation authority
+  (`cancel_current_or_next_attempt`); there is no retry-specific control
+  message and no shared cancellation token. A cancellation or drain that
+  wins while the child sleeps in retry backoff loses the backoff race
+  deterministically: no next `ModelRequestStarted` commits, the child
+  settles `AttemptCancelled`, and a drain-caused settlement preserves the
+  `RuntimeShutdown` cause end to end (the registry's committed cancel
+  reason is the parent-facing provenance; the cause is never rewritten to
+  `UserRequested` when the drain transition owns the shutdown).
+- **Tool cancellation phases are child-owned (Issue #136).** A child
+  canonical tool call cancelled before the executor-start frontier settles
+  `Cancelled { phase: BeforeStart }`; after the frontier it settles
+  `Cancelled { phase: DuringExecution }`. No child-specific `ToolResult`
+  shape, rendering, or rollback claim exists.
+- **Unresolved-output carryover is conversation-local (Issue #137).** The
+  pending pointer, the publication audit, and the rendering/consumption
+  state live only in the child's durable authority. A retry-exhausted child
+  may durably retain its pending pointer; it is never copied, projected, or
+  rendered into the parent conversation or any parent model request.
+- **Failed children expose no partial output.** A failed/cancelled
+  one-shot child returns only the bounded runtime-authored diagnostic; the
+  parent-facing terminal notice structurally cannot contain partial
+  assistant text, reasoning excerpts, proposed tool-call arguments, or
+  publication-audit payload, because none of that crosses the terminal
+  candidate boundary (it is not sanitization — the content is never on the
+  wire).
+- **Process interruption is not provider retry.** Child process/IPC/runtime
+  loss settles through the existing driver classification (Failed for a
+  live loss, Interrupted for restart recovery) and never triggers an
+  automatic relaunch of the delegated task; unknown external outcome
+  remains fail-closed.
 
 Representative `models.jsonc` (no real credential ever appears in a catalog
 checked into a repository — `$ENV_VAR` is the reason the literal form exists

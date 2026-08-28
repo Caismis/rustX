@@ -1629,6 +1629,7 @@ mod tests {
                 program: std::path::PathBuf::from("/nonexistent/rustx"),
                 workspace,
                 runtime_root: runtime_root.clone(),
+                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                 agent_status: crate::context::AgentStatusConfig::default(),
                 context: SessionContextPolicy {
                     reserve_tokens: 0,

@@ -136,7 +136,6 @@ pub async fn run_subagent_child() -> i32 {
             return 3;
         }
     };
-
     // From here on there is exactly one owner of the raw transport. Every
     // other child-side owner — the semantic driver and every nested
     // supervised process unit — reaches the parent only through it.
@@ -154,6 +153,8 @@ pub async fn run_subagent_child() -> i32 {
 
     let code = match Box::pin(run_child(&mut dispatcher, &handle, spec)).await {
         Ok(()) => 0,
+        // A startup failure was already reported through `StartupError`
+        // by `run_child` when the channel allowed.
         Err(ChildExit::Startup(message)) => {
             let _ = handle
                 .send(ChildFrame::StartupError(DiagnosticFrame {
@@ -173,7 +174,7 @@ pub async fn run_subagent_child() -> i32 {
 
 /// The child's typed early exits.
 #[derive(Debug)]
-enum ChildExit {
+pub(crate) enum ChildExit {
     /// Composition failed; reportable through `StartupError`.
     Startup(String),
     /// The parent violated the bounded control protocol.
@@ -210,7 +211,33 @@ async fn run_child(
         .await
         .map_err(|error| ChildExit::Protocol(error.to_string()))?;
     mark_ready_sent_if_armed();
+    serve_child_delegation(
+        dispatcher,
+        handle,
+        spec.parent_agent_id,
+        runtime,
+        observations,
+    )
+    .await
+}
 
+/// The child semantic loop after composition, activation, and the `Ready`
+/// handshake: the start gate, the ordinary durable delegation inbound, the
+/// terminal observation, the one bounded result candidate, and the drain.
+///
+/// This is the whole child-side conformance surface of Issue #138: the
+/// attempt that runs here is an ordinary `ConversationRuntime` attempt with
+/// the ordinary retry, deadline, tool-cancellation, publication, and
+/// carryover semantics. The in-crate conformance suites drive this exact
+/// function over a socket pair with a scripted model behind the same
+/// runtime composition, so no child behavior is reimplemented in tests.
+pub(crate) async fn serve_child_delegation(
+    dispatcher: &mut ChildControlDispatcher,
+    handle: &ChildControlHandle,
+    parent_agent_id: crate::runtime::identity::AgentId,
+    runtime: crate::runtime::conversation_runtime::ConversationRuntime,
+    observations: Arc<PendingObservations>,
+) -> Result<(), ChildExit> {
     // The start gate: no semantic work before the delegation arrives.
     let delegate = match dispatcher.next_event().await {
         Some(ChildControlEvent::Delegate(delegate)) => delegate,
@@ -239,7 +266,7 @@ async fn run_child(
     }));
     if let Err(error) = runtime.submit_sourced_inbound(
         UserSource::Agent {
-            agent_id: spec.parent_agent_id.clone(),
+            agent_id: parent_agent_id.clone(),
         },
         content,
     ) {

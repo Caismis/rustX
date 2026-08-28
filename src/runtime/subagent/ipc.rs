@@ -37,6 +37,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::context::{AgentStatusConfig, SessionContextPolicy};
+use crate::model::deadline::ModelTimeoutPolicy;
 use crate::runtime::identity::{AgentId, ConversationId, ProcessUnitId, SubagentId};
 
 use super::resolver::ResolvedSubagentSpec;
@@ -46,10 +47,11 @@ use super::resolver::ResolvedSubagentSpec;
 /// Version 2 replaced the profile/persona-shaped startup identity with the
 /// frozen named-agent semantic specification (Issue #144). Version 3 added
 /// the nested process-unit anchor handshake and the frozen external
-/// materialization plane (Issue #145). There is no compatibility decoding:
-/// a peer that does not speak exactly this version exits before composing
-/// anything.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 3;
+/// materialization plane (Issue #145). Version 4 carries the launch-scoped
+/// frozen `ModelTimeoutPolicy` (Issue #138). There is no compatibility
+/// decoding: a peer that does not speak exactly this version exits before
+/// composing anything.
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 4;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -111,6 +113,12 @@ pub(crate) struct SubagentChildSpec {
     /// The complete frozen named-agent specification resolved by the parent
     /// against the invoking attempt's runtime resource generation.
     pub resolved: ResolvedSubagentSpec,
+    /// The parent runtime's frozen model timeout policy, inherited by the
+    /// child unchanged (Issue #138): the child applies it to its own
+    /// response-start deadlines, stream-idle deadlines, and model-backed
+    /// summarization. The parent never enforces child provider deadlines
+    /// itself.
+    pub model_timeout_policy: ModelTimeoutPolicy,
     /// The launch-scoped Agent Status configuration of the child.
     pub agent_status: AgentStatusConfig,
     /// The session context policy of the child.
@@ -588,6 +596,7 @@ mod tests {
             child_agent_id: AgentId::new("agent-subagent-1"),
             parent_agent_id: AgentId::new("agent-parent"),
             resolved: resolved_spec(),
+            model_timeout_policy: ModelTimeoutPolicy::default(),
             agent_status: AgentStatusConfig::default(),
             context: SessionContextPolicy {
                 reserve_tokens: 1,

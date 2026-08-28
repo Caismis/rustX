@@ -1062,6 +1062,12 @@ impl LocalConversationCore {
             .map_err(|error| LocalRuntimeError::Capability {
             detail: error.to_string(),
         })?;
+        //
+        // The frozen model timeout policy is resolved once here so the
+        // parent runtime and every launched subagent child share exactly
+        // the same deadlines (Issue #138): the child inherits the policy
+        // through its typed startup specification and applies it locally.
+        let model_timeout_policy = runtime_config.timeout_policy()?;
         let subagents = crate::runtime::subagent::SubagentRegistry::new(
             crate::runtime::subagent::SubagentRegistryConfig {
                 conversation_id: tool_runtime.conversation_id().clone(),
@@ -1075,6 +1081,7 @@ impl LocalConversationCore {
                     })?,
                     workspace: paths.workspace.clone(),
                     runtime_root: artifacts_root.clone(),
+                    model_timeout_policy,
                     agent_status: runtime_config.agent_status.clone(),
                     context: runtime_config.context_policy(),
                 },
@@ -1224,7 +1231,7 @@ impl LocalConversationCore {
             agent_id: runtime_config.agent_id.clone(),
             model,
             approval_mode: runtime_config.approval_mode,
-            model_timeout_policy: runtime_config.timeout_policy()?,
+            model_timeout_policy,
             context: ConversationContextConfig {
                 policy: runtime_config.context_policy(),
                 estimator: Arc::clone(&dependencies.estimator),
@@ -1449,7 +1456,7 @@ impl LocalConversationCore {
             agent_id: spec.child_agent_id.clone(),
             model,
             approval_mode: crate::runtime::ApprovalMode::Policy,
-            model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+            model_timeout_policy: spec.model_timeout_policy,
             context: ConversationContextConfig {
                 policy: spec.context,
                 estimator: Arc::clone(&dependencies.estimator),

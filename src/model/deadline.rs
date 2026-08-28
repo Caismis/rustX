@@ -23,7 +23,11 @@ pub const DEFAULT_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 /// snapshots, canonical history, or provider continuation state. An actual
 /// request receives a copy at admission and the request-local deadline state
 /// owns the phase transitions while that request is live.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// The serde representation exists for exactly one internal boundary: the
+/// typed `SubagentChildSpec`, through which a launched subagent child
+/// inherits its parent runtime's frozen policy (Issue #138).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ModelTimeoutPolicy {
     /// Maximum time from request dispatch until the first generation event.
     pub response_start_timeout: Duration,
