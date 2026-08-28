@@ -87,7 +87,7 @@
 //! mechanics stay internal unless they express a client-relevant semantic
 //! fact. The mapping is defined here, in one place, so internal
 //! `RuntimeEvent` evolution cannot silently break Runtime Client Protocol
-//! v5.
+//! v6.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -165,6 +165,21 @@ pub(crate) enum SubscriberPoll {
     },
     /// The cursor space is exhausted; the observation stream is over.
     Exhausted,
+}
+
+/// The result of applying one foreground settlement to the projection.
+///
+/// The live execution event and canonical `ToolMessage` commit both call the
+/// same helper. `AlreadySettled` is the explicit deduplication rule: a
+/// foreground slot transitions to `Settled` at most once, and a later physical
+/// event cannot overwrite the canonical result that won. A missing slot
+/// preserves the existing event mapping for raw lifecycle observations while
+/// never inventing a foreground slot on a commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ForegroundSettlement {
+    Applied,
+    AlreadySettled,
+    Missing,
 }
 
 /// The projection state guarded by the Runtime Client host's one
@@ -340,6 +355,25 @@ impl RuntimeClientProjection {
                 block,
                 transcript_cursor,
             } => {
+                // A canonical ToolMessage is the authoritative result fact.
+                // It repairs an accepted foreground slot that has not seen a
+                // live execution settlement (notably BeforeStart, which must
+                // never fabricate started/completed facts). A slot transitions
+                // to Settled at most once: the live event path and this commit
+                // path share the same idempotent helper, and only the winner
+                // publishes ToolExecutionSettled.
+                let mut events = Vec::with_capacity(2);
+                if let (Some(attempt_id), MessageBlock::Tool(tool)) = (attempt_id.as_ref(), &block)
+                    && self.settle_foreground(attempt_id, &tool.tool_call_id, tool.result.clone())
+                        == ForegroundSettlement::Applied
+                {
+                    events.push(RuntimeClientEvent::ToolExecutionSettled {
+                        attempt_id: attempt_id.clone(),
+                        tool_call_id: tool.tool_call_id.clone(),
+                        tool_id: tool.tool_id.clone(),
+                        result: tool.result.clone(),
+                    });
+                }
                 if matches!(block, MessageBlock::Assistant(_))
                     && let Some(attempt) = &mut self.snapshot.attempt
                 {
@@ -355,11 +389,12 @@ impl RuntimeClientProjection {
                     self.snapshot.todos = todos;
                 }
                 self.snapshot.messages.push(block.clone());
-                vec![RuntimeClientEvent::MessageCommitted {
+                events.push(RuntimeClientEvent::MessageCommitted {
                     attempt_id,
                     message: block,
                     transcript_cursor: transcript_cursor.map(Into::into),
-                }]
+                });
+                events
             }
             // The three publication observations replace what used to be
             // per-delta Event Journal facts (Issue #108). The client-facing
@@ -711,7 +746,7 @@ impl RuntimeClientProjection {
     }
 
     /// The explicit `RuntimeEvent` mapping policy of Runtime Client Protocol
-    /// v5.
+    /// v6.
     ///
     /// Classification (see the module documentation):
     ///
@@ -829,6 +864,7 @@ impl RuntimeClientProjection {
                 if let Some(attempt) = &mut self.snapshot.attempt
                     && attempt.attempt_id == *attempt_id
                     && let Some(slot) = foreground_slot_mut(&mut attempt.foreground, tool_call_id)
+                    && !matches!(&slot.state, ForegroundToolState::Settled { .. })
                 {
                     slot.state = ForegroundToolState::Running {
                         arguments: arguments_of(&slot.state),
@@ -870,7 +906,11 @@ impl RuntimeClientProjection {
                 tool_id,
                 result,
             } => {
-                self.settle_foreground(tool_call_id, result.clone());
+                if self.settle_foreground(attempt_id, tool_call_id, result.clone())
+                    == ForegroundSettlement::AlreadySettled
+                {
+                    return Vec::new();
+                }
                 vec![RuntimeClientEvent::ToolExecutionSettled {
                     attempt_id: attempt_id.clone(),
                     tool_call_id: tool_call_id.clone(),
@@ -894,7 +934,11 @@ impl RuntimeClientProjection {
                     truncation: None,
                     managed_output: None,
                 };
-                self.settle_foreground(tool_call_id, result.clone());
+                if self.settle_foreground(attempt_id, tool_call_id, result.clone())
+                    == ForegroundSettlement::AlreadySettled
+                {
+                    return Vec::new();
+                }
                 vec![RuntimeClientEvent::ToolExecutionSettled {
                     attempt_id: attempt_id.clone(),
                     tool_call_id: tool_call_id.clone(),
@@ -1141,14 +1185,29 @@ impl RuntimeClientProjection {
     }
 
     /// Settles one foreground slot with its normalized result.
-    fn settle_foreground(&mut self, call_id: &ToolCallId, result: ToolExecutionResult) {
-        let Some(attempt) = self.snapshot.attempt.as_mut() else {
-            return;
+    fn settle_foreground(
+        &mut self,
+        attempt_id: &AttemptId,
+        call_id: &ToolCallId,
+        result: ToolExecutionResult,
+    ) -> ForegroundSettlement {
+        let Some(attempt) = self
+            .snapshot
+            .attempt
+            .as_mut()
+            .filter(|attempt| attempt.attempt_id == *attempt_id)
+        else {
+            return ForegroundSettlement::Missing;
         };
-        if let Some(slot) = foreground_slot_mut(&mut attempt.foreground, call_id) {
-            let arguments = arguments_of(&slot.state);
-            slot.state = ForegroundToolState::Settled { arguments, result };
+        let Some(slot) = foreground_slot_mut(&mut attempt.foreground, call_id) else {
+            return ForegroundSettlement::Missing;
+        };
+        if matches!(&slot.state, ForegroundToolState::Settled { .. }) {
+            return ForegroundSettlement::AlreadySettled;
         }
+        let arguments = arguments_of(&slot.state);
+        slot.state = ForegroundToolState::Settled { arguments, result };
+        ForegroundSettlement::Applied
     }
 
     /// Publishes one folded client event: allocate the next cursor,
@@ -1730,7 +1789,7 @@ mod tests {
     use crate::message::content::TextBlock;
     use crate::message::types::{
         AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, InboundKind, MessageBlock,
-        UserContentBlock, UserMessageBlock, UserSource,
+        ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
     use crate::model::adapter::ModelAdapter;
     use crate::model::error::{ModelError, ModelErrorKind};
@@ -1761,7 +1820,8 @@ mod tests {
     use crate::scripted_suites::support::fake::{FakeModel, FakeStep};
     use crate::tools::executor::ToolRegistry;
     use crate::tools::types::{
-        ToolCall, ToolCallStart, ToolExecutionResult, ToolExecutionStatus, ToolProgress,
+        ToolCall, ToolCallStart, ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus,
+        ToolProgress,
     };
     use std::sync::{Arc, Mutex};
 
@@ -1916,7 +1976,7 @@ mod tests {
     }
 
     #[test]
-    fn todo_status_section_round_trips_the_v5_wire_shape() {
+    fn todo_status_section_round_trips_the_v6_wire_shape() {
         let wire = serde_json::json!({
             "type": "todo",
             "current": {
@@ -1939,9 +1999,9 @@ mod tests {
             "omitted_count": 0
         });
         let section: RuntimeClientStatusSection =
-            serde_json::from_value(wire.clone()).expect("decode the v5 Todo section");
+            serde_json::from_value(wire.clone()).expect("decode the v6 Todo section");
         assert_eq!(
-            serde_json::to_value(section).expect("encode the v5 Todo section"),
+            serde_json::to_value(section).expect("encode the v6 Todo section"),
             wire
         );
     }
@@ -2401,6 +2461,53 @@ mod tests {
             truncation: None,
             managed_output: None,
         }
+    }
+
+    fn cancelled_result(
+        reason: CancellationReason,
+        phase: ToolCancellationPhase,
+    ) -> ToolExecutionResult {
+        ToolExecutionResult {
+            status: ToolExecutionStatus::Cancelled { reason, phase },
+            content: Vec::new(),
+            duration_ms: 1,
+            exit_code: None,
+            artifacts: Vec::new(),
+            truncation: None,
+            managed_output: None,
+        }
+    }
+
+    fn apply_assembled_call(projection: &mut RuntimeClientProjection, call: &ToolCall) {
+        apply_frame(
+            projection,
+            0,
+            PublicationPayload::ProposedToolCallStarted {
+                block_index: ContentBlockIndex::new(0),
+                call: ToolCallStart {
+                    id: call.id.clone(),
+                    tool_id: call.tool_id.clone(),
+                    name: call.name.clone(),
+                },
+            },
+        );
+        apply_frame(
+            projection,
+            1,
+            PublicationPayload::ProposedToolCallArgumentsSuffix {
+                block_index: ContentBlockIndex::new(0),
+                call_id: call.id.clone(),
+                suffix: serde_json::to_string(&call.arguments).expect("arguments JSON"),
+            },
+        );
+        apply_frame(
+            projection,
+            2,
+            PublicationPayload::ProposedToolCallCompleted {
+                block_index: ContentBlockIndex::new(0),
+                call: call.clone(),
+            },
+        );
     }
 
     fn stream_start() -> crate::publication::PublicationStreamStart {
@@ -2974,7 +3081,7 @@ mod tests {
             },
         );
         let (snapshot, _) = projection.snapshot().expect("snapshot");
-        let foreground = &snapshot.attempt.expect("attempt view").foreground;
+        let foreground = &snapshot.attempt.as_ref().expect("attempt view").foreground;
         assert_eq!(foreground.len(), 2);
         assert_eq!(foreground[0].call_id, ToolCallId::new("call_a"));
         assert_eq!(foreground[1].call_id, ToolCallId::new("call_b"));
@@ -2985,6 +3092,287 @@ mod tests {
         assert!(matches!(
             foreground[1].state,
             ForegroundToolState::Settled { .. }
+        ));
+    }
+
+    /// The Runtime Client projection carries the canonical cancellation phase
+    /// verbatim and preserves it through its wire round trip.
+    #[test]
+    fn issue136_foreground_cancellation_phase_round_trips_through_projection() {
+        let mut projection = projection();
+        apply_event(
+            &mut projection,
+            RuntimeEvent::AttemptStarted {
+                attempt_id: attempt(),
+            },
+        );
+        let call = ToolCall {
+            id: ToolCallId::new("call_cancelled"),
+            tool_id: ToolId::new("tool-cancelled"),
+            name: "cancelled".to_owned(),
+            arguments: serde_json::json!({"value": 1}),
+        };
+        apply_frame(
+            &mut projection,
+            0,
+            PublicationPayload::ProposedToolCallStarted {
+                block_index: ContentBlockIndex::new(0),
+                call: ToolCallStart {
+                    id: call.id.clone(),
+                    tool_id: call.tool_id.clone(),
+                    name: call.name.clone(),
+                },
+            },
+        );
+        apply_frame(
+            &mut projection,
+            1,
+            PublicationPayload::ProposedToolCallArgumentsSuffix {
+                block_index: ContentBlockIndex::new(0),
+                call_id: call.id.clone(),
+                suffix: serde_json::to_string(&call.arguments).expect("arguments JSON"),
+            },
+        );
+        apply_frame(
+            &mut projection,
+            2,
+            PublicationPayload::ProposedToolCallCompleted {
+                block_index: ContentBlockIndex::new(0),
+                call: call.clone(),
+            },
+        );
+        apply_event(
+            &mut projection,
+            RuntimeEvent::ToolExecutionStarted {
+                tool_call_id: call.id.clone(),
+                tool_id: call.tool_id.clone(),
+            },
+        );
+        let result = ToolExecutionResult {
+            status: ToolExecutionStatus::Cancelled {
+                reason: CancellationReason::RuntimeShutdown,
+                phase: ToolCancellationPhase::DuringExecution,
+            },
+            content: Vec::new(),
+            duration_ms: 3,
+            exit_code: None,
+            artifacts: Vec::new(),
+            truncation: None,
+            managed_output: None,
+        };
+        apply_event(
+            &mut projection,
+            RuntimeEvent::ToolExecutionCompleted {
+                tool_call_id: call.id.clone(),
+                tool_id: call.tool_id.clone(),
+                result: result.clone(),
+            },
+        );
+
+        let (snapshot, _) = projection.snapshot().expect("snapshot");
+        let foreground = &snapshot.attempt.as_ref().expect("attempt view").foreground;
+        let ForegroundToolState::Settled {
+            result: projected, ..
+        } = &foreground[0].state
+        else {
+            panic!("the cancelled call must be settled");
+        };
+        assert_eq!(projected, &result);
+        let encoded = serde_json::to_value(&snapshot).expect("snapshot JSON");
+        assert_eq!(
+            encoded["attempt"]["foreground"][0]["state"]["result"]["status"]["phase"],
+            "during_execution"
+        );
+        let decoded: crate::runtime_client::snapshot::RuntimeClientSnapshot =
+            serde_json::from_value(encoded).expect("snapshot round trip");
+        assert_eq!(decoded, snapshot);
+    }
+
+    /// A canonical `ToolMessage` settles an accepted call that never emitted a
+    /// live execution lifecycle event. The commit publishes exactly one
+    /// equivalent client settlement and preserves it against late raw facts.
+    #[allow(clippy::too_many_lines)]
+    #[test]
+    fn issue136_before_start_commit_repairs_foreground_slot_once() {
+        let mut projection = projection();
+        apply_event(
+            &mut projection,
+            RuntimeEvent::AttemptStarted {
+                attempt_id: attempt(),
+            },
+        );
+        let call = ToolCall {
+            id: ToolCallId::new("call_before_start"),
+            tool_id: ToolId::new("tool-before-start"),
+            name: "before_start".to_owned(),
+            arguments: serde_json::json!({"value": 1}),
+        };
+        apply_assembled_call(&mut projection, &call);
+        let result = cancelled_result(
+            CancellationReason::RuntimeShutdown,
+            ToolCancellationPhase::BeforeStart,
+        );
+        let committed = MessageBlock::Tool(ToolMessageBlock {
+            id: MessageId::new("message-before-start"),
+            tool_call_id: call.id.clone(),
+            tool_id: call.tool_id.clone(),
+            result: result.clone(),
+        });
+        let (_, before_commit) = projection.snapshot().expect("snapshot before commit");
+
+        projection.apply(ConversationObservation::Committed {
+            attempt_id: Some(attempt()),
+            block: committed.clone(),
+            transcript_cursor: Some(crate::durable::TranscriptCursor::new(1)),
+        });
+        let commit_events = collect(&mut projection, before_commit);
+        assert_eq!(commit_events.len(), 2);
+        assert_eq!(
+            commit_events
+                .iter()
+                .filter(|event| {
+                    matches!(event.event, RuntimeClientEvent::ToolExecutionSettled { .. })
+                })
+                .count(),
+            1,
+            "the canonical commit emits one foreground settlement"
+        );
+        assert!(
+            !commit_events.iter().any(|event| matches!(
+                event.event,
+                RuntimeClientEvent::ToolExecutionStarted { .. }
+            ))
+        );
+        assert!(matches!(
+            &commit_events[0].event,
+            RuntimeClientEvent::ToolExecutionSettled {
+                tool_call_id,
+                result: projected,
+                ..
+            } if tool_call_id == &call.id && projected == &result
+        ));
+        assert!(matches!(
+            &commit_events[1].event,
+            RuntimeClientEvent::MessageCommitted {
+                message,
+                ..
+            } if message == &committed
+        ));
+
+        let (snapshot, _) = projection.snapshot().expect("settled snapshot");
+        let foreground = &snapshot.attempt.as_ref().expect("attempt view").foreground;
+        assert_eq!(foreground.len(), 1);
+        assert!(matches!(
+            &foreground[0].state,
+            ForegroundToolState::Settled {
+                result: projected,
+                ..
+            } if projected == &result
+        ));
+
+        apply_event(
+            &mut projection,
+            RuntimeEvent::AttemptCancelled {
+                attempt_id: attempt(),
+                reason: CancellationReason::RuntimeShutdown,
+            },
+        );
+        let (settled_snapshot, after_attempt) = projection.snapshot().expect("terminal snapshot");
+        assert!(matches!(
+            settled_snapshot
+                .attempt
+                .as_ref()
+                .expect("attempt view")
+                .phase,
+            RuntimeClientAttemptPhase::Settled {
+                outcome: RuntimeClientOutcome::Cancelled {
+                    reason: CancellationReason::RuntimeShutdown,
+                }
+            }
+        ));
+        assert!(matches!(
+            &settled_snapshot.attempt.as_ref().expect("attempt view").foreground[0].state,
+            ForegroundToolState::Settled { result: projected, .. } if projected == &result
+        ));
+
+        // A late physical result cannot reopen this slot or emit a second
+        // client-visible settlement after the canonical commit won.
+        apply_event(
+            &mut projection,
+            RuntimeEvent::ToolExecutionCompleted {
+                tool_call_id: call.id.clone(),
+                tool_id: call.tool_id.clone(),
+                result: success_result(),
+            },
+        );
+        assert!(collect(&mut projection, after_attempt).is_empty());
+        let (final_snapshot, _) = projection.snapshot().expect("final snapshot");
+        assert!(matches!(
+            &final_snapshot.attempt.as_ref().expect("attempt view").foreground[0].state,
+            ForegroundToolState::Settled { result: projected, .. } if projected == &result
+        ));
+    }
+
+    /// A live `DuringExecution` settlement already closes the slot; its later
+    /// canonical `ToolMessage` commit is history only and emits no duplicate
+    /// foreground settlement.
+    #[test]
+    fn issue136_live_settlement_is_not_duplicated_by_tool_message_commit() {
+        let mut projection = projection();
+        apply_event(
+            &mut projection,
+            RuntimeEvent::AttemptStarted {
+                attempt_id: attempt(),
+            },
+        );
+        let call = ToolCall {
+            id: ToolCallId::new("call_during_execution"),
+            tool_id: ToolId::new("tool-during-execution"),
+            name: "during_execution".to_owned(),
+            arguments: serde_json::json!({}),
+        };
+        apply_assembled_call(&mut projection, &call);
+        apply_event(
+            &mut projection,
+            RuntimeEvent::ToolExecutionStarted {
+                tool_call_id: call.id.clone(),
+                tool_id: call.tool_id.clone(),
+            },
+        );
+        let result = cancelled_result(
+            CancellationReason::ParentCancelled,
+            ToolCancellationPhase::DuringExecution,
+        );
+        apply_event(
+            &mut projection,
+            RuntimeEvent::ToolExecutionCompleted {
+                tool_call_id: call.id.clone(),
+                tool_id: call.tool_id.clone(),
+                result: result.clone(),
+            },
+        );
+        let (_, before_commit) = projection.snapshot().expect("snapshot before commit");
+        projection.apply(ConversationObservation::Committed {
+            attempt_id: Some(attempt()),
+            block: MessageBlock::Tool(ToolMessageBlock {
+                id: MessageId::new("message-during-execution"),
+                tool_call_id: call.id.clone(),
+                tool_id: call.tool_id.clone(),
+                result: result.clone(),
+            }),
+            transcript_cursor: Some(crate::durable::TranscriptCursor::new(1)),
+        });
+
+        let commit_events = collect(&mut projection, before_commit);
+        assert_eq!(commit_events.len(), 1);
+        assert!(matches!(
+            &commit_events[0].event,
+            RuntimeClientEvent::MessageCommitted { .. }
+        ));
+        let (snapshot, _) = projection.snapshot().expect("snapshot after commit");
+        assert!(matches!(
+            &snapshot.attempt.as_ref().expect("attempt view").foreground[0].state,
+            ForegroundToolState::Settled { result: projected, .. } if projected == &result
         ));
     }
 

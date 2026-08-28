@@ -411,6 +411,28 @@ impl ManagedOutputContinuation {
     }
 }
 
+/// The semantic phase at which a tool call was cancelled.
+///
+/// This is a closed, provider-independent fact owned by the canonical tool
+/// result contract and shared by foreground and background runtime-owned
+/// results. The foreground Agent Loop selects it from its per-call executor
+/// start frontier; the background registry selects it from its detached-runner
+/// frontier. Executors may report a provisional physical cancellation status,
+/// but they do not own the canonical phase classification. Clients only
+/// consume or project the canonical typed fact; provider adapters likewise
+/// translate that fact without inferring its phase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCancellationPhase {
+    /// The accepted call had execution authority, but its owner's executor
+    /// start frontier was never crossed.
+    BeforeStart,
+    /// The owner's executor start frontier was crossed and cancellation won
+    /// before normal completion. This does not promise rollback or absence of
+    /// side effects.
+    DuringExecution,
+}
+
 /// Typed execution status of a tool call.
 ///
 /// Success and failure are not the only states: policy denial, cancellation,
@@ -437,12 +459,44 @@ pub enum ToolExecutionStatus {
     Cancelled {
         /// Why the execution was cancelled.
         reason: CancellationReason,
+        /// Whether cancellation won before executor start or while execution
+        /// was already in flight.
+        phase: ToolCancellationPhase,
     },
     /// The execution exceeded its time budget.
     TimedOut,
     /// The execution was interrupted (for example by a runtime restart) and
     /// the actual external outcome is unknown.
     Interrupted,
+}
+
+impl ToolExecutionStatus {
+    /// Renders the cancellation fact for inclusion in a model-facing tool
+    /// result. The typed status remains the source of truth; this text is
+    /// presentation only and is never parsed back into a phase or reason.
+    #[must_use]
+    pub fn model_facing_text(&self) -> Option<String> {
+        let Self::Cancelled { reason, phase } = self else {
+            return None;
+        };
+
+        let reason = match reason {
+            CancellationReason::UserRequested => "user_requested",
+            CancellationReason::RuntimeShutdown => "runtime_shutdown",
+            CancellationReason::ParentCancelled => "parent_cancelled",
+        };
+        let phase = match phase {
+            ToolCancellationPhase::BeforeStart => {
+                "rustX did not start execution of this tool call."
+            }
+            ToolCancellationPhase::DuringExecution => {
+                "Execution had already started, but cancellation occurred before normal completion. Partial side effects may have occurred."
+            }
+        };
+        Some(format!(
+            "Tool call was cancelled (reason: {reason}). {phase}"
+        ))
+    }
 }
 
 /// Truncation metadata for tool output.
@@ -517,8 +571,9 @@ pub struct ModelToolDefinition {
 #[cfg(test)]
 mod tests {
     use super::{
-        ToolApprovalPolicy, ToolCall, ToolCallStart, ToolDefinition, ToolExecutionPolicy,
-        ToolExecutionResult, ToolExecutionStatus, ToolReplayPolicy, TruncationState,
+        ToolApprovalPolicy, ToolCall, ToolCallStart, ToolCancellationPhase, ToolDefinition,
+        ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus, ToolReplayPolicy,
+        TruncationState,
     };
     use crate::runtime::identity::{McpServerId, ToolCallId, ToolId};
     use serde_json::json;
@@ -644,12 +699,52 @@ mod tests {
 
     /// Execution statuses serialize with stable explicit discriminators.
     #[test]
-    fn execution_status_discriminators_are_stable() {
+    fn issue136_execution_status_discriminators_are_stable() {
         let status = ToolExecutionStatus::Cancelled {
             reason: crate::runtime::types::CancellationReason::UserRequested,
+            phase: ToolCancellationPhase::DuringExecution,
         };
         let value = serde_json::to_value(&status).expect("serialize status");
         assert_eq!(value["type"], "cancelled");
         assert_eq!(value["reason"], "user_requested");
+        assert_eq!(value["phase"], "during_execution");
+    }
+
+    /// Both cancellation axes are closed, independent, and useful to the
+    /// model without relying on prose as a serialization mechanism.
+    #[test]
+    fn issue136_cancellation_reason_and_phase_render_independently() {
+        use crate::runtime::types::CancellationReason;
+
+        for (reason, reason_label) in [
+            (CancellationReason::UserRequested, "user_requested"),
+            (CancellationReason::RuntimeShutdown, "runtime_shutdown"),
+            (CancellationReason::ParentCancelled, "parent_cancelled"),
+        ] {
+            for phase in [
+                ToolCancellationPhase::BeforeStart,
+                ToolCancellationPhase::DuringExecution,
+            ] {
+                let status = ToolExecutionStatus::Cancelled { reason, phase };
+                let text = status.model_facing_text().expect("cancelled text");
+                assert!(text.contains(reason_label));
+                match phase {
+                    ToolCancellationPhase::BeforeStart => {
+                        assert!(text.contains("did not start execution"));
+                        assert!(!text.contains("Partial side effects"));
+                    }
+                    ToolCancellationPhase::DuringExecution => {
+                        assert!(text.contains("already started"));
+                        assert!(text.contains("Partial side effects may have occurred"));
+                    }
+                }
+                if matches!(
+                    reason,
+                    CancellationReason::RuntimeShutdown | CancellationReason::ParentCancelled
+                ) {
+                    assert!(!text.contains("user requested"));
+                }
+            }
+        }
     }
 }

@@ -1,4 +1,4 @@
-//! Issue #38/#130: transport-independent Runtime Client Protocol v5 conformance.
+//! Issue #38/#130/#136: transport-independent Runtime Client Protocol v6 conformance.
 //!
 //! Every scenario below runs unchanged through two framings:
 //!
@@ -52,6 +52,7 @@ conformance_scenarios!(
     inbound_batches_and_drains,
     cancellation_is_acceptance_not_settlement,
     // Tools
+    before_start_cancellation_repairs_runtime_client,
     foreground_tool_lifecycle,
     parallel_tools_keep_independent_identities,
     background_execution_lifecycle,

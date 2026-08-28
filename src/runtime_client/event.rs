@@ -1,4 +1,4 @@
-//! The Runtime Client event vocabulary (Runtime Client Protocol v5).
+//! The Runtime Client event vocabulary (Runtime Client Protocol v6).
 //!
 //! [`RuntimeClientEvent`] is the provider-neutral external event shape of
 //! the Runtime Client projection. It is deliberately **not** the internal
@@ -15,7 +15,7 @@
 //!   Python worker internals, and no provider wire objects appear.
 //!
 //! The internal `RuntimeEvent` schema can therefore evolve without
-//! breaking Runtime Client Protocol v5.
+//! breaking Runtime Client Protocol v6.
 //!
 //! Every attempt-scoped event carries its `attempt_id`, so events are
 //! self-describing for clients that attach mid-attempt.
@@ -286,7 +286,10 @@ pub enum RuntimeClientEvent {
     },
     /// A tool execution or pre-tool policy settled with its normalized result
     /// (success, failure, denial, cancellation, timeout, or validation
-    /// rejection all settle through this one shape).
+    /// rejection all settle through this one shape). For an accepted call
+    /// without a live execution settlement, the canonical `ToolMessage` commit
+    /// may publish this event directly (notably for `BeforeStart`
+    /// cancellation); the projection's slot transition remains at-most-once.
     ToolExecutionSettled {
         /// The attempt executing the call.
         attempt_id: AttemptId,

@@ -1087,7 +1087,7 @@ tool-start capability. The real ConversationRuntime shutdown path proves that
 pending-map removal is not waiter or attempt settlement: Quiescent waits for
 the waiter handoff, projection callback, AgentExecution, and attempt task.
 
-Runtime Client v5 carries `interaction_respond`, typed acceptance/errors,
+Runtime Client v6 carries `interaction_respond`, typed acceptance/errors,
 pending/settled events, and `snapshot.pending_interactions`. It also projects
 authoritative effective and pending ApprovalMode state and accepts mode
 changes through runtime control. The TUI remains a projection/client: it
@@ -1187,13 +1187,15 @@ the live path and the durable path cannot drift and a future PostgreSQL
 backend reuses the same contract.
 
 The durable event vocabulary changed incompatibly, so
-`SQLITE_SCHEMA_VERSION` is now 13. Version 10 froze the structured
+`SQLITE_SCHEMA_VERSION` is now 14. Version 10 froze the structured
 Questionnaire interaction audit vocabulary introduced by Issue #126; version
 11 added typed Agent Status generation metadata to canonical status messages;
 version 12 added canonical-message-coupled Agent Status emission facts,
 bounded Todo latest-emission heads, and the Todo-specific durable progress
 sequence. Version 13 adds per-request retry correlation and failed-request
-usage. Version 12 and every older development database are rejected at open.
+usage. Version 14 adds the typed cancellation phase to canonical tool
+results. Version 13 and every older development database are rejected at
+open.
 There is no migration and no compatibility layer.
 
 Exit criteria (met): durable-before-prompt proved inside the publication
@@ -1314,7 +1316,7 @@ the repeated terminal payload.
 
 Capabilities are deny-by-construction: the child composes the base tool
 plane only (v1 profile `explore`: Read/Glob/Grep) and has no `subagent`
-tool, so recursion is impossible by construction. Runtime Client v5 carries
+tool, so recursion is impossible by construction. Runtime Client v6 carries
 `subagent_status`, `subagent_cancel`, the `SubagentUpdated` event, and
 `snapshot.subagents`; the TUI renders the same projection.
 

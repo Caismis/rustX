@@ -192,8 +192,8 @@ use crate::tools::executor::{ProgressReporter, ToolExecutionContext, ToolExecuto
 use crate::tools::limits::bound_tool_progress;
 use crate::tools::mcp::McpRuntimeLeaseSet;
 use crate::tools::types::{
-    ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolProgress,
-    ToolResultContent,
+    ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
+    ToolInvocationMode, ToolProgress, ToolResultContent,
 };
 use crate::tools::workspace::Workspace;
 
@@ -1317,8 +1317,17 @@ impl ConversationBackgroundRegistry {
                         ToolExecutionStatus::Success => {
                             (BackgroundLifecycle::Succeeded, result.clone())
                         }
-                        ToolExecutionStatus::Cancelled { .. } => {
-                            (BackgroundLifecycle::Cancelled, result.clone())
+                        ToolExecutionStatus::Cancelled { reason, .. } => {
+                            // `mark_running` crossed the detached runner's
+                            // start frontier before the executor was called.
+                            // Do not trust a provisional executor-provided
+                            // phase; the registry owns the canonical phase.
+                            let mut canonical = result.clone();
+                            canonical.status = ToolExecutionStatus::Cancelled {
+                                reason,
+                                phase: ToolCancellationPhase::DuringExecution,
+                            };
+                            (BackgroundLifecycle::Cancelled, canonical)
                         }
                         ToolExecutionStatus::Denied { .. }
                         | ToolExecutionStatus::Failed { .. }
@@ -1342,6 +1351,7 @@ impl ConversationBackgroundRegistry {
                         let mut canonical = result.clone();
                         canonical.status = ToolExecutionStatus::Cancelled {
                             reason: record.cancel_reason.unwrap_or(BACKGROUND_CANCEL_REASON),
+                            phase: ToolCancellationPhase::DuringExecution,
                         };
                         (BackgroundLifecycle::Cancelled, canonical)
                     }
@@ -2826,6 +2836,7 @@ mod tests {
             result.status,
             ToolExecutionStatus::Cancelled {
                 reason: BACKGROUND_CANCEL_REASON,
+                phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
             },
             "the stored terminal result agrees with the registry winner"
         );

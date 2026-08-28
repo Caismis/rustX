@@ -482,7 +482,8 @@ function settledParts(result: ToolExecutionResult): string[] {
  * both carry runtime-published prose, and prose belongs in the bounded reason
  * band below — restating it here would put an unbounded, uncollapsible string
  * in the header and report the same fact twice. `cancelled` keeps its reason
- * because a `CancellationReason` is a small typed enum, not prose.
+ * because a `CancellationReason` and `ToolCancellationPhase` are small typed
+ * enums, not prose.
  */
 export function statusLabel(result: ToolExecutionResult): string {
   switch (result.status.type) {
@@ -493,7 +494,9 @@ export function statusLabel(result: ToolExecutionResult): string {
     case "denied":
       return role.warning("denied");
     case "cancelled":
-      return role.warning(`cancelled (${result.status.reason})`);
+      return role.warning(
+        `cancelled (${result.status.reason}, ${result.status.phase})`,
+      );
     case "timed_out":
       return role.warning("timed out");
     case "interrupted":

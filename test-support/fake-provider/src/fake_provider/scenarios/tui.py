@@ -149,6 +149,42 @@ def tui_ask_user_questionnaire() -> Scenario:
     )
 
 
+BEFORE_START_PROMPT = "cancel before executor start"
+BEFORE_START_ARGUMENTS = json.dumps(
+    {"command": "printf never-started"},
+    separators=(",", ":"),
+)
+
+
+def tui_before_start_cancellation() -> Scenario:
+    """One real tool proposal for the Runtime Client/TUI repair regression.
+
+    The TUI config requires approval for Bash. The client cancels while the
+    runtime is waiting at that pre-tool boundary, so the executor must never
+    be invoked and no continuation request can occur.
+    """
+    return Scenario(
+        "tui_before_start_cancellation",
+        Step(
+            Expect(
+                protocol=OPENAI_CHAT_COMPLETIONS,
+                model=INTEGRATION_MODEL,
+                body_contains=(BEFORE_START_PROMPT,),
+                tools_include=("bash",),
+                headers_present=("content-type",),
+            ),
+            Stream(
+                ToolCall(
+                    "call-tui-before-start",
+                    "bash",
+                    BEFORE_START_ARGUMENTS,
+                ),
+                Finish("tool_calls"),
+            ),
+        ),
+    )
+
+
 def tui_compaction() -> Scenario:
     """Two committed compactions, observed by the real TUI child over stdio.
 
@@ -212,5 +248,6 @@ def tui_compaction() -> Scenario:
 SCENARIOS = {
     "tui_integration": tui_integration,
     "tui_ask_user_questionnaire": tui_ask_user_questionnaire,
+    "tui_before_start_cancellation": tui_before_start_cancellation,
     "tui_compaction": tui_compaction,
 }

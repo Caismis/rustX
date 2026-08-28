@@ -140,9 +140,13 @@ use super::inbox::{
 /// request usage payload. The journal remains envelope-version 1, but an old
 /// store cannot be interpreted under the new request-recovery vocabulary.
 ///
-/// A v3/v4/v5/v6/v7/v8/v9/v10/v11/v12 database must fail at store open; there
-/// is no migration or compatibility path.
-pub const SQLITE_SCHEMA_VERSION: i64 = 13;
+/// Version 14 freezes Issue #136's typed tool cancellation phase.
+/// A version-13 store has only the undifferentiated cancellation status, so it
+/// is rejected rather than decoded with an invented or default phase.
+///
+/// A v3/v4/v5/v6/v7/v8/v9/v10/v11/v12/v13 database must fail at store open;
+/// there is no migration or compatibility path.
+pub const SQLITE_SCHEMA_VERSION: i64 = 14;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -6733,7 +6737,7 @@ mod tests {
     use crate::message::types::{
         AgentStatusEmission, AgentStatusGenerationMetadata, AgentStatusModuleId,
         AssistantContentBlock, AssistantMessageBlock, ContextKind, InboundKind, MessageBlock,
-        UserContentBlock, UserMessageBlock, UserSource,
+        ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
     use crate::model::catalog::ModelCapabilities;
     use crate::model::catalog::ModelCompat;
@@ -6742,7 +6746,10 @@ mod tests {
     use crate::model::snapshot::{AgentStatusStart, RequestIdentity, RequestSnapshot};
     use crate::model::types::{ModelProtocol, ModelRequest};
     use crate::runtime::identity::{AttemptId, EventId, TurnId};
-    use crate::runtime::types::{TokenMeasurement, TokenMeasurementSource};
+    use crate::runtime::types::{CancellationReason, TokenMeasurement, TokenMeasurementSource};
+    use crate::tools::types::{
+        ToolCall, ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus,
+    };
     use chrono::{TimeZone, Utc};
 
     fn draft(text: &str) -> InboundDraft {
@@ -9510,6 +9517,117 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
+    }
+
+    /// Issue #136 changes the durable cancellation status from an untyped
+    /// reason-only value to a reason-plus-phase value. The previous v13
+    /// development schema is rejected explicitly; no default phase is
+    /// supplied for old rows.
+    #[test]
+    fn issue136_schema_version_is_rejected_explicitly() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("pre-issue-136.sqlite");
+        let conversation_id = ConversationId::new("conv-pre-issue-136");
+        {
+            let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
+            store
+                .conn
+                .lock()
+                .unwrap()
+                .execute(
+                    "UPDATE rustx_store SET schema_version = 13 WHERE id = 1",
+                    [],
+                )
+                .unwrap();
+        }
+        assert!(matches!(
+            SqliteConversationStore::open(conversation_id, &path),
+            Err(ConversationStoreError::SchemaVersionMismatch {
+                stored: 13,
+                expected: SQLITE_SCHEMA_VERSION
+            })
+        ));
+    }
+
+    /// Both typed cancellation phases are durable canonical facts. They must
+    /// survive a close/reopen round trip without a compatibility default or
+    /// prose-based reconstruction.
+    #[test]
+    fn issue136_cancellation_phases_survive_durable_reload() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cancellation-phases.sqlite");
+        let conversation_id = ConversationId::new("conv-issue-136-cancellation-phases");
+        let base = user_message("user-issue-136", "Run the tools");
+        let assistant = MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("assistant-issue-136"),
+            content: vec![
+                AssistantContentBlock::ToolCall(ToolCall {
+                    id: ToolCallId::new("call-before-start"),
+                    tool_id: ToolId::new("tool-before-start"),
+                    name: "before_start".to_owned(),
+                    arguments: serde_json::json!({}),
+                }),
+                AssistantContentBlock::ToolCall(ToolCall {
+                    id: ToolCallId::new("call-during-execution"),
+                    tool_id: ToolId::new("tool-during-execution"),
+                    name: "during_execution".to_owned(),
+                    arguments: serde_json::json!({}),
+                }),
+            ],
+        });
+        let cancelled = |message_id: &str,
+                         call_id: &str,
+                         tool_id: &str,
+                         reason: CancellationReason,
+                         phase: ToolCancellationPhase| {
+            MessageBlock::Tool(ToolMessageBlock {
+                id: MessageId::new(message_id),
+                tool_call_id: ToolCallId::new(call_id),
+                tool_id: ToolId::new(tool_id),
+                result: ToolExecutionResult {
+                    status: ToolExecutionStatus::Cancelled { reason, phase },
+                    content: Vec::new(),
+                    duration_ms: 0,
+                    exit_code: None,
+                    artifacts: Vec::new(),
+                    truncation: None,
+                    managed_output: None,
+                },
+            })
+        };
+        let before_start = cancelled(
+            "result-before-start",
+            "call-before-start",
+            "tool-before-start",
+            CancellationReason::UserRequested,
+            ToolCancellationPhase::BeforeStart,
+        );
+        let during_execution = cancelled(
+            "result-during-execution",
+            "call-during-execution",
+            "tool-during-execution",
+            CancellationReason::RuntimeShutdown,
+            ToolCancellationPhase::DuringExecution,
+        );
+        let expected = vec![
+            base.clone(),
+            assistant.clone(),
+            before_start.clone(),
+            during_execution.clone(),
+        ];
+
+        {
+            let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
+            store.initialize(std::slice::from_ref(&base)).unwrap();
+            store.append_canonical(&assistant).unwrap();
+            store
+                .append_canonical_batch(&[before_start.clone(), during_execution.clone()])
+                .unwrap();
+            assert_eq!(store.load_canonical().unwrap(), expected);
+        }
+
+        let reopened = SqliteConversationStore::open(conversation_id, &path).unwrap();
+        assert_eq!(reopened.load_canonical().unwrap(), expected);
     }
 
     /// Issue #108 proposal-state rows are a development-only physical

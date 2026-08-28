@@ -1,4 +1,4 @@
-//! Transport-independent Runtime Client Protocol v5 conformance fixtures
+//! Transport-independent Runtime Client Protocol v6 conformance fixtures
 //! (Issue #38).
 //!
 //! # Why this layer exists
@@ -43,24 +43,31 @@
 #![allow(dead_code)] // every scenario is used only by some test binaries
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
+use rustx::agent::{LifecycleError, PreToolDecision, PreToolPolicy, PreToolView};
 use rustx::message::content::TextBlock;
 use rustx::message::types::{ContentBlockIndex, MessageBlock, UserContentBlock};
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
 use rustx::runtime::identity::ToolExecutionId;
+use rustx::runtime::types::CancellationReason;
 use rustx::runtime_client::transport::stdio::{
     StdioSessionEnd, StdioTransportError, serve_stdio_jsonl_with_io,
 };
 use rustx::runtime_client::{
-    EventDelivery, RequestId, RuntimeClientCursor, RuntimeClientEndpoint, RuntimeClientError,
-    RuntimeClientEvent, RuntimeClientHost, RuntimeClientOutcome, RuntimeClientProtocolEvent,
-    RuntimeClientRequest, RuntimeClientResponse, RuntimeClientResult, RuntimeClientSnapshot,
+    EventDelivery, ForegroundToolState, RequestId, RuntimeClientCursor, RuntimeClientEndpoint,
+    RuntimeClientError, RuntimeClientEvent, RuntimeClientHost, RuntimeClientOutcome,
+    RuntimeClientProtocolEvent, RuntimeClientRequest, RuntimeClientResponse, RuntimeClientResult,
+    RuntimeClientSnapshot,
 };
 use rustx::tools::executor::ToolRegistry;
-use rustx::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy, ToolOrigin};
+use rustx::tools::types::{
+    ToolCancellationPhase, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionStatus,
+    ToolOrigin,
+};
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 
 use super::fake::{FakeModel, FakeStep, FakeTool, ScriptedCall, await_started, success_result};
@@ -220,7 +227,7 @@ impl StdioJsonlDriver {
 
     /// Writes one request record: JSON payload plus exactly one LF.
     async fn send(&mut self, request: &RuntimeClientRequest) {
-        let mut record = serde_json::to_vec(request).expect("a v5 request serializes");
+        let mut record = serde_json::to_vec(request).expect("a v6 request serializes");
         record.push(b'\n');
         let stream = self.to_session.as_mut().expect("the session is open");
         stream.write_all(&record).await.expect("write the record");
@@ -602,6 +609,21 @@ pub async fn unsupported_protocol_version_is_typed(factory: &dyn DriverFactory) 
         .build()
         .await;
     let mut driver = connect(&fixture, factory);
+
+    let old = driver
+        .request(RuntimeClientRequest::Initialize {
+            id: RequestId::new(6),
+            protocol_version: 5,
+        })
+        .await;
+    assert_eq!(old.id, RequestId::new(6));
+    assert_eq!(
+        error(old),
+        RuntimeClientError::UnsupportedProtocolVersion {
+            supported: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
+            requested: 5,
+        }
+    );
 
     let response = driver
         .request(RuntimeClientRequest::Initialize {
@@ -1029,6 +1051,174 @@ pub async fn cancellation_is_acceptance_not_settlement(factory: &dyn DriverFacto
 // ---------------------------------------------------------------------------
 // Tool scenarios
 // ---------------------------------------------------------------------------
+
+/// Holds a real runtime-created attempt at the pre-tool boundary until the
+/// protocol client has requested cancellation. The policy is only a
+/// deterministic test gate: the Agent Loop still owns the canonical
+/// `BeforeStart` classification after the gate opens.
+struct BeforeStartPolicy {
+    entered: tokio::sync::watch::Sender<bool>,
+    release: tokio::sync::watch::Receiver<bool>,
+}
+
+impl PreToolPolicy for BeforeStartPolicy {
+    fn evaluate<'a>(
+        &'a self,
+        _view: &'a PreToolView<'a>,
+    ) -> BoxFuture<'a, Result<PreToolDecision, LifecycleError>> {
+        let entered = self.entered.clone();
+        let mut release = self.release.clone();
+        Box::pin(async move {
+            entered.send_replace(true);
+            release
+                .wait_for(|released| *released)
+                .await
+                .expect("the before-start release channel stays open");
+            Ok(PreToolDecision::Allow)
+        })
+    }
+}
+
+/// A canonical call that is cancelled while the real Runtime Client host is
+/// parked before the executor-start frontier. This scenario runs through
+/// both the typed endpoint and the JSONL session, so the snapshot and event
+/// assertions cover the actual protocol boundary rather than a hand-built
+/// projection.
+pub async fn before_start_cancellation_repairs_runtime_client(factory: &dyn DriverFactory) {
+    let call = scripted_call(
+        "call-before-start",
+        "tool-before-start",
+        "before_start",
+        serde_json::json!({}),
+    );
+    let mut first = vec![FakeStep::Emit(ModelEvent::Started)];
+    for event in super::fake::tool_call_events(0, &call) {
+        first.push(FakeStep::Emit(event));
+    }
+    first.push(FakeStep::Emit(ModelEvent::Completed {
+        finish_reason: ModelFinishReason::ToolCalls,
+        usage: None,
+    }));
+
+    let tool = FakeTool::new(
+        common::tool("before_start", "tool-before-start"),
+        success_result("must not run"),
+    );
+    let calls = tool.calls();
+    let mut tools = ToolRegistry::new();
+    tool.register(&mut tools);
+
+    let (entered, mut entered_rx) = tokio::sync::watch::channel(false);
+    let (release, release_rx) = tokio::sync::watch::channel(false);
+    let fixture = ConformanceFixture::builder(&conversation(factory, "before-start"))
+        .script(first)
+        .tools(tools)
+        .build()
+        .await;
+    fixture
+        .runtime
+        .install_test_pre_tool_policy(Arc::new(BeforeStartPolicy {
+            entered,
+            release: release_rx,
+        }));
+
+    let mut driver = connect(&fixture, factory);
+    let (_, cursor) = initialize(&mut *driver, 1).await;
+    subscribe(&mut *driver, 2, cursor).await;
+    submit(&mut *driver, 3, "run then cancel").await;
+
+    tokio::time::timeout(
+        LIVENESS_GUARD,
+        entered_rx.wait_for(|is_entered| *is_entered),
+    )
+    .await
+    .expect("the real runtime must reach the pre-tool boundary")
+    .expect("the pre-tool gate stays open");
+
+    let RuntimeClientResult::AttemptCancellationAccepted { attempt_id } = result(
+        driver
+            .request(RuntimeClientRequest::CancelCurrentAttempt {
+                id: RequestId::new(4),
+            })
+            .await,
+    ) else {
+        panic!("the protocol cancellation is accepted for the current attempt");
+    };
+    release.send_replace(true);
+
+    let events = receive_until(&mut *driver, cursor, |event| {
+        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    })
+    .await;
+    assert_eq!(settlements(&events), 1);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event.event, RuntimeClientEvent::ToolExecutionStarted { .. }))
+            .count(),
+        0,
+        "BeforeStart publishes no execution-start fact"
+    );
+    let settlements: Vec<_> = events
+        .iter()
+        .filter_map(|event| match &event.event {
+            RuntimeClientEvent::ToolExecutionSettled {
+                tool_call_id,
+                result,
+                ..
+            } => Some((tool_call_id, result)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        settlements.len(),
+        1,
+        "the canonical commit repairs the slot with one client settlement"
+    );
+    assert_eq!(settlements[0].0.as_str(), "call-before-start");
+    assert!(matches!(
+        settlements[0].1.status,
+        ToolExecutionStatus::Cancelled {
+            reason: CancellationReason::UserRequested,
+            phase: ToolCancellationPhase::BeforeStart,
+        }
+    ));
+
+    let (snapshot, snapshot_cursor) = snapshot_of(&mut *driver, 5).await;
+    assert_eq!(
+        snapshot_cursor,
+        events.last().expect("settlement event").cursor
+    );
+    let tool_message = snapshot
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            rustx::message::types::MessageBlock::Tool(tool)
+                if tool.tool_call_id.as_str() == "call-before-start" =>
+            {
+                Some(tool)
+            }
+            _ => None,
+        })
+        .expect("the canonical ToolMessage is committed");
+    assert!(matches!(
+        tool_message.result.status,
+        ToolExecutionStatus::Cancelled {
+            reason: CancellationReason::UserRequested,
+            phase: ToolCancellationPhase::BeforeStart,
+        }
+    ));
+    let attempt = snapshot.attempt.expect("attempt");
+    let foreground = &attempt.foreground;
+    assert_eq!(foreground.len(), 1);
+    let ForegroundToolState::Settled { result, .. } = &foreground[0].state else {
+        panic!("the snapshot repairs the foreground slot as settled");
+    };
+    assert_eq!(result, &tool_message.result);
+    assert_eq!(result, settlements[0].1);
+    assert_eq!(attempt_id, attempt.attempt_id);
+    assert!(calls.borrow().is_empty(), "the executor was never invoked");
+}
 
 /// One foreground tool call projects its whole lifecycle and continues to
 /// the model with the committed result.

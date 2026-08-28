@@ -1570,7 +1570,8 @@ fn mixed_sibling_batch_is_recovered_only_from_durable_evidence() {
             (
                 ToolCallId::new("call-c"),
                 ToolExecutionStatus::Cancelled {
-                    reason: CancellationReason::ParentCancelled
+                    reason: CancellationReason::ParentCancelled,
+                    phase: rustx::tools::types::ToolCancellationPhase::BeforeStart,
                 }
             ),
         ],

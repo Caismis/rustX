@@ -122,7 +122,7 @@ use crate::runtime::identity::{
     ToolCallId, ToolExecutionId, ToolId,
 };
 use crate::runtime::types::{CancellationReason, RuntimeClock, RuntimeError};
-use crate::tools::types::{ToolExecutionResult, ToolExecutionStatus};
+use crate::tools::types::{ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus};
 
 /// The Event Journal page size of the recovery fold.
 ///
@@ -1422,6 +1422,7 @@ impl RecoveryPlan {
                         result: ToolExecutionResult {
                             status: ToolExecutionStatus::Cancelled {
                                 reason: CancellationReason::ParentCancelled,
+                                phase: ToolCancellationPhase::BeforeStart,
                             },
                             content: Vec::new(),
                             duration_ms: 0,

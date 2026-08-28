@@ -636,7 +636,10 @@ async fn cancellation_during_mixed_batch_settles_structurally() {
     );
     assert!(matches!(
         messages[0].result.status,
-        ToolExecutionStatus::Cancelled { .. }
+        ToolExecutionStatus::Cancelled {
+            reason: CancellationReason::UserRequested,
+            phase: rustx::tools::types::ToolCancellationPhase::DuringExecution,
+        }
     ));
     assert_eq!(messages[1].result.status, ToolExecutionStatus::Success);
     let accepted = match &messages[1].result.content[0] {
@@ -646,11 +649,17 @@ async fn cancellation_during_mixed_batch_settles_structurally() {
     assert_eq!(accepted["execution_id"], "exec_1");
     assert!(matches!(
         messages[2].result.status,
-        ToolExecutionStatus::Cancelled { .. }
+        ToolExecutionStatus::Cancelled {
+            reason: CancellationReason::UserRequested,
+            phase: rustx::tools::types::ToolCancellationPhase::DuringExecution,
+        }
     ));
     assert!(matches!(
         messages[3].result.status,
-        ToolExecutionStatus::Cancelled { .. }
+        ToolExecutionStatus::Cancelled {
+            reason: CancellationReason::UserRequested,
+            phase: rustx::tools::types::ToolCancellationPhase::BeforeStart,
+        }
     ));
     assert_eq!(
         model.requests().len(),

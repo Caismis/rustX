@@ -63,8 +63,14 @@ describe("runtime-owned outcomes", () => {
       // The header names the settlement; the reason is a separate band.
       [{ status: { type: "denied", reason: "human denied" } }, /denied/],
       [
-        { status: { type: "cancelled", reason: "user_requested" } },
-        /cancelled \(user_requested\)/,
+        {
+          status: {
+            type: "cancelled",
+            reason: "user_requested",
+            phase: "during_execution",
+          },
+        },
+        /cancelled \(user_requested, during_execution\)/,
       ],
       [{ status: { type: "timed_out" } }, /timed out/],
       [{ status: { type: "interrupted" } }, /interrupted \(outcome unknown\)/],

@@ -30,8 +30,8 @@ use crate::runtime::subagent::{
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, input_schema};
 use crate::tools::types::{
-    ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
-    ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
+    ToolCancellationPhase, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
+    ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
 };
 
 use super::input::decode;
@@ -149,6 +149,7 @@ impl ToolExecutor for SubagentExecutor {
                 Ok(SubagentStartOutcome::RolledBack) => ToolExecutionResult {
                     status: ToolExecutionStatus::Cancelled {
                         reason: context.cancellation.reason(),
+                        phase: ToolCancellationPhase::DuringExecution,
                     },
                     content: Vec::new(),
                     duration_ms: 0,

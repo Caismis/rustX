@@ -2,7 +2,7 @@
   "name": "@rustx/tui",
   "version": "0.1.0",
   "private": true,
-  "description": "The rustX reference terminal client: a Pi-TUI presentation layer over Runtime Client Protocol v5.",
+  "description": "The rustX reference terminal client: a Pi-TUI presentation layer over Runtime Client Protocol v6.",
   "license": "MIT",
   "type": "module",
   "packageManager": "pnpm@11.13.1",

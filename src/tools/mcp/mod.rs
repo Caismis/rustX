@@ -72,8 +72,9 @@ use crate::tools::output::{
     continuation_for_capture, foreground_continuation_block, truncation_for_capture,
 };
 use crate::tools::types::{
-    ManagedOutputContinuation, ToolDefinition, ToolExecutionResult, ToolExecutionStatus,
-    ToolInvocation, ToolInvocationPolicy, ToolOrigin, ToolReplayPolicy, ToolResultContent,
+    ManagedOutputContinuation, ToolCancellationPhase, ToolDefinition, ToolExecutionResult,
+    ToolExecutionStatus, ToolInvocation, ToolInvocationPolicy, ToolOrigin, ToolReplayPolicy,
+    ToolResultContent,
 };
 use crate::tools::workspace::Workspace;
 
@@ -1658,6 +1659,7 @@ impl McpServerRuntime {
                         Ok(()) => mcp_empty_terminal(
                             ToolExecutionStatus::Cancelled {
                                 reason: context.cancellation.reason(),
+                                phase: ToolCancellationPhase::DuringExecution,
                             },
                             context,
                             started,
@@ -3075,6 +3077,7 @@ mod tests {
         let result = mcp_empty_terminal(
             ToolExecutionStatus::Cancelled {
                 reason: CancellationReason::UserRequested,
+                phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
             },
             &context(&runtime, Some(&execution_id), &progress),
             Instant::now(),

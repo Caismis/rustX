@@ -35,6 +35,7 @@ import type {
   RuntimeClientTranscriptEntry,
   RuntimeClientTranscriptPage,
   SessionModelView,
+  ToolExecutionResult,
 } from "../protocol/types.ts";
 import {
   isHiddenContextMessage,
@@ -427,10 +428,13 @@ export function reduce(
           call_id: event.tool_call_id,
           tool_id: event.tool_id,
           name: existing?.name ?? "",
-          state: {
-            type: "running",
-            arguments: argumentsOf(existing),
-          },
+          state:
+            existing?.state.type === "settled"
+              ? existing.state
+              : {
+                  type: "running",
+                  arguments: argumentsOf(existing),
+                },
         })),
       );
 
@@ -446,26 +450,24 @@ export function reduce(
           call_id: event.tool_call_id,
           tool_id: event.tool_id,
           name: existing?.name ?? "",
-          state: {
-            type: "running",
-            arguments: argumentsOf(existing),
-            progress: event.progress,
-          },
+          state:
+            existing?.state.type === "settled"
+              ? existing.state
+              : {
+                  type: "running",
+                  arguments: argumentsOf(existing),
+                  progress: event.progress,
+                },
         })),
       );
 
     case "tool_execution_settled":
       return withForeground(next, state, event.attempt_id, (foreground) =>
-        upsertForeground(foreground, event.tool_call_id, (existing) => ({
-          call_id: event.tool_call_id,
-          tool_id: event.tool_id,
-          name: existing?.name ?? "",
-          state: {
-            type: "settled",
-            arguments: argumentsOf(existing),
-            result: event.result,
-          },
-        })),
+        settleForeground(
+          foreground,
+          event.tool_call_id,
+          event.result,
+        ),
       );
 
     case "message_committed": {
@@ -496,6 +498,23 @@ export function reduce(
       const todos = publishedTodos(event.message);
       if (todos !== undefined) {
         next.todos = todos;
+      }
+      // A canonical ToolMessage is also the authoritative repair path for a
+      // foreground slot whose live execution settlement was not published
+      // (for example BeforeStart cancellation). The Rust projection normally
+      // emits one equivalent `tool_execution_settled` event before this
+      // message, so this update is idempotent and also keeps the reducer safe
+      // when the commit is the first fact it sees. The result is copied from
+      // the typed message; phase is never inferred by the TUI.
+      if (event.message.role === "tool" && event.attempt_id !== undefined) {
+        const toolMessage = event.message;
+        withForeground(next, state, event.attempt_id, (foreground) =>
+          settleForeground(
+            foreground,
+            toolMessage.tool_call_id,
+            toolMessage.result,
+          ),
+        );
       }
       return next;
     }
@@ -573,12 +592,12 @@ export function reduce(
       return next;
 
     default:
-      // RuntimeClientConnection validates the v5 event vocabulary before an
+      // RuntimeClientConnection validates the v6 event vocabulary before an
       // event reaches this reducer. This branch is unreachable unless a
       // caller bypasses that boundary, and must never advance the cursor.
       const exhaustiveEvent: never = event;
       throw new Error(
-        `unreachable Runtime Client Protocol v5 event: ${String(exhaustiveEvent)}`,
+        `unreachable Runtime Client Protocol v6 event: ${String(exhaustiveEvent)}`,
       );
   }
 }
@@ -856,6 +875,35 @@ function upsertForeground(
   const updated = [...foreground];
   updated[index] = build(foreground[index]);
   return updated;
+}
+
+/**
+ * Settles a foreground slot from an already-authoritative typed result.
+ *
+ * A canonical ToolMessage is the repair path for a matching slot belonging to
+ * a call that never published a live execution settlement. Once a slot is
+ * settled, later lifecycle facts are ignored so the client never emits or
+ * displays a second terminal result. A commit never invents a slot: accepted
+ * calls already assembled one, and a missing identity is not a projection
+ * fact the message can reconstruct.
+ */
+function settleForeground(
+  foreground: AttemptPresentation["foreground"],
+  callId: string,
+  result: ToolExecutionResult,
+): AttemptPresentation["foreground"] {
+  const existing = foreground.find((entry) => entry.call_id === callId);
+  if (existing === undefined || existing.state.type === "settled") {
+    return foreground;
+  }
+  return updateForeground(foreground, callId, (existing) => ({
+    ...existing,
+    state: {
+      type: "settled",
+      arguments: argumentsOf(existing),
+      result,
+    },
+  }));
 }
 
 function upsertBackground(

@@ -251,7 +251,11 @@ fn render_tool(tool: &ToolMessageBlock, parts: &mut Vec<String>) {
         ToolExecutionStatus::Success => "success".to_owned(),
         ToolExecutionStatus::Failed { error } => format!("failed: {error}"),
         ToolExecutionStatus::Denied { reason } => format!("denied: {reason}"),
-        ToolExecutionStatus::Cancelled { reason } => format!("cancelled: {reason:?}"),
+        ToolExecutionStatus::Cancelled { .. } => tool
+            .result
+            .status
+            .model_facing_text()
+            .expect("cancelled status has model-facing text"),
         ToolExecutionStatus::TimedOut => "timed out".to_owned(),
         ToolExecutionStatus::Interrupted => "interrupted".to_owned(),
     };
@@ -548,7 +552,10 @@ mod tests {
         InboundKind, MessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
     use crate::runtime::identity::{MessageId, ToolCallId, ToolId};
-    use crate::tools::types::{ToolExecutionResult, ToolExecutionStatus, ToolResultContent};
+    use crate::runtime::types::CancellationReason;
+    use crate::tools::types::{
+        ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus, ToolResultContent,
+    };
 
     fn request() -> SummaryRequest {
         SummaryRequest {
@@ -627,6 +634,45 @@ mod tests {
                     .len(),
             "the rendered transcript must be smaller than the canonical encoding"
         );
+    }
+
+    #[test]
+    fn issue136_rendered_transcript_explains_cancellation_phase() {
+        for (reason, reason_label) in [
+            (CancellationReason::UserRequested, "user_requested"),
+            (CancellationReason::RuntimeShutdown, "runtime_shutdown"),
+        ] {
+            for (phase, required) in [
+                (
+                    ToolCancellationPhase::BeforeStart,
+                    "rustX did not start execution",
+                ),
+                (
+                    ToolCancellationPhase::DuringExecution,
+                    "Partial side effects may have occurred",
+                ),
+            ] {
+                let request = SummaryRequest {
+                    retired: vec![MessageBlock::Tool(ToolMessageBlock {
+                        id: MessageId::new("tool-cancelled"),
+                        tool_call_id: ToolCallId::new("call-cancelled"),
+                        tool_id: ToolId::new("tool-cancelled"),
+                        result: ToolExecutionResult {
+                            status: ToolExecutionStatus::Cancelled { reason, phase },
+                            content: Vec::new(),
+                            duration_ms: 0,
+                            exit_code: None,
+                            artifacts: Vec::new(),
+                            truncation: None,
+                            managed_output: None,
+                        },
+                    })],
+                };
+                let rendered = request.render_transcript();
+                assert!(rendered.contains(reason_label));
+                assert!(rendered.contains(required));
+            }
+        }
     }
 
     /// Truncation never splits a multi-byte character.

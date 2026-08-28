@@ -330,7 +330,7 @@ export class RuntimeClientConnection {
       this.#close(
         new ConnectionClosedError(
           "protocol_error",
-          "the runtime sent an unknown or malformed Runtime Client Protocol v5 event",
+          "the runtime sent an unknown or malformed Runtime Client Protocol v6 event",
         ),
       );
       return false;
