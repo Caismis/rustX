@@ -1183,12 +1183,13 @@ that a live child produced an Interrupted physical result.
   correlation, so a live publication and a recovery publication are
   mutually exclusive by construction). Nothing is relaunched, replayed, or
   reattached.
-- **Capabilities are deny-by-construction.** The child composes the base
-  tool plane only (v1 profile `explore`: Read/Glob/Grep) with no `subagent`
-  tool — recursion is impossible by construction, not by policy. The
-  startup input is the typed `SubagentChildSpec` (resolved
-  `SessionContextPolicy`, model binding, workspace, child-private runtime
-  root); no temporary configuration file is ever written.
+- **Capabilities are deny-by-construction.** The child's `ToolRegistry` is
+  exactly the Builtin set its named definition resolved to — never "every
+  currently active native tool" — with no `subagent` and no `ask_user`
+  registration, so recursion and headless-only surfaces are impossible by
+  construction rather than by policy. The startup input is the typed
+  `SubagentChildSpec` carrying the frozen `ResolvedSubagentSpec`; no
+  temporary configuration file is ever written.
 - **Parent-death containment is real-process tested.** Linux and macOS test
   the actual parent/child binary boundary with a provider response gate,
   hard `SIGKILL`, control-channel EOF, child exit, and repeated restart.
@@ -1196,6 +1197,82 @@ that a live child produced an Interrupted physical result.
   replay, no fabricated success, and no child relaunch. Result and diagnostic
   bounds are bytes, not characters, and truncate only at a valid UTF-8
   boundary; Chinese, emoji, ASCII, and short-content cases are covered.
+
+## Issue #144: named attempt-scoped subagent definitions
+
+- **Named subagent definitions are immutable members of one admitted
+  runtime resource generation.** `SubagentCatalog` is
+  configuration/resource-generation state that the loader builds off-side,
+  validates against the very capability candidate it will publish, and
+  freezes into `RuntimeResourceSnapshot` at the same atomic commit that
+  publishes that generation's capabilities, project instructions, and
+  Skills. There is no hard-coded profile set and no `SubagentProfile` type.
+- **A subagent invocation resolves against the runtime generation owned by
+  its invoking attempt, not mutable runtime-current resources.** The
+  registered `SubagentExecutor` holds no runtime handle. Each invocation
+  receives an `AttemptSubagentContext` — the attempt's own
+  `Arc<RuntimeResourceSnapshot>` plus the model authority frozen at the same
+  admission linearization — through the crate-private `ToolExecutionContext`
+  seam that the native Questionnaire and task-list authorities already use.
+  A resource reload additionally cannot commit while an attempt is live: it
+  refuses with `Busy { Attempt }`.
+- **Parent active ToolRegistry is one projection of runtime authority; a
+  subagent is another.** Resolution reads
+  `CapabilitySnapshot::available_tools()` and the matching
+  capability-source availability of the same generation. So
+  `ParentActiveTools ⊆ available_tools()` and
+  `SubagentResolvedTools ⊆ available_tools()` both hold, while
+  `SubagentResolvedTools ⊆ ParentActiveTools` is deliberately **not**
+  required: a definition may select a capability that is available but
+  inactive for the parent.
+- **A named subagent may narrow authority but cannot manufacture it.** No
+  selector resolves to anything outside the invoking generation's authorized
+  available capabilities, and no per-call argument can widen a definition:
+  the model-facing contract is exactly `{agent, task, context?}`.
+- **Optionality belongs to source availability, never to a selection.** A
+  configured source that is unavailable in this generation keeps the runtime
+  healthy and blocks only the agents that explicitly require it
+  (`SourceUnavailable`, decided before ownership commit). A selector whose
+  source authority *is* present but that names an unknown capability, model,
+  or Skill rejects resource-generation preparation, so a failed reload
+  leaves the previous complete generation authoritative in every half —
+  catalog, capability state, project instructions, Skills, model selection,
+  and the active generation identity.
+- **Project instructions and Skills are parent-resolved frozen resources;
+  the child does not rediscover them.** `agentsMd.inherit = true` freezes the
+  generation's exact chain followed by the definition's explicit files in
+  configured order; `inherit = false` freezes only the explicit files. The
+  child's Skill catalog is the parent-resolved allowlist by value, with
+  progressive disclosure intact: catalog metadata crosses the boundary, never
+  a `SKILL.md` body. The child runs no ancestor discovery, which is what makes
+  the boundary correct once a child's filesystem ancestry can differ from the
+  parent workspace.
+- **A default child model is the invoking attempt's frozen effective model.**
+  An explicitly configured model resolves through the admitted model
+  authority and fails closed; no path reads live mutable session state or a
+  composition-time capture.
+- **Committed child identity is `(agent, definition_digest)`.**
+  `SubagentDefinitionDigest` is SHA-256 over a rustX-owned versioned
+  canonical framing (`rustx-subagent-definition-v1`) of the normalized
+  semantic definition — never raw JSONC bytes — so comments, whitespace, key
+  order, and selector listing order cannot change it while every semantic
+  change does. The durable fact, registry snapshot, recovery diagnostic, and
+  Runtime Client projection all carry both fields, so a later reload that
+  redefines the same agent name can never reinterpret an already-running
+  child by name alone.
+- **Builtin/MCP/Python selectors use one source-qualified semantic capability
+  model.** One selection vocabulary and one resolution core produce frozen
+  identities that keep exact source identity: Builtin freezes its `ToolId`
+  and definition; MCP freezes `server_id` plus the canonical name and exact
+  definition; Python freezes `ToolId` plus the exact `ToolVersionId`. There
+  is no parallel per-origin registry and no wildcard selector.
+- **Until external physical materialization exists, external-origin
+  requirements fail before subagent ownership commit.** A definition
+  resolving to MCP and/or Python resolves *semantically*, and
+  `SubagentRegistry::prepare` then refuses with
+  `ExternalOriginUnsupported` — before any identity is allocated and before
+  any process is staged. Nothing is silently removed, substituted,
+  downgraded, or reported as success.
 
 ## Issue #96: Session/configuration and capability activation
 

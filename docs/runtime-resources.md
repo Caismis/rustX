@@ -3,9 +3,10 @@
 `RuntimeResourceSnapshot` is the immutable process-local owner of loaded
 resource-derived authority. One generation contains the ordered project
 context files and concatenated bytes, the compact Skill catalog and discovered
-Skill source identities, the agent profile and extension System Sections, and
-the compatible immutable `CapabilitySnapshot` containing the Tool definitions
-and executors.
+Skill source identities, the agent profile and extension System Sections, the
+admitted `SubagentCatalog` of named subagent definitions with the
+capability-source availability of that same generation, and the compatible
+immutable `CapabilitySnapshot` containing the Tool definitions and executors.
 
 This object is not a conversation fact and is not a durable resource database.
 `RuntimeResourceRevision` is only the process-local identity recorded with a
@@ -54,6 +55,44 @@ summary additionally carries typed cumulative file-operation metadata derived
 from the retired span's canonical tool calls, never from the generated prose.
 Historical Status observations may be summarized as
 past evidence, but the summary is never current runtime authority.
+
+## Named subagent definitions
+
+A generation's `SubagentCatalog` is configuration/resource-generation state,
+never live execution state. A loader builds it off-side — reading each
+definition's instruction document and explicit project-instruction files —
+validates every definition against the very capability candidate it is about
+to publish, and only then does the candidate commit. A definition that names
+an unknown capability, model, or Skill therefore rejects the whole candidate,
+and the previous complete generation stays authoritative in every half.
+
+The capability-source availability carried alongside the catalog is what lets
+resolution distinguish two different facts:
+
+- a *source* that is unavailable in this generation keeps the runtime healthy
+  and blocks only the agents that explicitly require it;
+- a selector whose source authority is present but that names an unknown
+  capability is a static configuration error.
+
+`CapabilitySnapshot` stays focused on executable capability identity — its
+revision advances only when the effective committed executable set changes —
+so this control-plane availability is carried on the resource generation that
+needs it rather than distorting the capability revision's meaning.
+
+Resolution binds to the generation the *invoking attempt* owns. An attempt
+receives its `Arc<RuntimeResourceSnapshot>` at admission and hands each
+foreground tool invocation an `AttemptSubagentContext` over exactly that
+generation, so a reload that commits a newer generation cannot be observed by
+an in-flight attempt. A reload additionally refuses while an attempt is live.
+
+A resolved specification freezes everything the child needs: the
+`(agent, definition_digest)` identity, the instruction document, the exact
+model configuration, the exact source-qualified capability identities across
+Builtin/MCP/Python, the selected Skill catalog metadata, and the exact
+project-instruction chain. The child consumes that value and reinterprets
+nothing — it never reads `rustx.jsonc`, never runs the ancestor discovery
+described below, never re-chooses model policy, never rediscovers Skills, and
+never widens or substitutes Tool identity.
 
 ## Project instruction discovery
 

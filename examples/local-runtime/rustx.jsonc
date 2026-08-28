@@ -197,6 +197,76 @@
   // "skills": ["../shared-skills", "workspace/.agents/skills/pdf"],
   "skills": [],
 
+  // Named subagents. Each entry is one immutable definition admitted into
+  // the runtime resource generation; the map key *is* the agent name, so a
+  // definition never repeats it. The model chooses only which named agent
+  // runs — `{"agent": "...", "task": "...", "context": "..."}` — and can
+  // never override a definition's model, tools, Skills, or instructions.
+  //
+  // A subagent resolves against the immutable generation owned by the
+  // attempt that invoked it, so a config reload mid-turn cannot change what
+  // an in-flight attempt's subagent sees.
+  "subagents": {
+    // Launch-scoped: the per-conversation concurrency bound is read once, at
+    // startup, and resource reload deliberately never resizes it.
+    "maxConcurrent": 4,
+
+    "agents": {
+      // "explore": {
+      //   // The bounded routing description the model sees in the
+      //   // `subagent` tool description.
+      //   "description": "Read-only repository exploration.",
+      //
+      //   // The child's instruction document. Relative paths resolve
+      //   // against the canonical workspace root, and the parent freezes
+      //   // the file's content into the definition: the child never
+      //   // reads this file, or this config, itself.
+      //   "instructionsFile": ".rustx/subagents/explore.md",
+      //
+      //   // Omit to inherit the *invoking attempt's* frozen effective
+      //   // model. A named model must exist in `models.jsonc` or startup
+      //   // fails.
+      //   "model": "example/demo-model",
+      //
+      //   // Exact, source-qualified capability selection. Origins are
+      //   // named rather than collapsed into bare strings, so a built-in
+      //   // `read` and an MCP server's `read` are never interchangeable.
+      //   // There are no wildcards: a selection is an exact list.
+      //   //
+      //   // A selection may name a capability the *parent* has available
+      //   // but inactive — a subagent is an independent projection of the
+      //   // same runtime authority. It can never name one the runtime
+      //   // does not authorize at all.
+      //   //
+      //   // `subagent` and `ask_user` are rejected: nested delegation is
+      //   // unsupported, and a headless child has no questionnaire
+      //   // authority.
+      //   "tools": {
+      //     "builtin": ["read", "glob", "grep"],
+      //     "mcp": {"exa": ["web_search_exa"]},
+      //     "python": ["repository_symbols"],
+      //   },
+      //
+      //   // An exact allowlist over the Skills this generation admitted.
+      //   // Unselected Skills are absent from the child's catalog, and an
+      //   // unknown name fails startup rather than being dropped.
+      //   // Progressive disclosure is preserved: the child sees catalog
+      //   // metadata and loads bodies through ordinary Skill semantics.
+      //   "skills": ["repository-navigation"],
+      //
+      //   // Project instructions are parent-resolved and frozen; the child
+      //   // never walks ancestors of its own.
+      //   //   inherit: true   this generation's normal AGENTS.md chain,
+      //   //                   then the explicit files in configured order
+      //   //   inherit: false  the explicit files only
+      //   "agentsMd": {
+      //     "inherit": true,
+      //     "files": [".rustx/subagents/explore/AGENTS.md"],
+      //   },
+      // },
+    },
+  },
+
   // The base authorized tool environment. Every entry is explicit: no
   // process environment variable reaches a tool implicitly. Keep provider
   // credentials in `models.jsonc`'s `apiKey` reference instead of here.

@@ -2078,9 +2078,10 @@ transcript page it happens to hold, and without any client-side task
 state. The tool is fixed foreground-only, sequential,
 approval-never: one list cannot be mutated by a detached execution, two
 concurrent mutations would publish racing snapshots, and there is nothing
-in a task list for a human to approve. A subagent child composes the
-read-only `explore` profile and has no `todo` registration at all, so
-session isolation of the list is structural rather than a check.
+in a task list for a human to approve. A subagent child composes exactly the
+Builtin capabilities its named definition resolved to, so a child without an
+explicit `todo` selection has no `todo` registration at all and session
+isolation of the list is structural rather than a check.
 
 The dispatch ownership commit is the background linearization point: the
 registry synchronization boundary is acquired first and the final
@@ -4331,6 +4332,19 @@ The `subagent` intrinsic is conversation-owned detached work, not a second
 agent loop or a generic task framework:
 
 ```text
+RuntimeResourceSnapshot Rn         one admitted resource generation
+  ├─ CapabilitySnapshot
+  │    ├─ available_tools()        the generation's authorized capabilities
+  │    └─ active ToolRegistry      the *parent's* projection of them
+  ├─ capability-source availability of the same generation
+  ├─ SubagentCatalog               immutable named definitions
+  ├─ frozen project instructions
+  └─ frozen Skills/resources
+            |
+            v
+      SubagentResolver             definition + Rn + attempt model
+            |                      -> frozen ResolvedSubagentSpec
+            v
 ConversationRuntime/coordinator
         |
         v
@@ -4342,6 +4356,43 @@ subagent process driver   sole committed OS-process handle owner
         v
 real --subagent-child     ConversationRuntime + Agent Loop + Context + Tools
 ```
+
+Configuration semantics and live lifecycle are deliberately separate owners.
+`SubagentCatalog` owns the immutable named definitions of one resource
+generation and their deterministic digests, and nothing live.
+`SubagentResolver` owns the single transformation
+`definition + invoking RuntimeResourceSnapshot + invoking attempt model
+-> ResolvedSubagentSpec`. `SubagentRegistry` continues to own only live child
+concerns — capacity, `SubagentId`/lifecycle, staged preparation, ownership
+commit, cancellation, terminal settlement, recovery-facing state, and process
+ownership coordination — and never resolves configuration.
+
+The invocation seam is attempt-scoped rather than ambient. The registered
+`SubagentExecutor` is long-lived, so reading mutable `runtime_resources()`
+during execution would allow generation tearing: an attempt admitted under
+R1, a reload committing R2, and that same attempt's call then resolving R2.
+Instead the invoking `AgentExecution` hands each foreground invocation an
+`AttemptSubagentContext` — its own `Arc<RuntimeResourceSnapshot>` plus the
+model configuration frozen at the same admission linearization — through the
+crate-private `ToolExecutionContext` seam already used by the native
+Questionnaire and task-list authorities. No general runtime handle is exposed
+to any `ToolExecutor`, and a resource reload additionally refuses while an
+attempt is live (`Busy { Attempt }`).
+
+Capability resolution runs over `available_tools()` and the matching
+capability-source availability of the same generation, never over the
+parent's active `ToolRegistry`. A named subagent is therefore an independent
+projection of the authority admitted into the invoking generation: it may
+select a capability that is available but inactive for the parent, and it can
+never select one the generation does not authorize at all. Selectors are
+source-qualified across all three origins through one selection vocabulary
+and one resolution core, and the frozen result keeps exact identity —
+`ToolId` for Builtin, `server_id` plus canonical name and exact definition for
+MCP, and `ToolId` plus exact `ToolVersionId` for Python. Child-side physical
+materialization of the external origins is a later issue; until it exists,
+`SubagentRegistry::prepare` refuses a specification that requires one, before
+any identity is allocated and any process is staged, rather than starting a
+child weaker than the definition it was authorized with.
 
 `prepare` validates the bounded task/context and stages a real child through
 its typed Hello/Ready handshake. The one ownership commit freezes one start
@@ -4414,9 +4465,11 @@ read time) and the unique `event_id` index in bounded time, never a journal
 scan — so a repeated or caller-controlled `child_agent_id` in a terminal
 event is not authority. Success is
 `UserSource::Agent(child)`; failure, cancellation, and recovery interruption
-are `UserSource::Runtime`. The Explore child capability snapshot contains
-exactly Read/Glob/Grep, with no write, shell, background, MCP, or recursive
-subagent capability. Parent hard death closes the control channel; the child
+are `UserSource::Runtime`. The child capability snapshot contains exactly the
+Builtin capabilities its named definition resolved to; `subagent` and
+`ask_user` are structurally unregistrable there, so recursion and
+headless-only surfaces cannot appear whatever a definition names. Parent hard
+death closes the control channel; the child
 exits, and restart classifies the old nonterminal ownership as Interrupted
 without reattach, replay, PID adoption, or relaunch.
 

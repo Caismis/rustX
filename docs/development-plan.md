@@ -1315,11 +1315,18 @@ authority at write time and revalidated at read time) and the unique
 `event_id` index in bounded time, never a journal scan — not merely against
 the repeated terminal payload.
 
-Capabilities are deny-by-construction: the child composes the base tool
-plane only (v1 profile `explore`: Read/Glob/Grep) and has no `subagent`
-tool, so recursion is impossible by construction. Runtime Client v7 carries
-`subagent_status`, `subagent_cancel`, the `SubagentUpdated` event, and
-`snapshot.subagents`; the TUI renders the same projection.
+Capabilities are deny-by-construction: the child's registry is exactly the
+Builtin set its definition resolved to, and `subagent`/`ask_user` are
+structurally unregistrable there, so recursion and headless-only surfaces are
+impossible by construction. Runtime Client `subagent_status`,
+`subagent_cancel`, the `SubagentUpdated` event, and `snapshot.subagents`
+carry the `(agent, definition_digest)` identity; the TUI renders the same
+projection.
+
+Issue #144 replaced M9.25's hard-coded `SubagentProfile::Explore` with named
+attempt-scoped definitions; the paragraph above describes the current
+architecture, and the "profile" vocabulary is obsolete throughout the
+subagent plane.
 
 Exit criteria (met): deterministic registry tests over scripted staged
 children (capacity at commit, cancellation before and after the start-gate
@@ -1346,8 +1353,8 @@ write time and revalidated at terminal-validation time; UTF-8 byte-bound
 tests; recovery interrupted-only classification tests; and real-binary
 scenarios for ordinary execution and hard parent `SIGKILL` with child EOF
 containment and repeated idempotent restart. No durable workflow, no
-subagent profile configuration surface, cross-conversation children, or
-recursion were added.
+subagent definition configuration surface (Issue #144 added it),
+cross-conversation children, or recursion were added.
 
 ## Milestone 10 — Local runtime product
 
