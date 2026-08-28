@@ -34,7 +34,7 @@ function subagent(
 
 describe("subagent identity", () => {
   it("negotiates the protocol version that carries the named identity", () => {
-    assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 7);
+    assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 8);
   });
 
   it("carries agent and definition_digest from the snapshot", () => {
