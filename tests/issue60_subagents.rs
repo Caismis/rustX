@@ -66,8 +66,25 @@ fn models_json(base_url: &str) -> String {
 const SESSION_JSON: &str = r#"{
   "agentId": "agent-parent",
   "model": {"model": "fixture/subagent-model"},
-  "context": {"reserveTokens": 1024, "keepRecentTokens": 8192}
+  "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
+  "subagents": {
+    "maxConcurrent": 4,
+    "agents": {
+      "explore": {
+        "description": "Read-only repository exploration.",
+        "instructionsFile": "subagents/explore.md",
+        "tools": {"builtin": ["read", "glob", "grep"]}
+      }
+    }
+  }
 }"#;
+
+/// The `explore` agent's instruction document, written into the workspace so
+/// the parent generation can freeze it.
+const EXPLORE_INSTRUCTIONS: &str = "You are a read-only exploration subagent of the rustX \
+runtime. Answer the delegated task by inspecting the shared workspace with the capabilities \
+your definition authorized. Produce one bounded final answer; your runtime is one-shot and \
+terminates with it.";
 
 /// One spawned `rustx` process wired to its stdio JSONL transport.
 struct Process {
@@ -98,7 +115,12 @@ impl Process {
         continue_active: bool,
     ) -> Self {
         let workspace = root.join("workspace");
-        std::fs::create_dir_all(&workspace).expect("workspace");
+        std::fs::create_dir_all(workspace.join("subagents")).expect("workspace");
+        std::fs::write(
+            workspace.join("subagents").join("explore.md"),
+            EXPLORE_INSTRUCTIONS,
+        )
+        .expect("explore instructions");
         std::fs::write(root.join("models.jsonc"), models).expect("models.jsonc");
         std::fs::write(root.join("rustx.jsonc"), session).expect("rustx.jsonc");
         let mut command = tokio::process::Command::new(binary());
@@ -451,7 +473,12 @@ async fn a_subagent_child_runs_end_to_end_through_the_real_process_stack() {
         subagent.state,
         rustx::runtime::subagent::SubagentState::Succeeded
     );
-    assert_eq!(subagent.profile, "explore");
+    assert_eq!(subagent.agent, "explore");
+    assert!(
+        subagent.definition_digest.starts_with("sha256:"),
+        "the committed child carries the definition digest it started with: {}",
+        subagent.definition_digest
+    );
     let detail = subagent.detail.clone().expect("the terminal detail");
     assert!(
         detail.contains("CHILD-ANSWER"),

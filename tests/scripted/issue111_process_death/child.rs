@@ -926,7 +926,7 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 tool_id: "tool-subagent",
                 name: "subagent",
                 arguments: serde_json::json!({
-                    "profile": "explore",
+                    "agent": "explore",
                     "task": "inspect the workspace note"
                 }),
             };
@@ -1386,7 +1386,7 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 tool_id: "tool-subagent",
                 name: "subagent",
                 arguments: serde_json::json!({
-                    "profile": "explore",
+                    "agent": "explore",
                     "task": "inspect the workspace note"
                 }),
             };

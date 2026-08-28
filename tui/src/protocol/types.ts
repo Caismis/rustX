@@ -711,12 +711,21 @@ export interface RuntimeClientBackgroundExecution {
   result?: ToolExecutionResult;
 }
 
-/** The Runtime Client view of one subagent child (Issue #60). */
+/**
+ * The Runtime Client view of one subagent child (Issue #60), carrying the
+ * named-agent identity of Issue #144.
+ *
+ * `definition_digest` is the deterministic identity of the definition the
+ * child actually started with. It is not derived from the current catalog:
+ * a resource reload that redefines the same `agent` name leaves an
+ * already-running child reporting its original digest.
+ */
 export interface RuntimeClientSubagent {
   subagent_id: SubagentId;
   child_agent_id: AgentId;
   child_conversation_id: ConversationId;
-  profile: string;
+  agent: string;
+  definition_digest: string;
   state: SubagentState;
   detail?: string;
 }

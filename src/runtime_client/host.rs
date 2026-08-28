@@ -2463,7 +2463,7 @@ mod tests {
         assert!(matches!(
             bad,
             Err(RuntimeClientError::UnsupportedProtocolVersion {
-                supported: 7,
+                supported: 8,
                 requested: 9,
             })
         ));

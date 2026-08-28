@@ -2000,7 +2000,8 @@ fn audited_proposals_reject_all_dependent_tool_transitions_atomically() {
                 child_agent_id: AgentId::new("child-audited"),
                 child_conversation_id: ConversationId::new("child-conversation"),
                 tool_call_id: call_id,
-                profile: "profile".to_owned(),
+                agent: "profile".to_owned(),
+                definition_digest: "sha256:definition".to_owned(),
             },
         );
         subagent.event_id = EventId::new(format!("subagent-committed-event:{subagent_id}"));

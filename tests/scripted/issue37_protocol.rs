@@ -98,7 +98,7 @@ fn protocol_envelopes_round_trip_deterministically() {
 fn protocol_errors_round_trip_with_stable_categories() {
     let cases = [
         RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 7,
+            supported: 8,
             requested: 4,
         },
         RuntimeClientError::AttachmentInUse {
@@ -334,21 +334,31 @@ async fn attachment_request_correlation_and_version_negotiation() {
         assert!(response.error.is_none());
     }
 
-    // Incompatible version negotiation fails explicitly, including the
-    // previous wire contracts.
-    let incompatible = host.attach(8);
+    // Incompatible version negotiation fails explicitly, in both
+    // directions and including every superseded wire contract.
+    let incompatible = host.attach(9);
     assert!(matches!(
         incompatible,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 7,
-            requested: 8,
+            supported: 8,
+            requested: 9,
         })
     ));
-    let old_protocol = host.attach(6);
+    let old_protocol = host.attach(7);
     assert!(matches!(
         old_protocol,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 7,
+            supported: 8,
+            requested: 7,
+        })
+    ));
+    // v6 carried the obsolete profile-shaped subagent projection (Issue
+    // #144). It is refused rather than served a renamed payload.
+    let profile_shaped = host.attach(6);
+    assert!(matches!(
+        profile_shaped,
+        Err(RuntimeClientError::UnsupportedProtocolVersion {
+            supported: 8,
             requested: 6,
         })
     ));
@@ -356,7 +366,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     // The initialize method cannot re-initialize an admitted attachment.
     let reinit = attachment.handle_request(RuntimeClientRequest::Initialize {
         id: request_id(9),
-        protocol_version: 7,
+        protocol_version: 8,
     });
     assert!(matches!(
         reinit.error,

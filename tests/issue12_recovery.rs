@@ -3093,7 +3093,8 @@ fn commit_subagent_ownership(store: &SqliteConversationStore, subagent: &Subagen
                 child_agent_id: AgentId::new(format!("agent-{subagent}")),
                 child_conversation_id: ConversationId::new(subagent.as_str()),
                 tool_call_id: ToolCallId::new("call-sub"),
-                profile: "explore".to_owned(),
+                agent: "explore".to_owned(),
+                definition_digest: "sha256:definition".to_owned(),
             },
         ))
         .expect("subagent ownership");
@@ -3121,6 +3122,13 @@ fn nonterminal_subagent_work_is_terminalized_exactly_once_and_never_relaunched()
         "the durably owned child is classified"
     );
     assert_eq!(report.subagent_classes()[0].evidence.subagent_id, subagent);
+    // Issue #144: recovery reports the identity the child actually started
+    // with. Name alone would let a later catalog reinterpret an old child.
+    assert_eq!(report.subagent_classes()[0].evidence.agent, "explore");
+    assert_eq!(
+        report.subagent_classes()[0].evidence.definition_digest,
+        "sha256:definition"
+    );
     assert_eq!(
         report.reconciliation().subagent_terminals,
         vec![subagent.clone()]
@@ -3188,6 +3196,7 @@ fn a_durably_settled_subagent_needs_no_recovery() {
             &subagent,
             &AgentId::new(format!("agent-{subagent}")),
             "explore",
+            "sha256:definition",
             fixed_time(),
         );
         store
