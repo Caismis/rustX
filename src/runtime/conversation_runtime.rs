@@ -2745,8 +2745,28 @@ impl ConversationRuntime {
     /// [`ConversationRuntimeError::ToolRuntimeNotQuiescent`] when the tool
     /// runtime's background plane already holds prepared or committed
     /// background work.
-    #[allow(clippy::too_many_lines)]
     pub fn new(config: RuntimeConversationConfig) -> Result<Self, ConversationRuntimeError> {
+        Self::new_with_monotonic_clock(config, None)
+    }
+
+    /// Creates a runtime with one explicitly supplied monotonic clock for a
+    /// deterministic composition test. This seam is restricted to the crate
+    /// test build and remains at the conversation-runtime composition root:
+    /// normal runtime admission still constructs both sibling consumers from
+    /// `RuntimeInner`'s one clock field.
+    #[cfg(test)]
+    pub(crate) fn with_test_monotonic_clock(
+        config: RuntimeConversationConfig,
+        monotonic_clock: Arc<dyn MonotonicClock>,
+    ) -> Result<Self, ConversationRuntimeError> {
+        Self::new_with_monotonic_clock(config, Some(monotonic_clock))
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn new_with_monotonic_clock(
+        config: RuntimeConversationConfig,
+        injected_monotonic_clock: Option<Arc<dyn MonotonicClock>>,
+    ) -> Result<Self, ConversationRuntimeError> {
         // The one conversation authority at this boundary: every identity
         // this runtime publishes or derives comes from the tool runtime it
         // coordinates, so runtime and tool runtime cannot disagree.
@@ -3010,7 +3030,9 @@ impl ConversationRuntime {
             lifecycle,
             clock,
             model_timeout_policy: config.model_timeout_policy,
-            monotonic_clock: Arc::new(SystemMonotonicClock::new()),
+            monotonic_clock: injected_monotonic_clock.unwrap_or_else(|| {
+                Arc::new(SystemMonotonicClock::new()) as Arc<dyn MonotonicClock>
+            }),
             durability_gate: durability_gate.clone(),
             recovery,
             executor,

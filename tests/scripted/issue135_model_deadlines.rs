@@ -33,6 +33,9 @@ use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
 use rustx::model::types::ModelUsage;
 use rustx::runtime::continuation::{AnthropicContinuation, ProviderContinuationState};
+use rustx::runtime::conversation_runtime::{
+    ConversationContextConfig, ConversationRuntime, RuntimeConversationConfig,
+};
 use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolCallId, ToolId};
 use rustx::runtime::{ManualMonotonicClock, MonotonicClock};
 use rustx::tools::executor::ToolRegistry;
@@ -56,6 +59,12 @@ fn user(id: &str, text: &str) -> MessageBlock {
         kind: InboundKind::Message,
         timestamp: None,
     })
+}
+
+fn text_content(text: &str) -> Vec<UserContentBlock> {
+    vec![UserContentBlock::Text(TextBlock {
+        text: text.to_owned(),
+    })]
 }
 
 fn request(attempt: &str, model: &Arc<FakeModel>) -> AgentExecutionRequest {
@@ -174,6 +183,88 @@ fn summary_invocation(model: &Arc<FakeModel>) -> rustx::model::ResolvedModelInvo
     support::attempt_model_with_window(model.clone(), "fake-model", 10_000_000, 128)
         .summary_invocation()
         .clone()
+}
+
+/// Builds a real conversation runtime with one explicitly injected test
+/// clock. The injection is restricted to the composition-root test seam;
+/// runtime admission still constructs the primary and summary consumers from
+/// `RuntimeInner` exactly as production does.
+async fn runtime_with_manual_clock(
+    conversation_id: &str,
+    initial_messages: Vec<MessageBlock>,
+    scripts: Vec<Vec<FakeStep>>,
+    policy: ModelTimeoutPolicy,
+    clock: Arc<ManualMonotonicClock>,
+) -> (tempfile::TempDir, ConversationRuntime, Arc<FakeModel>) {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let conversation_id = ConversationId::new(conversation_id);
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let tool_runtime = rustx::tools::runtime::ConversationToolRuntime::new(
+        conversation_id.clone(),
+        &workspace,
+        dir.path().join("artifacts"),
+    )
+    .expect("tool runtime");
+    let capability = rustx::capabilities::CapabilityCoordinator::new(
+        rustx::capabilities::CapabilityCoordinatorConfig {
+            conversation_id: conversation_id.clone(),
+            workspace: tool_runtime.workspace().clone(),
+            base_tool_registry: Arc::new(ToolRegistry::new()),
+            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+            skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
+            mcp_servers: std::collections::BTreeMap::new(),
+            base_environment: tool_runtime.environment().clone(),
+            environment_store_root: dir.path().join("skill-env"),
+        },
+    )
+    .expect("capability coordinator");
+    let candidate = capability
+        .prepare_candidate()
+        .await
+        .expect("capability candidate");
+    capability.commit(candidate).expect("capability commit");
+
+    let model = fake_model(scripts);
+    let adapter: Arc<dyn rustx::model::ModelAdapter> = model.clone();
+    let resources = Arc::new(rustx::runtime::RuntimeResourceSnapshot::new(
+        rustx::runtime::RuntimeResourceRevision::new(1),
+        Vec::new(),
+        None,
+        rustx::context::ContextAssembly::new(),
+        capability.current_snapshot(),
+    ));
+    let resource_loader: Arc<dyn rustx::runtime::RuntimeResourceLoader> =
+        Arc::new(rustx::runtime::FilesystemRuntimeResourceLoader::new(
+            capability.current_snapshot().workspace_root(),
+        ));
+    let runtime = ConversationRuntime::with_test_monotonic_clock(
+        RuntimeConversationConfig {
+            agent_id: AgentId::new("agent-135-shared-clock"),
+            model: support::model::scripted_session_model(adapter),
+            approval_mode: rustx::runtime::ApprovalMode::Policy,
+            model_timeout_policy: policy,
+            context: ConversationContextConfig {
+                policy: SessionContextPolicy {
+                    reserve_tokens: 0,
+                    keep_recent_tokens: 0,
+                    summary_output_cap: None,
+                },
+                estimator: Arc::new(DefaultTokenEstimator),
+                status_engine: AgentStatusEngine::default(),
+            },
+            tool_runtime,
+            capability,
+            resources,
+            resource_loader,
+            clock: None,
+            initial_messages,
+            subagents: None,
+        },
+        Arc::clone(&clock) as Arc<dyn MonotonicClock>,
+    )
+    .expect("runtime composition");
+    (dir, runtime, model)
 }
 
 /// Runs one request until its response-start or stream-idle timeout wins,
@@ -937,131 +1028,112 @@ async fn model_backed_summarizer_uses_the_same_deadlines_without_generic_retry()
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn runtime_composition_shares_one_clock_between_primary_and_summarizer() {
-    let (summary_release, summary_release_rx) = model_release();
-    let summary_model = fake_model(vec![vec![
-        FakeStep::Emit(started()),
-        FakeStep::ParkUntilReleased(summary_release_rx),
-    ]]);
-    let summary_snapshot =
-        support::attempt_model_with_window(summary_model.clone(), "summary-model", 10_000_000, 128);
     let policy = timeout_policy(10, 10);
     let clock = Arc::new(ManualMonotonicClock::new());
-    let context_runtime = ContextRuntime::for_attempt(
-        SessionContextPolicy {
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-            summary_output_cap: None,
-        },
-        Arc::new(DefaultTokenEstimator),
-        AgentStatusEngine::default(),
-        &summary_snapshot,
+    let (summary_release, summary_release_rx) = model_release();
+    let (primary_release, primary_release_rx) = model_release();
+    let (_dir, runtime, model) = runtime_with_manual_clock(
+        "conv-135-shared-clock",
+        vec![user("retired", &"old history ".repeat(512))],
+        vec![
+            vec![
+                FakeStep::Emit(started()),
+                FakeStep::ParkUntilReleased(summary_release_rx),
+            ],
+            vec![
+                FakeStep::Emit(started()),
+                FakeStep::ParkUntilReleased(primary_release_rx),
+            ],
+        ],
         policy,
-        Arc::clone(&clock) as Arc<dyn MonotonicClock>,
+        clock.clone(),
     )
-    .expect("valid context runtime");
+    .await;
+    runtime.activate();
 
-    // Pull the provider-backed summarizer out of the context bundle only for
-    // this in-crate structural test. Its construction already received the
-    // same explicit policy/clock that the primary execution will receive.
-    let summarizer = context_runtime.summarizer.clone();
-    let mut summary_parked = summary_model.parked();
-    let mut summary_exited = summary_model.streams_exited();
-    let summary_clock = clock.clone();
-    let summary_controller = tokio::spawn(async move {
-        summary_parked
-            .wait_for(|is_parked| *is_parked)
-            .await
-            .expect("summary provider reaches its parked next pull");
-        summary_clock.advance(10);
-        summary_exited
-            .wait_for(|count| *count >= 1)
-            .await
-            .expect("summary stream exits at the shared deadline");
-        drop(summary_release);
-    });
-    let summary_error = tokio::time::timeout(
+    // Manual compaction is the real runtime/context admission path. The
+    // parked next pull proves the summarizer consumed Started before the
+    // single runtime-owned clock is advanced.
+    let summary_runtime = runtime.clone();
+    let summary_task = tokio::spawn(async move { summary_runtime.compact_context().await });
+    let mut parked = model.parked();
+    tokio::time::timeout(
         Duration::from_secs(2),
-        summarizer.summarize(
-            SummaryRequest {
-                retired: vec![user("retired", "old")],
-            },
-            rustx::runtime::CancellationSignal::new(),
-        ),
+        parked.wait_for(|is_parked| *is_parked),
     )
     .await
-    .expect("summary deadline must settle")
-    .expect_err("summary must time out");
-    summary_controller
+    .expect("summary provider reaches its parked next pull")
+    .expect("summary parked watch remains open");
+    clock.advance(10);
+    let summary_error = tokio::time::timeout(Duration::from_secs(2), summary_task)
         .await
-        .expect("summary clock controller completes");
-    assert_eq!(
-        summary_error.kind,
-        rustx::context::ContextErrorKind::SummaryFailed
-    );
+        .expect("summary deadline must settle")
+        .expect("summary task joins")
+        .expect_err("summary must time out");
+    assert!(matches!(
+        summary_error,
+        rustx::runtime::conversation_runtime::ManualCompactionError::Context(error)
+            if error.kind == rustx::context::ContextErrorKind::SummaryFailed
+    ));
+    drop(summary_release);
 
-    let (primary_release, primary_release_rx) = model_release();
-    let primary_model = fake_model(vec![vec![
-        FakeStep::Emit(started()),
-        FakeStep::ParkUntilReleased(primary_release_rx),
-    ]]);
-    let mut primary_parked = primary_model.parked();
-    let mut primary_exited = primary_model.streams_exited();
-    let tool_runtime = common::tool_runtime(CONVERSATION);
-    let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
-    let cancellation =
-        AgentCancellation::new(rustx::runtime::types::CancellationReason::UserRequested);
-    let execution_policy = crate::agent::execution::AgentExecutionRuntimePolicy {
-        model_timeout_policy: policy,
-        monotonic_clock: Arc::clone(&clock) as Arc<dyn MonotonicClock>,
-    };
-    let execution = AgentExecution::new(
-        request("attempt-135-shared-clock", &primary_model),
-        capability.into_lease(),
-        &cancellation,
-        execution_policy,
-        context_runtime,
-        &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+    // The same runtime now admits a normal primary attempt. FakeModel resets
+    // its parked watch when this second stream is opened, so this is the
+    // primary provider's parked next pull rather than the summary's stale
+    // parked state.
+    runtime
+        .submit_inbound(text_content("run the primary turn"))
+        .expect("primary inbound accepted");
+    // The stream-open count proves the second adapter invocation has opened,
+    // which also means the stale summary `parked` value was reset. The next
+    // `true` is therefore the primary provider's parked next pull.
+    let mut streams_started = model.streams_started();
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        streams_started.wait_for(|count| *count >= 2),
     )
-    .expect("conversation identity matches the tool runtime");
-    let primary_clock = clock.clone();
-    let controller_cancellation = cancellation.clone();
-    let primary_controller = tokio::spawn(async move {
-        primary_parked
-            .wait_for(|is_parked| *is_parked)
-            .await
-            .expect("primary provider reaches its parked next pull");
-        primary_clock.advance(10);
-        primary_exited
-            .wait_for(|count| *count >= 1)
-            .await
-            .expect("primary stream exits at the shared deadline");
-        // The primary timeout is retryable under Issue #134. Cancel only
-        // after its first request has settled so this structural test can
-        // finish without advancing a second retry deadline.
-        controller_cancellation.cancel();
-        drop(primary_release);
-    });
-    let result = tokio::time::timeout(Duration::from_secs(2), execution.run())
+    .await
+    .expect("primary provider invocation opens")
+    .expect("stream-start watch remains open");
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        parked.wait_for(|is_parked| *is_parked),
+    )
+    .await
+    .expect("primary provider reaches its parked next pull")
+    .expect("primary parked watch remains open");
+    clock.advance(10);
+    let mut exited = model.streams_exited();
+    tokio::time::timeout(Duration::from_secs(2), exited.wait_for(|count| *count >= 2))
         .await
-        .expect("primary deadline must settle");
-    primary_controller
+        .expect("the shared clock drives the primary deadline")
+        .expect("stream-exit watch remains open");
+    drop(primary_release);
+
+    // The primary timeout is transient under Issue #134. Shutdown cancels
+    // the admitted attempt during its ordinary retry backoff so this test
+    // observes the first timeout without introducing a second clock.
+    tokio::time::timeout(Duration::from_secs(2), runtime.shutdown())
         .await
-        .expect("primary clock controller completes");
-    let audit = common::durable_agent_result(result, tool_runtime.durable_store().as_ref());
-    assert!(matches!(audit.outcome, AttemptOutcome::Cancelled { .. }));
+        .expect("primary shutdown must settle")
+        .expect("runtime shutdown");
+    let events = runtime
+        .tool_runtime()
+        .durable_store()
+        .read_events(None, 256)
+        .expect("runtime event journal")
+        .events;
+    assert_eq!(model.requests().len(), 2, "summary plus primary only");
     assert_eq!(
-        audit
-            .event_history
+        events
             .iter()
             .filter(|event| matches!(
-                event,
-                RuntimeEvent::ModelRequestFailed { error, .. }
+                event.event,
+                RuntimeEvent::ModelRequestFailed { ref error, .. }
                     if error.kind == rustx::model::ModelErrorKind::Timeout
             ))
             .count(),
         1,
-        "the shared clock drove exactly one primary timeout before cancellation"
+        "runtime admission's primary branch records one timeout outcome"
     );
-    assert!(cancellation.is_cancelled());
 }
