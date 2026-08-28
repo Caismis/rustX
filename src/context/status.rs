@@ -1710,7 +1710,8 @@ mod tests {
     use crate::durable::{ConversationStore, SqliteConversationStore};
     use crate::message::content::TextBlock;
     use crate::message::types::{
-        ContextKind, InboundKind, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+        CompactionSummaryMetadata, ContextKind, InboundKind, ToolMessageBlock, UserContentBlock,
+        UserMessageBlock, UserSource,
     };
     use crate::runtime::identity::{RequestId, ToolCallId, ToolExecutionId, ToolId};
     use crate::tools::background::BackgroundLifecycle;
@@ -1793,7 +1794,7 @@ mod tests {
                 text: text.to_owned(),
             })],
             source: UserSource::Runtime,
-            kind: InboundKind::CompactionSummary,
+            kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
             timestamp: None,
         }
     }

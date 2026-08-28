@@ -554,12 +554,26 @@ the summary model's own rejection is what shrinks the summary budget.
 
 The summary request does not inherit the primary Effective System Prompt,
 depend on the primary request prefix, share provider KV/cache continuity, or
-re-enter the Agent Loop. The returned value remains an opaque free-form
-`String`. Its Pi-inspired organization is prompt guidance only: rustX does
-not parse headings, validate a schema, extract fields, or maintain a separate
-previous-summary accumulator. A useful non-empty summary is accepted even
-when it does not follow suggested organization; empty or whitespace-only text
-fails the compaction.
+re-enter the Agent Loop. The returned value is the body of one fixed
+structured Markdown contract (Issue #140): Goal, Constraints & Preferences,
+Progress (Done / In Progress / Blocked), Key Decisions, Next Steps, Critical
+Context. Structured means this contract only — rustX does not parse the
+headings back into fields, and an empty or whitespace-only body fails the
+compaction.
+
+The committed summary pairs that body with typed canonical
+`CompactionSummaryMetadata` on its `InboundKind::CompactionSummary` kind: the
+cumulative set of files the retired lineage read and modified, extracted
+deterministically from the retired span's canonical native Read/Edit/Write
+tool calls (each owning tool module decodes its own path argument) and merged
+with the typed metadata of earlier summaries inside the same span. The body
+is followed by the deterministic metadata-derived
+`<read-files>`/`<modified-files>` sections; those sections are a
+model-visible rendering of the metadata, never its authority, and nothing
+parses them — or any generated prose — back into facts. An earlier canonical
+summary in the retired span is ordinary summary-model input for the semantic
+half and typed metadata input for the file-fact half; there is no separate
+previous-summary channel.
 
 Runtime and Agent Status observations in retired history are historical
 evidence. The summarizer may describe a task as having run earlier and later

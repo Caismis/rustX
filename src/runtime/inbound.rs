@@ -831,7 +831,7 @@ impl ConversationInboundMailbox {
     ///
     /// Panics only if the mailbox lock is poisoned.
     pub fn enqueue(&self, message: UserMessageBlock) -> Result<InboundSequence, MailboxError> {
-        if message.kind == InboundKind::CompactionSummary {
+        if message.kind.is_compaction_summary() {
             return Err(MailboxError::CompactionSummaryNotEligible);
         }
         let timestamp = message.timestamp.ok_or(MailboxError::MissingTimestamp)?;
@@ -861,7 +861,7 @@ impl ConversationInboundMailbox {
         message: UserMessageBlock,
         correlation: String,
     ) -> Result<InboundSequence, MailboxError> {
-        if message.kind == InboundKind::CompactionSummary {
+        if message.kind.is_compaction_summary() {
             return Err(MailboxError::CompactionSummaryNotEligible);
         }
         let timestamp = message.timestamp.ok_or(MailboxError::MissingTimestamp)?;
@@ -887,7 +887,7 @@ impl ConversationInboundMailbox {
         &self,
         draft: InboundDraft,
     ) -> Result<AcceptedInbound, MailboxError> {
-        if draft.kind == InboundKind::CompactionSummary {
+        if draft.kind.is_compaction_summary() {
             return Err(MailboxError::CompactionSummaryNotEligible);
         }
         let accepted = self.with_running_commit(|| {
@@ -920,7 +920,7 @@ impl ConversationInboundMailbox {
         draft: InboundDraft,
         event: RuntimeEventEnvelope,
     ) -> Result<(AcceptedInbound, RuntimeEventEnvelope), MailboxError> {
-        if draft.kind == InboundKind::CompactionSummary {
+        if draft.kind.is_compaction_summary() {
             return Err(MailboxError::CompactionSummaryNotEligible);
         }
         // This path is intentionally settlement-owned rather than normal
@@ -1061,7 +1061,8 @@ mod tests {
     use crate::durable::sqlite::SqliteConversationStore;
     use crate::message::content::TextBlock;
     use crate::message::types::{
-        InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+        CompactionSummaryMetadata, InboundKind, MessageBlock, UserContentBlock, UserMessageBlock,
+        UserSource,
     };
     use crate::runtime::identity::{ConversationId, MessageId};
     use chrono::{DateTime, TimeZone, Utc};
@@ -1162,7 +1163,7 @@ mod tests {
         assert_eq!(
             mailbox
                 .enqueue(UserMessageBlock {
-                    kind: InboundKind::CompactionSummary,
+                    kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
                     ..human("m1", "derived")
                 })
                 .expect_err("compaction summary rejected")
@@ -1327,7 +1328,7 @@ mod tests {
                         text: "earlier history".to_owned(),
                     })],
                     source: UserSource::Runtime,
-                    kind: InboundKind::CompactionSummary,
+                    kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
                     timestamp: Some(fixed_time()),
                 })
                 .expect_err("compaction summary rejected"),
@@ -1367,7 +1368,7 @@ mod tests {
     fn fresh_inbound_rejects_compaction_summaries_and_missing_timestamps() {
         let ordinary = MessageBlock::User(human("u1", "hi"));
         let summary = MessageBlock::User(UserMessageBlock {
-            kind: InboundKind::CompactionSummary,
+            kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
             ..human("u2", "derived history")
         });
         let no_time = MessageBlock::User(UserMessageBlock {

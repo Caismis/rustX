@@ -32,10 +32,14 @@ use crate::tools::types::{ToolExecutionResult, ToolInvocation, TruncationState};
 
 use input::ReadInput;
 
+// Compaction file-operation metadata decodes the path of a historical
+// canonical Read call through this tool-owned boundary (Issue #140).
+pub(super) use input::operation_path;
+
 /// The canonical model-facing name of the tool.
 pub const NAME: &str = "read";
 /// The canonical identity of the rustX native Read capability.
-const TOOL_ID: &str = "tool-read";
+pub(crate) const TOOL_ID: &str = "tool-read";
 
 /// The tool-owned registration of the native Read tool.
 #[must_use]

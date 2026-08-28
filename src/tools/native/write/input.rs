@@ -22,3 +22,13 @@ impl WriteInput {
         decode(super::NAME, arguments)
     }
 }
+
+/// The path of one historical canonical Write call, when its recorded
+/// arguments identify one.
+///
+/// This decodes only what compaction file-operation metadata needs — the
+/// path — and deliberately not the full input contract. Execution validation
+/// stays with [`WriteInput::parse`].
+pub(crate) fn operation_path(arguments: &serde_json::Value) -> Option<String> {
+    crate::tools::native::input::file_path_argument(arguments)
+}

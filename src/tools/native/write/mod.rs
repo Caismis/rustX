@@ -20,15 +20,22 @@ use crate::tools::types::{ToolExecutionResult, ToolInvocation};
 
 use input::WriteInput;
 
+// Compaction file-operation metadata decodes the path of a historical
+// canonical Write call through this tool-owned boundary (Issue #140).
+pub(super) use input::operation_path;
+
 /// The canonical model-facing name of the tool.
 pub const NAME: &str = "write";
+
+/// The canonical identity of the rustX native Write capability.
+pub(crate) const TOOL_ID: &str = "tool-write";
 
 /// The tool-owned registration of the native Write tool.
 #[must_use]
 pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
     NativeToolRegistration::new(
         native_definition::<WriteInput>(
-            "tool-write",
+            TOOL_ID,
             NAME,
             "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.",
             policy,

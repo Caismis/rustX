@@ -2123,7 +2123,7 @@ mod tests {
         ) {
             if matches!(
                 block,
-                MessageBlock::User(user) if user.kind == InboundKind::CompactionSummary
+                MessageBlock::User(user) if user.kind.is_compaction_summary()
             ) {
                 self.facts
                     .lock()
@@ -2331,7 +2331,7 @@ mod tests {
                 message,
                 MessageBlock::User(user)
                     if user.id == latest.summary_message_id
-                        && user.kind == InboundKind::CompactionSummary
+                        && user.kind.is_compaction_summary()
             )),
             "the committed runtime summary is an ordinary canonical ledger fact"
         );
@@ -2377,7 +2377,7 @@ mod tests {
                 .audit_records()
                 .iter()
                 .all(|message| !matches!(message, MessageBlock::User(user)
-                    if user.kind == InboundKind::CompactionSummary)),
+                    if user.kind.is_compaction_summary())),
             "a failed compaction never commits a canonical summary"
         );
         let snapshot = observer.snapshot();

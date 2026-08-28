@@ -33,8 +33,9 @@ use rustx::conversation::{
 use rustx::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
-    AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, ContextKind, InboundKind,
-    MessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+    AssistantContentBlock, AssistantMessageBlock, CompactionSummaryMetadata, ContentBlockIndex,
+    ContextKind, InboundKind, MessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock,
+    UserSource,
 };
 use rustx::model::ModelInputMessage;
 use rustx::model::event::ModelEvent;
@@ -449,7 +450,7 @@ impl rustx::agent::PreStepPolicy for CountingPreStepPolicy {
 
 /// Whether a canonical message is a runtime compaction summary.
 fn is_summary(message: &MessageBlock) -> bool {
-    matches!(message, MessageBlock::User(user) if user.kind == InboundKind::CompactionSummary)
+    matches!(message, MessageBlock::User(user) if user.kind.is_compaction_summary())
 }
 
 /// Asserts that the attempt committed no compaction at all: no canonical
@@ -473,7 +474,7 @@ fn committed_summary(result: &AgentExecutionResult) -> &UserMessageBlock {
         .messages()
         .iter()
         .find_map(|message| match message {
-            MessageBlock::User(user) if user.kind == InboundKind::CompactionSummary => Some(user),
+            MessageBlock::User(user) if user.kind.is_compaction_summary() => Some(user),
             _ => None,
         })
         .expect("a successful compaction commits one canonical summary")
@@ -501,7 +502,7 @@ fn compacted_state(
             text: summary_text.to_owned(),
         })],
         source: UserSource::Runtime,
-        kind: InboundKind::CompactionSummary,
+        kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
         timestamp: None,
     };
     let commit = state
@@ -1256,7 +1257,7 @@ fn staged_context_is_evaluated_exactly_per_compaction_candidate() {
                         if matches!(
                             message,
                             MessageBlock::User(user)
-                                if user.kind == InboundKind::CompactionSummary
+                                if user.kind.is_compaction_summary()
                         ) {
                             1
                         } else {
@@ -1413,7 +1414,7 @@ fn multiple_tool_calls_stay_with_their_results() {
                         text: "s".to_owned(),
                     })],
                     source: UserSource::Runtime,
-                    kind: InboundKind::CompactionSummary,
+                    kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
                     timestamp: None,
                 },
                 SurfaceSpan::new(MessageId::new("u1"), MessageId::new(end)),
@@ -2220,7 +2221,7 @@ fn repeated_compaction_never_resurrects_retired_history() {
             text: "S1".to_owned(),
         })],
         source: UserSource::Runtime,
-        kind: InboundKind::CompactionSummary,
+        kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
         timestamp: None,
     };
     let commit = history
@@ -2288,7 +2289,7 @@ fn repeated_compaction_never_resurrects_retired_history() {
             .retired
             .iter()
             .any(|message| matches!(message, MessageBlock::User(user)
-                if user.kind == InboundKind::CompactionSummary)),
+                if user.kind.is_compaction_summary())),
         "the previous summary is an ordinary canonical message of the span"
     );
 
@@ -2298,7 +2299,7 @@ fn repeated_compaction_never_resurrects_retired_history() {
             text: "S2".to_owned(),
         })],
         source: UserSource::Runtime,
-        kind: InboundKind::CompactionSummary,
+        kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
         timestamp: None,
     };
     let commit2 = history
@@ -2380,7 +2381,7 @@ fn finite_reads_for(
             text: "S".to_owned(),
         })],
         source: UserSource::Runtime,
-        kind: InboundKind::CompactionSummary,
+        kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
         timestamp: None,
     };
     let commit = history
@@ -2492,7 +2493,7 @@ fn first_compaction_commits_one_summary_and_one_replacement() {
     assert_eq!(ledger_ids(&history), ledger_before);
     assert_eq!(commit.summary().id, summary_id(1));
     assert_eq!(commit.summary().source, UserSource::Runtime);
-    assert_eq!(commit.summary().kind, InboundKind::CompactionSummary);
+    assert!(commit.summary().kind.is_compaction_summary());
     assert_eq!(rebuilt.estimated_input.input_tokens, 101);
     assert_eq!(rebuilt.surface_revision, before_revision.next());
 
@@ -3001,7 +3002,7 @@ async fn proactive_compaction_before_the_next_turn() {
     };
     assert_eq!(summary.id, summary_id(1));
     assert_eq!(summary.source, UserSource::Runtime);
-    assert_eq!(summary.kind, InboundKind::CompactionSummary);
+    assert!(summary.kind.is_compaction_summary());
     assert!(matches!(
         requests[1].messages[1].as_canonical(),
         Some(MessageBlock::Assistant(assistant)) if assistant.id.as_str() == "attempt-1-agent-1"
@@ -3228,7 +3229,7 @@ async fn overflow_compact_and_retry_succeeds() {
     assert_eq!(requests.len(), 2);
     assert!(matches!(
         requests[1].messages[0].as_canonical(),
-        Some(MessageBlock::User(user)) if user.kind == InboundKind::CompactionSummary
+        Some(MessageBlock::User(user)) if user.kind.is_compaction_summary()
     ));
     assert_eq!(requests[1].messages.len(), 1);
     assert_eq!(requests[1].continuation, None);
@@ -4891,7 +4892,7 @@ async fn continuation_is_invalidated_by_compaction() {
         // the projected request contains no literal part of it.
         assert!(requests[1].messages.iter().any(|message| matches!(
             message.as_canonical(),
-            Some(MessageBlock::User(user)) if user.kind == InboundKind::CompactionSummary
+            Some(MessageBlock::User(user)) if user.kind.is_compaction_summary()
         )));
         assert!(
             !requests[1].messages.iter().any(|message| matches!(
@@ -4969,23 +4970,29 @@ async fn model_backed_summarizer_issues_a_canonical_request() {
     };
     assert!(text.contains("retired conversation history"));
     for required in [
-        "user's goal",
-        "constraints and preferences",
-        "progress and completed work",
-        "current work and blockers",
-        "key decisions and rationale",
-        "important tool outcomes",
-        "unresolved threads",
-        "next steps",
-        "important files, artifacts, paths, and references",
+        "## Goal",
+        "## Constraints & Preferences",
+        "### Done",
+        "### In Progress",
+        "### Blocked",
+        "## Key Decisions",
+        "## Next Steps",
+        "## Critical Context",
+        "file paths",
+        "type and function names",
+        "error strings",
         "historical evidence, not live authority",
-        "not a required schema",
+        "EXACTLY this Markdown structure",
     ] {
         assert!(
             text.contains(required),
-            "summary instruction must preserve continuation guidance: {required}"
+            "summary instruction must require the structured contract: {required}"
         );
     }
+    assert!(
+        !text.contains("free-form"),
+        "the structured contract replaced free-form guidance"
+    );
     // The rendered transcript is deterministic and embedded verbatim.
     let rendered = request.render_transcript();
     assert!(text.contains(&rendered));
@@ -5236,7 +5243,7 @@ async fn model_backed_summarizer_does_not_contaminate_the_execution() {
     assert_eq!(requests[2].continuation, None);
     assert!(matches!(
         requests[2].messages[0].as_canonical(),
-        Some(MessageBlock::User(user)) if user.kind == InboundKind::CompactionSummary
+        Some(MessageBlock::User(user)) if user.kind.is_compaction_summary()
     ));
     assert_single_terminal(&result.event_history);
     assert_outcome(
@@ -5623,7 +5630,7 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
             committed_summary(&result),
             UserMessageBlock {
                 source: UserSource::Runtime,
-                kind: InboundKind::CompactionSummary,
+                kind: InboundKind::CompactionSummary(_),
                 timestamp: None,
                 ..
             }

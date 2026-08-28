@@ -762,6 +762,13 @@ impl ContextEngine {
     /// message, the validated Surface replacement, and the projection the
     /// commit will establish.
     ///
+    /// The summary message pairs the model-produced structured body with the
+    /// deterministic file half of the transition (Issue #140): typed
+    /// cumulative `CompactionSummaryMetadata` is extracted from the plan's
+    /// exact retired span — including the typed metadata of earlier
+    /// compaction summaries inside it — and rendered as the derived
+    /// `<read-files>`/`<modified-files>` sections after the body.
+    ///
     /// Nothing is mutated here. The mandatory progress rule is enforced at
     /// this boundary: the plan must retire at least one canonical message,
     /// the summary must carry textual content, and the deterministic
@@ -807,6 +814,15 @@ impl ContextEngine {
                 "summary generation produced no content",
             ));
         }
+        // The deterministic file half of the transition (Issue #140): the
+        // typed cumulative metadata is extracted from the exact retired
+        // canonical span — including the typed metadata of earlier
+        // compaction summaries inside it — and rendered after the
+        // model-produced structured body. The summary model's prose is never
+        // parsed for paths and never contributes to the metadata.
+        let metadata = crate::context::compaction_metadata::retired_span_metadata(&plan.retired);
+        let committed_text =
+            crate::context::compaction_metadata::render_summary_text(summary_text, &metadata);
         let generation = state
             .surface()
             .compaction_generation()
@@ -815,10 +831,10 @@ impl ContextEngine {
         let summary = UserMessageBlock {
             id: summary_message_id(conversation_id, generation),
             content: vec![UserContentBlock::Text(TextBlock {
-                text: summary_text.to_owned(),
+                text: committed_text,
             })],
             source: UserSource::Runtime,
-            kind: InboundKind::CompactionSummary,
+            kind: InboundKind::CompactionSummary(metadata),
             timestamp: None,
         };
         let commit = state

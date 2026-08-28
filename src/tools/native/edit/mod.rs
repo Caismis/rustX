@@ -23,15 +23,22 @@ use crate::tools::types::{ToolExecutionResult, ToolInvocation};
 
 use input::{EditInput, EditReplacement};
 
+// Compaction file-operation metadata decodes the path of a historical
+// canonical Edit call through this tool-owned boundary (Issue #140).
+pub(super) use input::operation_path;
+
 /// The canonical model-facing name of the tool.
 pub const NAME: &str = "edit";
+
+/// The canonical identity of the rustX native Edit capability.
+pub(crate) const TOOL_ID: &str = "tool-edit";
 
 /// The tool-owned registration of the native Edit tool.
 #[must_use]
 pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
     NativeToolRegistration::new(
         native_definition::<EditInput>(
-            "tool-edit",
+            TOOL_ID,
             NAME,
             "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
             policy,

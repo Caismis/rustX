@@ -38,7 +38,7 @@ use rustx::local_runtime::composition::{
     LocalRuntimePaths,
 };
 use rustx::message::content::TextBlock;
-use rustx::message::types::{InboundKind, MessageBlock, UserContentBlock, UserSource};
+use rustx::message::types::{MessageBlock, UserContentBlock, UserSource};
 use rustx::model::catalog::{MapCredentialEnvironment, ModelRef};
 use rustx::model::session::{SessionModelConfig, SummaryModelPolicy};
 use rustx::runtime::recovery::{AttemptRecoveryClass, ResumeDisposition};
@@ -878,9 +878,7 @@ async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
             .messages
             .iter()
             .find_map(|message| match message {
-                MessageBlock::User(user) if user.kind == InboundKind::CompactionSummary => {
-                    Some(user)
-                }
+                MessageBlock::User(user) if user.kind.is_compaction_summary() => Some(user),
                 _ => None,
             })
             .expect("the canonical compaction summary is committed to the ledger");
@@ -1036,7 +1034,7 @@ async fn repeated_compaction_invokes_the_real_provider_on_both_summary_policies(
             .filter(|message| {
                 matches!(
                     message,
-                    MessageBlock::User(user) if user.kind == InboundKind::CompactionSummary
+                    MessageBlock::User(user) if user.kind.is_compaction_summary()
                 )
             })
             .collect();

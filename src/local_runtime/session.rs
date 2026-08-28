@@ -2148,8 +2148,9 @@ mod tests {
     use crate::message::content::TextBlock;
     use crate::message::types::{
         AgentStatusEmission, AgentStatusGenerationMetadata, AgentStatusModuleId,
-        AssistantContentBlock, AssistantMessageBlock, ContextKind, InboundKind, MessageBlock,
-        ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+        AssistantContentBlock, AssistantMessageBlock, CompactionSummaryMetadata, ContextKind,
+        InboundKind, MessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock,
+        UserSource,
     };
     use crate::model::catalog::{ModelCapabilities, ModelCompat};
     use crate::model::invocation::{ModelInvocationConfig, RequestParams};
@@ -3202,7 +3203,7 @@ mod tests {
                     id: MessageId::new("compaction-summary"),
                     content: vec![text("compacted A")],
                     source: UserSource::Runtime,
-                    kind: InboundKind::CompactionSummary,
+                    kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
                     timestamp: None,
                 },
                 span: SurfaceSpan::new(
@@ -3365,7 +3366,7 @@ mod tests {
                     id: MessageId::new("source-compaction-summary"),
                     content: vec![text("earlier work, summarized")],
                     source: UserSource::Runtime,
-                    kind: InboundKind::CompactionSummary,
+                    kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
                     timestamp: None,
                 },
                 span: SurfaceSpan::new(
@@ -3465,7 +3466,7 @@ mod tests {
                     id: MessageId::new("source-compaction-summary"),
                     content: vec![text("earlier work, summarized")],
                     source: UserSource::Runtime,
-                    kind: InboundKind::CompactionSummary,
+                    kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
                     timestamp: None,
                 },
                 span: SurfaceSpan::new(
@@ -3518,7 +3519,7 @@ mod tests {
                     id: MessageId::new("source-compaction-summary"),
                     content: vec![text("earlier work, summarized")],
                     source: UserSource::Runtime,
-                    kind: InboundKind::CompactionSummary,
+                    kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
                     timestamp: None,
                 },
                 span: SurfaceSpan::new(

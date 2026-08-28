@@ -555,7 +555,9 @@ async fn a_committed_list_survives_the_compaction_that_retires_its_result() {
                     text: "earlier work, summarized".to_owned(),
                 })],
                 source: UserSource::Runtime,
-                kind: rustx::message::types::InboundKind::CompactionSummary,
+                kind: rustx::message::types::InboundKind::CompactionSummary(
+                    rustx::message::types::CompactionSummaryMetadata::empty(),
+                ),
                 timestamp: None,
             },
             span: rustx::conversation::SurfaceSpan::new(first, last),

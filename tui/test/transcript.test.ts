@@ -372,7 +372,9 @@ describe("inbound provenance", () => {
           id: "m1",
           content: [{ type: "text", text: "summary body" }],
           source: "runtime",
-          kind: "compaction_summary",
+          kind: {
+            compaction_summary: { read_files: [], modified_files: [] },
+          },
         },
       ],
     });
