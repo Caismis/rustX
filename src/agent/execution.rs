@@ -68,6 +68,8 @@
 //! Cancellation is a generic Agent Loop invariant for every execution:
 //! observable cancellation is checked before every model turn begins.
 
+use std::sync::Arc;
+
 use futures_util::StreamExt;
 use futures_util::future::{BoxFuture, pending};
 
@@ -108,7 +110,6 @@ use crate::publication::{
     CoalescePolicy, PublicationCoalescer, PublicationFrame, PublicationPayload,
     PublicationStreamStart,
 };
-use crate::runtime::MonotonicClock;
 use crate::runtime::continuation::ProviderContinuationState;
 use crate::runtime::identity::{
     AgentId, AttemptId, ConversationId, EventId, MessageId, PublicationStreamId, RequestId,
@@ -117,6 +118,7 @@ use crate::runtime::identity::{
 use crate::runtime::inbound::{FreshInboundTurn, InitialTurnTrigger, MailboxError};
 use crate::runtime::interaction::{ApprovalDecision, InteractionOutcome, InteractionResponse};
 use crate::runtime::types::{CancellationReason, RuntimeError};
+use crate::runtime::{MonotonicClock, SystemMonotonicClock};
 use crate::tools::background::BackgroundDispatchOutcome;
 use crate::tools::executor::{
     PreflightOutcome, PreparedInvocation, ProgressReporter, ToolExecutionContext, ToolRegistry,
@@ -317,6 +319,19 @@ impl AgentExecutionResult {
     pub fn active_ids(&self) -> &[MessageId] {
         self.conversation.active_ids()
     }
+}
+
+/// Runtime-owned generic execution inputs frozen for one admitted operation.
+///
+/// The runtime supplies the generic execution policy and synchronization
+/// authority explicitly at this boundary; the context plane is not queried
+/// for either value.
+#[derive(Clone)]
+pub(crate) struct AgentExecutionRuntimePolicy {
+    /// The timeout policy frozen for this admitted attempt or operation.
+    pub(crate) model_timeout_policy: ModelTimeoutPolicy,
+    /// The shared runtime monotonic clock.
+    pub(crate) monotonic_clock: Arc<dyn MonotonicClock>,
 }
 
 /// One agent attempt execution.
@@ -756,6 +771,33 @@ impl<'a> AgentExecution<'a> {
         tool_runtime: &'a ConversationToolRuntime,
         lifecycle: AttemptLifecycle,
     ) -> Result<Self, MailboxError> {
+        Self::new_with_runtime_policy(
+            request,
+            capability,
+            cancellation,
+            context_runtime,
+            AgentExecutionRuntimePolicy {
+                model_timeout_policy: ModelTimeoutPolicy::default(),
+                monotonic_clock: Arc::new(SystemMonotonicClock::new()),
+            },
+            tool_runtime,
+            lifecycle,
+        )
+    }
+
+    /// Creates an attempt execution with the runtime-owned policy and
+    /// monotonic clock frozen at admission. The context runtime receives the
+    /// same values independently for its summarizer; this execution never
+    /// recovers generic execution state from the context plane.
+    pub(crate) fn new_with_runtime_policy(
+        request: AgentExecutionRequest,
+        capability: AttemptCapabilityLease,
+        cancellation: &'a AgentCancellation,
+        context_runtime: ContextRuntime,
+        runtime_policy: AgentExecutionRuntimePolicy,
+        tool_runtime: &'a ConversationToolRuntime,
+        lifecycle: AttemptLifecycle,
+    ) -> Result<Self, MailboxError> {
         if tool_runtime.conversation_id() != &request.conversation_id {
             return Err(MailboxError::ConversationMismatch {
                 expected: request.conversation_id.clone(),
@@ -768,6 +810,7 @@ impl<'a> AgentExecution<'a> {
             capability,
             cancellation,
             context_runtime,
+            runtime_policy,
             tool_runtime,
             store,
             lifecycle,
@@ -785,11 +828,13 @@ impl<'a> AgentExecution<'a> {
     /// [`MailboxError::Durable`] when the supplied authority belongs to a
     /// different conversation, cannot load its current head, or cannot
     /// initialize the standalone fixture history.
+    #[allow(clippy::too_many_arguments)] // one explicit authority-binding boundary
     fn new_bound(
         request: AgentExecutionRequest,
         capability: AttemptCapabilityLease,
         cancellation: &'a AgentCancellation,
         context_runtime: ContextRuntime,
+        runtime_policy: AgentExecutionRuntimePolicy,
         tool_runtime: &'a ConversationToolRuntime,
         store: std::sync::Arc<dyn ConversationStore>,
         lifecycle: AttemptLifecycle,
@@ -835,8 +880,6 @@ impl<'a> AgentExecution<'a> {
                 .initialize(conversation.ledger().audit_records())
                 .map_err(MailboxError::Durable)?;
         }
-        let model_timeout_policy = context_runtime.model_timeout_policy();
-        let monotonic_clock = context_runtime.monotonic_clock();
         Ok(Self {
             conversation,
             request,
@@ -865,8 +908,8 @@ impl<'a> AgentExecution<'a> {
             last_request_estimated_input: None,
             last_request_id: None,
             publication_policy: CoalescePolicy::default(),
-            monotonic_clock,
-            model_timeout_policy,
+            monotonic_clock: runtime_policy.monotonic_clock,
+            model_timeout_policy: runtime_policy.model_timeout_policy,
             publication: None,
             publication_settlement_failed: false,
             observer: None,

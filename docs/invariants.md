@@ -302,9 +302,12 @@ stream and normally commits exactly one terminal `RuntimeEvent`:
 - Every runtime-owned provider request path has a finite owner-appropriate
   `ModelTimeoutPolicy`: primary Agent Loop requests and
   `ModelBackedSummarizer` requests share one response-start and stream-idle
-  policy shape. The policy is frozen at actual-request/summary admission and
+  policy shape. The Conversation Runtime owns the current policy and the
+  shared runtime `MonotonicClock`; attempt/manual-operation admission freezes
+  copies for sibling Agent Loop and Context/Summarizer consumers. The policy
   is not model input, durable request state, canonical history, or provider
-  continuation state.
+  continuation state. `ConversationRuntime::new` rejects a zero deadline with
+  a typed error before store initialization or ownership transfer.
 - The request-local deadline state is
   `AwaitingGeneration → Streaming → Terminal`. The response-start deadline
   starts only after the primary `RequestSnapshot + ModelRequestStarted` commit,

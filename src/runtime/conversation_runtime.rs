@@ -12,6 +12,7 @@
 //! attempt-id allocation
 //! the current-attempt slot and its cancellation handle
 //! attempt admission (the ONE admission owner)
+//! current model request timeout execution policy and monotonic clock
 //! ordinary inbound acceptance/admission coordination
 //! the ConversationInboundMailbox active-process relationship
 //! ConversationToolRuntime / ConversationBackgroundRegistry
@@ -349,6 +350,8 @@ pub enum ConversationRuntimeError {
     },
     /// The context engine configuration is impossible.
     Context(String),
+    /// The runtime-owned model request deadline policy is invalid.
+    InvalidModelTimeoutPolicy,
     /// The initial canonical messages do not form a valid conversation
     /// state (for example a duplicate `MessageId`).
     InvalidInitialConversation(String),
@@ -438,6 +441,10 @@ impl core::fmt::Display for ConversationRuntimeError {
                 "capability owner {capability_conversation} does not match tool runtime owner {runtime_conversation}"
             ),
             Self::Context(message) => write!(f, "context configuration failed: {message}"),
+            Self::InvalidModelTimeoutPolicy => write!(
+                f,
+                "model request timeout policy is invalid: response-start and stream-idle timeouts must be positive"
+            ),
             Self::InvalidInitialConversation(message) => write!(
                 f,
                 "the initial canonical conversation is invalid: {message}"
@@ -480,11 +487,11 @@ impl std::error::Error for ConversationRuntimeError {}
 
 /// The shared context-plane pieces of one conversation runtime.
 ///
-/// These are the **composition-owned static** pieces: the token estimator, the
-/// Agent Status engine template, and the current runtime context policy (reserve tokens,
-/// keep-recent target, summary output cap). They persist across attempts,
-/// and the model path and the Runtime Client projection share one accepted
-/// Agent Status generation.
+/// These are the **composition-owned static** context pieces: the token
+/// estimator, the Agent Status engine template, and the current runtime
+/// context policy (reserve tokens, keep-recent target, summary output cap).
+/// They persist across attempts, and the model path and the Runtime Client
+/// projection share one accepted Agent Status generation.
 ///
 /// There is deliberately no separate summary store: compaction lineage is
 /// derived from the immutable Conversation Surface history owned by the
@@ -504,9 +511,6 @@ pub struct ConversationContextConfig {
     /// constructs a fresh engine from it, retaining the configured clock/module
     /// semantics while keeping quarantine state attempt-local.
     pub status_engine: AgentStatusEngine,
-    /// The finite runtime-owned model request deadline policy shared by the
-    /// primary Agent Loop and model-backed summarizer.
-    pub model_timeout_policy: ModelTimeoutPolicy,
 }
 
 /// The construction-time configuration of one conversation runtime.
@@ -531,6 +535,10 @@ pub struct RuntimeConversationConfig {
     pub model: SessionModelState,
     /// The launch-scoped runtime approval mode.
     pub approval_mode: ApprovalMode,
+    /// The current runtime-owned model request deadline policy. It is copied
+    /// at attempt/manual-operation admission and never enters model input or
+    /// durable historical state.
+    pub model_timeout_policy: ModelTimeoutPolicy,
     /// The shared context-plane pieces.
     pub context: ConversationContextConfig,
     /// The conversation tool runtime (owns the canonical mailbox and the
@@ -1122,6 +1130,9 @@ pub(crate) struct RuntimeInner {
     /// of its own.
     lifecycle: ConversationLifecycle,
     clock: Arc<dyn RuntimeClock>,
+    /// The current model request deadline policy. Admission copies this value
+    /// into each actual attempt/operation; it is never part of model state.
+    model_timeout_policy: ModelTimeoutPolicy,
     /// The one runtime-owned monotonic clock shared by publication, retry
     /// backoff, primary request deadlines, and summary request deadlines.
     monotonic_clock: Arc<dyn MonotonicClock>,
@@ -1592,7 +1603,7 @@ impl RuntimeInner {
             assembly,
             model,
             model_timeout_policy,
-            Arc::clone(&self.monotonic_clock),
+            &self.monotonic_clock,
         )
     }
 
@@ -1955,6 +1966,7 @@ impl RuntimeInner {
         lease: crate::capabilities::AttemptCapabilityLease,
     ) -> crate::agent::AgentExecutionResult {
         let observer = RuntimeObserver::new(self);
+        let monotonic_clock = Arc::clone(&self.monotonic_clock);
         // The context runtime is derived from the frozen snapshot, so the
         // attempt's window, output budget, and summary invocation all agree
         // with the model it was admitted with.
@@ -1966,6 +1978,10 @@ impl RuntimeInner {
             )
             .expect("admission validated this model against the session context policy");
         let context_runtime = context_runtime.with_runtime_resources(&resources);
+        let execution_policy = crate::agent::execution::AgentExecutionRuntimePolicy {
+            model_timeout_policy,
+            monotonic_clock,
+        };
         let request = AgentExecutionRequest {
             agent_id: self.agent_id.clone(),
             conversation_id: self.conversation_id.clone(),
@@ -1992,11 +2008,12 @@ impl RuntimeInner {
                 None => lifecycle,
             }
         };
-        let mut execution = AgentExecution::new(
+        let mut execution = AgentExecution::new_with_runtime_policy(
             request,
             lease,
             cancellation,
             context_runtime,
+            execution_policy,
             &self.tool_runtime,
             lifecycle,
         )
@@ -2532,7 +2549,7 @@ impl RuntimeInner {
         // Freeze runtime execution policy at the same admission boundary as
         // the attempt's model snapshot. A later configuration change can
         // therefore affect only a future admitted attempt.
-        let model_timeout_policy = self.context.model_timeout_policy;
+        let model_timeout_policy = self.model_timeout_policy;
         let approval_mode = state.effective_approval_mode;
         let resources = state.resources.clone();
         let lease = self
@@ -2716,6 +2733,8 @@ impl ConversationRuntime {
     /// Returns [`ConversationRuntimeError::OwnershipMismatch`] when the
     /// capability coordinator and the conversation tool runtime do not
     /// share the same conversation/workspace ownership domain,
+    /// [`ConversationRuntimeError::InvalidModelTimeoutPolicy`] when either
+    /// runtime model deadline is zero,
     /// [`ConversationRuntimeError::Context`] when the context engine
     /// configuration is impossible,
     /// [`ConversationRuntimeError::InvalidInitialConversation`] when the
@@ -2734,6 +2753,13 @@ impl ConversationRuntime {
         let conversation_id = config.tool_runtime.conversation_id().clone();
 
         // ---- Fallible validation: nothing below is observable yet. ----
+        // Validate generic runtime execution policy before store
+        // initialization, ownership claims, or any other observable work.
+        // Admission can therefore rely on this invariant and keep its
+        // per-attempt wiring infallible.
+        if !config.model_timeout_policy.is_positive() {
+            return Err(ConversationRuntimeError::InvalidModelTimeoutPolicy);
+        }
         let snapshot = config.capability.current_snapshot();
         // The coordinator is a separate authoritative identity, so it is
         // still validated explicitly against the runtime's identity.
@@ -2983,6 +3009,7 @@ impl ConversationRuntime {
             interaction,
             lifecycle,
             clock,
+            model_timeout_policy: config.model_timeout_policy,
             monotonic_clock: Arc::new(SystemMonotonicClock::new()),
             durability_gate: durability_gate.clone(),
             recovery,
@@ -3586,7 +3613,7 @@ impl ConversationRuntime {
                 .context_runtime_with_assembly(
                     &model,
                     resources.context_assembly().clone(),
-                    self.inner.context.model_timeout_policy,
+                    self.inner.model_timeout_policy,
                 )
                 .map_err(ManualCompactionError::Context)?;
             // Manual maintenance has no attempt lease, but it still freezes
@@ -5495,11 +5522,11 @@ mod tests {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter),
             approval_mode: ApprovalMode::Policy,
+            model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             context: ConversationContextConfig {
                 policy: options.policy,
                 estimator: options.estimator,
                 status_engine: options.status_engine,
-                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             },
             tool_runtime,
             resources,
@@ -5573,6 +5600,7 @@ mod tests {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter),
             approval_mode: ApprovalMode::Policy,
+            model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -5581,7 +5609,6 @@ mod tests {
                 },
                 estimator,
                 status_engine: AgentStatusEngine::default(),
-                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -5671,6 +5698,7 @@ mod tests {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter),
             approval_mode: ApprovalMode::Policy,
+            model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -5679,7 +5707,6 @@ mod tests {
                 },
                 estimator: Arc::new(DefaultTokenEstimator),
                 status_engine: AgentStatusEngine::default(),
-                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -5780,6 +5807,7 @@ mod tests {
             agent_id: runtime_agent.clone(),
             model: scripted_session_model(adapter),
             approval_mode: ApprovalMode::Policy,
+            model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -5788,7 +5816,6 @@ mod tests {
                 },
                 estimator: Arc::new(DefaultTokenEstimator),
                 status_engine: AgentStatusEngine::default(),
-                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -9338,6 +9365,7 @@ mod tests {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(Arc::new(FakeModel::new(Vec::new()))),
             approval_mode: ApprovalMode::Policy,
+            model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -9346,7 +9374,6 @@ mod tests {
                 },
                 estimator: Arc::new(DefaultTokenEstimator),
                 status_engine: AgentStatusEngine::default(),
-                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -9399,6 +9426,7 @@ mod tests {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(Arc::new(FakeModel::new(Vec::new()))),
             approval_mode: ApprovalMode::Policy,
+            model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -9407,7 +9435,6 @@ mod tests {
                 },
                 estimator: Arc::new(DefaultTokenEstimator),
                 status_engine: AgentStatusEngine::default(),
-                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -14110,6 +14137,109 @@ mod tests {
         );
     }
 
+    /// A public runtime composition rejects an invalid model timeout policy
+    /// before it initializes storage or claims either ownership plane. The
+    /// same untouched tool-runtime/capability bundle can immediately build a
+    /// valid runtime afterwards.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn invalid_model_timeout_policy_fails_before_runtime_ownership_transfer() {
+        struct Fixture {
+            tool_runtime: crate::tools::runtime::ConversationToolRuntime,
+            capability: crate::capabilities::CapabilityCoordinator,
+            resources: Arc<crate::runtime::RuntimeResourceSnapshot>,
+            resource_loader: Arc<dyn crate::runtime::RuntimeResourceLoader>,
+            _dir: tempfile::TempDir,
+        }
+
+        impl Fixture {
+            fn config(
+                &self,
+                model_timeout_policy: crate::model::ModelTimeoutPolicy,
+            ) -> RuntimeConversationConfig {
+                RuntimeConversationConfig {
+                    agent_id: AgentId::new("agent-timeout-construction"),
+                    model: scripted_session_model(Arc::new(FakeModel::new(Vec::new()))),
+                    approval_mode: ApprovalMode::Policy,
+                    model_timeout_policy,
+                    context: ConversationContextConfig {
+                        policy: crate::context::SessionContextPolicy {
+                            reserve_tokens: 0,
+                            keep_recent_tokens: 0,
+                            summary_output_cap: None,
+                        },
+                        estimator: Arc::new(DefaultTokenEstimator),
+                        status_engine: AgentStatusEngine::default(),
+                    },
+                    tool_runtime: self.tool_runtime.clone(),
+                    capability: self.capability.clone(),
+                    resources: self.resources.clone(),
+                    resource_loader: self.resource_loader.clone(),
+                    clock: None,
+                    initial_messages: Vec::new(),
+                    subagents: None,
+                }
+            }
+        }
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let conversation_id = ConversationId::new("conv-timeout-construction");
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+            conversation_id.clone(),
+            &workspace,
+            dir.path().join("artifacts"),
+        )
+        .expect("tool runtime");
+        let capability = crate::capabilities::CapabilityCoordinator::new(
+            crate::capabilities::CapabilityCoordinatorConfig {
+                conversation_id,
+                workspace: tool_runtime.workspace().clone(),
+                base_tool_registry: Arc::new(ToolRegistry::new()),
+                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
+                mcp_servers: std::collections::BTreeMap::new(),
+                base_environment: tool_runtime.environment().clone(),
+                environment_store_root: dir.path().join("skill-env"),
+            },
+        )
+        .expect("capability coordinator");
+        let candidate = capability.prepare_candidate().await.expect("candidate");
+        capability.commit(candidate).expect("candidate commit");
+        let fixture = Fixture {
+            resources: test_resources(&capability),
+            resource_loader: test_resource_loader(&capability),
+            tool_runtime,
+            capability,
+            _dir: dir,
+        };
+
+        for model_timeout_policy in [
+            crate::model::ModelTimeoutPolicy::new(
+                std::time::Duration::ZERO,
+                std::time::Duration::from_secs(1),
+            ),
+            crate::model::ModelTimeoutPolicy::new(
+                std::time::Duration::from_secs(1),
+                std::time::Duration::ZERO,
+            ),
+        ] {
+            assert!(matches!(
+                ConversationRuntime::new(fixture.config(model_timeout_policy)),
+                Err(ConversationRuntimeError::InvalidModelTimeoutPolicy)
+            ));
+        }
+
+        let runtime =
+            ConversationRuntime::new(fixture.config(crate::model::ModelTimeoutPolicy::default()))
+                .expect("valid construction can reuse both untouched ownership planes");
+        runtime.activate();
+        runtime
+            .shutdown()
+            .await
+            .expect("valid runtime admits no work and shuts down cleanly");
+    }
+
     /// Builds a conversation runtime over an existing artifacts directory
     /// (whose `conversation.sqlite` may already be populated), returning the
     /// construction result so recovery-gate tests can assert the typed error.
@@ -14164,6 +14294,7 @@ mod tests {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter),
             approval_mode: ApprovalMode::Policy,
+            model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -14172,7 +14303,6 @@ mod tests {
                 },
                 estimator,
                 status_engine: AgentStatusEngine::default(),
-                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             },
             tool_runtime,
             resources: test_resources(&coordinator),

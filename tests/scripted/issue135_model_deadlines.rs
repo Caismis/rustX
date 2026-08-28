@@ -776,6 +776,8 @@ async fn repeated_runtime_timeouts_use_the_bounded_generic_retry_budget_without_
     let publication = common::RecordingPublicationObserver::default();
     let clock = Arc::new(ManualMonotonicClock::new());
     let (pause, mut retry_reached, retry_release) = RetryBackoffPause::install();
+    let (event_pause, mut event_reached, event_release) =
+        crate::agent::execution::test_sync::ModelEventPause::install();
     let mut execution = make_execution(
         "attempt-135-budget",
         &model,
@@ -786,15 +788,22 @@ async fn repeated_runtime_timeouts_use_the_bounded_generic_retry_budget_without_
     )
     .await;
     execution.install_retry_backoff_pause(pause);
+    execution.install_model_event_pause(event_pause);
     let controller_clock = clock.clone();
-    let mut emitted = model.emitted();
     let mut exited = model.streams_exited();
     let controller = tokio::spawn(async move {
         for request_number in 1..=4_u64 {
-            emitted
-                .wait_for(|count| *count >= request_number)
+            // ModelEventPause is after the primary loop has observed Started
+            // and applied its deadline state. The fake provider's emitted
+            // counter is intentionally not used as a consumption frontier.
+            event_reached
+                .wait_for(|count| {
+                    *count
+                        >= u32::try_from(request_number).expect("test request number fits in u32")
+                })
                 .await
-                .expect("request Started remains observable");
+                .expect("request Started is processed");
+            event_release.send(()).expect("release request Started");
             controller_clock.advance(10);
             exited
                 .wait_for(|count| *count >= request_number)
@@ -850,14 +859,12 @@ async fn repeated_runtime_timeouts_use_the_bounded_generic_retry_budget_without_
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn model_backed_summarizer_uses_the_same_deadlines_without_generic_retry() {
-    for (attempt, script, expected) in [
+    for (script, expected) in [
         (
-            "summary-start-timeout",
             vec![FakeStep::Emit(started())],
             "summary generation timed out",
         ),
         (
-            "summary-idle-timeout",
             vec![FakeStep::Emit(started()), FakeStep::Emit(text("partial"))],
             "summary generation timed out",
         ),
@@ -873,19 +880,18 @@ async fn model_backed_summarizer_uses_the_same_deadlines_without_generic_retry()
             timeout_policy(10, 10),
             clock.clone() as Arc<dyn MonotonicClock>,
         );
-        let mut emitted = model.emitted();
+        let mut parked = model.parked();
         let mut exited = model.streams_exited();
         let advance_clock = clock.clone();
-        let expected_events = if attempt == "summary-start-timeout" {
-            1
-        } else {
-            2
-        };
         let controller = tokio::spawn(async move {
-            emitted
-                .wait_for(|count| *count >= expected_events)
+            // The fake provider marks ParkUntilReleased immediately before
+            // waiting for its next pull. Reaching this state proves that the
+            // summarizer consumed every preceding event, ran deadline.observe
+            // and its stream-state handling, and requested the next item.
+            parked
+                .wait_for(|is_parked| *is_parked)
                 .await
-                .expect("summary events remain observable");
+                .expect("summary provider park remains observable");
             advance_clock.advance(20);
             exited
                 .wait_for(|count| *count >= 1)

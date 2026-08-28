@@ -2575,11 +2575,13 @@ Assistant.
 The transient budget is three retries and the overflow budget is one, for an
 additive maximum of five primary provider requests per logical step. Backoff
 uses the runtime-owned monotonic clock: 2, 4, and 8 seconds, overridden by an
-adapter-normalized `retry_after_ms` hint capped at 60 seconds. Adapter
-normalization supplies `ModelRetryDisposition`; the Agent Loop never decides
-retryability from provider strings or HTTP prose. `ModelRequestFailed.usage`
-retains only the latest trustworthy cumulative pre-failure evidence for that
-request, or `None`.
+adapter-normalized `retry_after_ms` hint capped at 60 seconds. Provider
+adapters classify provider failures with `ModelRetryDisposition`; a runtime
+owner may assign the disposition for a normalized runtime failure such as a
+request timeout. The Agent Loop always owns retryability policy, budget,
+scheduling, and execution, and never derives it from provider strings or HTTP
+prose. `ModelRequestFailed.usage` retains only the latest trustworthy
+cumulative pre-failure evidence for that request, or `None`.
 
 #### OpenAI adapters (async-openai)
 
@@ -3459,6 +3461,11 @@ Runtime Client is a projection/control/attachment adapter over it.
   RuntimeInner ──► authoritative subsystems (tool runtime, mailbox,
                    capability coordinator)
   RuntimeInner ──► shared leaf observation queue (PendingObservations)
+  RuntimeInner ──► current ModelTimeoutPolicy + shared MonotonicClock
+
+  attempt/manual admission ──► frozen policy/clock copies
+                              ├─► AgentExecution
+                              └─► ContextRuntime ──► ModelBackedSummarizer
 
   RuntimeClientHost ──► Arc<ClientInner>
   ClientInner ──► Arc<ConversationRuntime> (control + bootstrap reads)
@@ -4486,8 +4493,14 @@ Representative current runtime/project configuration:
 
 `modelTimeoutPolicy` is current runtime execution policy shared by primary
 model requests and context-compaction summaries. The finite defaults are 30
-seconds for response-start and 15 seconds for stream-idle. Runtime admission
-copies the effective policy for future work; it is absent from model input,
+seconds for response-start and 15 seconds for stream-idle. `ConversationRuntime`
+(`RuntimeInner`) owns the current policy and the shared runtime
+`MonotonicClock`. Each attempt or manual-compaction admission freezes a copy;
+the Agent Loop and `ModelBackedSummarizer` receive that copy as sibling
+consumers. `ContextRuntime` owns context state and its constructed summarizer,
+but is not the authority for generic primary execution policy or clock access.
+Direct runtime composition rejects a zero timeout with a typed construction
+error before ownership transfer. The policy is absent from model input,
 `RequestSnapshot`, canonical history, and durable schema.
 
 `mcpServers` is an ecosystem-compatible named map keyed by MCP server

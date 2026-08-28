@@ -498,6 +498,7 @@ mod tests {
                 agent_id: AgentId::new("agent-child"),
                 model: scripted_session_model(adapter),
                 approval_mode: crate::runtime::ApprovalMode::Policy,
+                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                 context: ConversationContextConfig {
                     policy: SessionContextPolicy {
                         reserve_tokens: 0,
@@ -506,7 +507,6 @@ mod tests {
                     },
                     estimator: Arc::new(DefaultTokenEstimator),
                     status_engine: AgentStatusEngine::default(),
-                    model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                 },
                 tool_runtime,
                 resources: Arc::new(crate::runtime::RuntimeResourceSnapshot::new(

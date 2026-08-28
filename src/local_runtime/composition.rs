@@ -603,6 +603,7 @@ impl LocalConversationCore {
             agent_id: runtime_config.agent_id.clone(),
             model,
             approval_mode: runtime_config.approval_mode,
+            model_timeout_policy: runtime_config.timeout_policy()?,
             context: ConversationContextConfig {
                 policy: runtime_config.context_policy(),
                 estimator: Arc::clone(&dependencies.estimator),
@@ -610,7 +611,6 @@ impl LocalConversationCore {
                     runtime_config.agent_status.clone(),
                     Arc::new(crate::context::SystemClock),
                 ),
-                model_timeout_policy: runtime_config.timeout_policy()?,
             },
             tool_runtime: tool_runtime.clone(),
             capability: capability.clone(),
@@ -749,6 +749,7 @@ impl LocalConversationCore {
             agent_id: spec.child_agent_id.clone(),
             model,
             approval_mode: crate::runtime::ApprovalMode::Policy,
+            model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             context: ConversationContextConfig {
                 policy: spec.context,
                 estimator: Arc::clone(&dependencies.estimator),
@@ -756,7 +757,6 @@ impl LocalConversationCore {
                     spec.agent_status.clone(),
                     Arc::new(crate::context::SystemClock),
                 ),
-                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             },
             tool_runtime: tool_runtime.clone(),
             capability: capability.clone(),

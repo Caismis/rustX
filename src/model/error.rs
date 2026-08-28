@@ -27,12 +27,13 @@ pub enum ModelErrorKind {
     Unsupported,
 }
 
-/// The adapter's evidence-based retry classification for one normalized
-/// provider failure.
+/// The retry disposition of one normalized model failure.
 ///
-/// The Agent Loop owns the retry budget and scheduling. Adapters own the
-/// provider-specific decision that a failure is safe to retry and provide any
-/// provider-supplied delay separately in [`ModelError::retry_after_ms`].
+/// Provider adapters assign it from provider-specific retry evidence. A
+/// runtime owner may assign the appropriate disposition when it constructs a
+/// normalized runtime failure, such as a request deadline timeout. The Agent
+/// Loop always owns the retry budget, scheduling, and actual retry execution;
+/// provider-supplied delay remains separate in [`ModelError::retry_after_ms`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelRetryDisposition {
@@ -84,8 +85,9 @@ pub struct ModelError {
     pub kind: ModelErrorKind,
     /// Human-readable diagnostic message.
     pub message: String,
-    /// Adapter-owned evidence classification. Delay is intentionally a
-    /// separate field so there is exactly one source of `retry_after_ms`.
+    /// The retry disposition assigned by the owner that normalized this
+    /// failure. Delay is intentionally a separate field so there is exactly
+    /// one source of `retry_after_ms`.
     pub retry_disposition: ModelRetryDisposition,
     /// Provider-requested retry delay, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]

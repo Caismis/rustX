@@ -318,11 +318,11 @@ impl RuntimeClientFixtureBuilder {
             agent_id: AgentId::new("agent-a"),
             model: session_model,
             approval_mode: rustx::runtime::ApprovalMode::Policy,
+            model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
             context: ConversationContextConfig {
                 policy: self.context_policy,
                 estimator,
                 status_engine: self.status_engine,
-                model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
             },
             tool_runtime,
             resources: Arc::new(rustx::runtime::RuntimeResourceSnapshot::new(

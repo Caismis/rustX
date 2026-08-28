@@ -2219,6 +2219,7 @@ mod tests {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter.clone()),
             approval_mode: crate::runtime::ApprovalMode::Policy,
+            model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -2227,7 +2228,6 @@ mod tests {
                 },
                 estimator,
                 status_engine,
-                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -2298,6 +2298,7 @@ mod tests {
                 agent_id: AgentId::new("agent-a"),
                 model: scripted_session_model(adapter.clone()),
                 approval_mode: crate::runtime::ApprovalMode::Policy,
+                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                 context: ConversationContextConfig {
                     policy: crate::context::SessionContextPolicy {
                         reserve_tokens: 0,
@@ -2306,7 +2307,6 @@ mod tests {
                     },
                     estimator,
                     status_engine: status_engine(),
-                    model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                 },
                 tool_runtime,
                 resources: test_resources(&coordinator),
@@ -5650,6 +5650,7 @@ mod tests {
             agent_id: AgentId::new("agent-a"),
             model: crate::scripted_suites::support::model::scripted_session_model(adapter.clone()),
             approval_mode: crate::runtime::ApprovalMode::Policy,
+            model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -5658,7 +5659,6 @@ mod tests {
                 },
                 estimator,
                 status_engine: status_engine(),
-                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -5733,6 +5733,7 @@ mod tests {
                     adapter.clone(),
                 ),
                 approval_mode: crate::runtime::ApprovalMode::Policy,
+                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                 context: ConversationContextConfig {
                     policy: crate::context::SessionContextPolicy {
                         reserve_tokens: 0,
@@ -5741,7 +5742,6 @@ mod tests {
                     },
                     estimator,
                     status_engine: status_engine(),
-                    model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                 },
                 tool_runtime,
                 resources: test_resources(&coordinator),
@@ -5842,6 +5842,7 @@ mod tests {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter.clone()),
             approval_mode: crate::runtime::ApprovalMode::Policy,
+            model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -5850,7 +5851,6 @@ mod tests {
                 },
                 estimator,
                 status_engine: status_engine(),
-                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -6912,6 +6912,7 @@ mod tests {
             agent_id: AgentId::new("agent-claim"),
             model: scripted_session_model(fixture.adapter.clone()),
             approval_mode: crate::runtime::ApprovalMode::Policy,
+            model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -6920,7 +6921,6 @@ mod tests {
                 },
                 estimator: Arc::new(DefaultTokenEstimator),
                 status_engine: status_engine(),
-                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             },
             tool_runtime: fixture.tool_runtime.clone(),
             resources: test_resources(&fixture.coordinator),

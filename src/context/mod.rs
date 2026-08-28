@@ -109,12 +109,6 @@ pub struct ContextRuntime {
     pub(crate) native_system: NativeContextInput,
     /// Process-local resource generation that supplied `native_system`.
     pub(crate) resource_revision: crate::runtime::RuntimeResourceRevision,
-    /// The frozen runtime execution policy shared by the primary and summary
-    /// model request paths.
-    pub(crate) model_timeout_policy: ModelTimeoutPolicy,
-    /// The one runtime-owned monotonic clock shared by publication, retry
-    /// backoff, primary request deadlines, and summary request deadlines.
-    pub(crate) monotonic_clock: Arc<dyn MonotonicClock>,
 }
 
 impl ContextRuntime {
@@ -161,6 +155,7 @@ impl ContextRuntime {
         assembly: ContextAssembly,
         model: &AttemptModelSnapshot,
     ) -> Result<Self, ContextError> {
+        let monotonic_clock: Arc<dyn MonotonicClock> = Arc::new(SystemMonotonicClock::new());
         Self::for_attempt_with_assembly_and_timeout(
             policy,
             estimator,
@@ -168,7 +163,7 @@ impl ContextRuntime {
             assembly,
             model,
             ModelTimeoutPolicy::default(),
-            Arc::new(SystemMonotonicClock::new()),
+            &monotonic_clock,
         )
     }
 
@@ -181,7 +176,7 @@ impl ContextRuntime {
         assembly: ContextAssembly,
         model: &AttemptModelSnapshot,
         model_timeout_policy: ModelTimeoutPolicy,
-        monotonic_clock: Arc<dyn MonotonicClock>,
+        monotonic_clock: &Arc<dyn MonotonicClock>,
     ) -> Result<Self, ContextError> {
         if !model_timeout_policy.is_positive() {
             return Err(ContextError::new(
@@ -239,28 +234,14 @@ impl ContextRuntime {
             summarizer: Arc::new(ModelBackedSummarizer::new(
                 summary,
                 model_timeout_policy,
-                Arc::clone(&monotonic_clock),
+                Arc::clone(monotonic_clock),
             )),
             status_engine,
             assembly,
             compaction_budgets,
             native_system: NativeContextInput::default(),
             resource_revision: crate::runtime::RuntimeResourceRevision::default(),
-            model_timeout_policy,
-            monotonic_clock,
         })
-    }
-
-    /// The timeout policy frozen into this admitted attempt.
-    #[must_use]
-    pub(crate) const fn model_timeout_policy(&self) -> ModelTimeoutPolicy {
-        self.model_timeout_policy
-    }
-
-    /// The shared runtime monotonic clock frozen into this admitted attempt.
-    #[must_use]
-    pub(crate) fn monotonic_clock(&self) -> Arc<dyn MonotonicClock> {
-        Arc::clone(&self.monotonic_clock)
     }
 
     /// Freezes one admitted resource generation into this attempt bundle.
@@ -316,8 +297,6 @@ impl ContextRuntime {
             compaction_budgets,
             native_system: NativeContextInput::default(),
             resource_revision: crate::runtime::RuntimeResourceRevision::default(),
-            model_timeout_policy: ModelTimeoutPolicy::default(),
-            monotonic_clock: Arc::new(SystemMonotonicClock::new()),
         }
     }
 }

@@ -50,8 +50,10 @@ bounded recovery requests, each with its own `RequestIdentity`, shared
 `RequestIdentity.retry_number`, `RequestId`, provisional Assistant
 `MessageId`, `RequestSnapshot`, `ModelRequestStarted` fact, publication stream,
 provider outcome, and publication settlement. The Agent Loop owns this state
-machine and its retry budgets; adapters only normalize provider evidence into
-`ModelRetryDisposition` and an optional `retry_after_ms`.
+machine and its retry budgets; provider adapters classify provider failures
+from their evidence, while a runtime owner may assign a disposition to a
+normalized runtime failure such as a request timeout. An optional
+`retry_after_ms` remains separate.
 
 Transient recovery replays the frozen state through the normal
 stage/finalize/cancellation-arbitration/durable-start/reconstruct/adapter
@@ -69,6 +71,13 @@ bound is five. Default transient backoff is 2, 4, and 8 seconds, with an
 adapter-provided retry hint taking precedence and capped at 60 seconds. Both
 publication latency and retry deadlines use the runtime-owned monotonic clock;
 tests inject a manually advanced clock.
+
+The Conversation Runtime owns the current `ModelTimeoutPolicy` and the shared
+`MonotonicClock`. Attempt admission copies the policy into the admitted
+execution state. `AgentExecution` and the context-plane
+`ModelBackedSummarizer` are sibling consumers: `ContextRuntime` contains the
+summarizer it needs, but it is not the owner of generic Agent Loop execution
+policy or the shared clock.
 
 Every failed request settles its publication stream before another request can
 start. Partial text, reasoning, refusal, usage, and proposed tool calls remain
@@ -126,8 +135,10 @@ mutates `AgentCancellation`.
 The summarizer uses the same deadline state machine and runtime monotonic clock,
 but maps a timeout through its existing summary/context failure boundary and
 does not enter generic model retry. Both primary and summary deadlines use the
-runtime's shared `MonotonicClock`; `RuntimeClock` remains the wall-clock
-authority.
+runtime-owned shared `MonotonicClock`; `RuntimeClock` remains the wall-clock
+authority. A policy rejected at `ConversationRuntime::new` cannot reach
+attempt admission, and timeout policy is absent from all historical request
+reconstruction.
 
 Execution semantics are explicit: an `ExecutionStateMachine`
 (`Idle → RunningModel → WaitingForTool → RunningModel → Completed`, with
