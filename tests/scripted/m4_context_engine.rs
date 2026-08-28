@@ -4904,7 +4904,11 @@ async fn model_backed_summarizer_issues_a_canonical_request() {
         FakeStep::Emit(text_delta(0, "text")),
         FakeStep::Emit(done_with_usage(ModelFinishReason::Stop, 9)),
     ]]);
-    let summarizer = ModelBackedSummarizer::new(summary_invocation(&model, 128));
+    let summarizer = ModelBackedSummarizer::new(
+        summary_invocation(&model, 128),
+        rustx::model::ModelTimeoutPolicy::default(),
+        Arc::new(rustx::runtime::SystemMonotonicClock::new()),
+    );
     let request = SummaryRequest {
         retired: vec![user("u1", "hi")],
     };
@@ -4998,7 +5002,11 @@ async fn model_backed_summarizer_rejects_invalid_streams() {
     ];
     for (events, expected) in cases {
         let model = fake_model(vec![events]);
-        let summarizer = ModelBackedSummarizer::new(summary_invocation(&model, 64));
+        let summarizer = ModelBackedSummarizer::new(
+            summary_invocation(&model, 64),
+            rustx::model::ModelTimeoutPolicy::default(),
+            Arc::new(rustx::runtime::SystemMonotonicClock::new()),
+        );
         let request = SummaryRequest {
             retired: vec![user("u1", "hi")],
         };
@@ -5035,7 +5043,11 @@ async fn model_backed_summarizer_rejects_refusal_without_delta_and_empty_output(
     ];
     for events in cases {
         let model = fake_model(vec![events]);
-        let summarizer = ModelBackedSummarizer::new(summary_invocation(&model, 64));
+        let summarizer = ModelBackedSummarizer::new(
+            summary_invocation(&model, 64),
+            rustx::model::ModelTimeoutPolicy::default(),
+            Arc::new(rustx::runtime::SystemMonotonicClock::new()),
+        );
         let request = SummaryRequest {
             retired: vec![user("u1", "hi")],
         };
@@ -5076,7 +5088,11 @@ async fn model_backed_summarizer_rejects_malformed_stream_orderings() {
     ];
     for events in cases {
         let model = fake_model(vec![events]);
-        let summarizer = ModelBackedSummarizer::new(summary_invocation(&model, 64));
+        let summarizer = ModelBackedSummarizer::new(
+            summary_invocation(&model, 64),
+            rustx::model::ModelTimeoutPolicy::default(),
+            Arc::new(rustx::runtime::SystemMonotonicClock::new()),
+        );
         let request = SummaryRequest {
             retired: vec![user("u1", "hi")],
         };
@@ -5092,7 +5108,11 @@ async fn model_backed_summarizer_rejects_malformed_stream_orderings() {
 #[tokio::test]
 async fn model_backed_summarizer_aborts_on_cancellation() {
     let model = fake_model(vec![vec![FakeStep::ParkUntilCancelled]]);
-    let summarizer = ModelBackedSummarizer::new(summary_invocation(&model, 64));
+    let summarizer = ModelBackedSummarizer::new(
+        summary_invocation(&model, 64),
+        rustx::model::ModelTimeoutPolicy::default(),
+        Arc::new(rustx::runtime::SystemMonotonicClock::new()),
+    );
     let cancellation = rustx::runtime::CancellationSignal::new();
     let request = SummaryRequest {
         retired: vec![user("u1", "hi")],

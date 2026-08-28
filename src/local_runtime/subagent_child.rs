@@ -506,6 +506,7 @@ mod tests {
                     },
                     estimator: Arc::new(DefaultTokenEstimator),
                     status_engine: AgentStatusEngine::default(),
+                    model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                 },
                 tool_runtime,
                 resources: Arc::new(crate::runtime::RuntimeResourceSnapshot::new(

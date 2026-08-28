@@ -78,6 +78,57 @@ Only the successfully completed request can commit the canonical Assistant.
 snapshot observed before that exact request failed; absent evidence remains
 `None`.
 
+### Runtime-owned provider request deadlines (Issue #135)
+
+Every runtime-owned provider request has one finite, frozen
+`ModelTimeoutPolicy`. The policy is execution state, not model input: it is
+configured at the local/runtime composition boundary, copied when the actual
+request is admitted, and absent from `ModelRequest`, `RequestSnapshot`,
+canonical history, provider continuation state, and historical reconstruction.
+The same policy shape and event semantics serve the primary provider path and
+the provider-backed context summarizer.
+
+The shared request-local state machine in `src/model/deadline.rs` is:
+
+```text
+AwaitingGeneration --first generation-progress event--> Streaming
+AwaitingGeneration ------------------------------------> Timeout
+Streaming ---------no generation/liveness progress---> Timeout
+AwaitingGeneration or Streaming --Completed/Failed---> Terminal
+```
+
+`Started` is lifecycle-only and does not reset response-start. Generation
+progress is `TextDelta`, `ReasoningDelta`, `RefusalDelta`, `ToolCallStarted`,
+`ToolCallArgumentsDelta`, and `ToolCallCompleted`. `UsageUpdate` and
+`ContinuationState` are liveness progress: before generation they leave the
+response-start deadline unchanged; after generation they reset stream-idle.
+Terminal events transfer deadline ownership away. Publication flushes,
+durable frame commits, projection, status work, context work, and retry
+backoff are never provider progress.
+
+The primary loop uses one explicitly biased four-way wait for every provider
+pull, including an empty publication buffer:
+
+```text
+provider event > attempt cancellation > publication flush > request timeout
+```
+
+Thus a provider event wins a simultaneous cut, cancellation retains its
+`AgentCancellation` provenance and wins before timeout, and a committed-for-
+release publication frame flushes before a timeout at the same cut. A flush
+never resets stream-idle. When the timeout branch wins, the loop drops only
+the request-local adapter stream, normalizes `ModelErrorKind::Timeout`,
+settles exactly one `ModelRequestFailed` with the latest trustworthy usage,
+settles partial publication through the existing noncanonical path, and sends
+the error through the Issue #134 retry disposition/budget. It never signals or
+mutates `AgentCancellation`.
+
+The summarizer uses the same deadline state machine and runtime monotonic clock,
+but maps a timeout through its existing summary/context failure boundary and
+does not enter generic model retry. Both primary and summary deadlines use the
+runtime's shared `MonotonicClock`; `RuntimeClock` remains the wall-clock
+authority.
+
 Execution semantics are explicit: an `ExecutionStateMachine`
 (`Idle → RunningModel → WaitingForTool → RunningModel → Completed`, with
 failure and cancellation settling from any active state) enforces that

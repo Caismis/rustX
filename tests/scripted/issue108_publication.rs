@@ -1018,6 +1018,7 @@ async fn runtime_fixture(conversation: &str, model: Arc<FakeModel>) -> RuntimeFi
             },
             estimator,
             status_engine: AgentStatusEngine::default(),
+            model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
         },
         tool_runtime: tool_runtime.clone(),
         resources: Arc::new(rustx::runtime::RuntimeResourceSnapshot::new(

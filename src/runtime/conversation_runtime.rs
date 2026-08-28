@@ -307,6 +307,7 @@ use crate::durable::{
 use crate::events::types::RuntimeEvent;
 use crate::message::types::{InboundKind, MessageBlock, UserContentBlock, UserSource};
 use crate::model::catalog::ModelCatalogView;
+use crate::model::deadline::ModelTimeoutPolicy;
 use crate::model::session::{
     AttemptModelSnapshot, SessionModelConfig, SessionModelState, SessionModelView,
 };
@@ -321,6 +322,7 @@ use crate::runtime::interaction::{
     InteractionCoordinator, InteractionError, InteractionObserver, InteractionOutcome,
     InteractionRequest,
 };
+use crate::runtime::monotonic::{MonotonicClock, SystemMonotonicClock};
 use crate::runtime::observation::{ConversationObservation, PendingObservations};
 use crate::runtime::request_history::RequestHistory;
 use crate::runtime::resources::{RuntimeResourceLoader, RuntimeResourceSnapshot};
@@ -502,6 +504,9 @@ pub struct ConversationContextConfig {
     /// constructs a fresh engine from it, retaining the configured clock/module
     /// semantics while keeping quarantine state attempt-local.
     pub status_engine: AgentStatusEngine,
+    /// The finite runtime-owned model request deadline policy shared by the
+    /// primary Agent Loop and model-backed summarizer.
+    pub model_timeout_policy: ModelTimeoutPolicy,
 }
 
 /// The construction-time configuration of one conversation runtime.
@@ -1117,6 +1122,9 @@ pub(crate) struct RuntimeInner {
     /// of its own.
     lifecycle: ConversationLifecycle,
     clock: Arc<dyn RuntimeClock>,
+    /// The one runtime-owned monotonic clock shared by publication, retry
+    /// backoff, primary request deadlines, and summary request deadlines.
+    monotonic_clock: Arc<dyn MonotonicClock>,
     /// The shared durability frontier (Issue #60): the same failed fact the
     /// coordinator commits as `DurabilityFailed`, carried to the
     /// conversation-owned registries so their new durable ownership commits
@@ -1575,13 +1583,16 @@ impl RuntimeInner {
         &self,
         model: &AttemptModelSnapshot,
         assembly: crate::context::ContextAssembly,
+        model_timeout_policy: ModelTimeoutPolicy,
     ) -> Result<ContextRuntime, crate::context::ContextError> {
-        ContextRuntime::for_attempt_with_assembly(
+        ContextRuntime::for_attempt_with_assembly_and_timeout(
             self.context.policy,
             Arc::clone(&self.context.estimator),
             self.context.status_engine.for_attempt(),
             assembly,
             model,
+            model_timeout_policy,
+            Arc::clone(&self.monotonic_clock),
         )
     }
 
@@ -1938,6 +1949,7 @@ impl RuntimeInner {
         fresh: Option<FreshInboundTurn>,
         cancellation: &AgentCancellation,
         model: AttemptModelSnapshot,
+        model_timeout_policy: ModelTimeoutPolicy,
         approval_mode: ApprovalMode,
         resources: Arc<RuntimeResourceSnapshot>,
         lease: crate::capabilities::AttemptCapabilityLease,
@@ -1947,7 +1959,11 @@ impl RuntimeInner {
         // attempt's window, output budget, and summary invocation all agree
         // with the model it was admitted with.
         let context_runtime = self
-            .context_runtime_with_assembly(&model, resources.context_assembly().clone())
+            .context_runtime_with_assembly(
+                &model,
+                resources.context_assembly().clone(),
+                model_timeout_policy,
+            )
             .expect("admission validated this model against the session context policy");
         let context_runtime = context_runtime.with_runtime_resources(&resources);
         let request = AgentExecutionRequest {
@@ -2513,6 +2529,10 @@ impl RuntimeInner {
         // reconstructed only from its own frozen durable facts and is never
         // rewritten to resemble the new configuration.
         let model = state.model.snapshot();
+        // Freeze runtime execution policy at the same admission boundary as
+        // the attempt's model snapshot. A later configuration change can
+        // therefore affect only a future admitted attempt.
+        let model_timeout_policy = self.context.model_timeout_policy;
         let approval_mode = state.effective_approval_mode;
         let resources = state.resources.clone();
         let lease = self
@@ -2544,6 +2564,7 @@ impl RuntimeInner {
                     fresh,
                     &cancellation,
                     model,
+                    model_timeout_policy,
                     approval_mode,
                     resources,
                     lease,
@@ -2962,6 +2983,7 @@ impl ConversationRuntime {
             interaction,
             lifecycle,
             clock,
+            monotonic_clock: Arc::new(SystemMonotonicClock::new()),
             durability_gate: durability_gate.clone(),
             recovery,
             executor,
@@ -3561,7 +3583,11 @@ impl ConversationRuntime {
             let resources = state.resources.clone();
             let context_runtime = self
                 .inner
-                .context_runtime_with_assembly(&model, resources.context_assembly().clone())
+                .context_runtime_with_assembly(
+                    &model,
+                    resources.context_assembly().clone(),
+                    self.inner.context.model_timeout_policy,
+                )
                 .map_err(ManualCompactionError::Context)?;
             // Manual maintenance has no attempt lease, but it still freezes
             // the exact capability definitions used for planning at the
@@ -5473,6 +5499,7 @@ mod tests {
                 policy: options.policy,
                 estimator: options.estimator,
                 status_engine: options.status_engine,
+                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             },
             tool_runtime,
             resources,
@@ -5554,6 +5581,7 @@ mod tests {
                 },
                 estimator,
                 status_engine: AgentStatusEngine::default(),
+                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -5651,6 +5679,7 @@ mod tests {
                 },
                 estimator: Arc::new(DefaultTokenEstimator),
                 status_engine: AgentStatusEngine::default(),
+                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -5759,6 +5788,7 @@ mod tests {
                 },
                 estimator: Arc::new(DefaultTokenEstimator),
                 status_engine: AgentStatusEngine::default(),
+                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -9316,6 +9346,7 @@ mod tests {
                 },
                 estimator: Arc::new(DefaultTokenEstimator),
                 status_engine: AgentStatusEngine::default(),
+                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -9376,6 +9407,7 @@ mod tests {
                 },
                 estimator: Arc::new(DefaultTokenEstimator),
                 status_engine: AgentStatusEngine::default(),
+                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -14140,6 +14172,7 @@ mod tests {
                 },
                 estimator,
                 status_engine: AgentStatusEngine::default(),
+                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             },
             tool_runtime,
             resources: test_resources(&coordinator),

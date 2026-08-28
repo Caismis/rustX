@@ -41,7 +41,9 @@ pub mod tokens;
 
 use std::sync::Arc;
 
+use crate::model::deadline::ModelTimeoutPolicy;
 use crate::model::session::AttemptModelSnapshot;
+use crate::runtime::monotonic::{MonotonicClock, SystemMonotonicClock};
 
 pub use crate::message::types::{
     AgentStatusGenerationMetadata, AgentStatusMetadataError, AgentStatusModuleId,
@@ -107,6 +109,12 @@ pub struct ContextRuntime {
     pub(crate) native_system: NativeContextInput,
     /// Process-local resource generation that supplied `native_system`.
     pub(crate) resource_revision: crate::runtime::RuntimeResourceRevision,
+    /// The frozen runtime execution policy shared by the primary and summary
+    /// model request paths.
+    pub(crate) model_timeout_policy: ModelTimeoutPolicy,
+    /// The one runtime-owned monotonic clock shared by publication, retry
+    /// backoff, primary request deadlines, and summary request deadlines.
+    pub(crate) monotonic_clock: Arc<dyn MonotonicClock>,
 }
 
 impl ContextRuntime {
@@ -153,6 +161,34 @@ impl ContextRuntime {
         assembly: ContextAssembly,
         model: &AttemptModelSnapshot,
     ) -> Result<Self, ContextError> {
+        Self::for_attempt_with_assembly_and_timeout(
+            policy,
+            estimator,
+            status_engine,
+            assembly,
+            model,
+            ModelTimeoutPolicy::default(),
+            Arc::new(SystemMonotonicClock::new()),
+        )
+    }
+
+    /// Creates a production context runtime with the admitted model timeout
+    /// policy and shared runtime monotonic clock.
+    pub(crate) fn for_attempt_with_assembly_and_timeout(
+        policy: SessionContextPolicy,
+        estimator: Arc<dyn TokenEstimator>,
+        status_engine: AgentStatusEngine,
+        assembly: ContextAssembly,
+        model: &AttemptModelSnapshot,
+        model_timeout_policy: ModelTimeoutPolicy,
+        monotonic_clock: Arc<dyn MonotonicClock>,
+    ) -> Result<Self, ContextError> {
+        if !model_timeout_policy.is_positive() {
+            return Err(ContextError::new(
+                ContextErrorKind::InvalidConfiguration,
+                "model request timeout policy values must be positive",
+            ));
+        }
         if policy.summary_output_cap == Some(0) {
             return Err(ContextError::new(
                 ContextErrorKind::InvalidConfiguration,
@@ -200,13 +236,31 @@ impl ContextRuntime {
         );
         Ok(Self {
             engine,
-            summarizer: Arc::new(ModelBackedSummarizer::new(summary)),
+            summarizer: Arc::new(ModelBackedSummarizer::new(
+                summary,
+                model_timeout_policy,
+                Arc::clone(&monotonic_clock),
+            )),
             status_engine,
             assembly,
             compaction_budgets,
             native_system: NativeContextInput::default(),
             resource_revision: crate::runtime::RuntimeResourceRevision::default(),
+            model_timeout_policy,
+            monotonic_clock,
         })
+    }
+
+    /// The timeout policy frozen into this admitted attempt.
+    #[must_use]
+    pub(crate) const fn model_timeout_policy(&self) -> ModelTimeoutPolicy {
+        self.model_timeout_policy
+    }
+
+    /// The shared runtime monotonic clock frozen into this admitted attempt.
+    #[must_use]
+    pub(crate) fn monotonic_clock(&self) -> Arc<dyn MonotonicClock> {
+        Arc::clone(&self.monotonic_clock)
     }
 
     /// Freezes one admitted resource generation into this attempt bundle.
@@ -262,6 +316,8 @@ impl ContextRuntime {
             compaction_budgets,
             native_system: NativeContextInput::default(),
             resource_revision: crate::runtime::RuntimeResourceRevision::default(),
+            model_timeout_policy: ModelTimeoutPolicy::default(),
+            monotonic_clock: Arc::new(SystemMonotonicClock::new()),
         }
     }
 }

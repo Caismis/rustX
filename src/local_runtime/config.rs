@@ -11,10 +11,14 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use crate::context::{AgentStatusConfig, SessionContextPolicy};
+use crate::model::deadline::{
+    DEFAULT_RESPONSE_START_TIMEOUT, DEFAULT_STREAM_IDLE_TIMEOUT, ModelTimeoutPolicy,
+};
 use crate::model::session::SessionModelConfig;
 use crate::runtime::ApprovalMode;
 use crate::runtime::identity::{AgentId, McpServerId};
@@ -51,6 +55,11 @@ pub struct CurrentRuntimeConfig {
     pub agent_status: AgentStatusConfig,
     /// The current runtime context policy.
     pub context: ContextPolicyDocument,
+    /// The finite runtime-owned deadline policy shared by primary and
+    /// summarizer model requests. This is current launch state, never model
+    /// input or historical request state.
+    #[serde(default)]
+    pub model_timeout_policy: ModelTimeoutPolicyDocument,
     /// The ecosystem-compatible named MCP server map, keyed by server
     /// identity exactly as mainstream MCP clients spell it.
     #[serde(default)]
@@ -76,6 +85,53 @@ pub struct CurrentRuntimeConfig {
     /// Explicit Skill roots or package paths supplied by the project config.
     #[serde(default)]
     pub skills: Vec<PathBuf>,
+}
+
+/// The JSONC representation of the one shared model request timeout policy.
+///
+/// Milliseconds keep the configuration human-readable while the runtime
+/// receives a typed [`ModelTimeoutPolicy`] containing only finite
+/// [`Duration`] values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+pub struct ModelTimeoutPolicyDocument {
+    /// Maximum time to observe the first generation event.
+    pub response_start_timeout_ms: u64,
+    /// Maximum time between generation/liveness events after generation has
+    /// begun.
+    pub stream_idle_timeout_ms: u64,
+}
+
+impl Default for ModelTimeoutPolicyDocument {
+    fn default() -> Self {
+        Self {
+            response_start_timeout_ms: u64::try_from(DEFAULT_RESPONSE_START_TIMEOUT.as_millis())
+                .expect("the default response-start timeout fits in milliseconds"),
+            stream_idle_timeout_ms: u64::try_from(DEFAULT_STREAM_IDLE_TIMEOUT.as_millis())
+                .expect("the default stream-idle timeout fits in milliseconds"),
+        }
+    }
+}
+
+impl ModelTimeoutPolicyDocument {
+    /// Converts the current-runtime document to the runtime policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when either configured deadline is zero.
+    #[must_use = "the validated policy must be used by runtime composition"]
+    pub fn to_policy(self) -> Result<ModelTimeoutPolicy, String> {
+        if self.response_start_timeout_ms == 0 {
+            return Err("modelTimeoutPolicy.responseStartTimeoutMs must be positive".to_owned());
+        }
+        if self.stream_idle_timeout_ms == 0 {
+            return Err("modelTimeoutPolicy.streamIdleTimeoutMs must be positive".to_owned());
+        }
+        Ok(ModelTimeoutPolicy::new(
+            Duration::from_millis(self.response_start_timeout_ms),
+            Duration::from_millis(self.stream_idle_timeout_ms),
+        ))
+    }
 }
 
 const fn default_schema_version() -> u32 {
@@ -139,6 +195,7 @@ impl CurrentRuntimeConfig {
                 detail: "context.summaryOutputCap must be positive when present".to_owned(),
             });
         }
+        self.timeout_policy()?;
         if self.default_tools.iter().any(|name| name.trim().is_empty()) {
             return Err(CurrentRuntimeConfigError::Invalid {
                 detail: "defaultTools entries must be non-empty names".to_owned(),
@@ -160,6 +217,22 @@ impl CurrentRuntimeConfig {
             keep_recent_tokens: self.context.keep_recent_tokens,
             summary_output_cap: self.context.summary_output_cap,
         }
+    }
+
+    /// The validated finite model request deadline policy for this runtime.
+    ///
+    /// The policy is copied into admitted execution state. It is not placed
+    /// in a model request, request snapshot, canonical history, or provider
+    /// continuation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CurrentRuntimeConfigError::Invalid`] when either deadline is
+    /// zero.
+    pub fn timeout_policy(&self) -> Result<ModelTimeoutPolicy, CurrentRuntimeConfigError> {
+        self.model_timeout_policy
+            .to_policy()
+            .map_err(|detail| CurrentRuntimeConfigError::Invalid { detail })
     }
 
     /// The base authorized tool environment this configuration expresses.
@@ -556,7 +629,8 @@ impl std::error::Error for CurrentRuntimeConfigError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{CurrentRuntimeConfig, CurrentRuntimeConfigError};
+    use super::{CurrentRuntimeConfig, CurrentRuntimeConfigError, ModelTimeoutPolicyDocument};
+    use crate::model::deadline::{DEFAULT_RESPONSE_START_TIMEOUT, DEFAULT_STREAM_IDLE_TIMEOUT};
 
     const MINIMAL: &str = r#"{
         "agentId": "agent-a",
@@ -573,6 +647,19 @@ mod tests {
         assert!(config.agent_status.time.enabled);
         assert!(config.agent_status.background.enabled);
         assert_eq!(config.agent_status.time.timezone, None);
+        assert_eq!(
+            config.model_timeout_policy,
+            ModelTimeoutPolicyDocument::default()
+        );
+        let timeout_policy = config.timeout_policy().expect("finite timeout policy");
+        assert_eq!(
+            timeout_policy.response_start_timeout,
+            DEFAULT_RESPONSE_START_TIMEOUT
+        );
+        assert_eq!(
+            timeout_policy.stream_idle_timeout,
+            DEFAULT_STREAM_IDLE_TIMEOUT
+        );
         assert!(config.mcp_bindings().expect("bindings").is_empty());
         assert!(
             config
@@ -580,6 +667,71 @@ mod tests {
                 .expect("environment")
                 .authorized_entries()
                 .is_empty()
+        );
+    }
+
+    /// The one shared timeout policy is current runtime state and accepts
+    /// finite millisecond values without entering Session model state.
+    #[test]
+    fn model_timeout_policy_is_configurable() {
+        let json = MINIMAL.replace(
+            r#""agentId": "agent-a""#,
+            r#""agentId": "agent-a", "modelTimeoutPolicy": {"responseStartTimeoutMs": 7, "streamIdleTimeoutMs": 11}"#,
+        );
+        let config = CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect("valid");
+        let policy = config.timeout_policy().expect("finite timeout policy");
+        assert_eq!(
+            policy.response_start_timeout,
+            std::time::Duration::from_millis(7)
+        );
+        assert_eq!(
+            policy.stream_idle_timeout,
+            std::time::Duration::from_millis(11)
+        );
+    }
+
+    /// A zero deadline is rejected at the current-runtime composition
+    /// boundary rather than creating an ambiguous request.
+    #[test]
+    fn zero_model_timeout_is_rejected() {
+        let json = MINIMAL.replace(
+            r#""agentId": "agent-a""#,
+            r#""agentId": "agent-a", "modelTimeoutPolicy": {"responseStartTimeoutMs": 0, "streamIdleTimeoutMs": 11}"#,
+        );
+        let error = CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect_err("must fail");
+        assert!(matches!(error, CurrentRuntimeConfigError::Invalid { .. }));
+        assert!(error.to_string().contains("responseStartTimeoutMs"));
+    }
+
+    /// A policy read for one admission remains unchanged when current
+    /// configuration is edited; a later admission reads the new values.
+    #[test]
+    fn timeout_policy_changes_apply_only_to_later_admissions() {
+        let json = MINIMAL.replace(
+            r#""agentId": "agent-a""#,
+            r#""agentId": "agent-a", "modelTimeoutPolicy": {"responseStartTimeoutMs": 7, "streamIdleTimeoutMs": 11}"#,
+        );
+        let mut config = CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect("valid");
+        let admitted = config.timeout_policy().expect("initial policy");
+        config.model_timeout_policy.response_start_timeout_ms = 13;
+        config.model_timeout_policy.stream_idle_timeout_ms = 17;
+        let later = config.timeout_policy().expect("later policy");
+
+        assert_eq!(
+            admitted.response_start_timeout,
+            std::time::Duration::from_millis(7)
+        );
+        assert_eq!(
+            admitted.stream_idle_timeout,
+            std::time::Duration::from_millis(11)
+        );
+        assert_eq!(
+            later.response_start_timeout,
+            std::time::Duration::from_millis(13)
+        );
+        assert_eq!(
+            later.stream_idle_timeout,
+            std::time::Duration::from_millis(17)
         );
     }
 

@@ -54,6 +54,7 @@ mod issue127_todo_plane;
 mod issue127_todo_transaction;
 mod issue130_agent_status;
 mod issue134_model_retry;
+mod issue135_model_deadlines;
 mod issue27_multi_compaction;
 mod issue37_binding;
 mod issue37_capability;

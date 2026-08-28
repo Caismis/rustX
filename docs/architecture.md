@@ -4455,6 +4455,10 @@ Representative current runtime/project configuration:
     "keepRecentTokens": 20000,
     "summaryOutputCap": 2048
   },
+  "modelTimeoutPolicy": {
+    "responseStartTimeoutMs": 30000,
+    "streamIdleTimeoutMs": 15000
+  },
   "mcpServers": {
     "exa": {
       "type": "http",
@@ -4479,6 +4483,12 @@ Representative current runtime/project configuration:
   "skills": [".rustx/skills"]
 }
 ```
+
+`modelTimeoutPolicy` is current runtime execution policy shared by primary
+model requests and context-compaction summaries. The finite defaults are 30
+seconds for response-start and 15 seconds for stream-idle. Runtime admission
+copies the effective policy for future work; it is absent from model input,
+`RequestSnapshot`, canonical history, and durable schema.
 
 `mcpServers` is an ecosystem-compatible named map keyed by MCP server
 identity: an entry is the same object an MCP server's own documentation
