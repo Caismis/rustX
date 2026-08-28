@@ -27,7 +27,7 @@ use rustx::model::finish::ModelFinishReason;
 use rustx::model::{
     CarryoverBlockKind, CarryoverDetailLevel, CarryoverOmissionCounts, ModelInputMessage,
     RenderedCarryoverRecord, RenderedCarryoverText, RenderedUnresolvedOutputCarryover,
-    RequestOnlyInsertionAnchor, RequestOnlyModelContext,
+    RequestOnlyInsertionAnchor, RequestOnlyModelContext, UnresolvedOutputSettlement,
 };
 use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId};
 use rustx::runtime::inbound::{FreshInboundTurn, InitialTurnTrigger};
@@ -324,6 +324,7 @@ async fn live_terminal_transition_installs_then_consumes_one_frozen_carryover() 
                 ModelInputMessage::RequestOnly(RequestOnlyModelContext::UnresolvedOutputCarryover(
                     carryover
                 )) if carryover.source_stream_id == source
+                    && carryover.source_settlement == UnresolvedOutputSettlement::Incomplete
             )
         })
         .expect("the second eligible primary request carries the source");
@@ -341,6 +342,13 @@ async fn live_terminal_transition_installs_then_consumes_one_frozen_carryover() 
         .expect("consumer snapshot");
     assert_eq!(snapshot.unresolved_output_carryover_source, Some(source));
     assert_eq!(
+        snapshot
+            .unresolved_output_carryover
+            .as_ref()
+            .map(|carryover| carryover.source_settlement),
+        Some(UnresolvedOutputSettlement::Incomplete)
+    );
+    assert_eq!(
         snapshot.unresolved_output_carryover_anchor,
         Some(rustx::model::RequestOnlyInsertionAnchor::AfterCanonical,)
     );
@@ -349,6 +357,11 @@ async fn live_terminal_transition_installs_then_consumes_one_frozen_carryover() 
         .reconstruct_model_request(&snapshot.request_id)
         .expect("historical request reconstruction");
     assert_eq!(reconstructed, requests[1]);
+    assert_eq!(
+        carryover_from(&reconstructed).source_settlement,
+        UnresolvedOutputSettlement::Incomplete,
+        "snapshot reconstruction preserves the frozen settlement without rereading the audit"
+    );
     assert!(second_audit.event_history.iter().any(|event| matches!(
         event,
         RuntimeEvent::ModelRequestStarted { request_id, .. }
@@ -1148,6 +1161,7 @@ fn request_only_anchors_and_degradation_are_deterministic() {
     let source = rustx::runtime::identity::PublicationStreamId::new("audit-source");
     let carryover = RenderedUnresolvedOutputCarryover {
         source_stream_id: source.clone(),
+        source_settlement: UnresolvedOutputSettlement::Incomplete,
         records: vec![RenderedCarryoverRecord::Text(RenderedCarryoverText {
             kind: CarryoverBlockKind::Text,
             text: Some("tail".to_owned()),
@@ -1195,6 +1209,13 @@ fn request_only_anchors_and_degradation_are_deterministic() {
     };
     assert!(text.text.is_none());
     assert_eq!(text.omitted_detail_bytes, 4);
+    assert_eq!(
+        metadata.source_settlement,
+        UnresolvedOutputSettlement::Incomplete
+    );
+    assert_eq!(metadata.omitted_blocks, carryover.omitted_blocks);
+    assert_eq!(metadata.records[0].block_kind(), CarryoverBlockKind::Text);
+    assert!(metadata.render().contains("source_settlement=incomplete"));
     let omitted = metadata.degraded(CarryoverDetailLevel::Omitted);
     assert_eq!(omitted.source_stream_id, source);
     assert!(omitted.records.iter().all(|record| match record {
@@ -1389,6 +1410,14 @@ async fn overflow_compaction_only_degrades_the_frozen_carryover_source() {
     let full = carryover_from(&requests[1]);
     let degraded = carryover_from(&requests[2]);
     assert_eq!(full.source_stream_id, degraded.source_stream_id);
+    assert_eq!(
+        full.source_settlement,
+        UnresolvedOutputSettlement::Incomplete
+    );
+    assert_eq!(
+        degraded.source_settlement,
+        UnresolvedOutputSettlement::Incomplete
+    );
     assert!(full.records.iter().any(|record| {
         matches!(
             record,
@@ -1404,6 +1433,20 @@ async fn overflow_compaction_only_degrades_the_frozen_carryover_source() {
     assert_eq!(
         snapshots[0].unresolved_output_carryover_source,
         snapshots[1].unresolved_output_carryover_source
+    );
+    assert_eq!(
+        snapshots[0]
+            .unresolved_output_carryover
+            .as_ref()
+            .map(|carryover| carryover.source_settlement),
+        Some(UnresolvedOutputSettlement::Incomplete)
+    );
+    assert_eq!(
+        snapshots[1]
+            .unresolved_output_carryover
+            .as_ref()
+            .map(|carryover| carryover.source_settlement),
+        Some(UnresolvedOutputSettlement::Incomplete)
     );
     assert_eq!(
         snapshots[0].unresolved_output_carryover_anchor,

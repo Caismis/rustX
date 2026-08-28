@@ -16,6 +16,7 @@ use crate::events::types::RuntimeEvent;
 use crate::message::types::{
     AgentStatusModuleId, AssistantContentBlock, InboundKind, MessageBlock, UserContentBlock,
 };
+use crate::model::UnresolvedOutputSettlement;
 use crate::publication::PublicationAuditKind;
 use crate::runtime::identity::PublicationStreamId;
 use crate::runtime::recovery::{AttemptRecoveryClass, ResumeDisposition};
@@ -1140,6 +1141,13 @@ fn a_publication_audit_carryover_stays_request_only() {
             .as_ref()
             .map(|carryover| carryover.source_stream_id.clone()),
         Some(source)
+    );
+    assert_eq!(
+        resumed_snapshot
+            .unresolved_output_carryover
+            .as_ref()
+            .map(|carryover| carryover.source_settlement),
+        Some(UnresolvedOutputSettlement::Unaccepted)
     );
     assert!(
         resumed_snapshot

@@ -3644,6 +3644,12 @@ exactly one later eligible primary model start. The audit remains the sole
 body authority: durable state stores only its pending `PublicationStreamId`,
 and the selected rendering is frozen by value in that later Request Snapshot.
 
+The frozen carryover also preserves whether its source Publication Audit was
+`Incomplete` or `Unaccepted`. That distinction remains visible and typed in
+the Full, Reduced, and MetadataOnly representations and survives historical
+Request Snapshot reconstruction; only the Omitted representation removes the
+request-only item.
+
 Carryover is never canonical Assistant content, never a Ledger or Surface
 identity, never a `UserMessageBlock`, never a fabricated `MessageId`, and
 never lineage meaning. It is untrusted runtime-authored context with a

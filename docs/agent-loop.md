@@ -986,6 +986,13 @@ historical canonical Surface and does not consult pending state or the
 Publication Audit. The start transaction commits this snapshot, ordinary
 model-start facts, and one-shot pointer consumption atomically.
 
+`RenderedUnresolvedOutputCarryover` freezes a model-input-owned
+`UnresolvedOutputSettlement` converted from the source audit's
+`PublicationAuditKind`. Its provider-visible runtime record says
+`source_settlement=incomplete` or `source_settlement=unaccepted`, and the
+settlement survives Full, Reduced, MetadataOnly, and historical snapshot
+reconstruction. Only Omitted removes the request-only item.
+
 ### Authority matrix
 
 | Phase | Can observe | Can propose/decide | Cannot mutate | Owner |

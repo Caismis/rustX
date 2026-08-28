@@ -42,7 +42,7 @@ pub use input::{
     CarryoverBlockKind, CarryoverDetailLevel, CarryoverOmissionCounts, ModelInputMessage,
     RenderedCarryoverRecord, RenderedCarryoverText, RenderedCarryoverToolCall,
     RenderedUnresolvedOutputCarryover, RequestOnlyInsertionAnchor, RequestOnlyModelContext,
-    canonical_input,
+    UnresolvedOutputSettlement, canonical_input,
 };
 pub use invocation::{
     ModelBindingRegistry, ModelInvocationConfig, ModelInvocationError, ModelInvocationView,

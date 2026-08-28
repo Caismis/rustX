@@ -5140,6 +5140,18 @@ enum ModelInputMessage {
 enum RequestOnlyModelContext {
     UnresolvedOutputCarryover(RenderedUnresolvedOutputCarryover),
 }
+
+struct RenderedUnresolvedOutputCarryover {
+    source_stream_id: PublicationStreamId,
+    source_settlement: UnresolvedOutputSettlement,
+    records: Vec<RenderedCarryoverRecord>,
+    omitted_blocks: CarryoverOmissionCounts,
+}
+
+enum UnresolvedOutputSettlement {
+    Incomplete,
+    Unaccepted,
+}
 ```
 
 Canonical identities remain real Ledger identities; the request-only variant
@@ -5150,6 +5162,14 @@ fresh inbound it inserts it after the existing canonical projection and before
 newly staged current context. This anchor and the exact admitted bounded
 representation are frozen in the Request Snapshot, so reconstruction does not
 consult the current pointer, audit, Surface head, or runtime.
+
+The publication boundary converts `PublicationAuditKind::Incomplete` or
+`PublicationAuditKind::Unaccepted` once into the model-input-owned
+`UnresolvedOutputSettlement`. The frozen representation preserves that
+settlement and renders `source_settlement=incomplete` or
+`source_settlement=unaccepted` in Full, Reduced, and MetadataOnly forms.
+Historical reconstruction copies the frozen value without another audit load;
+only Omitted removes the request-only item.
 
 The shared selector takes the last durably started `RequestIdentity` and
 checks retry ordinals `N, N-1, ..., 0`, deriving each request, provisional

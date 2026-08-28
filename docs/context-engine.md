@@ -434,8 +434,11 @@ The value/reference decisions are deliberate:
   committed atomically with request start.
 - unresolved_output_carryover_source records only the selected Publication
   Stream identity. The optional rendered value is the exact bounded
-  request-only representation that fit this request, and the anchor records
-  where it was inserted. Neither value is canonical history or lineage state.
+  request-only representation that fit this request, including its frozen
+  `UnresolvedOutputSettlement` (`Incomplete` or `Unaccepted`), and the anchor
+  records where it was inserted. Neither value is canonical history or lineage
+  state. Full, Reduced, and MetadataOnly retain the settlement distinction;
+  only Omitted removes the request-only item.
 
 RequestSnapshot::reconstruct(&ConversationState) resolves only the
 referenced historical Surface revision, hydrates its canonical messages,

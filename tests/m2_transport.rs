@@ -16,6 +16,7 @@ use rustx::model::{
 use rustx::model::{
     CarryoverBlockKind, CarryoverOmissionCounts, ModelInputMessage, RenderedCarryoverRecord,
     RenderedCarryoverText, RenderedUnresolvedOutputCarryover, RequestOnlyModelContext,
+    UnresolvedOutputSettlement,
 };
 use rustx::runtime::CancellationSignal;
 use rustx::runtime::identity::PublicationStreamId;
@@ -48,6 +49,7 @@ fn request_with_carryover(mut request: ModelRequest) -> ModelRequest {
     request.messages.push(ModelInputMessage::RequestOnly(
         RequestOnlyModelContext::UnresolvedOutputCarryover(RenderedUnresolvedOutputCarryover {
             source_stream_id: PublicationStreamId::new("audit-stream"),
+            source_settlement: UnresolvedOutputSettlement::Incomplete,
             records: vec![RenderedCarryoverRecord::Text(RenderedCarryoverText {
                 kind: CarryoverBlockKind::Text,
                 text: Some("unresolved tail".to_owned()),
@@ -104,7 +106,9 @@ async fn every_adapter_translates_request_only_carryover_without_canonical_ident
     assert!(
         chat_messages[1]["content"][0]["text"]
             .as_str()
-            .is_some_and(|text| text.contains("unresolved tail"))
+            .is_some_and(|text| {
+                text.contains("unresolved tail") && text.contains("source_settlement=incomplete")
+            })
     );
 
     let responses_events = collect(
@@ -124,7 +128,9 @@ async fn every_adapter_translates_request_only_carryover_without_canonical_ident
     assert!(
         responses_input[1]["content"][0]["text"]
             .as_str()
-            .is_some_and(|text| text.contains("unresolved tail"))
+            .is_some_and(|text| {
+                text.contains("unresolved tail") && text.contains("source_settlement=incomplete")
+            })
     );
 
     let anthropic_events = collect(
@@ -146,7 +152,9 @@ async fn every_adapter_translates_request_only_carryover_without_canonical_ident
     assert!(
         anthropic_messages[1]["content"][0]["text"]
             .as_str()
-            .is_some_and(|text| text.contains("unresolved tail"))
+            .is_some_and(|text| {
+                text.contains("unresolved tail") && text.contains("source_settlement=incomplete")
+            })
     );
 
     let request = request_with_carryover(chat_request());

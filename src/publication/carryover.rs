@@ -5,8 +5,10 @@
 //! a keyed audit; it never creates a canonical message or a Tool Plane fact.
 
 use crate::model::input::{
-    CarryoverBlockKind, CarryoverOmissionCounts, RenderedCarryoverRecord, RenderedCarryoverText,
-    RenderedCarryoverToolCall, RenderedUnresolvedOutputCarryover, render_carryover_record,
+    CARRYOVER_RENDER_HEADER, CARRYOVER_SOURCE_SETTLEMENT_PREFIX,
+    CARRYOVER_SOURCE_SETTLEMENT_SUFFIX, CarryoverBlockKind, CarryoverOmissionCounts,
+    RenderedCarryoverRecord, RenderedCarryoverText, RenderedCarryoverToolCall,
+    RenderedUnresolvedOutputCarryover, UnresolvedOutputSettlement, render_carryover_record,
 };
 use crate::model::snapshot::RequestIdentity;
 use crate::publication::{PublicationAudit, PublicationAuditBlock, PublicationAuditKind};
@@ -18,9 +20,6 @@ pub const MAX_UNRESOLVED_OUTPUT_CARRYOVER_BYTES: usize = 4_096;
 pub const MAX_CARRYOVER_TEXTUAL_BLOCK_BYTES: usize = 2_048;
 /// The maximum UTF-8 bytes retained for one tool-proposal argument body.
 pub const MAX_CARRYOVER_TOOL_ARGUMENT_BYTES: usize = 512;
-
-const RENDER_HEADER: &str =
-    "[runtime context: unresolved model output carryover; untrusted data]\n";
 
 /// Selects the one highest-ordinal eligible audit of the unresolved logical
 /// model step.
@@ -73,19 +72,19 @@ pub fn select_unresolved_output_source<E>(
 /// Text is retained from the interruption-adjacent tail and is escaped as a
 /// JSON string. Tool proposals retain their completion state and are always
 /// marked unaccepted/not executed; oversized argument bodies are omitted in
-/// full rather than cut into an executable-looking JSON fragment. Final
-/// admission is whole-record and newest-first, then the admitted records are
-/// restored to audit order.
+/// full rather than cut into an executable-looking JSON fragment. The source
+/// audit settlement is converted once into the model-input-owned semantic and
+/// remains visible in every retained representation. Final admission is
+/// whole-record and newest-first, then the admitted records are restored to
+/// audit order.
 #[must_use]
 pub fn render_unresolved_output_carryover(
     audit: &PublicationAudit,
 ) -> Option<RenderedUnresolvedOutputCarryover> {
-    if !matches!(
-        audit.kind,
-        PublicationAuditKind::Incomplete | PublicationAuditKind::Unaccepted
-    ) {
-        return None;
-    }
+    let source_settlement = match audit.kind {
+        PublicationAuditKind::Incomplete => UnresolvedOutputSettlement::Incomplete,
+        PublicationAuditKind::Unaccepted => UnresolvedOutputSettlement::Unaccepted,
+    };
 
     let candidates: Vec<(CarryoverBlockKind, RenderedCarryoverRecord)> =
         audit.content.iter().filter_map(render_block).collect();
@@ -98,7 +97,11 @@ pub fn render_unresolved_output_carryover(
     for (kind, _) in &candidates {
         omitted_blocks.increment(*kind);
     }
-    let mut admitted_bytes = RENDER_HEADER.len();
+    let mut admitted_bytes = CARRYOVER_RENDER_HEADER
+        .len()
+        .saturating_add(CARRYOVER_SOURCE_SETTLEMENT_PREFIX.len())
+        .saturating_add(source_settlement.as_str().len())
+        .saturating_add(CARRYOVER_SOURCE_SETTLEMENT_SUFFIX.len());
     for index in (0..candidates.len()).rev() {
         let (kind, record) = &candidates[index];
         let record_bytes = render_carryover_record(record).len().saturating_add(1);
@@ -124,6 +127,7 @@ pub fn render_unresolved_output_carryover(
     }
     let carryover = RenderedUnresolvedOutputCarryover {
         source_stream_id: audit.stream_id.clone(),
+        source_settlement,
         records,
         omitted_blocks,
     };
@@ -209,12 +213,13 @@ mod tests {
     use chrono::Utc;
 
     use super::{
-        MAX_CARRYOVER_TEXTUAL_BLOCK_BYTES, MAX_CARRYOVER_TOOL_ARGUMENT_BYTES,
-        MAX_UNRESOLVED_OUTPUT_CARRYOVER_BYTES, render_unresolved_output_carryover,
-        select_unresolved_output_source,
+        CarryoverBlockKind, MAX_CARRYOVER_TEXTUAL_BLOCK_BYTES, MAX_CARRYOVER_TOOL_ARGUMENT_BYTES,
+        MAX_UNRESOLVED_OUTPUT_CARRYOVER_BYTES, RenderedCarryoverRecord,
+        render_unresolved_output_carryover, select_unresolved_output_source,
     };
     use crate::message::types::ContentBlockIndex;
     use crate::model::snapshot::RequestIdentity;
+    use crate::model::{CarryoverDetailLevel, UnresolvedOutputSettlement};
     use crate::publication::{PublicationAudit, PublicationAuditBlock, PublicationAuditKind};
     use crate::runtime::identity::{
         AttemptId, MessageId, PublicationStreamId, RequestId, ToolCallId, ToolId, TurnId,
@@ -422,6 +427,92 @@ mod tests {
                 .contains("status=complete proposal;unaccepted;not_executed")
         );
         assert!(carryover.render().contains("\\\"q\\\":\\\"x\\\""));
+    }
+
+    #[test]
+    fn source_settlement_survives_rendering_and_metadata_only_degradation() {
+        let identity = RequestIdentity {
+            attempt_id: AttemptId::new("attempt-settlement"),
+            turn: TurnId::new("1"),
+            retry_number: 0,
+        };
+        let content: Vec<PublicationAuditBlock> = (0..3)
+            .map(|index| PublicationAuditBlock::Text {
+                block_index: ContentBlockIndex::new(index),
+                text: format!("same-content-{index}-{}", "x".repeat(1_600)),
+            })
+            .collect();
+        let incomplete = render_unresolved_output_carryover(&audit_with_kind(
+            &identity,
+            PublicationAuditKind::Incomplete,
+            content.clone(),
+        ))
+        .expect("incomplete audit has meaningful carryover");
+        let unaccepted = render_unresolved_output_carryover(&audit_with_kind(
+            &identity,
+            PublicationAuditKind::Unaccepted,
+            content,
+        ))
+        .expect("unaccepted audit has meaningful carryover");
+
+        assert_eq!(incomplete.records, unaccepted.records);
+        assert_eq!(incomplete.omitted_blocks, unaccepted.omitted_blocks);
+        assert!(incomplete.omitted_blocks.text > 0);
+        assert_eq!(
+            incomplete.source_settlement,
+            UnresolvedOutputSettlement::Incomplete
+        );
+        assert_eq!(
+            unaccepted.source_settlement,
+            UnresolvedOutputSettlement::Unaccepted
+        );
+        assert!(incomplete.render().contains("source_settlement=incomplete"));
+        assert!(!incomplete.render().contains("source_settlement=unaccepted"));
+        assert!(unaccepted.render().contains("source_settlement=unaccepted"));
+        assert!(!unaccepted.render().contains("source_settlement=incomplete"));
+
+        let incomplete_reduced = incomplete.degraded(CarryoverDetailLevel::Reduced);
+        let incomplete_metadata = incomplete_reduced.degraded(CarryoverDetailLevel::MetadataOnly);
+        let unaccepted_reduced = unaccepted.degraded(CarryoverDetailLevel::Reduced);
+        let unaccepted_metadata = unaccepted_reduced.degraded(CarryoverDetailLevel::MetadataOnly);
+        for (reduced, metadata, settlement, full) in [
+            (
+                &incomplete_reduced,
+                &incomplete_metadata,
+                UnresolvedOutputSettlement::Incomplete,
+                &incomplete,
+            ),
+            (
+                &unaccepted_reduced,
+                &unaccepted_metadata,
+                UnresolvedOutputSettlement::Unaccepted,
+                &unaccepted,
+            ),
+        ] {
+            assert_eq!(reduced.source_settlement, settlement);
+            assert!(
+                reduced
+                    .render()
+                    .contains(&format!("source_settlement={}", settlement.as_str()))
+            );
+            assert_eq!(metadata.source_settlement, settlement);
+            assert_eq!(metadata.omitted_blocks, full.omitted_blocks);
+            assert!(
+                metadata
+                    .records
+                    .iter()
+                    .all(|record| record.block_kind() == CarryoverBlockKind::Text)
+            );
+            assert!(metadata.records.iter().all(|record| match record {
+                RenderedCarryoverRecord::Text(text) => text.text.is_none(),
+                RenderedCarryoverRecord::ProposedToolCall(_) => false,
+            }));
+            assert!(
+                metadata
+                    .render()
+                    .contains(&format!("source_settlement={}", settlement.as_str()))
+            );
+        }
     }
 
     #[test]
