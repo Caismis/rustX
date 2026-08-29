@@ -119,7 +119,8 @@ struct Driver {
     #[allow(dead_code)]
     root: tempfile::TempDir,
     runtime: LocalConversationRuntime,
-    /// The one v1 attachment, kept alive for the subscription's lifetime.
+    /// The one Runtime Client attachment, kept alive for the subscription's
+    /// lifetime.
     #[allow(dead_code)]
     _attachment: RuntimeAttachment,
     events: EventSubscription,

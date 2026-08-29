@@ -61,7 +61,7 @@ async function attach(
 }
 
 describe("RuntimeClientAttachment", () => {
-  it("negotiates v8, installs the snapshot, and subscribes from its cursor", async () => {
+  it("negotiates the Runtime Client protocol, installs the snapshot, and subscribes from its cursor", async () => {
     const { peer, session } = connect();
     await attach(peer, session, snapshot({ conversation_id: "conv-7" }), 12);
 

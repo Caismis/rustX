@@ -86,8 +86,7 @@
 //! [`ModelRequestFailed`], [`ModelRetryScheduled`]) and compaction
 //! mechanics stay internal unless they express a client-relevant semantic
 //! fact. The mapping is defined here, in one place, so internal
-//! `RuntimeEvent` evolution cannot silently break Runtime Client Protocol
-//! v6.
+//! `RuntimeEvent` evolution cannot silently break the Runtime Client protocol.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -745,8 +744,8 @@ impl RuntimeClientProjection {
         }
     }
 
-    /// The explicit `RuntimeEvent` mapping policy of Runtime Client Protocol
-    /// v6.
+    /// The explicit `RuntimeEvent` mapping policy of the Runtime Client
+    /// protocol.
     ///
     /// Classification (see the module documentation):
     ///
@@ -1977,7 +1976,7 @@ mod tests {
     }
 
     #[test]
-    fn todo_status_section_round_trips_the_v6_wire_shape() {
+    fn todo_status_section_round_trips_the_wire_shape() {
         let wire = serde_json::json!({
             "type": "todo",
             "current": {
@@ -2000,9 +1999,9 @@ mod tests {
             "omitted_count": 0
         });
         let section: RuntimeClientStatusSection =
-            serde_json::from_value(wire.clone()).expect("decode the v6 Todo section");
+            serde_json::from_value(wire.clone()).expect("decode the Runtime Client Todo section");
         assert_eq!(
-            serde_json::to_value(section).expect("encode the v6 Todo section"),
+            serde_json::to_value(section).expect("encode the Runtime Client Todo section"),
             wire
         );
     }

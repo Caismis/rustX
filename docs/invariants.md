@@ -2743,15 +2743,15 @@ message role, history shape, or timestamps:
   to consume the dead `PostToolBatch` marker. An adopted FreshInbound turn has
   its separate durable answer obligation and follows the ordinary recovery
   contract; the process-local PostToolBatch marker is never reconstructed.
-- Runtime Client protocol v8 carries the optional structured
+- The Runtime Client protocol carries the optional structured
   `opportunities.post_tool_batch` member, the tagged Todo section, and the
   typed compaction-summary metadata payload on the canonical
   `compaction_summary` inbound kind (Issue #140). The
   field is omitted when no production PostToolBatch marker existed. Adding a
   strict tagged `Todo` variant and typing the compaction-summary kind are
-  breaking wire-contract changes, so v5 and v6 are
-  explicitly rejected; v7 is the sole supported version and has no aliases or
-  compatibility wire paths.
+  breaking wire-contract changes, so superseded protocol versions are
+  explicitly rejected; the current protocol is the sole supported version and
+  has no aliases or compatibility wire paths.
 - `ModelRequest.effective_system_prompt` is the sole System authority. It is
   rustX-rendered from ordered native/extension sections; canonical history
   has no System role. Frozen project instructions occupy the
@@ -3504,8 +3504,8 @@ semantic normalization boundary. The frozen invariants:
   a model that silently stopped folding transitions.
 - **Runtime Client protocol versioning is independent from internal
   RuntimeEvent/Event Journal schema versioning.** Version negotiation is
-  explicit at attachment admission; Protocol v8 is the sole supported
-  version, and every superseded version is rejected explicitly.
+  explicit at attachment admission; the current protocol is the sole
+  supported version, and every superseded version is rejected explicitly.
 - **The semantic layer owns protocol negotiation and attachment
   admission; transports are framing only.** `initialize` is dispatched by
   `RuntimeClientEndpoint` and is by itself sufficient to establish the
@@ -3594,7 +3594,7 @@ semantic normalization boundary. The frozen invariants:
   no derived message mirror of its own, and deterministic regressions
   verify the projection mirror against the authoritative ledger rather
   than coordinating two histories.
-- **One active attachment.** Protocol v8 admits at most one attachment
+- **One active attachment.** The Runtime Client protocol admits at most one attachment
   per runtime instance; a second attach fails deterministically without
   evicting the first; reconnect receives a fresh attachment identity;
   request ids are attachment-scoped; cursor/replay state belongs to the
@@ -3643,7 +3643,7 @@ endpoint. It frames; it never becomes a second authority.
   until one complete, in-bound-size framed record has successfully
   deserialized to the exact Runtime Client request type. A record that
   violates framing, exceeds the record limit, or fails exact
-  deserialization ends the transport having applied nothing; Protocol v8
+  deserialization ends the transport having applied nothing; the Runtime Client protocol
   has no uncorrelated error envelope, so no transport fabricates a
   protocol record for it.
 - **Transport loss is not semantic cancellation.** Runtime Client
