@@ -69,6 +69,7 @@ async fn new_bundle(conversation: &str) -> Bundle {
         mcp_servers: std::collections::BTreeMap::new(),
         base_environment: runtime.environment().clone(),
         environment_store_root: dir.path().join("skill-env"),
+        python_store_roots: None,
     })
     .expect("coordinator");
     let candidate = coordinator.prepare_candidate().await.expect("prepare");

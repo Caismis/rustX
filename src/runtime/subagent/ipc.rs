@@ -37,17 +37,19 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::context::{AgentStatusConfig, SessionContextPolicy};
-use crate::runtime::identity::{AgentId, ConversationId, SubagentId};
+use crate::runtime::identity::{AgentId, ConversationId, ProcessUnitId, SubagentId};
 
 use super::resolver::ResolvedSubagentSpec;
 
 /// The only subagent control protocol version this build speaks.
 ///
 /// Version 2 replaced the profile/persona-shaped startup identity with the
-/// frozen named-agent semantic specification (Issue #144). There is no
-/// compatibility decoding: a peer that does not speak exactly this version
-/// exits before composing anything.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 2;
+/// frozen named-agent semantic specification (Issue #144). Version 3 added
+/// the nested process-unit anchor handshake and the frozen external
+/// materialization plane (Issue #145). There is no compatibility decoding:
+/// a peer that does not speak exactly this version exits before composing
+/// anything.
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 3;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -61,12 +63,16 @@ pub(crate) const MAX_FRAME_BYTES: usize = 1024 * 1024;
 const KIND_HELLO: u8 = 1;
 const KIND_DELEGATE: u8 = 2;
 const KIND_CANCEL: u8 = 3;
+const KIND_ANCHOR_ACCEPTED: u8 = 4;
+const KIND_ANCHOR_REFUSED: u8 = 5;
 
 // Child -> parent frame kinds.
 const KIND_READY: u8 = 101;
 const KIND_STARTUP_ERROR: u8 = 102;
 const KIND_RESULT: u8 = 103;
 const KIND_DIAGNOSTIC: u8 = 104;
+const KIND_ANCHOR_OFFERED: u8 = 105;
+const KIND_ANCHOR_RELEASED: u8 = 106;
 
 /// The typed startup specification of one subagent child, carried by the
 /// `Hello` frame.
@@ -172,6 +178,39 @@ pub(crate) struct ResultFrame {
     pub diagnostic: Option<String>,
 }
 
+/// One nested supervised process unit's containment anchor (Issue #145).
+///
+/// `pgid` is the numeric identity of the unit's own `setsid()` group — the
+/// group the child's local supervisor would otherwise be the only owner of.
+/// The parent retains exactly this pair; it never scans, guesses, or
+/// correlates by ordering.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ProcessUnitAnchorFrame {
+    /// The typed identity of the offering supervised unit.
+    pub unit_id: ProcessUnitId,
+    /// The unit's containment process-group id.
+    pub pgid: i32,
+}
+
+/// The parent's acknowledgement of one retained anchor (Issue #145).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ProcessUnitAckFrame {
+    /// The exact unit acknowledged. Correlation is by identity only.
+    pub unit_id: ProcessUnitId,
+}
+
+/// The parent's refusal to retain one offered anchor (Issue #145).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ProcessUnitRefusalFrame {
+    /// The exact unit refused.
+    pub unit_id: ProcessUnitId,
+    /// The bounded refusal reason.
+    pub reason: String,
+}
+
 /// One decoded parent-bound frame.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ChildFrame {
@@ -183,6 +222,12 @@ pub(crate) enum ChildFrame {
     Result(ResultFrame),
     /// A bounded diagnostic note.
     Diagnostic(DiagnosticFrame),
+    /// A nested supervised unit offers its containment anchor and blocks on
+    /// the acknowledgement.
+    AnchorOffered(ProcessUnitAnchorFrame),
+    /// A nested supervised unit is proven physically terminal, so the
+    /// parent may drop exactly that retained anchor.
+    AnchorReleased(ProcessUnitAnchorFrame),
 }
 
 /// One decoded child-bound frame.
@@ -194,6 +239,12 @@ pub(crate) enum ParentFrame {
     Delegate(DelegationFrame),
     /// Cancellation/shutdown request.
     Cancel,
+    /// The parent retains the named unit's anchor; its local `START` gate
+    /// may now open.
+    AnchorAccepted(ProcessUnitAckFrame),
+    /// The parent will not retain the named unit's anchor; it must never
+    /// start.
+    AnchorRefused(ProcessUnitRefusalFrame),
 }
 
 /// A control-protocol violation of the peer.
@@ -237,8 +288,13 @@ impl core::fmt::Display for ProtocolError {
 impl std::error::Error for ProtocolError {}
 
 /// Writes one bounded frame.
-pub(crate) async fn write_frame(
-    stream: &mut tokio::net::UnixStream,
+///
+/// The transport is generic over the sink so the one raw `UnixStream` can be
+/// split into a read half and a write half owned by the single child control
+/// dispatcher (Issue #145). It is deliberately *not* generic over a
+/// different socket: there is exactly one IPC plane.
+pub(crate) async fn write_frame<W: tokio::io::AsyncWrite + Unpin + ?Sized>(
+    stream: &mut W,
     kind: u8,
     payload: &[u8],
 ) -> Result<(), ProtocolError> {
@@ -269,8 +325,8 @@ pub(crate) async fn write_frame(
 }
 
 /// Reads one bounded frame; `Ok(None)` is a clean EOF at a frame boundary.
-pub(crate) async fn read_frame(
-    stream: &mut tokio::net::UnixStream,
+pub(crate) async fn read_frame<R: tokio::io::AsyncRead + Unpin + ?Sized>(
+    stream: &mut R,
 ) -> Result<Option<(u8, Vec<u8>)>, ProtocolError> {
     let mut length_buf = [0u8; 4];
     match stream.read_exact(&mut length_buf).await {
@@ -309,8 +365,8 @@ fn decode<'a, T: Deserialize<'a>>(payload: &'a [u8]) -> Result<T, ProtocolError>
 }
 
 /// Writes one typed parent-bound frame.
-pub(crate) async fn write_child_frame(
-    stream: &mut tokio::net::UnixStream,
+pub(crate) async fn write_child_frame<W: tokio::io::AsyncWrite + Unpin + ?Sized>(
+    stream: &mut W,
     frame: &ChildFrame,
 ) -> Result<(), ProtocolError> {
     match frame {
@@ -322,12 +378,18 @@ pub(crate) async fn write_child_frame(
         ChildFrame::Diagnostic(payload) => {
             write_frame(stream, KIND_DIAGNOSTIC, &encode(payload)?).await
         }
+        ChildFrame::AnchorOffered(payload) => {
+            write_frame(stream, KIND_ANCHOR_OFFERED, &encode(payload)?).await
+        }
+        ChildFrame::AnchorReleased(payload) => {
+            write_frame(stream, KIND_ANCHOR_RELEASED, &encode(payload)?).await
+        }
     }
 }
 
 /// Reads and decodes one typed parent-bound frame.
-pub(crate) async fn read_child_frame(
-    stream: &mut tokio::net::UnixStream,
+pub(crate) async fn read_child_frame<R: tokio::io::AsyncRead + Unpin + ?Sized>(
+    stream: &mut R,
 ) -> Result<Option<ChildFrame>, ProtocolError> {
     let Some((kind, payload)) = read_frame(stream).await? else {
         return Ok(None);
@@ -337,14 +399,16 @@ pub(crate) async fn read_child_frame(
         KIND_STARTUP_ERROR => ChildFrame::StartupError(decode(&payload)?),
         KIND_RESULT => ChildFrame::Result(decode(&payload)?),
         KIND_DIAGNOSTIC => ChildFrame::Diagnostic(decode(&payload)?),
+        KIND_ANCHOR_OFFERED => ChildFrame::AnchorOffered(decode(&payload)?),
+        KIND_ANCHOR_RELEASED => ChildFrame::AnchorReleased(decode(&payload)?),
         other => return Err(ProtocolError::UnknownKind { kind: other }),
     };
     Ok(Some(frame))
 }
 
 /// Writes one typed child-bound frame.
-pub(crate) async fn write_parent_frame(
-    stream: &mut tokio::net::UnixStream,
+pub(crate) async fn write_parent_frame<W: tokio::io::AsyncWrite + Unpin + ?Sized>(
+    stream: &mut W,
     frame: &ParentFrame,
 ) -> Result<(), ProtocolError> {
     match frame {
@@ -353,12 +417,18 @@ pub(crate) async fn write_parent_frame(
             write_frame(stream, KIND_DELEGATE, &encode(payload)?).await
         }
         ParentFrame::Cancel => write_frame(stream, KIND_CANCEL, &[]).await,
+        ParentFrame::AnchorAccepted(payload) => {
+            write_frame(stream, KIND_ANCHOR_ACCEPTED, &encode(payload)?).await
+        }
+        ParentFrame::AnchorRefused(payload) => {
+            write_frame(stream, KIND_ANCHOR_REFUSED, &encode(payload)?).await
+        }
     }
 }
 
 /// Reads and decodes one typed child-bound frame.
-pub(crate) async fn read_parent_frame(
-    stream: &mut tokio::net::UnixStream,
+pub(crate) async fn read_parent_frame<R: tokio::io::AsyncRead + Unpin + ?Sized>(
+    stream: &mut R,
 ) -> Result<Option<ParentFrame>, ProtocolError> {
     let Some((kind, payload)) = read_frame(stream).await? else {
         return Ok(None);
@@ -367,6 +437,8 @@ pub(crate) async fn read_parent_frame(
         KIND_HELLO => ParentFrame::Hello(Box::new(decode(&payload)?)),
         KIND_DELEGATE => ParentFrame::Delegate(decode(&payload)?),
         KIND_CANCEL => ParentFrame::Cancel,
+        KIND_ANCHOR_ACCEPTED => ParentFrame::AnchorAccepted(decode(&payload)?),
+        KIND_ANCHOR_REFUSED => ParentFrame::AnchorRefused(decode(&payload)?),
         other => return Err(ProtocolError::UnknownKind { kind: other }),
     };
     Ok(Some(frame))
@@ -422,6 +494,13 @@ mod tests {
                     server_id: McpServerId::new("github"),
                     tool_id: ToolId::new("tool-get_issue"),
                     name: "get_issue".to_owned(),
+                    identity: crate::tools::mcp::identity::definition_identity(&tool_definition(
+                        "get_issue",
+                        ToolOrigin::Mcp {
+                            server_id: McpServerId::new("github"),
+                        },
+                    ))
+                    .expect("an MCP definition has an MCP identity"),
                     definition: tool_definition(
                         "get_issue",
                         ToolOrigin::Mcp {
@@ -451,11 +530,32 @@ mod tests {
                     description: "Navigate the repository.".to_owned(),
                     location: "/w/.rustx/skills/nav/SKILL.md".to_owned(),
                 },
+                source_root: PathBuf::from("/w/.rustx/skills/nav"),
+                files: vec![PathBuf::from("SKILL.md"), PathBuf::from("ref/guide.md")],
             }],
             project_instructions: vec![crate::runtime::resources::ProjectContextFile {
                 path: PathBuf::from("/w/AGENTS.md"),
                 content: "workspace instructions".to_owned(),
             }],
+            materialization: crate::runtime::subagent::resolver::ResolvedSubagentMaterialization {
+                mcp_servers: [(
+                    McpServerId::new("github"),
+                    crate::tools::mcp::McpServerBinding {
+                        transport: crate::tools::mcp::McpTransportConfig::Stdio {
+                            program: "github-mcp".to_owned(),
+                            args: vec!["--stdio".to_owned()],
+                            cwd: None,
+                            environment: [("TOKEN".to_owned(), "x".to_owned())]
+                                .into_iter()
+                                .collect(),
+                        },
+                        policy: crate::tools::types::ToolInvocationPolicy::default(),
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                python_shared_store_root: Some(PathBuf::from("/rr/environments/m7-tools")),
+            },
         }
     }
 

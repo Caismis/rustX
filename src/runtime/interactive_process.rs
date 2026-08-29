@@ -153,6 +153,11 @@ pub(crate) struct InteractiveTestControl {
     /// The supervisor events the driver observed, in arrival order.
     #[cfg(test)]
     pub(crate) observed_events: Arc<Mutex<Vec<String>>>,
+    /// Scopes a nested containment authority to exactly this unit
+    /// (Issue #145); see the equivalent seam on `RunnerTestControl`.
+    #[cfg(test)]
+    pub(crate) nested_authority:
+        Option<Arc<dyn crate::runtime::nested_containment::NestedAnchorAuthority>>,
 }
 
 #[cfg(unix)]
@@ -164,6 +169,7 @@ impl InteractiveTestControl {
             force_emergency_anchor_unavailable: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             force_accept_failure: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             observed_events: Arc::new(Mutex::new(Vec::new())),
+            nested_authority: None,
         }
     }
 
@@ -570,6 +576,12 @@ async fn run_interactive_unit(
     let mut lifecycle = UnitLifecycle::PreOwnership;
     let mut started = false;
     let mut control_failure: Option<String> = None;
+    // The nested containment gate of this unit (Issue #145). In the
+    // top-level runtime it resolves immediately; inside a subagent child it
+    // holds START closed until the top-level parent has acknowledged
+    // retention of this exact anchor. MCP stdio therefore uses exactly the
+    // same generic mechanism as Bash, Python, and Skill environments.
+    let mut anchor_gate = crate::runtime::nested_containment::AnchorGate::Idle;
     loop {
         tokio::select! {
             biased;
@@ -580,6 +592,27 @@ async fn run_interactive_unit(
                 // A dropped sender is not a shutdown request: the business
                 // handle requests shutdown explicitly.
             }
+            anchored = anchor_gate.settle_offer(), if anchor_gate.is_pending() => {
+                started = true;
+                match anchored {
+                    Ok(()) => {
+                        if let Err(error) = send_start(&mut control_write).await
+                            && control_failure.is_none()
+                        {
+                            control_failure = Some(error);
+                        }
+                    }
+                    Err(error) => {
+                        // The server was never started: the unit is asked to
+                        // terminate and its ordinary settlement proves the
+                        // empty unit terminal.
+                        if control_failure.is_none() {
+                            control_failure = Some(error.to_string());
+                        }
+                        let () = send_terminate(&mut control_write).await;
+                    }
+                }
+            }
             event = read_supervisor_event(&mut control_read) => match event {
                 Ok(Some(SupervisorEvent::AnchorReady { pgid })) => {
                     record_event(test_control, "anchor_ready");
@@ -589,7 +622,17 @@ async fn run_interactive_unit(
                         control_failure =
                             Some("invalid interactive ownership anchor transition".to_owned());
                     }
-                    if !started {
+                    if !started && pgid > 0 {
+                        // START waits for the nested containment gate; see
+                        // the arm below.
+                        #[cfg(test)]
+                        let authority = test_control.nested_authority.clone();
+                        #[cfg(not(test))]
+                        let authority: Option<
+                            Arc<dyn crate::runtime::nested_containment::NestedAnchorAuthority>,
+                        > = None;
+                        anchor_gate.offer_with(pgid, authority);
+                    } else if !started {
                         started = true;
                         if let Err(error) = send_start(&mut control_write).await
                             && control_failure.is_none()
@@ -668,7 +711,10 @@ async fn run_interactive_unit(
             control_failure.as_deref(),
         ));
     }
-    match lifecycle {
+    // Release the parent's retained anchor only against this unit's own
+    // proven physical terminality; an unproven settlement deliberately
+    // keeps the parent's retention alive.
+    let settlement = match lifecycle {
         // The owned tree is provably terminal: the authoritative terminal
         // event, or an explicit proof-carrying `NoOwnership`.
         UnitLifecycle::Terminal => UnitSettlement::PhysicallySettled,
@@ -690,7 +736,16 @@ async fn run_interactive_unit(
         UnitLifecycle::OwnershipPossible { pgid } | UnitLifecycle::Owned { pgid } => {
             emergency_settlement(pgid, control_failure.as_deref(), test_control).await
         }
+    };
+    if matches!(settlement, UnitSettlement::PhysicallySettled) {
+        anchor_gate.release();
+    } else {
+        // Keep the anchor retained in the parent: this process could not
+        // prove the unit terminal, so the parent's catastrophic containment
+        // authority for that exact group must survive.
+        anchor_gate.retain_unproven();
     }
+    settlement
 }
 
 /// The catastrophic fallback settlement of a unit whose supervisor was lost
@@ -776,6 +831,7 @@ mod interactive_tests {
         INNER_EXIT_BEFORE_CONNECT_ENV, OUTER_FAIL_ENV,
     };
     use crate::runtime::process_runner::MAX_PROCESS_OUTPUT_BYTES;
+    use std::sync::Arc;
 
     const DEADLINE: Duration = Duration::from_secs(20);
 
@@ -818,6 +874,95 @@ mod interactive_tests {
             };
             SupervisedInteractiveProcess::spawn_with_control(spec, control)
         }
+    }
+
+    /// A recording nested anchor authority whose acknowledgement the test
+    /// releases explicitly (Issue #145).
+    #[derive(Debug)]
+    struct GatedAuthority {
+        offers: tokio::sync::mpsc::UnboundedSender<(crate::runtime::identity::ProcessUnitId, i32)>,
+        releases:
+            tokio::sync::mpsc::UnboundedSender<(crate::runtime::identity::ProcessUnitId, i32)>,
+        gate: Arc<tokio::sync::Notify>,
+    }
+
+    impl crate::runtime::nested_containment::NestedAnchorAuthority for GatedAuthority {
+        fn offer(
+            &self,
+            unit: crate::runtime::identity::ProcessUnitId,
+            pgid: i32,
+        ) -> futures_util::future::BoxFuture<
+            'static,
+            Result<(), crate::runtime::nested_containment::AnchorError>,
+        > {
+            let _ = self.offers.send((unit, pgid));
+            let gate = self.gate.clone();
+            Box::pin(async move {
+                gate.notified().await;
+                Ok(())
+            })
+        }
+
+        fn release(&self, unit: crate::runtime::identity::ProcessUnitId, pgid: i32) {
+            let _ = self.releases.send((unit, pgid));
+        }
+    }
+
+    /// The MCP stdio path is a **supervised interactive unit**, and #145
+    /// routes it through exactly the same generic nested containment gate as
+    /// the short-lived command runner: the long-lived server may not start
+    /// before the parent acknowledges its anchor, and the anchor is released
+    /// only against the unit's proven physical terminality.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn an_interactive_unit_uses_the_same_nested_anchor_gate() {
+        let fixture = Fixture::new();
+        let marker = fixture.path("started");
+        let (offers_tx, mut offers) = tokio::sync::mpsc::unbounded_channel();
+        let (releases_tx, mut releases) = tokio::sync::mpsc::unbounded_channel();
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let mut control = InteractiveTestControl::new();
+        control.nested_authority = Some(Arc::new(GatedAuthority {
+            offers: offers_tx,
+            releases: releases_tx,
+            gate: gate.clone(),
+        }));
+        let script = format!("echo started > {}; exec sleep 30", marker.display());
+        let process = fixture
+            .spawn_with_control(&script, Vec::new(), control)
+            .expect("spawn");
+
+        let (unit, pgid) = tokio::time::timeout(DEADLINE, offers.recv())
+            .await
+            .expect("the interactive unit must offer its anchor")
+            .expect("an offer");
+        assert!(pgid > 0);
+        assert!(
+            !marker.exists(),
+            "the supervised server must not start before the acknowledgement"
+        );
+
+        gate.notify_waiters();
+        // The server now starts; its own marker is the proof.
+        let deadline = Instant::now() + DEADLINE;
+        while !marker.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "the acknowledged unit must start"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        process.request_shutdown();
+        tokio::time::timeout(DEADLINE, process.wait_for_settlement())
+            .await
+            .expect("the unit must settle")
+            .expect("the unit settles physically");
+        let (released_unit, released_pgid) = tokio::time::timeout(DEADLINE, releases.recv())
+            .await
+            .expect("the settled unit must release its anchor")
+            .expect("a release");
+        assert_eq!(released_unit, unit);
+        assert_eq!(released_pgid, pgid);
     }
 
     fn wait_for_file(path: &Path, description: &str) {

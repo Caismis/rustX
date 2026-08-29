@@ -1355,6 +1355,7 @@ mod tests {
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: crate::tools::environment::ToolEnvironment::new(),
                 environment_store_root: dir.path().join("skill-env"),
+                python_store_roots: None,
             },
             backend,
         )

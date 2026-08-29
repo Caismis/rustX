@@ -217,6 +217,7 @@ async fn runtime_with_manual_clock(
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: tool_runtime.environment().clone(),
             environment_store_root: dir.path().join("skill-env"),
+            python_store_roots: None,
         },
     )
     .expect("capability coordinator");

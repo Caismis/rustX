@@ -377,6 +377,7 @@ fn base_only_capability_setup_is_structurally_independent_of_python_storage() {
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: rustx::tools::environment::ToolEnvironment::new(),
             environment_store_root: store_root,
+            python_store_roots: None,
         },
     )
     .expect("coordinator construction must not depend on Python storage");

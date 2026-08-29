@@ -306,6 +306,19 @@ impl SkillPackage {
         &self.root
     }
 
+    /// The canonical absolute host root of this package, as a
+    /// **materialization source** for a separate-process runtime (Issue
+    /// #145).
+    ///
+    /// The accessor is deliberately public while [`SkillPackage::root`]
+    /// stays crate-internal, and the name says why: a consumer of this path
+    /// is copying bytes out of it and must prove the copy still hashes to
+    /// the package's `SkillVersionId`. The path is never an identity.
+    #[must_use]
+    pub fn materialization_root(&self) -> &Path {
+        &self.root
+    }
+
     /// The model-visible host path of this package's `SKILL.md`.
     ///
     /// This is the one published address: the catalog projects it verbatim,

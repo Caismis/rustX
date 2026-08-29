@@ -641,9 +641,81 @@ impl Drop for BuildOwnerGuard {
     }
 }
 
+/// The two ownership domains of one Python tool store (Issue #145).
+///
+/// ```text
+/// shared root                       process-private root
+///   tool-versions/                    python-tool-envs/
+///   uv-cache/                         python-tool-bindings/
+///                                     python-invocations/
+/// ```
+///
+/// **Shared** holds only data whose correctness does not depend on a rustX
+/// process-local ownership domain:
+///
+/// - `tool-versions/` is immutable and content-addressed. Publication is a
+///   staging directory plus one atomic `rename`, with the concurrent-winner
+///   path validating the installed marker, and every read revalidates the
+///   source digest against the claimed identity. Two rustX processes may
+///   therefore publish and read the same versions safely.
+/// - `uv-cache/` is owned by `uv`, which supports concurrent readers and
+///   writers against one cache and performs its own cache/target locking.
+///   Sharing it means a subagent child never pays for a cold cache.
+///
+/// **Private** holds every root whose rustX-side ownership is process-local:
+///
+/// - `python-tool-envs/` and `python-tool-bindings/` are published by the
+///   store's in-flight build coalescing, whose ownership domain is one
+///   `Arc<Mutex<..>>` inside one process. That is not cross-process
+///   synchronization, and #145 deliberately does not add a cross-process
+///   lock to pretend otherwise: each process builds into its own root.
+/// - `python-invocations/` is per-invocation scratch allocated from one
+///   process-local monotonic counter. There is no product requirement for
+///   sharing a scratch namespace across processes.
+///
+/// Sharing `uv-cache/` is safe **because of uv's own contract**; it says
+/// nothing about rustX's environment-publication ownership, which stays
+/// private.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PythonToolStoreRoots {
+    /// The cross-process shared immutable/cache root.
+    pub shared: PathBuf,
+    /// The process-private mutable execution root.
+    pub private: PathBuf,
+}
+
+impl PythonToolStoreRoots {
+    /// The top-level runtime shape: one process owns both domains, so they
+    /// are the same directory and the on-disk layout is unchanged.
+    #[must_use]
+    pub fn unified(root: PathBuf) -> Self {
+        Self {
+            shared: root.clone(),
+            private: root,
+        }
+    }
+
+    /// The subagent-child shape: the parent's shared root plus a
+    /// child-private mutable root.
+    #[must_use]
+    pub fn split(shared: PathBuf, private: PathBuf) -> Self {
+        Self { shared, private }
+    }
+
+    /// Creates every root this store owns.
+    fn establish(&self) -> Result<(), PythonToolError> {
+        std::fs::create_dir_all(self.shared.join("tool-versions")).map_err(io_error)?;
+        std::fs::create_dir_all(self.shared.join("uv-cache")).map_err(io_error)?;
+        std::fs::create_dir_all(self.private.join("python-tool-envs")).map_err(io_error)?;
+        std::fs::create_dir_all(self.private.join("python-tool-bindings")).map_err(io_error)?;
+        std::fs::create_dir_all(self.private.join("python-invocations")).map_err(io_error)?;
+        Ok(())
+    }
+}
+
 #[derive(Clone)]
 struct PythonToolStoreInner {
-    root: PathBuf,
+    roots: PythonToolStoreRoots,
     runner: Arc<dyn SupervisedProcessRunner>,
     uv_binary: PathBuf,
     python_binary: PathBuf,
@@ -664,25 +736,38 @@ impl std::fmt::Debug for PythonToolStore {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("PythonToolStore")
-            .field("root", &self.inner.root)
+            .field("shared_root", &self.inner.roots.shared)
+            .field("private_root", &self.inner.roots.private)
             .finish()
     }
 }
 
 impl PythonToolStore {
-    /// Creates the production store below a runtime-private root.
+    /// Creates the production store whose shared and process-private roots
+    /// are the same directory.
+    ///
+    /// This is the top-level runtime shape: one runtime process owns the
+    /// whole store, so both ownership domains live under one root and the
+    /// on-disk layout is exactly the M7 layout.
     ///
     /// # Errors
     ///
     /// Returns an error if the store directories cannot be created.
     pub fn new(root: PathBuf) -> Result<Self, PythonToolError> {
-        std::fs::create_dir_all(root.join("tool-versions")).map_err(io_error)?;
-        std::fs::create_dir_all(root.join("python-tool-envs")).map_err(io_error)?;
-        std::fs::create_dir_all(root.join("python-tool-bindings")).map_err(io_error)?;
-        std::fs::create_dir_all(root.join("python-invocations")).map_err(io_error)?;
+        Self::with_roots(PythonToolStoreRoots::unified(root))
+    }
+
+    /// Creates the production store over an explicit shared/private root
+    /// split.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store directories cannot be created.
+    pub fn with_roots(roots: PythonToolStoreRoots) -> Result<Self, PythonToolError> {
+        roots.establish()?;
         Ok(Self {
             inner: Arc::new(PythonToolStoreInner {
-                root,
+                roots,
                 runner: Arc::new(RunnerBackedProcessRunner::default()),
                 uv_binary: resolve_executable("uv"),
                 python_binary: resolve_executable("python3"),
@@ -701,13 +786,20 @@ impl PythonToolStore {
         root: PathBuf,
         runner: Arc<dyn SupervisedProcessRunner>,
     ) -> Result<Self, PythonToolError> {
-        std::fs::create_dir_all(root.join("tool-versions")).map_err(io_error)?;
-        std::fs::create_dir_all(root.join("python-tool-envs")).map_err(io_error)?;
-        std::fs::create_dir_all(root.join("python-tool-bindings")).map_err(io_error)?;
-        std::fs::create_dir_all(root.join("python-invocations")).map_err(io_error)?;
+        Self::with_roots_and_runner(PythonToolStoreRoots::unified(root), runner)
+    }
+
+    /// Test constructor for an explicit root split and a recorded backend.
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn with_roots_and_runner(
+        roots: PythonToolStoreRoots,
+        runner: Arc<dyn SupervisedProcessRunner>,
+    ) -> Result<Self, PythonToolError> {
+        roots.establish()?;
         Ok(Self {
             inner: Arc::new(PythonToolStoreInner {
-                root,
+                roots,
                 runner,
                 uv_binary: resolve_executable("uv"),
                 python_binary: resolve_executable("python3"),
@@ -715,6 +807,97 @@ impl PythonToolStore {
                 waiter_attachments: Arc::new(WaiterAttachments::default()),
                 next_invocation: Arc::new(AtomicU64::new(0)),
             }),
+        })
+    }
+
+    /// The shared immutable/cache root of this store.
+    #[must_use]
+    pub fn shared_root(&self) -> &Path {
+        &self.inner.roots.shared
+    }
+
+    /// The process-private mutable root of this store.
+    #[must_use]
+    pub fn private_root(&self) -> &Path {
+        &self.inner.roots.private
+    }
+
+    /// Opens the exact immutable published `ToolVersion` named by a frozen
+    /// specification (Issue #145).
+    ///
+    /// This is the child-side counterpart of [`PythonToolStore::publish`]
+    /// and the one authority a subagent child may use to obtain a Python
+    /// Tool: it opens `tool-versions/<id>/`, revalidates the marker,
+    /// re-reads and re-validates the canonical source through exactly the
+    /// ordinary package validation, and recomputes the content identity
+    /// from those bytes. A workspace is never consulted, and a same-named
+    /// package of a different version can never be substituted, because the
+    /// only input is the `ToolVersionId` itself.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PythonToolError::Storage`] if the version is absent, its
+    /// marker is invalid, or its published source does not hash back to the
+    /// requested identity, and [`PythonToolError::InvalidPackage`] if the
+    /// published source is not a valid package.
+    pub fn open_published_version(
+        &self,
+        tool_version_id: &ToolVersionId,
+    ) -> Result<PublishedPythonTool, PythonToolError> {
+        let destination = self
+            .inner
+            .roots
+            .shared
+            .join("tool-versions")
+            .join(tool_version_id.as_str());
+        if !destination.is_dir() {
+            return Err(PythonToolError::Storage(format!(
+                "the frozen Python ToolVersion {} is not present in the shared store",
+                tool_version_id.as_str()
+            )));
+        }
+        let marker = destination.join(TOOL_VERSION_MARKER);
+        let marker_bytes = std::fs::read(&marker).map_err(io_error)?;
+        let marker_value: serde_json::Value =
+            serde_json::from_slice(&marker_bytes).map_err(|error| {
+                PythonToolError::Storage(format!(
+                    "published ToolVersion marker is invalid: {error}"
+                ))
+            })?;
+        let valid = marker_value.get("format")
+            == Some(&serde_json::json!(TOOL_VERSION_MARKER_FORMAT))
+            && marker_value
+                .get("tool_version_id")
+                .and_then(serde_json::Value::as_str)
+                == Some(tool_version_id.as_str());
+        if !valid {
+            return Err(PythonToolError::Storage(
+                "published ToolVersion marker is invalid".to_owned(),
+            ));
+        }
+        let source_root = destination.join(TOOL_SOURCE_DIRECTORY);
+        // The package name is the manifest's own declaration; the ordinary
+        // validator then re-checks that the manifest agrees with it, so a
+        // published source cannot claim one name in the manifest and be
+        // opened under another.
+        let manifest_bytes = regular_file(&source_root, TOOL_MANIFEST_FILE)?;
+        let manifest: ToolManifest =
+            toml::from_str(std::str::from_utf8(&manifest_bytes).map_err(|error| {
+                PythonToolError::InvalidPackage(format!("TOOL.toml is not UTF-8: {error}"))
+            })?)
+            .map_err(|error| PythonToolError::InvalidPackage(format!("TOOL.toml: {error}")))?;
+        let package = discover_package(&manifest.name.clone(), &source_root)?;
+        if package.tool_version_id != *tool_version_id {
+            return Err(PythonToolError::Storage(format!(
+                "published ToolVersion source does not match its claimed identity: \
+                 marker claims {}, published source digest is {}",
+                tool_version_id.as_str(),
+                package.tool_version_id.as_str(),
+            )));
+        }
+        Ok(PublishedPythonTool {
+            package,
+            root: source_root,
         })
     }
 
@@ -747,7 +930,7 @@ impl PythonToolStore {
     /// is sufficient for that; the actual bundle-ownership claim is the
     /// filesystem `create_dir`.
     fn allocate_execution_bundle(&self) -> Result<PathBuf, PythonToolError> {
-        let root = self.inner.root.join("python-invocations");
+        let root = self.inner.roots.private.join("python-invocations");
         let exhausted = || {
             PythonToolError::Storage(
                 "the Python invocation identifier space is exhausted".to_owned(),
@@ -796,7 +979,8 @@ impl PythonToolStore {
         static NEXT_STAGING: AtomicU64 = AtomicU64::new(0);
         let destination = self
             .inner
-            .root
+            .roots
+            .shared
             .join("tool-versions")
             .join(package.tool_version_id.as_str());
         let source_root = destination.join(TOOL_SOURCE_DIRECTORY);
@@ -835,7 +1019,7 @@ impl PythonToolStore {
                 root: source_root,
             });
         }
-        let staging = self.inner.root.join(format!(
+        let staging = self.inner.roots.shared.join(format!(
             ".tool-version-{}-{}-{}",
             package.tool_version_id.as_str(),
             std::process::id(),
@@ -909,7 +1093,8 @@ impl PythonToolStore {
         );
         let final_root = self
             .inner
-            .root
+            .roots
+            .private
             .join("python-tool-envs")
             .join(digest.as_str());
         if let Some(environment) = Self::read_published_environment(
@@ -1023,7 +1208,8 @@ impl PythonToolStore {
         digest: &PythonToolEnvironmentDigest,
     ) -> Result<(), PythonToolError> {
         let directory = inner
-            .root
+            .roots
+            .private
             .join("python-tool-bindings")
             .join(tool.package.tool_version_id.as_str());
         std::fs::create_dir_all(&directory).map_err(io_error)?;
@@ -1192,7 +1378,7 @@ async fn materialize_environment(
         // source, corrupting its canonical bytes.
         environment_entries.push((
             "UV_CACHE_DIR".to_owned(),
-            inner.root.join("uv-cache").display().to_string(),
+            inner.roots.shared.join("uv-cache").display().to_string(),
         ));
         // The exact interpreter selection: uv must materialize with the same
         // runtime whose identity entered the environment digest. Project-local
@@ -2695,6 +2881,52 @@ mod tests {
         );
     }
 
+    /// A child store's uv commands use the **shared** cache while every
+    /// mutable rustX environment root stays child-private (Issue #145).
+    ///
+    /// Sharing the cache is safe because uv owns its own cache/target
+    /// locking; it says nothing about rustX's environment publication, which
+    /// is exactly why the environment root is not shared with it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_child_store_shares_the_uv_cache_but_not_its_environment_root() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let shared = dir.path().join("shared");
+        let private = dir.path().join("child-private");
+        let scripted = Arc::new(ScriptedRunner::new(vec![
+            Ok(ok_output("resolved 2 packages")),
+            Ok(ok_output("installed 1 package")),
+        ]));
+        scripted.release_gate();
+        let store = PythonToolStore::with_roots_and_runner(
+            super::PythonToolStoreRoots::split(shared.clone(), private.clone()),
+            scripted.clone(),
+        )
+        .expect("child store");
+        let published = store.publish(&test_package()).expect("publish");
+        let _ = store.ensure_environment(&published).await;
+
+        let sync_env = scripted
+            .sync_environment()
+            .expect("sync command environment");
+        let cache = sync_env
+            .iter()
+            .find(|(key, _)| key == "UV_CACHE_DIR")
+            .map(|(_, value)| value.clone())
+            .expect("UV_CACHE_DIR must be set");
+        assert_eq!(
+            cache,
+            shared.join("uv-cache").display().to_string(),
+            "the child uses the parent's uv cache rather than a cold private one"
+        );
+        assert!(
+            !std::path::Path::new(&cache).starts_with(&private),
+            "the uv cache is never allocated under the child-private root"
+        );
+        // The environment publication root, by contrast, is child-private.
+        assert!(private.join("python-tool-envs").is_dir());
+        assert!(!shared.join("python-tool-envs").exists());
+    }
+
     /// A different interpreter-selection input cannot alias to the same
     /// environment identity: the digest includes the probed Python identity,
     /// so a runtime selection change produces a different digest.
@@ -2717,6 +2949,197 @@ mod tests {
             b"lock",
         );
         assert_ne!(v1, v2);
+    }
+
+    // ---- Issue #145: shared immutable roots, private mutable roots ----
+
+    /// A same-named package whose bytes changed produces a **different**
+    /// `ToolVersionId`, which is what makes exact-version selection
+    /// meaningful in the first place.
+    fn test_package_v2() -> PythonToolPackage {
+        let mut package = test_package();
+        let mut files = package.files.clone();
+        for (path, bytes) in &mut files {
+            if path == std::path::Path::new("tool.py") {
+                *bytes = b"def main(arguments):\n    return {\"v\": 2}\n".to_vec();
+            }
+        }
+        package.tool_version_id = super::tool_version_id(&files);
+        package.files = files;
+        package
+    }
+
+    /// The store's two ownership domains land in the roots they belong to:
+    /// the immutable content-addressed authority and the uv cache in the
+    /// shared root, every mutable rustX execution domain in the private one.
+    #[test]
+    fn the_store_splits_shared_immutable_roots_from_private_mutable_roots() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let shared = dir.path().join("shared");
+        let private = dir.path().join("child-private");
+        let store = PythonToolStore::with_roots(super::PythonToolStoreRoots::split(
+            shared.clone(),
+            private.clone(),
+        ))
+        .expect("store");
+        assert_eq!(store.shared_root(), shared);
+        assert_eq!(store.private_root(), private);
+        assert!(shared.join("tool-versions").is_dir());
+        assert!(shared.join("uv-cache").is_dir());
+        assert!(private.join("python-tool-envs").is_dir());
+        assert!(private.join("python-tool-bindings").is_dir());
+        assert!(private.join("python-invocations").is_dir());
+        // The mutable roots are never created under the shared authority,
+        // and the immutable authority is never created under a private root.
+        assert!(!shared.join("python-tool-envs").exists());
+        assert!(!shared.join("python-invocations").exists());
+        assert!(!private.join("tool-versions").exists());
+        assert!(!private.join("uv-cache").exists());
+    }
+
+    /// A publication made by one process is readable by another process's
+    /// store over the same shared root, while each keeps its own private
+    /// mutable roots. This is the parent/child shape.
+    #[test]
+    fn a_child_store_opens_the_exact_version_its_parent_published() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let shared = dir.path().join("shared");
+        let parent =
+            PythonToolStore::with_roots(super::PythonToolStoreRoots::unified(shared.clone()))
+                .expect("parent store");
+        let package = test_package();
+        parent.publish(&package).expect("publish");
+
+        let child = PythonToolStore::with_roots(super::PythonToolStoreRoots::split(
+            shared.clone(),
+            dir.path().join("child-private"),
+        ))
+        .expect("child store");
+        let opened = child
+            .open_published_version(&package.tool_version_id)
+            .expect("the child opens the exact frozen version");
+        assert_eq!(opened.package.tool_version_id, package.tool_version_id);
+        assert_eq!(opened.package.name, "alpha");
+        assert_eq!(
+            opened.root,
+            shared
+                .join("tool-versions")
+                .join(package.tool_version_id.as_str())
+                .join("source"),
+            "the child reads the shared immutable authority directly"
+        );
+    }
+
+    /// **The exact-version invariant.** A workspace is not `ToolVersion`
+    /// authority after resolution: with a newer same-named version already
+    /// published, opening the frozen identity still yields the frozen bytes.
+    #[test]
+    fn a_newer_same_named_version_never_substitutes_the_frozen_one() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let shared = dir.path().join("shared");
+        let parent =
+            PythonToolStore::with_roots(super::PythonToolStoreRoots::unified(shared.clone()))
+                .expect("parent store");
+        let frozen = test_package();
+        let newer = test_package_v2();
+        assert_ne!(
+            frozen.tool_version_id, newer.tool_version_id,
+            "the two versions are genuinely different content"
+        );
+        parent.publish(&frozen).expect("publish the frozen version");
+        parent.publish(&newer).expect("publish the newer version");
+
+        let child = PythonToolStore::with_roots(super::PythonToolStoreRoots::split(
+            shared,
+            dir.path().join("child-private"),
+        ))
+        .expect("child store");
+        let opened = child
+            .open_published_version(&frozen.tool_version_id)
+            .expect("the frozen version opens");
+        assert_eq!(opened.package.tool_version_id, frozen.tool_version_id);
+        assert_eq!(
+            std::fs::read(opened.root.join("tool.py")).expect("source"),
+            b"def main(arguments):\n    return arguments\n".to_vec(),
+            "the frozen bytes execute, not the newer same-named ones"
+        );
+    }
+
+    /// A frozen version that is absent fails closed instead of falling back
+    /// to rediscovery.
+    #[test]
+    fn a_missing_frozen_version_fails_closed() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = PythonToolStore::new(dir.path().join("store")).expect("store");
+        let error = store
+            .open_published_version(&ToolVersionId::new("sha256:absent"))
+            .expect_err("an absent version cannot be materialized");
+        assert!(
+            format!("{error}").contains("not present in the shared store"),
+            "unexpected failure: {error}"
+        );
+    }
+
+    /// A frozen version whose published source was mutated after
+    /// publication fails closed: the digest is recomputed, never trusted
+    /// from the marker.
+    #[test]
+    fn a_corrupt_frozen_version_fails_closed() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path().join("store");
+        let store = PythonToolStore::new(root.clone()).expect("store");
+        let package = test_package();
+        store.publish(&package).expect("publish");
+        std::fs::write(
+            root.join("tool-versions")
+                .join(package.tool_version_id.as_str())
+                .join("source/tool.py"),
+            b"def main(arguments):\n    return \"tampered\"\n",
+        )
+        .expect("tamper");
+        let error = store
+            .open_published_version(&package.tool_version_id)
+            .expect_err("a corrupt version cannot be materialized");
+        assert!(
+            format!("{error}").contains("does not match its claimed identity"),
+            "unexpected failure: {error}"
+        );
+    }
+
+    /// Two child stores over the same shared authority are **separate**
+    /// process-local ownership domains: they never share the in-flight
+    /// environment-build coalescing or the invocation allocation domain.
+    ///
+    /// This is exactly why the mutable roots stay private: an
+    /// `Arc<Mutex<..>>` is not cross-process synchronization, and #145
+    /// deliberately does not pretend otherwise.
+    #[test]
+    fn two_child_stores_never_share_process_local_ownership() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let shared = dir.path().join("shared");
+        let first = PythonToolStore::with_roots(super::PythonToolStoreRoots::split(
+            shared.clone(),
+            dir.path().join("child-a"),
+        ))
+        .expect("first child store");
+        let second = PythonToolStore::with_roots(super::PythonToolStoreRoots::split(
+            shared.clone(),
+            dir.path().join("child-b"),
+        ))
+        .expect("second child store");
+        assert_ne!(
+            first.identity_token(),
+            second.identity_token(),
+            "two child stores are two process-local coordination domains"
+        );
+        assert_eq!(first.shared_root(), second.shared_root());
+        assert_ne!(first.private_root(), second.private_root());
+        // Each child allocates invocation scratch from its own root, so the
+        // scratch namespaces cannot collide.
+        let first_bundle = first.allocate_execution_bundle().expect("first bundle");
+        let second_bundle = second.allocate_execution_bundle().expect("second bundle");
+        assert!(first_bundle.starts_with(dir.path().join("child-a")));
+        assert!(second_bundle.starts_with(dir.path().join("child-b")));
     }
 
     /// The published `ToolVersion` shape is `tool-versions/<id>/source/` plus
@@ -2911,12 +3334,26 @@ mod tests {
     fn store_inner_is_constructible() {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = PythonToolStore::new(dir.path().join("store")).expect("store");
-        assert!(store.inner.root.join("tool-versions").is_dir());
-        assert!(store.inner.root.join("python-tool-envs").is_dir());
-        assert!(store.inner.root.join("python-tool-bindings").is_dir());
-        assert!(store.inner.root.join("python-invocations").is_dir());
+        assert!(store.inner.roots.shared.join("tool-versions").is_dir());
+        assert!(store.inner.roots.private.join("python-tool-envs").is_dir());
+        assert!(
+            store
+                .inner
+                .roots
+                .private
+                .join("python-tool-bindings")
+                .is_dir()
+        );
+        assert!(
+            store
+                .inner
+                .roots
+                .private
+                .join("python-invocations")
+                .is_dir()
+        );
         let _ = PythonToolStoreInner {
-            root: dir.path().join("other"),
+            roots: super::PythonToolStoreRoots::unified(dir.path().join("other")),
             runner: Arc::new(ScriptedRunner::new(Vec::new())),
             uv_binary: PathBuf::from("uv"),
             python_binary: PathBuf::from("python3"),
@@ -3692,7 +4129,7 @@ mod tests {
         let recorded = runner.commands.lock().expect("recorded commands lock");
         assert_eq!(recorded.len(), 1, "exactly one execution command ran");
         let (command, cwd) = &recorded[0];
-        let invocation_root = store.inner.root.join("python-invocations");
+        let invocation_root = store.inner.roots.private.join("python-invocations");
         let bundle = cwd.parent().expect("the source directory's bundle");
         assert_eq!(
             cwd.file_name().expect("source dir name"),
@@ -3716,7 +4153,12 @@ mod tests {
             "the runtime-owned input lives outside the source namespace"
         );
         assert!(
-            !store.inner.root.join("python-tool-harness.py").exists(),
+            !store
+                .inner
+                .roots
+                .private
+                .join("python-tool-harness.py")
+                .exists(),
             "no shared writable harness path exists across executor generations"
         );
         drop(recorded);
@@ -3990,7 +4432,11 @@ mod tests {
         let package = test_package();
         let (store, _published, executor, tool_runtime) =
             executor_fixture(&dir, runner.clone(), &package);
-        let stale = store.inner.root.join("python-invocations/execution-0");
+        let stale = store
+            .inner
+            .roots
+            .private
+            .join("python-invocations/execution-0");
         std::fs::create_dir_all(&stale).expect("stale scratch");
         std::fs::write(stale.join("marker.txt"), b"unknown ownership").expect("marker");
 
@@ -4044,7 +4490,8 @@ mod tests {
         assert!(
             !store
                 .inner
-                .root
+                .roots
+                .private
                 .join("python-invocations/execution-0")
                 .exists(),
             "no lower-numbered bundle was ever created"
@@ -4069,7 +4516,8 @@ mod tests {
             bundle,
             store
                 .inner
-                .root
+                .roots
+                .private
                 .join("python-invocations/execution-18446744073709551614"),
             "the final identifier names its bundle"
         );
@@ -4094,7 +4542,8 @@ mod tests {
         assert!(
             !store
                 .inner
-                .root
+                .roots
+                .private
                 .join("python-invocations/execution-0")
                 .exists(),
             "the allocator never wrapped to execution-0"
@@ -4111,7 +4560,8 @@ mod tests {
         let store = PythonToolStore::new(dir.path().join("store")).expect("store");
         let stale = store
             .inner
-            .root
+            .roots
+            .private
             .join("python-invocations/execution-18446744073709551614");
         std::fs::create_dir_all(&stale).expect("stale final-identifier scratch");
         std::fs::write(stale.join("marker.txt"), b"unknown ownership").expect("marker");
@@ -4137,7 +4587,8 @@ mod tests {
         assert!(
             !store
                 .inner
-                .root
+                .roots
+                .private
                 .join("python-invocations/execution-0")
                 .exists(),
             "stale-scratch skipping never wrapped to execution-0"

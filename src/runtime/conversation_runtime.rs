@@ -5155,6 +5155,8 @@ mod tests {
             tools: Vec::new(),
             skills: Vec::new(),
             project_instructions: Vec::new(),
+            materialization:
+                crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
         }
     }
 
@@ -5565,6 +5567,7 @@ mod tests {
                 mcp_servers: options.mcp_servers.clone(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
+                python_store_roots: None,
             },
         )
         .expect("coordinator");
@@ -5664,6 +5667,7 @@ mod tests {
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
+                python_store_roots: None,
             },
         )
         .expect("coordinator");
@@ -5738,6 +5742,7 @@ mod tests {
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
+                python_store_roots: None,
             },
         )
         .expect("coordinator");
@@ -5842,6 +5847,7 @@ mod tests {
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
+                python_store_roots: None,
             },
         )
         .expect("coordinator");
@@ -9427,6 +9433,7 @@ mod tests {
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: other_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
+                python_store_roots: None,
             },
         )
         .expect("coordinator");
@@ -9488,6 +9495,7 @@ mod tests {
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
+                python_store_roots: None,
             },
         )
         .expect("coordinator");
@@ -14384,6 +14392,7 @@ mod tests {
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
+                python_store_roots: None,
             },
         )
         .expect("capability coordinator");
@@ -14465,6 +14474,7 @@ mod tests {
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
+                python_store_roots: None,
             },
         )
         .expect("coordinator");

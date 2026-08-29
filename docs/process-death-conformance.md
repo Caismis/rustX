@@ -353,6 +353,29 @@ registry commit, the real durable ownership transaction, the real driver and
 control channel, the real recovery evidence, and the real terminal
 publication.
 
+### Nested supervised process units inside a subagent child (Issue #145)
+
+A subagent child that runs Bash, MCP stdio, Python/uv, or Skill environment
+work owns supervised units whose inner `setsid()` group is deliberately
+outside the child's own process group, so killing the child's group cannot
+reach them. The generic anchor protocol makes every death boundary decidable
+without scanning:
+
+| Boundary | State at the kill | Required outcome | Forbidden | Test |
+| --- | --- | --- | --- | --- |
+| child dies **before** the anchor ACK | offer outstanding | the inner never received `START`, so the semantic command was never spawned; the unit settles as a process-control failure | starting the command anyway; reporting success | `a_refused_anchor_never_starts_the_nested_command` |
+| child dies **after** the anchor ACK | the parent holds the exact `pgid` | on Linux the parent contains the adopted group (`WNOWAIT` retention, one anchored `SIGKILL`, group-scoped `ECHILD`) before it publishes settlement | publishing settlement on the direct child's reap alone; signalling a `pgid` whose identity is not retained | `a_committed_child_settles_its_nested_anchors_before_publishing` |
+| pre-commit rollback with a retained anchor | `StagedChild` owns child + anchors | the rollback kills and reaps the direct child, then contains every retained anchor; an unprovable one returns `RollbackError::NestedContainment` | reporting a rolled-back ownership decision while owned work may be alive | `staged_rollback_contains_every_retained_nested_anchor` |
+| several units, one proves terminal | multiple retained anchors | exactly that unit's anchor is released; every other retention survives | correlating releases by ordering or by approximate `pgid` | `releasing_one_unit_removes_only_that_anchor`, `an_offered_anchor_is_retained_before_it_is_acknowledged` |
+| the platform cannot adopt the orphaned anchor | anchor retained, `waitid` answers `ECHILD` | the settlement is published as explicitly unproven and appended to the terminal's bounded diagnostic | claiming Linux-level terminality; signalling the cached `pgid` anyway | `an_unadoptable_anchor_is_reported_unproven` |
+
+The Linux prerequisite (`PR_SET_CHILD_SUBREAPER`) is established **before**
+the child is spawned — a subreaper installed afterwards does not retroactively
+adopt — and a spawn that cannot establish it fails with
+`SpawnError::ContainmentPrerequisite` rather than claiming containment
+authority it does not have
+(`the_containment_prerequisite_precedes_child_staging`).
+
 ## 9. Transcript recovery
 
 After a real process death and reopen, the derived transcript still pages

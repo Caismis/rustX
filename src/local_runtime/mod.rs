@@ -22,6 +22,7 @@
 pub mod cli;
 pub mod composition;
 pub mod config;
+pub(crate) mod dispatcher;
 pub mod serve;
 pub mod session;
 pub mod subagent_child;

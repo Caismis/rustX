@@ -704,6 +704,87 @@ pub(crate) fn emergency_contain_group(
     Err("fallback containment requires Linux or macOS process supervision".to_owned())
 }
 
+/// Containment of an **adopted orphaned** unit group whose owning process is
+/// gone entirely (Issue #145).
+///
+/// This is the sibling of [`emergency_contain_group`], and the difference is
+/// exactly the difference between the two catastrophes:
+///
+/// ```text
+/// emergency_contain_group   the unit's OUTER supervisor was lost, but the
+///                           inner supervisor is still the unit's own reaping
+///                           owner, so containment first waits for the inner
+///                           to reach its own terminal state and only then
+///                           issues the anchored fallback signal.
+///
+/// contain_adopted_group     the whole owning rustX process is gone. Nothing
+///                           will ever drive that unit to its terminal state,
+///                           so waiting for the inner would wait forever: the
+///                           anchor is retained for identity, the group is
+///                           killed, and terminality is proven group-scoped.
+/// ```
+///
+/// The pid-reuse guarantee is identical and is what makes signalling a cached
+/// numeric pgid legal: `waitid(Pid, WNOWAIT)` must first answer for the
+/// anchor. `StillAlive` proves the identity is allocated and adopted by this
+/// process; `Exited`/`Signaled` under `WNOWAIT` proves the same because the
+/// zombie is deliberately not consumed. `ECHILD` proves the opposite — the
+/// anchor is not adoptable here (macOS, or a Linux parent that was not a
+/// subreaper when the owner died) — and the cached pgid is then **never**
+/// signalled and no terminality is claimed.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn contain_adopted_group(pgid: i32) -> Result<EmergencyContainment, String> {
+    use crate::runtime::process_wait::{Id, waitid};
+    use nix::errno::Errno;
+    use nix::sys::signal::Signal;
+    use nix::sys::wait::{WaitPidFlag, WaitStatus};
+
+    let anchor = Pid::from_raw(pgid);
+    loop {
+        match waitid(
+            Id::Pid(anchor),
+            WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT,
+        ) {
+            // Both outcomes prove the numeric identity is still allocated
+            // and owned here, which is exactly the precondition for
+            // signalling the cached group id.
+            Ok(WaitStatus::StillAlive | WaitStatus::Exited(..) | WaitStatus::Signaled(..)) => break,
+            Ok(_) | Err(Errno::EINTR) => {}
+            Err(Errno::ECHILD) => return Ok(EmergencyContainment::AnchorUnavailable),
+            Err(error) => {
+                return Err(format!(
+                    "cannot retain the adopted nested unit anchor: {error}"
+                ));
+            }
+        }
+    }
+
+    signal_group(pgid, Signal::SIGKILL)?;
+    loop {
+        // The group-scoped terminal proof: no adopted member of the unit
+        // group remains. This wait also reaps the anchor itself, strictly
+        // after the containment signal.
+        match waitid(
+            Id::PGid(anchor),
+            WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED,
+        ) {
+            Ok(WaitStatus::StillAlive) => std::thread::sleep(POLL_INTERVAL),
+            Ok(_) | Err(Errno::EINTR) => {}
+            Err(Errno::ECHILD) => return Ok(EmergencyContainment::TerminalProven),
+            Err(error) => {
+                return Err(format!(
+                    "cannot prove the adopted nested unit group terminal: {error}"
+                ));
+            }
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub(crate) fn contain_adopted_group(_pgid: i32) -> Result<EmergencyContainment, String> {
+    Err("nested unit containment requires Linux or macOS process supervision".to_owned())
+}
+
 #[cfg(all(
     test,
     target_os = "linux",

@@ -27,6 +27,14 @@ pub enum CapabilityPreparationError {
     /// Preparation was requested after the owning conversation runtime
     /// closed new capability admission.
     ConversationInactive,
+    /// A subagent child could not materialize the exact frozen capability
+    /// identity it was authorized with (Issue #145). This is never degraded
+    /// into an availability state: a child starts with exactly what it was
+    /// authorized with, or it does not start.
+    SelectedMaterialization(crate::capabilities::selected::SelectedMaterializationError),
+    /// Child preparation was cancelled or lost its parent before it
+    /// completed (Issue #145).
+    PreparationSettled(String),
 }
 
 impl core::fmt::Display for CapabilityPreparationError {
@@ -47,6 +55,11 @@ impl core::fmt::Display for CapabilityPreparationError {
                 f,
                 "capability preparation is closed because the conversation runtime is draining"
             ),
+            Self::SelectedMaterialization(error) => write!(f, "{error}"),
+            Self::PreparationSettled(detail) => write!(
+                f,
+                "child capability preparation settled before it completed: {detail}"
+            ),
         }
     }
 }
@@ -62,6 +75,14 @@ impl From<SkillPackageError> for CapabilityPreparationError {
 impl From<DependencyConflict> for CapabilityPreparationError {
     fn from(conflict: DependencyConflict) -> Self {
         Self::DependencyConflict(conflict)
+    }
+}
+
+impl From<crate::capabilities::selected::SelectedMaterializationError>
+    for CapabilityPreparationError
+{
+    fn from(error: crate::capabilities::selected::SelectedMaterializationError) -> Self {
+        Self::SelectedMaterialization(error)
     }
 }
 

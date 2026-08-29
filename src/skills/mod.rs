@@ -33,8 +33,9 @@
 mod catalog;
 mod dependencies;
 pub mod environments;
-mod identity;
-mod package;
+pub(crate) mod identity;
+pub mod materialization;
+pub(crate) mod package;
 
 pub use catalog::{SkillCatalogEntry, SkillSnapshot, render_skill_catalog};
 pub use dependencies::{

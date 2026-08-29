@@ -296,6 +296,7 @@ impl RuntimeClientFixtureBuilder {
                 mcp_servers: self.mcp_servers,
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: workspace.path().join("skill-env"),
+                python_store_roots: None,
             },
             Arc::new(crate::scripted_suites::common::FakeSkillEnvironmentBackend::new()),
         )

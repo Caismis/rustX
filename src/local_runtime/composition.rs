@@ -395,26 +395,165 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
     }
 }
 
-/// Builds the child's exact base registry from its frozen specification.
+/// The cancellable-owned-work guard of one child preparation (Issue #145).
 ///
-/// An external-origin requirement never reaches this point in practice: the
-/// parent registry refuses such a start in `prepare`, before any child
-/// process is staged. The check is repeated here because the child is the
-/// side that would otherwise compose *weaker* than the definition it was
-/// authorized with, and silently degrading is precisely the outcome the
-/// staged boundary exists to prevent.
+/// External capability composition is no longer a cheap synchronous
+/// prelude: it may start an MCP process, negotiate a protocol, list a
+/// catalog, verify a content-addressed `ToolVersion`, and materialize a uv
+/// environment. Two authorities must therefore be able to end it *before*
+/// the child ever reaches semantic work:
+///
+/// ```text
+/// attempt-derived cancellation   the spawn attempt that owns this child
+/// parent control-channel EOF     the parent process disappeared
+/// ```
+///
+/// Neither is polled as mutable "current state" later: both are futures
+/// raced against the preparation itself, so the settlement is observed at
+/// the instant it happens rather than at the next convenient checkpoint.
+pub(crate) struct ChildPreparation {
+    cancellation: crate::runtime::cancellation::CancellationSignal,
+    parent_lost: Option<crate::local_runtime::dispatcher::ChildControlHandle>,
+}
+
+impl ChildPreparation {
+    /// The production guard: the child's own preparation cancellation plus
+    /// the control channel that is its parent-liveness authority.
+    pub(crate) fn new(
+        cancellation: crate::runtime::cancellation::CancellationSignal,
+        parent_lost: crate::local_runtime::dispatcher::ChildControlHandle,
+    ) -> Self {
+        Self {
+            cancellation,
+            parent_lost: Some(parent_lost),
+        }
+    }
+
+    /// A guard with no parent-liveness authority, for compositions that are
+    /// not driven by a control channel (tests and in-process fixtures).
+    #[cfg(test)]
+    pub(crate) fn detached() -> Self {
+        Self {
+            cancellation: crate::runtime::cancellation::CancellationSignal::new(),
+            parent_lost: None,
+        }
+    }
+
+    /// Runs one preparation step under both settlement authorities.
+    ///
+    /// The step's own future is dropped on settlement, which is what makes
+    /// staged physical resources settle: every owner inside the capability
+    /// plane already settles its process on drop/cancel, so no MCP process
+    /// or uv build survives a settled preparation.
+    pub(crate) async fn guard<T, F>(
+        &self,
+        step: F,
+    ) -> Result<T, crate::capabilities::CapabilityPreparationError>
+    where
+        F: std::future::Future<Output = Result<T, crate::capabilities::CapabilityPreparationError>>,
+    {
+        let parent_lost = async {
+            match &self.parent_lost {
+                Some(handle) => handle.parent_lost_signal().await,
+                None => std::future::pending().await,
+            }
+        };
+        tokio::select! {
+            biased;
+            () = self.cancellation.cancelled() => Err(
+                crate::capabilities::CapabilityPreparationError::PreparationSettled(
+                    "the spawn attempt cancelled this child before it was owned".to_owned(),
+                ),
+            ),
+            () = parent_lost => Err(
+                crate::capabilities::CapabilityPreparationError::PreparationSettled(
+                    "the parent runtime disappeared while this child was still composing"
+                        .to_owned(),
+                ),
+            ),
+            outcome = step => outcome,
+        }
+    }
+}
+
+/// Materializes the child's frozen Skill packages and returns the catalog
+/// entries with their locations remapped onto the child's own copies.
+fn materialize_frozen_skills(
+    spec: &crate::runtime::subagent::ipc::SubagentChildSpec,
+) -> Result<Vec<crate::skills::SkillCatalogEntry>, LocalRuntimeError> {
+    let root = spec.runtime_root.join("skills");
+    let mut entries = Vec::with_capacity(spec.resolved.skills.len());
+    for skill in &spec.resolved.skills {
+        let destination = root.join(skill.binding.skill_id.as_str());
+        let location = crate::skills::materialization::materialize_skill(
+            &skill.binding,
+            &skill.source_root,
+            &skill.files,
+            &destination,
+        )
+        .map_err(|error| LocalRuntimeError::Capability {
+            detail: error.to_string(),
+        })?;
+        entries.push(crate::skills::SkillCatalogEntry {
+            location,
+            ..skill.catalog_entry.clone()
+        });
+    }
+    Ok(entries)
+}
+
+/// Projects the frozen specification into the child's selected-only
+/// capability materialization plan.
+fn selected_capability_plan(
+    spec: &crate::runtime::subagent::ipc::SubagentChildSpec,
+) -> crate::capabilities::SelectedCapabilityPlan {
+    use crate::runtime::subagent::ResolvedSubagentTool;
+    let mut plan = crate::capabilities::SelectedCapabilityPlan::default();
+    for tool in &spec.resolved.tools {
+        match tool {
+            ResolvedSubagentTool::Builtin { .. } => {}
+            ResolvedSubagentTool::Mcp {
+                server_id,
+                name,
+                identity,
+                ..
+            } => plan.mcp_tools.push(crate::capabilities::SelectedMcpTool {
+                server_id: server_id.clone(),
+                name: name.clone(),
+                identity: identity.clone(),
+            }),
+            ResolvedSubagentTool::Python {
+                tool_version_id,
+                name,
+                ..
+            } => plan
+                .python_tools
+                .push(crate::capabilities::SelectedPythonTool {
+                    tool_version_id: tool_version_id.clone(),
+                    name: name.clone(),
+                }),
+        }
+    }
+    // The shared root is the parent's immutable `tool-versions/` + `uv-cache/`
+    // authority; every mutable execution root is child-private.
+    plan.python_roots = spec
+        .resolved
+        .materialization
+        .python_shared_store_root
+        .as_ref()
+        .map(|shared| {
+            crate::tools::python::PythonToolStoreRoots::split(
+                shared.clone(),
+                spec.runtime_root.join("python"),
+            )
+        });
+    plan
+}
+
+/// Builds the child's exact base registry from its frozen specification.
 fn subagent_child_registry(
     resolved: &crate::runtime::subagent::ResolvedSubagentSpec,
 ) -> Result<ToolRegistry, LocalRuntimeError> {
-    if let Some(external) = resolved.tools.iter().find(|tool| tool.is_external_origin()) {
-        return Err(LocalRuntimeError::NativeTools {
-            detail: format!(
-                "the frozen specification requires {}, whose child-side execution plane this \
-                 build does not materialize yet",
-                external.canonical()
-            ),
-        });
-    }
     // The exact parent-frozen definitions — identity, description, input
     // schema, and all three invocation-policy axes — never just their
     // names. Rebuilding a definition from a default policy table here would
@@ -743,6 +882,9 @@ impl LocalConversationCore {
             mcp_servers: runtime_config.mcp_bindings()?,
             base_environment,
             environment_store_root: paths.environment_store_root_for(&conversation_id),
+            // The top-level runtime owns one unified store; the split only
+            // exists for a subagent child (Issue #145).
+            python_store_roots: None,
         })
         .map_err(|error| LocalRuntimeError::Capability {
             detail: format!("{error:?}"),
@@ -888,9 +1030,11 @@ impl LocalConversationCore {
     ///
     /// Returns the first composition failure, exactly like the ordinary
     /// composition path.
-    pub(crate) fn compose_subagent_child(
+    #[allow(clippy::too_many_lines)] // one coherent child composition pipeline
+    pub(crate) async fn compose_subagent_child(
         spec: &crate::runtime::subagent::ipc::SubagentChildSpec,
         dependencies: &LocalRuntimeDependencies,
+        preparation: &ChildPreparation,
     ) -> Result<Self, LocalRuntimeError> {
         // 1-4. The child's model authority, materialized from the
         // parent-frozen resolved invocation. There is deliberately no model
@@ -925,30 +1069,70 @@ impl LocalConversationCore {
             detail: format!("{error:?}"),
         })?;
 
-        // 7-8. The deny-by-construction base registry: exactly the Builtin
-        // capabilities the parent's resolution authorized, by name.
+        // 7. The exact frozen Skill packages are materialized into the
+        // child-private runtime root and their frozen `SkillVersionId` is
+        // re-proven over the materialized bytes. Discovery is never
+        // restarted, and the model-visible location is remapped onto the
+        // child's own copy so the frozen identity stays authoritative even
+        // once the child's filesystem ancestry differs from the parent's.
+        let skills = materialize_frozen_skills(spec)?;
+
+        // 8. The deny-by-construction base registry: exactly the Builtin
+        // capabilities the parent's resolution authorized, with their exact
+        // admitted definitions.
         let base_registry = subagent_child_registry(&spec.resolved)?;
 
-        // 9-11. The base-only capability plane: the exact frozen registry
-        // and nothing else.
+        // 9. The capability plane sees exactly the frozen selected MCP
+        // server bindings — never a configured set the child could widen —
+        // and a Python store whose immutable/cache roots are shared with the
+        // parent while every mutable execution root is child-private.
+        let plan = selected_capability_plan(spec);
         let capability = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
             conversation_id: tool_runtime.conversation_id().clone(),
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: Arc::new(base_registry),
             tool_activation: ToolActivationPolicy::default(),
             skill_discovery: SkillDiscoveryConfig::default(),
-            mcp_servers: crate::tools::mcp::McpServerBindings::default(),
+            mcp_servers: spec.resolved.materialization.mcp_servers.clone(),
             base_environment,
             environment_store_root: spec.runtime_root.join("environments"),
+            python_store_roots: plan.python_roots.clone(),
         })
         .map_err(|error| LocalRuntimeError::Capability {
             detail: format!("{error:?}"),
         })?;
-        let candidate = capability.prepare_base_only_candidate().map_err(|error| {
-            LocalRuntimeError::Capability {
-                detail: format!("{error:?}"),
+        // 10-11. Materialization. A child with no external requirement takes
+        // the deterministic base-only path it always did; a child with one
+        // takes the selected-only realization path, which is cancellable
+        // owned work: cancellation and parent loss settle it instead of
+        // finishing a long MCP connect or uv build for an owner that is
+        // already gone.
+        let candidate = if plan.is_empty() {
+            capability.prepare_base_only_candidate().map_err(|error| {
+                LocalRuntimeError::Capability {
+                    detail: format!("{error:?}"),
+                }
+            })?
+        } else {
+            match preparation
+                .guard(capability.prepare_selected_candidate(&plan))
+                .await
+            {
+                Ok(candidate) => candidate,
+                Err(error) => {
+                    // Settlement drops the preparation future, but an MCP
+                    // connect owner it already spawned is independent of
+                    // that future by design. Cancelling the coordinator's
+                    // preparation root makes each such owner drive its own
+                    // stdio process to physical settlement instead of
+                    // outliving the composition that created it.
+                    capability.cancel_conversation_preparation();
+                    return Err(LocalRuntimeError::Capability {
+                        detail: format!("{error:?}"),
+                    });
+                }
             }
-        })?;
+        };
         capability
             .commit(candidate)
             .map_err(|error| LocalRuntimeError::Capability {
@@ -966,14 +1150,7 @@ impl LocalConversationCore {
                 crate::context::ContextAssembly::new(),
                 capability.current_snapshot(),
             )
-            .with_frozen_skill_catalog(
-                &spec
-                    .resolved
-                    .skills
-                    .iter()
-                    .map(|skill| skill.catalog_entry.clone())
-                    .collect::<Vec<_>>(),
-            ),
+            .with_frozen_skill_catalog(&skills),
         );
         let resource_loader: Arc<dyn RuntimeResourceLoader> =
             Arc::new(FrozenSubagentResourceLoader {
@@ -1600,7 +1777,7 @@ impl From<SessionSupervisorError> for LocalRuntimeError {
 mod subagent_child_tests {
     use std::sync::Arc;
 
-    use super::{LocalConversationCore, LocalRuntimeDependencies};
+    use super::{ChildPreparation, LocalConversationCore, LocalRuntimeDependencies};
     use crate::model::catalog::MapCredentialEnvironment;
     use crate::runtime::identity::{AgentId, ConversationId, SubagentId, ToolId};
     use crate::runtime::resources::ProjectContextFile;
@@ -1682,6 +1859,8 @@ mod subagent_child_tests {
                 tools,
                 skills,
                 project_instructions,
+                materialization:
+                    crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
             },
             agent_status: crate::context::AgentStatusConfig::default(),
             context: crate::context::SessionContextPolicy {
@@ -1727,7 +1906,9 @@ mod subagent_child_tests {
         let core = LocalConversationCore::compose_subagent_child(
             &spec(dir.path(), vec![builtin("read")], frozen, Vec::new()),
             &dependencies(),
+            &ChildPreparation::detached(),
         )
+        .await
         .expect("the child composes");
         let resources = core.runtime().runtime_resources();
 
@@ -1762,30 +1943,48 @@ mod subagent_child_tests {
         );
     }
 
-    /// A frozen Skill allowlist is rendered verbatim: metadata only, so
-    /// progressive disclosure survives the parent/child boundary.
+    /// A frozen Skill allowlist is **materialized** into the child-private
+    /// root, re-proven against its frozen `SkillVersionId`, and rendered as
+    /// metadata only, so progressive disclosure survives the boundary
+    /// (Issue #145).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_frozen_skill_allowlist_is_rendered_without_bodies() {
+    async fn a_frozen_skill_allowlist_is_materialized_and_rendered_without_bodies() {
         let dir = lab();
-        let core = LocalConversationCore::compose_subagent_child(
-            &spec(
-                dir.path(),
-                vec![builtin("read"), builtin("grep")],
-                Vec::new(),
-                vec![crate::runtime::subagent::ResolvedSubagentSkill {
-                    binding: crate::protocol::manifest::SkillBinding {
-                        skill_id: crate::runtime::identity::SkillId::new("skill-selected"),
-                        version_id: crate::runtime::identity::SkillVersionId::new("sha256:v1"),
-                    },
-                    catalog_entry: crate::skills::SkillCatalogEntry {
-                        name: "selected".to_owned(),
-                        description: "the selected skill".to_owned(),
-                        location: "/w/.agents/skills/selected/SKILL.md".to_owned(),
-                    },
-                }],
-            ),
-            &dependencies(),
+        let source = dir.path().join("selected-source");
+        std::fs::create_dir_all(&source).expect("source");
+        std::fs::write(
+            source.join("SKILL.md"),
+            "---\nname: selected\ndescription: the selected skill\n---\nsecret body\n",
         )
+        .expect("SKILL.md");
+        let files = vec![std::path::PathBuf::from("SKILL.md")];
+        let markdown = std::fs::read(source.join("SKILL.md")).expect("read");
+        let version_id = crate::skills::identity::package_version_id(&source, &files, &markdown)
+            .expect("frozen identity");
+        let child_spec = spec(
+            dir.path(),
+            vec![builtin("read"), builtin("grep")],
+            Vec::new(),
+            vec![crate::runtime::subagent::ResolvedSubagentSkill {
+                binding: crate::protocol::manifest::SkillBinding {
+                    skill_id: crate::runtime::identity::SkillId::new("selected"),
+                    version_id,
+                },
+                catalog_entry: crate::skills::SkillCatalogEntry {
+                    name: "selected".to_owned(),
+                    description: "the selected skill".to_owned(),
+                    location: source.join("SKILL.md").display().to_string(),
+                },
+                source_root: source.clone(),
+                files,
+            }],
+        );
+        let core = LocalConversationCore::compose_subagent_child(
+            &child_spec,
+            &dependencies(),
+            &ChildPreparation::detached(),
+        )
+        .await
         .expect("the child composes");
         let catalog = core
             .runtime()
@@ -1793,15 +1992,80 @@ mod subagent_child_tests {
             .skill_catalog()
             .expect("the frozen catalog")
             .to_owned();
+        let materialized = child_spec
+            .runtime_root
+            .join("skills/selected/SKILL.md")
+            .display()
+            .to_string();
         assert!(catalog.contains("selected"));
-        assert!(catalog.contains("/w/.agents/skills/selected/SKILL.md"));
+        assert!(
+            catalog.contains(&materialized),
+            "the model-visible location is remapped onto the child's own copy: {catalog}"
+        );
+        assert!(
+            std::path::Path::new(&materialized).is_file(),
+            "the frozen bytes are materialized under the child-private root"
+        );
         assert!(
             !catalog.contains("ambient"),
             "an unselected, discoverable Skill is absent from the child catalog: {catalog}"
         );
         assert!(
-            !catalog.contains("body"),
+            !catalog.contains("secret body"),
             "only catalog metadata crosses the boundary: {catalog}"
+        );
+    }
+
+    /// Skill bytes that changed after the parent froze them fail child
+    /// composition rather than executing a different Skill version.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_changed_skill_source_fails_child_composition() {
+        let dir = lab();
+        let source = dir.path().join("selected-source");
+        std::fs::create_dir_all(&source).expect("source");
+        std::fs::write(
+            source.join("SKILL.md"),
+            "---\nname: selected\ndescription: the selected skill\n---\noriginal\n",
+        )
+        .expect("SKILL.md");
+        let files = vec![std::path::PathBuf::from("SKILL.md")];
+        let markdown = std::fs::read(source.join("SKILL.md")).expect("read");
+        let version_id = crate::skills::identity::package_version_id(&source, &files, &markdown)
+            .expect("frozen identity");
+        // The source moves on after the freeze.
+        std::fs::write(
+            source.join("SKILL.md"),
+            "---\nname: selected\ndescription: the selected skill\n---\nrewritten\n",
+        )
+        .expect("rewrite");
+        let child_spec = spec(
+            dir.path(),
+            vec![builtin("read")],
+            Vec::new(),
+            vec![crate::runtime::subagent::ResolvedSubagentSkill {
+                binding: crate::protocol::manifest::SkillBinding {
+                    skill_id: crate::runtime::identity::SkillId::new("selected"),
+                    version_id,
+                },
+                catalog_entry: crate::skills::SkillCatalogEntry {
+                    name: "selected".to_owned(),
+                    description: "the selected skill".to_owned(),
+                    location: source.join("SKILL.md").display().to_string(),
+                },
+                source_root: source,
+                files,
+            }],
+        );
+        let error = LocalConversationCore::compose_subagent_child(
+            &child_spec,
+            &dependencies(),
+            &ChildPreparation::detached(),
+        )
+        .await
+        .expect_err("a changed Skill source fails closed");
+        assert!(
+            format!("{error}").contains("source bytes changed"),
+            "unexpected failure: {error}"
         );
     }
 
@@ -1818,8 +2082,13 @@ mod subagent_child_tests {
         let dir = lab();
         std::fs::remove_file(dir.path().join("models.jsonc")).expect("remove the catalog");
         let spec = spec(dir.path(), vec![builtin("read")], Vec::new(), Vec::new());
-        let core = LocalConversationCore::compose_subagent_child(&spec, &dependencies())
-            .expect("the child composes from the frozen model authority alone");
+        let core = LocalConversationCore::compose_subagent_child(
+            &spec,
+            &dependencies(),
+            &ChildPreparation::detached(),
+        )
+        .await
+        .expect("the child composes from the frozen model authority alone");
 
         let model = core.runtime().model_view();
         assert_eq!(
@@ -1841,28 +2110,452 @@ mod subagent_child_tests {
         );
     }
 
-    /// A frozen specification that requires an external execution plane is
-    /// refused rather than composed weaker than it was authorized.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn an_external_origin_requirement_refuses_child_composition() {
-        let dir = lab();
-        let mcp = ResolvedSubagentTool::Mcp {
-            server_id: crate::runtime::identity::McpServerId::new("github"),
-            tool_id: ToolId::new("tool-get-issue"),
-            name: "get_issue".to_owned(),
-            definition: ToolDefinition {
-                id: ToolId::new("tool-get-issue"),
-                name: "get_issue".to_owned(),
-                description: "issue".to_owned(),
-                input_schema: serde_json::json!({"type": "object"}),
-                execution_policy: ToolExecutionPolicy::ForegroundOnly,
-                concurrency_policy: ToolConcurrencyPolicy::Sequential,
-                approval_policy: ToolApprovalPolicy::Never,
-                replay_policy: ToolReplayPolicy::Never,
-                origin: ToolOrigin::Mcp {
-                    server_id: crate::runtime::identity::McpServerId::new("github"),
-                },
+    // ---- Issue #145: child preparation is cancellable owned work ----
+
+    /// A preparation step that never completes and reports its own drop.
+    ///
+    /// It is a hand-written future rather than an `async` block so the drop
+    /// is observable even when the settlement wins before the step is ever
+    /// polled.
+    struct NeverEnding(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+    impl std::future::Future for NeverEnding {
+        type Output = Result<(), crate::capabilities::CapabilityPreparationError>;
+
+        fn poll(
+            self: std::pin::Pin<&mut Self>,
+            _context: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Self::Output> {
+            std::task::Poll::Pending
+        }
+    }
+
+    impl Drop for NeverEnding {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// Cancellation derived from the invoking spawn attempt settles a long
+    /// preparation immediately; the step's own future is dropped, so no
+    /// staged physical resource survives it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn attempt_cancellation_settles_a_long_preparation() {
+        let cancellation = crate::runtime::cancellation::CancellationSignal::new();
+        let (parent, child) = tokio::net::UnixStream::pair().expect("control pair");
+        let dispatcher = crate::local_runtime::dispatcher::ChildControlDispatcher::start(child);
+        let preparation = ChildPreparation::new(cancellation.clone(), dispatcher.handle());
+
+        // A step that would never finish on its own. Its completion is the
+        // only thing that could produce `Ok`, so an `Err` here proves the
+        // settlement won and the step was dropped.
+        let dropped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let step = NeverEnding(dropped.clone());
+        cancellation.cancel();
+        let outcome = preparation.guard(step).await;
+        assert!(
+            matches!(
+                outcome,
+                Err(crate::capabilities::CapabilityPreparationError::PreparationSettled(_))
+            ),
+            "cancellation settles the preparation: {outcome:?}"
+        );
+        assert!(
+            dropped.load(std::sync::atomic::Ordering::SeqCst),
+            "the settled preparation drops its in-flight step"
+        );
+        drop(parent);
+    }
+
+    /// Parent control-channel EOF is observable **while** composition is in
+    /// progress: a child never finishes a long MCP/uv preparation for a
+    /// parent that has already disappeared.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn parent_loss_settles_a_long_preparation() {
+        let (parent, child) = tokio::net::UnixStream::pair().expect("control pair");
+        let dispatcher = crate::local_runtime::dispatcher::ChildControlDispatcher::start(child);
+        let handle = dispatcher.handle();
+        let preparation = ChildPreparation::new(
+            crate::runtime::cancellation::CancellationSignal::new(),
+            handle.clone(),
+        );
+        // The EOF is published by the dispatcher's reader before the guard
+        // is entered, so the ordering is a fact rather than a race.
+        drop(parent);
+        handle.parent_lost_signal().await;
+
+        let outcome = preparation
+            .guard(std::future::pending::<
+                Result<(), crate::capabilities::CapabilityPreparationError>,
+            >())
+            .await;
+        assert!(
+            matches!(
+                outcome,
+                Err(crate::capabilities::CapabilityPreparationError::PreparationSettled(_))
+            ),
+            "parent loss settles the preparation: {outcome:?}"
+        );
+    }
+
+    /// A preparation that completes before either settlement authority fires
+    /// returns its ordinary result.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn an_uninterrupted_preparation_returns_its_result() {
+        let (parent, child) = tokio::net::UnixStream::pair().expect("control pair");
+        let dispatcher = crate::local_runtime::dispatcher::ChildControlDispatcher::start(child);
+        let preparation = ChildPreparation::new(
+            crate::runtime::cancellation::CancellationSignal::new(),
+            dispatcher.handle(),
+        );
+        let outcome = preparation.guard(std::future::ready(Ok(7u32))).await;
+        assert_eq!(outcome.expect("an uninterrupted preparation"), 7);
+        drop(parent);
+    }
+
+    // ---- Issue #145: selected-only MCP materialization ----
+
+    /// The frozen MCP binding of the shared stdio fixture, re-executing this
+    /// test binary as its own MCP server.
+    #[cfg(feature = "mcp-fixture")]
+    fn fixture_binding(test_name: &str, prefix: &str) -> crate::tools::mcp::McpServerBinding {
+        crate::tools::mcp::McpServerBinding {
+            transport: crate::tools::mcp::McpTransportConfig::Stdio {
+                program: std::env::current_exe()
+                    .expect("test executable")
+                    .display()
+                    .to_string(),
+                args: crate::tools::mcp::fixture::fixture_spawn_args(test_name),
+                cwd: None,
+                environment: std::collections::BTreeMap::from([
+                    (
+                        crate::tools::mcp::fixture::FIXTURE_MODE_ENV.to_owned(),
+                        "1".to_owned(),
+                    ),
+                    (
+                        crate::tools::mcp::fixture::TOOL_PREFIX_ENV.to_owned(),
+                        prefix.to_owned(),
+                    ),
+                ]),
             },
+            policy: ToolInvocationPolicy::default(),
+        }
+    }
+
+    /// Connects the fixture once, exactly as a parent generation would, and
+    /// returns the canonical definition of one published tool.
+    #[cfg(feature = "mcp-fixture")]
+    async fn frozen_fixture_tool(
+        server_id: &crate::runtime::identity::McpServerId,
+        binding: &crate::tools::mcp::McpServerBinding,
+        workspace: &crate::tools::Workspace,
+        name: &str,
+    ) -> ToolDefinition {
+        let runtime = crate::tools::mcp::McpServerRuntime::connect(
+            server_id,
+            binding,
+            workspace,
+            std::sync::Arc::new(crate::tools::mcp::McpInvalidationState::new()),
+        )
+        .await
+        .expect("the fixture connects");
+        let tools = runtime.list_tools().await.expect("tools/list");
+        let tool = tools
+            .into_iter()
+            .find(|tool| tool.name == name)
+            .expect("the fixture publishes the tool");
+        runtime.close().await.expect("the fixture runtime closes");
+        ToolDefinition {
+            id: ToolId::new(format!("mcp:{server_id}:{name}")),
+            name: tool.name,
+            description: tool.description,
+            input_schema: tool.input_schema,
+            execution_policy: binding.policy.execution,
+            concurrency_policy: binding.policy.concurrency,
+            approval_policy: binding.policy.approval,
+            replay_policy: ToolReplayPolicy::Never,
+            origin: ToolOrigin::Mcp {
+                server_id: server_id.clone(),
+            },
+        }
+    }
+
+    /// A named agent that selects one **inactive-but-available** MCP tool
+    /// starts, and its child Tool Plane contains exactly the frozen Builtin
+    /// plus that one MCP tool — nothing the fixture also publishes, and
+    /// nothing from the workspace.
+    #[cfg(feature = "mcp-fixture")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_child_materializes_exactly_the_selected_mcp_tool() {
+        if crate::tools::mcp::fixture::serve_if_fixture_mode(
+            crate::tools::mcp::fixture::FixtureServer::from_env(),
+        )
+        .await
+        {
+            return;
+        }
+        let dir = lab();
+        let workspace =
+            crate::tools::Workspace::new(dir.path().join("workspace")).expect("workspace");
+        let server_id = crate::runtime::identity::McpServerId::new("alpha");
+        let binding = fixture_binding(
+            "local_runtime::composition::subagent_child_tests::a_child_materializes_exactly_the_selected_mcp_tool",
+            "alpha_",
+        );
+        let definition = frozen_fixture_tool(&server_id, &binding, &workspace, "alpha_echo").await;
+        let identity = crate::tools::mcp::identity::definition_identity(&definition)
+            .expect("an MCP definition has an MCP identity");
+        let mcp = ResolvedSubagentTool::Mcp {
+            server_id: server_id.clone(),
+            tool_id: definition.id.clone(),
+            name: definition.name.clone(),
+            identity,
+            definition,
+        };
+        let mut child_spec = spec(
+            dir.path(),
+            vec![builtin("read"), mcp],
+            Vec::new(),
+            Vec::new(),
+        );
+        child_spec
+            .resolved
+            .materialization
+            .mcp_servers
+            .insert(server_id, binding);
+
+        let core = LocalConversationCore::compose_subagent_child(
+            &child_spec,
+            &dependencies(),
+            &ChildPreparation::detached(),
+        )
+        .await
+        .expect("the child materializes its frozen MCP selection");
+        let snapshot = core.capability().current_snapshot();
+        let mut names = snapshot.tool_registry().names();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            vec!["alpha_echo", "read"],
+            "the child Tool Plane is exactly the frozen selection: the fixture also \
+             publishes alpha_mutate and alpha_slow, and neither is materialized"
+        );
+    }
+
+    /// A definition whose canonical cross-process identity is not the one the
+    /// parent generation froze fails child preparation — before `Ready`, and
+    /// therefore before any durable ownership commit.
+    #[cfg(feature = "mcp-fixture")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_changed_mcp_definition_fails_before_the_child_is_ready() {
+        if crate::tools::mcp::fixture::serve_if_fixture_mode(
+            crate::tools::mcp::fixture::FixtureServer::from_env(),
+        )
+        .await
+        {
+            return;
+        }
+        let dir = lab();
+        let workspace =
+            crate::tools::Workspace::new(dir.path().join("workspace")).expect("workspace");
+        let server_id = crate::runtime::identity::McpServerId::new("beta");
+        let binding = fixture_binding(
+            "local_runtime::composition::subagent_child_tests::a_changed_mcp_definition_fails_before_the_child_is_ready",
+            "beta_",
+        );
+        let mut definition =
+            frozen_fixture_tool(&server_id, &binding, &workspace, "beta_echo").await;
+        // The parent froze a description the server no longer publishes.
+        definition.description = format!("{} (as the parent froze it)", definition.description);
+        let identity = crate::tools::mcp::identity::definition_identity(&definition)
+            .expect("an MCP definition has an MCP identity");
+        let mcp = ResolvedSubagentTool::Mcp {
+            server_id: server_id.clone(),
+            tool_id: definition.id.clone(),
+            name: definition.name.clone(),
+            identity,
+            definition,
+        };
+        let mut child_spec = spec(
+            dir.path(),
+            vec![builtin("read"), mcp],
+            Vec::new(),
+            Vec::new(),
+        );
+        child_spec
+            .resolved
+            .materialization
+            .mcp_servers
+            .insert(server_id, binding);
+
+        let error = LocalConversationCore::compose_subagent_child(
+            &child_spec,
+            &dependencies(),
+            &ChildPreparation::detached(),
+        )
+        .await
+        .expect_err("a changed definition must not be executed");
+        let rendered = format!("{error:?}");
+        assert!(
+            rendered.contains("McpIdentityMismatch"),
+            "the failure is a typed cross-process identity mismatch: {rendered}"
+        );
+        assert!(
+            rendered.contains("beta_echo"),
+            "the failure names the exact definition: {rendered}"
+        );
+    }
+
+    /// A frozen tool the server no longer publishes fails child preparation
+    /// rather than silently starting a weaker child.
+    #[cfg(feature = "mcp-fixture")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_missing_mcp_definition_fails_before_the_child_is_ready() {
+        if crate::tools::mcp::fixture::serve_if_fixture_mode(
+            crate::tools::mcp::fixture::FixtureServer::from_env(),
+        )
+        .await
+        {
+            return;
+        }
+        let dir = lab();
+        let server_id = crate::runtime::identity::McpServerId::new("gamma");
+        let binding = fixture_binding(
+            "local_runtime::composition::subagent_child_tests::a_missing_mcp_definition_fails_before_the_child_is_ready",
+            "gamma_",
+        );
+        let definition = ToolDefinition {
+            id: ToolId::new("mcp:gamma:gamma_absent"),
+            name: "gamma_absent".to_owned(),
+            description: "a tool the server does not publish".to_owned(),
+            input_schema: serde_json::json!({"type": "object"}),
+            execution_policy: ToolExecutionPolicy::ForegroundOnly,
+            concurrency_policy: ToolConcurrencyPolicy::Sequential,
+            approval_policy: ToolApprovalPolicy::Never,
+            replay_policy: ToolReplayPolicy::Never,
+            origin: ToolOrigin::Mcp {
+                server_id: server_id.clone(),
+            },
+        };
+        let mcp = ResolvedSubagentTool::Mcp {
+            server_id: server_id.clone(),
+            tool_id: definition.id.clone(),
+            name: definition.name.clone(),
+            identity: crate::tools::mcp::identity::definition_identity(&definition)
+                .expect("an MCP definition has an MCP identity"),
+            definition,
+        };
+        let mut child_spec = spec(
+            dir.path(),
+            vec![builtin("read"), mcp],
+            Vec::new(),
+            Vec::new(),
+        );
+        child_spec
+            .resolved
+            .materialization
+            .mcp_servers
+            .insert(server_id, binding);
+
+        let error = LocalConversationCore::compose_subagent_child(
+            &child_spec,
+            &dependencies(),
+            &ChildPreparation::detached(),
+        )
+        .await
+        .expect_err("a missing definition must not be silently omitted");
+        assert!(
+            format!("{error:?}").contains("McpToolMissing"),
+            "the failure is a typed missing-definition refusal: {error:?}"
+        );
+    }
+
+    /// A frozen MCP requirement is **required**, not optional: a server the
+    /// child cannot connect fails composition before `Ready` rather than
+    /// degrading into an availability state and starting weaker than the
+    /// child was authorized (Issue #145).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_unreachable_required_mcp_server_fails_child_composition() {
+        let dir = lab();
+        let server_id = crate::runtime::identity::McpServerId::new("github");
+        let definition = ToolDefinition {
+            id: ToolId::new("tool-get-issue"),
+            name: "get_issue".to_owned(),
+            description: "issue".to_owned(),
+            input_schema: serde_json::json!({"type": "object"}),
+            execution_policy: ToolExecutionPolicy::ForegroundOnly,
+            concurrency_policy: ToolConcurrencyPolicy::Sequential,
+            approval_policy: ToolApprovalPolicy::Never,
+            replay_policy: ToolReplayPolicy::Never,
+            origin: ToolOrigin::Mcp {
+                server_id: server_id.clone(),
+            },
+        };
+        let mcp = ResolvedSubagentTool::Mcp {
+            server_id: server_id.clone(),
+            tool_id: definition.id.clone(),
+            name: definition.name.clone(),
+            identity: crate::tools::mcp::identity::definition_identity(&definition)
+                .expect("an MCP definition has an MCP identity"),
+            definition,
+        };
+        let mut child_spec = spec(
+            dir.path(),
+            vec![builtin("read"), mcp],
+            Vec::new(),
+            Vec::new(),
+        );
+        child_spec.resolved.materialization.mcp_servers.insert(
+            server_id,
+            crate::tools::mcp::McpServerBinding {
+                transport: crate::tools::mcp::McpTransportConfig::Stdio {
+                    program: "rustx-no-such-mcp-server".to_owned(),
+                    args: Vec::new(),
+                    cwd: None,
+                    environment: std::collections::BTreeMap::new(),
+                },
+                policy: ToolInvocationPolicy::default(),
+            },
+        );
+        let error = LocalConversationCore::compose_subagent_child(
+            &child_spec,
+            &dependencies(),
+            &ChildPreparation::detached(),
+        )
+        .await
+        .expect_err("a required MCP source that cannot be connected fails composition");
+        assert!(
+            format!("{error:?}").contains("Mcp"),
+            "the failure is an explicit MCP preparation failure: {error:?}"
+        );
+    }
+
+    /// A frozen MCP selection whose materialization plane carries no binding
+    /// for the required server can never be widened by the child: it fails.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_missing_frozen_mcp_binding_is_never_rediscovered() {
+        let dir = lab();
+        let server_id = crate::runtime::identity::McpServerId::new("github");
+        let definition = ToolDefinition {
+            id: ToolId::new("tool-get-issue"),
+            name: "get_issue".to_owned(),
+            description: "issue".to_owned(),
+            input_schema: serde_json::json!({"type": "object"}),
+            execution_policy: ToolExecutionPolicy::ForegroundOnly,
+            concurrency_policy: ToolConcurrencyPolicy::Sequential,
+            approval_policy: ToolApprovalPolicy::Never,
+            replay_policy: ToolReplayPolicy::Never,
+            origin: ToolOrigin::Mcp {
+                server_id: server_id.clone(),
+            },
+        };
+        let mcp = ResolvedSubagentTool::Mcp {
+            server_id,
+            tool_id: definition.id.clone(),
+            name: definition.name.clone(),
+            identity: crate::tools::mcp::identity::definition_identity(&definition)
+                .expect("an MCP definition has an MCP identity"),
+            definition,
         };
         let error = LocalConversationCore::compose_subagent_child(
             &spec(
@@ -1872,11 +2565,13 @@ mod subagent_child_tests {
                 Vec::new(),
             ),
             &dependencies(),
+            &ChildPreparation::detached(),
         )
-        .expect_err("an unmaterializable capability refuses composition");
+        .await
+        .expect_err("a selection with no frozen binding cannot be materialized");
         assert!(
-            format!("{error:?}").contains("mcp:github/get_issue"),
-            "the refusal names the capability rather than silently dropping it: {error:?}"
+            format!("{error:?}").contains("was not given a binding"),
+            "the child refuses rather than looking a server up for itself: {error:?}"
         );
     }
 }

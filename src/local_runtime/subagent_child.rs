@@ -10,7 +10,9 @@
 //! ```text
 //! fd 0 (inherited control channel)
 //!   -> Hello(spec)      version handshake; mismatch exits before compose
-//!   -> compose          the real runtime stack, deny-by-construction
+//!   -> dispatcher       the ONE owner of the raw transport from here on
+//!   -> compose          the real runtime stack, deny-by-construction, and
+//!                       cancellable owned work (Issue #145)
 //!   -> Ready            composition and activation complete
 //!   -> Delegate(task)   the task enters through the child's ORDINARY
 //!                       durable inbound path (UserSource::Agent(parent))
@@ -18,6 +20,25 @@
 //!   -> Result(candidate) exactly once, bounded
 //!   -> drain + exit
 //! ```
+//!
+//! # One control dispatcher (Issue #145)
+//!
+//! Only the `Hello` version handshake reads the raw `UnixStream` directly:
+//! it must be decided before anything at all is composed. Everything after
+//! it goes through [`ChildControlDispatcher`], the single owner of the
+//! transport, because the child now also creates supervised process units
+//! that must offer their containment anchors to the parent concurrently
+//! with `Delegate`/`Cancel`/`Result` traffic. No Tool executor and no
+//! supervised-unit owner ever touches the stream.
+//!
+//! # Composition is cancellable owned work (Issue #145)
+//!
+//! External capability materialization can start an MCP process, verify a
+//! content-addressed Python `ToolVersion`, and build a uv environment.
+//! Composition therefore races the attempt-derived cancellation and the
+//! control channel's EOF: a settled preparation drops the composition, the
+//! child never answers `Ready`, no semantic work begins, and the parent
+//! settles the terminal from the child's physical outcome.
 //!
 //! # Message-bus invariant (child side)
 //!
@@ -53,6 +74,7 @@ use std::sync::Arc;
 use crate::events::types::RuntimeEvent;
 use crate::message::content::TextBlock;
 use crate::message::types::{MessageBlock, UserContentBlock, UserSource};
+use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::observation::{ConversationObservation, PendingObservations};
 use crate::runtime::subagent::ipc::{
     ChildFrame, ChildResultStatus, DiagnosticFrame, ParentFrame, ReadyFrame, ResultFrame,
@@ -61,7 +83,8 @@ use crate::runtime::subagent::ipc::{
 use crate::runtime::subagent::{MAX_RESULT_CONTENT_BYTES, bound_utf8};
 use crate::runtime::types::CancellationReason;
 
-use super::composition::{LocalConversationCore, LocalRuntimeDependencies};
+use super::composition::{ChildPreparation, LocalConversationCore, LocalRuntimeDependencies};
+use super::dispatcher::{ChildControlDispatcher, ChildControlEvent, ChildControlHandle};
 
 /// The process entry point of the internal subagent-child mode.
 ///
@@ -78,6 +101,10 @@ pub async fn run_subagent_child() -> i32 {
             return 2;
         }
     };
+    // The version handshake is read from the raw stream, before the
+    // dispatcher takes ownership of it: a peer that does not speak exactly
+    // this protocol version must be refused before anything at all is
+    // composed, including the dispatcher's own tasks.
     let spec = match read_parent_frame(&mut control).await {
         Ok(Some(ParentFrame::Hello(spec))) => {
             if spec.protocol_version != SUBAGENT_IPC_VERSION {
@@ -109,23 +136,39 @@ pub async fn run_subagent_child() -> i32 {
             return 3;
         }
     };
-    match run_child(&mut control, spec).await {
+
+    // From here on there is exactly one owner of the raw transport. Every
+    // other child-side owner — the semantic driver and every nested
+    // supervised process unit — reaches the parent only through it.
+    let mut dispatcher = ChildControlDispatcher::start(control);
+    let handle = dispatcher.handle();
+    // The nested containment authority is installed BEFORE any composition
+    // step can create a supervised process unit, so no unit can ever slip
+    // past the anchor gate.
+    if let Err(detail) =
+        crate::runtime::nested_containment::install_authority(dispatcher.anchor_authority())
+    {
+        eprintln!("subagent child: {detail}");
+        return 2;
+    }
+
+    let code = match Box::pin(run_child(&mut dispatcher, &handle, spec)).await {
         Ok(()) => 0,
         Err(ChildExit::Startup(message)) => {
-            let _ = write_child_frame(
-                &mut control,
-                &ChildFrame::StartupError(DiagnosticFrame {
+            let _ = handle
+                .send(ChildFrame::StartupError(DiagnosticFrame {
                     message: bound_diagnostic(message),
-                }),
-            )
-            .await;
+                }))
+                .await;
             2
         }
         Err(ChildExit::Protocol(message)) => {
             eprintln!("subagent child: {message}");
             3
         }
-    }
+    };
+    dispatcher.shutdown().await;
+    code
 }
 
 /// The child's typed early exits.
@@ -140,12 +183,17 @@ enum ChildExit {
 /// The staged child run: compose, handshake, delegate, observe, report,
 /// drain.
 async fn run_child(
-    control: &mut tokio::net::UnixStream,
+    dispatcher: &mut ChildControlDispatcher,
+    handle: &ChildControlHandle,
     spec: SubagentChildSpec,
 ) -> Result<(), ChildExit> {
-    let core =
-        LocalConversationCore::compose_subagent_child(&spec, &LocalRuntimeDependencies::default())
-            .map_err(|error| ChildExit::Startup(format!("{error:?}")))?;
+    let Some(core) = compose_cancellably(dispatcher, handle, &spec).await? else {
+        // Preparation settled (cancellation or parent loss) before the child
+        // was owned: nothing composed, nothing started, no result. The
+        // parent settles the cancelled/interrupted terminal itself from the
+        // physical outcome.
+        return Ok(());
+    };
     // The observation bridge is installed over the still-inactive runtime,
     // so the attempt's canonical terminal event can never be missed.
     let observations = Arc::new(PendingObservations::new());
@@ -155,31 +203,26 @@ async fn run_child(
     let runtime = core.runtime().clone();
     let headless = core.into_headless();
     drop(headless);
-    write_child_frame(
-        control,
-        &ChildFrame::Ready(ReadyFrame {
+    handle
+        .send(ChildFrame::Ready(ReadyFrame {
             subagent_id: spec.subagent_id.clone(),
-        }),
-    )
-    .await
-    .map_err(|error| ChildExit::Protocol(error.to_string()))?;
+        }))
+        .await
+        .map_err(|error| ChildExit::Protocol(error.to_string()))?;
 
     // The start gate: no semantic work before the delegation arrives.
-    let delegate = match read_parent_frame(control).await {
-        Ok(Some(ParentFrame::Delegate(delegate))) => delegate,
-        Ok(Some(ParentFrame::Cancel) | None) => {
+    let delegate = match dispatcher.next_event().await {
+        Some(ChildControlEvent::Delegate(delegate)) => delegate,
+        Some(ChildControlEvent::Cancel) | None => {
             // Cancelled (or orphaned) before any work began: drain and
             // exit. The parent settles the cancelled/interrupted terminal
             // itself from the physical outcome.
             let _ = runtime.shutdown().await;
             return Ok(());
         }
-        Ok(Some(ParentFrame::Hello(_))) => {
-            return Err(ChildExit::Protocol(
-                "a second Hello frame arrived".to_owned(),
-            ));
+        Some(ChildControlEvent::ProtocolViolation(message)) => {
+            return Err(ChildExit::Protocol(message));
         }
-        Err(error) => return Err(ChildExit::Protocol(error.to_string())),
     };
 
     // The delegated task enters through the child's ordinary durable
@@ -200,7 +243,7 @@ async fn run_child(
         content,
     ) {
         return report_and_drain(
-            control,
+            handle,
             &runtime,
             ResultFrame {
                 status: ChildResultStatus::Failed,
@@ -215,7 +258,7 @@ async fn run_child(
 
     // Observe the attempt to its canonical terminal event while serving
     // Cancel frames through the ordinary cancellation path.
-    let terminal = await_terminal(control, &runtime, &observations).await?;
+    let terminal = await_terminal(dispatcher, &runtime, &observations).await?;
     let frame = match terminal {
         AttemptTerminal::Completed => {
             let answer = final_answer(&runtime);
@@ -249,16 +292,83 @@ async fn run_child(
             return Ok(());
         }
     };
-    report_and_drain(control, &runtime, frame).await
+    report_and_drain(handle, &runtime, frame).await
+}
+
+/// Composes the child runtime as **cancellable owned work** (Issue #145).
+///
+/// External capability materialization can take materially longer than the
+/// old base-only startup — an MCP process start plus protocol negotiation,
+/// a content-addressed `ToolVersion` verification, a uv environment build.
+/// Three things therefore race here, and the composition future is dropped
+/// the instant any of them wins:
+///
+/// ```text
+/// Cancel from the parent   the spawn attempt no longer wants this child
+/// parent control EOF       the parent process is gone
+/// composition completes    the child may answer Ready
+/// ```
+///
+/// `Ok(None)` means the preparation settled: nothing was composed, no
+/// semantic work began, and the parent settles the terminal from the child's
+/// physical outcome.
+async fn compose_cancellably(
+    dispatcher: &mut ChildControlDispatcher,
+    handle: &ChildControlHandle,
+    spec: &SubagentChildSpec,
+) -> Result<Option<LocalConversationCore>, ChildExit> {
+    let cancellation = CancellationSignal::new();
+    let preparation = ChildPreparation::new(cancellation.clone(), handle.clone());
+    let dependencies = LocalRuntimeDependencies::default();
+    let composition =
+        LocalConversationCore::compose_subagent_child(spec, &dependencies, &preparation);
+    let mut composition = std::pin::pin!(composition);
+    let mut events_open = true;
+    let composed = loop {
+        tokio::select! {
+            event = dispatcher.next_event(), if events_open => match event {
+                Some(ChildControlEvent::Cancel) => cancellation.cancel(),
+                Some(ChildControlEvent::Delegate(_)) => {
+                    return Err(ChildExit::Protocol(
+                        "a delegation arrived before the child answered Ready".to_owned(),
+                    ));
+                }
+                Some(ChildControlEvent::ProtocolViolation(message)) => {
+                    return Err(ChildExit::Protocol(message));
+                }
+                None => {
+                    // The control channel is finished. The preparation
+                    // guard observes the same fact and settles; the arm is
+                    // disabled so the loop cannot spin.
+                    events_open = false;
+                    cancellation.cancel();
+                }
+            },
+            composed = &mut composition => break composed,
+        }
+    };
+    match composed {
+        Ok(core) => Ok(Some(core)),
+        Err(error) => {
+            if cancellation.is_cancelled() || handle.parent_lost() {
+                // A settled preparation is not a startup failure: the child
+                // simply never became owned.
+                Ok(None)
+            } else {
+                Err(ChildExit::Startup(format!("{error:?}")))
+            }
+        }
+    }
 }
 
 /// Sends the one terminal result candidate and drains the runtime.
 async fn report_and_drain(
-    control: &mut tokio::net::UnixStream,
+    handle: &ChildControlHandle,
     runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
     frame: ResultFrame,
 ) -> Result<(), ChildExit> {
-    write_child_frame(control, &ChildFrame::Result(frame))
+    handle
+        .send(ChildFrame::Result(frame))
         .await
         .map_err(|error| ChildExit::Protocol(error.to_string()))?;
     let _ = runtime.shutdown().await;
@@ -281,22 +391,22 @@ enum AttemptTerminal {
 /// Drives the attempt to its terminal event, serving cancellation through
 /// the ordinary runtime path.
 async fn await_terminal(
-    control: &mut tokio::net::UnixStream,
+    dispatcher: &mut ChildControlDispatcher,
     runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
     observations: &Arc<PendingObservations>,
 ) -> Result<AttemptTerminal, ChildExit> {
-    await_terminal_inner(control, runtime, observations, |_| {}).await
+    await_terminal_inner(dispatcher, runtime, observations, |_| {}).await
 }
 
 #[cfg(test)]
 async fn await_terminal_with_probe(
-    control: &mut tokio::net::UnixStream,
+    dispatcher: &mut ChildControlDispatcher,
     runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
     observations: &Arc<PendingObservations>,
     cancellation_before_admission: Arc<tokio::sync::Notify>,
     cancellation_after_admission: Arc<tokio::sync::Notify>,
 ) -> Result<AttemptTerminal, ChildExit> {
-    await_terminal_inner(control, runtime, observations, move |delivered| {
+    await_terminal_inner(dispatcher, runtime, observations, move |delivered| {
         if delivered {
             cancellation_after_admission.notify_one();
         } else {
@@ -307,7 +417,7 @@ async fn await_terminal_with_probe(
 }
 
 async fn await_terminal_inner<F>(
-    control: &mut tokio::net::UnixStream,
+    dispatcher: &mut ChildControlDispatcher,
     runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
     observations: &Arc<PendingObservations>,
     on_cancellation: F,
@@ -317,9 +427,9 @@ where
 {
     loop {
         tokio::select! {
-            frame = read_parent_frame(control) => {
-                match frame {
-                    Ok(Some(ParentFrame::Cancel)) => {
+            event = dispatcher.next_event() => {
+                match event {
+                    Some(ChildControlEvent::Cancel) => {
                         // The cancellation commits directly into the
                         // runtime-owned one-shot intent under the
                         // coordinator lock: a current attempt is cancelled
@@ -341,14 +451,15 @@ where
                         // The frame is a request, not a terminal fact: the
                         // canonical AttemptCancelled settles the attempt.
                     }
-                    Ok(Some(_)) => {
+                    Some(ChildControlEvent::Delegate(_)) => {
                         return Err(ChildExit::Protocol(
-                            "an unexpected control frame arrived during the attempt"
-                                .to_owned(),
+                            "a second delegation arrived during the attempt".to_owned(),
                         ));
                     }
-                    Ok(None) => return Ok(AttemptTerminal::Orphaned),
-                    Err(error) => return Err(ChildExit::Protocol(error.to_string())),
+                    Some(ChildControlEvent::ProtocolViolation(message)) => {
+                        return Err(ChildExit::Protocol(message));
+                    }
+                    None => return Ok(AttemptTerminal::Orphaned),
                 }
             }
             () = observations.wait() => {
@@ -488,6 +599,7 @@ mod tests {
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: tool_runtime.environment().clone(),
             environment_store_root: dir.path().join("environments"),
+            python_store_roots: None,
         })
         .expect("capability coordinator");
         let candidate = capability.prepare_candidate().await.expect("candidate");
@@ -595,7 +707,7 @@ mod tests {
         let before_probe = Arc::clone(&cancellation_before_admission);
         let after_probe = Arc::clone(&cancellation_after_admission);
         let waiter = tokio::spawn(async move {
-            let mut child_end = child_end;
+            let mut child_end = ChildControlDispatcher::start(child_end);
             await_terminal_with_probe(
                 &mut child_end,
                 &child_runtime,
@@ -690,7 +802,7 @@ mod tests {
         let cancellation_after_admission = Arc::new(tokio::sync::Notify::new());
         let after_probe = Arc::clone(&cancellation_after_admission);
         let waiter = tokio::spawn(async move {
-            let mut child_end = child_end;
+            let mut child_end = ChildControlDispatcher::start(child_end);
             await_terminal_with_probe(
                 &mut child_end,
                 &child_runtime,
@@ -777,7 +889,7 @@ mod tests {
         let cancellation_after_admission = Arc::new(tokio::sync::Notify::new());
         let after_probe = Arc::clone(&cancellation_after_admission);
         let waiter = tokio::spawn(async move {
-            let mut child_end = child_end;
+            let mut child_end = ChildControlDispatcher::start(child_end);
             await_terminal_with_probe(
                 &mut child_end,
                 &child_runtime,

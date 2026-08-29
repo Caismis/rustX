@@ -176,6 +176,39 @@ id_type! {
     McpServerId
 }
 
+id_type! {
+    /// Identifies one rustX-owned **supervised process unit** created
+    /// inside this process (Issue #145).
+    ///
+    /// The identity exists so a nested unit's containment anchor can be
+    /// offered to, acknowledged by, and released from the top-level parent
+    /// by exact typed correlation rather than by ordering or by an
+    /// approximate pgid match. It is allocated by
+    /// `crate::runtime::nested_containment` as
+    /// `unit:{process id}:{monotonic ordinal}`, so two units of one process
+    /// and two units of two sibling children can never collide.
+    ProcessUnitId
+}
+
+id_type! {
+    /// The deterministic cross-process semantic identity of one canonical
+    /// MCP Tool definition (Issue #145).
+    ///
+    /// The identity is derived by
+    /// [`mcp_tool_identity`](crate::tools::mcp::identity::mcp_tool_identity)
+    /// over the versioned `MCP_TOOL_IDENTITY_V1` field set — server
+    /// identity, canonical name, description, canonical input schema, and
+    /// the effective execution policy — in the textual form
+    /// `sha256:<64 lowercase hex characters>`.
+    ///
+    /// It is deliberately distinct from the process-local MCP invalidation
+    /// **epoch**: an epoch stabilizes one process's catalog read and means
+    /// nothing to another OS process, while this identity is exactly what a
+    /// subagent child recomputes from its own connection to prove it
+    /// materialized the Tool contract its parent froze.
+    McpToolIdentity
+}
+
 /// The conversation-scoped attempt identity domain (Issue #12, M9a).
 ///
 /// The conversation runtime is the one `AttemptId` allocation owner, and the
