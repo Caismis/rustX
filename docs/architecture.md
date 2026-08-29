@@ -3103,7 +3103,7 @@ environment, finite timeout, bounded diagnostics, and no generic
 
 The outermost layer exposes the runtime to humans and other systems:
 
-- Runtime Client Protocol v7 (semantic client boundary)
+- Runtime Client Protocol v8 (semantic client boundary)
 - Local interactive CLI
 - Runtime command interface
 - HTTP control interface
@@ -3112,7 +3112,7 @@ The outermost layer exposes the runtime to humans and other systems:
 
 AG-UI is an output projection, not the internal durable event model.
 
-#### Runtime Client Protocol v7 implementation (Issue #37, revised by Issues #131, #130, #136, and #140)
+#### Runtime Client Protocol v8 implementation (Issue #37, revised by Issues #131, #130, #136, #140, and #144)
 
 Issue #37 implements the one external semantic normalization boundary in
 `src/runtime_client`:
@@ -3127,7 +3127,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-      Runtime Client Protocol v7
+      Runtime Client Protocol v8
 ```
 
 The governing invariant is that all authoritative execution and
@@ -3633,7 +3633,7 @@ Runtime Client is a projection/control/attachment adapter over it.
   compaction start, failure, and committed completion project with optional
   attempt attribution and update the shared context read model. Internal
   `RuntimeEvent` evolution therefore cannot silently break Runtime Client
-  Protocol v7.
+  Protocol v8.
 - **Streaming repair.** The snapshot carries an in-flight Assistant output
   view (accumulated blocks) and foreground tool views keyed by the
   logical tool-call identity, so a client repairing after `resync`
@@ -3668,7 +3668,7 @@ Runtime Client is a projection/control/attachment adapter over it.
   subscribe, and subscription polls) then fails with
   `projection_exhausted`. A read never hands back a model that silently
   stopped folding authoritative transitions.
-- **Attachment lifecycle.** Protocol v7 admits at most one active
+- **Attachment lifecycle.** Protocol v8 admits at most one active
   attachment: the first attach succeeds, a second fails with
   `attachment_in_use` and never evicts the first, detach (explicit or
   RAII drop) releases ownership, reconnects receive a fresh attachment
@@ -3790,7 +3790,7 @@ rustX Runtime
 Runtime Client projection
       |
       v
-Runtime Client Protocol v7        semantic; Issue #37/#131/#130/#136/#140
+Runtime Client Protocol v8        semantic; Issue #37/#131/#130/#136/#140/#144
       |
       v
 transport adapters                framing only; src/runtime_client/transport
@@ -3836,7 +3836,7 @@ means adding a sibling module there; no semantic module moves.
   string stays in one record and multiline pretty-printed JSON is not
   supported. CRLF input is accepted by removing exactly one `\r` before
   the terminating LF; no other whitespace is touched.
-- **Malformed and oversized input is transport-fatal.** Protocol v7 has
+- **Malformed and oversized input is transport-fatal.** Protocol v8 has
   no uncorrelated error envelope, and a malformed frame may not even
   carry a request id, so the transport invents none. Any complete
   in-bound-size record that does not deserialize to the exact v7 request
@@ -3857,7 +3857,7 @@ means adding a sibling module there; no semantic module moves.
   background execution, and capability state continue under their own
   owners, and no projection lock is held across any transport await.
 - **Active-subscription lag closes the transport.** After a stall the
-  subscription may fall behind the bounded replay ring. Protocol v7 has
+  subscription may fall behind the bounded replay ring. Protocol v8 has
   no uncorrelated stream-error record, so the session ends with a typed
   local `SubscriptionLagged` error carrying the cursor information and
   the client repairs from an authoritative snapshot after reconnecting.
@@ -4748,7 +4748,7 @@ beside it:
 rustX Runtime semantics
         |
         v
-Runtime Client Protocol v7
+Runtime Client Protocol v8
         |
         v
 rustX TypeScript projection
