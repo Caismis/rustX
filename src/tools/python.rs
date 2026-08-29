@@ -2303,15 +2303,23 @@ mod tests {
         let probe = store.inner.waiter_attachments.clone();
         tokio::task::block_in_place(|| {
             loop {
+                // Register the notification interest BEFORE checking the
+                // count: `notify_waiters()` only wakes registered waiters,
+                // so a merely created (never polled/enabled) `Notified`
+                // would leave a check-then-register hole. `enable()` is
+                // the same no-lost-wakeup pattern the production waiter
+                // loop in `ensure_environment` uses. An attachment recorded
+                // before the count check is observed in the count; an
+                // attachment recorded after `enable()` wakes this
+                // `Notified` through `notify_waiters()`.
+                let mut notified = Box::pin(probe.notify.notified());
+                notified.as_mut().enable();
                 if probe.count.load(std::sync::atomic::Ordering::Acquire) >= count {
                     return;
                 }
-                let notified = probe.notify.notified();
-                tokio::runtime::Handle::current().block_on(async {
-                    tokio::time::timeout(Duration::from_secs(15), notified)
-                        .await
-                        .expect("the waiters must attach to the in-flight build");
-                });
+                tokio::runtime::Handle::current()
+                    .block_on(tokio::time::timeout(Duration::from_secs(15), notified))
+                    .expect("the waiters must attach to the in-flight build");
             }
         });
     }
@@ -2414,12 +2422,15 @@ mod tests {
     ///
     /// Every ordering edge is explicit synchronization, never scheduler
     /// progress: `wait_for_materializations(1)` proves the owner holds the
-    /// digest inside its gated materialization; `wait_for_attached_waiters(2)`
-    /// proves both waiters selected that same `BuildState` under the
-    /// ownership lock before the owner is allowed to fail; and a waiter
-    /// can only observe the terminal result after `BuildOwnerGuard::finish`
-    /// removed the in-flight entry, because publication and removal both
-    /// precede `notify_waiters` there.
+    /// digest inside its gated materialization; and
+    /// `wait_for_attached_waiters(2)` proves both waiters selected that
+    /// same `BuildState` under the ownership lock before the owner is
+    /// allowed to fail. Attached waiters are committed to that state and
+    /// therefore observe the same terminal result; their observation is
+    /// NOT ordered against ownership removal (a waiter may read the
+    /// published result while the owner is still removing the entry), so
+    /// release-before-retry is proven separately by the explicit
+    /// `in_flight` inspection below.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn owner_error_wakes_all_waiters_and_retry_does_not_overlap() {
         let scripted = Arc::new(ScriptedRunner::new(vec![
@@ -2492,10 +2503,12 @@ mod tests {
             "exactly one materialization sequence ran"
         );
 
-        // The waiters could only observe the terminal error after the
-        // failed owner removed its in-flight entry, so ownership of the
-        // digest is already released before this retry starts; the retry
-        // must acquire fresh ownership and materialize without overlap.
+        // The owner task has completed, so `BuildOwnerGuard::finish` ran
+        // to completion: terminal publication, in-flight removal, and
+        // notification all happened. Prove the ownership release
+        // explicitly before the retry starts: fresh ownership is
+        // serialized through the `in_flight` mutex, so the retry can only
+        // become the next owner because the previous entry is gone.
         assert!(
             store
                 .inner
