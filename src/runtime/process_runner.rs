@@ -1132,8 +1132,10 @@ impl SupervisedCommandRunner {
         // exactly this unit. Releasing here — after the loop proved the
         // unit's own physical terminality and never earlier — is what makes
         // the parent's retention correct: an anchor is dropped only against
-        // proof, never because some other part of the tree exited.
-        self.anchor_gate.release();
+        // proof, never because some other part of the tree exited. The
+        // release awaits its bounded delivery: while the parent control
+        // plane is alive a proven-terminal release is never dropped.
+        self.anchor_gate.release().await;
 
         // Process terminality was proven by the outer supervisor before this
         // point. Reaping the already-terminal direct child is semantically
@@ -1615,8 +1617,13 @@ mod tests {
             })
         }
 
-        fn release(&self, unit: crate::runtime::identity::ProcessUnitId, pgid: i32) {
+        fn release(
+            &self,
+            unit: crate::runtime::identity::ProcessUnitId,
+            pgid: i32,
+        ) -> futures_util::future::BoxFuture<'static, ()> {
             let _ = self.releases.send((unit, pgid));
+            Box::pin(std::future::ready(()))
         }
     }
 

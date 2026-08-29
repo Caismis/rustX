@@ -90,16 +90,35 @@
 //!                         control dispatcher — the sole owner of the IPC
 //!                         transport. Unit owners never touch that stream.
 //!
-//! ProcessUnitAnchor       the RAII lease one supervised unit holds from
-//!                         ACK until it has proven its unit physically
-//!                         terminal. Releasing it emits exactly one
-//!                         ProcessUnitAnchorReleased for that unit.
+//! ProcessUnitAnchor       the lease one supervised unit holds from ACK
+//!                         until it has proven its unit physically
+//!                         terminal. Only an explicit proven-terminal
+//!                         release emits ProcessUnitAnchorReleased;
+//!                         dropping the lease retains the parent's anchor.
 //!
 //! RetainedProcessUnits    the parent-side set. It belongs to whichever
 //!                         owner currently owns the child: StagedChild
 //!                         before the ownership commit, the live record
 //!                         after it. Ownership transfers exactly once.
 //! ```
+//!
+//! # Release is a proof-carrying ownership transition
+//!
+//! `ProcessUnitAnchorReleased` is not telemetry. Two rules make it safe:
+//!
+//! - **Proof-carrying**: RAII owner destruction (task abort, panic, an
+//!   unexpected future drop, a cancellation path that has not completed
+//!   settlement) is not evidence of physical terminality, so dropping a
+//!   lease never emits a release. The only release-producing transition is
+//!   the explicit [`ProcessUnitAnchor::release`] at a proven-terminal
+//!   settlement; anything unproven retains the parent's catastrophic
+//!   containment authority for that exact group.
+//! - **Reliable**: while the parent control plane is alive, a
+//!   proven-terminal release is never silently dropped under bounded
+//!   outbound backpressure — the release future resolves only once the
+//!   frame is queued with the one dispatcher. A parent that is already
+//!   definitively gone has nothing left to release; that is a separate,
+//!   explicitly known state.
 //!
 //! In the **top-level** process no authority is installed, so
 //! [`retain`] resolves immediately into an unanchored lease and the
@@ -154,9 +173,15 @@ pub(crate) trait NestedAnchorAuthority: Send + Sync + std::fmt::Debug {
     fn offer(&self, unit: ProcessUnitId, pgid: i32) -> BoxFuture<'static, Result<(), AnchorError>>;
 
     /// Reports that this unit is physically terminal, so the parent may drop
-    /// exactly this retained anchor. Best-effort by construction: a parent
-    /// that is already gone has nothing left to release.
-    fn release(&self, unit: ProcessUnitId, pgid: i32);
+    /// exactly this retained anchor.
+    ///
+    /// A release is an **ownership transition, not telemetry**: while the
+    /// parent control plane is alive it must not be silently lost, so the
+    /// returned future applies bounded backpressure and resolves only once
+    /// the release is queued with the one dispatcher. A parent that is
+    /// already definitively gone has no retained anchor left to drop; that
+    /// — and only that — resolves without delivering anything.
+    fn release(&self, unit: ProcessUnitId, pgid: i32) -> BoxFuture<'static, ()>;
 }
 
 /// The process's one nested anchor authority.
@@ -288,10 +313,14 @@ pub(crate) fn retain_with(
 /// The lease one supervised unit holds from the parent's acknowledgement
 /// until that unit is proven physically terminal.
 ///
-/// Release is idempotent and also happens on drop, so no code path can lose
-/// a retained anchor in the parent by forgetting to release it. Releasing
-/// early would be the real hazard, which is why the only release sites are
-/// the unit's proven-terminal settlements.
+/// Release is **proof-carrying**: the only release-producing transition is
+/// the explicit [`ProcessUnitAnchor::release`], called exactly at a
+/// proven-terminal settlement. Dropping the lease emits **nothing** — RAII
+/// owner destruction (task abort, panic, an unexpected future drop, or a
+/// cancellation path that has not completed settlement) is not evidence
+/// that the supervised unit reached physical terminality, so an unproven
+/// drop deliberately keeps the parent's retained anchor — and its
+/// catastrophic containment authority for that exact group — alive.
 #[derive(Debug)]
 pub(crate) struct ProcessUnitAnchor {
     unit: ProcessUnitId,
@@ -307,27 +336,18 @@ impl ProcessUnitAnchor {
     }
 
     /// Reports the unit physically terminal and drops the parent's retained
-    /// anchor. Called exactly at a proven-terminal settlement.
-    pub(crate) fn release(mut self) {
-        self.release_in_place();
+    /// anchor. Called exactly at a proven-terminal settlement, and never
+    /// from anywhere else: this is the one release-producing transition.
+    pub(crate) async fn release(mut self) {
+        if let Some(authority) = self.authority.take() {
+            authority.release(self.unit.clone(), self.pgid).await;
+        }
     }
 
     /// Discards the lease without emitting a release, keeping the parent's
     /// retained anchor alive.
     fn forget(&mut self) {
         self.authority = None;
-    }
-
-    fn release_in_place(&mut self) {
-        if let Some(authority) = self.authority.take() {
-            authority.release(self.unit.clone(), self.pgid);
-        }
-    }
-}
-
-impl Drop for ProcessUnitAnchor {
-    fn drop(&mut self) {
-        self.release_in_place();
     }
 }
 
@@ -398,9 +418,13 @@ impl AnchorGate {
     }
 
     /// Releases the retained anchor at a proven-terminal settlement.
-    pub(crate) fn release(&mut self) {
+    ///
+    /// This awaits the release's bounded delivery to the dispatcher: while
+    /// the parent control plane is alive the release is never dropped under
+    /// outbound backpressure.
+    pub(crate) async fn release(&mut self) {
         if let Self::Held(anchor) = std::mem::replace(self, Self::Released) {
-            anchor.release();
+            anchor.release().await;
         }
     }
 
@@ -473,7 +497,13 @@ mod tests {
             ) -> futures_util::future::BoxFuture<'static, Result<(), AnchorError>> {
                 Box::pin(std::future::ready(Err(AnchorError::ParentLost)))
             }
-            fn release(&self, _unit: crate::runtime::identity::ProcessUnitId, _pgid: i32) {}
+            fn release(
+                &self,
+                _unit: crate::runtime::identity::ProcessUnitId,
+                _pgid: i32,
+            ) -> futures_util::future::BoxFuture<'static, ()> {
+                Box::pin(std::future::ready(()))
+            }
         }
         let authority = std::sync::Arc::new(Refusing);
         let mut gate = AnchorGate::Pending(Box::pin(async move {
@@ -518,11 +548,16 @@ mod global_authority_tests {
             Box::pin(std::future::ready(Ok(())))
         }
 
-        fn release(&self, unit: ProcessUnitId, pgid: i32) {
+        fn release(
+            &self,
+            unit: ProcessUnitId,
+            pgid: i32,
+        ) -> futures_util::future::BoxFuture<'static, ()> {
             self.releases
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push((unit, pgid));
+            Box::pin(std::future::ready(()))
         }
     }
 

@@ -738,7 +738,7 @@ async fn run_interactive_unit(
         }
     };
     if matches!(settlement, UnitSettlement::PhysicallySettled) {
-        anchor_gate.release();
+        anchor_gate.release().await;
     } else {
         // Keep the anchor retained in the parent: this process could not
         // prove the unit terminal, so the parent's catastrophic containment
@@ -912,8 +912,13 @@ mod interactive_tests {
             })
         }
 
-        fn release(&self, unit: crate::runtime::identity::ProcessUnitId, pgid: i32) {
+        fn release(
+            &self,
+            unit: crate::runtime::identity::ProcessUnitId,
+            pgid: i32,
+        ) -> futures_util::future::BoxFuture<'static, ()> {
             let _ = self.releases.send((unit, pgid));
+            Box::pin(std::future::ready(()))
         }
     }
 

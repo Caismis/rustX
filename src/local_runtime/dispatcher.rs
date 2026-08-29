@@ -178,17 +178,61 @@ impl NestedAnchorAuthority for DispatcherInner {
         })
     }
 
-    fn release(&self, unit: ProcessUnitId, pgid: i32) {
-        // Release is best-effort by construction: a parent that is already
-        // gone has no retained anchor left to drop, and the send is
-        // non-blocking so a proven-terminal settlement is never delayed by
-        // a stalled control channel.
-        let _ = self
-            .outbound
-            .try_send(ChildFrame::AnchorReleased(ProcessUnitAnchorFrame {
-                unit_id: unit,
-                pgid,
-            }));
+    fn release(&self, unit: ProcessUnitId, pgid: i32) -> BoxFuture<'static, ()> {
+        let outbound = self.outbound.clone();
+        let frame = ChildFrame::AnchorReleased(ProcessUnitAnchorFrame {
+            unit_id: unit,
+            pgid,
+        });
+        Box::pin(async move {
+            // A release is an ownership transition, not telemetry: while
+            // the parent control plane is alive it is never silently
+            // dropped. The bounded queue applies backpressure — this send
+            // awaits capacity and the one writer delivers the frame — so a
+            // proven-terminal release cannot be lost to a full queue. A
+            // closed queue means the dispatcher has drained or the parent
+            // is definitively gone; that is the separate state in which
+            // there is nothing left to release.
+            let _ = outbound.send(frame).await;
+        })
+    }
+}
+
+/// Test-only gate in front of the writer's outbound drain (Issue #145).
+///
+/// While the gate is closed the writer waits instead of receiving from the
+/// bounded outbound queue, so a test can fill the queue *deterministically*
+/// — `OUTBOUND_CAPACITY` completed sends prove the queue full — and then
+/// prove what a frame producer does under real backpressure. The gate is
+/// level-triggered: once opened it stays open, and opening it lets the
+/// writer drain every queued frame in order.
+#[cfg(test)]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct WriterGate {
+    open: Arc<tokio::sync::watch::Sender<bool>>,
+}
+
+#[cfg(test)]
+impl WriterGate {
+    /// Opens the gate permanently: the writer drains normally from here.
+    ///
+    /// `send_replace`, not `send`: a `watch` send drops the value when no
+    /// receiver is currently subscribed, and the writer subscribes only
+    /// when its task first runs — losing the open would park the writer
+    /// forever.
+    pub(crate) fn open(&self) {
+        self.open.send_replace(true);
+    }
+
+    /// Parks while the gate is closed; resolves immediately once open (or
+    /// when the gate handle is gone, which only happens at test teardown).
+    async fn wait_open(&self) {
+        let mut receiver = self.open.subscribe();
+        while !*receiver.borrow_and_update() {
+            if receiver.changed().await.is_err() {
+                return;
+            }
+        }
     }
 }
 
@@ -213,6 +257,30 @@ impl ChildControlDispatcher {
     /// Takes sole ownership of the raw control transport and starts the one
     /// reader task and the one writer task.
     pub(crate) fn start(control: tokio::net::UnixStream) -> Self {
+        #[cfg(test)]
+        {
+            Self::start_impl(control, None)
+        }
+        #[cfg(not(test))]
+        {
+            Self::start_impl(control)
+        }
+    }
+
+    /// Starts the dispatcher with the writer's outbound drain gated (tests
+    /// only), so bounded-queue backpressure is exercised deterministically.
+    #[cfg(test)]
+    pub(crate) fn start_with_writer_gate(
+        control: tokio::net::UnixStream,
+        gate: WriterGate,
+    ) -> Self {
+        Self::start_impl(control, Some(gate))
+    }
+
+    fn start_impl(
+        control: tokio::net::UnixStream,
+        #[cfg(test)] writer_gate: Option<WriterGate>,
+    ) -> Self {
         let (read_half, write_half) = tokio::io::split(control);
         let (outbound_tx, mut outbound_rx) =
             tokio::sync::mpsc::channel::<ChildFrame>(OUTBOUND_CAPACITY);
@@ -230,6 +298,13 @@ impl ChildControlDispatcher {
             let mut write_half = write_half;
             let mut closing = false;
             loop {
+                // The test gate parks the writer BEFORE it receives, so the
+                // bounded queue provably stays full while the gate is
+                // closed. Level-triggered: once open this never waits.
+                #[cfg(test)]
+                if let Some(gate) = &writer_gate {
+                    gate.wait_open().await;
+                }
                 tokio::select! {
                     biased;
                     frame = outbound_rx.recv() => match frame {
@@ -557,7 +632,7 @@ mod tests {
         assert_eq!(read_child_frame(&mut parent).await.expect("eof"), None);
         // The surviving owners are inert rather than dangling: a release on
         // a drained transport is a no-op, not a panic or a hang.
-        authority.release(ProcessUnitId::new("unit-a"), 11);
+        authority.release(ProcessUnitId::new("unit-a"), 11).await;
         assert_eq!(
             handle
                 .send(ChildFrame::Diagnostic(DiagnosticFrame {
@@ -595,5 +670,157 @@ mod tests {
             dispatcher.next_event().await,
             Some(ChildControlEvent::Cancel)
         );
+    }
+
+    /// A proven-terminal release under bounded outbound backpressure is
+    /// **never silently dropped**: with the queue provably full (the writer
+    /// is gated, so `OUTBOUND_CAPACITY` completed sends fill it exactly),
+    /// the release future pends instead of resolving, and once the
+    /// backpressure clears the exact `AnchorReleased` frame arrives and
+    /// removes exactly the parent's retained anchor.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_proven_terminal_release_survives_bounded_backpressure() {
+        use futures_util::FutureExt;
+
+        let (mut parent, child) = pair();
+        let gate = super::WriterGate::default();
+        let dispatcher = ChildControlDispatcher::start_with_writer_gate(child, gate.clone());
+        let handle = dispatcher.handle();
+        let authority = dispatcher.anchor_authority();
+
+        // Fill the bounded outbound queue exactly. The writer is gated
+        // before its first receive, so these completed sends are the proof
+        // that the queue is now full — no timing is involved.
+        for index in 0..super::OUTBOUND_CAPACITY {
+            handle
+                .send(ChildFrame::Diagnostic(DiagnosticFrame {
+                    message: format!("filler {index}"),
+                }))
+                .await
+                .expect("queue capacity remains while filling");
+        }
+
+        // The parent retains this exact anchor; the child has just proven
+        // the unit physically terminal and releases it under backpressure.
+        let unit = ProcessUnitId::new("unit-a");
+        let mut retained = crate::runtime::subagent::anchors::RetainedProcessUnits::default();
+        retained.retain(unit.clone(), 4242).expect("retained");
+        let mut release = Box::pin(authority.release(unit.clone(), 4242));
+        assert!(
+            release.as_mut().now_or_never().is_none(),
+            "a release behind a full queue must wait for capacity; it is never dropped"
+        );
+
+        // The backpressure clears: the writer drains the queue in order and
+        // the release is delivered — never lost.
+        gate.open();
+        release.await;
+        for _ in 0..super::OUTBOUND_CAPACITY {
+            assert!(
+                matches!(
+                    read_child_frame(&mut parent).await.expect("queued frame"),
+                    Some(ChildFrame::Diagnostic(_))
+                ),
+                "the queued fillers drain first, in order"
+            );
+        }
+        assert_eq!(
+            read_child_frame(&mut parent)
+                .await
+                .expect("the release frame"),
+            Some(ChildFrame::AnchorReleased(
+                crate::runtime::subagent::ipc::ProcessUnitAnchorFrame {
+                    unit_id: unit.clone(),
+                    pgid: 4242
+                }
+            )),
+            "the exact AnchorReleased arrives once the backpressure clears"
+        );
+        // The parent applies exactly this release to exactly this anchor.
+        assert!(retained.release(&unit, 4242));
+        assert!(retained.is_empty());
+
+        dispatcher.shutdown().await;
+    }
+
+    /// Destroying a held anchor's owner — by plain drop or by task abort —
+    /// is **not** terminal proof: no `AnchorReleased` may be emitted, and
+    /// the parent's retained anchor (its catastrophic containment authority
+    /// for that exact unit) must survive.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn an_unproven_owner_loss_never_releases_the_retained_anchor() {
+        let (mut parent, child) = pair();
+        let dispatcher = ChildControlDispatcher::start(child);
+        let authority = dispatcher.anchor_authority();
+        let handle = dispatcher.handle();
+
+        // The parent-side view: both offered anchors are ACKed and
+        // retained. Each lease comes from the real `retain_with` path a
+        // supervised-unit owner uses.
+        let mut retained = crate::runtime::subagent::anchors::RetainedProcessUnits::default();
+        let mut acknowledge = async |unit: &ProcessUnitId, pgid: i32| {
+            let pending = tokio::spawn({
+                let authority = authority.clone();
+                let unit = unit.clone();
+                async move {
+                    crate::runtime::nested_containment::retain_with(unit, pgid, Some(authority))
+                        .await
+                }
+            });
+            assert!(matches!(
+                read_child_frame(&mut parent).await.expect("offer frame"),
+                Some(ChildFrame::AnchorOffered(_))
+            ));
+            retained.retain(unit.clone(), pgid).expect("retained");
+            write_parent_frame(
+                &mut parent,
+                &ParentFrame::AnchorAccepted(ProcessUnitAckFrame {
+                    unit_id: unit.clone(),
+                }),
+            )
+            .await
+            .expect("ack");
+            pending
+                .await
+                .expect("offer task")
+                .expect("acknowledged lease")
+        };
+
+        // 1. A held lease destroyed by plain owner drop.
+        let dropped = acknowledge(&ProcessUnitId::new("unit-drop"), 11).await;
+        drop(dropped);
+
+        // 2. A held lease destroyed by owner task abort mid-park.
+        let aborted = acknowledge(&ProcessUnitId::new("unit-abort"), 22).await;
+        let owner = tokio::spawn(async move {
+            let _held = aborted;
+            std::future::pending::<()>().await;
+        });
+        owner.abort();
+        let _ = owner.await;
+
+        // The wire proves the silence: frames are totally ordered, so any
+        // manufactured release would arrive before this trailing frame.
+        handle
+            .send(ChildFrame::Diagnostic(DiagnosticFrame {
+                message: "after both owner losses".to_owned(),
+            }))
+            .await
+            .expect("trailing frame queued");
+        assert_eq!(
+            read_child_frame(&mut parent).await.expect("trailing frame"),
+            Some(ChildFrame::Diagnostic(DiagnosticFrame {
+                message: "after both owner losses".to_owned()
+            })),
+            "no AnchorReleased was manufactured by drop or abort"
+        );
+
+        // The parent still retains both exact anchors: catastrophic
+        // containment authority for both units remains available.
+        assert_eq!(retained.len(), 2);
+        assert!(!retained.release(&ProcessUnitId::new("unit-drop"), 99));
+        assert!(!retained.release(&ProcessUnitId::new("unit-abort"), 99));
+
+        dispatcher.shutdown().await;
     }
 }
