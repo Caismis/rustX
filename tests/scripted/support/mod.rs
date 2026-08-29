@@ -43,6 +43,9 @@ pub(crate) fn default_execution_policy() -> crate::agent::execution::AgentExecut
     crate::agent::execution::AgentExecutionRuntimePolicy {
         model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
         monotonic_clock: default_monotonic_clock(),
+        // A direct in-crate execution fixture owns no runtime resource
+        // generation, so it hands out no subagent resolution authority.
+        subagent_context: None,
     }
 }
 

@@ -221,7 +221,11 @@ pub enum RuntimeClientSessionRequest {
 /// canonical `InboundKind::CompactionSummary` message kind now transports
 /// its validated cumulative file-operation metadata, and clients mirror the
 /// payload shape.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 7;
+///
+/// Version 8 carries Issue #144's named-subagent projection: a subagent is
+/// identified by `(agent, definition_digest)` instead of a profile name.
+/// There is no compatibility decoding of the obsolete shape.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 8;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1098,7 +1102,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 7);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 8);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

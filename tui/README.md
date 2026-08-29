@@ -1,7 +1,7 @@
 # `rustx-tui`
 
 The rustX reference terminal client: a Pi-TUI presentation layer over Runtime
-Client Protocol v7.
+Client Protocol v8.
 
 ## The one architectural rule
 

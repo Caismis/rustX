@@ -14,6 +14,7 @@ pub mod deadline;
 pub mod error;
 pub mod event;
 pub mod finish;
+pub mod frozen;
 pub mod input;
 pub mod invocation;
 pub mod session;
@@ -38,6 +39,9 @@ pub use deadline::{
 pub use error::{ContextOverflowReport, ModelError, ModelErrorKind, ModelRetryDisposition};
 pub use event::ModelEvent;
 pub use finish::ModelFinishReason;
+pub use frozen::{
+    FrozenModelInvocation, FrozenModelSpec, FrozenProviderBinding, FrozenSummaryModel,
+};
 pub use input::{
     CarryoverBlockKind, CarryoverDetailLevel, CarryoverOmissionCounts, ModelInputMessage,
     RenderedCarryoverRecord, RenderedCarryoverText, RenderedCarryoverToolCall,

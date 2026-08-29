@@ -2659,6 +2659,7 @@ mod mcp_race_tests {
                 environment: runtime_bundle.environment(),
                 questionnaire_requester: None,
                 todos: None,
+                subagent: None,
             },
         )
         .await;

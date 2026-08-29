@@ -1963,6 +1963,8 @@ impl RuntimeInner {
         model_timeout_policy: ModelTimeoutPolicy,
         approval_mode: ApprovalMode,
         resources: Arc<RuntimeResourceSnapshot>,
+        model_config: crate::model::session::SessionModelConfig,
+        model_registry: Option<crate::model::invocation::ModelBindingRegistry>,
         lease: crate::capabilities::AttemptCapabilityLease,
     ) -> crate::agent::AgentExecutionResult {
         let observer = RuntimeObserver::new(self);
@@ -1981,6 +1983,28 @@ impl RuntimeInner {
         let execution_policy = crate::agent::execution::AgentExecutionRuntimePolicy {
             model_timeout_policy,
             monotonic_clock,
+            // The attempt-scoped subagent seam. It is derived from the very
+            // generation and model configuration this attempt was admitted
+            // with, under the same admission linearization, so a subagent
+            // invoked by this attempt resolves exactly that generation — not
+            // whatever generation happens to be runtime-current when the
+            // model issues the call.
+            // A runtime whose model authority is frozen (a subagent child)
+            // owns neither a subagent registry nor a catalog to resolve a
+            // named definition's explicit model against, so the seam is
+            // absent on both counts rather than half-present.
+            subagent_context: self
+                .subagents
+                .is_some()
+                .then_some(model_registry)
+                .flatten()
+                .map(|models| {
+                    crate::runtime::subagent::AttemptSubagentContext::new(
+                        Arc::clone(&resources),
+                        model_config,
+                        models,
+                    )
+                }),
         };
         let request = AgentExecutionRequest {
             agent_id: self.agent_id.clone(),
@@ -2546,6 +2570,12 @@ impl RuntimeInner {
         // reconstructed only from its own frozen durable facts and is never
         // rewritten to resemble the new configuration.
         let model = state.model.snapshot();
+        // The attempt's frozen *effective* model configuration, taken at the
+        // same linearization point as its resolved snapshot. A named
+        // subagent with no explicit model inherits exactly this — never live
+        // mutable session state, and never a composition-time capture.
+        let model_config = state.model.config().clone();
+        let model_registry = state.model.registry().cloned();
         // Freeze runtime execution policy at the same admission boundary as
         // the attempt's model snapshot. A later configuration change can
         // therefore affect only a future admitted attempt.
@@ -2584,6 +2614,8 @@ impl RuntimeInner {
                     model_timeout_policy,
                     approval_mode,
                     resources,
+                    model_config,
+                    model_registry,
                     lease,
                 )
                 .await;
@@ -5106,6 +5138,26 @@ impl ConversationRuntime {
 mod tests {
     use std::sync::Arc;
 
+    /// A Builtin-only frozen named-agent specification for registry-level
+    /// tests: resolution is the resolver's concern, so a registry test
+    /// supplies its already-frozen result.
+    fn test_resolved_subagent(agent: &str) -> crate::runtime::subagent::ResolvedSubagentSpec {
+        crate::runtime::subagent::ResolvedSubagentSpec {
+            agent: crate::runtime::subagent::SubagentName::parse(agent).expect("canonical name"),
+            definition_digest: serde_json::from_value(serde_json::json!(
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            ))
+            .expect("digest"),
+            instructions: "instructions".to_owned(),
+            model: crate::model::frozen::test_frozen_model_spec(
+                serde_json::from_value(serde_json::json!("local/model")).expect("model reference"),
+            ),
+            tools: Vec::new(),
+            skills: Vec::new(),
+            project_instructions: Vec::new(),
+        }
+    }
+
     use super::{
         CancelAttemptError, ConversationContextConfig, ConversationRuntime,
         ConversationRuntimeError, CoordinatorProbe, Gate, InboundAdmissionError,
@@ -5699,13 +5751,8 @@ mod tests {
                 clock: Arc::new(crate::runtime::types::SystemClock),
                 spawn: crate::runtime::subagent::SubagentSpawnPlan {
                     program: std::path::PathBuf::from("/nonexistent/rustx"),
-                    models: std::path::PathBuf::from("/nonexistent/models.jsonc"),
                     workspace: workspace.clone(),
                     runtime_root: dir.path().join("subagents"),
-                    model: crate::model::session::SessionModelConfig::of(
-                        serde_json::from_value(serde_json::json!("local/model"))
-                            .expect("model reference"),
-                    ),
                     agent_status: crate::context::AgentStatusConfig::default(),
                     context: crate::context::SessionContextPolicy {
                         reserve_tokens: 0,
@@ -5808,13 +5855,8 @@ mod tests {
                 clock: Arc::new(crate::runtime::types::SystemClock),
                 spawn: crate::runtime::subagent::SubagentSpawnPlan {
                     program: std::path::PathBuf::from("/nonexistent/rustx"),
-                    models: std::path::PathBuf::from("/nonexistent/models.jsonc"),
                     workspace: workspace.clone(),
                     runtime_root: dir.path().join("subagents"),
-                    model: crate::model::session::SessionModelConfig::of(
-                        serde_json::from_value(serde_json::json!("local/model"))
-                            .expect("model reference"),
-                    ),
                     agent_status: crate::context::AgentStatusConfig::default(),
                     context: crate::context::SessionContextPolicy {
                         reserve_tokens: 0,
@@ -5945,7 +5987,7 @@ mod tests {
             .commit(
                 subagents
                     .prepare(&crate::runtime::subagent::SubagentStartSpec {
-                        profile: crate::runtime::subagent::SubagentProfile::Explore,
+                        resolved: test_resolved_subagent("explore"),
                         task: "pre-constructed".to_owned(),
                         context: None,
                         tool_call_id: ToolCallId::new("call-pre-constructed"),
@@ -6066,7 +6108,7 @@ mod tests {
         let committer = tokio::spawn(async move {
             let prepared = commit_registry
                 .prepare(&crate::runtime::subagent::SubagentStartSpec {
-                    profile: crate::runtime::subagent::SubagentProfile::Explore,
+                    resolved: test_resolved_subagent("explore"),
                     task: "transfer race".to_owned(),
                     context: None,
                     tool_call_id: ToolCallId::new("call-transfer-race"),
@@ -6199,7 +6241,7 @@ mod tests {
         // path — so nothing is ever spawned or published.
         let error = subagents
             .prepare(&crate::runtime::subagent::SubagentStartSpec {
-                profile: crate::runtime::subagent::SubagentProfile::Explore,
+                resolved: test_resolved_subagent("explore"),
                 task: "refused after claim".to_owned(),
                 context: None,
                 tool_call_id: ToolCallId::new("call-refused"),
@@ -11393,7 +11435,7 @@ mod tests {
             .commit(
                 subagents
                     .prepare(&crate::runtime::subagent::SubagentStartSpec {
-                        profile: crate::runtime::subagent::SubagentProfile::Explore,
+                        resolved: test_resolved_subagent("explore"),
                         task: "first terminal".to_owned(),
                         context: None,
                         tool_call_id: ToolCallId::new("call-subagent-one"),
@@ -11451,7 +11493,7 @@ mod tests {
             .commit(
                 subagents
                     .prepare(&crate::runtime::subagent::SubagentStartSpec {
-                        profile: crate::runtime::subagent::SubagentProfile::Explore,
+                        resolved: test_resolved_subagent("explore"),
                         task: "second terminal".to_owned(),
                         context: None,
                         tool_call_id: ToolCallId::new("call-subagent-two"),
@@ -11598,7 +11640,7 @@ mod tests {
             .commit(
                 subagents
                     .prepare(&crate::runtime::subagent::SubagentStartSpec {
-                        profile: crate::runtime::subagent::SubagentProfile::Explore,
+                        resolved: test_resolved_subagent("explore"),
                         task: "owned child".to_owned(),
                         context: None,
                         tool_call_id: ToolCallId::new("call-owned"),
@@ -11667,7 +11709,7 @@ mod tests {
         subagents.push_staged_override(staged);
         let prepared = subagents
             .prepare(&crate::runtime::subagent::SubagentStartSpec {
-                profile: crate::runtime::subagent::SubagentProfile::Explore,
+                resolved: test_resolved_subagent("explore"),
                 task: "rejected after failure".to_owned(),
                 context: None,
                 tool_call_id: ToolCallId::new("call-rejected"),
@@ -11758,7 +11800,7 @@ mod tests {
             .commit(
                 subagents
                     .prepare(&crate::runtime::subagent::SubagentStartSpec {
-                        profile: crate::runtime::subagent::SubagentProfile::Explore,
+                        resolved: test_resolved_subagent("explore"),
                         task: "owned".to_owned(),
                         context: None,
                         tool_call_id: ToolCallId::new("call-owned"),
@@ -11859,7 +11901,7 @@ mod tests {
         let committer = tokio::spawn(async move {
             let prepared = commit_registry
                 .prepare(&crate::runtime::subagent::SubagentStartSpec {
-                    profile: crate::runtime::subagent::SubagentProfile::Explore,
+                    resolved: test_resolved_subagent("explore"),
                     task: "racing".to_owned(),
                     context: None,
                     tool_call_id: ToolCallId::new("call-racing"),
@@ -12482,7 +12524,7 @@ mod tests {
             .commit(
                 subagents
                     .prepare(&crate::runtime::subagent::SubagentStartSpec {
-                        profile: crate::runtime::subagent::SubagentProfile::Explore,
+                        resolved: test_resolved_subagent("explore"),
                         task: "owned".to_owned(),
                         context: None,
                         tool_call_id: ToolCallId::new("call-owned"),
@@ -12577,7 +12619,7 @@ mod tests {
         subagents.push_staged_override(staged);
         let prepared = subagents
             .prepare(&crate::runtime::subagent::SubagentStartSpec {
-                profile: crate::runtime::subagent::SubagentProfile::Explore,
+                resolved: test_resolved_subagent("explore"),
                 task: "rejected".to_owned(),
                 context: None,
                 tool_call_id: ToolCallId::new("call-rejected"),
@@ -14152,6 +14194,113 @@ mod tests {
             1,
             "only the first parallel sibling crossed the start frontier"
         );
+        assert_eq!(
+            runtime.lifecycle_state(),
+            ConversationLifecycleState::Quiescent
+        );
+    }
+
+    /// Issue #144: a resource reload can never commit a new generation
+    /// underneath a live attempt, so an attempt's tool execution cannot
+    /// observe a generation other than the one it was admitted with.
+    ///
+    /// The ordering is decided by the tool-start frontier and the typed
+    /// refusal, not by timing: the attempt is provably parked inside its
+    /// tool batch when `reload_resources` returns `Busy { Attempt }`, and
+    /// the same reload succeeds only after the attempt has settled.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_reload_cannot_commit_a_new_generation_under_a_live_attempt() {
+        use crate::agent::execution::test_sync::ToolStartPause;
+        use crate::tools::executor::ToolRegistry;
+        use crate::tools::types::{
+            ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin,
+            ToolReplayPolicy,
+        };
+
+        let (tool, mut started, release) = GatedBackgroundExecutor::new();
+        let mut registry = ToolRegistry::new();
+        registry
+            .register(
+                ToolDefinition {
+                    id: crate::runtime::identity::ToolId::new("tool-a"),
+                    name: "alpha".to_owned(),
+                    description: String::new(),
+                    input_schema: serde_json::json!({"type": "object"}),
+                    execution_policy: ToolExecutionPolicy::ForegroundOnly,
+                    concurrency_policy: ToolConcurrencyPolicy::Sequential,
+                    approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
+                    replay_policy: ToolReplayPolicy::Never,
+                    origin: ToolOrigin::Builtin,
+                },
+                Arc::new(tool),
+            )
+            .expect("tool registration");
+
+        let call = crate::scripted_suites::support::fake::ScriptedCall {
+            id: "call-a",
+            tool_id: "tool-a",
+            name: "alpha",
+            arguments: serde_json::json!({}),
+        };
+        let mut script = vec![FakeStep::Emit(crate::model::event::ModelEvent::Started)];
+        script.extend(
+            crate::scripted_suites::support::fake::tool_call_events(0, &call)
+                .into_iter()
+                .map(FakeStep::Emit),
+        );
+        script.push(FakeStep::Emit(crate::model::event::ModelEvent::Completed {
+            finish_reason: crate::model::finish::ModelFinishReason::ToolCalls,
+            usage: None,
+        }));
+        let continuation = one_turn_script();
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (tool_start_pause, mut tool_start_reached, tool_start_release) =
+            ToolStartPause::install();
+        let (runtime, _model) = headless_runtime(
+            &dir,
+            vec![script, continuation],
+            Some(registry),
+            Some(CoordinatorProbe {
+                tool_start_pause: Some(tool_start_pause),
+                ..CoordinatorProbe::default()
+            }),
+        )
+        .await;
+        runtime.activate();
+        let admitted = runtime.runtime_resources();
+        runtime
+            .submit_inbound(text_content("run a tool"))
+            .expect("accepted");
+        tool_start_reached
+            .wait_for(|reached| *reached)
+            .await
+            .expect("the attempt parks at its tool-start frontier");
+
+        // The attempt provably owns the runtime here, and the reload is
+        // refused rather than publishing a generation the running attempt
+        // would then be able to observe.
+        assert!(matches!(
+            runtime.reload_resources().await,
+            Err(super::RuntimeResourceReloadError::Busy {
+                reason: super::RuntimeResourceReloadBusyReason::Attempt
+            })
+        ));
+        assert!(
+            Arc::ptr_eq(&admitted, &runtime.runtime_resources()),
+            "a refused reload publishes nothing"
+        );
+
+        tool_start_release.send(()).expect("release the frontier");
+        started
+            .wait_for(|started| *started)
+            .await
+            .expect("the tool starts");
+        release.send_replace(true);
+        runtime.shutdown().await.expect("the attempt settles");
+
+        // Between attempts, the same reload is admitted normally: the
+        // refusal above is about the live attempt, not about reload itself.
         assert_eq!(
             runtime.lifecycle_state(),
             ConversationLifecycleState::Quiescent

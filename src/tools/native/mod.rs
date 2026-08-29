@@ -67,6 +67,8 @@ pub(crate) use read::ReadTool;
 
 use registration::NativeToolRegistration;
 
+pub use subagent::SUBAGENT_TOOL_NAME;
+
 // The per-invocation Bash supervisor process entry points are reachable
 // only from the supervisor binary and from test binaries via self-exec;
 // they are documented-hidden binary entry points, never tool-plane API. The
@@ -136,6 +138,13 @@ pub struct NativeToolResources {
     /// means the intrinsic is not registered at all, so recursive
     /// delegation is absent by construction.
     pub subagents: Option<crate::runtime::subagent::SubagentRegistry>,
+    /// The named-subagent catalog of the resource generation this
+    /// registration set belongs to (Issue #144).
+    ///
+    /// It supplies the model-facing routing description of the `subagent`
+    /// intrinsic, so the description a generation publishes always names
+    /// exactly the agents that generation admits.
+    pub subagent_catalog: crate::runtime::subagent::SubagentCatalog,
 }
 
 /// The concrete, bounded per-tool policy configuration of the six ordinary
@@ -232,6 +241,7 @@ pub(crate) fn native_tool_registrations(
     let NativeToolResources {
         background,
         subagents,
+        subagent_catalog,
     } = resources;
     let mut registrations = vec![
         background_task::registration(background),
@@ -247,70 +257,285 @@ pub(crate) fn native_tool_registrations(
     // The `subagent` intrinsic exists only in a runtime that owns a
     // subagent registry (never inside a child runtime).
     if let Some(subagents) = subagents {
-        registrations.push(subagent::registration(subagents));
+        registrations.push(subagent::registration(subagents, &subagent_catalog));
     }
     registrations
 }
 
-/// Registers exactly the deny-by-construction capability set of a subagent
-/// child (Issue #60).
+/// The one explicit native-name -> implementation composition of the
+/// subagent child plane (Issue #144).
 ///
-/// The v1 `explore` profile is read-only: the child's `ToolRegistry`
-/// contains `Read`, `Glob`, and `Grep` and nothing else. There is no
-/// `subagent` tool in the child, so recursive delegation is structurally
-/// absent; there is no Write/Edit/Bash, no background execution, and no
-/// MCP/Python capability in the child composition path at all.
+/// It is a bounded `match` over the native capabilities a child may run —
+/// deliberately not a factory, plugin loader, strategy registry, or
+/// reflective lookup. Three capabilities are structurally absent from it and
+/// therefore unregistrable in a child however a definition was written:
+/// `subagent` (recursive delegation), and `ask_user` and `background_task`
+/// (a headless child holds no Runtime Client questionnaire authority and no
+/// conversation-owned detached execution plane of its own).
+///
+/// The requested `policy` is the parent-frozen one, so the returned
+/// registration's definition is built from the frozen policy rather than
+/// from a default table. `todo` owns a fixed policy of its own; a frozen
+/// definition that disagrees with it simply fails the identity check below
+/// instead of being quietly rewritten.
+fn subagent_child_registration(
+    name: &str,
+    policy: ToolInvocationPolicy,
+) -> Option<NativeToolRegistration> {
+    Some(match name {
+        "read" => read::registration(policy),
+        "write" => write::registration(policy),
+        "edit" => edit::registration(policy),
+        "glob" => glob::registration(policy),
+        "grep" => grep::registration(policy),
+        "bash" => bash::registration(policy),
+        "todo" => todo::registration(),
+        _ => return None,
+    })
+}
+
+/// The canonical child-plane definition of one native capability under one
+/// invocation policy, for in-crate tests that need to build a frozen
+/// specification the child plane can actually materialize.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn subagent_child_definition(
+    name: &str,
+    policy: ToolInvocationPolicy,
+) -> Option<crate::tools::types::ToolDefinition> {
+    subagent_child_registration(name, policy).map(|registration| registration.definition)
+}
+
+/// Registers exactly the Builtin capability set one named subagent
+/// definition resolved to (Issue #144).
+///
+/// # The definition is the contract, not the name
+///
+/// `frozen` is the sequence of exact [`ToolDefinition`]s the invoking
+/// generation admitted and the parent resolution froze. Each one is
+/// registered **verbatim**: its identity, description, input schema, replay
+/// policy, origin, and all three invocation-policy axes are the ones the
+/// parent authorized, never a locally rebuilt default. A generation that
+/// admits `grep` as model-selectable, parallel, and approval-required must
+/// give the child that `grep` — quietly substituting a foreground-only,
+/// sequential, approval-never `grep` would hand the child different
+/// semantics under the same name.
+///
+/// Materialization is therefore checked, not assumed: the child plane
+/// reconstructs the native implementation for the frozen name under the
+/// frozen policy and compares the reconstructed definition against the
+/// frozen one. A mismatch — a capability this build implements differently,
+/// or a fixed-policy tool whose frozen policy disagrees — fails closed
+/// rather than registering something the parent did not authorize.
+///
+/// The set is deny-by-construction in both directions:
+///
+/// - the `subagent` intrinsic is never registrable here, so recursive
+///   delegation is structurally absent even if a definition somehow named
+///   it (definition admission already rejects that selector);
+/// - `ask_user` is likewise absent, because a headless child has no Runtime
+///   Client questionnaire authority to satisfy it;
+/// - no registration is marked mandatory, so the child's active set equals
+///   its authorized set exactly rather than gaining an implicit Read.
 ///
 /// # Errors
 ///
-/// Returns the specific [`ToolRegistryError`] of the first registration
-/// violation.
+/// Returns [`ToolRegistryError::InvalidIdentity`] when the frozen set names
+/// a capability the child plane does not implement or when the child cannot
+/// faithfully materialize a frozen definition, and the specific
+/// [`ToolRegistryError`] of the first registration violation otherwise.
+///
+/// [`ToolDefinition`]: crate::tools::types::ToolDefinition
 pub fn register_subagent_child_tools(
     registry: &mut ToolRegistry,
-    policies: NativeToolPolicies,
+    frozen: &[crate::tools::types::ToolDefinition],
 ) -> Result<(), ToolRegistryError> {
-    let registrations = [
-        read::registration(policies.read),
-        glob::registration(policies.glob),
-        grep::registration(policies.grep),
-    ];
-    for NativeToolRegistration {
-        definition,
-        executor,
-        normalizer,
-        mandatory,
-    } in registrations
-    {
-        registry.register_with_activation_metadata(definition, executor, normalizer, mandatory)?;
+    for definition in frozen {
+        let policy = ToolInvocationPolicy::new(
+            definition.execution_policy,
+            definition.concurrency_policy,
+            definition.approval_policy,
+        );
+        let Some(registration) = subagent_child_registration(&definition.name, policy) else {
+            return Err(ToolRegistryError::InvalidIdentity(format!(
+                "the subagent child plane does not implement the built-in capability {:?}",
+                definition.name
+            )));
+        };
+        let NativeToolRegistration {
+            definition: reconstructed,
+            executor,
+            normalizer,
+            ..
+        } = registration;
+        if reconstructed != *definition {
+            return Err(ToolRegistryError::InvalidIdentity(format!(
+                "the subagent child plane cannot faithfully materialize the frozen \
+                 definition of {:?}: this build implements {reconstructed:?}",
+                definition.name
+            )));
+        }
+        // The exact frozen definition is what the child registers. The
+        // child's active set is exactly its authorized set: nothing is
+        // mandatory, so no capability is force-activated beside the ones the
+        // definition selected.
+        registry.register_with_activation_metadata(
+            definition.clone(),
+            executor,
+            normalizer,
+            false,
+        )?;
     }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{NativeToolPolicies, register_subagent_child_tools};
+    use super::{register_subagent_child_tools, subagent_child_definition};
     use crate::tools::executor::ToolRegistry;
+    use crate::tools::types::{
+        ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
+        ToolInvocationPolicy,
+    };
+
+    fn frozen(names: &[&str], policy: ToolInvocationPolicy) -> Vec<ToolDefinition> {
+        names
+            .iter()
+            .map(|name| {
+                subagent_child_definition(name, policy)
+                    .unwrap_or_else(|| panic!("{name} is a child-plane capability"))
+            })
+            .collect()
+    }
 
     #[test]
-    fn subagent_child_registry_is_exactly_the_explore_profile() {
+    fn the_child_registry_is_exactly_the_resolved_selection() {
         let mut registry = ToolRegistry::new();
-        register_subagent_child_tools(&mut registry, NativeToolPolicies::default())
-            .expect("explore tools register");
+        register_subagent_child_tools(
+            &mut registry,
+            &frozen(&["read", "glob", "grep"], ToolInvocationPolicy::default()),
+        )
+        .expect("selected tools register");
         assert_eq!(registry.names(), vec!["read", "glob", "grep"]);
         assert_eq!(registry.len(), 3);
         assert!(
             registry
                 .registrations()
                 .iter()
-                .find(|registration| registration.definition.name == "read")
-                .is_some_and(|registration| registration.mandatory),
-            "native Read is marked mandatory by the native composition"
+                .all(|registration| !registration.mandatory),
+            "a child activates exactly its authorized set, with nothing forced in"
         );
         assert!(
             registry
                 .definitions()
                 .iter()
                 .all(|definition| definition.origin == crate::tools::types::ToolOrigin::Builtin)
+        );
+
+        let mut narrower = ToolRegistry::new();
+        register_subagent_child_tools(
+            &mut narrower,
+            &frozen(&["grep"], ToolInvocationPolicy::default()),
+        )
+        .expect("a narrower selection registers");
+        assert_eq!(narrower.names(), vec!["grep"]);
+    }
+
+    /// Child-unsafe and recursive capabilities are structurally
+    /// unregistrable in a child, independently of definition admission.
+    #[test]
+    fn child_unsafe_capabilities_are_structurally_absent() {
+        for name in ["subagent", "ask_user", "background_task"] {
+            assert!(
+                subagent_child_definition(name, ToolInvocationPolicy::default()).is_none(),
+                "{name} has no child-plane implementation at all"
+            );
+            let mut registry = ToolRegistry::new();
+            let definition = ToolDefinition {
+                name: name.to_owned(),
+                ..subagent_child_definition("read", ToolInvocationPolicy::default())
+                    .expect("read exists")
+            };
+            assert!(
+                register_subagent_child_tools(&mut registry, &[definition]).is_err(),
+                "{name} must not be registrable in a subagent child"
+            );
+        }
+    }
+
+    /// Issue #144 blocker 2: the child registers the **exact** parent-frozen
+    /// definition, including a non-default policy on every axis. Rebuilding
+    /// from a default policy table would silently give the child different
+    /// semantics under the same tool name.
+    #[test]
+    fn a_non_default_frozen_policy_survives_child_registration_exactly() {
+        let policy = ToolInvocationPolicy::new(
+            ToolExecutionPolicy::ModelSelectable,
+            ToolConcurrencyPolicy::Parallel,
+            ToolApprovalPolicy::Always,
+        );
+        let frozen_definitions = frozen(&["grep"], policy);
+        let frozen_grep = &frozen_definitions[0];
+        assert_ne!(
+            *frozen_grep,
+            subagent_child_definition("grep", ToolInvocationPolicy::default())
+                .expect("grep exists"),
+            "the fixture must actually differ from the default-policy definition"
+        );
+
+        let mut registry = ToolRegistry::new();
+        register_subagent_child_tools(&mut registry, &frozen_definitions)
+            .expect("the frozen definition registers");
+        let registered = registry
+            .definitions()
+            .into_iter()
+            .find(|definition| definition.name == "grep")
+            .expect("grep is registered")
+            .clone();
+        assert_eq!(
+            registered, *frozen_grep,
+            "the child registry holds the whole frozen definition, not just its name"
+        );
+        assert_eq!(
+            registered.execution_policy,
+            ToolExecutionPolicy::ModelSelectable
+        );
+        assert_eq!(
+            registered.concurrency_policy,
+            ToolConcurrencyPolicy::Parallel
+        );
+        assert_eq!(registered.approval_policy, ToolApprovalPolicy::Always);
+    }
+
+    /// A frozen definition this build cannot reproduce faithfully fails
+    /// closed rather than registering something the parent never authorized.
+    #[test]
+    fn an_unmaterializable_frozen_definition_fails_closed() {
+        let mut tampered = subagent_child_definition("read", ToolInvocationPolicy::default())
+            .expect("read exists");
+        tampered.description = "a description this build does not own".to_owned();
+        let mut registry = ToolRegistry::new();
+        let error = register_subagent_child_tools(&mut registry, &[tampered])
+            .expect_err("an unfaithful materialization is refused");
+        assert!(
+            format!("{error:?}").contains("faithfully materialize"),
+            "the refusal names the contract it defends: {error:?}"
+        );
+        assert_eq!(registry.len(), 0);
+    }
+
+    /// `todo` owns a fixed policy; a frozen definition that disagrees with
+    /// it is refused instead of being quietly rewritten.
+    #[test]
+    fn a_fixed_policy_tool_refuses_a_conflicting_frozen_policy() {
+        let mut conflicting = subagent_child_definition("todo", ToolInvocationPolicy::default())
+            .expect("todo exists");
+        assert_eq!(conflicting.approval_policy, ToolApprovalPolicy::Never);
+        conflicting.approval_policy = ToolApprovalPolicy::Always;
+        let mut registry = ToolRegistry::new();
+        assert!(
+            register_subagent_child_tools(&mut registry, &[conflicting]).is_err(),
+            "todo's fixed policy is never silently overwritten by a frozen one"
         );
     }
 }

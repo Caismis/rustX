@@ -51,11 +51,13 @@ use crate::runtime::identity::{AgentId, ConversationId, SubagentId, ToolCallId};
 use crate::runtime::inbound::ConversationInboundMailbox;
 use crate::runtime::types::{CancellationReason, DurabilityGate};
 
+use super::catalog::{SubagentDefinitionDigest, SubagentName};
 use super::ipc::DelegationFrame;
 use super::process::{PhysicalOutcome, StagedChild, SubagentSpawnPlan};
+use super::resolver::ResolvedSubagentSpec;
 use super::{
-    MAX_CONTEXT_PACKAGE_BYTES, MAX_RESULT_CONTENT_BYTES, MAX_TASK_BYTES, SubagentProfile,
-    SubagentTerminalState, bound_utf8, ownership_event, terminal_publication,
+    MAX_CONTEXT_PACKAGE_BYTES, MAX_RESULT_CONTENT_BYTES, MAX_TASK_BYTES, SubagentTerminalState,
+    bound_utf8, ownership_event, terminal_publication,
 };
 
 /// The highest lifecycle state of one subagent child.
@@ -137,7 +139,8 @@ struct SubagentRecord {
     child_agent_id: AgentId,
     child_conversation_id: ConversationId,
     tool_call_id: ToolCallId,
-    profile: SubagentProfile,
+    agent: SubagentName,
+    definition_digest: SubagentDefinitionDigest,
     lifecycle: SubagentLifecycle,
     cancel_reason: Option<CancellationReason>,
     /// The narrow cancellation handle into the driver task — never an OS
@@ -166,7 +169,8 @@ impl SubagentRecord {
             child_agent_id: self.child_agent_id.clone(),
             child_conversation_id: self.child_conversation_id.clone(),
             tool_call_id: self.tool_call_id.clone(),
-            profile: self.profile.name().to_owned(),
+            agent: self.agent.as_str().to_owned(),
+            definition_digest: self.definition_digest.as_str().to_owned(),
             state,
             detail: self.detail.clone(),
             publication_abandoned: self.publication_abandoned,
@@ -233,8 +237,14 @@ pub struct SubagentSnapshot {
     pub child_conversation_id: ConversationId,
     /// The delegating tool call.
     pub tool_call_id: ToolCallId,
-    /// The frozen profile identity.
-    pub profile: String,
+    /// The canonical named-agent identity frozen at start (Issue #144).
+    pub agent: String,
+    /// The deterministic definition digest frozen at start (Issue #144).
+    ///
+    /// The snapshot reports the definition the child actually started with,
+    /// so a resource reload that redefines the same agent name can never
+    /// make an already-running child appear to have the new definition.
+    pub definition_digest: String,
     /// The lifecycle state.
     pub state: SubagentState,
     /// The bounded result content (succeeded) or failure/cancellation
@@ -251,10 +261,15 @@ pub struct SubagentSnapshot {
 }
 
 /// The inputs of one subagent start.
+///
+/// `resolved` is already the complete frozen outcome of resolving one named
+/// definition against the invoking attempt's runtime resource generation.
+/// The registry never resolves configuration itself: it owns live child
+/// lifecycle only.
 #[derive(Debug, Clone)]
 pub struct SubagentStartSpec {
-    /// The frozen execution profile.
-    pub profile: SubagentProfile,
+    /// The frozen named-agent specification of the child.
+    pub resolved: ResolvedSubagentSpec,
     /// The delegated task.
     pub task: String,
     /// The explicit bounded context package.
@@ -271,7 +286,8 @@ pub struct PreparedSubagent {
     child_agent_id: AgentId,
     child_conversation_id: ConversationId,
     tool_call_id: ToolCallId,
-    profile: SubagentProfile,
+    agent: SubagentName,
+    definition_digest: SubagentDefinitionDigest,
     task: String,
     context: Option<String>,
     staged: StagedChild,
@@ -286,8 +302,10 @@ pub struct SubagentAccepted {
     pub child_agent_id: AgentId,
     /// The child conversation identity.
     pub child_conversation_id: ConversationId,
-    /// The frozen profile identity.
-    pub profile: String,
+    /// The canonical named-agent identity.
+    pub agent: String,
+    /// The deterministic definition digest frozen at start.
+    pub definition_digest: String,
     /// The tool result the delegating call receives.
     pub result: serde_json::Value,
 }
@@ -322,6 +340,20 @@ pub enum SubagentStartError {
     CapacityExceeded {
         /// The configured bound.
         max: usize,
+    },
+    /// The resolved specification requires a capability whose physical
+    /// execution plane a child runtime cannot materialize yet.
+    ///
+    /// This is the temporary staged boundary of the follow-up external
+    /// capability issue. Semantic resolution already succeeded and is
+    /// exact; the runtime simply refuses to start a child that is weaker
+    /// than the definition it was authorized with. The check runs in
+    /// `prepare`, so it is decided before any process is staged and long
+    /// before ownership commit.
+    ExternalOriginUnsupported {
+        /// The frozen capability selections that cannot be realized yet, in
+        /// canonical order.
+        requirements: Vec<String>,
     },
     /// Staging the child process failed.
     Spawn {
@@ -369,6 +401,13 @@ impl core::fmt::Display for SubagentStartError {
             Self::CapacityExceeded { max } => {
                 write!(f, "the per-conversation subagent bound ({max}) is reached")
             }
+            Self::ExternalOriginUnsupported { requirements } => write!(
+                f,
+                "the subagent requires {}, whose child-side execution plane this build does \
+                 not materialize yet; the child is not started rather than started without \
+                 the capabilities it was authorized with",
+                requirements.join(", ")
+            ),
             Self::Spawn { detail } => write!(f, "could not start the child runtime: {detail}"),
             Self::Durability { detail } => {
                 write!(f, "the durable ownership commit failed: {detail}")
@@ -554,6 +593,14 @@ impl SubagentRegistry {
                 return Err(SubagentStartError::ContextOversized { bytes });
             }
         }
+        // The temporary external-origin boundary is evaluated before any
+        // identity is allocated and before any process is staged, so a
+        // definition this build cannot physically realize can never reach
+        // the ownership commit.
+        let requirements = spec.resolved.external_origin_requirements();
+        if !requirements.is_empty() {
+            return Err(SubagentStartError::ExternalOriginUnsupported { requirements });
+        }
         if self.config.mailbox.begin_running_admission().is_err() {
             return Err(SubagentStartError::ConversationInactive);
         }
@@ -571,7 +618,7 @@ impl SubagentRegistry {
             &child_conversation_id,
             &child_agent_id,
             &self.config.agent_id,
-            spec.profile,
+            &spec.resolved,
         );
         let staged = {
             #[cfg(test)]
@@ -588,7 +635,8 @@ impl SubagentRegistry {
                         child_agent_id,
                         child_conversation_id,
                         tool_call_id: spec.tool_call_id.clone(),
-                        profile: spec.profile,
+                        agent: spec.resolved.agent.clone(),
+                        definition_digest: spec.resolved.definition_digest.clone(),
                         task: spec.task.clone(),
                         context: spec.context.clone(),
                         staged,
@@ -606,7 +654,8 @@ impl SubagentRegistry {
             child_agent_id,
             child_conversation_id,
             tool_call_id: spec.tool_call_id.clone(),
-            profile: spec.profile,
+            agent: spec.resolved.agent.clone(),
+            definition_digest: spec.resolved.definition_digest.clone(),
             task: spec.task.clone(),
             context: spec.context.clone(),
             staged,
@@ -665,7 +714,8 @@ impl SubagentRegistry {
             child_agent_id,
             child_conversation_id,
             tool_call_id,
-            profile,
+            agent,
+            definition_digest,
             task,
             context,
             staged,
@@ -731,7 +781,8 @@ impl SubagentRegistry {
                         &child_agent_id,
                         &child_conversation_id,
                         &tool_call_id,
-                        profile,
+                        &agent,
+                        &definition_digest,
                         started_at,
                     )) {
                         return Decision::Failed(SubagentStartError::Durability {
@@ -749,7 +800,8 @@ impl SubagentRegistry {
                         child_agent_id: child_agent_id.clone(),
                         child_conversation_id: child_conversation_id.clone(),
                         tool_call_id,
-                        profile,
+                        agent: agent.clone(),
+                        definition_digest: definition_digest.clone(),
                         lifecycle: SubagentLifecycle::Running,
                         cancel_reason: None,
                         control: None,
@@ -862,7 +914,8 @@ impl SubagentRegistry {
                     subagent_id,
                     child_agent_id,
                     child_conversation_id,
-                    profile: profile.name().to_owned(),
+                    agent: agent.as_str().to_owned(),
+                    definition_digest: definition_digest.as_str().to_owned(),
                     result: serde_json::json!({
                         "status": "running",
                         "note": "The child runtime is running asynchronously. Its answer \
@@ -1296,18 +1349,18 @@ fn terminal_blocks(
     let text = match candidate.state {
         TerminalState::Succeeded => candidate.content.clone().unwrap_or_default(),
         TerminalState::Failed => format!(
-            "Subagent {} (profile {}) failed: {}",
+            "Subagent {} (agent {}) failed: {}",
             record.subagent_id,
-            record.profile.name(),
+            record.agent,
             candidate
                 .diagnostic
                 .clone()
                 .unwrap_or_else(|| "unknown failure".to_owned())
         ),
         TerminalState::Cancelled => format!(
-            "Subagent {} (profile {}) was cancelled ({}).",
+            "Subagent {} (agent {}) was cancelled ({}).",
             record.subagent_id,
-            record.profile.name(),
+            record.agent,
             candidate.reason.map_or("cancelled", reason_text)
         ),
     };
@@ -1489,8 +1542,9 @@ impl CommitBoundaryHook {
 mod tests {
     use std::sync::Arc;
 
+    use super::super::SubagentTerminalState;
+    use super::super::catalog::SubagentToolSelector;
     use super::super::ipc::{ChildFrame, ChildResultStatus, ParentFrame, ResultFrame};
-    use super::super::{SubagentProfile, SubagentTerminalState};
     use super::*;
     use crate::durable::ConversationStore;
     use crate::runtime::types::{CancellationReason, SystemClock};
@@ -1524,12 +1578,8 @@ mod tests {
             clock: Arc::new(SystemClock),
             spawn: SubagentSpawnPlan {
                 program: std::path::PathBuf::from("/nonexistent/rustx"),
-                models: std::path::PathBuf::from("/nonexistent/models.jsonc"),
                 workspace,
                 runtime_root: runtime_root.clone(),
-                model: crate::model::session::SessionModelConfig::of(
-                    serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),
-                ),
                 agent_status: crate::context::AgentStatusConfig::default(),
                 context: SessionContextPolicy {
                     reserve_tokens: 0,
@@ -1612,9 +1662,28 @@ mod tests {
         }
     }
 
+    /// A Builtin-only frozen specification: the registry owns live child
+    /// lifecycle, so resolution is already complete before it is involved.
+    fn resolved(agent: &str) -> ResolvedSubagentSpec {
+        ResolvedSubagentSpec {
+            agent: SubagentName::parse(agent).expect("canonical name"),
+            definition_digest: serde_json::from_value(serde_json::json!(
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            ))
+            .expect("digest"),
+            instructions: "instructions".to_owned(),
+            model: crate::model::frozen::test_frozen_model_spec(
+                serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),
+            ),
+            tools: Vec::new(),
+            skills: Vec::new(),
+            project_instructions: Vec::new(),
+        }
+    }
+
     fn spec(task: &str) -> SubagentStartSpec {
         SubagentStartSpec {
-            profile: SubagentProfile::Explore,
+            resolved: resolved("explore"),
             task: task.to_owned(),
             context: None,
             tool_call_id: ToolCallId::new("call-1"),
@@ -1623,6 +1692,54 @@ mod tests {
 
     fn start_spec(task: &str) -> SubagentStartSpec {
         spec(task)
+    }
+
+    /// A capability whose child-side execution plane does not exist yet must
+    /// fail in `prepare`: no identity is allocated, no process is staged,
+    /// and no ownership fact can follow.
+    #[tokio::test]
+    async fn an_external_origin_requirement_fails_before_any_staging() {
+        let plane = plane(2);
+        let mut spec = spec("inspect");
+        spec.resolved.tools = vec![super::super::resolver::ResolvedSubagentTool::Mcp {
+            server_id: crate::runtime::identity::McpServerId::new("github"),
+            tool_id: crate::runtime::identity::ToolId::new("tool-get-issue"),
+            name: "get_issue".to_owned(),
+            definition: crate::tools::types::ToolDefinition {
+                id: crate::runtime::identity::ToolId::new("tool-get-issue"),
+                name: "get_issue".to_owned(),
+                description: "issue".to_owned(),
+                input_schema: serde_json::json!({"type": "object"}),
+                execution_policy: crate::tools::types::ToolExecutionPolicy::ForegroundOnly,
+                concurrency_policy: crate::tools::types::ToolConcurrencyPolicy::Sequential,
+                approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
+                replay_policy: crate::tools::types::ToolReplayPolicy::Never,
+                origin: crate::tools::types::ToolOrigin::Mcp {
+                    server_id: crate::runtime::identity::McpServerId::new("github"),
+                },
+            },
+        }];
+        assert_eq!(
+            plane.registry.prepare(&spec).await.expect_err("refused"),
+            SubagentStartError::ExternalOriginUnsupported {
+                requirements: vec!["mcp:github/get_issue".to_owned()],
+            }
+        );
+        assert!(
+            plane.registry.is_pristine(),
+            "no record, no capacity, and no durable trace exists"
+        );
+        // The selector vocabulary is the same one the definition uses; the
+        // failure is a physical-realization limit, not a second capability
+        // model.
+        assert_eq!(
+            SubagentToolSelector::Mcp {
+                server_id: crate::runtime::identity::McpServerId::new("github"),
+                name: "get_issue".to_owned(),
+            }
+            .canonical(),
+            "mcp:github/get_issue"
+        );
     }
 
     async fn start(plane: &TestPlane, spec: &SubagentStartSpec) -> SubagentAccepted {

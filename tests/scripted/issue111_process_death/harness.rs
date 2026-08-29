@@ -115,7 +115,20 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
             "read": {"approval": read_approval},
             "bash": {"execution": "model_selectable"}
         },
-        "defaultTools": default_tools
+        "defaultTools": default_tools,
+        // One named subagent definition (Issue #144). The instruction
+        // document is a workspace resource the parent generation freezes;
+        // the child never reads this configuration.
+        "subagents": {
+            "maxConcurrent": 4,
+            "agents": {
+                "explore": {
+                    "description": "Read-only exploration of the shared workspace.",
+                    "instructionsFile": "subagents/explore.md",
+                    "tools": {"builtin": ["read"]}
+                }
+            }
+        }
     })
     .to_string()
 }
@@ -141,6 +154,13 @@ impl Lab {
         let lab = Self { dir };
         std::fs::create_dir_all(lab.workspace().join(".agents/skills/alpha"))
             .expect("skill directory");
+        std::fs::create_dir_all(lab.workspace().join("subagents")).expect("subagent resources");
+        std::fs::write(
+            lab.workspace().join("subagents/explore.md"),
+            "You are a read-only exploration subagent. Answer the delegated task with the \
+             capabilities your definition authorized.\n",
+        )
+        .expect("explore instructions");
         std::fs::create_dir_all(lab.root().join("private")).expect("runtime-private root");
         std::fs::write(lab.root().join("models.jsonc"), models_json()).expect("models.jsonc");
         lab.write_runtime_config("never");

@@ -1,5 +1,5 @@
 /**
- * Runtime Client Protocol v6 — the TypeScript mirror of the wire contract.
+ * Runtime Client Protocol v8 — the TypeScript mirror of the wire contract.
  *
  * These declarations describe the JSON rustX already speaks. They are a
  * *transcription* of the Rust types in `src/runtime_client/`, never a second
@@ -11,7 +11,7 @@
  * - nothing in this file interprets a value. `requestParams` stays opaque
  *   provider-owned JSON, capability sets are read as published, and tool
  *   arguments/results are carried, not parsed for meaning;
- * - Runtime Client Protocol v6 event discriminators are a closed vocabulary at
+ * - Runtime Client Protocol v8 event discriminators are a closed vocabulary at
  *   the connection boundary: an unknown event is a protocol error, not a
  *   presentation fact; other open values remain opaque or are checked at
  *   their owning boundary.
@@ -23,7 +23,7 @@
  * camelCase.
  */
 
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 7;
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 8;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -711,12 +711,21 @@ export interface RuntimeClientBackgroundExecution {
   result?: ToolExecutionResult;
 }
 
-/** The Runtime Client view of one subagent child (Issue #60). */
+/**
+ * The Runtime Client view of one subagent child (Issue #60), carrying the
+ * named-agent identity of Issue #144.
+ *
+ * `definition_digest` is the deterministic identity of the definition the
+ * child actually started with. It is not derived from the current catalog:
+ * a resource reload that redefines the same `agent` name leaves an
+ * already-running child reporting its original digest.
+ */
 export interface RuntimeClientSubagent {
   subagent_id: SubagentId;
   child_agent_id: AgentId;
   child_conversation_id: ConversationId;
-  profile: string;
+  agent: string;
+  definition_digest: string;
   state: SubagentState;
   detail?: string;
 }
@@ -1537,7 +1546,7 @@ export type RuntimeClientOutboundRecord =
   | RuntimeClientProtocolEvent;
 
 /**
- * Checks only the discriminator of one Runtime Client Protocol v6 event.
+ * Checks only the discriminator of one Runtime Client Protocol v8 event.
  *
  * The connection owns structural protocol validation, so this deliberately
  * does not validate the event payload. Once this returns true, the reducer

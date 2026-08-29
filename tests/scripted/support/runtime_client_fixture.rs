@@ -271,6 +271,7 @@ impl RuntimeClientFixtureBuilder {
             rustx::tools::register_native_tools(
                 &mut base_tools,
                 rustx::tools::NativeToolResources {
+                    subagent_catalog: rustx::runtime::subagent::SubagentCatalog::empty(),
                     background: tool_runtime.background().clone(),
                     subagents: None,
                 },

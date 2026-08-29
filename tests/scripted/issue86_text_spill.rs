@@ -69,6 +69,7 @@ fn fixture() -> IssueFixture {
     register_native_tools(
         &mut registry,
         NativeToolResources {
+            subagent_catalog: rustx::runtime::subagent::SubagentCatalog::empty(),
             background: runtime.background().clone(),
             subagents: None,
         },

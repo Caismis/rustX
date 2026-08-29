@@ -347,8 +347,14 @@ pub struct SubagentEvidence {
     pub child_conversation_id: ConversationId,
     /// The model-issued tool call that delegated the work.
     pub tool_call_id: ToolCallId,
-    /// The frozen child profile identity.
-    pub profile: String,
+    /// The canonical named-agent identity frozen at start (Issue #144).
+    pub agent: String,
+    /// The deterministic definition digest frozen at start (Issue #144).
+    ///
+    /// Recovery reports the definition the child *actually* started with,
+    /// never the definition the current catalog happens to hold for that
+    /// name.
+    pub definition_digest: String,
 }
 
 /// The complete durable evidence of one conversation at process startup.
@@ -804,7 +810,8 @@ impl RecoveryEvidence {
                 child_agent_id,
                 child_conversation_id,
                 tool_call_id,
-                profile,
+                agent,
+                definition_digest,
             } => {
                 if let Some(ordinal) = subagent_id.conversation_ordinal(&self.conversation_id) {
                     self.highest_subagent_ordinal = self.highest_subagent_ordinal.max(ordinal);
@@ -816,7 +823,8 @@ impl RecoveryEvidence {
                         child_agent_id: child_agent_id.clone(),
                         child_conversation_id: child_conversation_id.clone(),
                         tool_call_id: tool_call_id.clone(),
-                        profile: profile.clone(),
+                        agent: agent.clone(),
+                        definition_digest: definition_digest.clone(),
                     },
                 );
             }
@@ -1887,7 +1895,8 @@ impl RecoveryPlan {
                 &self.conversation_id,
                 &class.evidence.subagent_id,
                 &class.evidence.child_agent_id,
-                &class.evidence.profile,
+                &class.evidence.agent,
+                &class.evidence.definition_digest,
                 clock.now(),
             );
             store.accept_inbound_with_event(draft, event)?;

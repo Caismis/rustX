@@ -843,6 +843,19 @@ impl ResolvedProvider {
     pub fn credential_source(&self) -> CredentialSourceView {
         self.source.view()
     }
+
+    /// The **declared** credential source of this provider.
+    ///
+    /// This is catalog configuration, not a resolved secret: it is the same
+    /// bounded two-form value the catalog file declared. It exists so a
+    /// frozen provider binding can carry the declaration to another process
+    /// that resolves it through its own [`CredentialEnvironment`], instead
+    /// of that process reopening the mutable catalog. Use
+    /// [`ResolvedProvider::credential_source`] for anything client-facing.
+    #[must_use]
+    pub const fn credential_declaration(&self) -> &CredentialSource {
+        &self.source
+    }
 }
 
 impl fmt::Debug for ResolvedProvider {

@@ -1183,12 +1183,13 @@ that a live child produced an Interrupted physical result.
   correlation, so a live publication and a recovery publication are
   mutually exclusive by construction). Nothing is relaunched, replayed, or
   reattached.
-- **Capabilities are deny-by-construction.** The child composes the base
-  tool plane only (v1 profile `explore`: Read/Glob/Grep) with no `subagent`
-  tool — recursion is impossible by construction, not by policy. The
-  startup input is the typed `SubagentChildSpec` (resolved
-  `SessionContextPolicy`, model binding, workspace, child-private runtime
-  root); no temporary configuration file is ever written.
+- **Capabilities are deny-by-construction.** The child's `ToolRegistry` is
+  exactly the Builtin set its named definition resolved to — never "every
+  currently active native tool" — with no `subagent` and no `ask_user`
+  registration, so recursion and headless-only surfaces are impossible by
+  construction rather than by policy. The startup input is the typed
+  `SubagentChildSpec` carrying the frozen `ResolvedSubagentSpec`; no
+  temporary configuration file is ever written.
 - **Parent-death containment is real-process tested.** Linux and macOS test
   the actual parent/child binary boundary with a provider response gate,
   hard `SIGKILL`, control-channel EOF, child exit, and repeated restart.
@@ -1196,6 +1197,116 @@ that a live child produced an Interrupted physical result.
   replay, no fabricated success, and no child relaunch. Result and diagnostic
   bounds are bytes, not characters, and truncate only at a valid UTF-8
   boundary; Chinese, emoji, ASCII, and short-content cases are covered.
+
+## Issue #144: named attempt-scoped subagent definitions
+
+- **Named subagent definitions are immutable members of one admitted
+  runtime resource generation.** `SubagentCatalog` is
+  configuration/resource-generation state that the loader builds off-side,
+  validates against the very capability candidate it will publish, and
+  freezes into `RuntimeResourceSnapshot` at the same atomic commit that
+  publishes that generation's capabilities, project instructions, and
+  Skills. There is no hard-coded profile set and no `SubagentProfile` type.
+- **A subagent invocation resolves against the runtime generation owned by
+  its invoking attempt, not mutable runtime-current resources.** The
+  registered `SubagentExecutor` holds no runtime handle. Each invocation
+  receives an `AttemptSubagentContext` — the attempt's own
+  `Arc<RuntimeResourceSnapshot>` plus the model authority frozen at the same
+  admission linearization — through the crate-private `ToolExecutionContext`
+  seam that the native Questionnaire and task-list authorities already use.
+  A resource reload additionally cannot commit while an attempt is live: it
+  refuses with `Busy { Attempt }`.
+- **Parent active ToolRegistry is one projection of runtime authority; a
+  subagent is another.** Resolution reads
+  `CapabilitySnapshot::available_tools()` and the matching
+  capability-source availability of the same generation. So
+  `ParentActiveTools ⊆ available_tools()` and
+  `SubagentResolvedTools ⊆ available_tools()` both hold, while
+  `SubagentResolvedTools ⊆ ParentActiveTools` is deliberately **not**
+  required: a definition may select a capability that is available but
+  inactive for the parent.
+- **A named subagent may narrow authority but cannot manufacture it.** No
+  selector resolves to anything outside the invoking generation's authorized
+  available capabilities, and no per-call argument can widen a definition:
+  the model-facing contract is exactly `{agent, task, context?}`.
+- **Optionality belongs to source availability, never to a selection.** A
+  configured source that is unavailable in this generation keeps the runtime
+  healthy and blocks only the agents that explicitly require it
+  (`SourceUnavailable`, decided before ownership commit). A selector whose
+  source authority *is* present but that names an unknown capability, model,
+  or Skill rejects resource-generation preparation, so a failed reload
+  leaves the previous complete generation authoritative in every half —
+  catalog, capability state, project instructions, Skills, model selection,
+  and the active generation identity.
+- **Optional-source tolerance never short-circuits admission.** Admission
+  inspects *every* selector of a definition: an unavailable source is
+  tolerated for that individual selector and validation continues, so an
+  offline MCP server listed before a misspelled Builtin/Python/MCP selector
+  cannot smuggle a statically invalid definition into a published
+  generation. Invocation-time resolution stays fail-fast on the first
+  unsatisfiable selector. Both callers share one per-selector,
+  source-qualified matching core.
+- **Project instructions and Skills are parent-resolved frozen resources;
+  the child does not rediscover them.** `agentsMd.inherit = true` freezes the
+  generation's exact chain followed by the definition's explicit files in
+  configured order; `inherit = false` freezes only the explicit files. The
+  child's Skill allowlist crosses as the immutable
+  `SkillId` + `SkillVersionId` binding of each selected package plus its
+  model-visible catalog metadata, with progressive disclosure intact: no
+  `SKILL.md` body ever crosses the boundary, and a host path is metadata
+  rather than identity, so a later filesystem change cannot reinterpret an
+  already-frozen specification. The child runs no ancestor discovery and no
+  Skill discovery, which is what makes the boundary correct once a child's
+  filesystem ancestry can differ from the parent workspace.
+- **A default child model is the invoking attempt's frozen effective model,
+  and it crosses the boundary already resolved.** An explicitly configured
+  model resolves through the admitted model authority and fails closed; no
+  path reads live mutable session state or a composition-time capture. What
+  crosses is a `FrozenModelSpec` — the resolved invocation's provider
+  binding, protocol, context window, output budget, reasoning profile and
+  enabled state, effective request parameters, effective capabilities, and
+  compat metadata — never a `SessionModelConfig` plus a `models.jsonc` path.
+  The child materializes it physically (adapter construction plus credential
+  resolution through its own `CredentialEnvironment`) and owns **no** mutable
+  model authority: `SessionModelState::registry()` is `None` there and a live
+  model replacement is refused. A catalog edit landing between the parent's
+  freeze and the child's composition is therefore unobservable to that child.
+- **A child registers the exact parent-frozen `ToolDefinition`.** Identity,
+  description, input schema, replay policy, origin, and all three invocation
+  policy axes are the ones the invoking generation admitted. The child plane
+  reconstructs the native implementation for the frozen name under the frozen
+  policy through one bounded explicit `match` — no factory, plugin loader, or
+  strategy registry — and compares the reconstruction against the frozen
+  definition, failing closed on any mismatch rather than substituting
+  different semantics under the same tool name. `subagent`, `ask_user`, and
+  `background_task` have no child-plane implementation at all.
+- **Committed child identity is `(agent, definition_digest)`.**
+  `SubagentDefinitionDigest` is SHA-256 over a rustX-owned versioned
+  canonical framing (`rustx-subagent-definition-v1`) of the normalized
+  semantic definition — never raw JSONC bytes — so comments, whitespace, key
+  order, and selector listing order cannot change it while every semantic
+  change does. It is the identity of the **named definition itself**, not of
+  the full effective child runtime: inherited project instructions, the exact
+  admitted Skill versions, the resolved capability definitions, and the
+  resolved model invocation are invoking-generation state, so two children of
+  the same definition under different generations share a digest while
+  legitimately differing in resolved resources. The durable fact, registry
+  snapshot, recovery diagnostic, and Runtime Client projection all carry both
+  fields, so a later reload that redefines the same agent name can never
+  reinterpret an already-running child by name alone.
+- **Builtin/MCP/Python selectors use one source-qualified semantic capability
+  model.** One selection vocabulary and one resolution core produce frozen
+  identities that keep exact source identity: Builtin freezes its `ToolId`
+  and definition; MCP freezes `server_id` plus the canonical name and exact
+  definition; Python freezes `ToolId` plus the exact `ToolVersionId`. There
+  is no parallel per-origin registry and no wildcard selector.
+- **Until external physical materialization exists, external-origin
+  requirements fail before subagent ownership commit.** A definition
+  resolving to MCP and/or Python resolves *semantically*, and
+  `SubagentRegistry::prepare` then refuses with
+  `ExternalOriginUnsupported` — before any identity is allocated and before
+  any process is staged. Nothing is silently removed, substituted,
+  downgraded, or reported as success.
 
 ## Issue #96: Session/configuration and capability activation
 
@@ -2632,7 +2743,7 @@ message role, history shape, or timestamps:
   to consume the dead `PostToolBatch` marker. An adopted FreshInbound turn has
   its separate durable answer obligation and follows the ordinary recovery
   contract; the process-local PostToolBatch marker is never reconstructed.
-- Runtime Client protocol v7 carries the optional structured
+- Runtime Client protocol v8 carries the optional structured
   `opportunities.post_tool_batch` member, the tagged Todo section, and the
   typed compaction-summary metadata payload on the canonical
   `compaction_summary` inbound kind (Issue #140). The
@@ -3393,8 +3504,8 @@ semantic normalization boundary. The frozen invariants:
   a model that silently stopped folding transitions.
 - **Runtime Client protocol versioning is independent from internal
   RuntimeEvent/Event Journal schema versioning.** Version negotiation is
-  explicit at attachment admission; Protocol v7 is the sole supported
-  version, and Protocol v5 is rejected explicitly.
+  explicit at attachment admission; Protocol v8 is the sole supported
+  version, and every superseded version is rejected explicitly.
 - **The semantic layer owns protocol negotiation and attachment
   admission; transports are framing only.** `initialize` is dispatched by
   `RuntimeClientEndpoint` and is by itself sufficient to establish the
@@ -3483,7 +3594,7 @@ semantic normalization boundary. The frozen invariants:
   no derived message mirror of its own, and deterministic regressions
   verify the projection mirror against the authoritative ledger rather
   than coordinating two histories.
-- **One active attachment.** Protocol v7 admits at most one attachment
+- **One active attachment.** Protocol v8 admits at most one attachment
   per runtime instance; a second attach fails deterministically without
   evicting the first; reconnect receives a fresh attachment identity;
   request ids are attachment-scoped; cursor/replay state belongs to the
@@ -3532,7 +3643,7 @@ endpoint. It frames; it never becomes a second authority.
   until one complete, in-bound-size framed record has successfully
   deserialized to the exact Runtime Client request type. A record that
   violates framing, exceeds the record limit, or fails exact
-  deserialization ends the transport having applied nothing; Protocol v7
+  deserialization ends the transport having applied nothing; Protocol v8
   has no uncorrelated error envelope, so no transport fabricates a
   protocol record for it.
 - **Transport loss is not semantic cancellation.** Runtime Client

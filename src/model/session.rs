@@ -17,6 +17,12 @@
 //! > observed by that attempt. An update that linearizes **after** admission
 //! > affects only future attempts.
 //!
+//! A session composed from an already-frozen specification (a subagent
+//! child, Issue #144) short-circuits the first arrow: the parent performed
+//! the `SessionModelConfig -> ResolvedModelInvocation` resolution, and the
+//! child materializes that decision instead of repeating it against its own
+//! view of a mutable catalog file.
+//!
 //! After admission every model turn of the attempt — every tool→model
 //! continuation, every transient or context-overflow retry, every
 //! proactive-compaction continuation, and every compaction summary — uses the
@@ -40,7 +46,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::catalog::{ModelCatalogView, ModelRef, ReasoningProfileId};
+use crate::model::catalog::{
+    CredentialEnvironment, ModelCatalogView, ModelRef, ReasoningProfileId,
+};
+use crate::model::frozen::FrozenModelSpec;
 use crate::model::invocation::{
     ModelBindingRegistry, ModelInvocationError, ModelInvocationView, ModelSelection, RequestParams,
     RequestParamsLayer, ResolvedModelInvocation,
@@ -207,15 +216,30 @@ impl AttemptModelSnapshot {
     }
 }
 
-/// The session's model authority: the binding registry plus the current
-/// desired configuration and its resolution.
+/// Where a session's model semantics come from.
+///
+/// A normal session owns a mutable catalog authority and can re-resolve a
+/// replacement configuration against it. A session composed from an
+/// already-frozen specification — a subagent child (Issue #144) — owns no
+/// catalog at all: its semantics were decided by the parent, and there is
+/// nothing in-process to resolve a different model against.
+#[derive(Debug, Clone)]
+enum ModelAuthority {
+    /// The mutable catalog authority of an ordinary session.
+    Catalog(ModelBindingRegistry),
+    /// The immutable parent-frozen authority of an out-of-process child.
+    Frozen(Box<FrozenModelSpec>),
+}
+
+/// The session's model authority plus the current desired configuration and
+/// its resolution.
 ///
 /// Updates are transactional: a failed update changes nothing, so a caller
 /// can publish a model-change observation exactly when `apply` returns
 /// `Ok`.
 #[derive(Debug, Clone)]
 pub struct SessionModelState {
-    registry: ModelBindingRegistry,
+    authority: ModelAuthority,
     config: SessionModelConfig,
     primary: ResolvedModelInvocation,
     summary: AttemptSummaryModel,
@@ -234,8 +258,34 @@ impl SessionModelState {
     ) -> Result<Self, ModelInvocationError> {
         let (primary, summary) = resolve(&registry, &config)?;
         Ok(Self {
-            registry,
+            authority: ModelAuthority::Catalog(registry),
             config,
+            primary,
+            summary,
+        })
+    }
+
+    /// Composes the session model state of a runtime whose model semantics
+    /// were **already resolved by another process** (Issue #144).
+    ///
+    /// Nothing is resolved here: the frozen primary and summary invocations
+    /// are materialized physically — adapter construction plus credential
+    /// resolution through `credentials`, the ordinary process credential
+    /// boundary — and become the state verbatim. No model catalog is opened,
+    /// so a catalog file that changed after the parent froze this
+    /// specification cannot be observed.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first credential-resolution failure.
+    pub fn frozen(
+        frozen: &FrozenModelSpec,
+        credentials: &dyn CredentialEnvironment,
+    ) -> Result<Self, ModelInvocationError> {
+        let (primary, summary) = frozen.materialize(credentials)?;
+        Ok(Self {
+            authority: ModelAuthority::Frozen(Box::new(frozen.clone())),
+            config: frozen.configured.clone(),
             primary,
             summary,
         })
@@ -247,16 +297,28 @@ impl SessionModelState {
         &self.config
     }
 
-    /// The binding registry behind this session.
+    /// The binding registry behind this session, when it owns one.
+    ///
+    /// A frozen (subagent child) authority returns `None`: it holds exactly
+    /// the invocations its parent froze and no catalog to resolve others
+    /// against.
     #[must_use]
-    pub const fn registry(&self) -> &ModelBindingRegistry {
-        &self.registry
+    pub const fn registry(&self) -> Option<&ModelBindingRegistry> {
+        match &self.authority {
+            ModelAuthority::Catalog(registry) => Some(registry),
+            ModelAuthority::Frozen(_) => None,
+        }
     }
 
     /// The safe public catalog view.
+    ///
+    /// A frozen authority serves exactly the models it froze.
     #[must_use]
     pub fn catalog_view(&self) -> ModelCatalogView {
-        self.registry.catalog_view()
+        match &self.authority {
+            ModelAuthority::Catalog(registry) => registry.catalog_view(),
+            ModelAuthority::Frozen(frozen) => frozen.catalog_view(),
+        }
     }
 
     /// Freezes the current configuration into an attempt model snapshot.
@@ -277,7 +339,12 @@ impl SessionModelState {
     /// completely unchanged and no model-change observation may be
     /// published.
     pub fn apply(&mut self, config: SessionModelConfig) -> Result<(), ModelInvocationError> {
-        let (primary, summary) = resolve(&self.registry, &config)?;
+        let ModelAuthority::Catalog(registry) = &self.authority else {
+            return Err(ModelInvocationError::ImmutableModelAuthority {
+                model: self.config.model.clone(),
+            });
+        };
+        let (primary, summary) = resolve(registry, &config)?;
         self.config = config;
         self.primary = primary;
         self.summary = summary;

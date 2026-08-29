@@ -470,6 +470,7 @@ async fn bash_reaches_skill_assets_through_the_published_location() {
     rustx::tools::native::register_native_tools(
         &mut registry,
         rustx::tools::native::NativeToolResources {
+            subagent_catalog: rustx::runtime::subagent::SubagentCatalog::empty(),
             background: rustx::tools::background::ConversationBackgroundRegistry::new(
                 conversation_id.clone(),
                 rustx::tools::background::BackgroundResources {
@@ -545,6 +546,7 @@ async fn bash_cd_cannot_redefine_the_skill_root() {
     rustx::tools::native::register_native_tools(
         &mut registry,
         rustx::tools::native::NativeToolResources {
+            subagent_catalog: rustx::runtime::subagent::SubagentCatalog::empty(),
             background: rustx::tools::background::ConversationBackgroundRegistry::new(
                 conversation_id.clone(),
                 rustx::tools::background::BackgroundResources {

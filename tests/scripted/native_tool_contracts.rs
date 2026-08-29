@@ -279,6 +279,7 @@ fn native_tools_preserve_legal_execution_policies_and_fixed_background_task_poli
         register_native_tools(
             &mut registry,
             NativeToolResources {
+                subagent_catalog: rustx::runtime::subagent::SubagentCatalog::empty(),
                 background: runtime.background().clone(),
                 subagents: None,
             },
@@ -387,6 +388,7 @@ fn independent_native_execution_policies_coexist_in_one_registry() {
     register_native_tools(
         &mut registry,
         NativeToolResources {
+            subagent_catalog: rustx::runtime::subagent::SubagentCatalog::empty(),
             background: runtime.background().clone(),
             subagents: None,
         },

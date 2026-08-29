@@ -2186,6 +2186,7 @@ mod tests {
             crate::tools::register_native_tools(
                 &mut tools,
                 crate::tools::NativeToolResources {
+                    subagent_catalog: crate::runtime::subagent::SubagentCatalog::empty(),
                     background: tool_runtime.background().clone(),
                     subagents: None,
                 },
@@ -2462,7 +2463,7 @@ mod tests {
         assert!(matches!(
             bad,
             Err(RuntimeClientError::UnsupportedProtocolVersion {
-                supported: 7,
+                supported: 8,
                 requested: 9,
             })
         ));
@@ -5620,6 +5621,7 @@ mod tests {
             crate::tools::register_native_tools(
                 &mut tools,
                 crate::tools::NativeToolResources {
+                    subagent_catalog: crate::runtime::subagent::SubagentCatalog::empty(),
                     background: tool_runtime.background().clone(),
                     subagents: None,
                 },
