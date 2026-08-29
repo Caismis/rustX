@@ -240,7 +240,7 @@ pub struct WorkspaceSettlementError {
     pub detail: String,
     /// The conservative physical settlement, including a handoff when one
     /// could be inspected.
-    pub settlement: WorkspaceSettlement,
+    pub settlement: Box<WorkspaceSettlement>,
 }
 
 impl core::fmt::Display for WorkspaceSettlementError {
@@ -839,7 +839,10 @@ impl WorkspaceLease {
                 "staged workspace is dirty or has a committed child change; it was preserved"
                     .to_owned()
             });
-            return Err(WorkspaceSettlementError { detail, settlement });
+            return Err(WorkspaceSettlementError {
+                detail,
+                settlement: Box::new(settlement),
+            });
         }
         Ok(settlement)
     }
