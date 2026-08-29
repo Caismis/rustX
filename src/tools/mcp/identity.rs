@@ -59,6 +59,27 @@
 //! The result is a byte string, so a digest computed by a parent build and
 //! by a child build of the same rustX version are equal exactly when the
 //! Tool contract is equal.
+//!
+//! # V1 frame format (architecture-independent)
+//!
+//! The hashed preimage is a sequence of framed fields:
+//!
+//! ```text
+//! frame  = field(domain) field(server_id) field(name) field(description)
+//!        , field(canonical_json(input_schema)) field(execution)
+//!        , field(concurrency) field(approval)
+//! field  = u64_le_byte_length ++ utf8_bytes
+//! ```
+//!
+//! Every field length is encoded as exactly 8 bytes: the **fixed-width**
+//! `u64` little-endian byte length. The framing therefore does not depend
+//! on the target's pointer width — a `usize`-sized length prefix would
+//! produce different canonical bytes on 32-bit and 64-bit builds of the
+//! same rustX version, tearing the cross-process identity. A string length
+//! always fits `u64` on every supported target; the conversion is checked
+//! explicitly rather than silently truncated.
+//!
+//! The identity itself is `"sha256:" ++ lowercase_hex(sha256(frame))`.
 
 use sha2::Digest;
 
@@ -88,12 +109,50 @@ pub fn mcp_tool_identity(
     concurrency: ToolConcurrencyPolicy,
     approval: ToolApprovalPolicy,
 ) -> McpToolIdentity {
-    let mut hasher = sha2::Sha256::new();
-    // Every component is length-prefixed, so no concatenation of two
-    // components can be confused with a different split of the same bytes.
+    let frame = identity_frame(
+        server_id,
+        name,
+        description,
+        input_schema,
+        execution,
+        concurrency,
+        approval,
+    );
+    let digest = sha2::Sha256::digest(&frame);
+    let mut hex = String::with_capacity(71);
+    hex.push_str("sha256:");
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{byte:02x}");
+    }
+    McpToolIdentity::new(hex)
+}
+
+/// Builds the canonical V1 preimage bytes (see the module documentation for
+/// the exact frame format).
+///
+/// Every component is length-prefixed with a fixed-width `u64`
+/// little-endian byte length, so no concatenation of two components can be
+/// confused with a different split of the same bytes, and the canonical
+/// bytes are identical on every target architecture.
+fn identity_frame(
+    server_id: &McpServerId,
+    name: &str,
+    description: &str,
+    input_schema: &serde_json::Value,
+    execution: ToolExecutionPolicy,
+    concurrency: ToolConcurrencyPolicy,
+    approval: ToolApprovalPolicy,
+) -> Vec<u8> {
+    let mut frame = Vec::new();
     let mut field = |value: &str| {
-        hasher.update(value.len().to_le_bytes());
-        hasher.update(value.as_bytes());
+        // Fixed-width framing: a string length always fits `u64` on every
+        // supported target, so this conversion can never fail; it is
+        // checked explicitly rather than silently truncated.
+        let length = u64::try_from(value.len())
+            .expect("a string byte length always fits the fixed-width u64 frame field");
+        frame.extend_from_slice(&length.to_le_bytes());
+        frame.extend_from_slice(value.as_bytes());
     };
     field(MCP_TOOL_IDENTITY_DOMAIN);
     field(server_id.as_str());
@@ -103,14 +162,7 @@ pub fn mcp_tool_identity(
     field(execution_token(execution));
     field(concurrency_token(concurrency));
     field(approval_token(approval));
-    let digest = hasher.finalize();
-    let mut hex = String::with_capacity(71);
-    hex.push_str("sha256:");
-    for byte in digest {
-        use std::fmt::Write as _;
-        let _ = write!(hex, "{byte:02x}");
-    }
-    McpToolIdentity::new(hex)
+    frame
 }
 
 /// Derives the canonical identity of an already-composed MCP
@@ -254,7 +306,7 @@ fn write_string(value: &str, output: &mut String) {
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_json, mcp_tool_identity};
+    use super::{canonical_json, identity_frame, mcp_tool_identity};
     use crate::runtime::identity::McpServerId;
     use crate::tools::types::{ToolApprovalPolicy, ToolConcurrencyPolicy, ToolExecutionPolicy};
 
@@ -269,6 +321,53 @@ mod tests {
             ToolApprovalPolicy::Never,
         )
         .into_string()
+    }
+
+    /// The V1 frame is frozen byte-for-byte: every field is prefixed by a
+    /// **fixed-width** `u64` little-endian length, so the canonical bytes
+    /// are identical on 32-bit and 64-bit targets. This vector must never
+    /// change; a framing change is a new identity version.
+    #[test]
+    fn the_v1_frame_is_frozen_byte_for_byte() {
+        let frame = identity_frame(
+            &McpServerId::new("github"),
+            "get_issue",
+            "Reads one issue.",
+            &serde_json::json!({"type": "object"}),
+            ToolExecutionPolicy::ForegroundOnly,
+            ToolConcurrencyPolicy::Sequential,
+            ToolApprovalPolicy::Never,
+        );
+        let mut expected = Vec::new();
+        let mut field = |value: &str| {
+            expected.extend_from_slice(&(value.len() as u64).to_le_bytes());
+            expected.extend_from_slice(value.as_bytes());
+        };
+        field("MCP_TOOL_IDENTITY_V1");
+        field("github");
+        field("get_issue");
+        field("Reads one issue.");
+        field(r#"{"type":"object"}"#);
+        field("execution=foreground_only");
+        field("concurrency=sequential");
+        field("approval=never");
+        assert_eq!(frame, expected, "the V1 frame format is frozen");
+        // Every length prefix is exactly 8 bytes: fixed-width framing, not
+        // the target-width-dependent `usize` encoding.
+        assert_eq!(&frame[..8], &20u64.to_le_bytes());
+    }
+
+    /// The V1 identity digest over the frozen frame is a fixed constant.
+    /// The expected value below is reproduced independently of the
+    /// implementation (the frame format is fully specified in the module
+    /// documentation), so this test freezes the architecture-independent
+    /// V1 representation rather than the code's current output.
+    #[test]
+    fn the_v1_identity_digest_is_frozen() {
+        assert_eq!(
+            identity(&serde_json::json!({"type": "object"})),
+            "sha256:638dbb487df8367bcb91ba4638cf7119d6e1f7974a2456dd265d5d0334bb68c9"
+        );
     }
 
     /// The canonical form sorts object keys recursively, so two documents
