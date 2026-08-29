@@ -36,6 +36,7 @@ use tokio::io::AsyncWriteExt;
 
 use crate::context::{AgentStatusConfig, SessionContextPolicy};
 use crate::runtime::identity::SubagentId;
+use crate::runtime::types::CancellationReason;
 
 use super::anchors::{NestedUnitSettlement, RetainedProcessUnits, contain_retained};
 use super::ipc::{
@@ -595,14 +596,22 @@ pub(crate) enum PhysicalOutcome {
     /// the process is reaped.
     Completed(ResultFrame),
     /// The child exited (reaped) without a valid terminal result envelope.
+    /// Its semantic outcome is unknown, but the direct process and control
+    /// settlement were proven. `cancellation_delivered` says that the
+    /// registry's already-committed cancellation was successfully written to
+    /// the child; it is physical evidence, not a cancellation reason.
     Lost {
         /// The bounded diagnostic.
         diagnostic: String,
-        /// Whether the driver escalated the child to a signal kill. A child
-        /// that died to the driver's own escalation after cancellation
-        /// intent is physically cancelled, not failed; the registry
-        /// canonicalizes on this evidence.
-        escalated: bool,
+        /// Whether the typed cancellation frame was successfully delivered.
+        cancellation_delivered: bool,
+    },
+    /// The low-level driver could not prove a required process/control
+    /// operation. This is an explicit infrastructure/containment failure,
+    /// never an `Interrupted` semantic outcome.
+    ControlFailure {
+        /// The bounded diagnostic.
+        diagnostic: String,
     },
 }
 
@@ -628,7 +637,17 @@ impl StagedChild {
         // the ownership-to-driver handoff.
         let (start_tx, start_rx) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
-            let cancelled_before_start = start_rx.await.unwrap_or(true);
+            let Ok(cancelled_before_start) = start_rx.await else {
+                return settle_after_driver_loss(
+                    child,
+                    control,
+                    retained,
+                    runtime_root,
+                    "the registry dropped the child start decision".to_owned(),
+                    false,
+                )
+                .await;
+            };
             drive_child(
                 child,
                 control,
@@ -821,7 +840,15 @@ async fn handshake_core(
         tokio::select! {
             biased;
             () = cancellation.cancelled() => {
-                let _ = write_parent_frame(control, &ParentFrame::Cancel).await;
+                // Preparation cancellation is not a committed child
+                // attempt cancellation. There is no semantic reason to
+                // invent here; the child only needs its preparation signal
+                // woken so staged physical teardown can complete.
+                let _ = write_parent_frame(
+                    control,
+                    &ParentFrame::Cancel { reason: None },
+                )
+                .await;
                 return Err(SpawnError::Cancelled);
             }
             frame = read_child_frame(control) => match frame {
@@ -905,15 +932,20 @@ async fn answer_anchor_offer(
 #[derive(Debug)]
 pub(crate) struct ChildDriver {
     commands: tokio::sync::mpsc::Sender<DriverCommand>,
-    start: tokio::sync::oneshot::Sender<bool>,
+    start: tokio::sync::oneshot::Sender<Option<CancellationReason>>,
     task: tokio::task::JoinHandle<PhysicalSettlement>,
 }
 
 /// The driver command channel payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DriverCommand {
-    /// Cancel the child: send the `Cancel` frame, then escalate.
-    Cancel,
+    /// Cancel the child with the reason committed by the registry: send the
+    /// typed `Cancel` frame, then escalate. The driver never chooses the
+    /// semantic reason.
+    Cancel {
+        /// The registry's first-winner cancellation cause.
+        reason: CancellationReason,
+    },
 }
 
 impl ChildDriver {
@@ -924,11 +956,36 @@ impl ChildDriver {
         self,
     ) -> (
         tokio::sync::mpsc::Sender<DriverCommand>,
-        tokio::sync::oneshot::Sender<bool>,
+        tokio::sync::oneshot::Sender<Option<CancellationReason>>,
         tokio::task::JoinHandle<PhysicalSettlement>,
     ) {
         (self.commands, self.start, self.task)
     }
+}
+
+/// Settles a driver-owned child after a low-level control operation fails.
+/// A proven direct reap makes this an ordinary unknown process/IPC outcome;
+/// only an unproven reap remains an explicit infrastructure failure. The
+/// driver never turns a failed control write into a semantic cancellation.
+async fn settle_after_driver_loss(
+    mut child: tokio::process::Child,
+    mut control: tokio::net::UnixStream,
+    mut retained: RetainedProcessUnits,
+    runtime_root: PhysicalChildRuntimeRoot,
+    diagnostic: String,
+    cancellation_delivered: bool,
+) -> PhysicalSettlement {
+    let _ = control.shutdown().await;
+    let outcome = match reap(&mut child).await {
+        Ok(()) => PhysicalOutcome::Lost {
+            diagnostic,
+            cancellation_delivered,
+        },
+        Err(error) => PhysicalOutcome::ControlFailure {
+            diagnostic: format!("{diagnostic}; {error}"),
+        },
+    };
+    settle_nested(outcome, &mut retained, runtime_root).await
 }
 
 /// The sole driver of one committed child: sends the delegation, observes
@@ -947,42 +1004,41 @@ async fn drive_child(
     runtime_root: PhysicalChildRuntimeRoot,
     delegate: super::ipc::DelegationFrame,
     mut commands: tokio::sync::mpsc::Receiver<DriverCommand>,
-    cancelled_before_start: bool,
+    cancelled_before_start: Option<CancellationReason>,
 ) -> PhysicalSettlement {
     let mut cancel_deadline = None;
-    if cancelled_before_start {
-        if let Err(error) = write_parent_frame(&mut control, &ParentFrame::Cancel).await {
-            let diagnostic = match reap(&mut child).await {
-                Ok(()) => format!("could not deliver the cancellation: {error}"),
-                Err(reap_error) => {
-                    format!("could not deliver the cancellation: {error}; {reap_error}")
-                }
-            };
-            return settle_nested(
-                PhysicalOutcome::Lost {
-                    diagnostic,
-                    escalated: true,
-                },
-                &mut retained,
+    let mut cancellation_delivered = false;
+    if let Some(reason) = cancelled_before_start {
+        if let Err(error) = write_parent_frame(
+            &mut control,
+            &ParentFrame::Cancel {
+                reason: Some(reason),
+            },
+        )
+        .await
+        {
+            return settle_after_driver_loss(
+                child,
+                control,
+                retained,
                 runtime_root,
+                format!("could not deliver the cancellation: {error}"),
+                false,
             )
             .await;
         }
+        cancellation_delivered = true;
         cancel_deadline = Some(tokio::time::Instant::now() + CANCEL_GRACE);
     } else if let Err(error) =
         write_parent_frame(&mut control, &ParentFrame::Delegate(delegate)).await
     {
-        let diagnostic = match reap(&mut child).await {
-            Ok(()) => format!("could not deliver the delegation: {error}"),
-            Err(reap_error) => format!("could not deliver the delegation: {error}; {reap_error}"),
-        };
-        return settle_nested(
-            PhysicalOutcome::Lost {
-                diagnostic,
-                escalated: true,
-            },
-            &mut retained,
+        return settle_after_driver_loss(
+            child,
+            control,
+            retained,
             runtime_root,
+            format!("could not deliver the delegation: {error}"),
+            false,
         )
         .await;
     }
@@ -997,14 +1053,29 @@ async fn drive_child(
         tokio::select! {
             command = commands.recv() => {
                 // A closed channel (registry dropped) is not a command.
-                if matches!(command, Some(DriverCommand::Cancel)) && cancel_deadline.is_none() {
+                if let Some(DriverCommand::Cancel { reason }) = command
+                    && cancel_deadline.is_none()
+                {
                     // The Cancel frame is a request, not evidence. The
                     // driver keeps observing; the escalation deadline
                     // below is the bounded fallback.
-                    if write_parent_frame(&mut control, &ParentFrame::Cancel).await.is_err() {
-                        violation = Some("control channel lost while cancelling".to_owned());
-                    } else {
-                        cancel_deadline = Some(tokio::time::Instant::now() + CANCEL_GRACE);
+                    match write_parent_frame(
+                        &mut control,
+                        &ParentFrame::Cancel {
+                            reason: Some(reason),
+                        },
+                    )
+                    .await
+                    {
+                        Ok(()) => {
+                            cancellation_delivered = true;
+                            cancel_deadline = Some(tokio::time::Instant::now() + CANCEL_GRACE);
+                        }
+                        Err(error) => {
+                            violation = Some(format!(
+                                "control channel lost while delivering cancellation: {error}"
+                            ));
+                        }
                     }
                 }
             }
@@ -1063,13 +1134,13 @@ async fn drive_child(
     // well-behaved child's drain signal after its terminal frame.
     let _ = control.shutdown().await;
     if let Err(error) = reap(&mut child).await {
-        return settle_nested(
-            PhysicalOutcome::Lost {
-                diagnostic: format!("the child could not be reaped: {error}"),
-                escalated: true,
-            },
-            &mut retained,
+        return settle_after_driver_loss(
+            child,
+            control,
+            retained,
             runtime_root,
+            format!("the child could not be reaped: {error}"),
+            cancellation_delivered,
         )
         .await;
     }
@@ -1077,11 +1148,11 @@ async fn drive_child(
         (Some(frame), _) => PhysicalOutcome::Completed(frame),
         (None, Some(diagnostic)) => PhysicalOutcome::Lost {
             diagnostic,
-            escalated: kill_deadline.is_some() || cancel_deadline.is_some(),
+            cancellation_delivered,
         },
         (None, None) => PhysicalOutcome::Lost {
             diagnostic: "the child exited without a terminal result".to_owned(),
-            escalated: kill_deadline.is_some() || cancel_deadline.is_some(),
+            cancellation_delivered,
         },
     };
     settle_nested(outcome, &mut retained, runtime_root).await
@@ -1456,7 +1527,7 @@ mod tests {
             context: None,
         });
         let (_commands, start_gate, task) = driver.split();
-        let _ = start_gate.send(false);
+        let _ = start_gate.send(None);
 
         // The child dies without releasing its anchor: close the control
         // channel and let the driver reap it.

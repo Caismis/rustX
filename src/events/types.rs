@@ -517,15 +517,16 @@ pub enum SubagentTerminalState {
     /// The child completed and its bounded answer was durably accepted by
     /// the parent conversation with `UserSource::Agent(child)` provenance.
     Succeeded,
-    /// The child failed or its process/protocol settlement failed.
+    /// The child produced a known semantic failure or the process/control
+    /// settlement failed to prove required physical authority.
     Failed,
     /// Cancellation intent won settlement (explicit cancel or runtime
     /// drain).
     Cancelled,
-    /// The owning process restarted while the child was non-terminal: the
-    /// child process did not survive the parent and its actual outcome is
-    /// **unknown**. Recovery never converts this into a known failure and
-    /// never reattaches to or replays the old child.
+    /// The child process/IPC plane disappeared without a valid semantic
+    /// terminal, whether observed live or during restart recovery. Its
+    /// actual outcome is **unknown**. This is never provider retry, never an
+    /// automatic relaunch, and never converted into a known model failure.
     Interrupted,
 }
 

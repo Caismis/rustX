@@ -386,10 +386,9 @@ fn content_source(state: SubagentTerminalState, child_agent_id: &AgentId) -> Use
     }
 }
 
-/// The recovery-generated terminal publication of one subagent child that
-/// was durably owned but never settled before the process restarted
-/// (Issue #60): a runtime-authored notice with the
-/// [`SubagentTerminalState::Interrupted`] terminal fact.
+/// The runtime-authored terminal publication of one subagent child whose
+/// process/IPC outcome is unknown (live physical loss or restart recovery):
+/// a bounded notice with the [`SubagentTerminalState::Interrupted`] fact.
 ///
 /// The identity contract is deliberately identical to the live settlement
 /// path — the same `MessageId` and the same producer correlation — so a

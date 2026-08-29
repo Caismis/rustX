@@ -12053,7 +12053,9 @@ mod tests {
             crate::runtime::subagent::ipc::read_parent_frame(&mut peer)
                 .await
                 .expect("driver frame"),
-            Some(crate::runtime::subagent::ipc::ParentFrame::Cancel)
+            Some(crate::runtime::subagent::ipc::ParentFrame::Cancel {
+                reason: Some(crate::runtime::types::CancellationReason::UserRequested),
+            })
         ));
     }
 

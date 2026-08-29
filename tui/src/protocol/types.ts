@@ -23,7 +23,8 @@
  * camelCase.
  */
 
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 8;
+/** Version 9 adds `interrupted` to the closed subagent lifecycle vocabulary. */
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 9;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -286,14 +287,21 @@ export type BackgroundLifecycle =
   | "failed"
   | "cancelled";
 
-/** The lifecycle states of a subagent child (Issue #60). */
+/**
+ * The lifecycle states of a subagent child (Issue #60).
+ *
+ * `interrupted` means the child process/control plane ended without a valid
+ * semantic terminal result. It is distinct from both semantic `failed` and
+ * committed-cause `cancelled`.
+ */
 export type SubagentState =
   | "running"
   | "cancelling"
   | "publishing_terminal"
   | "succeeded"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "interrupted";
 
 export const BACKGROUND_TERMINAL_STATES: ReadonlySet<BackgroundLifecycle> =
   new Set<BackgroundLifecycle>(["succeeded", "failed", "cancelled"]);

@@ -1248,14 +1248,26 @@ async fn parent_runtime_drain_during_child_retry_backoff_reaches_quiescence() {
     let child_events = journal(&child.store);
     assert_eq!(count_events(&child_events, is_request_started), 1);
     // The child's own attempt settlement is the ordinary Cancel-frame
-    // authority (the parent/child cancellation authorities stay separate);
-    // the parent-facing terminal carries the shutdown cause.
+    // authority (the parent/child cancellation authorities stay separate),
+    // and the exact reason committed by the parent registry crosses the
+    // control boundary unchanged.
     assert_eq!(
         count_events(&child_events, |event| matches!(
             event,
             RuntimeEvent::AttemptCancelled { .. }
         )),
         1
+    );
+    assert_eq!(
+        count_events(&child_events, |event| matches!(
+            event,
+            RuntimeEvent::AttemptCancelled {
+                reason: CancellationReason::RuntimeShutdown,
+                ..
+            }
+        )),
+        1,
+        "the child's durable cancellation provenance is RuntimeShutdown"
     );
     assert_eq!(
         terminal_publications(&journal(&parent.plane.store)),
@@ -1796,13 +1808,10 @@ async fn child_compaction_summarizer_timeout_is_not_generic_retry() {
 // ---------------------------------------------------------------------------
 
 /// The child process dies while the child attempt sleeps in retry backoff.
-/// The parent settles exactly one terminal through the existing process-loss
-/// classification (Failed, with the bounded driver diagnostic), the parent
-/// never schedules or observes any retry, and nothing relaunches the child.
-/// The restart-recovery classification of the same frontier as
-/// `Interrupted` — with no reattach, replay, or relaunch — is covered by
-/// the real-process Issue #60 hard-parent-death regression and by the
-/// Issue #111 process-death conformance suite.
+/// The parent settles exactly one `Interrupted` terminal with the bounded
+/// runtime-authored notice: the process/IPC outcome is unknown, not a model
+/// failure. The parent never schedules or observes any retry and nothing
+/// relaunches the child.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_process_loss_during_backoff_is_terminal_and_never_relaunched() {
@@ -1854,19 +1863,30 @@ async fn child_process_loss_during_backoff_is_terminal_and_never_relaunched() {
         .wait_until_settled(&wired.accepted.subagent_id)
         .await
         .expect("child settles");
-    assert_eq!(settled.state, SubagentState::Failed);
-    let detail = settled.detail.expect("bounded process-loss diagnostic");
+    assert_eq!(settled.state, SubagentState::Interrupted);
+    let detail = settled.detail.expect("bounded interruption detail");
     assert!(
         detail.contains("exited without a terminal result"),
-        "the existing recovery classification, not a retry: {detail}"
+        "the physical outcome is classified as Interrupted, not a retry: {detail}"
     );
     let parent_events = journal(&plane.store);
     assert_eq!(count_events(&parent_events, is_request_started), 0);
     assert_eq!(count_events(&parent_events, is_retry_scheduled), 0);
     assert_eq!(
         terminal_publications(&parent_events),
-        vec![SubagentTerminalState::Failed],
-        "one terminal, fail-closed"
+        vec![SubagentTerminalState::Interrupted],
+        "one interruption terminal, fail-closed"
+    );
+    let notices = parent_pending_texts(&plane);
+    assert_eq!(
+        notices.len(),
+        1,
+        "exactly one parent-facing interruption notice"
+    );
+    assert!(
+        notices[0].contains("interrupted") && notices[0].contains("unknown"),
+        "the notice communicates unknown outcome without claiming model failure: {}",
+        notices[0]
     );
     // No relaunch: the registry owns exactly this one terminal record, and
     // the child conversation's journal ends at the durable backoff
@@ -2002,6 +2022,28 @@ async fn cancellation_and_drain_have_exactly_one_winning_cause() {
             settled.detail
         );
         await_serve(wired.serve).await;
+        let child_events = journal(&child.store);
+        let expected_reason = if user_first {
+            CancellationReason::UserRequested
+        } else {
+            CancellationReason::RuntimeShutdown
+        };
+        assert_eq!(
+            count_events(&child_events, |event| matches!(
+                event,
+                RuntimeEvent::AttemptCancelled { reason, .. } if *reason == expected_reason
+            )),
+            1,
+            "the child journal records the same first-winner reason as the parent"
+        );
+        assert_eq!(
+            count_events(&child_events, |event| matches!(
+                event,
+                RuntimeEvent::AttemptCancelled { .. }
+            )),
+            1,
+            "the child settles exactly once"
+        );
         assert_eq!(
             terminal_publications(&journal(&plane.store)),
             vec![SubagentTerminalState::Cancelled],
@@ -2058,6 +2100,12 @@ async fn the_parent_projection_has_no_retry_state() {
         | SubagentState::Failed
         | SubagentState::Cancelled => {
             panic!("a child in retry backoff is Running: {:?}", snapshot.state)
+        }
+        SubagentState::Interrupted => {
+            panic!(
+                "a child in retry backoff cannot be interrupted: {:?}",
+                snapshot.state
+            )
         }
     }
     assert!(snapshot.detail.is_none(), "no retry detail is projected");

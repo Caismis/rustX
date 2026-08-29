@@ -77,11 +77,17 @@ enum SubagentLifecycle {
     Failed,
     /// The terminal cancellation is durably published.
     Cancelled,
+    /// The child process/control plane settled without a valid semantic
+    /// terminal result, so the child outcome is unknown.
+    Interrupted,
 }
 
 impl SubagentLifecycle {
     const fn is_terminal(self) -> bool {
-        matches!(self, Self::Succeeded | Self::Failed | Self::Cancelled)
+        matches!(
+            self,
+            Self::Succeeded | Self::Failed | Self::Cancelled | Self::Interrupted
+        )
     }
 
     const fn is_active(self) -> bool {
@@ -118,6 +124,7 @@ enum TerminalState {
     Succeeded,
     Failed,
     Cancelled,
+    Interrupted,
 }
 
 /// The notification-plane state of one terminal result, mirroring the
@@ -164,6 +171,7 @@ impl SubagentRecord {
             SubagentLifecycle::Succeeded => SubagentState::Succeeded,
             SubagentLifecycle::Failed => SubagentState::Failed,
             SubagentLifecycle::Cancelled => SubagentState::Cancelled,
+            SubagentLifecycle::Interrupted => SubagentState::Interrupted,
         };
         SubagentSnapshot {
             subagent_id: self.subagent_id.clone(),
@@ -222,6 +230,9 @@ pub enum SubagentState {
     Failed,
     /// The cancellation is durably published.
     Cancelled,
+    /// The child process/control plane settled without a valid semantic
+    /// terminal result; the child's outcome is unknown.
+    Interrupted,
 }
 
 /// A consistency snapshot of one subagent child.
@@ -906,22 +917,25 @@ impl SubagentRegistry {
                         hook.wait();
                     }
                     let cancel_before_start =
-                        matches!(record.lifecycle, SubagentLifecycle::Cancelling);
-                    // Sending `true` resolves the gate cancelled: the
-                    // driver sends Cancel before Delegate and never allows
-                    // child semantic work to begin. Sending `false` opens
-                    // the normal gate. The release is synchronous under the
-                    // same mutex acquisition, so start-vs-cancel has exactly
-                    // one arbitration boundary.
+                        matches!(record.lifecycle, SubagentLifecycle::Cancelling).then(|| {
+                            record
+                                .cancel_reason
+                                .expect("cancelling child has a committed reason")
+                        });
+                    // Sending `Some(reason)` resolves the gate cancelled:
+                    // the driver sends that exact reason before Delegate
+                    // and never allows child semantic work to begin.
+                    // Sending `None` opens the normal gate. The release is
+                    // synchronous under the same mutex acquisition, so
+                    // start-vs-cancel has exactly one arbitration boundary.
                     let _ = start_gate.send(cancel_before_start);
                 }
                 let registry = self.clone_for_task();
                 let settlement_id = subagent_id.clone();
                 tokio::spawn(async move {
                     let settlement = task.await.unwrap_or_else(|_| {
-                        PhysicalSettlement::of(PhysicalOutcome::Lost {
+                        PhysicalSettlement::of(PhysicalOutcome::ControlFailure {
                             diagnostic: "the child driver task failed".to_owned(),
-                            escalated: false,
                         })
                     });
                     registry.settle_from_driver(&settlement_id, settlement);
@@ -1034,7 +1048,7 @@ impl SubagentRegistry {
             record.lifecycle = SubagentLifecycle::Cancelling;
             record.cancel_reason = Some(reason);
             if let Some(control) = &record.control {
-                let _ = control.try_send(super::process::DriverCommand::Cancel);
+                let _ = control.try_send(super::process::DriverCommand::Cancel { reason });
             }
             publish_snapshot(&mut state, &self.state_version, index);
         }
@@ -1080,10 +1094,13 @@ impl SubagentRegistry {
     /// **Settlement.** Canonicalizes the driver's physical outcome against
     /// the lifecycle, then drives the durable result acceptance.
     ///
-    /// Cancellation intent is canonical: once committed, every later
-    /// physical outcome settles as cancelled — except an explicit
-    /// process-control failure (`Lost`), which stays failed. The durable
-    /// compound transaction makes the publication exactly-once.
+    /// Cancellation intent is canonical once its typed frame is delivered:
+    /// a physical loss caused by that cancellation settles as cancelled with
+    /// the registry's committed reason. An unexpected loss with proven
+    /// physical settlement is Interrupted; a low-level control or
+    /// containment failure stays an explicit Failed infrastructure
+    /// outcome. The durable compound transaction makes the publication
+    /// exactly-once.
     #[allow(clippy::too_many_lines)] // one coherent physical-to-durable settlement pipeline
     fn settle_from_driver(&self, subagent_id: &SubagentId, settlement: PhysicalSettlement) {
         if self.config.mailbox.begin_settlement_admission().is_err() {
@@ -1101,6 +1118,7 @@ impl SubagentRegistry {
         let settlement_diagnostic = [
             nested.unproven_diagnostic(),
             runtime_root_cleanup_error
+                .as_ref()
                 .map(|detail| format!("the child physical runtime root was not removed: {detail}")),
         ]
         .into_iter()
@@ -1108,6 +1126,8 @@ impl SubagentRegistry {
         .collect::<Vec<_>>();
         let settlement_diagnostic =
             (!settlement_diagnostic.is_empty()).then_some(settlement_diagnostic.join("; "));
+        let physical_settlement_unproven =
+            !nested.unproven.is_empty() || runtime_root_cleanup_error.is_some();
         let candidate = {
             let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             let Some(&index) = state.index.get(subagent_id) else {
@@ -1151,7 +1171,10 @@ impl SubagentRegistry {
                         state: TerminalState::Cancelled,
                         content: None,
                         diagnostic: None,
-                        reason: Some(CancellationReason::UserRequested),
+                        // A child result without a committed parent
+                        // cancellation has no semantic reason in its wire
+                        // envelope. Do not fabricate UserRequested.
+                        reason: None,
                         timestamp,
                     },
                     // Cancellation intent is canonical: a completed frame
@@ -1165,20 +1188,51 @@ impl SubagentRegistry {
                     },
                 },
                 PhysicalOutcome::Lost {
-                    escalated: true, ..
-                } if cancelling => TerminalCandidate {
-                    // The child died to the driver's own escalation after
-                    // cancellation intent: that is the physical settlement
-                    // of the cancellation, not a failure.
-                    state: TerminalState::Cancelled,
-                    content: None,
-                    diagnostic: None,
-                    reason: record.cancel_reason,
-                    timestamp,
-                },
-                PhysicalOutcome::Lost { diagnostic, .. } => TerminalCandidate {
-                    // An explicit process-control failure settles as failed
-                    // even after cancellation intent.
+                    diagnostic,
+                    cancellation_delivered,
+                    ..
+                } => {
+                    if physical_settlement_unproven {
+                        // A missing semantic result plus an unproven
+                        // containment/cleanup boundary is an explicit
+                        // infrastructure failure, never a clean
+                        // Interrupted state.
+                        TerminalCandidate {
+                            state: TerminalState::Failed,
+                            content: None,
+                            diagnostic: Some(bound_utf8(diagnostic, MAX_RESULT_CONTENT_BYTES)),
+                            reason: None,
+                            timestamp,
+                        }
+                    } else if cancelling && cancellation_delivered {
+                        // The child died after the registry's committed
+                        // cancellation was delivered. This includes driver
+                        // escalation: physical death cannot erase the
+                        // logical cancellation cause.
+                        TerminalCandidate {
+                            state: TerminalState::Cancelled,
+                            content: None,
+                            diagnostic: None,
+                            reason: record.cancel_reason,
+                            timestamp,
+                        }
+                    } else {
+                        // The direct process/control plane settled, but no
+                        // valid semantic terminal arrived. The outcome is
+                        // unknown, not a known model failure.
+                        TerminalCandidate {
+                            state: TerminalState::Interrupted,
+                            content: None,
+                            diagnostic: Some(bound_utf8(diagnostic, MAX_RESULT_CONTENT_BYTES)),
+                            reason: None,
+                            timestamp,
+                        }
+                    }
+                }
+                PhysicalOutcome::ControlFailure { diagnostic } => TerminalCandidate {
+                    // A required process/control operation was not proven.
+                    // This is an explicit infrastructure failure, including
+                    // after a cancellation intent.
                     state: TerminalState::Failed,
                     content: None,
                     diagnostic: Some(bound_utf8(diagnostic, MAX_RESULT_CONTENT_BYTES)),
@@ -1239,6 +1293,7 @@ impl SubagentRegistry {
                         TerminalState::Succeeded => SubagentLifecycle::Succeeded,
                         TerminalState::Failed => SubagentLifecycle::Failed,
                         TerminalState::Cancelled => SubagentLifecycle::Cancelled,
+                        TerminalState::Interrupted => SubagentLifecycle::Interrupted,
                     };
                     record.pending_terminal = None;
                     record.notification = NotificationState::Delivered;
@@ -1320,6 +1375,7 @@ impl SubagentRegistry {
                     TerminalState::Succeeded => SubagentLifecycle::Succeeded,
                     TerminalState::Failed => SubagentLifecycle::Failed,
                     TerminalState::Cancelled => SubagentLifecycle::Cancelled,
+                    TerminalState::Interrupted => SubagentLifecycle::Interrupted,
                 };
                 record.pending_terminal = None;
                 record.publication_abandoned = false;
@@ -1412,6 +1468,10 @@ fn terminal_blocks(
             record.agent,
             candidate.reason.map_or("cancelled", reason_text)
         ),
+        TerminalState::Interrupted => format!(
+            "Subagent {} (agent {}) was interrupted: its actual outcome is unknown and it was not restarted.",
+            record.subagent_id, record.agent,
+        ),
     };
     vec![crate::message::types::UserContentBlock::Text(
         crate::message::content::TextBlock {
@@ -1426,6 +1486,7 @@ const fn candidate_state(candidate: &TerminalCandidate) -> SubagentTerminalState
         TerminalState::Succeeded => SubagentTerminalState::Succeeded,
         TerminalState::Failed => SubagentTerminalState::Failed,
         TerminalState::Cancelled => SubagentTerminalState::Cancelled,
+        TerminalState::Interrupted => SubagentTerminalState::Interrupted,
     }
 }
 
@@ -1968,6 +2029,28 @@ mod tests {
             .await
             .expect("settled");
         assert_eq!(settled.state, SubagentState::Cancelled);
+        assert_eq!(
+            settled.detail.as_deref(),
+            Some("requested by the user"),
+            "driver escalation cannot erase the committed cancellation cause"
+        );
+        assert_eq!(
+            events(&plane)
+                .into_iter()
+                .filter(|event| {
+                    matches!(
+                        event,
+                        crate::events::types::RuntimeEvent::SubagentTerminalPublished {
+                            subagent_id,
+                            state: SubagentTerminalState::Cancelled,
+                            ..
+                        } if *subagent_id == accepted.subagent_id
+                    )
+                })
+                .count(),
+            1,
+            "escalated cancellation has one terminal publication"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2061,6 +2144,11 @@ mod tests {
             .expect("cancel task")
         };
         assert_eq!(cancelling.state, SubagentState::Cancelling);
+        let expected_reason = if runtime_drain {
+            CancellationReason::RuntimeShutdown
+        } else {
+            CancellationReason::UserRequested
+        };
 
         hook.release();
         let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), committer)
@@ -2107,7 +2195,12 @@ mod tests {
         .expect("driver control liveness")
         .expect("driver frame")
         .expect("cancel frame");
-        assert!(matches!(first, ParentFrame::Cancel));
+        assert!(matches!(
+            first,
+            ParentFrame::Cancel {
+                reason: Some(reason)
+            } if reason == expected_reason
+        ));
         // No Delegate was sent after cancellation won this handoff frontier:
         // the driver's cancelled-before-start branch never writes it. Drain
         // every remaining control frame (the escalation then EOF after
@@ -2121,7 +2214,17 @@ mod tests {
             .expect("driver control liveness")
             .expect("driver frame");
             match frame {
-                Some(ParentFrame::Cancel) => {}
+                Some(ParentFrame::Cancel {
+                    reason: Some(reason),
+                }) if reason == expected_reason => {}
+                Some(ParentFrame::Cancel { reason: None }) => {
+                    panic!("a committed cancellation must carry its registry reason")
+                }
+                Some(ParentFrame::Cancel {
+                    reason: Some(reason),
+                }) => {
+                    panic!("unexpected cancellation reason on the wire: {reason:?}")
+                }
                 Some(ParentFrame::Delegate(_)) => {
                     panic!("cancellation won the frontier; Delegate must never be sent")
                 }
@@ -2190,6 +2293,7 @@ mod tests {
     /// later cancellation arrives as in-flight cancellation (`Cancel` frame
     /// after `Delegate`), settling one canonical cancelled terminal.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
     async fn gate_release_wins_the_start_cancel_arbitration_and_cancel_becomes_in_flight() {
         let plane = plane(4);
         let hook = Arc::new(GateReleaseHook::default());
@@ -2274,7 +2378,12 @@ mod tests {
         .expect("driver control liveness")
         .expect("driver frame")
         .expect("cancel frame");
-        assert!(matches!(second, ParentFrame::Cancel));
+        assert!(matches!(
+            second,
+            ParentFrame::Cancel {
+                reason: Some(CancellationReason::UserRequested)
+            }
+        ));
 
         let settled = plane
             .registry
