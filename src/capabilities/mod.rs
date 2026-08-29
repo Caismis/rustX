@@ -48,6 +48,7 @@
 mod availability;
 mod coordinator;
 mod error;
+pub mod selected;
 mod snapshot;
 mod tools;
 
@@ -61,6 +62,9 @@ pub use coordinator::{
     CapabilityResourceInputs, PreparedCapabilityCandidate,
 };
 pub use error::{CapabilityCommitError, CapabilityPreparationError};
+pub use selected::{
+    SelectedCapabilityPlan, SelectedMaterializationError, SelectedMcpTool, SelectedPythonTool,
+};
 pub use snapshot::CapabilitySnapshot;
 pub use tools::{AvailableTool, AvailableToolCatalog, ToolActivationPolicy};
 

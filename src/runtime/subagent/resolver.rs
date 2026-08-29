@@ -63,6 +63,9 @@
 //! `ToolDefinition` rather than a name, and each Skill crosses as its
 //! immutable `SkillId` + `SkillVersionId` binding rather than a host path.
 
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 use crate::capabilities::{
@@ -72,9 +75,10 @@ use crate::model::frozen::FrozenModelSpec;
 use crate::model::invocation::ModelBindingRegistry;
 use crate::model::session::SessionModelConfig;
 use crate::protocol::manifest::SkillBinding;
-use crate::runtime::identity::{McpServerId, ToolId, ToolVersionId};
+use crate::runtime::identity::{McpServerId, McpToolIdentity, ToolId, ToolVersionId};
 use crate::runtime::resources::{ProjectContextFile, RuntimeResourceSnapshot};
 use crate::skills::{SkillCatalogEntry, SkillSnapshot};
+use crate::tools::mcp::{McpServerBinding, McpServerBindings};
 use crate::tools::types::{ToolDefinition, ToolOrigin};
 
 use super::catalog::{
@@ -111,6 +115,16 @@ pub enum ResolvedSubagentTool {
         /// The exact admitted definition, which is the identity the child's
         /// physical MCP materialization must realize.
         definition: ToolDefinition,
+        /// The deterministic **cross-process** semantic identity of that
+        /// definition (Issue #145).
+        ///
+        /// The child connects the server itself, performs its own
+        /// `tools/list`, recomputes this digest from what the server
+        /// actually publishes, and refuses to start unless it matches. The
+        /// process-local MCP invalidation epoch cannot serve this purpose:
+        /// it stabilizes one process's catalog read and has no meaning in
+        /// another process.
+        identity: McpToolIdentity,
     },
     /// One custom Python tool at its exact immutable version.
     Python {
@@ -142,13 +156,6 @@ impl ResolvedSubagentTool {
             | Self::Mcp { definition, .. }
             | Self::Python { definition, .. } => definition,
         }
-    }
-
-    /// Whether this capability needs an external execution plane the child
-    /// runtime does not physically materialize yet.
-    #[must_use]
-    pub const fn is_external_origin(&self) -> bool {
-        matches!(self, Self::Mcp { .. } | Self::Python { .. })
     }
 
     /// The canonical selection text of this resolution, for diagnostics.
@@ -185,8 +192,65 @@ pub struct ResolvedSubagentSkill {
     /// The exact immutable `SkillId` + `SkillVersionId` the generation
     /// admitted.
     pub binding: SkillBinding,
-    /// The model-visible catalog metadata of that same Skill.
+    /// The model-visible catalog metadata of that same Skill, as the parent
+    /// generation rendered it. The child **remaps** `location` onto its own
+    /// materialized copy; every other field crosses verbatim.
     pub catalog_entry: SkillCatalogEntry,
+    /// The canonical absolute host root of the admitted package.
+    ///
+    /// This is a materialization **source**, never an identity: the child
+    /// copies exactly `files` from here and then proves the copy hashes back
+    /// to `binding.version_id`. A source whose bytes moved on after the
+    /// parent froze them therefore fails closed instead of being executed.
+    pub source_root: PathBuf,
+    /// The exact package-relative file set of the admitted package, in the
+    /// generation's deterministic order.
+    pub files: Vec<PathBuf>,
+}
+
+/// The frozen **physical materialization plane** of one resolved child
+/// (Issue #145).
+///
+/// The rest of [`ResolvedSubagentSpec`] freezes *semantic* identity: which
+/// Tool, which version, which Skill. This value freezes what the child needs
+/// in order to physically realize those identities with runtimes it owns
+/// itself — and nothing more. It carries only the sources the selected
+/// capabilities actually require:
+///
+/// ```text
+/// selected mcp:github/get_issue   ->  mcp_servers = { github: <binding> }
+///                                     (never every configured server)
+/// selected python:symbols@V1      ->  python_shared_store_root = Some(..)
+/// selected nothing external       ->  both empty/None
+/// ```
+///
+/// The child never reads `rustx.jsonc` to obtain any of this: a
+/// configuration edit between the parent's freeze and the child's
+/// composition cannot change which server the child connects or which store
+/// it opens.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedSubagentMaterialization {
+    /// Exactly the MCP servers whose tools this child selected, keyed by
+    /// the one authoritative server identity.
+    pub mcp_servers: BTreeMap<McpServerId, McpServerBinding>,
+    /// The shared immutable Python tool-store root, present only when this
+    /// child selected at least one Python tool.
+    ///
+    /// The child opens `tool-versions/` and `uv-cache/` under this root and
+    /// keeps its own private `python-tool-envs/`, `python-tool-bindings/`,
+    /// and `python-invocations/` roots.
+    pub python_shared_store_root: Option<PathBuf>,
+}
+
+impl ResolvedSubagentMaterialization {
+    /// Whether this child needs any externally sourced execution plane at
+    /// all. A child with no external requirement composes exactly the
+    /// deterministic base-only plane it always did.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.mcp_servers.is_empty() && self.python_shared_store_root.is_none()
+    }
 }
 
 /// The complete frozen launch specification of one named subagent child.
@@ -226,26 +290,12 @@ pub struct ResolvedSubagentSpec {
     pub skills: Vec<ResolvedSubagentSkill>,
     /// The frozen project instruction chain, in deterministic order.
     pub project_instructions: Vec<ProjectContextFile>,
+    /// The frozen physical materialization plane of the selected external
+    /// capabilities (Issue #145).
+    pub materialization: ResolvedSubagentMaterialization,
 }
 
 impl ResolvedSubagentSpec {
-    /// The frozen capabilities whose physical execution plane the child
-    /// runtime cannot materialize yet, in canonical order.
-    ///
-    /// This is the temporary staged boundary of the follow-up external
-    /// capability issue: semantic resolution is complete and exact, but a
-    /// child that would need one of these capabilities must fail **before**
-    /// durable ownership commit rather than start weaker than it was
-    /// authorized to be.
-    #[must_use]
-    pub fn external_origin_requirements(&self) -> Vec<String> {
-        self.tools
-            .iter()
-            .filter(|tool| tool.is_external_origin())
-            .map(ResolvedSubagentTool::canonical)
-            .collect()
-    }
-
     /// The canonical model-facing names of the frozen capability set.
     #[must_use]
     pub fn tool_names(&self) -> Vec<&str> {
@@ -401,6 +451,11 @@ impl SubagentResolver {
         let skills = resolve_skills(definition, capability.skills())?;
         let model = resolve_model(definition, attempt_model, models)?;
         let project_instructions = resolve_project_instructions(definition, resources);
+        let materialization = resolve_materialization(
+            &tools,
+            capability.mcp_servers(),
+            capability.python_store_root(),
+        )?;
         Ok(ResolvedSubagentSpec {
             agent: definition.name().clone(),
             definition_digest: definition.digest().clone(),
@@ -409,6 +464,7 @@ impl SubagentResolver {
             tools,
             skills,
             project_instructions,
+            materialization,
         })
     }
 
@@ -582,6 +638,18 @@ fn freeze_tool(
             server_id: server_id.clone(),
             tool_id: definition.id.clone(),
             name: definition.name.clone(),
+            // The expected cross-process identity is derived here, once,
+            // from the exact definition this generation admitted. The child
+            // recomputes it from its own catalog read and compares.
+            identity: crate::tools::mcp::identity::mcp_tool_identity(
+                server_id,
+                &definition.name,
+                &definition.description,
+                &definition.input_schema,
+                definition.execution_policy,
+                definition.concurrency_policy,
+                definition.approval_policy,
+            ),
             definition: definition.clone(),
         },
         (SubagentToolSelector::Python { .. }, ToolOrigin::Python { tool_version_id }) => {
@@ -647,9 +715,69 @@ fn resolve_skills(
                 version_id: package.version_id().clone(),
             },
             catalog_entry: catalog_entry.clone(),
+            source_root: package.materialization_root().to_path_buf(),
+            files: package.files().to_vec(),
         });
     }
     Ok(resolved)
+}
+
+/// Freezes the physical materialization plane the selected capabilities
+/// require — and only what they require.
+///
+/// This is where "selected-only" becomes a **structural** property rather
+/// than a discipline the child has to remember: a child whose frozen
+/// specification names one MCP server has no way to learn about a second
+/// one, because no other binding ever crosses the boundary.
+///
+/// A selection whose source authority has disappeared from the generation
+/// between capability admission and this freeze is refused here, before any
+/// process is staged.
+fn resolve_materialization(
+    tools: &[ResolvedSubagentTool],
+    configured: &McpServerBindings,
+    python_store_root: Option<&std::path::Path>,
+) -> Result<ResolvedSubagentMaterialization, SubagentResolutionError> {
+    let mut mcp_servers = BTreeMap::new();
+    let mut needs_python = false;
+    for tool in tools {
+        match tool {
+            ResolvedSubagentTool::Builtin { .. } => {}
+            ResolvedSubagentTool::Mcp {
+                server_id, name, ..
+            } => {
+                if mcp_servers.contains_key(server_id) {
+                    continue;
+                }
+                let binding = configured.get(server_id).ok_or_else(|| {
+                    SubagentResolutionError::SourceUnavailable {
+                        selector: format!("mcp:{server_id}/{name}"),
+                        source: format!("mcp:{server_id}"),
+                        reason: "the runtime generation configures no such MCP server".to_owned(),
+                    }
+                })?;
+                mcp_servers.insert(server_id.clone(), binding.clone());
+            }
+            ResolvedSubagentTool::Python { .. } => needs_python = true,
+        }
+    }
+    let python_shared_store_root = if needs_python {
+        Some(
+            python_store_root
+                .ok_or_else(|| SubagentResolutionError::SourceUnavailable {
+                    selector: "python".to_owned(),
+                    source: "python".to_owned(),
+                    reason: "the runtime generation has no Python tool store root".to_owned(),
+                })?
+                .to_path_buf(),
+        )
+    } else {
+        None
+    };
+    Ok(ResolvedSubagentMaterialization {
+        mcp_servers,
+        python_shared_store_root,
+    })
 }
 
 /// Freezes the child's model **authority**.
@@ -729,8 +857,8 @@ pub(crate) fn render_agent_routing(catalog: &SubagentCatalog) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ResolvedSubagentTool, SubagentResolutionError, render_agent_routing, resolve_tools,
-        validate_selectors_for_admission,
+        ResolvedSubagentTool, SubagentResolutionError, freeze_tool, render_agent_routing,
+        resolve_tools, validate_selectors_for_admission,
     };
     use crate::capabilities::{
         AvailableToolCatalog, CapabilityAvailability, CapabilitySourceId, CapabilitySourceState,
@@ -841,10 +969,142 @@ mod tests {
         assert_eq!(
             resolved
                 .iter()
-                .filter(|tool| tool.is_external_origin())
+                .filter(|tool| {
+                    matches!(
+                        tool,
+                        ResolvedSubagentTool::Mcp { .. } | ResolvedSubagentTool::Python { .. }
+                    )
+                })
                 .count(),
-            2
+            2,
+            "both externally sourced origins keep their exact source-qualified identity"
         );
+    }
+
+    /// The frozen materialization plane carries **only** the sources the
+    /// selection actually needs. This is what makes "connect only the
+    /// required MCP servers" structural in the child: no other binding ever
+    /// crosses the boundary, so the child has nothing to widen to.
+    #[test]
+    fn the_materialization_plane_freezes_only_required_sources() {
+        use super::{ResolvedSubagentMaterialization, resolve_materialization};
+        let github = McpServerId::new("github");
+        let unrelated = McpServerId::new("filesystem");
+        let binding = || crate::tools::mcp::McpServerBinding {
+            transport: crate::tools::mcp::McpTransportConfig::Stdio {
+                program: "server".to_owned(),
+                args: Vec::new(),
+                cwd: None,
+                environment: std::collections::BTreeMap::new(),
+            },
+            policy: crate::tools::types::ToolInvocationPolicy::default(),
+        };
+        let configured: crate::tools::mcp::McpServerBindings =
+            [(github.clone(), binding()), (unrelated.clone(), binding())]
+                .into_iter()
+                .collect();
+
+        let tools = vec![
+            freeze_tool(
+                &SubagentToolSelector::Builtin {
+                    name: "read".to_owned(),
+                },
+                &tool("read", ToolOrigin::Builtin),
+            ),
+            freeze_tool(
+                &SubagentToolSelector::Mcp {
+                    server_id: github.clone(),
+                    name: "get_issue".to_owned(),
+                },
+                &tool(
+                    "get_issue",
+                    ToolOrigin::Mcp {
+                        server_id: github.clone(),
+                    },
+                ),
+            ),
+        ];
+        let plane = resolve_materialization(&tools, &configured, None).expect("plane");
+        assert_eq!(
+            plane.mcp_servers.keys().collect::<Vec<_>>(),
+            vec![&github],
+            "the unrelated configured server is never frozen for this child"
+        );
+        assert!(!plane.mcp_servers.contains_key(&unrelated));
+        assert_eq!(
+            plane.python_shared_store_root, None,
+            "a child with no Python selection is given no Python store at all"
+        );
+        assert!(!plane.is_empty());
+
+        // A Builtin-only agent needs no external plane whatsoever.
+        let builtin_only = vec![freeze_tool(
+            &SubagentToolSelector::Builtin {
+                name: "read".to_owned(),
+            },
+            &tool("read", ToolOrigin::Builtin),
+        )];
+        assert_eq!(
+            resolve_materialization(&builtin_only, &configured, None).expect("plane"),
+            ResolvedSubagentMaterialization::default()
+        );
+    }
+
+    /// A Python selection freezes the shared immutable store root, and a
+    /// generation without one refuses the invocation rather than letting the
+    /// child pick a store for itself.
+    #[test]
+    fn a_python_selection_freezes_the_shared_store_root() {
+        use super::resolve_materialization;
+        let configured = crate::tools::mcp::McpServerBindings::new();
+        let tools = vec![freeze_tool(
+            &SubagentToolSelector::Python {
+                name: "symbols".to_owned(),
+            },
+            &tool(
+                "symbols",
+                ToolOrigin::Python {
+                    tool_version_id: ToolVersionId::new("sha256:v1"),
+                },
+            ),
+        )];
+        let root = std::path::Path::new("/rr/environments/m7-tools");
+        let plane = resolve_materialization(&tools, &configured, Some(root)).expect("plane");
+        assert_eq!(plane.python_shared_store_root.as_deref(), Some(root));
+
+        assert!(matches!(
+            resolve_materialization(&tools, &configured, None),
+            Err(SubagentResolutionError::SourceUnavailable { .. })
+        ));
+    }
+
+    /// The frozen MCP identity is the deterministic cross-process digest of
+    /// the exact admitted definition, not a restatement of its name.
+    #[test]
+    fn a_frozen_mcp_selection_carries_its_cross_process_identity() {
+        let definition = tool(
+            "get_issue",
+            ToolOrigin::Mcp {
+                server_id: McpServerId::new("github"),
+            },
+        );
+        let frozen = freeze_tool(
+            &SubagentToolSelector::Mcp {
+                server_id: McpServerId::new("github"),
+                name: "get_issue".to_owned(),
+            },
+            &definition,
+        );
+        let ResolvedSubagentTool::Mcp { identity, .. } = &frozen else {
+            panic!("an MCP selector freezes an MCP identity: {frozen:?}");
+        };
+        assert_eq!(
+            identity,
+            &crate::tools::mcp::identity::definition_identity(&definition)
+                .expect("an MCP definition has an MCP identity"),
+            "the frozen identity is derived from the exact admitted definition"
+        );
+        assert!(identity.as_str().starts_with("sha256:"));
     }
 
     #[test]

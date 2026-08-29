@@ -27,6 +27,8 @@
 //! loses its parent drains its own runtime and exits; the restarted parent
 //! classifies the durable ownership as interrupted and never reattaches.
 
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -35,8 +37,10 @@ use tokio::io::AsyncWriteExt;
 use crate::context::{AgentStatusConfig, SessionContextPolicy};
 use crate::runtime::identity::SubagentId;
 
+use super::anchors::{NestedUnitSettlement, RetainedProcessUnits, contain_retained};
 use super::ipc::{
-    ChildFrame, ParentFrame, ResultFrame, SubagentChildSpec, read_child_frame, write_parent_frame,
+    ChildFrame, ParentFrame, ProcessUnitAckFrame, ProcessUnitRefusalFrame, ResultFrame,
+    SubagentChildSpec, read_child_frame, write_parent_frame,
 };
 use super::resolver::ResolvedSubagentSpec;
 
@@ -63,6 +67,17 @@ const TERM_GRACE: Duration = Duration::from_secs(5);
 #[cfg(test)]
 const TERM_GRACE: Duration = Duration::from_millis(200);
 
+/// The number of OS-random bytes in one physical spawn-incarnation token.
+/// The token is never semantic state; it only prevents a later process
+/// generation from receiving an earlier child's mutable pathname.
+const INCARNATION_TOKEN_BYTES: usize = 16;
+
+/// A bounded retry budget for the exclusive incarnation-directory create.
+/// A collision is harmless — the existing directory is never opened or
+/// removed — but a broken entropy source must not turn staging into an
+/// unbounded loop.
+const INCARNATION_ALLOCATION_ATTEMPTS: usize = 8;
+
 /// The composition inputs one child process is spawned with.
 ///
 /// Everything the child needs that is not process-inheritable travels in
@@ -75,8 +90,10 @@ pub struct SubagentSpawnPlan {
     pub program: std::path::PathBuf,
     /// The shared read-only workspace root.
     pub workspace: std::path::PathBuf,
-    /// The **parent** runtime-private root; each child gets a disjoint
-    /// `subagents/<subagent_id>` subtree under it.
+    /// The **parent** runtime-private root. Each child gets a fresh physical
+    /// incarnation directory below
+    /// `subagents/<semantic_subagent_id>/`, and only that directory is ever
+    /// given to the child as mutable authority.
     pub runtime_root: std::path::PathBuf,
     /// The launch-scoped Agent Status configuration inherited by the child.
     pub agent_status: AgentStatusConfig,
@@ -85,12 +102,18 @@ pub struct SubagentSpawnPlan {
 }
 
 impl SubagentSpawnPlan {
-    /// The child-private runtime root of one subagent.
-    #[must_use]
-    pub fn child_runtime_root(&self, subagent_id: &SubagentId) -> std::path::PathBuf {
-        self.runtime_root
-            .join("subagents")
-            .join(subagent_id.as_str())
+    /// Reserves one fresh physical runtime namespace for a spawn
+    /// incarnation.
+    ///
+    /// The semantic `SubagentId` is only a grouping component. The mutable
+    /// authority is the exclusively-created `incarnation-...` child below
+    /// that grouping directory, so a stale child can keep writing in its own
+    /// old directory without ever naming a later child's directory.
+    pub(crate) fn allocate_child_runtime_root(
+        &self,
+        subagent_id: &SubagentId,
+    ) -> Result<PhysicalChildRuntimeRoot, SpawnError> {
+        PhysicalChildRuntimeRoot::allocate(&self.runtime_root, subagent_id)
     }
 
     /// The one typed startup specification of a child.
@@ -111,6 +134,7 @@ impl SubagentSpawnPlan {
         child_agent_id: &crate::runtime::identity::AgentId,
         parent_agent_id: &crate::runtime::identity::AgentId,
         resolved: &ResolvedSubagentSpec,
+        runtime_root: &PhysicalChildRuntimeRoot,
     ) -> SubagentChildSpec {
         SubagentChildSpec {
             protocol_version: super::ipc::SUBAGENT_IPC_VERSION,
@@ -122,9 +146,96 @@ impl SubagentSpawnPlan {
             agent_status: self.agent_status.clone(),
             context: self.context,
             workspace: self.workspace.clone(),
-            runtime_root: self.child_runtime_root(subagent_id),
+            runtime_root: runtime_root.path().to_path_buf(),
         }
     }
+}
+
+/// The unique physical mutable namespace of one staged spawn incarnation.
+///
+/// This value is deliberately not `Clone`: the path is one lifecycle-owned
+/// capability. Its pathname contains an OS-random token and was created with
+/// an exclusive directory operation, so it cannot alias a still-existing
+/// namespace from an earlier rustX process generation.
+#[derive(Debug)]
+pub(crate) struct PhysicalChildRuntimeRoot {
+    path: PathBuf,
+}
+
+impl PhysicalChildRuntimeRoot {
+    /// Creates the semantic grouping directory and exclusively creates one
+    /// fresh incarnation directory beneath it.
+    fn allocate(parent: &Path, subagent_id: &SubagentId) -> Result<Self, SpawnError> {
+        let semantic_root = parent.join("subagents").join(subagent_id.as_str());
+        std::fs::create_dir_all(&semantic_root).map_err(|error| SpawnError::WorkspaceSetup {
+            detail: format!(
+                "create semantic child runtime grouping {}: {error}",
+                semantic_root.display()
+            ),
+        })?;
+
+        for _ in 0..INCARNATION_ALLOCATION_ATTEMPTS {
+            let mut token = [0u8; INCARNATION_TOKEN_BYTES];
+            getrandom::fill(&mut token).map_err(|error| SpawnError::WorkspaceSetup {
+                detail: format!(
+                    "generate a physical child spawn-incarnation token for {}: {error}",
+                    semantic_root.display()
+                ),
+            })?;
+            let name = format!("incarnation-{}", hex_token(&token));
+            let path = semantic_root.join(name);
+            match std::fs::create_dir(&path) {
+                Ok(()) => return Ok(Self { path }),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => {
+                    return Err(SpawnError::WorkspaceSetup {
+                        detail: format!(
+                            "create physical child runtime root {}: {error}",
+                            path.display()
+                        ),
+                    });
+                }
+            }
+        }
+
+        Err(SpawnError::WorkspaceSetup {
+            detail: format!(
+                "allocate a fresh physical child runtime root below {} after {} attempts",
+                semantic_root.display(),
+                INCARNATION_ALLOCATION_ATTEMPTS
+            ),
+        })
+    }
+
+    /// The exact path handed to the child and used by its private stores.
+    #[must_use]
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Removes exactly this incarnation directory. The semantic grouping
+    /// directory is intentionally left alone because another incarnation
+    /// may be using it.
+    fn remove(self) -> std::io::Result<()> {
+        std::fs::remove_dir_all(self.path)
+    }
+
+    /// Wraps a test-created directory in the same lifecycle owner used by a
+    /// production staged child.
+    #[cfg(test)]
+    fn from_existing(path: PathBuf) -> Self {
+        Self { path }
+    }
+}
+
+/// Encodes a physical token without introducing another identifier type or
+/// dependency. The result is safe as one directory component.
+fn hex_token(token: &[u8; INCARNATION_TOKEN_BYTES]) -> String {
+    let mut encoded = String::with_capacity(INCARNATION_TOKEN_BYTES * 2);
+    for byte in token {
+        write!(&mut encoded, "{byte:02x}").expect("writing into a String cannot fail");
+    }
+    encoded
 }
 
 /// A failure to stage a child process.
@@ -133,6 +244,19 @@ impl SubagentSpawnPlan {
 /// published, no capacity is consumed, and no staged process survives.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpawnError {
+    /// The platform process-supervision prerequisite that makes nested
+    /// containment provable could not be established (Issue #145).
+    ///
+    /// On Linux this is `PR_SET_CHILD_SUBREAPER`, and it must exist
+    /// **before** the child is spawned: a subreaper installed afterwards
+    /// does not retroactively adopt the child's orphaned supervised units,
+    /// so the parent could not contain them. Failing here is deliberate —
+    /// the alternative is claiming containment authority that does not
+    /// exist.
+    ContainmentPrerequisite {
+        /// The activation failure detail.
+        detail: String,
+    },
     /// The child-private runtime root could not be prepared.
     WorkspaceSetup {
         /// The failure detail.
@@ -149,6 +273,12 @@ pub enum SpawnError {
         /// The failure detail.
         detail: String,
     },
+    /// The invoking attempt's cancellation became observable while the
+    /// child was still staging (Issue #145). The staged child was settled
+    /// completely — the `Cancel` frame delivered best-effort, the process
+    /// reaped, every retained nested anchor contained, the runtime root
+    /// removed — before this was returned.
+    Cancelled,
     /// The staged child could not be conclusively killed and reaped after a
     /// pre-commit failure.
     Rollback {
@@ -160,6 +290,11 @@ pub enum SpawnError {
 impl core::fmt::Display for SpawnError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::ContainmentPrerequisite { detail } => write!(
+                f,
+                "cannot establish the process-supervision prerequisite required before a \
+                 subagent child may create nested supervised process units: {detail}"
+            ),
             Self::WorkspaceSetup { detail } => {
                 write!(f, "cannot prepare the child runtime root: {detail}")
             }
@@ -167,6 +302,10 @@ impl core::fmt::Display for SpawnError {
             Self::Handshake { detail } => {
                 write!(f, "the child startup handshake failed: {detail}")
             }
+            Self::Cancelled => write!(
+                f,
+                "the invoking attempt was cancelled while the child was still staging"
+            ),
             Self::Rollback { detail } => {
                 write!(
                     f,
@@ -196,6 +335,13 @@ pub(crate) enum RollbackError {
         /// The failure detail.
         detail: String,
     },
+    /// The child was reaped but one or more of its retained nested
+    /// supervised process units could not be proven physically terminal
+    /// (Issue #145). Rollback is not complete while owned work may survive.
+    NestedContainment {
+        /// The bounded per-unit detail.
+        detail: String,
+    },
 }
 
 impl core::fmt::Display for RollbackError {
@@ -203,6 +349,10 @@ impl core::fmt::Display for RollbackError {
         match self {
             Self::Reap { detail } => write!(f, "child reap failed: {detail}"),
             Self::Cleanup { detail } => write!(f, "child cleanup failed: {detail}"),
+            Self::NestedContainment { detail } => write!(
+                f,
+                "child nested process-unit containment is unproven: {detail}"
+            ),
         }
     }
 }
@@ -211,31 +361,97 @@ impl std::error::Error for RollbackError {}
 
 /// Spawns and stages one child behind the start gate.
 ///
-/// Staging performs, in order: child runtime-root preparation, control
-/// channel creation, process spawn into its own process group, the
-/// versioned `Hello` handoff, and the `Ready` handshake. Any failure tears
-/// the stage down completely (the staged process is killed and reaped)
-/// before the error is returned.
+/// The caller reserves the exclusive physical runtime-root token before
+/// invoking this function. Staging then performs, in order: control channel
+/// creation, process spawn into its own process group, the versioned `Hello`
+/// handoff, and the `Ready` handshake. Any failure tears the stage down
+/// completely (the staged process is killed and reaped) before the error is
+/// returned. The supplied root token is consumed by this function and becomes
+/// owned by `StagedChild` before the Hello/Ready handshake begins.
+///
+/// `preparation_cancellation` is the invoking attempt's cancellation
+/// authority (Issue #145): it participates in staging **from the start**,
+/// not only at the ownership commit. If it becomes observable while the
+/// child is still preparing, the child is told (`Cancel`), never treated
+/// as startable, and every staged physical resource — the direct child and
+/// every retained nested anchor — is settled before this returns
+/// [`SpawnError::Cancelled`].
 ///
 /// # Errors
 ///
-/// Returns the typed [`SpawnError`] of the first failing stage.
+/// Returns the typed [`SpawnError`] of the first failing stage, or
+/// [`SpawnError::Cancelled`] when the preparation cancellation won.
 pub(crate) async fn spawn_staged(
     plan: &SubagentSpawnPlan,
     spec: &SubagentChildSpec,
+    runtime_root: PhysicalChildRuntimeRoot,
+    preparation_cancellation: &crate::runtime::cancellation::CancellationSignal,
 ) -> Result<StagedChild, SpawnError> {
-    let runtime_root = plan.child_runtime_root(&spec.subagent_id);
-    std::fs::create_dir_all(&runtime_root).map_err(|error| SpawnError::WorkspaceSetup {
-        detail: format!("{}: {error}", runtime_root.display()),
-    })?;
-    let mut staged = match spawn_process(plan, spec, &runtime_root).await {
-        Ok(staged) => staged,
-        Err(error) => {
-            let _ = std::fs::remove_dir_all(&runtime_root);
-            return Err(error);
-        }
+    if preparation_cancellation.is_cancelled() {
+        return Err(discard_unstaged_root(runtime_root, SpawnError::Cancelled));
+    }
+    if spec.runtime_root.as_path() != runtime_root.path() {
+        let owned_path = runtime_root.path().display().to_string();
+        let specified_path = spec.runtime_root.display().to_string();
+        return Err(discard_unstaged_root(
+            runtime_root,
+            SpawnError::WorkspaceSetup {
+                detail: format!(
+                    "child spec runtime root {specified_path} does not match the reserved physical incarnation {owned_path}"
+                ),
+            },
+        ));
+    }
+    // The containment prerequisite is established BEFORE the child exists.
+    // A subagent child may create nested supervised process units during
+    // its own preparation, and the parent can only contain an orphaned unit
+    // anchor it has adopted — which on Linux requires child-subreaper mode
+    // to have been active when the intermediate process died. Installing it
+    // lazily inside the child (as the child's own local runner does) would
+    // make the child a subreaper, not this process, and the anchors this
+    // process retains would be unreachable.
+    if let Err(detail) = crate::runtime::process_supervision::ensure_child_subreaper() {
+        return Err(discard_unstaged_root(
+            runtime_root,
+            SpawnError::ContainmentPrerequisite { detail },
+        ));
+    }
+    let spawned = match spawn_process(plan, runtime_root.path()) {
+        Ok(spawned) => spawned,
+        Err(error) => return Err(discard_unstaged_root(runtime_root, error)),
     };
-    if let Err(error) = staged.handshake(spec).await {
+    let mut staged = StagedChild {
+        child: spawned.child,
+        control: spawned.control,
+        runtime_root,
+        retained: RetainedProcessUnits::default(),
+    };
+    // The typed startup specification travels over the control channel; no
+    // temporary configuration file is ever written.
+    if let Err(error) = write_parent_frame(
+        &mut staged.control,
+        &ParentFrame::Hello(Box::new(spec.clone())),
+    )
+    .await
+    {
+        return match staged.rollback().await {
+            Ok(()) => Err(SpawnError::Handshake {
+                detail: error.to_string(),
+            }),
+            Err(rollback) => Err(SpawnError::Rollback {
+                detail: format!("{error}; {rollback}"),
+            }),
+        };
+    }
+    if let Err(error) = staged.handshake(spec, preparation_cancellation).await {
+        if matches!(error, SpawnError::Cancelled) {
+            return match staged.rollback_cancelled().await {
+                Ok(()) => Err(SpawnError::Cancelled),
+                Err(rollback) => Err(SpawnError::Rollback {
+                    detail: format!("cancelled staging rollback: {rollback}"),
+                }),
+            };
+        }
         return match staged.rollback().await {
             Ok(()) => Err(error),
             Err(rollback) => Err(SpawnError::Rollback {
@@ -246,13 +462,25 @@ pub(crate) async fn spawn_staged(
     Ok(staged)
 }
 
-/// Spawns the child process with the control channel inherited as fd 0 and
-/// hands it the typed startup specification.
-async fn spawn_process(
+/// Returns a pre-spawn failure after removing only the physical root reserved
+/// for that failed spawn. The semantic grouping directory is never removed.
+fn discard_unstaged_root(runtime_root: PhysicalChildRuntimeRoot, error: SpawnError) -> SpawnError {
+    let path = runtime_root.path().display().to_string();
+    match runtime_root.remove() {
+        Ok(()) => error,
+        Err(cleanup) => SpawnError::Rollback {
+            detail: format!(
+                "{error}; could not remove unowned physical child runtime root {path}: {cleanup}"
+            ),
+        },
+    }
+}
+
+/// Spawns the child process with the control channel inherited as fd 0.
+fn spawn_process(
     plan: &SubagentSpawnPlan,
-    spec: &SubagentChildSpec,
-    runtime_root: &std::path::Path,
-) -> Result<StagedChild, SpawnError> {
+    runtime_root: &Path,
+) -> Result<SpawnedProcess, SpawnError> {
     // The control channel: one UnixStream pair. The child end becomes the
     // child's fd 0; both ends are CLOEXEC, so no other descendant of either
     // process can hold the liveness endpoint open.
@@ -285,29 +513,18 @@ async fn spawn_process(
     let child = command.spawn().map_err(|error| SpawnError::Spawn {
         detail: format!("{}: {error}", plan.program.display()),
     })?;
-    let mut staged = StagedChild {
+    Ok(SpawnedProcess {
         child,
         control: parent_end,
-        runtime_root: runtime_root.to_path_buf(),
-    };
-    // The typed startup specification travels over the control channel; no
-    // temporary configuration file is ever written.
-    if let Err(error) = write_parent_frame(
-        &mut staged.control,
-        &ParentFrame::Hello(Box::new(spec.clone())),
-    )
-    .await
-    {
-        return match staged.rollback().await {
-            Ok(()) => Err(SpawnError::Handshake {
-                detail: error.to_string(),
-            }),
-            Err(rollback) => Err(SpawnError::Rollback {
-                detail: format!("{error}; {rollback}"),
-            }),
-        };
-    }
-    Ok(staged)
+    })
+}
+
+/// The process and control endpoint that become one `StagedChild` only
+/// after the physical-root token is moved into that owner.
+#[derive(Debug)]
+struct SpawnedProcess {
+    child: tokio::process::Child,
+    control: tokio::net::UnixStream,
 }
 
 /// A spawned child parked behind the start gate, not yet owned by the
@@ -321,7 +538,50 @@ async fn spawn_process(
 pub(crate) struct StagedChild {
     child: tokio::process::Child,
     control: tokio::net::UnixStream,
-    runtime_root: std::path::PathBuf,
+    runtime_root: PhysicalChildRuntimeRoot,
+    /// The nested supervised process units this child has anchored in this
+    /// process (Issue #145).
+    ///
+    /// External capability preparation — MCP stdio startup, a uv
+    /// environment build, a Skill environment subprocess — happens while
+    /// the child is still *staged*, so anchors can exist long before any
+    /// durable ownership commit. The staged owner therefore owns them, and
+    /// the one ownership commit moves the whole set into the driver task.
+    retained: RetainedProcessUnits,
+}
+
+/// The complete physical settlement of one committed child (Issue #145).
+///
+/// > A direct child reap is not proof of physical settlement while retained
+/// > nested anchors are unresolved.
+///
+/// The driver therefore publishes both facts together, and only after both
+/// are decided: the direct child's terminal outcome and the settlement of
+/// every nested supervised process unit the child anchored here.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PhysicalSettlement {
+    /// The direct child's terminal outcome.
+    pub outcome: PhysicalOutcome,
+    /// The settlement of the child's retained nested process units.
+    pub nested: NestedUnitSettlement,
+    /// A failure to remove the exact physical root after the child and all
+    /// proven nested units settled. An unproven nested unit deliberately
+    /// leaves its root in place instead.
+    pub runtime_root_cleanup_error: Option<String>,
+}
+
+impl PhysicalSettlement {
+    /// A settlement with no nested units, for the paths that never had any.
+    pub(crate) const fn of(outcome: PhysicalOutcome) -> Self {
+        Self {
+            outcome,
+            nested: NestedUnitSettlement {
+                contained: Vec::new(),
+                unproven: Vec::new(),
+            },
+            runtime_root_cleanup_error: None,
+        }
+    }
 }
 
 /// The physical terminal outcome the driver observed.
@@ -344,7 +604,19 @@ pub(crate) enum PhysicalOutcome {
 
 impl StagedChild {
     /// Moves the staged child into the driver task at the ownership commit.
+    ///
+    /// This is the **exactly-once** ownership transfer of both physical
+    /// resources: the OS child handle and the retained nested process-unit
+    /// anchors move together into the driver task. They are moved, never
+    /// copied, so there is one owner at every instant and no second
+    /// containment authority can exist.
     pub(crate) fn into_driver(self, delegate: super::ipc::DelegationFrame) -> ChildDriver {
+        let Self {
+            child,
+            control,
+            runtime_root,
+            retained,
+        } = self;
         let (command_tx, command_rx) = tokio::sync::mpsc::channel(4);
         // The driver owns the OS handle immediately after this call, but it
         // cannot send Delegate until the registry has installed its command
@@ -354,8 +626,10 @@ impl StagedChild {
         let task = tokio::spawn(async move {
             let cancelled_before_start = start_rx.await.unwrap_or(true);
             drive_child(
-                self.child,
-                self.control,
+                child,
+                control,
+                retained,
+                runtime_root,
                 delegate,
                 command_rx,
                 cancelled_before_start,
@@ -370,12 +644,40 @@ impl StagedChild {
     }
 
     /// Tears the staged child down completely: kill the process group, reap
-    /// the direct child, and remove the child runtime root.
+    /// the direct child, settle retained anchors, and remove exactly the
+    /// physical incarnation root it owns.
     ///
     /// Called on every pre-commit failure and on every rolled-back commit
     /// attempt; the registry's no-rollback and no-stale-partial-record
     /// guarantees extend to the OS process.
-    pub(crate) async fn rollback(mut self) -> Result<(), RollbackError> {
+    pub(crate) async fn rollback(self) -> Result<(), RollbackError> {
+        self.settle(false).await
+    }
+
+    /// Tears down a staged child whose preparation the invoking attempt
+    /// cancelled (Issue #145).
+    ///
+    /// The handshake already delivered the `Cancel` frame, so the child's
+    /// own preparation cancellation authority has fired: it cancels and
+    /// physically settles its preparatory supervised units itself. This
+    /// path first gives the child the cancellation grace to do exactly
+    /// that and exit, then escalates (group `SIGTERM`, then `SIGKILL`),
+    /// reaps, contains every retained nested anchor, and removes the child
+    /// spawn-incarnation root — the same complete settlement as
+    /// [`StagedChild::rollback`].
+    pub(crate) async fn rollback_cancelled(self) -> Result<(), RollbackError> {
+        self.settle(true).await
+    }
+
+    /// The one staged-teardown settlement. `cancellation_grace` gives a
+    /// cancelled child the grace window to settle its own preparation
+    /// before signal escalation.
+    async fn settle(mut self, cancellation_grace: bool) -> Result<(), RollbackError> {
+        if cancellation_grace {
+            // The Cancel frame is already on the wire; the child settles
+            // its preparation and exits on its own within the grace.
+            let _ = tokio::time::timeout(CANCEL_GRACE, self.child.wait()).await;
+        }
         kill_group(&self.child, Signal::Term);
         let term_wait = tokio::time::timeout(TERM_GRACE, self.child.wait()).await;
         match term_wait {
@@ -395,12 +697,22 @@ impl StagedChild {
                     })?;
             }
         }
-        std::fs::remove_dir_all(&self.runtime_root).map_err(|error| RollbackError::Cleanup {
-            detail: format!(
-                "remove child runtime root {}: {error}",
-                self.runtime_root.display()
-            ),
-        })?;
+        // The direct child is reaped, so every nested unit it anchored here
+        // is now orphaned (and, on Linux, adopted by this process).
+        // Rollback is not physically complete until each retained anchor is
+        // settled: a staged child that created supervised work must not
+        // leave that work running behind a "rolled back" ownership answer.
+        let settlement = contain_retained(self.retained.take()).await;
+        if let Some(detail) = settlement.unproven_diagnostic() {
+            return Err(RollbackError::NestedContainment { detail });
+        }
+        let runtime_root = self.runtime_root;
+        let path = runtime_root.path().display().to_string();
+        runtime_root
+            .remove()
+            .map_err(|error| RollbackError::Cleanup {
+                detail: format!("remove child runtime root {path}: {error}"),
+            })?;
         Ok(())
     }
 
@@ -417,49 +729,63 @@ impl StagedChild {
         Self {
             child,
             control,
-            runtime_root,
+            runtime_root: PhysicalChildRuntimeRoot::from_existing(runtime_root),
+            retained: RetainedProcessUnits::default(),
         }
+    }
+
+    /// The number of nested process-unit anchors this staged child
+    /// currently has retained (tests only).
+    #[cfg(test)]
+    pub(crate) fn retained_anchor_count(&self) -> usize {
+        self.retained.len()
+    }
+
+    /// Retains one anchor directly (tests only), standing in for an offer
+    /// that arrived over the control channel.
+    #[cfg(test)]
+    pub(crate) fn retain_for_test(
+        &mut self,
+        unit_id: crate::runtime::identity::ProcessUnitId,
+        pgid: i32,
+    ) {
+        self.retained.retain(unit_id, pgid).expect("test retention");
+    }
+
+    /// Runs the startup handshake against a bare subagent identity (tests
+    /// only), so the anchor-offer arm can be exercised without composing a
+    /// whole child specification.
+    #[cfg(test)]
+    pub(crate) async fn handshake_for_test(
+        &mut self,
+        subagent_id: &str,
+        cancellation: &crate::runtime::cancellation::CancellationSignal,
+    ) -> Result<(), SpawnError> {
+        let expected = crate::runtime::identity::SubagentId::new(subagent_id);
+        handshake_core(
+            &mut self.control,
+            &mut self.child,
+            &mut self.retained,
+            &expected,
+            cancellation,
+        )
+        .await
     }
 
     /// Completes the startup handshake: awaits `Ready` (or an honest
     /// `StartupError`), bounded by the startup liveness guard.
-    async fn handshake(&mut self, spec: &SubagentChildSpec) -> Result<(), SpawnError> {
-        let handshake = async {
-            loop {
-                match read_child_frame(&mut self.control).await {
-                    Ok(Some(ChildFrame::Ready(ready))) if ready.subagent_id == spec.subagent_id => {
-                        return Ok(());
-                    }
-                    Ok(Some(ChildFrame::Ready(_))) => {
-                        return Err(SpawnError::Handshake {
-                            detail: "the child reported the wrong identity".to_owned(),
-                        });
-                    }
-                    Ok(Some(ChildFrame::StartupError(error))) => {
-                        return Err(SpawnError::Handshake {
-                            detail: error.message,
-                        });
-                    }
-                    Ok(Some(ChildFrame::Diagnostic(_))) => {}
-                    Ok(Some(ChildFrame::Result(_))) => {
-                        return Err(SpawnError::Handshake {
-                            detail: "the child produced a result before delegation".to_owned(),
-                        });
-                    }
-                    Ok(None) => {
-                        let exit = try_wait(&mut self.child);
-                        return Err(SpawnError::Handshake {
-                            detail: format!("the child exited before Ready{exit}"),
-                        });
-                    }
-                    Err(error) => {
-                        return Err(SpawnError::Handshake {
-                            detail: error.to_string(),
-                        });
-                    }
-                }
-            }
-        };
+    async fn handshake(
+        &mut self,
+        spec: &SubagentChildSpec,
+        cancellation: &crate::runtime::cancellation::CancellationSignal,
+    ) -> Result<(), SpawnError> {
+        let handshake = handshake_core(
+            &mut self.control,
+            &mut self.child,
+            &mut self.retained,
+            &spec.subagent_id,
+            cancellation,
+        );
         match tokio::time::timeout(STARTUP_LIVENESS, handshake).await {
             Ok(result) => result,
             Err(_) => Err(SpawnError::Handshake {
@@ -468,6 +794,103 @@ impl StagedChild {
             }),
         }
     }
+}
+
+/// The one startup-handshake loop: consumes child frames until `Ready`
+/// while the invoking attempt's preparation cancellation participates from
+/// the start (Issue #145).
+///
+/// The cancellation arm is **biased** ahead of the frame arm: once the
+/// attempt cancellation is observable, a `Ready` that is already queued
+/// can never turn the child into a startable staged child. The child is
+/// told via the `Cancel` frame — its own preparation cancellation
+/// authority is driven by it — and the staged teardown then settles every
+/// physical resource before the caller's start decision returns.
+async fn handshake_core(
+    control: &mut tokio::net::UnixStream,
+    child: &mut tokio::process::Child,
+    retained: &mut RetainedProcessUnits,
+    expected: &crate::runtime::identity::SubagentId,
+    cancellation: &crate::runtime::cancellation::CancellationSignal,
+) -> Result<(), SpawnError> {
+    loop {
+        tokio::select! {
+            biased;
+            () = cancellation.cancelled() => {
+                let _ = write_parent_frame(control, &ParentFrame::Cancel).await;
+                return Err(SpawnError::Cancelled);
+            }
+            frame = read_child_frame(control) => match frame {
+                Ok(Some(ChildFrame::Ready(ready))) if ready.subagent_id == *expected => {
+                    return Ok(());
+                }
+                Ok(Some(ChildFrame::Ready(_))) => {
+                    return Err(SpawnError::Handshake {
+                        detail: "the child reported the wrong identity".to_owned(),
+                    });
+                }
+                Ok(Some(ChildFrame::StartupError(error))) => {
+                    return Err(SpawnError::Handshake {
+                        detail: error.message,
+                    });
+                }
+                Ok(Some(ChildFrame::Diagnostic(_))) => {}
+                // External capability preparation runs before `Ready`,
+                // so a nested supervised unit can legitimately offer its
+                // anchor here. The staged owner retains it; the child's
+                // local `START` gate opens only after the ACK below.
+                Ok(Some(ChildFrame::AnchorOffered(offer))) => {
+                    if let Err(error) = answer_anchor_offer(control, retained, &offer).await {
+                        return Err(SpawnError::Handshake {
+                            detail: error.to_string(),
+                        });
+                    }
+                }
+                Ok(Some(ChildFrame::AnchorReleased(release))) => {
+                    retained.release(&release.unit_id, release.pgid);
+                }
+                Ok(Some(ChildFrame::Result(_))) => {
+                    return Err(SpawnError::Handshake {
+                        detail: "the child produced a result before delegation".to_owned(),
+                    });
+                }
+                Ok(None) => {
+                    let exit = try_wait(child);
+                    return Err(SpawnError::Handshake {
+                        detail: format!("the child exited before Ready{exit}"),
+                    });
+                }
+                Err(error) => {
+                    return Err(SpawnError::Handshake {
+                        detail: error.to_string(),
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// Retains one offered nested anchor and answers the child.
+///
+/// The retention happens **strictly before** the acknowledgement is written,
+/// so an acknowledged unit is always already retained: a child that dies
+/// immediately after receiving the ACK is contained, and a child that dies
+/// before it never started the unit's semantic command.
+async fn answer_anchor_offer(
+    control: &mut tokio::net::UnixStream,
+    retained: &mut RetainedProcessUnits,
+    offer: &super::ipc::ProcessUnitAnchorFrame,
+) -> Result<(), super::ipc::ProtocolError> {
+    let frame = match retained.retain(offer.unit_id.clone(), offer.pgid) {
+        Ok(()) => ParentFrame::AnchorAccepted(ProcessUnitAckFrame {
+            unit_id: offer.unit_id.clone(),
+        }),
+        Err(refusal) => ParentFrame::AnchorRefused(ProcessUnitRefusalFrame {
+            unit_id: offer.unit_id.clone(),
+            reason: refusal.reason().to_owned(),
+        }),
+    };
+    write_parent_frame(control, &frame).await
 }
 
 /// The narrow control handle the registry holds for one running child.
@@ -479,7 +902,7 @@ impl StagedChild {
 pub(crate) struct ChildDriver {
     commands: tokio::sync::mpsc::Sender<DriverCommand>,
     start: tokio::sync::oneshot::Sender<bool>,
-    task: tokio::task::JoinHandle<PhysicalOutcome>,
+    task: tokio::task::JoinHandle<PhysicalSettlement>,
 }
 
 /// The driver command channel payload.
@@ -498,7 +921,7 @@ impl ChildDriver {
     ) -> (
         tokio::sync::mpsc::Sender<DriverCommand>,
         tokio::sync::oneshot::Sender<bool>,
-        tokio::task::JoinHandle<PhysicalOutcome>,
+        tokio::task::JoinHandle<PhysicalSettlement>,
     ) {
         (self.commands, self.start, self.task)
     }
@@ -512,13 +935,16 @@ impl ChildDriver {
 /// authority only from the returned [`PhysicalOutcome`]. A `Cancel` frame
 /// alone is never treated as proof of shutdown; the proof is always the
 /// reaped process.
+#[allow(clippy::too_many_lines)] // one coherent delegate/observe/settle pipeline
 async fn drive_child(
     mut child: tokio::process::Child,
     mut control: tokio::net::UnixStream,
+    mut retained: RetainedProcessUnits,
+    runtime_root: PhysicalChildRuntimeRoot,
     delegate: super::ipc::DelegationFrame,
     mut commands: tokio::sync::mpsc::Receiver<DriverCommand>,
     cancelled_before_start: bool,
-) -> PhysicalOutcome {
+) -> PhysicalSettlement {
     let mut cancel_deadline = None;
     if cancelled_before_start {
         if let Err(error) = write_parent_frame(&mut control, &ParentFrame::Cancel).await {
@@ -528,10 +954,15 @@ async fn drive_child(
                     format!("could not deliver the cancellation: {error}; {reap_error}")
                 }
             };
-            return PhysicalOutcome::Lost {
-                diagnostic,
-                escalated: true,
-            };
+            return settle_nested(
+                PhysicalOutcome::Lost {
+                    diagnostic,
+                    escalated: true,
+                },
+                &mut retained,
+                runtime_root,
+            )
+            .await;
         }
         cancel_deadline = Some(tokio::time::Instant::now() + CANCEL_GRACE);
     } else if let Err(error) =
@@ -541,10 +972,15 @@ async fn drive_child(
             Ok(()) => format!("could not deliver the delegation: {error}"),
             Err(reap_error) => format!("could not deliver the delegation: {error}; {reap_error}"),
         };
-        return PhysicalOutcome::Lost {
-            diagnostic,
-            escalated: true,
-        };
+        return settle_nested(
+            PhysicalOutcome::Lost {
+                diagnostic,
+                escalated: true,
+            },
+            &mut retained,
+            runtime_root,
+        )
+        .await;
     }
     let mut result: Option<ResultFrame> = None;
     let mut violation: Option<String> = None;
@@ -572,6 +1008,22 @@ async fn drive_child(
                 match frame {
                     Ok(Some(ChildFrame::Result(frame))) => result = Some(frame),
                     Ok(Some(ChildFrame::Diagnostic(_))) => {}
+                    // The nested anchor protocol stays live for the whole
+                    // committed lifetime: a unit may be created at any point
+                    // during the child's semantic work.
+                    Ok(Some(ChildFrame::AnchorOffered(offer))) => {
+                        if let Err(error) =
+                            answer_anchor_offer(&mut control, &mut retained, &offer).await
+                        {
+                            violation = Some(format!(
+                                "control channel lost while acknowledging a nested process \
+                                 unit anchor: {error}"
+                            ));
+                        }
+                    }
+                    Ok(Some(ChildFrame::AnchorReleased(release))) => {
+                        retained.release(&release.unit_id, release.pgid);
+                    }
                     Ok(Some(_)) => {
                         violation = Some(
                             "protocol violation: unexpected frame after Ready".to_owned(),
@@ -607,12 +1059,17 @@ async fn drive_child(
     // well-behaved child's drain signal after its terminal frame.
     let _ = control.shutdown().await;
     if let Err(error) = reap(&mut child).await {
-        return PhysicalOutcome::Lost {
-            diagnostic: format!("the child could not be reaped: {error}"),
-            escalated: true,
-        };
+        return settle_nested(
+            PhysicalOutcome::Lost {
+                diagnostic: format!("the child could not be reaped: {error}"),
+                escalated: true,
+            },
+            &mut retained,
+            runtime_root,
+        )
+        .await;
     }
-    match (result, violation) {
+    let outcome = match (result, violation) {
         (Some(frame), _) => PhysicalOutcome::Completed(frame),
         (None, Some(diagnostic)) => PhysicalOutcome::Lost {
             diagnostic,
@@ -622,6 +1079,40 @@ async fn drive_child(
             diagnostic: "the child exited without a terminal result".to_owned(),
             escalated: kill_deadline.is_some() || cancel_deadline.is_some(),
         },
+    };
+    settle_nested(outcome, &mut retained, runtime_root).await
+}
+
+/// Settles every anchor the child still had retained when it exited.
+///
+/// This is the one place the "reap is not settlement" rule is enforced: the
+/// driver task does not return — and therefore the registry's counted
+/// lifecycle admission is not released and runtime drain cannot declare
+/// quiescence — until every retained nested unit is contained or explicitly
+/// reported unprovable.
+async fn settle_nested(
+    outcome: PhysicalOutcome,
+    retained: &mut RetainedProcessUnits,
+    runtime_root: PhysicalChildRuntimeRoot,
+) -> PhysicalSettlement {
+    let nested = contain_retained(retained.take()).await;
+    let runtime_root_cleanup_error = if nested.unproven.is_empty() {
+        let path = runtime_root.path().display().to_string();
+        runtime_root
+            .remove()
+            .err()
+            .map(|error| format!("remove child runtime root {path}: {error}"))
+    } else {
+        // An unproven nested unit may still be alive, so keep its mutable
+        // namespace rather than deleting it before physical settlement is
+        // established. The old incarnation remains isolated from all later
+        // incarnation roots.
+        None
+    };
+    PhysicalSettlement {
+        outcome,
+        nested,
+        runtime_root_cleanup_error,
     }
 }
 
@@ -683,5 +1174,518 @@ fn kill_group(child: &tokio::process::Child, signal: Signal) {
     {
         let _ = signal;
         let _ = child;
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::io::{Read as _, Write as _};
+    use std::path::{Path, PathBuf};
+
+    use super::{StagedChild, SubagentSpawnPlan, spawn_staged};
+    use crate::context::{AgentStatusConfig, SessionContextPolicy};
+    use crate::runtime::identity::{ProcessUnitId, SubagentId};
+    use crate::runtime::subagent::ipc::{
+        ChildFrame, ParentFrame, ProcessUnitAnchorFrame, ReadyFrame, read_parent_frame,
+        write_child_frame,
+    };
+
+    const DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+
+    /// A staged child plus the socket the test plays the child role over.
+    struct StagedHarness {
+        staged: StagedChild,
+        child: tokio::net::UnixStream,
+        runtime_root: PathBuf,
+        _dir: tempfile::TempDir,
+    }
+
+    fn stage() -> StagedHarness {
+        let dir = tempfile::tempdir().expect("lab");
+        let root = dir.path().join("child");
+        std::fs::create_dir_all(&root).expect("child root");
+        let (parent, child) = tokio::net::UnixStream::pair().expect("control pair");
+        // The stand-in child leads its own process group, exactly like a
+        // real staged child: rollback signals that group.
+        let process = tokio::process::Command::new("sleep")
+            .arg("300")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0)
+            .spawn()
+            .expect("a stand-in direct child");
+        StagedHarness {
+            staged: StagedChild::for_test(process, parent, root),
+            child,
+            runtime_root: dir.path().join("child"),
+            _dir: dir,
+        }
+    }
+
+    fn allocation_plan(runtime_root: PathBuf) -> SubagentSpawnPlan {
+        SubagentSpawnPlan {
+            program: PathBuf::from("/nonexistent/rustx"),
+            workspace: runtime_root.join("workspace"),
+            runtime_root,
+            agent_status: AgentStatusConfig::default(),
+            context: SessionContextPolicy {
+                reserve_tokens: 0,
+                keep_recent_tokens: 0,
+                summary_output_cap: None,
+            },
+        }
+    }
+
+    fn assert_no_named_entry(root: &Path, name: &str) {
+        let mut pending = vec![root.to_path_buf()];
+        while let Some(directory) = pending.pop() {
+            for entry in std::fs::read_dir(directory).expect("walk the physical root") {
+                let entry = entry.expect("read physical-root entry");
+                assert_ne!(
+                    entry.file_name().to_string_lossy(),
+                    name,
+                    "the old marker is absent from the new physical root"
+                );
+                if entry
+                    .file_type()
+                    .expect("inspect physical-root entry")
+                    .is_dir()
+                {
+                    pending.push(entry.path());
+                }
+            }
+        }
+    }
+
+    /// The parent retains an offered anchor **before** it acknowledges it,
+    /// so an acknowledged unit is always already retained. The child's local
+    /// `START` gate can therefore never open against an anchor the parent is
+    /// not holding.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // one coherent offer/ack/refuse/release sequence
+    async fn an_offered_anchor_is_retained_before_it_is_acknowledged() {
+        let mut harness = stage();
+        let unit = ProcessUnitId::new("unit-a");
+        write_child_frame(
+            &mut harness.child,
+            &ChildFrame::AnchorOffered(ProcessUnitAnchorFrame {
+                unit_id: unit.clone(),
+                pgid: 4242,
+            }),
+        )
+        .await
+        .expect("offer");
+        write_child_frame(
+            &mut harness.child,
+            &ChildFrame::Ready(ReadyFrame {
+                subagent_id: crate::runtime::identity::SubagentId::new("conv-1-subagent-1"),
+            }),
+        )
+        .await
+        .expect("ready");
+
+        // The handshake loop answers the offer and then consumes the Ready
+        // frame the child already queued.
+        tokio::time::timeout(
+            DEADLINE,
+            harness.staged.handshake_for_test(
+                "conv-1-subagent-1",
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            ),
+        )
+        .await
+        .expect("handshake liveness")
+        .expect("the child answered Ready");
+        assert_eq!(
+            harness.staged.retained_anchor_count(),
+            1,
+            "the acknowledged anchor is retained by the staged owner"
+        );
+        let frame = tokio::time::timeout(DEADLINE, read_parent_frame(&mut harness.child))
+            .await
+            .expect("ack liveness")
+            .expect("ack frame");
+        assert_eq!(
+            frame,
+            Some(ParentFrame::AnchorAccepted(
+                crate::runtime::subagent::ipc::ProcessUnitAckFrame {
+                    unit_id: unit.clone()
+                }
+            )),
+            "the parent acknowledges exactly the offered unit"
+        );
+
+        // A duplicate identity is refused, never silently replacing a
+        // retained anchor.
+        write_child_frame(
+            &mut harness.child,
+            &ChildFrame::AnchorOffered(ProcessUnitAnchorFrame {
+                unit_id: unit.clone(),
+                pgid: 4243,
+            }),
+        )
+        .await
+        .expect("duplicate offer");
+        write_child_frame(
+            &mut harness.child,
+            &ChildFrame::Ready(ReadyFrame {
+                subagent_id: crate::runtime::identity::SubagentId::new("conv-1-subagent-1"),
+            }),
+        )
+        .await
+        .expect("ready");
+        tokio::time::timeout(
+            DEADLINE,
+            harness.staged.handshake_for_test(
+                "conv-1-subagent-1",
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            ),
+        )
+        .await
+        .expect("handshake liveness")
+        .expect("the child answered Ready");
+        let frame = tokio::time::timeout(DEADLINE, read_parent_frame(&mut harness.child))
+            .await
+            .expect("refusal liveness")
+            .expect("refusal frame");
+        assert!(
+            matches!(frame, Some(ParentFrame::AnchorRefused(refusal)) if refusal.unit_id == unit),
+            "a duplicate unit identity is refused"
+        );
+        assert_eq!(harness.staged.retained_anchor_count(), 1);
+
+        // Releasing that exact unit removes exactly that anchor.
+        write_child_frame(
+            &mut harness.child,
+            &ChildFrame::AnchorReleased(ProcessUnitAnchorFrame {
+                unit_id: unit,
+                pgid: 4242,
+            }),
+        )
+        .await
+        .expect("release");
+        write_child_frame(
+            &mut harness.child,
+            &ChildFrame::Ready(ReadyFrame {
+                subagent_id: crate::runtime::identity::SubagentId::new("conv-1-subagent-1"),
+            }),
+        )
+        .await
+        .expect("ready");
+        tokio::time::timeout(
+            DEADLINE,
+            harness.staged.handshake_for_test(
+                "conv-1-subagent-1",
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            ),
+        )
+        .await
+        .expect("handshake liveness")
+        .expect("the child answered Ready");
+        assert_eq!(
+            harness.staged.retained_anchor_count(),
+            0,
+            "the proven-terminal unit's anchor is dropped"
+        );
+        harness.staged.rollback().await.expect("rollback");
+    }
+
+    /// Rollback is not physically complete until every retained nested
+    /// anchor is settled: a staged child that created supervised work must
+    /// not leave that work running behind a rolled-back ownership answer.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn staged_rollback_contains_every_retained_nested_anchor() {
+        let harness = stage();
+        let mut staged = harness.staged;
+        // A real adopted group: a direct child of this process that leads
+        // its own process group, exactly like an orphaned nested unit
+        // anchor after the owning child dies.
+        let mut nested = tokio::process::Command::new("sleep");
+        nested.arg("300");
+        nested.process_group(0);
+        let nested = nested.spawn().expect("nested group leader");
+        let pgid = i32::try_from(nested.id().expect("a live child has a pid")).expect("pid fits");
+        staged.retain_for_test(ProcessUnitId::new("unit-a"), pgid);
+        assert_eq!(staged.retained_anchor_count(), 1);
+
+        tokio::time::timeout(DEADLINE, staged.rollback())
+            .await
+            .expect("rollback liveness")
+            .expect("rollback must prove containment");
+        assert!(
+            matches!(
+                nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid), None),
+                Err(nix::errno::Errno::ESRCH)
+            ),
+            "the retained nested unit group is contained by the rollback"
+        );
+        drop(nested);
+    }
+
+    /// **Reap is not settlement.** The committed child driver publishes its
+    /// physical settlement only after every retained nested anchor is
+    /// resolved — so the direct child's exit and reap alone can never make
+    /// the registry (and therefore runtime drain) believe the child is
+    /// physically settled.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_committed_child_settles_its_nested_anchors_before_publishing() {
+        let harness = stage();
+        let mut staged = harness.staged;
+        let mut nested = tokio::process::Command::new("sleep");
+        nested.arg("300");
+        nested
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0);
+        let nested = nested.spawn().expect("nested group leader");
+        let pgid = i32::try_from(nested.id().expect("a live child has a pid")).expect("pid fits");
+        let unit = ProcessUnitId::new("unit-a");
+        staged.retain_for_test(unit.clone(), pgid);
+
+        // The ownership commit: the direct child handle AND the retained
+        // anchor set move into the driver task, exactly once.
+        let driver = staged.into_driver(crate::runtime::subagent::ipc::DelegationFrame {
+            task: "inspect".to_owned(),
+            context: None,
+        });
+        let (_commands, start_gate, task) = driver.split();
+        let _ = start_gate.send(false);
+
+        // The child dies without releasing its anchor: close the control
+        // channel and let the driver reap it.
+        drop(harness.child);
+        let settlement = tokio::time::timeout(DEADLINE, task)
+            .await
+            .expect("the driver must settle")
+            .expect("the driver task must not panic");
+        assert_eq!(
+            settlement.nested.contained,
+            vec![unit],
+            "the driver contained the retained nested unit before publishing"
+        );
+        assert!(
+            settlement.nested.unproven.is_empty(),
+            "an adopted anchor is provably contained on this platform"
+        );
+        assert!(
+            matches!(
+                nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid), None),
+                Err(nix::errno::Errno::ESRCH)
+            ),
+            "the nested unit group is gone once the settlement is published"
+        );
+        assert!(
+            !harness.runtime_root.exists(),
+            "the committed driver, not a separate cleanup owner, removed its exact physical root"
+        );
+        drop(nested);
+    }
+
+    /// The Linux containment prerequisite is established **before** any
+    /// child is spawned, so an orphaned nested anchor is adoptable by this
+    /// process. A spawn that could not establish it must fail rather than
+    /// claim containment authority it does not have.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_containment_prerequisite_precedes_child_staging() {
+        // The prerequisite is one-time and sticky per process; consulting it
+        // here is exactly what `spawn_staged` does before it launches the
+        // child whose root was already reserved by the caller.
+        assert_eq!(
+            crate::runtime::process_supervision::ensure_child_subreaper(),
+            Ok(()),
+            "the supported platforms must be able to establish the prerequisite"
+        );
+        // A spawn whose program does not exist still fails *after* the
+        // prerequisite, never before it.
+        let dir = tempfile::tempdir().expect("lab");
+        let plan = super::SubagentSpawnPlan {
+            program: dir.path().join("no-such-rustx"),
+            workspace: dir.path().join("workspace"),
+            runtime_root: dir.path().join("runtime"),
+            agent_status: crate::context::AgentStatusConfig::default(),
+            context: crate::context::SessionContextPolicy {
+                reserve_tokens: 0,
+                keep_recent_tokens: 0,
+                summary_output_cap: None,
+            },
+        };
+        let mut spec = crate::runtime::subagent::ipc::SubagentChildSpec {
+            protocol_version: crate::runtime::subagent::ipc::SUBAGENT_IPC_VERSION,
+            subagent_id: crate::runtime::identity::SubagentId::new("conv-1-subagent-1"),
+            child_conversation_id: crate::runtime::identity::ConversationId::new(
+                "conv-1-subagent-1",
+            ),
+            child_agent_id: crate::runtime::identity::AgentId::new("agent-child"),
+            parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
+            resolved: crate::runtime::subagent::ResolvedSubagentSpec {
+                agent: crate::runtime::subagent::SubagentName::parse("explore").expect("name"),
+                definition_digest: serde_json::from_value(serde_json::json!("sha256:frozen"))
+                    .expect("digest"),
+                instructions: String::new(),
+                model: crate::model::frozen::test_frozen_model_spec(
+                    serde_json::from_value(serde_json::json!("local/model-a")).expect("model"),
+                ),
+                tools: Vec::new(),
+                skills: Vec::new(),
+                project_instructions: Vec::new(),
+                materialization:
+                    crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
+            },
+            agent_status: crate::context::AgentStatusConfig::default(),
+            context: crate::context::SessionContextPolicy {
+                reserve_tokens: 0,
+                keep_recent_tokens: 0,
+                summary_output_cap: None,
+            },
+            workspace: dir.path().join("workspace"),
+            runtime_root: dir.path().join("runtime"),
+        };
+        let runtime_root = plan
+            .allocate_child_runtime_root(&spec.subagent_id)
+            .expect("a physical incarnation root");
+        spec.runtime_root = runtime_root.path().to_path_buf();
+        assert!(
+            matches!(
+                spawn_staged(
+                    &plan,
+                    &spec,
+                    runtime_root,
+                    &crate::runtime::cancellation::CancellationSignal::new()
+                )
+                .await,
+                Err(super::SpawnError::Spawn { .. })
+            ),
+            "the prerequisite is consulted first; the spawn itself is what fails here"
+        );
+    }
+
+    /// A stale physical incarnation is retained as its own namespace; a
+    /// later spawn of the same semantic child receives a fresh sibling
+    /// namespace rather than deleting and recreating the stale pathname.
+    #[test]
+    fn a_stale_child_incarnation_never_becomes_the_next_childs_authority() {
+        let dir = tempfile::tempdir().expect("lab");
+        let runtime_root = dir.path().join("runtime");
+        let plan = allocation_plan(runtime_root);
+        let semantic_id = SubagentId::new("conv-1-subagent-1");
+        let semantic_root = plan
+            .runtime_root
+            .join("subagents")
+            .join(semantic_id.as_str());
+        let stale_root = semantic_root.join("incarnation-crashed-earlier");
+        let stale_environment = stale_root.join("environments").join("stale");
+        std::fs::create_dir_all(&stale_environment).expect("the stale tree");
+        std::fs::write(stale_environment.join("pyvenv.cfg"), "stale").expect("the stale artifact");
+
+        let fresh_root = plan
+            .allocate_child_runtime_root(&semantic_id)
+            .expect("the fresh physical incarnation root");
+
+        assert!(
+            stale_root.exists(),
+            "the stale incarnation remains available to its original owner"
+        );
+        assert_eq!(
+            std::fs::read_dir(fresh_root.path())
+                .expect("the fresh root listing")
+                .count(),
+            0,
+            "the fresh root has no stale mutable state"
+        );
+        assert_ne!(
+            stale_root,
+            fresh_root.path(),
+            "the semantic grouping path is not itself a mutable child authority"
+        );
+        fresh_root
+            .remove()
+            .expect("remove only the fresh incarnation");
+    }
+
+    /// A real old process is blocked immediately before its delayed
+    /// filesystem create. A later process generation stages the same
+    /// semantic identity through the production allocator while the old
+    /// process is still alive. The old write then succeeds, but its exact
+    /// pathname is a sibling of — never an alias for — the new root.
+    #[test]
+    fn a_surviving_old_incarnation_can_write_only_to_its_own_root() {
+        let dir = tempfile::tempdir().expect("lab");
+        let plan = allocation_plan(dir.path().join("runtime"));
+        let semantic_id = SubagentId::new("conv-race-subagent-1");
+        let old_root = plan
+            .allocate_child_runtime_root(&semantic_id)
+            .expect("the old physical incarnation root");
+        let old_path = old_root.path().to_path_buf();
+
+        let entered_fifo = dir.path().join("old-writer-entered");
+        let release_fifo = dir.path().join("old-writer-release");
+        let fifo_mode = nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR;
+        nix::unistd::mkfifo(&entered_fifo, fifo_mode).expect("the entered rendezvous");
+        nix::unistd::mkfifo(&release_fifo, fifo_mode).expect("the release rendezvous");
+
+        let mut old_writer = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("printf 'entered\\n' > \"$ENTERED\"; IFS= read -r _ < \"$RELEASE\"; printf 'old' > \"$ROOT/old-marker\"")
+            .env("ENTERED", &entered_fifo)
+            .env("RELEASE", &release_fifo)
+            .env("ROOT", &old_path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("the real old writer process");
+
+        let mut entered = std::fs::File::open(&entered_fifo).expect("open entered rendezvous");
+        let mut announcement = String::new();
+        entered
+            .read_to_string(&mut announcement)
+            .expect("read entered rendezvous");
+        assert_eq!(announcement, "entered\n");
+        assert!(
+            old_writer
+                .try_wait()
+                .expect("probe the old writer")
+                .is_none(),
+            "the old writer is alive and blocked before its filesystem write"
+        );
+
+        // A separate plan value models a later rustX process generation using
+        // the same stable runtime root and the same semantic child identity.
+        let restarted_plan = plan.clone();
+        let new_root = restarted_plan
+            .allocate_child_runtime_root(&semantic_id)
+            .expect("the new physical incarnation root");
+        let new_path = new_root.path().to_path_buf();
+        assert_ne!(old_path, new_path);
+        std::fs::write(new_path.join("new-marker"), "new").expect("new child mutable state");
+
+        // Opening and writing the release FIFO is the exact synchronization
+        // point. No sleep is involved: the old process cannot reach its
+        // marker create until this write completes.
+        let mut release = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&release_fifo)
+            .expect("open release rendezvous");
+        release
+            .write_all(b"release\n")
+            .expect("release the old writer");
+        drop(release);
+        let status = old_writer.wait().expect("wait for the old writer");
+        assert!(status.success(), "the delayed old write succeeded");
+
+        assert_eq!(
+            std::fs::read(old_path.join("old-marker")).expect("the old marker"),
+            b"old"
+        );
+        assert_eq!(
+            std::fs::read(new_path.join("new-marker")).expect("the new marker"),
+            b"new"
+        );
+        assert_no_named_entry(&new_path, "old-marker");
+
+        old_root.remove().expect("old owner removes only old root");
+        new_root.remove().expect("new owner removes only new root");
     }
 }

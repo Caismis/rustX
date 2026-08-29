@@ -658,6 +658,18 @@ pub(crate) struct RunnerTestControl {
     pub(crate) terminal_hold: Option<RunnerTerminalHold>,
     #[cfg(test)]
     pub(crate) channel_eof: Option<RunnerChannelEofHook>,
+    /// Overrides the process-global nested containment authority for this
+    /// one invocation (Issue #145).
+    ///
+    /// The authority is process-global in production because a subagent
+    /// child has exactly one parent. In the test binary many supervised
+    /// units run concurrently, so a globally installed test authority would
+    /// receive every other test's offers too. This seam scopes a recording
+    /// authority to exactly the invocation under test; the global path is
+    /// covered separately.
+    #[cfg(test)]
+    pub(crate) nested_authority:
+        Option<Arc<dyn crate::runtime::nested_containment::NestedAnchorAuthority>>,
 }
 
 impl RunnerTestControl {
@@ -668,6 +680,7 @@ impl RunnerTestControl {
         Self {
             pause_at_shell_exit: false,
             lifecycle: RunnerLifecycleHook::new(),
+            nested_authority: None,
             fail_supervisor_spawn: false,
             fail_command_spawn: false,
             fail_signal: false,
@@ -731,6 +744,13 @@ pub(crate) struct SupervisedCommandRunner {
     terminate_sent: bool,
     terminate_deadline: Option<tokio::time::Instant>,
     terminal_event_held: bool,
+    /// The nested containment gate of this unit (Issue #145).
+    ///
+    /// In the top-level runtime it resolves immediately and this runner
+    /// behaves exactly as it did before. Inside a subagent child it holds
+    /// the unit's `START` closed until the top-level parent has
+    /// acknowledged retention of this exact `pgid`.
+    anchor_gate: crate::runtime::nested_containment::AnchorGate,
     control: Option<RunnerTestControl>,
 }
 
@@ -855,6 +875,7 @@ impl SupervisedCommandRunner {
                 terminate_sent: false,
                 terminate_deadline: None,
                 terminal_event_held: false,
+                anchor_gate: crate::runtime::nested_containment::AnchorGate::Idle,
                 control,
             },
             stdout_pipe,
@@ -921,9 +942,26 @@ impl SupervisedCommandRunner {
                             self.failure = Some("invalid Bash ownership anchor transition".to_owned());
                         } else {
                             self.lifecycle = ProcessLifecycle::OwnershipPossible { pgid };
-                            if let Err(error) = send_start(&mut self.stream).await {
-                                self.failure = Some(error);
-                            }
+                            // START is NOT sent here. The nested containment
+                            // gate is opened first; in the top-level runtime
+                            // it resolves immediately, and inside a subagent
+                            // child it resolves only when the top-level
+                            // parent has acknowledged retention of this exact
+                            // anchor. The offer is polled as its own select
+                            // arm so cancellation and the invocation deadline
+                            // stay authoritative while the parent decides.
+                            #[cfg(test)]
+                            let authority = self
+                                .control
+                                .as_ref()
+                                .and_then(|control| control.nested_authority.clone());
+                            #[cfg(not(test))]
+                            let authority: Option<
+                                std::sync::Arc<
+                                    dyn crate::runtime::nested_containment::NestedAnchorAuthority,
+                                >,
+                            > = None;
+                            self.anchor_gate.offer_with(pgid, authority);
                         }
                     }
                     Ok(Some(SupervisorEvent::OwnershipEstablished)) => {
@@ -1046,6 +1084,30 @@ impl SupervisedCommandRunner {
                         }
                     }
                 },
+                anchored = self.anchor_gate.settle_offer(), if self.anchor_gate.is_pending() => {
+                    match anchored {
+                        Ok(()) => {
+                            if let Err(error) = send_start(&mut self.stream).await {
+                                self.failure = Some(error);
+                            }
+                        }
+                        Err(error) => {
+                            // The unit never crossed its START gate, so no
+                            // semantic command was ever spawned. The
+                            // supervisor is told to terminate and the
+                            // ordinary settlement proves the empty unit
+                            // terminal.
+                            self.failure = Some(error.to_string());
+                            if !self.terminate_sent {
+                                send_terminate(&mut self.stream).await;
+                                self.terminate_sent = true;
+                                self.terminate_deadline = Some(
+                                    tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION,
+                                );
+                            }
+                        }
+                    }
+                }
                 () = wait_for_terminal_release(self.control.as_ref()), if self.terminal_event_held => {
                     self.terminal_event_held = false;
                     self.lifecycle = ProcessLifecycle::Terminal;
@@ -1065,6 +1127,15 @@ impl SupervisedCommandRunner {
                 }
             }
         }
+
+        // The unit is terminal: release the parent's retained anchor for
+        // exactly this unit. Releasing here — after the loop proved the
+        // unit's own physical terminality and never earlier — is what makes
+        // the parent's retention correct: an anchor is dropped only against
+        // proof, never because some other part of the tree exited. The
+        // release awaits its bounded delivery: while the parent control
+        // plane is alive a proven-terminal release is never dropped.
+        self.anchor_gate.release().await;
 
         // Process terminality was proven by the outer supervisor before this
         // point. Reaping the already-terminal direct child is semantically
@@ -1489,6 +1560,261 @@ mod tests {
         )
         .await
         .expect("rustX must reap the direct supervisor child");
+    }
+
+    // ---- Issue #145: the nested containment gate ----
+    //
+    // These regressions prove the generic mechanism once, at its real
+    // boundary — the shared supervised-command runner every production
+    // consumer (native Bash, Python uv/tool execution, Skill environment
+    // materialization) goes through. Each consumer then only has to be shown
+    // to enter this path, rather than re-running the whole race matrix.
+
+    /// A recording nested anchor authority whose acknowledgement the test
+    /// releases explicitly. No sleep establishes any ordering here: the
+    /// offer channel and the release gate are the synchronization.
+    ///
+    /// The gate is a **level-triggered** `watch` rather than a `Notify`, and
+    /// the subscription is taken synchronously inside `offer` — before the
+    /// test can observe the offer at all. An edge-triggered notification
+    /// would be lost whenever the returned future had not been polled yet,
+    /// which is a scheduling accident rather than a property of the gate
+    /// under test.
+    #[cfg(unix)]
+    #[derive(Debug)]
+    struct GatedAuthority {
+        offers: tokio::sync::mpsc::UnboundedSender<(crate::runtime::identity::ProcessUnitId, i32)>,
+        releases:
+            tokio::sync::mpsc::UnboundedSender<(crate::runtime::identity::ProcessUnitId, i32)>,
+        gate: tokio::sync::watch::Sender<bool>,
+        accept: bool,
+    }
+
+    #[cfg(unix)]
+    impl crate::runtime::nested_containment::NestedAnchorAuthority for GatedAuthority {
+        fn offer(
+            &self,
+            unit: crate::runtime::identity::ProcessUnitId,
+            pgid: i32,
+        ) -> futures_util::future::BoxFuture<
+            'static,
+            Result<(), crate::runtime::nested_containment::AnchorError>,
+        > {
+            let mut gate = self.gate.subscribe();
+            let _ = self.offers.send((unit, pgid));
+            let accept = self.accept;
+            Box::pin(async move {
+                while !*gate.borrow_and_update() {
+                    if gate.changed().await.is_err() {
+                        return Err(crate::runtime::nested_containment::AnchorError::ParentLost);
+                    }
+                }
+                if accept {
+                    Ok(())
+                } else {
+                    Err(crate::runtime::nested_containment::AnchorError::ParentLost)
+                }
+            })
+        }
+
+        fn release(
+            &self,
+            unit: crate::runtime::identity::ProcessUnitId,
+            pgid: i32,
+        ) -> futures_util::future::BoxFuture<'static, ()> {
+            let _ = self.releases.send((unit, pgid));
+            Box::pin(std::future::ready(()))
+        }
+    }
+
+    #[cfg(unix)]
+    struct GatedHarness {
+        control: RunnerTestControl,
+        offers:
+            tokio::sync::mpsc::UnboundedReceiver<(crate::runtime::identity::ProcessUnitId, i32)>,
+        releases:
+            tokio::sync::mpsc::UnboundedReceiver<(crate::runtime::identity::ProcessUnitId, i32)>,
+        gate: tokio::sync::watch::Sender<bool>,
+    }
+
+    /// Scopes a recording nested anchor authority to exactly one invocation.
+    #[cfg(unix)]
+    fn gated_authority(accept: bool) -> GatedHarness {
+        let (offers_tx, offers) = tokio::sync::mpsc::unbounded_channel();
+        let (releases_tx, releases) = tokio::sync::mpsc::unbounded_channel();
+        let (gate, _closed) = tokio::sync::watch::channel(false);
+        let mut control = RunnerTestControl::new();
+        control.nested_authority = Some(std::sync::Arc::new(GatedAuthority {
+            offers: offers_tx,
+            releases: releases_tx,
+            gate: gate.clone(),
+            accept,
+        }));
+        GatedHarness {
+            control,
+            offers,
+            releases,
+            gate,
+        }
+    }
+
+    /// **The core #145 invariant.** A nested supervised unit may not cross
+    /// its local `START` gate until the parent has acknowledged retention of
+    /// that exact containment anchor.
+    ///
+    /// The proof is structural, not timed. The supervisor announces
+    /// `AnchorReady` strictly before it spawns anything, and the runner now
+    /// answers that with an offer instead of `START`. So at the instant the
+    /// offer is observed, the command provably has not run — asserted by the
+    /// absence of the marker it would create. Releasing the acknowledgement
+    /// is the only thing that lets it run, and the marker then exists.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_nested_unit_cannot_start_before_the_parent_acknowledges_its_anchor() {
+        let mut harness = gated_authority(true);
+        let dir = tempfile::tempdir().expect("lab");
+        let marker = dir.path().join("started");
+        let runner = RunnerBackedProcessRunner::default();
+        let cancellation = CancellationSignal::new();
+        let control = harness.control.clone();
+        let invocation = tokio::spawn({
+            let marker = marker.clone();
+            let cancellation = cancellation.clone();
+            async move {
+                runner
+                    .run(
+                        SupervisedCommandSpec {
+                            command: format!("touch {}", marker.display()),
+                            cwd: std::env::temp_dir(),
+                            environment: vec![(
+                                "PATH".to_owned(),
+                                "/usr/local/bin:/usr/bin:/bin".to_owned(),
+                            )],
+                            timeout: Some(Duration::from_secs(30)),
+                            cancellation,
+                        },
+                        Some(control),
+                    )
+                    .await
+            }
+        });
+
+        let (unit, pgid) = tokio::time::timeout(Duration::from_secs(15), harness.offers.recv())
+            .await
+            .expect("the unit must offer its anchor")
+            .expect("an offer");
+        assert!(pgid > 0, "the offered anchor is a real process group");
+        assert!(
+            !marker.exists(),
+            "the semantic command must not have started before the acknowledgement"
+        );
+
+        harness.gate.send_replace(true);
+        let result = tokio::time::timeout(Duration::from_secs(30), invocation)
+            .await
+            .expect("the acknowledged unit must settle")
+            .expect("the invocation task must not panic")
+            .expect("a terminal result");
+        assert_eq!(result.intent, ProcessOutcomeIntent::Completed);
+        assert!(marker.exists(), "the acknowledged unit ran its command");
+
+        // Release happens only against the unit's own proven physical
+        // terminality, and it names exactly the unit that was offered.
+        let (released, released_pgid) =
+            tokio::time::timeout(Duration::from_secs(15), harness.releases.recv())
+                .await
+                .expect("the settled unit must release its anchor")
+                .expect("a release");
+        assert_eq!(released, unit);
+        assert_eq!(released_pgid, pgid);
+        assert!(
+            harness.releases.try_recv().is_err(),
+            "exactly one release is emitted for one unit"
+        );
+    }
+
+    /// A parent that disappears while the offer is outstanding leaves no
+    /// started nested command: the unit is settled instead.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_refused_anchor_never_starts_the_nested_command() {
+        let mut harness = gated_authority(false);
+        let dir = tempfile::tempdir().expect("lab");
+        let marker = dir.path().join("started");
+        let runner = RunnerBackedProcessRunner::default();
+        let control = harness.control.clone();
+        let invocation = tokio::spawn({
+            let marker = marker.clone();
+            async move {
+                runner
+                    .run(
+                        SupervisedCommandSpec {
+                            command: format!("touch {}", marker.display()),
+                            cwd: std::env::temp_dir(),
+                            environment: vec![(
+                                "PATH".to_owned(),
+                                "/usr/local/bin:/usr/bin:/bin".to_owned(),
+                            )],
+                            timeout: Some(Duration::from_secs(30)),
+                            cancellation: CancellationSignal::new(),
+                        },
+                        Some(control),
+                    )
+                    .await
+            }
+        });
+
+        tokio::time::timeout(Duration::from_secs(15), harness.offers.recv())
+            .await
+            .expect("the unit must offer its anchor")
+            .expect("an offer");
+        harness.gate.send_replace(true);
+
+        let result = tokio::time::timeout(Duration::from_secs(30), invocation)
+            .await
+            .expect("the refused unit must settle")
+            .expect("the invocation task must not panic")
+            .expect("a terminal result");
+        assert!(
+            matches!(result.intent, ProcessOutcomeIntent::ProcessControlFailed(_)),
+            "a unit that could not be anchored settles as a process-control failure: {:?}",
+            result.intent
+        );
+        assert!(
+            !marker.exists(),
+            "a unit that never crossed its START gate never ran its command"
+        );
+        assert!(
+            harness.releases.try_recv().is_err(),
+            "a unit that was never acknowledged has no anchor to release"
+        );
+    }
+
+    /// The top-level runtime installs no authority, so the gate resolves
+    /// immediately and the single-level lifecycle is unchanged.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn the_top_level_runtime_runs_units_without_any_anchor_handshake() {
+        let dir = tempfile::tempdir().expect("lab");
+        let marker = dir.path().join("started");
+        let result = RunnerBackedProcessRunner::default()
+            .run(
+                SupervisedCommandSpec {
+                    command: format!("touch {}", marker.display()),
+                    cwd: std::env::temp_dir(),
+                    environment: vec![(
+                        "PATH".to_owned(),
+                        "/usr/local/bin:/usr/bin:/bin".to_owned(),
+                    )],
+                    timeout: Some(Duration::from_secs(30)),
+                    cancellation: CancellationSignal::new(),
+                },
+                None,
+            )
+            .await
+            .expect("a terminal result");
+        assert_eq!(result.intent, ProcessOutcomeIntent::Completed);
+        assert!(marker.exists());
     }
 
     /// The result waiter is not the physical process owner. Aborting the

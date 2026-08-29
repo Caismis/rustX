@@ -5155,6 +5155,8 @@ mod tests {
             tools: Vec::new(),
             skills: Vec::new(),
             project_instructions: Vec::new(),
+            materialization:
+                crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
         }
     }
 
@@ -5565,6 +5567,7 @@ mod tests {
                 mcp_servers: options.mcp_servers.clone(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
+                python_store_roots: None,
             },
         )
         .expect("coordinator");
@@ -5664,6 +5667,7 @@ mod tests {
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
+                python_store_roots: None,
             },
         )
         .expect("coordinator");
@@ -5738,6 +5742,7 @@ mod tests {
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
+                python_store_roots: None,
             },
         )
         .expect("coordinator");
@@ -5842,6 +5847,7 @@ mod tests {
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
+                python_store_roots: None,
             },
         )
         .expect("coordinator");
@@ -5986,12 +5992,15 @@ mod tests {
         let accepted = match subagents
             .commit(
                 subagents
-                    .prepare(&crate::runtime::subagent::SubagentStartSpec {
-                        resolved: test_resolved_subagent("explore"),
-                        task: "pre-constructed".to_owned(),
-                        context: None,
-                        tool_call_id: ToolCallId::new("call-pre-constructed"),
-                    })
+                    .prepare(
+                        &crate::runtime::subagent::SubagentStartSpec {
+                            resolved: test_resolved_subagent("explore"),
+                            task: "pre-constructed".to_owned(),
+                            context: None,
+                            tool_call_id: ToolCallId::new("call-pre-constructed"),
+                        },
+                        &crate::runtime::cancellation::CancellationSignal::new(),
+                    )
                     .await
                     .expect("prepare"),
                 &crate::runtime::cancellation::CancellationSignal::new(),
@@ -6107,12 +6116,15 @@ mod tests {
         let commit_registry = subagents.clone();
         let committer = tokio::spawn(async move {
             let prepared = commit_registry
-                .prepare(&crate::runtime::subagent::SubagentStartSpec {
-                    resolved: test_resolved_subagent("explore"),
-                    task: "transfer race".to_owned(),
-                    context: None,
-                    tool_call_id: ToolCallId::new("call-transfer-race"),
-                })
+                .prepare(
+                    &crate::runtime::subagent::SubagentStartSpec {
+                        resolved: test_resolved_subagent("explore"),
+                        task: "transfer race".to_owned(),
+                        context: None,
+                        tool_call_id: ToolCallId::new("call-transfer-race"),
+                    },
+                    &crate::runtime::cancellation::CancellationSignal::new(),
+                )
                 .await
                 .expect("prepare");
             commit_registry
@@ -6240,12 +6252,15 @@ mod tests {
         // guards the ownership commit, and the earliest point of the start
         // path — so nothing is ever spawned or published.
         let error = subagents
-            .prepare(&crate::runtime::subagent::SubagentStartSpec {
-                resolved: test_resolved_subagent("explore"),
-                task: "refused after claim".to_owned(),
-                context: None,
-                tool_call_id: ToolCallId::new("call-refused"),
-            })
+            .prepare(
+                &crate::runtime::subagent::SubagentStartSpec {
+                    resolved: test_resolved_subagent("explore"),
+                    task: "refused after claim".to_owned(),
+                    context: None,
+                    tool_call_id: ToolCallId::new("call-refused"),
+                },
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
             .await
             .expect_err("standalone start refused by the runtime-owned lifecycle");
         assert!(matches!(
@@ -9427,6 +9442,7 @@ mod tests {
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: other_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
+                python_store_roots: None,
             },
         )
         .expect("coordinator");
@@ -9488,6 +9504,7 @@ mod tests {
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
+                python_store_roots: None,
             },
         )
         .expect("coordinator");
@@ -11434,12 +11451,15 @@ mod tests {
         let accepted = match subagents
             .commit(
                 subagents
-                    .prepare(&crate::runtime::subagent::SubagentStartSpec {
-                        resolved: test_resolved_subagent("explore"),
-                        task: "first terminal".to_owned(),
-                        context: None,
-                        tool_call_id: ToolCallId::new("call-subagent-one"),
-                    })
+                    .prepare(
+                        &crate::runtime::subagent::SubagentStartSpec {
+                            resolved: test_resolved_subagent("explore"),
+                            task: "first terminal".to_owned(),
+                            context: None,
+                            tool_call_id: ToolCallId::new("call-subagent-one"),
+                        },
+                        &crate::runtime::cancellation::CancellationSignal::new(),
+                    )
                     .await
                     .expect("prepare first"),
                 &crate::runtime::cancellation::CancellationSignal::new(),
@@ -11492,12 +11512,15 @@ mod tests {
         let accepted = match subagents
             .commit(
                 subagents
-                    .prepare(&crate::runtime::subagent::SubagentStartSpec {
-                        resolved: test_resolved_subagent("explore"),
-                        task: "second terminal".to_owned(),
-                        context: None,
-                        tool_call_id: ToolCallId::new("call-subagent-two"),
-                    })
+                    .prepare(
+                        &crate::runtime::subagent::SubagentStartSpec {
+                            resolved: test_resolved_subagent("explore"),
+                            task: "second terminal".to_owned(),
+                            context: None,
+                            tool_call_id: ToolCallId::new("call-subagent-two"),
+                        },
+                        &crate::runtime::cancellation::CancellationSignal::new(),
+                    )
                     .await
                     .expect("prepare second"),
                 &crate::runtime::cancellation::CancellationSignal::new(),
@@ -11639,12 +11662,15 @@ mod tests {
         let owned = match subagents
             .commit(
                 subagents
-                    .prepare(&crate::runtime::subagent::SubagentStartSpec {
-                        resolved: test_resolved_subagent("explore"),
-                        task: "owned child".to_owned(),
-                        context: None,
-                        tool_call_id: ToolCallId::new("call-owned"),
-                    })
+                    .prepare(
+                        &crate::runtime::subagent::SubagentStartSpec {
+                            resolved: test_resolved_subagent("explore"),
+                            task: "owned child".to_owned(),
+                            context: None,
+                            tool_call_id: ToolCallId::new("call-owned"),
+                        },
+                        &crate::runtime::cancellation::CancellationSignal::new(),
+                    )
                     .await
                     .expect("prepare owned"),
                 &crate::runtime::cancellation::CancellationSignal::new(),
@@ -11708,12 +11734,15 @@ mod tests {
         let (staged, _rejected_peer) = stage_runtime_test_child(&dir.path().join("rejected-child"));
         subagents.push_staged_override(staged);
         let prepared = subagents
-            .prepare(&crate::runtime::subagent::SubagentStartSpec {
-                resolved: test_resolved_subagent("explore"),
-                task: "rejected after failure".to_owned(),
-                context: None,
-                tool_call_id: ToolCallId::new("call-rejected"),
-            })
+            .prepare(
+                &crate::runtime::subagent::SubagentStartSpec {
+                    resolved: test_resolved_subagent("explore"),
+                    task: "rejected after failure".to_owned(),
+                    context: None,
+                    tool_call_id: ToolCallId::new("call-rejected"),
+                },
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
             .await
             .expect("prepare rejected");
         let error = subagents
@@ -11799,12 +11828,15 @@ mod tests {
         let accepted = match subagents
             .commit(
                 subagents
-                    .prepare(&crate::runtime::subagent::SubagentStartSpec {
-                        resolved: test_resolved_subagent("explore"),
-                        task: "owned".to_owned(),
-                        context: None,
-                        tool_call_id: ToolCallId::new("call-owned"),
-                    })
+                    .prepare(
+                        &crate::runtime::subagent::SubagentStartSpec {
+                            resolved: test_resolved_subagent("explore"),
+                            task: "owned".to_owned(),
+                            context: None,
+                            tool_call_id: ToolCallId::new("call-owned"),
+                        },
+                        &crate::runtime::cancellation::CancellationSignal::new(),
+                    )
                     .await
                     .expect("prepare"),
                 &crate::runtime::cancellation::CancellationSignal::new(),
@@ -11900,12 +11932,15 @@ mod tests {
         let commit_registry = subagents.clone();
         let committer = tokio::spawn(async move {
             let prepared = commit_registry
-                .prepare(&crate::runtime::subagent::SubagentStartSpec {
-                    resolved: test_resolved_subagent("explore"),
-                    task: "racing".to_owned(),
-                    context: None,
-                    tool_call_id: ToolCallId::new("call-racing"),
-                })
+                .prepare(
+                    &crate::runtime::subagent::SubagentStartSpec {
+                        resolved: test_resolved_subagent("explore"),
+                        task: "racing".to_owned(),
+                        context: None,
+                        tool_call_id: ToolCallId::new("call-racing"),
+                    },
+                    &crate::runtime::cancellation::CancellationSignal::new(),
+                )
                 .await
                 .expect("prepare");
             commit_registry
@@ -12523,12 +12558,15 @@ mod tests {
         let outcome = subagents
             .commit(
                 subagents
-                    .prepare(&crate::runtime::subagent::SubagentStartSpec {
-                        resolved: test_resolved_subagent("explore"),
-                        task: "owned".to_owned(),
-                        context: None,
-                        tool_call_id: ToolCallId::new("call-owned"),
-                    })
+                    .prepare(
+                        &crate::runtime::subagent::SubagentStartSpec {
+                            resolved: test_resolved_subagent("explore"),
+                            task: "owned".to_owned(),
+                            context: None,
+                            tool_call_id: ToolCallId::new("call-owned"),
+                        },
+                        &crate::runtime::cancellation::CancellationSignal::new(),
+                    )
                     .await
                     .expect("prepare"),
                 &crate::runtime::cancellation::CancellationSignal::new(),
@@ -12618,12 +12656,15 @@ mod tests {
         let (staged, _rejected_peer) = stage_runtime_test_child(&dir.path().join("rejected-child"));
         subagents.push_staged_override(staged);
         let prepared = subagents
-            .prepare(&crate::runtime::subagent::SubagentStartSpec {
-                resolved: test_resolved_subagent("explore"),
-                task: "rejected".to_owned(),
-                context: None,
-                tool_call_id: ToolCallId::new("call-rejected"),
-            })
+            .prepare(
+                &crate::runtime::subagent::SubagentStartSpec {
+                    resolved: test_resolved_subagent("explore"),
+                    task: "rejected".to_owned(),
+                    context: None,
+                    tool_call_id: ToolCallId::new("call-rejected"),
+                },
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
             .await
             .expect("prepare");
         match subagents
@@ -14384,6 +14425,7 @@ mod tests {
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
+                python_store_roots: None,
             },
         )
         .expect("capability coordinator");
@@ -14465,6 +14507,7 @@ mod tests {
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
+                python_store_roots: None,
             },
         )
         .expect("coordinator");

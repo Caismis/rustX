@@ -1006,6 +1006,7 @@ async fn runtime_fixture(conversation: &str, model: Arc<FakeModel>) -> RuntimeFi
         mcp_servers: std::collections::BTreeMap::new(),
         base_environment: tool_runtime.environment().clone(),
         environment_store_root: dir.path().join("skill-env"),
+        python_store_roots: None,
     })
     .expect("coordinator");
     let candidate = coordinator.prepare_candidate().await.expect("prepare");

@@ -32,9 +32,32 @@
 //!
 //! subagent process driver (subagent_process)
 //!   owns: spawn, the OS child handle, the control channel, signal
-//!         escalation, wait/reap, physical terminal proof
+//!         escalation, wait/reap, physical terminal proof, and the
+//!         retained nested process-unit anchors of that child (Issue #145)
 //!   never owns: canonical conversation state, lifecycle terminality
 //! ```
+//!
+//! # Nested process-unit anchors (Issue #145)
+//!
+//! A child that runs Bash, MCP stdio, Python/uv, or Skill environment work
+//! creates supervised units whose inner `setsid()` group is outside the
+//! child's own process group, so killing that group cannot reach them. Each
+//! such unit offers its containment anchor to this process and may not cross
+//! its local `START` gate until it is acknowledged; see
+//! [`anchors`] for the parent half and
+//! [`crate::runtime::nested_containment`] for the generic mechanism.
+//!
+//! Anchor ownership follows child ownership exactly:
+//!
+//! ```text
+//! StagedChild   direct child process + retained anchors
+//!      |  exactly-once move at the ownership commit
+//!      v
+//! child driver task
+//! ```
+//!
+//! and a direct child reap is not proof of physical settlement while any
+//! retained anchor is unresolved.
 //!
 //! # Message-bus invariant
 //!
@@ -50,6 +73,8 @@
 pub mod catalog;
 mod registry;
 pub mod resolver;
+
+pub(crate) mod anchors;
 
 pub(crate) mod ipc;
 pub(crate) mod process;

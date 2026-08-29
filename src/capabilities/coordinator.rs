@@ -53,6 +53,13 @@ pub struct CapabilityCoordinatorConfig {
     /// The caller-configured runtime-private environment store root,
     /// disjoint from the Workspace.
     pub environment_store_root: PathBuf,
+    /// An explicit Python tool-store root split (Issue #145).
+    ///
+    /// `None` is the top-level runtime shape: one unified store under the
+    /// environment store root. A subagent child passes an explicit split so
+    /// it reads the parent's shared immutable `tool-versions/` and
+    /// `uv-cache/` while keeping its own private mutable roots.
+    pub python_store_roots: Option<crate::tools::python::PythonToolStoreRoots>,
 }
 
 /// The synchronized coordinator state.
@@ -94,15 +101,16 @@ struct CoordinatorInner {
     workspace: Workspace,
     resource_inputs: Mutex<CapabilityResourceInputs>,
     /// The ownership cancellation root of every in-flight conversation-owned
-    /// MCP connection (Issue #12, M9c).
+    /// preparation: MCP connects (Issue #12, M9c) and Python/uv environment
+    /// builds (Issue #145).
     ///
-    /// Each in-flight connect owner takes a child of this signal, so runtime
-    /// drain can close in-flight *preparation* the same way it closes
-    /// retained runtimes: by cancelling the owner, never by dropping a
-    /// caller future. Cancelling drives an already-spawned stdio process to
-    /// its physical settlement proof before the owner releases its counted
-    /// lifecycle admission.
-    mcp_preparation_cancellation: crate::runtime::cancellation::CancellationSignal,
+    /// Each in-flight preparation owner takes a child of this signal, so
+    /// runtime drain can close in-flight *preparation* the same way it
+    /// closes retained runtimes: by cancelling the owner, never by dropping
+    /// a caller future. Cancelling drives an already-spawned stdio process
+    /// or uv unit to its physical settlement proof before the owner
+    /// releases its counted lifecycle admission.
+    preparation_cancellation: crate::runtime::cancellation::CancellationSignal,
     /// Test-only: parks the next conversation-owned MCP connect at the
     /// instant physical process ownership exists.
     #[cfg(test)]
@@ -121,7 +129,7 @@ struct CoordinatorInner {
     /// Python storage failure degrades Python availability and can never
     /// fail core coordinator construction — and a base-only/subagent
     /// coordinator never touches Python storage at all.
-    python_store_root: PathBuf,
+    python_store_roots: crate::tools::python::PythonToolStoreRoots,
     /// The lazily initialized, coordinator-lifetime-stable Python tool
     /// store (Issue #81).
     ///
@@ -164,6 +172,158 @@ struct CoordinatorInner {
     /// Test-only commit-boundary synchronization hook.
     #[cfg(test)]
     commit_hook: Mutex<Option<Arc<test_sync::CommitBoundaryHook>>>,
+}
+
+/// One materialized capability: its exact definition and its executor.
+type MaterializedTool = (
+    crate::tools::types::ToolDefinition,
+    Arc<dyn crate::tools::executor::ToolExecutor>,
+);
+
+/// Verifies and materializes exactly the selected tools of one connected
+/// MCP server (Issue #145).
+///
+/// The verification is the whole point of the cross-process identity: the
+/// child derives the canonical identity of what the server *actually*
+/// publishes right now and compares it to what its parent generation froze.
+/// A missing tool and a changed tool are both refusals, never silent
+/// omissions and never silent substitutions.
+fn select_verified_mcp_tools(
+    server_id: &McpServerId,
+    binding: &crate::tools::mcp::McpServerBinding,
+    generation: &McpRuntimeGeneration,
+    published: &[crate::tools::mcp::CanonicalMcpTool],
+    selected: &[&crate::capabilities::selected::SelectedMcpTool],
+) -> Result<Vec<MaterializedTool>, crate::capabilities::selected::SelectedMaterializationError> {
+    use crate::capabilities::selected::SelectedMaterializationError;
+    let mut materialized = Vec::with_capacity(selected.len());
+    for wanted in selected {
+        let Some(candidate) = published.iter().find(|tool| tool.name == wanted.name) else {
+            return Err(SelectedMaterializationError::McpToolMissing {
+                server_id: server_id.clone(),
+                name: wanted.name.clone(),
+            });
+        };
+        let observed = crate::tools::mcp::identity::mcp_tool_identity(
+            server_id,
+            &candidate.name,
+            &candidate.description,
+            &candidate.input_schema,
+            binding.policy.execution,
+            binding.policy.concurrency,
+            binding.policy.approval,
+        );
+        if observed != wanted.identity {
+            return Err(SelectedMaterializationError::McpIdentityMismatch {
+                server_id: server_id.clone(),
+                name: wanted.name.clone(),
+                expected: wanted.identity.clone(),
+                observed,
+            });
+        }
+        // The executor is constructed only after verification, from a
+        // child-owned runtime binding. No parent executor, lease, transport
+        // handle, or process-local epoch is ever copied across the process
+        // boundary.
+        materialized.extend(crate::tools::mcp::definitions_owned(
+            server_id,
+            binding.policy,
+            &generation.binding(),
+            vec![candidate.clone()],
+        ));
+    }
+    Ok(materialized)
+}
+
+/// Retires every MCP runtime a failed selected-only preparation connected.
+///
+/// A candidate is only "owned" once it commits; before that, the preparation
+/// itself owns the physical runtimes it created and must settle them on
+/// every failure path rather than dropping the handles.
+async fn retire_candidate_runtimes(runtimes: Vec<McpRuntimeGeneration>) {
+    for generation in runtimes {
+        let _: Option<String> = generation.retire_and_close().await;
+    }
+}
+
+/// Opens and verifies exactly the frozen Python `ToolVersion`s of one child
+/// (Issue #145).
+///
+/// The store is opened over the plan's shared/private root split, so the
+/// child reads the parent's immutable `tool-versions/` and `uv-cache/` while
+/// every mutable execution root stays child-private. `fallback_private_root`
+/// is used only when a plan carries Python tools without an explicit split,
+/// which the resolver does not produce.
+async fn materialize_selected_python(
+    plan: &crate::capabilities::selected::SelectedCapabilityPlan,
+    fallback_private_root: &Path,
+    cancellation: &crate::runtime::cancellation::CancellationSignal,
+) -> Result<Vec<ToolRegistration>, CapabilityPreparationError> {
+    use crate::capabilities::selected::SelectedMaterializationError;
+    if plan.python_tools.is_empty() {
+        return Ok(Vec::new());
+    }
+    let roots = plan.python_roots.clone().unwrap_or_else(|| {
+        crate::tools::python::PythonToolStoreRoots::unified(fallback_private_root.to_path_buf())
+    });
+    let store = PythonToolStore::with_roots(roots).map_err(|error| {
+        SelectedMaterializationError::PythonVersion {
+            tool_version_id: plan.python_tools[0].tool_version_id.clone(),
+            detail: format!("the child Python store could not be opened: {error}"),
+        }
+    })?;
+    let mut registrations = Vec::with_capacity(plan.python_tools.len());
+    for selected in &plan.python_tools {
+        // The one Python authority in a child: the exact frozen identity,
+        // re-verified against the published bytes. No workspace is
+        // consulted and no same-named version can substitute.
+        let published = store
+            .open_published_version(&selected.tool_version_id)
+            .map_err(|error| SelectedMaterializationError::PythonVersion {
+                tool_version_id: selected.tool_version_id.clone(),
+                detail: error.to_string(),
+            })?;
+        if published.package.name != selected.name {
+            return Err(SelectedMaterializationError::PythonNameMismatch {
+                tool_version_id: selected.tool_version_id.clone(),
+                expected: selected.name.clone(),
+                observed: published.package.name.clone(),
+            }
+            .into());
+        }
+        let environment = store
+            .ensure_environment(&published, cancellation)
+            .await
+            .map_err(|error| SelectedMaterializationError::PythonEnvironment {
+                tool_version_id: selected.tool_version_id.clone(),
+                detail: error.to_string(),
+            })?;
+        let package = published.package.clone();
+        let executor = Arc::new(crate::tools::python::PythonToolExecutor::new(
+            &store,
+            published,
+            environment,
+        ));
+        registrations.push(ToolRegistration::plain(
+            crate::tools::types::ToolDefinition {
+                id: crate::runtime::identity::ToolId::new(crate::tools::python::python_tool_id(
+                    &package.name,
+                )),
+                name: package.name,
+                description: package.description,
+                input_schema: package.input_schema,
+                execution_policy: package.policy.execution,
+                concurrency_policy: package.policy.concurrency,
+                approval_policy: package.policy.approval,
+                replay_policy: crate::tools::types::ToolReplayPolicy::Never,
+                origin: crate::tools::types::ToolOrigin::Python {
+                    tool_version_id: package.tool_version_id,
+                },
+            },
+            executor as Arc<dyn crate::tools::executor::ToolExecutor>,
+        ));
+    }
+    Ok(registrations)
 }
 
 /// The capability coordinator of one conversation/capability owner.
@@ -284,6 +444,15 @@ pub struct PreparedCapabilityCandidate {
 }
 
 impl PreparedCapabilityCandidate {
+    /// Settles every physical runtime of a prepared candidate that will
+    /// never commit (Issue #145): pre-commit cancellation won the race
+    /// against this candidate's completion, so the preparation that owns
+    /// these runtimes retires them to physical settlement rather than
+    /// dropping the handles.
+    pub(crate) async fn retire_uncommitted(self) {
+        retire_candidate_runtimes(self.mcp_runtimes).await;
+    }
+
     /// The prepared availability outcome of this candidate.
     #[must_use]
     pub fn availability(&self) -> &CapabilityAvailability {
@@ -401,7 +570,11 @@ impl CapabilityCoordinator {
         // Only the Python store *location* is computed here; the store
         // itself is opened inside the optional Python preparation
         // boundary (Issue #81), never in core construction.
-        let python_store_root = environment_store.root().join("m7-tools");
+        let python_store_roots = config.python_store_roots.clone().unwrap_or_else(|| {
+            crate::tools::python::PythonToolStoreRoots::unified(
+                environment_store.root().join("m7-tools"),
+            )
+        });
         let initial_skills = Arc::new(SkillSnapshot::new(Vec::new()));
         let initial_snapshot = Arc::new(CapabilitySnapshot::new(
             config.conversation_id.clone(),
@@ -416,6 +589,8 @@ impl CapabilityCoordinator {
             None,
             config.base_environment.clone(),
             Arc::new(McpRuntimeLeaseAuthority::empty()),
+            Arc::new(mcp_servers.clone()),
+            Some(python_store_roots.shared.clone()),
         ));
         Ok(Self {
             inner: Arc::new(CoordinatorInner {
@@ -428,12 +603,11 @@ impl CapabilityCoordinator {
                     mcp_servers,
                     base_environment: config.base_environment.clone(),
                 }),
-                mcp_preparation_cancellation: crate::runtime::cancellation::CancellationSignal::new(
-                ),
+                preparation_cancellation: crate::runtime::cancellation::CancellationSignal::new(),
                 #[cfg(test)]
                 connect_ownership_pause: Mutex::new(None),
                 mcp_invalidation: Arc::new(McpInvalidationState::new()),
-                python_store_root,
+                python_store_roots,
                 python_store: Mutex::new(None),
                 environment_store,
                 state: Mutex::new(CoordinatorState {
@@ -704,7 +878,7 @@ impl CapabilityCoordinator {
         let mut mcp_runtimes = Vec::new();
         // `BTreeMap` iteration is the deterministic identity order.
         for (server_id, binding) in &inputs.mcp_servers {
-            match self.prepare_mcp_server(server_id, binding).await {
+            match self.prepare_mcp_server(server_id, binding, None).await {
                 Ok((epoch, generation, tools)) => {
                     mcp_epochs.insert(server_id.clone(), epoch);
                     mcp_tools.extend(crate::tools::mcp::definitions_owned(
@@ -779,7 +953,7 @@ impl CapabilityCoordinator {
         for package in python_packages {
             let published = store.publish(&package).map_err(|error| error.to_string())?;
             let environment = store
-                .ensure_environment(&published)
+                .ensure_environment(&published, &self.inner.preparation_cancellation.child())
                 .await
                 .map_err(|error| error.to_string())?;
             let executor = Arc::new(PythonToolExecutor::new(&store, published, environment));
@@ -826,7 +1000,7 @@ impl CapabilityCoordinator {
         if let Some(store) = &*slot {
             return Ok(store.clone());
         }
-        let store = PythonToolStore::new(self.inner.python_store_root.clone())?;
+        let store = PythonToolStore::with_roots(self.inner.python_store_roots.clone())?;
         *slot = Some(store.clone());
         drop(slot);
         Ok(store)
@@ -840,10 +1014,16 @@ impl CapabilityCoordinator {
     /// Each server is one optional capability source: the caller records a
     /// failure as that server's own unavailable state and continues with
     /// the remaining servers.
+    ///
+    /// `preparation_cancellation` is `Some` only on the selected-only child
+    /// realization path (Issue #145): the child preparation's lifecycle
+    /// authority, which the physical connect owner must observe in addition
+    /// to this coordinator's own preparation root.
     async fn prepare_mcp_server(
         &self,
         server_id: &McpServerId,
         binding: &crate::tools::mcp::McpServerBinding,
+        preparation_cancellation: Option<&crate::runtime::cancellation::CancellationSignal>,
     ) -> Result<
         (
             u64,
@@ -853,7 +1033,7 @@ impl CapabilityCoordinator {
         String,
     > {
         let generation = self
-            .connect_conversation_owned(server_id, binding)
+            .connect_conversation_owned(server_id, binding, preparation_cancellation)
             .await
             .map_err(|error| error.to_string())?;
         // The epoch snapshot is taken under the shared invalidation
@@ -954,6 +1134,178 @@ impl CapabilityCoordinator {
         })
     }
 
+    /// Prepares the **selected-only** candidate of a subagent child runtime
+    /// (Issue #145).
+    ///
+    /// This is the physical realization of a frozen
+    /// `ResolvedSubagentSpec`, and it is deliberately *not* the parent's
+    /// discovery pipeline with a filter bolted on:
+    ///
+    /// ```text
+    /// no Skill discovery            the child's Skills are already frozen
+    ///                               and materialized by its composition
+    /// no workspace Python discovery only the frozen ToolVersionIds are
+    ///                               opened, from the shared immutable store
+    /// no "every configured server"  only the servers the selection names
+    ///                               are connected at all
+    /// no activation policy pass     the frozen set IS the active set
+    /// ```
+    ///
+    /// Each externally sourced capability is verified against the identity
+    /// the parent generation froze before it becomes executable, and a
+    /// failure is a **preparation error**, never an availability
+    /// degradation: a child starts with exactly the authority it was given
+    /// or it does not start.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CapabilityPreparationError::ConversationInactive`] when the
+    /// claiming conversation is draining,
+    /// [`CapabilityPreparationError::Mcp`] when a required server cannot be
+    /// connected or listed,
+    /// [`CapabilityPreparationError::SelectedMaterialization`] when a frozen
+    /// identity cannot be reproduced, and
+    /// [`CapabilityPreparationError::ToolActivation`] when the composed
+    /// registry is invalid.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the coordinator state lock is poisoned.
+    #[allow(clippy::too_many_lines)] // one coherent selected-only realization pipeline
+    pub async fn prepare_selected_candidate(
+        &self,
+        plan: &crate::capabilities::selected::SelectedCapabilityPlan,
+        preparation_cancellation: &crate::runtime::cancellation::CancellationSignal,
+    ) -> Result<PreparedCapabilityCandidate, CapabilityPreparationError> {
+        let lifecycle = self
+            .inner
+            .state
+            .lock()
+            .expect("capability state lock poisoned")
+            .conversation_lifecycle
+            .clone();
+        let _admission = if let Some(lifecycle) = lifecycle {
+            Some(
+                lifecycle
+                    .try_enter_preparation()
+                    .map_err(|_| CapabilityPreparationError::ConversationInactive)?,
+            )
+        } else {
+            None
+        };
+        let base_revision = self
+            .inner
+            .state
+            .lock()
+            .expect("capability state lock poisoned")
+            .revision;
+        let inputs = self
+            .inner
+            .resource_inputs
+            .lock()
+            .expect("capability resource-input lock poisoned")
+            .clone();
+
+        // The frozen Builtin registrations, exactly as the parent admitted
+        // them. Deny by construction: this registry was composed from the
+        // frozen `ToolDefinition`s alone.
+        let mut registrations: Vec<ToolRegistration> = inputs.base_tool_registry.registrations();
+
+        // ---- MCP: connect only the required servers ----
+        //
+        // `inputs.mcp_servers` is already exactly the frozen selected set —
+        // the child's composition never learns about any other server — so
+        // "connect only what is required" is structural here, not a filter.
+        let mut mcp_runtimes: Vec<McpRuntimeGeneration> = Vec::new();
+        let mut mcp_epochs = BTreeMap::new();
+        let required = plan.required_mcp_servers();
+        for server_id in &required {
+            let Some(binding) = inputs.mcp_servers.get(server_id) else {
+                return Err(CapabilityPreparationError::Mcp(format!(
+                    "the frozen specification requires MCP server {server_id}, which this \
+                     child was not given a binding for"
+                )));
+            };
+            let (epoch, generation, tools) = match self
+                .prepare_mcp_server(server_id, binding, Some(preparation_cancellation))
+                .await
+            {
+                Ok(prepared) => prepared,
+                Err(reason) => {
+                    // A required source is not optional. Retire everything
+                    // already connected before failing, so no MCP process
+                    // survives a failed child preparation.
+                    retire_candidate_runtimes(mcp_runtimes).await;
+                    return Err(CapabilityPreparationError::Mcp(reason));
+                }
+            };
+            let selected: Vec<_> = plan
+                .mcp_tools
+                .iter()
+                .filter(|tool| tool.server_id == *server_id)
+                .collect();
+            match select_verified_mcp_tools(server_id, binding, &generation, &tools, &selected) {
+                Ok(definitions) => {
+                    mcp_epochs.insert(server_id.clone(), epoch);
+                    registrations.extend(definitions.into_iter().map(|(definition, executor)| {
+                        ToolRegistration::plain(definition, executor)
+                    }));
+                    mcp_runtimes.push(generation);
+                }
+                Err(error) => {
+                    mcp_runtimes.push(generation);
+                    retire_candidate_runtimes(mcp_runtimes).await;
+                    return Err(error.into());
+                }
+            }
+        }
+
+        // ---- Python: open exactly the frozen immutable versions ----
+        //
+        // Every failure from here on must retire the MCP runtimes already
+        // connected for this candidate: a failed child preparation must not
+        // leave an MCP stdio process behind.
+        match materialize_selected_python(
+            plan,
+            &self.inner.python_store_roots.private,
+            preparation_cancellation,
+        )
+        .await
+        {
+            Ok(python) => registrations.extend(python),
+            Err(error) => {
+                retire_candidate_runtimes(mcp_runtimes).await;
+                return Err(error);
+            }
+        }
+
+        // The frozen set IS the active set: activation policy has nothing
+        // left to decide, so the default (activate everything composed) is
+        // exactly the authorized projection.
+        let (available_tools, candidate_registry) =
+            match select_tools(&registrations, &ToolActivationPolicy::default()) {
+                Ok(selected) => selected,
+                Err(error) => {
+                    retire_candidate_runtimes(mcp_runtimes).await;
+                    return Err(CapabilityPreparationError::ToolActivation(error));
+                }
+            };
+        Ok(PreparedCapabilityCandidate {
+            base_revision,
+            skills: Arc::new(SkillSnapshot::new(Vec::new())),
+            python: None,
+            node: None,
+            effective_environment: inputs.base_environment.clone(),
+            candidate_registry: Arc::new(candidate_registry),
+            available_tools: Arc::new(available_tools),
+            mcp_epochs,
+            availability: CapabilityAvailability::new(),
+            mcp_runtimes,
+            resource_inputs: inputs,
+            force_publish: false,
+        })
+    }
+
     /// Connects one conversation-owned MCP server through an owner whose
     /// lifetime is independent of this caller (Issue #12, M9c).
     ///
@@ -972,10 +1324,18 @@ impl CapabilityCoordinator {
     /// The counted admission is released only after A or B, so aborting or
     /// dropping *this* future never removes the physical owner from the
     /// conversation's quiescence proof. The waiter is not the owner.
+    ///
+    /// `preparation_cancellation` is an additional lifecycle authority the
+    /// physical connect must observe (the child preparation's pre-commit
+    /// authority, Issue #145). It is forwarded into the owner's own
+    /// cancellation signal: once fired, the owner drives its physical
+    /// process to settlement before answering, exactly as it does for the
+    /// coordinator's preparation root.
     async fn connect_conversation_owned(
         &self,
         server_id: &McpServerId,
         binding: &crate::tools::mcp::McpServerBinding,
+        preparation_cancellation: Option<&crate::runtime::cancellation::CancellationSignal>,
     ) -> Result<McpRuntimeGeneration, CapabilityPreparationError> {
         let lifecycle = self
             .inner
@@ -994,7 +1354,7 @@ impl CapabilityCoordinator {
             ),
             None => None,
         };
-        let cancellation = self.inner.mcp_preparation_cancellation.child();
+        let cancellation = self.inner.preparation_cancellation.child();
         #[cfg(test)]
         let ownership_pause = self
             .inner
@@ -1005,6 +1365,7 @@ impl CapabilityCoordinator {
         let inner = Arc::clone(&self.inner);
         let server_id_owned = server_id.clone();
         let binding_owned = binding.clone();
+        let preparation_cancellation = preparation_cancellation.cloned();
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         let handle = tokio::runtime::Handle::current();
         tokio::spawn(async move {
@@ -1013,11 +1374,30 @@ impl CapabilityCoordinator {
                 &binding_owned,
                 &inner.workspace,
                 inner.mcp_invalidation.clone(),
-                cancellation,
+                cancellation.clone(),
             );
             #[cfg(test)]
             let request = request.with_ownership_pause(ownership_pause);
-            let outcome = match McpServerRuntime::connect_owned(request).await {
+            let outcome = {
+                let mut connect = std::pin::pin!(McpServerRuntime::connect_owned(request));
+                match preparation_cancellation {
+                    // The child preparation's authority fires into the owner's
+                    // own cancellation signal; the connect then drives its
+                    // physical process to settlement before answering, exactly
+                    // as it does for the coordinator's preparation root.
+                    Some(authority) => {
+                        tokio::select! {
+                            outcome = &mut connect => outcome,
+                            () = authority.cancelled() => {
+                                cancellation.cancel();
+                                connect.await
+                            }
+                        }
+                    }
+                    None => connect.await,
+                }
+            };
+            let outcome = match outcome {
                 // The preparation owner transfers its lifecycle admission into
                 // the candidate generation before answering the caller. If
                 // the caller has already been cancelled, the send-failure
@@ -1046,15 +1426,16 @@ impl CapabilityCoordinator {
         })
     }
 
-    /// Requests cancellation of every in-flight conversation-owned MCP
-    /// preparation owner (Issue #12, M9c).
+    /// Requests cancellation of every in-flight conversation-owned
+    /// preparation owner (Issue #12, M9c; Issue #145).
     ///
     /// This is a synchronous non-blocking control operation taken by the
-    /// runtime drain transition. It never waits: each owner settles its own
-    /// physical process and only then releases the counted lifecycle
-    /// admission that quiescence waits on.
+    /// runtime drain transition and by a settled child preparation. It
+    /// never waits: each owner settles its own physical process and only
+    /// then releases the counted lifecycle admission that quiescence waits
+    /// on.
     pub(crate) fn cancel_conversation_preparation(&self) {
-        self.inner.mcp_preparation_cancellation.cancel();
+        self.inner.preparation_cancellation.cancel();
     }
 
     /// Settles the conversation-owned capability process plane before the
@@ -1362,6 +1743,8 @@ impl CapabilityCoordinator {
                 candidate.node,
                 candidate.effective_environment,
                 mcp_lease_authority,
+                Arc::new(candidate.resource_inputs.mcp_servers.clone()),
+                Some(self.inner.python_store_roots.shared.clone()),
             ));
             let previous_mcp_runtimes = std::mem::replace(
                 &mut state.mcp_runtimes,
@@ -1852,6 +2235,7 @@ body
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: dir.path().join("skill-env"),
+            python_store_roots: None,
         })
         .expect("coordinator");
         (dir, coordinator)
@@ -2087,6 +2471,7 @@ body
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: store_root,
+            python_store_roots: None,
         })
         .expect("coordinator construction never touches Python storage");
 
@@ -2218,6 +2603,7 @@ mod mcp_race_tests {
             )]),
             base_environment: ToolEnvironment::new(),
             environment_store_root: dir.path().join("skill-env"),
+            python_store_roots: None,
         })
         .expect("coordinator");
         (coordinator, server_id)
@@ -2272,6 +2658,7 @@ mod mcp_race_tests {
             mcp_servers,
             base_environment: ToolEnvironment::new(),
             environment_store_root: dir.path().join("skill-env"),
+            python_store_roots: None,
         })
         .expect("coordinator");
         let lifecycle = crate::runtime::types::ConversationLifecycle::new();

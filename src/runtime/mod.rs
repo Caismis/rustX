@@ -48,6 +48,10 @@ pub mod interactive_supervisor;
 /// Runtime-owned monotonic elapsed time for deterministic policy deadlines.
 /// This is separate from the UTC [`RuntimeClock`] timestamp boundary.
 pub mod monotonic;
+
+/// Generic containment of nested supervised process units created inside a
+/// subagent child (Issue #145).
+pub(crate) mod nested_containment;
 /// Non-Unix interactive supervisor entry points are intentionally unavailable
 /// because the runtime's process-unit implementation uses Unix process
 /// groups and Unix-domain control sockets.

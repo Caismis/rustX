@@ -114,10 +114,30 @@ nominal:
   the policy the child actually registers. The child reconstructs the native
   implementation for that name under the frozen policy and **fails closed**
   if the reconstruction does not equal the frozen definition;
+- each MCP capability crosses as `server_id` plus the canonical name, the
+  exact admitted `ToolDefinition`, and a deterministic **cross-process**
+  `McpToolIdentity`. The process-local MCP invalidation epoch stabilizes one
+  process's catalog read and means nothing in another process, so the child
+  connects the server itself, performs its own `tools/list`, recomputes the
+  identity from what the server actually publishes, and refuses to start on
+  a missing or changed definition;
+- each Python capability crosses as its exact immutable `ToolVersionId`. A
+  workspace is not `ToolVersion` authority after resolution: the child opens
+  that exact published version from the shared content-addressed store and
+  revalidates its digest, so a newer same-named version can never substitute
+  it;
 - each Skill crosses as `SkillId` + `SkillVersionId` plus its catalog
-  metadata. A host path is metadata, never identity: the bytes behind a path
-  can change without the path changing, so an old frozen specification stays
-  unambiguous after the filesystem moves on.
+  metadata and the materialization source it was frozen from. A host path is
+  a source, never identity: the bytes behind a path can change without the
+  path changing, so the child copies the exact frozen file set into its own
+  runtime root, re-proves the version digest over the copy, and remaps the
+  model-visible location onto that copy. Progressive disclosure is untouched
+  — no `SKILL.md` body is preloaded;
+- the specification additionally carries a `ResolvedSubagentMaterialization`
+  plane holding **only** the sources the selection actually needs: the MCP
+  server bindings of the selected tools, and a shared Python store root only
+  when a Python tool is selected. An agent that selects one MCP tool has no
+  second binding to widen to.
 
 ### What `definition_digest` is, and is not
 

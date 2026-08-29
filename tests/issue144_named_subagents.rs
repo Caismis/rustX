@@ -940,7 +940,10 @@ async fn the_frozen_specification_preserves_exact_builtin_identity_through_seria
         assert_eq!(name, &definition.name);
         assert_eq!(definition.origin, rustx::tools::types::ToolOrigin::Builtin);
     }
-    assert!(resolved.external_origin_requirements().is_empty());
+    assert!(
+        resolved.materialization.is_empty(),
+        "a Builtin-only agent needs no externally sourced materialization plane"
+    );
 
     let encoded = serde_json::to_vec(&resolved).expect("encode the frozen specification");
     let decoded: rustx::runtime::subagent::ResolvedSubagentSpec =

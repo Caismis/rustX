@@ -641,9 +641,81 @@ impl Drop for BuildOwnerGuard {
     }
 }
 
+/// The two ownership domains of one Python tool store (Issue #145).
+///
+/// ```text
+/// shared root                       process-private root
+///   tool-versions/                    python-tool-envs/
+///   uv-cache/                         python-tool-bindings/
+///                                     python-invocations/
+/// ```
+///
+/// **Shared** holds only data whose correctness does not depend on a rustX
+/// process-local ownership domain:
+///
+/// - `tool-versions/` is immutable and content-addressed. Publication is a
+///   staging directory plus one atomic `rename`, with the concurrent-winner
+///   path validating the installed marker, and every read revalidates the
+///   source digest against the claimed identity. Two rustX processes may
+///   therefore publish and read the same versions safely.
+/// - `uv-cache/` is owned by `uv`, which supports concurrent readers and
+///   writers against one cache and performs its own cache/target locking.
+///   Sharing it means a subagent child never pays for a cold cache.
+///
+/// **Private** holds every root whose rustX-side ownership is process-local:
+///
+/// - `python-tool-envs/` and `python-tool-bindings/` are published by the
+///   store's in-flight build coalescing, whose ownership domain is one
+///   `Arc<Mutex<..>>` inside one process. That is not cross-process
+///   synchronization, and #145 deliberately does not add a cross-process
+///   lock to pretend otherwise: each process builds into its own root.
+/// - `python-invocations/` is per-invocation scratch allocated from one
+///   process-local monotonic counter. There is no product requirement for
+///   sharing a scratch namespace across processes.
+///
+/// Sharing `uv-cache/` is safe **because of uv's own contract**; it says
+/// nothing about rustX's environment-publication ownership, which stays
+/// private.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PythonToolStoreRoots {
+    /// The cross-process shared immutable/cache root.
+    pub shared: PathBuf,
+    /// The process-private mutable execution root.
+    pub private: PathBuf,
+}
+
+impl PythonToolStoreRoots {
+    /// The top-level runtime shape: one process owns both domains, so they
+    /// are the same directory and the on-disk layout is unchanged.
+    #[must_use]
+    pub fn unified(root: PathBuf) -> Self {
+        Self {
+            shared: root.clone(),
+            private: root,
+        }
+    }
+
+    /// The subagent-child shape: the parent's shared root plus a
+    /// child-private mutable root.
+    #[must_use]
+    pub fn split(shared: PathBuf, private: PathBuf) -> Self {
+        Self { shared, private }
+    }
+
+    /// Creates every root this store owns.
+    fn establish(&self) -> Result<(), PythonToolError> {
+        std::fs::create_dir_all(self.shared.join("tool-versions")).map_err(io_error)?;
+        std::fs::create_dir_all(self.shared.join("uv-cache")).map_err(io_error)?;
+        std::fs::create_dir_all(self.private.join("python-tool-envs")).map_err(io_error)?;
+        std::fs::create_dir_all(self.private.join("python-tool-bindings")).map_err(io_error)?;
+        std::fs::create_dir_all(self.private.join("python-invocations")).map_err(io_error)?;
+        Ok(())
+    }
+}
+
 #[derive(Clone)]
 struct PythonToolStoreInner {
-    root: PathBuf,
+    roots: PythonToolStoreRoots,
     runner: Arc<dyn SupervisedProcessRunner>,
     uv_binary: PathBuf,
     python_binary: PathBuf,
@@ -664,25 +736,38 @@ impl std::fmt::Debug for PythonToolStore {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("PythonToolStore")
-            .field("root", &self.inner.root)
+            .field("shared_root", &self.inner.roots.shared)
+            .field("private_root", &self.inner.roots.private)
             .finish()
     }
 }
 
 impl PythonToolStore {
-    /// Creates the production store below a runtime-private root.
+    /// Creates the production store whose shared and process-private roots
+    /// are the same directory.
+    ///
+    /// This is the top-level runtime shape: one runtime process owns the
+    /// whole store, so both ownership domains live under one root and the
+    /// on-disk layout is exactly the M7 layout.
     ///
     /// # Errors
     ///
     /// Returns an error if the store directories cannot be created.
     pub fn new(root: PathBuf) -> Result<Self, PythonToolError> {
-        std::fs::create_dir_all(root.join("tool-versions")).map_err(io_error)?;
-        std::fs::create_dir_all(root.join("python-tool-envs")).map_err(io_error)?;
-        std::fs::create_dir_all(root.join("python-tool-bindings")).map_err(io_error)?;
-        std::fs::create_dir_all(root.join("python-invocations")).map_err(io_error)?;
+        Self::with_roots(PythonToolStoreRoots::unified(root))
+    }
+
+    /// Creates the production store over an explicit shared/private root
+    /// split.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store directories cannot be created.
+    pub fn with_roots(roots: PythonToolStoreRoots) -> Result<Self, PythonToolError> {
+        roots.establish()?;
         Ok(Self {
             inner: Arc::new(PythonToolStoreInner {
-                root,
+                roots,
                 runner: Arc::new(RunnerBackedProcessRunner::default()),
                 uv_binary: resolve_executable("uv"),
                 python_binary: resolve_executable("python3"),
@@ -701,13 +786,20 @@ impl PythonToolStore {
         root: PathBuf,
         runner: Arc<dyn SupervisedProcessRunner>,
     ) -> Result<Self, PythonToolError> {
-        std::fs::create_dir_all(root.join("tool-versions")).map_err(io_error)?;
-        std::fs::create_dir_all(root.join("python-tool-envs")).map_err(io_error)?;
-        std::fs::create_dir_all(root.join("python-tool-bindings")).map_err(io_error)?;
-        std::fs::create_dir_all(root.join("python-invocations")).map_err(io_error)?;
+        Self::with_roots_and_runner(PythonToolStoreRoots::unified(root), runner)
+    }
+
+    /// Test constructor for an explicit root split and a recorded backend.
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn with_roots_and_runner(
+        roots: PythonToolStoreRoots,
+        runner: Arc<dyn SupervisedProcessRunner>,
+    ) -> Result<Self, PythonToolError> {
+        roots.establish()?;
         Ok(Self {
             inner: Arc::new(PythonToolStoreInner {
-                root,
+                roots,
                 runner,
                 uv_binary: resolve_executable("uv"),
                 python_binary: resolve_executable("python3"),
@@ -715,6 +807,121 @@ impl PythonToolStore {
                 waiter_attachments: Arc::new(WaiterAttachments::default()),
                 next_invocation: Arc::new(AtomicU64::new(0)),
             }),
+        })
+    }
+
+    /// Test constructor with explicit `uv`/`python3` binaries: the physical
+    /// settlement regressions run a real supervised runner against scripted
+    /// stand-in binaries rather than a real toolchain.
+    #[cfg(test)]
+    pub(crate) fn with_binaries_and_runner(
+        roots: PythonToolStoreRoots,
+        uv_binary: PathBuf,
+        python_binary: PathBuf,
+        runner: Arc<dyn SupervisedProcessRunner>,
+    ) -> Result<Self, PythonToolError> {
+        roots.establish()?;
+        Ok(Self {
+            inner: Arc::new(PythonToolStoreInner {
+                roots,
+                runner,
+                uv_binary,
+                python_binary,
+                in_flight: Arc::new(Mutex::new(BTreeMap::new())),
+                waiter_attachments: Arc::new(WaiterAttachments::default()),
+                next_invocation: Arc::new(AtomicU64::new(0)),
+            }),
+        })
+    }
+
+    /// The shared immutable/cache root of this store.
+    #[must_use]
+    pub fn shared_root(&self) -> &Path {
+        &self.inner.roots.shared
+    }
+
+    /// The process-private mutable root of this store.
+    #[must_use]
+    pub fn private_root(&self) -> &Path {
+        &self.inner.roots.private
+    }
+
+    /// Opens the exact immutable published `ToolVersion` named by a frozen
+    /// specification (Issue #145).
+    ///
+    /// This is the child-side counterpart of [`PythonToolStore::publish`]
+    /// and the one authority a subagent child may use to obtain a Python
+    /// Tool: it opens `tool-versions/<id>/`, revalidates the marker,
+    /// re-reads and re-validates the canonical source through exactly the
+    /// ordinary package validation, and recomputes the content identity
+    /// from those bytes. A workspace is never consulted, and a same-named
+    /// package of a different version can never be substituted, because the
+    /// only input is the `ToolVersionId` itself.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PythonToolError::Storage`] if the version is absent, its
+    /// marker is invalid, or its published source does not hash back to the
+    /// requested identity, and [`PythonToolError::InvalidPackage`] if the
+    /// published source is not a valid package.
+    pub fn open_published_version(
+        &self,
+        tool_version_id: &ToolVersionId,
+    ) -> Result<PublishedPythonTool, PythonToolError> {
+        let destination = self
+            .inner
+            .roots
+            .shared
+            .join("tool-versions")
+            .join(tool_version_id.as_str());
+        if !destination.is_dir() {
+            return Err(PythonToolError::Storage(format!(
+                "the frozen Python ToolVersion {} is not present in the shared store",
+                tool_version_id.as_str()
+            )));
+        }
+        let marker = destination.join(TOOL_VERSION_MARKER);
+        let marker_bytes = std::fs::read(&marker).map_err(io_error)?;
+        let marker_value: serde_json::Value =
+            serde_json::from_slice(&marker_bytes).map_err(|error| {
+                PythonToolError::Storage(format!(
+                    "published ToolVersion marker is invalid: {error}"
+                ))
+            })?;
+        let valid = marker_value.get("format")
+            == Some(&serde_json::json!(TOOL_VERSION_MARKER_FORMAT))
+            && marker_value
+                .get("tool_version_id")
+                .and_then(serde_json::Value::as_str)
+                == Some(tool_version_id.as_str());
+        if !valid {
+            return Err(PythonToolError::Storage(
+                "published ToolVersion marker is invalid".to_owned(),
+            ));
+        }
+        let source_root = destination.join(TOOL_SOURCE_DIRECTORY);
+        // The package name is the manifest's own declaration; the ordinary
+        // validator then re-checks that the manifest agrees with it, so a
+        // published source cannot claim one name in the manifest and be
+        // opened under another.
+        let manifest_bytes = regular_file(&source_root, TOOL_MANIFEST_FILE)?;
+        let manifest: ToolManifest =
+            toml::from_str(std::str::from_utf8(&manifest_bytes).map_err(|error| {
+                PythonToolError::InvalidPackage(format!("TOOL.toml is not UTF-8: {error}"))
+            })?)
+            .map_err(|error| PythonToolError::InvalidPackage(format!("TOOL.toml: {error}")))?;
+        let package = discover_package(&manifest.name.clone(), &source_root)?;
+        if package.tool_version_id != *tool_version_id {
+            return Err(PythonToolError::Storage(format!(
+                "published ToolVersion source does not match its claimed identity: \
+                 marker claims {}, published source digest is {}",
+                tool_version_id.as_str(),
+                package.tool_version_id.as_str(),
+            )));
+        }
+        Ok(PublishedPythonTool {
+            package,
+            root: source_root,
         })
     }
 
@@ -747,7 +954,7 @@ impl PythonToolStore {
     /// is sufficient for that; the actual bundle-ownership claim is the
     /// filesystem `create_dir`.
     fn allocate_execution_bundle(&self) -> Result<PathBuf, PythonToolError> {
-        let root = self.inner.root.join("python-invocations");
+        let root = self.inner.roots.private.join("python-invocations");
         let exhausted = || {
             PythonToolError::Storage(
                 "the Python invocation identifier space is exhausted".to_owned(),
@@ -796,7 +1003,8 @@ impl PythonToolStore {
         static NEXT_STAGING: AtomicU64 = AtomicU64::new(0);
         let destination = self
             .inner
-            .root
+            .roots
+            .shared
             .join("tool-versions")
             .join(package.tool_version_id.as_str());
         let source_root = destination.join(TOOL_SOURCE_DIRECTORY);
@@ -835,7 +1043,7 @@ impl PythonToolStore {
                 root: source_root,
             });
         }
-        let staging = self.inner.root.join(format!(
+        let staging = self.inner.roots.shared.join(format!(
             ".tool-version-{}-{}-{}",
             package.tool_version_id.as_str(),
             std::process::id(),
@@ -885,6 +1093,28 @@ impl PythonToolStore {
     /// waiter never releases ownership, and owner failure always publishes a
     /// terminal error and removes the in-flight entry.
     ///
+    /// # Lifecycle cancellation (Issue #145)
+    ///
+    /// `cancellation` is the **lifecycle cancellation authority** of the
+    /// calling ownership domain (a child preparation's pre-commit authority,
+    /// or the conversation-owned preparation root). It is a different
+    /// concern from the process-local build ownership above:
+    ///
+    /// - this caller's own runtime identity probes observe it directly;
+    /// - when this call establishes the build, the store-owned owner task
+    ///   drives the physical uv materialization with it, so cancelling the
+    ///   owning domain's authority cancels the physical supervised unit
+    ///   and the owner publishes its terminal error only after that unit
+    ///   has settled;
+    /// - a waiter never cancels a shared build: its wait ends with the
+    ///   owner's terminal publication, never with the waiter's own
+    ///   cancellation or disappearance (Issue #153).
+    ///
+    /// Callers attaching to one in-flight build must pass authorities of
+    /// the same lifecycle domain; both production call sites satisfy this
+    /// (the child preparation passes its one pre-commit authority, the
+    /// conversation path passes children of the one preparation root).
+    ///
     /// # Errors
     ///
     /// Returns an error if runtime probes, lock validation, frozen
@@ -897,8 +1127,10 @@ impl PythonToolStore {
     pub async fn ensure_environment(
         &self,
         tool: &PublishedPythonTool,
+        cancellation: &crate::runtime::CancellationSignal,
     ) -> Result<PythonToolEnvironment, PythonToolError> {
-        let (python_runtime, uv_identity) = probe_runtime_identity(&self.inner, tool).await?;
+        let (python_runtime, uv_identity) =
+            probe_runtime_identity(&self.inner, tool, cancellation).await?;
         let digest = python_tool_environment_digest(
             std::env::consts::OS,
             std::env::consts::ARCH,
@@ -909,7 +1141,8 @@ impl PythonToolStore {
         );
         let final_root = self
             .inner
-            .root
+            .roots
+            .private
             .join("python-tool-envs")
             .join(digest.as_str());
         if let Some(environment) = Self::read_published_environment(
@@ -957,6 +1190,10 @@ impl PythonToolStore {
             let build_root = final_root.clone();
             let build_python = python_runtime.clone();
             let build_uv = uv_identity.clone();
+            // The physical build observes the lifecycle cancellation
+            // authority of the caller that established it: cancelling the
+            // owning domain's authority cancels the uv units themselves.
+            let build_cancellation = cancellation.clone();
             // Dropping a JoinHandle detaches the task; it does not abort it.
             // The caller therefore cannot become the physical materialization
             // owner merely by being cancelled while waiting below.
@@ -969,6 +1206,7 @@ impl PythonToolStore {
                     &build_digest,
                     &build_python,
                     &build_uv,
+                    &build_cancellation,
                 )
                 .await;
                 let result = match result {
@@ -1023,7 +1261,8 @@ impl PythonToolStore {
         digest: &PythonToolEnvironmentDigest,
     ) -> Result<(), PythonToolError> {
         let directory = inner
-            .root
+            .roots
+            .private
             .join("python-tool-bindings")
             .join(tool.package.tool_version_id.as_str());
         std::fs::create_dir_all(&directory).map_err(io_error)?;
@@ -1101,6 +1340,7 @@ impl PythonToolStore {
 async fn probe_runtime_identity(
     inner: &PythonToolStoreInner,
     tool: &PublishedPythonTool,
+    cancellation: &crate::runtime::CancellationSignal,
 ) -> Result<(String, String), PythonToolError> {
     let environment = ToolEnvironment::new();
     let child_environment = environment.child_environment(&tool.root);
@@ -1110,6 +1350,7 @@ async fn probe_runtime_identity(
         let runner = inner.runner.clone();
         let cwd = tool.root.clone();
         let environment = child_environment.clone();
+        let cancellation = cancellation.clone();
         async move {
             runner
                 .run(
@@ -1118,7 +1359,11 @@ async fn probe_runtime_identity(
                         cwd,
                         environment,
                         timeout: Some(PYTHON_TOOL_PROBE_TIMEOUT),
-                        cancellation: crate::runtime::CancellationSignal::new(),
+                        // The caller's lifecycle authority, never a fresh
+                        // detached signal: a settled preparation physically
+                        // cancels the probe, and the result resolves only
+                        // after the unit's settlement.
+                        cancellation,
                     },
                     None,
                 )
@@ -1167,6 +1412,7 @@ async fn materialize_environment(
     digest: &PythonToolEnvironmentDigest,
     python_runtime: &str,
     uv_identity: &str,
+    cancellation: &crate::runtime::CancellationSignal,
 ) -> Result<PythonToolEnvironment, PythonToolError> {
     if final_root.exists() {
         std::fs::remove_dir_all(final_root).map_err(io_error)?;
@@ -1192,7 +1438,7 @@ async fn materialize_environment(
         // source, corrupting its canonical bytes.
         environment_entries.push((
             "UV_CACHE_DIR".to_owned(),
-            inner.root.join("uv-cache").display().to_string(),
+            inner.roots.shared.join("uv-cache").display().to_string(),
         ));
         // The exact interpreter selection: uv must materialize with the same
         // runtime whose identity entered the environment digest. Project-local
@@ -1213,7 +1459,10 @@ async fn materialize_environment(
                     cwd: tool.root.clone(),
                     environment: environment_entries,
                     timeout: Some(PYTHON_TOOL_UV_TIMEOUT),
-                    cancellation: crate::runtime::CancellationSignal::new(),
+                    // The build-owner domain's lifecycle authority: its
+                    // cancellation physically cancels this uv unit, and
+                    // the result resolves only after the unit settled.
+                    cancellation: cancellation.clone(),
                 },
                 None,
             )
@@ -2339,15 +2588,24 @@ mod tests {
 
         let first_store = store.clone();
         let first_published = published.clone();
-        let first =
-            tokio::spawn(async move { first_store.ensure_environment(&first_published).await });
+        let first = tokio::spawn(async move {
+            first_store
+                .ensure_environment(&first_published, &crate::runtime::CancellationSignal::new())
+                .await
+        });
         // The owner is inside the materialization while the gate is closed.
         scripted.wait_for_materializations(1);
 
         let second_store = store.clone();
         let second_published = published.clone();
-        let second =
-            tokio::spawn(async move { second_store.ensure_environment(&second_published).await });
+        let second = tokio::spawn(async move {
+            second_store
+                .ensure_environment(
+                    &second_published,
+                    &crate::runtime::CancellationSignal::new(),
+                )
+                .await
+        });
         // Let the second caller finish its probes and reach the in-flight
         // coordination point, then assert it did not start a second
         // materialization sequence.
@@ -2389,8 +2647,14 @@ mod tests {
 
         let waiter_store = store.clone();
         let waiter_published = published.clone();
-        let waiter =
-            tokio::spawn(async move { waiter_store.ensure_environment(&waiter_published).await });
+        let waiter = tokio::spawn(async move {
+            waiter_store
+                .ensure_environment(
+                    &waiter_published,
+                    &crate::runtime::CancellationSignal::new(),
+                )
+                .await
+        });
         scripted.wait_for_materializations(1);
         waiter.abort();
         let _ = waiter.await;
@@ -2404,7 +2668,7 @@ mod tests {
         let retry_store = store.clone();
         let retry_published = published.clone();
         let environment = retry_store
-            .ensure_environment(&retry_published)
+            .ensure_environment(&retry_published, &crate::runtime::CancellationSignal::new())
             .await
             .expect("the owner's result is still observed");
         assert_eq!(environment.digest.as_str().len(), 7 + 64);
@@ -2412,6 +2676,225 @@ mod tests {
             scripted.materialization_count(),
             2,
             "no second build after waiter drop"
+        );
+    }
+
+    // ---- Issue #145, Blocker 2: preparation cancellation is physical ----
+
+    /// A Python store whose `uv`/`python3` are scripted stand-ins over the
+    /// REAL supervised runner: the identity probes answer instantly, and
+    /// every materialization subcommand announces its physical start through
+    /// a FIFO rendezvous and then parks, so the test can prove the exact
+    /// ordering without any sleep.
+    ///
+    /// Returns the store, the `RunnerTestControl` of the real runner, the
+    /// anchor-pgid file, and the start-rendezvous FIFO path.
+    #[cfg(unix)]
+    fn gated_physical_store(
+        dir: &tempfile::TempDir,
+    ) -> (
+        PythonToolStore,
+        crate::runtime::process_runner::RunnerTestControl,
+        PathBuf,
+        PathBuf,
+    ) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let gate = dir.path().join("uv-started.fifo");
+        nix::unistd::mkfifo(&gate, nix::sys::stat::Mode::S_IRWXU).expect("fifo");
+        let uv = dir.path().join("uv");
+        std::fs::write(
+            &uv,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'uv 0.9.9'; exit 0; fi\nprintf started > \"{}\"\nexec sleep 300\n",
+                gate.display()
+            ),
+        )
+        .expect("uv stand-in");
+        std::fs::set_permissions(&uv, std::fs::Permissions::from_mode(0o755)).expect("chmod uv");
+        let python = dir.path().join("python3");
+        std::fs::write(&python, "#!/bin/sh\necho 'Python 3.12.0'\n").expect("python stand-in");
+        std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod python");
+
+        let anchor_pid = dir.path().join("anchor-pgid");
+        let mut control = crate::runtime::process_runner::RunnerTestControl::new();
+        control.anchor_pid_file = Some(anchor_pid.clone());
+        let runner: Arc<dyn SupervisedProcessRunner> = Arc::new(
+            crate::runtime::process_runner::RunnerBackedProcessRunner::with_test_control(
+                control.clone(),
+            ),
+        );
+        let store = PythonToolStore::with_binaries_and_runner(
+            super::PythonToolStoreRoots::unified(dir.path().join("store")),
+            uv,
+            python,
+            runner,
+        )
+        .expect("store");
+        (store, control, anchor_pid, gate)
+    }
+
+    /// Deterministic proof that the gated uv process physically started:
+    /// opening the FIFO for reading completes only when the uv process
+    /// opened it for writing, and the bytes arrive when it wrote them.
+    #[cfg(unix)]
+    async fn await_uv_started(gate: PathBuf) {
+        let announced = tokio::task::spawn_blocking(move || std::fs::read(gate))
+            .await
+            .expect("rendezvous task")
+            .expect("the uv process announced its start");
+        assert_eq!(announced, b"started");
+    }
+
+    /// The recorded anchor pgid of the parked uv unit. Written by the inner
+    /// supervisor strictly before the unit's `START`, so after the FIFO
+    /// rendezvous the file provably names this unit's process group.
+    #[cfg(unix)]
+    fn anchor_pgid(anchor_pid: &std::path::Path) -> i32 {
+        std::fs::read_to_string(anchor_pid)
+            .expect("the unit's anchor pgid was recorded")
+            .trim()
+            .parse()
+            .expect("a process-group id")
+    }
+
+    /// The parked uv unit's process group is physically gone.
+    #[cfg(unix)]
+    fn assert_group_terminal(pgid: i32) {
+        assert!(
+            matches!(
+                nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid), None),
+                Err(nix::errno::Errno::ESRCH)
+            ),
+            "the preparatory unit's process group is physically terminal"
+        );
+    }
+
+    /// Attempt-style cancellation of a Python preparation must reach the
+    /// PHYSICAL supervised unit of the in-flight uv build: the unit
+    /// receives the cancellation, its process group becomes physically
+    /// terminal, and only then does the preparation observe its outcome.
+    ///
+    /// Under the old ownership (a fresh detached `CancellationSignal` per
+    /// command) the parked unit never observed any cancellation and this
+    /// test would hang at the liveness guard.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn preparation_cancellation_physically_settles_an_in_flight_uv_build() {
+        let dir = tempfile::tempdir().expect("lab");
+        let (store, control, anchor_pid, gate) = gated_physical_store(&dir);
+        let published = store.publish(&test_package()).expect("publish");
+        let cancellation = crate::runtime::CancellationSignal::new();
+        let ensure = tokio::spawn({
+            let store = store.clone();
+            let cancellation = cancellation.clone();
+            async move { store.ensure_environment(&published, &cancellation).await }
+        });
+
+        // 1. The physical uv preparatory process has actually started.
+        await_uv_started(gate).await;
+        let pgid = anchor_pgid(&anchor_pid);
+
+        // 2. The preparation's lifecycle cancellation authority fires.
+        cancellation.cancel();
+
+        // 3. The physical supervised process receives the cancellation and
+        //    its group becomes physically terminal; only then does the
+        //    preparation outcome arrive.
+        let outcome = tokio::time::timeout(Duration::from_secs(30), ensure)
+            .await
+            .expect("liveness: the cancelled build must settle")
+            .expect("the build task must not panic");
+        let error = outcome.expect_err("a cancelled build is an error, never an environment");
+        assert!(
+            format!("{error}").contains("cancelled"),
+            "the uv unit was cancelled: {error}"
+        );
+        // Settlement was physical BEFORE the outcome was published: the
+        // group is already gone at this point.
+        assert_group_terminal(pgid);
+        assert!(
+            control
+                .recorded_signals()
+                .iter()
+                .any(|signal| signal.pgid == pgid && signal.signal == "SIGTERM"),
+            "the unit's group received the termination signal: {:?}",
+            control.recorded_signals()
+        );
+    }
+
+    /// Parent control-channel EOF during a real uv build is a physical
+    /// cancellation authority (Issue #145): the dispatcher's parent-loss
+    /// publication fires the one preparation signal, the parked uv unit is
+    /// physically cancelled and settled, and only then does the guarded
+    /// preparation settle. Nothing is inferred from dropping a future.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn parent_eof_physically_settles_an_in_flight_uv_build() {
+        let dir = tempfile::tempdir().expect("lab");
+        let (store, control, anchor_pid, gate) = gated_physical_store(&dir);
+        let published = store.publish(&test_package()).expect("publish");
+
+        let (parent, child) = tokio::net::UnixStream::pair().expect("control pair");
+        let dispatcher = crate::local_runtime::dispatcher::ChildControlDispatcher::start(child);
+        let handle = dispatcher.handle();
+        let preparation = crate::local_runtime::composition::ChildPreparation::new(
+            crate::runtime::CancellationSignal::new(),
+            handle.clone(),
+        );
+        let preparation_signal = preparation.cancellation();
+        let guard = tokio::spawn(async move {
+            let signal = preparation.cancellation();
+            let step = async move {
+                store
+                    .ensure_environment(&published, &signal)
+                    .await
+                    .map_err(|error| {
+                        crate::capabilities::CapabilityPreparationError::PreparationSettled(
+                            error.to_string(),
+                        )
+                    })
+            };
+            preparation.guard(step).await
+        });
+
+        // 1. The physical uv preparatory process has actually started.
+        await_uv_started(gate).await;
+        let pgid = anchor_pgid(&anchor_pid);
+
+        // 2. The parent control channel reaches EOF while the build is
+        //    parked. The dispatcher publishes parent loss before the guard
+        //    can observe it.
+        drop(parent);
+        handle.parent_lost_signal().await;
+
+        // 3. The guard fires the one preparation signal (a physical
+        //    cancellation authority), the uv unit settles physically, and
+        //    only then does the preparation settle.
+        let outcome = tokio::time::timeout(Duration::from_secs(30), guard)
+            .await
+            .expect("liveness: the settled preparation must complete")
+            .expect("the guard task must not panic");
+        assert!(
+            matches!(
+                outcome,
+                Err(crate::capabilities::CapabilityPreparationError::PreparationSettled(_))
+            ),
+            "parent EOF settles the preparation: {outcome:?}"
+        );
+        assert!(
+            preparation_signal.is_cancelled(),
+            "parent EOF fired the preparation's physical cancellation authority"
+        );
+        assert_group_terminal(pgid);
+        assert!(
+            control
+                .recorded_signals()
+                .iter()
+                .any(|signal| signal.pgid == pgid && signal.signal == "SIGTERM"),
+            "the unit's group received the termination signal: {:?}",
+            control.recorded_signals()
         );
     }
 
@@ -2444,8 +2927,11 @@ mod tests {
         // materialization command.
         let owner_store = store.clone();
         let owner_published = published.clone();
-        let owner =
-            tokio::spawn(async move { owner_store.ensure_environment(&owner_published).await });
+        let owner = tokio::spawn(async move {
+            owner_store
+                .ensure_environment(&owner_published, &crate::runtime::CancellationSignal::new())
+                .await
+        });
         scripted.wait_for_materializations(1);
 
         // Both waiters attach to the owner's in-flight `BuildState` before
@@ -2457,14 +2943,20 @@ mod tests {
         let waiter_alpha_published = published.clone();
         let waiter_alpha = tokio::spawn(async move {
             waiter_alpha_store
-                .ensure_environment(&waiter_alpha_published)
+                .ensure_environment(
+                    &waiter_alpha_published,
+                    &crate::runtime::CancellationSignal::new(),
+                )
                 .await
         });
         let waiter_beta_store = store.clone();
         let waiter_beta_published = published.clone();
         let waiter_beta = tokio::spawn(async move {
             waiter_beta_store
-                .ensure_environment(&waiter_beta_published)
+                .ensure_environment(
+                    &waiter_beta_published,
+                    &crate::runtime::CancellationSignal::new(),
+                )
                 .await
         });
         wait_for_attached_waiters(&store, 2);
@@ -2528,7 +3020,7 @@ mod tests {
         let retry_store = store.clone();
         let retry_published = published.clone();
         let retry_environment = retry_store
-            .ensure_environment(&retry_published)
+            .ensure_environment(&retry_published, &crate::runtime::CancellationSignal::new())
             .await
             .expect("the retry acquires ownership after the failed owner published");
         assert_eq!(retry_environment.digest.as_str().len(), 7 + 64);
@@ -2635,7 +3127,9 @@ mod tests {
         scripted.release_gate();
         let (_dir, store) = store_with(scripted.clone());
         let published = store.publish(&test_package()).expect("publish");
-        let _ = store.ensure_environment(&published).await;
+        let _ = store
+            .ensure_environment(&published, &crate::runtime::CancellationSignal::new())
+            .await;
         let recorded = scripted
             .commands
             .lock()
@@ -2662,7 +3156,9 @@ mod tests {
         scripted.release_gate();
         let (_dir, store) = store_with(scripted.clone());
         let published = store.publish(&test_package()).expect("publish");
-        let _ = store.ensure_environment(&published).await;
+        let _ = store
+            .ensure_environment(&published, &crate::runtime::CancellationSignal::new())
+            .await;
 
         let sync_env = scripted
             .sync_environment()
@@ -2695,6 +3191,54 @@ mod tests {
         );
     }
 
+    /// A child store's uv commands use the **shared** cache while every
+    /// mutable rustX environment root stays child-private (Issue #145).
+    ///
+    /// Sharing the cache is safe because uv owns its own cache/target
+    /// locking; it says nothing about rustX's environment publication, which
+    /// is exactly why the environment root is not shared with it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_child_store_shares_the_uv_cache_but_not_its_environment_root() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let shared = dir.path().join("shared");
+        let private = dir.path().join("child-private");
+        let scripted = Arc::new(ScriptedRunner::new(vec![
+            Ok(ok_output("resolved 2 packages")),
+            Ok(ok_output("installed 1 package")),
+        ]));
+        scripted.release_gate();
+        let store = PythonToolStore::with_roots_and_runner(
+            super::PythonToolStoreRoots::split(shared.clone(), private.clone()),
+            scripted.clone(),
+        )
+        .expect("child store");
+        let published = store.publish(&test_package()).expect("publish");
+        let _ = store
+            .ensure_environment(&published, &crate::runtime::CancellationSignal::new())
+            .await;
+
+        let sync_env = scripted
+            .sync_environment()
+            .expect("sync command environment");
+        let cache = sync_env
+            .iter()
+            .find(|(key, _)| key == "UV_CACHE_DIR")
+            .map(|(_, value)| value.clone())
+            .expect("UV_CACHE_DIR must be set");
+        assert_eq!(
+            cache,
+            shared.join("uv-cache").display().to_string(),
+            "the child uses the parent's uv cache rather than a cold private one"
+        );
+        assert!(
+            !std::path::Path::new(&cache).starts_with(&private),
+            "the uv cache is never allocated under the child-private root"
+        );
+        // The environment publication root, by contrast, is child-private.
+        assert!(private.join("python-tool-envs").is_dir());
+        assert!(!shared.join("python-tool-envs").exists());
+    }
+
     /// A different interpreter-selection input cannot alias to the same
     /// environment identity: the digest includes the probed Python identity,
     /// so a runtime selection change produces a different digest.
@@ -2717,6 +3261,197 @@ mod tests {
             b"lock",
         );
         assert_ne!(v1, v2);
+    }
+
+    // ---- Issue #145: shared immutable roots, private mutable roots ----
+
+    /// A same-named package whose bytes changed produces a **different**
+    /// `ToolVersionId`, which is what makes exact-version selection
+    /// meaningful in the first place.
+    fn test_package_v2() -> PythonToolPackage {
+        let mut package = test_package();
+        let mut files = package.files.clone();
+        for (path, bytes) in &mut files {
+            if path == std::path::Path::new("tool.py") {
+                *bytes = b"def main(arguments):\n    return {\"v\": 2}\n".to_vec();
+            }
+        }
+        package.tool_version_id = super::tool_version_id(&files);
+        package.files = files;
+        package
+    }
+
+    /// The store's two ownership domains land in the roots they belong to:
+    /// the immutable content-addressed authority and the uv cache in the
+    /// shared root, every mutable rustX execution domain in the private one.
+    #[test]
+    fn the_store_splits_shared_immutable_roots_from_private_mutable_roots() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let shared = dir.path().join("shared");
+        let private = dir.path().join("child-private");
+        let store = PythonToolStore::with_roots(super::PythonToolStoreRoots::split(
+            shared.clone(),
+            private.clone(),
+        ))
+        .expect("store");
+        assert_eq!(store.shared_root(), shared);
+        assert_eq!(store.private_root(), private);
+        assert!(shared.join("tool-versions").is_dir());
+        assert!(shared.join("uv-cache").is_dir());
+        assert!(private.join("python-tool-envs").is_dir());
+        assert!(private.join("python-tool-bindings").is_dir());
+        assert!(private.join("python-invocations").is_dir());
+        // The mutable roots are never created under the shared authority,
+        // and the immutable authority is never created under a private root.
+        assert!(!shared.join("python-tool-envs").exists());
+        assert!(!shared.join("python-invocations").exists());
+        assert!(!private.join("tool-versions").exists());
+        assert!(!private.join("uv-cache").exists());
+    }
+
+    /// A publication made by one process is readable by another process's
+    /// store over the same shared root, while each keeps its own private
+    /// mutable roots. This is the parent/child shape.
+    #[test]
+    fn a_child_store_opens_the_exact_version_its_parent_published() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let shared = dir.path().join("shared");
+        let parent =
+            PythonToolStore::with_roots(super::PythonToolStoreRoots::unified(shared.clone()))
+                .expect("parent store");
+        let package = test_package();
+        parent.publish(&package).expect("publish");
+
+        let child = PythonToolStore::with_roots(super::PythonToolStoreRoots::split(
+            shared.clone(),
+            dir.path().join("child-private"),
+        ))
+        .expect("child store");
+        let opened = child
+            .open_published_version(&package.tool_version_id)
+            .expect("the child opens the exact frozen version");
+        assert_eq!(opened.package.tool_version_id, package.tool_version_id);
+        assert_eq!(opened.package.name, "alpha");
+        assert_eq!(
+            opened.root,
+            shared
+                .join("tool-versions")
+                .join(package.tool_version_id.as_str())
+                .join("source"),
+            "the child reads the shared immutable authority directly"
+        );
+    }
+
+    /// **The exact-version invariant.** A workspace is not `ToolVersion`
+    /// authority after resolution: with a newer same-named version already
+    /// published, opening the frozen identity still yields the frozen bytes.
+    #[test]
+    fn a_newer_same_named_version_never_substitutes_the_frozen_one() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let shared = dir.path().join("shared");
+        let parent =
+            PythonToolStore::with_roots(super::PythonToolStoreRoots::unified(shared.clone()))
+                .expect("parent store");
+        let frozen = test_package();
+        let newer = test_package_v2();
+        assert_ne!(
+            frozen.tool_version_id, newer.tool_version_id,
+            "the two versions are genuinely different content"
+        );
+        parent.publish(&frozen).expect("publish the frozen version");
+        parent.publish(&newer).expect("publish the newer version");
+
+        let child = PythonToolStore::with_roots(super::PythonToolStoreRoots::split(
+            shared,
+            dir.path().join("child-private"),
+        ))
+        .expect("child store");
+        let opened = child
+            .open_published_version(&frozen.tool_version_id)
+            .expect("the frozen version opens");
+        assert_eq!(opened.package.tool_version_id, frozen.tool_version_id);
+        assert_eq!(
+            std::fs::read(opened.root.join("tool.py")).expect("source"),
+            b"def main(arguments):\n    return arguments\n".to_vec(),
+            "the frozen bytes execute, not the newer same-named ones"
+        );
+    }
+
+    /// A frozen version that is absent fails closed instead of falling back
+    /// to rediscovery.
+    #[test]
+    fn a_missing_frozen_version_fails_closed() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = PythonToolStore::new(dir.path().join("store")).expect("store");
+        let error = store
+            .open_published_version(&ToolVersionId::new("sha256:absent"))
+            .expect_err("an absent version cannot be materialized");
+        assert!(
+            format!("{error}").contains("not present in the shared store"),
+            "unexpected failure: {error}"
+        );
+    }
+
+    /// A frozen version whose published source was mutated after
+    /// publication fails closed: the digest is recomputed, never trusted
+    /// from the marker.
+    #[test]
+    fn a_corrupt_frozen_version_fails_closed() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path().join("store");
+        let store = PythonToolStore::new(root.clone()).expect("store");
+        let package = test_package();
+        store.publish(&package).expect("publish");
+        std::fs::write(
+            root.join("tool-versions")
+                .join(package.tool_version_id.as_str())
+                .join("source/tool.py"),
+            b"def main(arguments):\n    return \"tampered\"\n",
+        )
+        .expect("tamper");
+        let error = store
+            .open_published_version(&package.tool_version_id)
+            .expect_err("a corrupt version cannot be materialized");
+        assert!(
+            format!("{error}").contains("does not match its claimed identity"),
+            "unexpected failure: {error}"
+        );
+    }
+
+    /// Two child stores over the same shared authority are **separate**
+    /// process-local ownership domains: they never share the in-flight
+    /// environment-build coalescing or the invocation allocation domain.
+    ///
+    /// This is exactly why the mutable roots stay private: an
+    /// `Arc<Mutex<..>>` is not cross-process synchronization, and #145
+    /// deliberately does not pretend otherwise.
+    #[test]
+    fn two_child_stores_never_share_process_local_ownership() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let shared = dir.path().join("shared");
+        let first = PythonToolStore::with_roots(super::PythonToolStoreRoots::split(
+            shared.clone(),
+            dir.path().join("child-a"),
+        ))
+        .expect("first child store");
+        let second = PythonToolStore::with_roots(super::PythonToolStoreRoots::split(
+            shared.clone(),
+            dir.path().join("child-b"),
+        ))
+        .expect("second child store");
+        assert_ne!(
+            first.identity_token(),
+            second.identity_token(),
+            "two child stores are two process-local coordination domains"
+        );
+        assert_eq!(first.shared_root(), second.shared_root());
+        assert_ne!(first.private_root(), second.private_root());
+        // Each child allocates invocation scratch from its own root, so the
+        // scratch namespaces cannot collide.
+        let first_bundle = first.allocate_execution_bundle().expect("first bundle");
+        let second_bundle = second.allocate_execution_bundle().expect("second bundle");
+        assert!(first_bundle.starts_with(dir.path().join("child-a")));
+        assert!(second_bundle.starts_with(dir.path().join("child-b")));
     }
 
     /// The published `ToolVersion` shape is `tool-versions/<id>/source/` plus
@@ -2911,12 +3646,26 @@ mod tests {
     fn store_inner_is_constructible() {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = PythonToolStore::new(dir.path().join("store")).expect("store");
-        assert!(store.inner.root.join("tool-versions").is_dir());
-        assert!(store.inner.root.join("python-tool-envs").is_dir());
-        assert!(store.inner.root.join("python-tool-bindings").is_dir());
-        assert!(store.inner.root.join("python-invocations").is_dir());
+        assert!(store.inner.roots.shared.join("tool-versions").is_dir());
+        assert!(store.inner.roots.private.join("python-tool-envs").is_dir());
+        assert!(
+            store
+                .inner
+                .roots
+                .private
+                .join("python-tool-bindings")
+                .is_dir()
+        );
+        assert!(
+            store
+                .inner
+                .roots
+                .private
+                .join("python-invocations")
+                .is_dir()
+        );
         let _ = PythonToolStoreInner {
-            root: dir.path().join("other"),
+            roots: super::PythonToolStoreRoots::unified(dir.path().join("other")),
             runner: Arc::new(ScriptedRunner::new(Vec::new())),
             uv_binary: PathBuf::from("uv"),
             python_binary: PathBuf::from("python3"),
@@ -3692,7 +4441,7 @@ mod tests {
         let recorded = runner.commands.lock().expect("recorded commands lock");
         assert_eq!(recorded.len(), 1, "exactly one execution command ran");
         let (command, cwd) = &recorded[0];
-        let invocation_root = store.inner.root.join("python-invocations");
+        let invocation_root = store.inner.roots.private.join("python-invocations");
         let bundle = cwd.parent().expect("the source directory's bundle");
         assert_eq!(
             cwd.file_name().expect("source dir name"),
@@ -3716,7 +4465,12 @@ mod tests {
             "the runtime-owned input lives outside the source namespace"
         );
         assert!(
-            !store.inner.root.join("python-tool-harness.py").exists(),
+            !store
+                .inner
+                .roots
+                .private
+                .join("python-tool-harness.py")
+                .exists(),
             "no shared writable harness path exists across executor generations"
         );
         drop(recorded);
@@ -3990,7 +4744,11 @@ mod tests {
         let package = test_package();
         let (store, _published, executor, tool_runtime) =
             executor_fixture(&dir, runner.clone(), &package);
-        let stale = store.inner.root.join("python-invocations/execution-0");
+        let stale = store
+            .inner
+            .roots
+            .private
+            .join("python-invocations/execution-0");
         std::fs::create_dir_all(&stale).expect("stale scratch");
         std::fs::write(stale.join("marker.txt"), b"unknown ownership").expect("marker");
 
@@ -4044,7 +4802,8 @@ mod tests {
         assert!(
             !store
                 .inner
-                .root
+                .roots
+                .private
                 .join("python-invocations/execution-0")
                 .exists(),
             "no lower-numbered bundle was ever created"
@@ -4069,7 +4828,8 @@ mod tests {
             bundle,
             store
                 .inner
-                .root
+                .roots
+                .private
                 .join("python-invocations/execution-18446744073709551614"),
             "the final identifier names its bundle"
         );
@@ -4094,7 +4854,8 @@ mod tests {
         assert!(
             !store
                 .inner
-                .root
+                .roots
+                .private
                 .join("python-invocations/execution-0")
                 .exists(),
             "the allocator never wrapped to execution-0"
@@ -4111,7 +4872,8 @@ mod tests {
         let store = PythonToolStore::new(dir.path().join("store")).expect("store");
         let stale = store
             .inner
-            .root
+            .roots
+            .private
             .join("python-invocations/execution-18446744073709551614");
         std::fs::create_dir_all(&stale).expect("stale final-identifier scratch");
         std::fs::write(stale.join("marker.txt"), b"unknown ownership").expect("marker");
@@ -4137,7 +4899,8 @@ mod tests {
         assert!(
             !store
                 .inner
-                .root
+                .roots
+                .private
                 .join("python-invocations/execution-0")
                 .exists(),
             "stale-scratch skipping never wrapped to execution-0"
@@ -4369,7 +5132,7 @@ mod tests {
         let (_dir, store) = store_with(scripted);
         let published = store.publish(&test_package()).expect("publish");
         let error = store
-            .ensure_environment(&published)
+            .ensure_environment(&published, &crate::runtime::CancellationSignal::new())
             .await
             .expect_err("a timed-out probe must fail preparation");
         assert!(error.to_string().contains("timed out"));

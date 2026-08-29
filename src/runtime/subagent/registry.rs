@@ -10,6 +10,7 @@
 //! lifecycle        (typed SubagentLifecycle; terminal publication
 //!                   exactly-once through the durable compound transaction)
 //! identity         (SubagentId ordinals; never a PID)
+//! physical root    (one fresh spawn-incarnation namespace per child)
 //! cancellation     (intent commit -> driver command -> escalation)
 //! settlement       (physical outcome -> terminal candidate -> durable
 //!                   result acceptance -> capacity release)
@@ -53,7 +54,7 @@ use crate::runtime::types::{CancellationReason, DurabilityGate};
 
 use super::catalog::{SubagentDefinitionDigest, SubagentName};
 use super::ipc::DelegationFrame;
-use super::process::{PhysicalOutcome, StagedChild, SubagentSpawnPlan};
+use super::process::{PhysicalOutcome, PhysicalSettlement, StagedChild, SubagentSpawnPlan};
 use super::resolver::ResolvedSubagentSpec;
 use super::{
     MAX_CONTEXT_PACKAGE_BYTES, MAX_RESULT_CONTENT_BYTES, MAX_TASK_BYTES, SubagentTerminalState,
@@ -341,20 +342,6 @@ pub enum SubagentStartError {
         /// The configured bound.
         max: usize,
     },
-    /// The resolved specification requires a capability whose physical
-    /// execution plane a child runtime cannot materialize yet.
-    ///
-    /// This is the temporary staged boundary of the follow-up external
-    /// capability issue. Semantic resolution already succeeded and is
-    /// exact; the runtime simply refuses to start a child that is weaker
-    /// than the definition it was authorized with. The check runs in
-    /// `prepare`, so it is decided before any process is staged and long
-    /// before ownership commit.
-    ExternalOriginUnsupported {
-        /// The frozen capability selections that cannot be realized yet, in
-        /// canonical order.
-        requirements: Vec<String>,
-    },
     /// Staging the child process failed.
     Spawn {
         /// The failure detail.
@@ -380,6 +367,12 @@ pub enum SubagentStartError {
         /// The failure detail.
         detail: String,
     },
+    /// The invoking attempt's cancellation became observable before the
+    /// durable ownership commit (Issue #145): the child never reached a
+    /// startable `Ready` *as a committed start*, no ownership record,
+    /// event, or capacity consumption survives, and every staged physical
+    /// resource settled before this was returned.
+    Cancelled,
 }
 
 impl core::fmt::Display for SubagentStartError {
@@ -401,13 +394,6 @@ impl core::fmt::Display for SubagentStartError {
             Self::CapacityExceeded { max } => {
                 write!(f, "the per-conversation subagent bound ({max}) is reached")
             }
-            Self::ExternalOriginUnsupported { requirements } => write!(
-                f,
-                "the subagent requires {}, whose child-side execution plane this build does \
-                 not materialize yet; the child is not started rather than started without \
-                 the capabilities it was authorized with",
-                requirements.join(", ")
-            ),
             Self::Spawn { detail } => write!(f, "could not start the child runtime: {detail}"),
             Self::Durability { detail } => {
                 write!(f, "the durable ownership commit failed: {detail}")
@@ -419,6 +405,10 @@ impl core::fmt::Display for SubagentStartError {
             Self::Rollback { detail } => {
                 write!(f, "the child rollback was not proven complete: {detail}")
             }
+            Self::Cancelled => write!(
+                f,
+                "the invoking attempt was cancelled before the child was owned"
+            ),
         }
     }
 }
@@ -576,13 +566,26 @@ impl SubagentRegistry {
     /// Nothing is published, no capacity is consumed, and a failure leaves
     /// no trace.
     ///
+    /// `preparation_cancellation` is the invoking attempt's cancellation
+    /// authority (Issue #145): it owns the *whole* pre-commit lifecycle,
+    /// not merely the commit decision. If it becomes observable while the
+    /// child is still staging, the child never reaches a startable `Ready`,
+    /// every staged physical resource settles, and this returns
+    /// [`SubagentStartError::Cancelled`].
+    ///
     /// # Errors
     ///
-    /// Returns the typed [`SubagentStartError`] of the first failing stage.
+    /// Returns the typed [`SubagentStartError`] of the first failing stage,
+    /// or [`SubagentStartError::Cancelled`] when the attempt cancellation
+    /// won before the ownership commit.
     pub async fn prepare(
         &self,
         spec: &SubagentStartSpec,
+        preparation_cancellation: &CancellationSignal,
     ) -> Result<PreparedSubagent, SubagentStartError> {
+        if preparation_cancellation.is_cancelled() {
+            return Err(SubagentStartError::Cancelled);
+        }
         let task_bytes = spec.task.len();
         if spec.task.trim().is_empty() || task_bytes > MAX_TASK_BYTES {
             return Err(SubagentStartError::InvalidTask { bytes: task_bytes });
@@ -592,14 +595,6 @@ impl SubagentRegistry {
             if bytes > MAX_CONTEXT_PACKAGE_BYTES {
                 return Err(SubagentStartError::ContextOversized { bytes });
             }
-        }
-        // The temporary external-origin boundary is evaluated before any
-        // identity is allocated and before any process is staged, so a
-        // definition this build cannot physically realize can never reach
-        // the ownership commit.
-        let requirements = spec.resolved.external_origin_requirements();
-        if !requirements.is_empty() {
-            return Err(SubagentStartError::ExternalOriginUnsupported { requirements });
         }
         if self.config.mailbox.begin_running_admission().is_err() {
             return Err(SubagentStartError::ConversationInactive);
@@ -613,13 +608,6 @@ impl SubagentRegistry {
         let subagent_id = SubagentId::for_conversation(&self.config.conversation_id, ordinal);
         let child_conversation_id = ConversationId::new(subagent_id.as_str());
         let child_agent_id = AgentId::new(format!("agent-{subagent_id}"));
-        let child_spec = self.config.spawn.child_spec(
-            &subagent_id,
-            &child_conversation_id,
-            &child_agent_id,
-            &self.config.agent_id,
-            &spec.resolved,
-        );
         let staged = {
             #[cfg(test)]
             {
@@ -643,11 +631,37 @@ impl SubagentRegistry {
                     });
                 }
             }
-            super::process::spawn_staged(&self.config.spawn, &child_spec)
-                .await
+            // Semantic identity may be reused after a pre-commit crash, so
+            // reserve its mutable physical namespace independently of the
+            // durable ordinal before launching the child.
+            let runtime_root = self
+                .config
+                .spawn
+                .allocate_child_runtime_root(&subagent_id)
                 .map_err(|error| SubagentStartError::Spawn {
                     detail: error.to_string(),
-                })?
+                })?;
+            let child_spec = self.config.spawn.child_spec(
+                &subagent_id,
+                &child_conversation_id,
+                &child_agent_id,
+                &self.config.agent_id,
+                &spec.resolved,
+                &runtime_root,
+            );
+            super::process::spawn_staged(
+                &self.config.spawn,
+                &child_spec,
+                runtime_root,
+                preparation_cancellation,
+            )
+            .await
+            .map_err(|error| match error {
+                super::process::SpawnError::Cancelled => SubagentStartError::Cancelled,
+                error => SubagentStartError::Spawn {
+                    detail: error.to_string(),
+                },
+            })?
         };
         Ok(PreparedSubagent {
             subagent_id,
@@ -904,11 +918,13 @@ impl SubagentRegistry {
                 let registry = self.clone_for_task();
                 let settlement_id = subagent_id.clone();
                 tokio::spawn(async move {
-                    let outcome = task.await.unwrap_or(PhysicalOutcome::Lost {
-                        diagnostic: "the child driver task failed".to_owned(),
-                        escalated: false,
+                    let settlement = task.await.unwrap_or_else(|_| {
+                        PhysicalSettlement::of(PhysicalOutcome::Lost {
+                            diagnostic: "the child driver task failed".to_owned(),
+                            escalated: false,
+                        })
                     });
-                    registry.settle_from_driver(&settlement_id, outcome);
+                    registry.settle_from_driver(&settlement_id, settlement);
                 });
                 Ok(SubagentStartOutcome::Accepted(SubagentAccepted {
                     subagent_id,
@@ -1068,10 +1084,30 @@ impl SubagentRegistry {
     /// physical outcome settles as cancelled — except an explicit
     /// process-control failure (`Lost`), which stays failed. The durable
     /// compound transaction makes the publication exactly-once.
-    fn settle_from_driver(&self, subagent_id: &SubagentId, outcome: PhysicalOutcome) {
+    #[allow(clippy::too_many_lines)] // one coherent physical-to-durable settlement pipeline
+    fn settle_from_driver(&self, subagent_id: &SubagentId, settlement: PhysicalSettlement) {
         if self.config.mailbox.begin_settlement_admission().is_err() {
             return;
         }
+        let PhysicalSettlement {
+            outcome,
+            nested,
+            runtime_root_cleanup_error,
+        } = settlement;
+        // An unproven nested settlement or a failed exact-root cleanup never
+        // silently disappears. The child answer remains the semantic
+        // candidate, while the physical settlement diagnostic is carried
+        // alongside it.
+        let settlement_diagnostic = [
+            nested.unproven_diagnostic(),
+            runtime_root_cleanup_error
+                .map(|detail| format!("the child physical runtime root was not removed: {detail}")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        let settlement_diagnostic =
+            (!settlement_diagnostic.is_empty()).then_some(settlement_diagnostic.join("; "));
         let candidate = {
             let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             let Some(&index) = state.index.get(subagent_id) else {
@@ -1148,6 +1184,19 @@ impl SubagentRegistry {
                     diagnostic: Some(bound_utf8(diagnostic, MAX_RESULT_CONTENT_BYTES)),
                     reason: None,
                     timestamp,
+                },
+            };
+            let candidate = match settlement_diagnostic {
+                None => candidate,
+                Some(diagnostic) => TerminalCandidate {
+                    diagnostic: Some(bound_utf8(
+                        match candidate.diagnostic {
+                            Some(existing) => format!("{existing}; {diagnostic}"),
+                            None => diagnostic,
+                        },
+                        MAX_RESULT_CONTENT_BYTES,
+                    )),
+                    ..candidate
                 },
             };
             record.pending_terminal = Some(candidate.clone());
@@ -1678,6 +1727,8 @@ mod tests {
             tools: Vec::new(),
             skills: Vec::new(),
             project_instructions: Vec::new(),
+            materialization:
+                crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
         }
     }
 
@@ -1694,44 +1745,65 @@ mod tests {
         spec(task)
     }
 
-    /// A capability whose child-side execution plane does not exist yet must
-    /// fail in `prepare`: no identity is allocated, no process is staged,
-    /// and no ownership fact can follow.
+    /// Issue #145 removed the temporary #144 refusal: an externally
+    /// sourced capability is no longer rejected in `prepare`. The registry
+    /// stages the child exactly as it does for any other frozen
+    /// specification, and physical realization (with its own identity
+    /// verification) happens inside the child, before it answers `Ready`.
     #[tokio::test]
-    async fn an_external_origin_requirement_fails_before_any_staging() {
+    async fn an_external_origin_requirement_is_no_longer_refused_by_the_registry() {
         let plane = plane(2);
         let mut spec = spec("inspect");
+        let definition = crate::tools::types::ToolDefinition {
+            id: crate::runtime::identity::ToolId::new("tool-get-issue"),
+            name: "get_issue".to_owned(),
+            description: "issue".to_owned(),
+            input_schema: serde_json::json!({"type": "object"}),
+            execution_policy: crate::tools::types::ToolExecutionPolicy::ForegroundOnly,
+            concurrency_policy: crate::tools::types::ToolConcurrencyPolicy::Sequential,
+            approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
+            replay_policy: crate::tools::types::ToolReplayPolicy::Never,
+            origin: crate::tools::types::ToolOrigin::Mcp {
+                server_id: crate::runtime::identity::McpServerId::new("github"),
+            },
+        };
         spec.resolved.tools = vec![super::super::resolver::ResolvedSubagentTool::Mcp {
             server_id: crate::runtime::identity::McpServerId::new("github"),
-            tool_id: crate::runtime::identity::ToolId::new("tool-get-issue"),
-            name: "get_issue".to_owned(),
-            definition: crate::tools::types::ToolDefinition {
-                id: crate::runtime::identity::ToolId::new("tool-get-issue"),
-                name: "get_issue".to_owned(),
-                description: "issue".to_owned(),
-                input_schema: serde_json::json!({"type": "object"}),
-                execution_policy: crate::tools::types::ToolExecutionPolicy::ForegroundOnly,
-                concurrency_policy: crate::tools::types::ToolConcurrencyPolicy::Sequential,
-                approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
-                replay_policy: crate::tools::types::ToolReplayPolicy::Never,
-                origin: crate::tools::types::ToolOrigin::Mcp {
-                    server_id: crate::runtime::identity::McpServerId::new("github"),
-                },
-            },
+            tool_id: definition.id.clone(),
+            name: definition.name.clone(),
+            identity: crate::tools::mcp::identity::definition_identity(&definition)
+                .expect("an MCP definition has an MCP identity"),
+            definition,
         }];
-        assert_eq!(
-            plane.registry.prepare(&spec).await.expect_err("refused"),
-            SubagentStartError::ExternalOriginUnsupported {
-                requirements: vec!["mcp:github/get_issue".to_owned()],
-            }
-        );
+        // The staged override consumes `prepare` before any real process is
+        // spawned, so this asserts exactly one thing: the registry no longer
+        // has a capability-shaped refusal of its own.
+        let (parent, _peer) = tokio::net::UnixStream::pair().expect("control pair");
+        let child = tokio::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn a staged stand-in");
+        let root = std::env::temp_dir().join(format!(
+            "rustx-staged-override-{}-{}",
+            std::process::id(),
+            "external-origin"
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        plane
+            .registry
+            .push_staged_override(StagedChild::for_test(child, parent, root));
+        let prepared = plane
+            .registry
+            .prepare(&spec, &CancellationSignal::new())
+            .await
+            .expect("an externally sourced capability no longer refuses staging");
         assert!(
-            plane.registry.is_pristine(),
-            "no record, no capacity, and no durable trace exists"
+            prepared.staged.retained_anchor_count() == 0,
+            "a freshly staged child has anchored no nested process unit yet"
         );
-        // The selector vocabulary is the same one the definition uses; the
-        // failure is a physical-realization limit, not a second capability
-        // model.
+        prepared.staged.rollback().await.expect("rollback");
+        // The selector vocabulary is unchanged: #145 removed a physical
+        // limitation, not a capability model.
         assert_eq!(
             SubagentToolSelector::Mcp {
                 server_id: crate::runtime::identity::McpServerId::new("github"),
@@ -1743,7 +1815,11 @@ mod tests {
     }
 
     async fn start(plane: &TestPlane, spec: &SubagentStartSpec) -> SubagentAccepted {
-        let prepared = plane.registry.prepare(spec).await.expect("prepared");
+        let prepared = plane
+            .registry
+            .prepare(spec, &CancellationSignal::new())
+            .await
+            .expect("prepared");
         match plane
             .registry
             .commit(prepared, &CancellationSignal::new())
@@ -1906,7 +1982,10 @@ mod tests {
         let committer = {
             let attempt_cancellation = attempt_cancellation.clone();
             tokio::spawn(async move {
-                let prepared = registry.prepare(&spec).await.expect("prepared");
+                let prepared = registry
+                    .prepare(&spec, &CancellationSignal::new())
+                    .await
+                    .expect("prepared");
                 registry.commit(prepared, &attempt_cancellation).await
             })
         };
@@ -1945,7 +2024,10 @@ mod tests {
         let registry = plane.registry.clone();
         let spec = start_spec("inspect");
         let committer = tokio::spawn(async move {
-            let prepared = registry.prepare(&spec).await.expect("prepared");
+            let prepared = registry
+                .prepare(&spec, &CancellationSignal::new())
+                .await
+                .expect("prepared");
             registry.commit(prepared, &CancellationSignal::new()).await
         });
 
@@ -2045,6 +2127,9 @@ mod tests {
                 Some(ParentFrame::Hello(_)) => {
                     panic!("unexpected Hello after Ready")
                 }
+                Some(ParentFrame::AnchorAccepted(_) | ParentFrame::AnchorRefused(_)) => {
+                    panic!("this child offered no nested process unit anchor")
+                }
                 None => break,
             }
         }
@@ -2112,7 +2197,10 @@ mod tests {
         let registry = plane.registry.clone();
         let spec = start_spec("inspect");
         let committer = tokio::spawn(async move {
-            let prepared = registry.prepare(&spec).await.expect("prepared");
+            let prepared = registry
+                .prepare(&spec, &CancellationSignal::new())
+                .await
+                .expect("prepared");
             registry.commit(prepared, &CancellationSignal::new()).await
         });
 
@@ -2229,7 +2317,7 @@ mod tests {
         let _second_child = stage_exit0(&plane);
         let prepared = plane
             .registry
-            .prepare(&start_spec("second"))
+            .prepare(&start_spec("second"), &CancellationSignal::new())
             .await
             .expect("prepared");
         let error = plane
@@ -2258,14 +2346,14 @@ mod tests {
         let plane = plane(4);
         let error = plane
             .registry
-            .prepare(&start_spec(""))
+            .prepare(&start_spec(""), &CancellationSignal::new())
             .await
             .expect_err("empty task");
         assert!(matches!(error, SubagentStartError::InvalidTask { .. }));
         let oversized = "x".repeat(MAX_TASK_BYTES + 1);
         let error = plane
             .registry
-            .prepare(&start_spec(&oversized))
+            .prepare(&start_spec(&oversized), &CancellationSignal::new())
             .await
             .expect_err("oversized task");
         assert!(matches!(error, SubagentStartError::InvalidTask { .. }));
@@ -2273,7 +2361,7 @@ mod tests {
         oversized_context.context = Some("x".repeat(MAX_CONTEXT_PACKAGE_BYTES + 1));
         let error = plane
             .registry
-            .prepare(&oversized_context)
+            .prepare(&oversized_context, &CancellationSignal::new())
             .await
             .expect_err("oversized context");
         assert!(matches!(error, SubagentStartError::ContextOversized { .. }));
@@ -2330,7 +2418,7 @@ mod tests {
         let _second_child = stage_exit0(&plane);
         let second_prepared = plane
             .registry
-            .prepare(&start_spec("second"))
+            .prepare(&start_spec("second"), &CancellationSignal::new())
             .await
             .expect("private preparation is allowed");
         let error = plane

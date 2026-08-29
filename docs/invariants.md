@@ -1300,13 +1300,249 @@ that a live child produced an Interrupted physical result.
   and definition; MCP freezes `server_id` plus the canonical name and exact
   definition; Python freezes `ToolId` plus the exact `ToolVersionId`. There
   is no parallel per-origin registry and no wildcard selector.
-- **Until external physical materialization exists, external-origin
-  requirements fail before subagent ownership commit.** A definition
-  resolving to MCP and/or Python resolves *semantically*, and
-  `SubagentRegistry::prepare` then refuses with
-  `ExternalOriginUnsupported` — before any identity is allocated and before
-  any process is staged. Nothing is silently removed, substituted,
-  downgraded, or reported as success.
+- **MCP selections additionally freeze a deterministic cross-process
+  identity.** `McpToolIdentity` (`MCP_TOOL_IDENTITY_V1`) is what a separate
+  OS process can recompute and compare; see Issue #145 below.
+
+## Issue #145: external subagent capabilities and nested process containment
+
+### Semantic authority versus physical realization
+
+- **A subagent executes exactly the capability/resource identities frozen for
+  its spawn, or it does not start.** The parent decides semantic authority;
+  the child physically realizes exactly that authority using runtimes it owns
+  itself. The child may validate and materialize a frozen identity, but it
+  may never rediscover authority, substitute a newer resource, or expand the
+  selected capability set.
+- **The child has one Tool Plane.** There is no MCP subagent registry, no
+  Python subagent registry, no Skill-specific Tool Plane, and no second
+  capability model. The frozen selection becomes one ordinary child
+  `ToolRegistry`.
+- **The temporary #144 external-origin refusal is gone, not preserved
+  alongside the new behaviour.** `SubagentStartError::ExternalOriginUnsupported`
+  and `ResolvedSubagentSpec::external_origin_requirements` no longer exist.
+
+### Selected-only materialization
+
+- **The child materializes the frozen selected set and nothing else.**
+  `prepare_selected_candidate` is a separate physical path, not the parent's
+  discovery pipeline with a filter: no Skill discovery, no workspace Python
+  discovery, no "every configured server", and no activation-policy pass —
+  the frozen set *is* the active set.
+- **Only the required sources cross the boundary at all.**
+  `ResolvedSubagentMaterialization` carries exactly the MCP server bindings
+  the selection needs and a Python shared store root only when a Python tool
+  is selected. An agent that selects one GitHub MCP tool has no second
+  binding to widen to, so "connect only the required servers" is structural
+  rather than a rule to remember.
+- **A required externally sourced capability is never optional in a child.**
+  Failure to realize one is a preparation failure, not an availability
+  degradation, and it happens before the child answers `Ready` — therefore
+  before any durable ownership commit. The child starts with exactly the
+  authority it was authorized with or it does not start.
+
+### MCP cross-process identity
+
+- **The process-local MCP epoch is never cross-process identity.** An epoch
+  stabilizes one process's catalog read; it cannot certify another process's
+  generation. `MCP_TOOL_IDENTITY_V1` covers `server_id`, canonical name,
+  description, canonical input schema, and the effective execution policy
+  (execution/concurrency/approval). The wire frame is fixed-width: every
+  component is a `u64` little-endian length prefix followed by its UTF-8
+  bytes, so the digest never depends on a platform-width `usize` and two
+  architectures derive byte-identical identities. A frozen byte-level test
+  vector pins the frame byte for byte, so a framing change is a test
+  failure, not a silent digest change.
+- **Canonical JSON is rustX-owned.** Object keys are sorted recursively by
+  rustX code rather than trusted to arrive sorted; array order is preserved
+  because it is semantic in JSON Schema; strings are escaped by one rustX
+  escaper; numbers use their exact integer form or the shortest round-trip
+  decimal form. The digest never hashes a Rust in-memory representation and
+  never depends on `serde_json`'s map implementation or feature flags.
+- **The child verifies before it executes.** It connects only the required
+  server, performs its own `tools/list`, derives the canonical identity, and
+  fails child preparation if the definition is missing or changed. A
+  child-local executor is constructed only after that verification, from a
+  child-owned runtime binding: no parent executor, lease, transport handle,
+  or process-local epoch is ever copied across the process boundary.
+
+### Python store ownership
+
+- **`tool-versions/` and `uv-cache/` are shared; every mutable rustX
+  execution root is process-private.** `tool-versions/` is immutable and
+  content-addressed with atomic publication and digest revalidation on every
+  read. `uv-cache/` is shared because uv supports concurrent readers/writers
+  against one cache and owns its own locking — a statement about uv, **not**
+  a claim that rustX's mutable environment-publication state is cross-process
+  safe.
+- **`python-tool-envs/`, `python-tool-bindings/`, and `python-invocations/`
+  stay private.** The build coalescing that publishes environments is one
+  `Arc<Mutex<..>>` inside one process, which is not cross-process
+  synchronization; #145 does not add a cross-process lock to pretend
+  otherwise. Two children therefore never share rustX process-local Python
+  environment or invocation-scratch ownership. The Issue #153 deterministic
+  waiter/owner contract is unchanged and remains process-local.
+- **A workspace is not `ToolVersion` authority after resolution.** The child
+  opens the exact frozen `ToolVersionId`, recomputes its canonical source
+  digest, and fails closed if it is missing or corrupted. A newer same-named
+  version published in the meantime can never substitute the frozen one, and
+  there is no "latest by name" fallback.
+
+### Skills and frozen resources
+
+- **The frozen `SkillId` + `SkillVersionId` stays authoritative in the
+  child.** The child copies exactly the frozen file set into its own runtime
+  root, recomputes `package_version_id` over the copy, compares it to the
+  frozen version, and fails child composition on mismatch. A host path is a
+  materialization source, never an identity.
+- **Discovery is never restarted in the child, and progressive disclosure is
+  intact.** Only bytes on disk are materialized; no `SKILL.md` body is
+  preloaded into the child prompt, and the model-visible location is remapped
+  onto the child's own copy so the identity does not depend on mutable child
+  workspace ancestry.
+
+### Child preparation
+
+- **Cancellation, parent loss, or preparation failure before subagent
+  ownership commit prevents durable child ownership and physically settles
+  every staged resource.** External composition is cancellable owned work,
+  raced against two authorities that are futures rather than polled mutable
+  state: the invoking attempt's cancellation and parent control-channel EOF.
+  Parent EOF is observable *while* composition is in progress, so a child
+  never finishes a long MCP/uv preparation for a parent that is already gone.
+- **There is exactly one cancellation authority of a pre-commit
+  preparation.** The invoking attempt's `ToolExecutionContext` cancellation
+  derives the one preparation `CancellationSignal` (parent side), the
+  `ParentFrame::Cancel` consumed during composition cancels the child's one
+  preparation signal, and parent control-channel EOF is itself a physical
+  cancellation authority that fires the same signal. That authority reaches
+  every supervised process unit of preparation — the Python runtime-identity
+  probes, the uv lock/sync build (whose owner task captures the establishing
+  preparation's authority, so #153 waiters never cancel shared builds), and
+  the MCP connect owners — so cancellation is never inferred from a dropped
+  future: the unit is physically cancelled and settled, and only then does
+  the preparation outcome arrive.
+- **Once pre-commit cancellation has won, `Ready` is impossible.** A Cancel
+  event sets the child's preparation signal before any settlement decision;
+  the guarded preparation path then refuses to publish a candidate from a
+  settled preparation even when the external step races to completion, and
+  the driver re-checks the settlement authorities after composition and
+  settles the composed runtime instead of answering `Ready`. The parent's
+  handshake arm is biased towards the cancellation too: an observable
+  pre-commit cancellation can never become a startable staged child.
+- **A settled preparation is not a startup failure.** The child never became
+  owned; the parent settles the terminal from the child's physical outcome.
+- **The cancelled rollback waits for the child to settle itself first.**
+  After writing `ParentFrame::Cancel` the parent gives the child a bounded
+  grace to finish its own settlement, then terminates, kills, reaps, and
+  contains every retained anchor; the staged rollback removes the
+  child-private runtime root. `SubagentRegistry::prepare` returns
+  `SubagentStartError::Cancelled`, burns no durable ownership fact, and
+  consumes no capacity.
+- **Semantic child identity and physical spawn incarnation are separate.**
+  Durable/canonical ownership, recovery evidence, and Runtime Client
+  projections use the semantic `SubagentId`. A crash before
+  `SubagentOwnershipCommitted` may make that semantic identity reusable after
+  restart, but every staged spawn first creates a fresh, exclusively-created
+  physical incarnation directory beneath
+  `runtime_root/subagents/<SubagentId>/`. The physical token is independent of
+  the durable ordinal and is not user-visible semantic state.
+- **All mutable child-local state is incarnation-private.**
+  The exact physical incarnation path is the `SubagentChildSpec.runtime_root`
+  passed to the child and is the root for artifacts, diagnostics, Skill
+  copies, Python private environments, bindings, and invocation scratch. A
+  stale old incarnation may remain on disk while its process settles, but a
+  later reuse of the same semantic `SubagentId` receives a different sibling
+  path, so the old writer cannot contaminate the new child.
+- **Physical-root cleanup follows the one child lifecycle owner.**
+  Pre-commit rollback removes only the exact incarnation reserved by its
+  `StagedChild`; the staged-to-live commit moves that same ownership into the
+  child driver exactly once; terminal settlement removes only that exact root
+  after direct and proven nested settlement. An unproven nested anchor keeps
+  the old root fail-closed, and semantic grouping directories are never
+  recursively deleted or reused as mutable authority.
+
+### Nested supervised-process containment
+
+- **A nested supervised unit may not cross its local start/ownership gate
+  until the top-level parent has acknowledged retention of that exact
+  containment anchor.** The acknowledgement is part of the ownership
+  protocol, not telemetry. Before the ACK the inner supervisor never received
+  `START`, so the semantic command was never spawned; after the ACK the
+  parent holds the exact `pgid` and owns catastrophic containment for it.
+- **One containment abstraction covers every supervised unit.** Native Bash,
+  MCP stdio, Python uv/environment materialization, Python Tool execution,
+  and Skill environment subprocesses all enter the same `AnchorGate`. There
+  is no `McpSubagentAnchor`, `PythonSubagentAnchor`, or `BashSubagentAnchor`.
+- **The top-level process is unchanged.** With no authority installed the
+  gate resolves immediately, so the existing single-level lifecycle is
+  bit-for-bit the same.
+- **An anchor is released only against proven physical terminality.** An
+  unproven settlement deliberately keeps the parent's retention alive, and an
+  anchor is never removed merely because the direct child exited. Releases
+  correlate by exact typed `ProcessUnitId`, never by ordering or approximate
+  `pgid` matching.
+- **A proven release is never silently dropped.** The release travels the
+  one bounded dispatcher channel as an ordinary reliable `send`: bounded
+  backpressure pends the releaser until the writer drains, and the parent
+  removes exactly the retained anchor it reads. The release proof is
+  carried through the channel, never re-derived parent-side.
+- **Losing an anchor owner never manufactures terminal proof.** Dropping a
+  `ProcessUnitAnchor` without an explicit proven-terminal release emits no
+  `AnchorReleased` and retains the anchor — fail-closed containment, never
+  an inferred settlement.
+
+### Platform containment contract
+
+- **The Linux containment prerequisite is established before the child is
+  spawned.** A subreaper installed after the fact does not retroactively
+  adopt orphans, so `spawn_staged` consults `ensure_child_subreaper` first
+  and fails with `SpawnError::ContainmentPrerequisite` rather than claiming
+  containment authority it does not have.
+- **`contain_adopted_group` retains the anchor with `WNOWAIT` before it
+  signals.** `StillAlive`/`Exited`/`Signaled` prove the numeric identity is
+  still allocated and owned here, which is what makes signalling a cached
+  `pgid` legal; `ECHILD` proves the anchor is not adoptable and the cached
+  `pgid` is then never signalled and no terminality is claimed.
+- **Non-Linux platforms report explicitly unproven terminality.** Without an
+  orphan-adoption primitive an orphaned anchor reparents to `init` and
+  containment reports `AnchorUnavailable`. That weaker contract is reported
+  honestly and never fabricated into Linux parity.
+
+### Staged versus live anchor ownership
+
+- **The staged child owns its retained anchors, and the ownership commit
+  transfers them exactly once.** Nested units may be created during child
+  preparation, before any durable commit, so `StagedChild` owns the direct
+  child process *and* the retained anchor set; both **move** into the driver
+  task at the one ownership commit. There are not two independent ownership
+  commits and no copied anchor set with ambiguous owners.
+- **Rollback is not physically complete until every retained anchor is
+  settled.** `StagedChild::rollback` kills and reaps the direct child and
+  then contains every retained anchor, returning
+  `RollbackError::NestedContainment` rather than reporting a rolled-back
+  ownership decision while owned work may still be running.
+- **A direct child reap is not proof of physical settlement while retained
+  nested anchors are unresolved.** The driver task does not return — so the
+  registry's counted lifecycle admission is not released and runtime drain
+  cannot declare quiescence — until every retained unit is contained or
+  explicitly reported unprovable. An unproven nested settlement never changes
+  the child's semantic terminal but is appended to its bounded diagnostic
+  rather than dropped.
+
+### Child control transport
+
+- **There is exactly one owner of the child's raw IPC transport.** One reader
+  of the read half, one serialized writer of the write half, bounded
+  in-process channels for every other owner, and explicit EOF propagation. No
+  Tool executor or supervised-unit owner ever locks, reads, or writes the
+  `UnixStream`; there is no second socket, no listener, and no network
+  service.
+- **Anchor acknowledgements route by exact typed identity.** Two units with
+  outstanding offers cannot open each other's start gates.
+- **The subagent IPC version is 3 and there is no compatibility decoding.** A
+  peer that does not speak exactly this version exits before composing
+  anything.
 
 ## Issue #96: Session/configuration and capability activation
 

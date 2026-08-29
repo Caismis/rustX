@@ -115,7 +115,7 @@ pub async fn run_process(arguments: impl IntoIterator<Item = String>) -> i32 {
             let _ = stderr.flush();
             return 2;
         }
-        return super::subagent_child::run_subagent_child().await;
+        return Box::pin(super::subagent_child::run_subagent_child()).await;
     }
     let outcome = serve(arguments).await;
     if let Some(diagnostic) = outcome.diagnostic() {

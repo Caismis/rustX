@@ -176,11 +176,35 @@ impl ToolExecutor for SubagentExecutor {
                 context: input.context,
                 tool_call_id: invocation.call_id.clone(),
             };
-            let prepared = match self.subagents.prepare(&spec).await {
+            // One attempt-derived cancellation authority owns the whole
+            // pre-commit lifecycle: preparation (identity, spawn, startup
+            // handshake, child external capability composition) AND the
+            // commit decision. There is no second, unrelated cancellation
+            // model for the same staged lifecycle.
+            let child_cancellation = context.cancellation.child_signal();
+            let prepared = match self.subagents.prepare(&spec, &child_cancellation).await {
                 Ok(prepared) => prepared,
+                Err(SubagentStartError::Cancelled) => {
+                    // The attempt cancellation won while the child was
+                    // still staging: nothing was published, every staged
+                    // physical resource settled before the error returned,
+                    // and the tool result is the absorbing cancellation
+                    // outcome.
+                    return ToolExecutionResult {
+                        status: ToolExecutionStatus::Cancelled {
+                            reason: context.cancellation.reason(),
+                            phase: ToolCancellationPhase::DuringExecution,
+                        },
+                        content: Vec::new(),
+                        duration_ms: 0,
+                        exit_code: None,
+                        artifacts: Vec::new(),
+                        truncation: None,
+                        managed_output: None,
+                    };
+                }
                 Err(error) => return failed_result(error.to_string()),
             };
-            let child_cancellation = context.cancellation.child_signal();
             match self.subagents.commit(prepared, &child_cancellation).await {
                 Ok(SubagentStartOutcome::Accepted(accepted)) => {
                     let mut result = accepted.result;

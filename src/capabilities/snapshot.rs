@@ -10,7 +10,7 @@ use crate::skills::SkillSnapshot;
 use crate::skills::environments::{NodeEnvironment, PythonEnvironment};
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::executor::ToolRegistry;
-use crate::tools::mcp::{McpRuntimeLeaseAuthority, McpRuntimeLeaseSet};
+use crate::tools::mcp::{McpRuntimeLeaseAuthority, McpRuntimeLeaseSet, McpServerBindings};
 
 /// The immutable capability snapshot observed by one attempt.
 ///
@@ -45,6 +45,24 @@ pub struct CapabilitySnapshot {
     /// rather than read from mutable coordinator-current state at attempt
     /// admission.
     mcp_lease_authority: Arc<McpRuntimeLeaseAuthority>,
+    /// The **configured** MCP server bindings of this exact generation
+    /// (Issue #145).
+    ///
+    /// This is source authority, not live runtime state: it is what a
+    /// subagent resolution freezes so a child can establish its own
+    /// transport to exactly the servers its selected tools need. It is
+    /// deliberately part of the immutable snapshot rather than read from
+    /// mutable coordinator-current inputs, so a reload between the parent's
+    /// freeze and the child's materialization cannot change the transport
+    /// the child connects.
+    mcp_servers: Arc<McpServerBindings>,
+    /// The **shared immutable** Python tool-store root of this generation
+    /// (Issue #145), when the runtime has a Python store location at all.
+    ///
+    /// A child opens the exact frozen `ToolVersionId` under this root and
+    /// keeps its own private mutable roots; see
+    /// [`PythonToolStoreRoots`](crate::tools::python::PythonToolStoreRoots).
+    python_store_root: Option<PathBuf>,
 }
 
 /// Two snapshots are equal when their capability content is equal: the
@@ -95,6 +113,8 @@ impl CapabilitySnapshot {
         node_environment: Option<NodeEnvironment>,
         effective_environment: ToolEnvironment,
         mcp_lease_authority: Arc<McpRuntimeLeaseAuthority>,
+        mcp_servers: Arc<McpServerBindings>,
+        python_store_root: Option<PathBuf>,
     ) -> Self {
         Self {
             conversation_id,
@@ -107,7 +127,21 @@ impl CapabilitySnapshot {
             node_environment,
             effective_environment,
             mcp_lease_authority,
+            mcp_servers,
+            python_store_root,
         }
+    }
+
+    /// The configured MCP server bindings of this immutable generation.
+    #[must_use]
+    pub fn mcp_servers(&self) -> &McpServerBindings {
+        &self.mcp_servers
+    }
+
+    /// The shared immutable Python tool-store root of this generation.
+    #[must_use]
+    pub fn python_store_root(&self) -> Option<&Path> {
+        self.python_store_root.as_deref()
     }
 
     /// The conversation owner of this immutable capability snapshot.

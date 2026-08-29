@@ -38,6 +38,8 @@
 #[doc(hidden)]
 pub mod fixture;
 
+pub mod identity;
+
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -206,7 +208,13 @@ impl McpInvalidationGuard<'_> {
 }
 
 /// A configured MCP server transport.
-#[derive(Clone, PartialEq, Eq)]
+///
+/// The type is serializable because a subagent child materializes the exact
+/// transport its parent generation froze (Issue #145): the frozen binding
+/// crosses the private subagent control channel rather than being
+/// rediscovered from `rustx.jsonc` in the child.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "transport", rename_all = "snake_case", deny_unknown_fields)]
 pub enum McpTransportConfig {
     /// A stdio server launched with an explicit environment and workspace
     /// relative working directory.
@@ -257,7 +265,8 @@ impl std::fmt::Debug for McpTransportConfig {
 ///
 /// The binding deliberately carries no identity field: an MCP server set is
 /// keyed by [`McpServerId`], and the key is the one authoritative identity.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct McpServerBinding {
     /// The configured transport.
     pub transport: McpTransportConfig,
@@ -1808,6 +1817,7 @@ fn joined_versions(versions: &[ProtocolVersion]) -> String {
 }
 
 /// A canonicalized MCP tool definition at the adapter boundary.
+#[derive(Debug, Clone, PartialEq)]
 pub struct CanonicalMcpTool {
     /// Remote model-facing name.
     pub name: String,
