@@ -878,12 +878,17 @@ mod interactive_tests {
 
     /// A recording nested anchor authority whose acknowledgement the test
     /// releases explicitly (Issue #145).
+    ///
+    /// The gate is a **level-triggered** `watch` subscribed synchronously
+    /// inside `offer`, before the test can observe the offer; an
+    /// edge-triggered notification would be lost whenever the returned
+    /// future had not been polled yet.
     #[derive(Debug)]
     struct GatedAuthority {
         offers: tokio::sync::mpsc::UnboundedSender<(crate::runtime::identity::ProcessUnitId, i32)>,
         releases:
             tokio::sync::mpsc::UnboundedSender<(crate::runtime::identity::ProcessUnitId, i32)>,
-        gate: Arc<tokio::sync::Notify>,
+        gate: tokio::sync::watch::Sender<bool>,
     }
 
     impl crate::runtime::nested_containment::NestedAnchorAuthority for GatedAuthority {
@@ -895,10 +900,14 @@ mod interactive_tests {
             'static,
             Result<(), crate::runtime::nested_containment::AnchorError>,
         > {
+            let mut gate = self.gate.subscribe();
             let _ = self.offers.send((unit, pgid));
-            let gate = self.gate.clone();
             Box::pin(async move {
-                gate.notified().await;
+                while !*gate.borrow_and_update() {
+                    if gate.changed().await.is_err() {
+                        return Err(crate::runtime::nested_containment::AnchorError::ParentLost);
+                    }
+                }
                 Ok(())
             })
         }
@@ -919,7 +928,7 @@ mod interactive_tests {
         let marker = fixture.path("started");
         let (offers_tx, mut offers) = tokio::sync::mpsc::unbounded_channel();
         let (releases_tx, mut releases) = tokio::sync::mpsc::unbounded_channel();
-        let gate = Arc::new(tokio::sync::Notify::new());
+        let (gate, _closed) = tokio::sync::watch::channel(false);
         let mut control = InteractiveTestControl::new();
         control.nested_authority = Some(Arc::new(GatedAuthority {
             offers: offers_tx,
@@ -941,7 +950,7 @@ mod interactive_tests {
             "the supervised server must not start before the acknowledgement"
         );
 
-        gate.notify_waiters();
+        gate.send_replace(true);
         // The server now starts; its own marker is the proof.
         let deadline = Instant::now() + DEADLINE;
         while !marker.exists() {

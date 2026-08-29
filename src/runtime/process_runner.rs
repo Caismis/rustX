@@ -1571,13 +1571,20 @@ mod tests {
     /// A recording nested anchor authority whose acknowledgement the test
     /// releases explicitly. No sleep establishes any ordering here: the
     /// offer channel and the release gate are the synchronization.
+    ///
+    /// The gate is a **level-triggered** `watch` rather than a `Notify`, and
+    /// the subscription is taken synchronously inside `offer` — before the
+    /// test can observe the offer at all. An edge-triggered notification
+    /// would be lost whenever the returned future had not been polled yet,
+    /// which is a scheduling accident rather than a property of the gate
+    /// under test.
     #[cfg(unix)]
     #[derive(Debug)]
     struct GatedAuthority {
         offers: tokio::sync::mpsc::UnboundedSender<(crate::runtime::identity::ProcessUnitId, i32)>,
         releases:
             tokio::sync::mpsc::UnboundedSender<(crate::runtime::identity::ProcessUnitId, i32)>,
-        gate: std::sync::Arc<tokio::sync::Notify>,
+        gate: tokio::sync::watch::Sender<bool>,
         accept: bool,
     }
 
@@ -1591,11 +1598,15 @@ mod tests {
             'static,
             Result<(), crate::runtime::nested_containment::AnchorError>,
         > {
+            let mut gate = self.gate.subscribe();
             let _ = self.offers.send((unit, pgid));
-            let gate = self.gate.clone();
             let accept = self.accept;
             Box::pin(async move {
-                gate.notified().await;
+                while !*gate.borrow_and_update() {
+                    if gate.changed().await.is_err() {
+                        return Err(crate::runtime::nested_containment::AnchorError::ParentLost);
+                    }
+                }
                 if accept {
                     Ok(())
                 } else {
@@ -1616,7 +1627,7 @@ mod tests {
             tokio::sync::mpsc::UnboundedReceiver<(crate::runtime::identity::ProcessUnitId, i32)>,
         releases:
             tokio::sync::mpsc::UnboundedReceiver<(crate::runtime::identity::ProcessUnitId, i32)>,
-        gate: std::sync::Arc<tokio::sync::Notify>,
+        gate: tokio::sync::watch::Sender<bool>,
     }
 
     /// Scopes a recording nested anchor authority to exactly one invocation.
@@ -1624,7 +1635,7 @@ mod tests {
     fn gated_authority(accept: bool) -> GatedHarness {
         let (offers_tx, offers) = tokio::sync::mpsc::unbounded_channel();
         let (releases_tx, releases) = tokio::sync::mpsc::unbounded_channel();
-        let gate = std::sync::Arc::new(tokio::sync::Notify::new());
+        let (gate, _closed) = tokio::sync::watch::channel(false);
         let mut control = RunnerTestControl::new();
         control.nested_authority = Some(std::sync::Arc::new(GatedAuthority {
             offers: offers_tx,
@@ -1691,7 +1702,7 @@ mod tests {
             "the semantic command must not have started before the acknowledgement"
         );
 
-        harness.gate.notify_waiters();
+        harness.gate.send_replace(true);
         let result = tokio::time::timeout(Duration::from_secs(30), invocation)
             .await
             .expect("the acknowledged unit must settle")
@@ -1750,7 +1761,7 @@ mod tests {
             .await
             .expect("the unit must offer its anchor")
             .expect("an offer");
-        harness.gate.notify_waiters();
+        harness.gate.send_replace(true);
 
         let result = tokio::time::timeout(Duration::from_secs(30), invocation)
             .await
