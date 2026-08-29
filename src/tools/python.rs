@@ -810,6 +810,30 @@ impl PythonToolStore {
         })
     }
 
+    /// Test constructor with explicit `uv`/`python3` binaries: the physical
+    /// settlement regressions run a real supervised runner against scripted
+    /// stand-in binaries rather than a real toolchain.
+    #[cfg(test)]
+    pub(crate) fn with_binaries_and_runner(
+        roots: PythonToolStoreRoots,
+        uv_binary: PathBuf,
+        python_binary: PathBuf,
+        runner: Arc<dyn SupervisedProcessRunner>,
+    ) -> Result<Self, PythonToolError> {
+        roots.establish()?;
+        Ok(Self {
+            inner: Arc::new(PythonToolStoreInner {
+                roots,
+                runner,
+                uv_binary,
+                python_binary,
+                in_flight: Arc::new(Mutex::new(BTreeMap::new())),
+                waiter_attachments: Arc::new(WaiterAttachments::default()),
+                next_invocation: Arc::new(AtomicU64::new(0)),
+            }),
+        })
+    }
+
     /// The shared immutable/cache root of this store.
     #[must_use]
     pub fn shared_root(&self) -> &Path {
@@ -1069,6 +1093,28 @@ impl PythonToolStore {
     /// waiter never releases ownership, and owner failure always publishes a
     /// terminal error and removes the in-flight entry.
     ///
+    /// # Lifecycle cancellation (Issue #145)
+    ///
+    /// `cancellation` is the **lifecycle cancellation authority** of the
+    /// calling ownership domain (a child preparation's pre-commit authority,
+    /// or the conversation-owned preparation root). It is a different
+    /// concern from the process-local build ownership above:
+    ///
+    /// - this caller's own runtime identity probes observe it directly;
+    /// - when this call establishes the build, the store-owned owner task
+    ///   drives the physical uv materialization with it, so cancelling the
+    ///   owning domain's authority cancels the physical supervised unit
+    ///   and the owner publishes its terminal error only after that unit
+    ///   has settled;
+    /// - a waiter never cancels a shared build: its wait ends with the
+    ///   owner's terminal publication, never with the waiter's own
+    ///   cancellation or disappearance (Issue #153).
+    ///
+    /// Callers attaching to one in-flight build must pass authorities of
+    /// the same lifecycle domain; both production call sites satisfy this
+    /// (the child preparation passes its one pre-commit authority, the
+    /// conversation path passes children of the one preparation root).
+    ///
     /// # Errors
     ///
     /// Returns an error if runtime probes, lock validation, frozen
@@ -1081,8 +1127,10 @@ impl PythonToolStore {
     pub async fn ensure_environment(
         &self,
         tool: &PublishedPythonTool,
+        cancellation: &crate::runtime::CancellationSignal,
     ) -> Result<PythonToolEnvironment, PythonToolError> {
-        let (python_runtime, uv_identity) = probe_runtime_identity(&self.inner, tool).await?;
+        let (python_runtime, uv_identity) =
+            probe_runtime_identity(&self.inner, tool, cancellation).await?;
         let digest = python_tool_environment_digest(
             std::env::consts::OS,
             std::env::consts::ARCH,
@@ -1142,6 +1190,10 @@ impl PythonToolStore {
             let build_root = final_root.clone();
             let build_python = python_runtime.clone();
             let build_uv = uv_identity.clone();
+            // The physical build observes the lifecycle cancellation
+            // authority of the caller that established it: cancelling the
+            // owning domain's authority cancels the uv units themselves.
+            let build_cancellation = cancellation.clone();
             // Dropping a JoinHandle detaches the task; it does not abort it.
             // The caller therefore cannot become the physical materialization
             // owner merely by being cancelled while waiting below.
@@ -1154,6 +1206,7 @@ impl PythonToolStore {
                     &build_digest,
                     &build_python,
                     &build_uv,
+                    &build_cancellation,
                 )
                 .await;
                 let result = match result {
@@ -1287,6 +1340,7 @@ impl PythonToolStore {
 async fn probe_runtime_identity(
     inner: &PythonToolStoreInner,
     tool: &PublishedPythonTool,
+    cancellation: &crate::runtime::CancellationSignal,
 ) -> Result<(String, String), PythonToolError> {
     let environment = ToolEnvironment::new();
     let child_environment = environment.child_environment(&tool.root);
@@ -1296,6 +1350,7 @@ async fn probe_runtime_identity(
         let runner = inner.runner.clone();
         let cwd = tool.root.clone();
         let environment = child_environment.clone();
+        let cancellation = cancellation.clone();
         async move {
             runner
                 .run(
@@ -1304,7 +1359,11 @@ async fn probe_runtime_identity(
                         cwd,
                         environment,
                         timeout: Some(PYTHON_TOOL_PROBE_TIMEOUT),
-                        cancellation: crate::runtime::CancellationSignal::new(),
+                        // The caller's lifecycle authority, never a fresh
+                        // detached signal: a settled preparation physically
+                        // cancels the probe, and the result resolves only
+                        // after the unit's settlement.
+                        cancellation,
                     },
                     None,
                 )
@@ -1353,6 +1412,7 @@ async fn materialize_environment(
     digest: &PythonToolEnvironmentDigest,
     python_runtime: &str,
     uv_identity: &str,
+    cancellation: &crate::runtime::CancellationSignal,
 ) -> Result<PythonToolEnvironment, PythonToolError> {
     if final_root.exists() {
         std::fs::remove_dir_all(final_root).map_err(io_error)?;
@@ -1399,7 +1459,10 @@ async fn materialize_environment(
                     cwd: tool.root.clone(),
                     environment: environment_entries,
                     timeout: Some(PYTHON_TOOL_UV_TIMEOUT),
-                    cancellation: crate::runtime::CancellationSignal::new(),
+                    // The build-owner domain's lifecycle authority: its
+                    // cancellation physically cancels this uv unit, and
+                    // the result resolves only after the unit settled.
+                    cancellation: cancellation.clone(),
                 },
                 None,
             )
@@ -2525,15 +2588,24 @@ mod tests {
 
         let first_store = store.clone();
         let first_published = published.clone();
-        let first =
-            tokio::spawn(async move { first_store.ensure_environment(&first_published).await });
+        let first = tokio::spawn(async move {
+            first_store
+                .ensure_environment(&first_published, &crate::runtime::CancellationSignal::new())
+                .await
+        });
         // The owner is inside the materialization while the gate is closed.
         scripted.wait_for_materializations(1);
 
         let second_store = store.clone();
         let second_published = published.clone();
-        let second =
-            tokio::spawn(async move { second_store.ensure_environment(&second_published).await });
+        let second = tokio::spawn(async move {
+            second_store
+                .ensure_environment(
+                    &second_published,
+                    &crate::runtime::CancellationSignal::new(),
+                )
+                .await
+        });
         // Let the second caller finish its probes and reach the in-flight
         // coordination point, then assert it did not start a second
         // materialization sequence.
@@ -2575,8 +2647,14 @@ mod tests {
 
         let waiter_store = store.clone();
         let waiter_published = published.clone();
-        let waiter =
-            tokio::spawn(async move { waiter_store.ensure_environment(&waiter_published).await });
+        let waiter = tokio::spawn(async move {
+            waiter_store
+                .ensure_environment(
+                    &waiter_published,
+                    &crate::runtime::CancellationSignal::new(),
+                )
+                .await
+        });
         scripted.wait_for_materializations(1);
         waiter.abort();
         let _ = waiter.await;
@@ -2590,7 +2668,7 @@ mod tests {
         let retry_store = store.clone();
         let retry_published = published.clone();
         let environment = retry_store
-            .ensure_environment(&retry_published)
+            .ensure_environment(&retry_published, &crate::runtime::CancellationSignal::new())
             .await
             .expect("the owner's result is still observed");
         assert_eq!(environment.digest.as_str().len(), 7 + 64);
@@ -2598,6 +2676,225 @@ mod tests {
             scripted.materialization_count(),
             2,
             "no second build after waiter drop"
+        );
+    }
+
+    // ---- Issue #145, Blocker 2: preparation cancellation is physical ----
+
+    /// A Python store whose `uv`/`python3` are scripted stand-ins over the
+    /// REAL supervised runner: the identity probes answer instantly, and
+    /// every materialization subcommand announces its physical start through
+    /// a FIFO rendezvous and then parks, so the test can prove the exact
+    /// ordering without any sleep.
+    ///
+    /// Returns the store, the `RunnerTestControl` of the real runner, the
+    /// anchor-pgid file, and the start-rendezvous FIFO path.
+    #[cfg(unix)]
+    fn gated_physical_store(
+        dir: &tempfile::TempDir,
+    ) -> (
+        PythonToolStore,
+        crate::runtime::process_runner::RunnerTestControl,
+        PathBuf,
+        PathBuf,
+    ) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let gate = dir.path().join("uv-started.fifo");
+        nix::unistd::mkfifo(&gate, nix::sys::stat::Mode::S_IRWXU).expect("fifo");
+        let uv = dir.path().join("uv");
+        std::fs::write(
+            &uv,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'uv 0.9.9'; exit 0; fi\nprintf started > \"{}\"\nexec sleep 300\n",
+                gate.display()
+            ),
+        )
+        .expect("uv stand-in");
+        std::fs::set_permissions(&uv, std::fs::Permissions::from_mode(0o755)).expect("chmod uv");
+        let python = dir.path().join("python3");
+        std::fs::write(&python, "#!/bin/sh\necho 'Python 3.12.0'\n").expect("python stand-in");
+        std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod python");
+
+        let anchor_pid = dir.path().join("anchor-pgid");
+        let mut control = crate::runtime::process_runner::RunnerTestControl::new();
+        control.anchor_pid_file = Some(anchor_pid.clone());
+        let runner: Arc<dyn SupervisedProcessRunner> = Arc::new(
+            crate::runtime::process_runner::RunnerBackedProcessRunner::with_test_control(
+                control.clone(),
+            ),
+        );
+        let store = PythonToolStore::with_binaries_and_runner(
+            super::PythonToolStoreRoots::unified(dir.path().join("store")),
+            uv,
+            python,
+            runner,
+        )
+        .expect("store");
+        (store, control, anchor_pid, gate)
+    }
+
+    /// Deterministic proof that the gated uv process physically started:
+    /// opening the FIFO for reading completes only when the uv process
+    /// opened it for writing, and the bytes arrive when it wrote them.
+    #[cfg(unix)]
+    async fn await_uv_started(gate: PathBuf) {
+        let announced = tokio::task::spawn_blocking(move || std::fs::read(gate))
+            .await
+            .expect("rendezvous task")
+            .expect("the uv process announced its start");
+        assert_eq!(announced, b"started");
+    }
+
+    /// The recorded anchor pgid of the parked uv unit. Written by the inner
+    /// supervisor strictly before the unit's `START`, so after the FIFO
+    /// rendezvous the file provably names this unit's process group.
+    #[cfg(unix)]
+    fn anchor_pgid(anchor_pid: &std::path::Path) -> i32 {
+        std::fs::read_to_string(anchor_pid)
+            .expect("the unit's anchor pgid was recorded")
+            .trim()
+            .parse()
+            .expect("a process-group id")
+    }
+
+    /// The parked uv unit's process group is physically gone.
+    #[cfg(unix)]
+    fn assert_group_terminal(pgid: i32) {
+        assert!(
+            matches!(
+                nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid), None),
+                Err(nix::errno::Errno::ESRCH)
+            ),
+            "the preparatory unit's process group is physically terminal"
+        );
+    }
+
+    /// Attempt-style cancellation of a Python preparation must reach the
+    /// PHYSICAL supervised unit of the in-flight uv build: the unit
+    /// receives the cancellation, its process group becomes physically
+    /// terminal, and only then does the preparation observe its outcome.
+    ///
+    /// Under the old ownership (a fresh detached `CancellationSignal` per
+    /// command) the parked unit never observed any cancellation and this
+    /// test would hang at the liveness guard.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn preparation_cancellation_physically_settles_an_in_flight_uv_build() {
+        let dir = tempfile::tempdir().expect("lab");
+        let (store, control, anchor_pid, gate) = gated_physical_store(&dir);
+        let published = store.publish(&test_package()).expect("publish");
+        let cancellation = crate::runtime::CancellationSignal::new();
+        let ensure = tokio::spawn({
+            let store = store.clone();
+            let cancellation = cancellation.clone();
+            async move { store.ensure_environment(&published, &cancellation).await }
+        });
+
+        // 1. The physical uv preparatory process has actually started.
+        await_uv_started(gate).await;
+        let pgid = anchor_pgid(&anchor_pid);
+
+        // 2. The preparation's lifecycle cancellation authority fires.
+        cancellation.cancel();
+
+        // 3. The physical supervised process receives the cancellation and
+        //    its group becomes physically terminal; only then does the
+        //    preparation outcome arrive.
+        let outcome = tokio::time::timeout(Duration::from_secs(30), ensure)
+            .await
+            .expect("liveness: the cancelled build must settle")
+            .expect("the build task must not panic");
+        let error = outcome.expect_err("a cancelled build is an error, never an environment");
+        assert!(
+            format!("{error}").contains("cancelled"),
+            "the uv unit was cancelled: {error}"
+        );
+        // Settlement was physical BEFORE the outcome was published: the
+        // group is already gone at this point.
+        assert_group_terminal(pgid);
+        assert!(
+            control
+                .recorded_signals()
+                .iter()
+                .any(|signal| signal.pgid == pgid && signal.signal == "SIGTERM"),
+            "the unit's group received the termination signal: {:?}",
+            control.recorded_signals()
+        );
+    }
+
+    /// Parent control-channel EOF during a real uv build is a physical
+    /// cancellation authority (Issue #145): the dispatcher's parent-loss
+    /// publication fires the one preparation signal, the parked uv unit is
+    /// physically cancelled and settled, and only then does the guarded
+    /// preparation settle. Nothing is inferred from dropping a future.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn parent_eof_physically_settles_an_in_flight_uv_build() {
+        let dir = tempfile::tempdir().expect("lab");
+        let (store, control, anchor_pid, gate) = gated_physical_store(&dir);
+        let published = store.publish(&test_package()).expect("publish");
+
+        let (parent, child) = tokio::net::UnixStream::pair().expect("control pair");
+        let dispatcher = crate::local_runtime::dispatcher::ChildControlDispatcher::start(child);
+        let handle = dispatcher.handle();
+        let preparation = crate::local_runtime::composition::ChildPreparation::new(
+            crate::runtime::CancellationSignal::new(),
+            handle.clone(),
+        );
+        let preparation_signal = preparation.cancellation();
+        let guard = tokio::spawn(async move {
+            let signal = preparation.cancellation();
+            let step = async move {
+                store
+                    .ensure_environment(&published, &signal)
+                    .await
+                    .map_err(|error| {
+                        crate::capabilities::CapabilityPreparationError::PreparationSettled(
+                            error.to_string(),
+                        )
+                    })
+            };
+            preparation.guard(step).await
+        });
+
+        // 1. The physical uv preparatory process has actually started.
+        await_uv_started(gate).await;
+        let pgid = anchor_pgid(&anchor_pid);
+
+        // 2. The parent control channel reaches EOF while the build is
+        //    parked. The dispatcher publishes parent loss before the guard
+        //    can observe it.
+        drop(parent);
+        handle.parent_lost_signal().await;
+
+        // 3. The guard fires the one preparation signal (a physical
+        //    cancellation authority), the uv unit settles physically, and
+        //    only then does the preparation settle.
+        let outcome = tokio::time::timeout(Duration::from_secs(30), guard)
+            .await
+            .expect("liveness: the settled preparation must complete")
+            .expect("the guard task must not panic");
+        assert!(
+            matches!(
+                outcome,
+                Err(crate::capabilities::CapabilityPreparationError::PreparationSettled(_))
+            ),
+            "parent EOF settles the preparation: {outcome:?}"
+        );
+        assert!(
+            preparation_signal.is_cancelled(),
+            "parent EOF fired the preparation's physical cancellation authority"
+        );
+        assert_group_terminal(pgid);
+        assert!(
+            control
+                .recorded_signals()
+                .iter()
+                .any(|signal| signal.pgid == pgid && signal.signal == "SIGTERM"),
+            "the unit's group received the termination signal: {:?}",
+            control.recorded_signals()
         );
     }
 
@@ -2630,8 +2927,11 @@ mod tests {
         // materialization command.
         let owner_store = store.clone();
         let owner_published = published.clone();
-        let owner =
-            tokio::spawn(async move { owner_store.ensure_environment(&owner_published).await });
+        let owner = tokio::spawn(async move {
+            owner_store
+                .ensure_environment(&owner_published, &crate::runtime::CancellationSignal::new())
+                .await
+        });
         scripted.wait_for_materializations(1);
 
         // Both waiters attach to the owner's in-flight `BuildState` before
@@ -2643,14 +2943,20 @@ mod tests {
         let waiter_alpha_published = published.clone();
         let waiter_alpha = tokio::spawn(async move {
             waiter_alpha_store
-                .ensure_environment(&waiter_alpha_published)
+                .ensure_environment(
+                    &waiter_alpha_published,
+                    &crate::runtime::CancellationSignal::new(),
+                )
                 .await
         });
         let waiter_beta_store = store.clone();
         let waiter_beta_published = published.clone();
         let waiter_beta = tokio::spawn(async move {
             waiter_beta_store
-                .ensure_environment(&waiter_beta_published)
+                .ensure_environment(
+                    &waiter_beta_published,
+                    &crate::runtime::CancellationSignal::new(),
+                )
                 .await
         });
         wait_for_attached_waiters(&store, 2);
@@ -2714,7 +3020,7 @@ mod tests {
         let retry_store = store.clone();
         let retry_published = published.clone();
         let retry_environment = retry_store
-            .ensure_environment(&retry_published)
+            .ensure_environment(&retry_published, &crate::runtime::CancellationSignal::new())
             .await
             .expect("the retry acquires ownership after the failed owner published");
         assert_eq!(retry_environment.digest.as_str().len(), 7 + 64);
@@ -2821,7 +3127,9 @@ mod tests {
         scripted.release_gate();
         let (_dir, store) = store_with(scripted.clone());
         let published = store.publish(&test_package()).expect("publish");
-        let _ = store.ensure_environment(&published).await;
+        let _ = store
+            .ensure_environment(&published, &crate::runtime::CancellationSignal::new())
+            .await;
         let recorded = scripted
             .commands
             .lock()
@@ -2848,7 +3156,9 @@ mod tests {
         scripted.release_gate();
         let (_dir, store) = store_with(scripted.clone());
         let published = store.publish(&test_package()).expect("publish");
-        let _ = store.ensure_environment(&published).await;
+        let _ = store
+            .ensure_environment(&published, &crate::runtime::CancellationSignal::new())
+            .await;
 
         let sync_env = scripted
             .sync_environment()
@@ -2903,7 +3213,9 @@ mod tests {
         )
         .expect("child store");
         let published = store.publish(&test_package()).expect("publish");
-        let _ = store.ensure_environment(&published).await;
+        let _ = store
+            .ensure_environment(&published, &crate::runtime::CancellationSignal::new())
+            .await;
 
         let sync_env = scripted
             .sync_environment()
@@ -4820,7 +5132,7 @@ mod tests {
         let (_dir, store) = store_with(scripted);
         let published = store.publish(&test_package()).expect("publish");
         let error = store
-            .ensure_environment(&published)
+            .ensure_environment(&published, &crate::runtime::CancellationSignal::new())
             .await
             .expect_err("a timed-out probe must fail preparation");
         assert!(error.to_string().contains("timed out"));

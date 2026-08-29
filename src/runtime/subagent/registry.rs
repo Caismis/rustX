@@ -366,6 +366,12 @@ pub enum SubagentStartError {
         /// The failure detail.
         detail: String,
     },
+    /// The invoking attempt's cancellation became observable before the
+    /// durable ownership commit (Issue #145): the child never reached a
+    /// startable `Ready` *as a committed start*, no ownership record,
+    /// event, or capacity consumption survives, and every staged physical
+    /// resource settled before this was returned.
+    Cancelled,
 }
 
 impl core::fmt::Display for SubagentStartError {
@@ -398,6 +404,10 @@ impl core::fmt::Display for SubagentStartError {
             Self::Rollback { detail } => {
                 write!(f, "the child rollback was not proven complete: {detail}")
             }
+            Self::Cancelled => write!(
+                f,
+                "the invoking attempt was cancelled before the child was owned"
+            ),
         }
     }
 }
@@ -555,13 +565,26 @@ impl SubagentRegistry {
     /// Nothing is published, no capacity is consumed, and a failure leaves
     /// no trace.
     ///
+    /// `preparation_cancellation` is the invoking attempt's cancellation
+    /// authority (Issue #145): it owns the *whole* pre-commit lifecycle,
+    /// not merely the commit decision. If it becomes observable while the
+    /// child is still staging, the child never reaches a startable `Ready`,
+    /// every staged physical resource settles, and this returns
+    /// [`SubagentStartError::Cancelled`].
+    ///
     /// # Errors
     ///
-    /// Returns the typed [`SubagentStartError`] of the first failing stage.
+    /// Returns the typed [`SubagentStartError`] of the first failing stage,
+    /// or [`SubagentStartError::Cancelled`] when the attempt cancellation
+    /// won before the ownership commit.
     pub async fn prepare(
         &self,
         spec: &SubagentStartSpec,
+        preparation_cancellation: &CancellationSignal,
     ) -> Result<PreparedSubagent, SubagentStartError> {
+        if preparation_cancellation.is_cancelled() {
+            return Err(SubagentStartError::Cancelled);
+        }
         let task_bytes = spec.task.len();
         if spec.task.trim().is_empty() || task_bytes > MAX_TASK_BYTES {
             return Err(SubagentStartError::InvalidTask { bytes: task_bytes });
@@ -614,10 +637,13 @@ impl SubagentRegistry {
                     });
                 }
             }
-            super::process::spawn_staged(&self.config.spawn, &child_spec)
+            super::process::spawn_staged(&self.config.spawn, &child_spec, preparation_cancellation)
                 .await
-                .map_err(|error| SubagentStartError::Spawn {
-                    detail: error.to_string(),
+                .map_err(|error| match error {
+                    super::process::SpawnError::Cancelled => SubagentStartError::Cancelled,
+                    error => SubagentStartError::Spawn {
+                        detail: error.to_string(),
+                    },
                 })?
         };
         Ok(PreparedSubagent {
@@ -1737,7 +1763,7 @@ mod tests {
             .push_staged_override(StagedChild::for_test(child, parent, root));
         let prepared = plane
             .registry
-            .prepare(&spec)
+            .prepare(&spec, &CancellationSignal::new())
             .await
             .expect("an externally sourced capability no longer refuses staging");
         assert!(
@@ -1758,7 +1784,11 @@ mod tests {
     }
 
     async fn start(plane: &TestPlane, spec: &SubagentStartSpec) -> SubagentAccepted {
-        let prepared = plane.registry.prepare(spec).await.expect("prepared");
+        let prepared = plane
+            .registry
+            .prepare(spec, &CancellationSignal::new())
+            .await
+            .expect("prepared");
         match plane
             .registry
             .commit(prepared, &CancellationSignal::new())
@@ -1921,7 +1951,10 @@ mod tests {
         let committer = {
             let attempt_cancellation = attempt_cancellation.clone();
             tokio::spawn(async move {
-                let prepared = registry.prepare(&spec).await.expect("prepared");
+                let prepared = registry
+                    .prepare(&spec, &CancellationSignal::new())
+                    .await
+                    .expect("prepared");
                 registry.commit(prepared, &attempt_cancellation).await
             })
         };
@@ -1960,7 +1993,10 @@ mod tests {
         let registry = plane.registry.clone();
         let spec = start_spec("inspect");
         let committer = tokio::spawn(async move {
-            let prepared = registry.prepare(&spec).await.expect("prepared");
+            let prepared = registry
+                .prepare(&spec, &CancellationSignal::new())
+                .await
+                .expect("prepared");
             registry.commit(prepared, &CancellationSignal::new()).await
         });
 
@@ -2130,7 +2166,10 @@ mod tests {
         let registry = plane.registry.clone();
         let spec = start_spec("inspect");
         let committer = tokio::spawn(async move {
-            let prepared = registry.prepare(&spec).await.expect("prepared");
+            let prepared = registry
+                .prepare(&spec, &CancellationSignal::new())
+                .await
+                .expect("prepared");
             registry.commit(prepared, &CancellationSignal::new()).await
         });
 
@@ -2247,7 +2286,7 @@ mod tests {
         let _second_child = stage_exit0(&plane);
         let prepared = plane
             .registry
-            .prepare(&start_spec("second"))
+            .prepare(&start_spec("second"), &CancellationSignal::new())
             .await
             .expect("prepared");
         let error = plane
@@ -2276,14 +2315,14 @@ mod tests {
         let plane = plane(4);
         let error = plane
             .registry
-            .prepare(&start_spec(""))
+            .prepare(&start_spec(""), &CancellationSignal::new())
             .await
             .expect_err("empty task");
         assert!(matches!(error, SubagentStartError::InvalidTask { .. }));
         let oversized = "x".repeat(MAX_TASK_BYTES + 1);
         let error = plane
             .registry
-            .prepare(&start_spec(&oversized))
+            .prepare(&start_spec(&oversized), &CancellationSignal::new())
             .await
             .expect_err("oversized task");
         assert!(matches!(error, SubagentStartError::InvalidTask { .. }));
@@ -2291,7 +2330,7 @@ mod tests {
         oversized_context.context = Some("x".repeat(MAX_CONTEXT_PACKAGE_BYTES + 1));
         let error = plane
             .registry
-            .prepare(&oversized_context)
+            .prepare(&oversized_context, &CancellationSignal::new())
             .await
             .expect_err("oversized context");
         assert!(matches!(error, SubagentStartError::ContextOversized { .. }));
@@ -2348,7 +2387,7 @@ mod tests {
         let _second_child = stage_exit0(&plane);
         let second_prepared = plane
             .registry
-            .prepare(&start_spec("second"))
+            .prepare(&start_spec("second"), &CancellationSignal::new())
             .await
             .expect("private preparation is allowed");
         let error = plane

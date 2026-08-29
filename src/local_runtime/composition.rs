@@ -408,9 +408,11 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
 /// parent control-channel EOF     the parent process disappeared
 /// ```
 ///
-/// Neither is polled as mutable "current state" later: both are futures
-/// raced against the preparation itself, so the settlement is observed at
-/// the instant it happens rather than at the next convenient checkpoint.
+/// Both converge on the ONE preparation cancellation signal this guard
+/// owns — parent loss *is* a physical cancellation authority, not merely a
+/// reason to drop a waiter — and every preparatory supervised process unit
+/// of the child observes that signal, so either authority physically
+/// cancels the in-flight preparation work.
 pub(crate) struct ChildPreparation {
     cancellation: crate::runtime::cancellation::CancellationSignal,
     parent_lost: Option<crate::local_runtime::dispatcher::ChildControlHandle>,
@@ -439,12 +441,42 @@ impl ChildPreparation {
         }
     }
 
+    /// The one pre-commit cancellation authority of this preparation.
+    ///
+    /// Every cancellation-aware preparation step is built with it, so a
+    /// settled preparation physically cancels its preparatory supervised
+    /// units rather than merely dropping their waiters.
+    pub(crate) fn cancellation(&self) -> crate::runtime::cancellation::CancellationSignal {
+        self.cancellation.clone()
+    }
+
+    /// Whether a settlement authority has already won.
+    ///
+    /// A guarded step can complete *after* a settlement authority fired
+    /// (the race is inherent), so the caller must check this before
+    /// treating the step's output as publishable: once pre-commit
+    /// cancellation has won, `Ready` must be impossible.
+    pub(crate) fn is_settled(&self) -> bool {
+        self.cancellation.is_cancelled()
+            || self
+                .parent_lost
+                .as_ref()
+                .is_some_and(crate::local_runtime::dispatcher::ChildControlHandle::parent_lost)
+    }
+
     /// Runs one preparation step under both settlement authorities.
     ///
-    /// The step's own future is dropped on settlement, which is what makes
-    /// staged physical resources settle: every owner inside the capability
-    /// plane already settles its process on drop/cancel, so no MCP process
-    /// or uv build survives a settled preparation.
+    /// The step is built with [`ChildPreparation::cancellation`]: it is
+    /// cancellation-aware owned work that physically settles its
+    /// preparatory supervised units before it returns. A settlement
+    /// authority that wins therefore does **not** merely drop the step
+    /// future — dropping a waiter never settles physical work — it fires
+    /// the cancellation (parent loss first cancels the signal) and then
+    /// awaits the step, so no MCP process, runtime probe, or uv build
+    /// outlives a settled preparation. If the cancellation is observed
+    /// *during* the step's final unguarded stretch, the step may still
+    /// complete: the caller checks [`ChildPreparation::is_settled`] before
+    /// publishing anything derived from it.
     pub(crate) async fn guard<T, F>(
         &self,
         step: F,
@@ -458,22 +490,248 @@ impl ChildPreparation {
                 None => std::future::pending().await,
             }
         };
+        tokio::pin!(step);
         tokio::select! {
             biased;
-            () = self.cancellation.cancelled() => Err(
-                crate::capabilities::CapabilityPreparationError::PreparationSettled(
-                    "the spawn attempt cancelled this child before it was owned".to_owned(),
-                ),
-            ),
-            () = parent_lost => Err(
-                crate::capabilities::CapabilityPreparationError::PreparationSettled(
-                    "the parent runtime disappeared while this child was still composing"
-                        .to_owned(),
-                ),
-            ),
-            outcome = step => outcome,
+            () = self.cancellation.cancelled() => {
+                // Await the step's physical settlement: the step observes
+                // this same signal and settles its preparatory units
+                // before returning.
+                let _ = step.await;
+                Err(
+                    crate::capabilities::CapabilityPreparationError::PreparationSettled(
+                        "the spawn attempt cancelled this child before it was owned".to_owned(),
+                    ),
+                )
+            },
+            () = parent_lost => {
+                // Parent control-channel loss is a physical cancellation
+                // authority: fire the one preparation signal so every
+                // preparatory unit is cancelled, then await the step's
+                // settlement.
+                self.cancellation.cancel();
+                let _ = step.await;
+                Err(
+                    crate::capabilities::CapabilityPreparationError::PreparationSettled(
+                        "the parent runtime disappeared while this child was still composing"
+                            .to_owned(),
+                    ),
+                )
+            },
+            outcome = &mut step => outcome,
         }
     }
+}
+
+/// The controllable external-preparation seam of the Issue #145
+/// regression tests (test builds only; in every other build the two entry
+/// points below are inert and the environment variable is read by
+/// nothing).
+///
+/// When armed, the child composition parks **inside the guarded external
+/// preparation step** over a test-owned Unix socket: it announces the
+/// exact boundary (`entered-external-preparation`) and then resolves
+/// either by the test's `release` line or by the preparation cancellation
+/// — exactly the contract of a well-behaved external preparation step (an
+/// MCP connect, a uv build). The release arm is deliberately biased ahead
+/// of the cancellation arm, so a test can drive the dangerous ordering —
+/// cancellation committed, *then* the external step completes — and prove
+/// the surrounding settlement checks make `Ready` impossible anyway.
+#[cfg(test)]
+const TEST_PREPARATION_GATE_ENV: &str = "RUSTX_ISSUE145_PREPARATION_GATE";
+
+/// An in-process registration of the test preparation gate for ONE
+/// specific child runtime root. In-process tests (which cannot arm a
+/// process-global environment variable without poisoning concurrent
+/// tests) register the gate for the exact child they compose, and gain
+/// direct observability of the exact preparation cancellation signal the
+/// gated step runs under — the proof handle of the Issue #145 local
+/// race: Cancel consumed (signal set), then the step completes.
+#[cfg(test)]
+pub(crate) struct TestPreparationGate {
+    entered: tokio::sync::watch::Sender<bool>,
+    release: tokio::sync::watch::Sender<bool>,
+    cancellation: std::sync::Mutex<Option<crate::runtime::cancellation::CancellationSignal>>,
+}
+
+/// The in-process gate registrations, keyed by the child runtime root.
+#[cfg(test)]
+static TEST_PREPARATION_GATES: std::sync::Mutex<
+    Vec<(std::path::PathBuf, std::sync::Weak<TestPreparationGate>)>,
+> = std::sync::Mutex::new(Vec::new());
+
+/// Arms the test preparation gate for one child runtime root (test
+/// builds only). The returned handle is the test's control and
+/// observation channel; dropping it unregisters the gate.
+#[cfg(test)]
+pub(crate) fn arm_test_preparation_gate(
+    runtime_root: &std::path::Path,
+) -> std::sync::Arc<TestPreparationGate> {
+    let (entered, _) = tokio::sync::watch::channel(false);
+    let (release, _) = tokio::sync::watch::channel(false);
+    let gate = std::sync::Arc::new(TestPreparationGate {
+        entered,
+        release,
+        cancellation: std::sync::Mutex::new(None),
+    });
+    let mut gates = TEST_PREPARATION_GATES.lock().expect("gate registry");
+    gates.retain(|(root, weak)| weak.strong_count() > 0 && root != runtime_root);
+    gates.push((runtime_root.to_path_buf(), std::sync::Arc::downgrade(&gate)));
+    gate
+}
+
+/// The gate registered for this child runtime root, if any.
+#[cfg(test)]
+fn registered_preparation_gate(
+    runtime_root: &std::path::Path,
+) -> Option<std::sync::Arc<TestPreparationGate>> {
+    TEST_PREPARATION_GATES
+        .lock()
+        .expect("gate registry")
+        .iter()
+        .find_map(|(root, weak)| (root == runtime_root).then(|| weak.upgrade()).flatten())
+}
+
+#[cfg(test)]
+impl TestPreparationGate {
+    /// Parks until the gated step entered: the child is provably inside
+    /// external preparation.
+    pub(crate) async fn entered(&self) {
+        let mut entered = self.entered.subscribe();
+        while !*entered.borrow_and_update() {
+            entered.changed().await.expect("the gate outlives the step");
+        }
+    }
+
+    /// The exact preparation cancellation signal the gated step runs
+    /// under; valid once [`Self::entered`] resolved (the step captures its
+    /// authority before announcing its entry).
+    pub(crate) fn cancellation(&self) -> crate::runtime::cancellation::CancellationSignal {
+        self.cancellation
+            .lock()
+            .expect("gate cancellation")
+            .clone()
+            .expect("the step captured its cancellation authority before entering")
+    }
+
+    /// Releases the gated step to completion (idempotent).
+    ///
+    /// `send_replace`, not `send`: a `watch` send drops the value when no
+    /// receiver is currently subscribed, and a lost release would park the
+    /// gated step forever.
+    pub(crate) fn release(&self) {
+        self.release.send_replace(true);
+    }
+
+    /// The gated step itself: announces the boundary, then resolves by
+    /// release or cancellation — biased towards completion, exactly like
+    /// the socket seam, so a settled authority still loses to a released
+    /// step and the surrounding settlement checks are what must hold.
+    async fn run(
+        &self,
+        cancellation: &crate::runtime::cancellation::CancellationSignal,
+    ) -> Result<(), crate::capabilities::CapabilityPreparationError> {
+        *self.cancellation.lock().expect("gate cancellation") = Some(cancellation.clone());
+        // Subscribe BEFORE announcing the entry so a release can never be
+        // missed once `entered` resolved, and `send_replace` the entry
+        // itself: a `watch` send drops the value when the test has not
+        // subscribed yet, which would park its `entered` wait forever.
+        let mut release = self.release.subscribe();
+        self.entered.send_replace(true);
+        tokio::select! {
+            biased;
+            released = release.changed() => match released {
+                Ok(()) => Ok(()),
+                Err(error) => Err(
+                    crate::capabilities::CapabilityPreparationError::PreparationSettled(format!(
+                        "the test preparation gate closed without a release: {error}"
+                    )),
+                ),
+            },
+            () = cancellation.cancelled() => Err(
+                crate::capabilities::CapabilityPreparationError::PreparationSettled(
+                    "the preparation cancellation settled the gated external step".to_owned(),
+                ),
+            ),
+        }
+    }
+}
+
+/// Whether the test-only preparation gate is armed for this child.
+#[cfg(test)]
+fn preparation_gate_armed(runtime_root: &std::path::Path) -> bool {
+    registered_preparation_gate(runtime_root).is_some()
+        || std::env::var_os(TEST_PREPARATION_GATE_ENV).is_some()
+}
+
+/// Whether the test-only preparation gate is armed: never outside test
+/// builds.
+#[cfg(not(test))]
+const fn preparation_gate_armed(_runtime_root: &std::path::Path) -> bool {
+    false
+}
+
+/// Parks at the test preparation gate when armed (test builds only).
+#[cfg(test)]
+async fn run_preparation_gate_if_armed(
+    runtime_root: &std::path::Path,
+    cancellation: &crate::runtime::cancellation::CancellationSignal,
+) -> Result<(), crate::capabilities::CapabilityPreparationError> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    if let Some(gate) = registered_preparation_gate(runtime_root) {
+        return gate.run(cancellation).await;
+    }
+    let Some(path) = std::env::var_os(TEST_PREPARATION_GATE_ENV) else {
+        return Ok(());
+    };
+    let stream = tokio::net::UnixStream::connect(path)
+        .await
+        .map_err(|error| {
+            crate::capabilities::CapabilityPreparationError::PreparationSettled(format!(
+                "the test preparation gate is unreachable: {error}"
+            ))
+        })?;
+    let (read, mut write) = stream.into_split();
+    write
+        .write_all(b"entered-external-preparation\n")
+        .await
+        .map_err(|error| {
+            crate::capabilities::CapabilityPreparationError::PreparationSettled(format!(
+                "the test preparation gate announcement failed: {error}"
+            ))
+        })?;
+    let mut lines = tokio::io::BufReader::new(read).lines();
+    tokio::select! {
+        biased;
+        // Biased towards completion: when the test released the gate the
+        // step completes even if the cancellation already fired, modelling
+        // the racy external step the settlement checks exist for.
+        line = lines.next_line() => match line {
+            Ok(Some(line)) if line == "release" => Ok(()),
+            other => Err(
+                crate::capabilities::CapabilityPreparationError::PreparationSettled(format!(
+                    "the test preparation gate closed without a release: {other:?}"
+                )),
+            ),
+        },
+        () = cancellation.cancelled() => Err(
+            crate::capabilities::CapabilityPreparationError::PreparationSettled(
+                "the preparation cancellation settled the gated external step".to_owned(),
+            ),
+        ),
+    }
+}
+
+/// The inert non-test twin of the gate: external preparation runs no
+/// test seam in a shipped build.
+#[cfg(not(test))]
+#[allow(clippy::unused_async)] // async only to match the test seam's shape
+async fn run_preparation_gate_if_armed(
+    _runtime_root: &std::path::Path,
+    _cancellation: &crate::runtime::cancellation::CancellationSignal,
+) -> Result<(), crate::capabilities::CapabilityPreparationError> {
+    Ok(())
 }
 
 /// Materializes the child's frozen Skill packages and returns the catalog
@@ -1106,26 +1364,52 @@ impl LocalConversationCore {
         // takes the selected-only realization path, which is cancellable
         // owned work: cancellation and parent loss settle it instead of
         // finishing a long MCP connect or uv build for an owner that is
-        // already gone.
-        let candidate = if plan.is_empty() {
+        // already gone, and every preparatory supervised unit observes the
+        // one preparation cancellation authority.
+        let candidate = if plan.is_empty() && !preparation_gate_armed(&spec.runtime_root) {
             capability.prepare_base_only_candidate().map_err(|error| {
                 LocalRuntimeError::Capability {
                     detail: format!("{error:?}"),
                 }
             })?
         } else {
-            match preparation
-                .guard(capability.prepare_selected_candidate(&plan))
-                .await
-            {
-                Ok(candidate) => candidate,
+            let cancellation = preparation.cancellation();
+            let step = async {
+                run_preparation_gate_if_armed(&spec.runtime_root, &cancellation).await?;
+                capability
+                    .prepare_selected_candidate(&plan, &cancellation)
+                    .await
+            };
+            match preparation.guard(step).await {
+                Ok(candidate) => {
+                    // The step may complete after a settlement authority
+                    // already won (the race is inherent to the final
+                    // unguarded stretch): a settled preparation must never
+                    // publish a startable candidate. Retire its physical
+                    // runtimes to settlement and report the settlement.
+                    if preparation.is_settled() {
+                        candidate.retire_uncommitted().await;
+                        capability.cancel_conversation_preparation();
+                        return Err(LocalRuntimeError::Capability {
+                            detail: format!(
+                                "{:?}",
+                                crate::capabilities::CapabilityPreparationError::PreparationSettled(
+                                    "a settlement authority won before the candidate completed"
+                                        .to_owned(),
+                                )
+                            ),
+                        });
+                    }
+                    candidate
+                }
                 Err(error) => {
-                    // Settlement drops the preparation future, but an MCP
-                    // connect owner it already spawned is independent of
-                    // that future by design. Cancelling the coordinator's
-                    // preparation root makes each such owner drive its own
-                    // stdio process to physical settlement instead of
-                    // outliving the composition that created it.
+                    // Settlement fires the one preparation cancellation
+                    // authority, so every MCP connect owner and Python/uv
+                    // build the step already spawned is physically
+                    // cancelled and the guard awaited its settlement.
+                    // Cancelling the coordinator's preparation root
+                    // additionally covers any owner the step's own
+                    // authority did not reach.
                     capability.cancel_conversation_preparation();
                     return Err(LocalRuntimeError::Capability {
                         detail: format!("{error:?}"),
@@ -2112,33 +2396,11 @@ mod subagent_child_tests {
 
     // ---- Issue #145: child preparation is cancellable owned work ----
 
-    /// A preparation step that never completes and reports its own drop.
-    ///
-    /// It is a hand-written future rather than an `async` block so the drop
-    /// is observable even when the settlement wins before the step is ever
-    /// polled.
-    struct NeverEnding(std::sync::Arc<std::sync::atomic::AtomicBool>);
-
-    impl std::future::Future for NeverEnding {
-        type Output = Result<(), crate::capabilities::CapabilityPreparationError>;
-
-        fn poll(
-            self: std::pin::Pin<&mut Self>,
-            _context: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<Self::Output> {
-            std::task::Poll::Pending
-        }
-    }
-
-    impl Drop for NeverEnding {
-        fn drop(&mut self) {
-            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
-        }
-    }
-
     /// Cancellation derived from the invoking spawn attempt settles a long
-    /// preparation immediately; the step's own future is dropped, so no
-    /// staged physical resource survives it.
+    /// preparation — and the in-flight step is **not merely dropped**: the
+    /// guard fires the one preparation signal and awaits the step's own
+    /// settlement, so preparatory physical work settles before the
+    /// preparation reports settled.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn attempt_cancellation_settles_a_long_preparation() {
         let cancellation = crate::runtime::cancellation::CancellationSignal::new();
@@ -2146,11 +2408,24 @@ mod subagent_child_tests {
         let dispatcher = crate::local_runtime::dispatcher::ChildControlDispatcher::start(child);
         let preparation = ChildPreparation::new(cancellation.clone(), dispatcher.handle());
 
-        // A step that would never finish on its own. Its completion is the
-        // only thing that could produce `Ok`, so an `Err` here proves the
-        // settlement won and the step was dropped.
-        let dropped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let step = NeverEnding(dropped.clone());
+        // A cancellation-aware step that would never finish on its own: it
+        // parks on the preparation's one authority and records its
+        // settlement before returning — exactly the contract of an MCP
+        // connect or a uv build.
+        let settled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let step = {
+            let signal = preparation.cancellation();
+            let settled = settled.clone();
+            async move {
+                signal.cancelled().await;
+                settled.store(true, std::sync::atomic::Ordering::SeqCst);
+                Err::<(), _>(
+                    crate::capabilities::CapabilityPreparationError::PreparationSettled(
+                        "the step settled its owned work".to_owned(),
+                    ),
+                )
+            }
+        };
         cancellation.cancel();
         let outcome = preparation.guard(step).await;
         assert!(
@@ -2161,15 +2436,18 @@ mod subagent_child_tests {
             "cancellation settles the preparation: {outcome:?}"
         );
         assert!(
-            dropped.load(std::sync::atomic::Ordering::SeqCst),
-            "the settled preparation drops its in-flight step"
+            settled.load(std::sync::atomic::Ordering::SeqCst),
+            "the guard awaited the step's settlement before reporting settled"
         );
         drop(parent);
     }
 
-    /// Parent control-channel EOF is observable **while** composition is in
-    /// progress: a child never finishes a long MCP/uv preparation for a
-    /// parent that has already disappeared.
+    /// Parent control-channel EOF is a **physical cancellation
+    /// authority**, observable **while** composition is in progress: it
+    /// fires the one preparation cancellation signal (so every preparatory
+    /// supervised unit is cancelled), and the guard awaits the step's
+    /// settlement rather than finishing work for a parent that no longer
+    /// exists.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn parent_loss_settles_a_long_preparation() {
         let (parent, child) = tokio::net::UnixStream::pair().expect("control pair");
@@ -2179,22 +2457,42 @@ mod subagent_child_tests {
             crate::runtime::cancellation::CancellationSignal::new(),
             handle.clone(),
         );
+        // The step parks on the preparation's one authority: only the
+        // guard's parent-loss arm can release it, by firing the signal.
+        let settled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let step = {
+            let signal = preparation.cancellation();
+            let settled = settled.clone();
+            async move {
+                signal.cancelled().await;
+                settled.store(true, std::sync::atomic::Ordering::SeqCst);
+                Err::<(), _>(
+                    crate::capabilities::CapabilityPreparationError::PreparationSettled(
+                        "the step settled its owned work".to_owned(),
+                    ),
+                )
+            }
+        };
         // The EOF is published by the dispatcher's reader before the guard
         // is entered, so the ordering is a fact rather than a race.
         drop(parent);
         handle.parent_lost_signal().await;
 
-        let outcome = preparation
-            .guard(std::future::pending::<
-                Result<(), crate::capabilities::CapabilityPreparationError>,
-            >())
-            .await;
+        let outcome = preparation.guard(step).await;
         assert!(
             matches!(
                 outcome,
                 Err(crate::capabilities::CapabilityPreparationError::PreparationSettled(_))
             ),
             "parent loss settles the preparation: {outcome:?}"
+        );
+        assert!(
+            settled.load(std::sync::atomic::Ordering::SeqCst),
+            "parent loss fired the physical cancellation authority and the step settled"
+        );
+        assert!(
+            preparation.is_settled(),
+            "parent loss leaves the preparation settled"
         );
     }
 
@@ -2210,6 +2508,33 @@ mod subagent_child_tests {
         );
         let outcome = preparation.guard(std::future::ready(Ok(7u32))).await;
         assert_eq!(outcome.expect("an uninterrupted preparation"), 7);
+        drop(parent);
+    }
+
+    /// A step that completes **after** the cancellation won is not
+    /// publishable: the biased cancellation arm plus the `is_settled`
+    /// post-check make `Ready` impossible once pre-commit cancellation has
+    /// won.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_step_completing_after_cancellation_is_not_publishable() {
+        let cancellation = crate::runtime::cancellation::CancellationSignal::new();
+        let (parent, child) = tokio::net::UnixStream::pair().expect("control pair");
+        let dispatcher = crate::local_runtime::dispatcher::ChildControlDispatcher::start(child);
+        let preparation = ChildPreparation::new(cancellation.clone(), dispatcher.handle());
+        cancellation.cancel();
+        // The cancellation already fired; the step completes anyway. The
+        // guard's biased cancellation arm wins this poll...
+        let outcome = preparation.guard(std::future::ready(Ok(7u32))).await;
+        assert!(
+            matches!(
+                outcome,
+                Err(crate::capabilities::CapabilityPreparationError::PreparationSettled(_))
+            ),
+            "a cancelled preparation never publishes: {outcome:?}"
+        );
+        // ...and where a step's completion wins a race elsewhere, the
+        // caller-side `is_settled` check refuses to publish its output.
+        assert!(preparation.is_settled());
         drop(parent);
     }
 

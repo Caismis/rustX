@@ -164,6 +164,12 @@ pub enum SpawnError {
         /// The failure detail.
         detail: String,
     },
+    /// The invoking attempt's cancellation became observable while the
+    /// child was still staging (Issue #145). The staged child was settled
+    /// completely — the `Cancel` frame delivered best-effort, the process
+    /// reaped, every retained nested anchor contained, the runtime root
+    /// removed — before this was returned.
+    Cancelled,
     /// The staged child could not be conclusively killed and reaped after a
     /// pre-commit failure.
     Rollback {
@@ -187,6 +193,10 @@ impl core::fmt::Display for SpawnError {
             Self::Handshake { detail } => {
                 write!(f, "the child startup handshake failed: {detail}")
             }
+            Self::Cancelled => write!(
+                f,
+                "the invoking attempt was cancelled while the child was still staging"
+            ),
             Self::Rollback { detail } => {
                 write!(
                     f,
@@ -248,13 +258,26 @@ impl std::error::Error for RollbackError {}
 /// the stage down completely (the staged process is killed and reaped)
 /// before the error is returned.
 ///
+/// `preparation_cancellation` is the invoking attempt's cancellation
+/// authority (Issue #145): it participates in staging **from the start**,
+/// not only at the ownership commit. If it becomes observable while the
+/// child is still preparing, the child is told (`Cancel`), never treated
+/// as startable, and every staged physical resource — the direct child and
+/// every retained nested anchor — is settled before this returns
+/// [`SpawnError::Cancelled`].
+///
 /// # Errors
 ///
-/// Returns the typed [`SpawnError`] of the first failing stage.
+/// Returns the typed [`SpawnError`] of the first failing stage, or
+/// [`SpawnError::Cancelled`] when the preparation cancellation won.
 pub(crate) async fn spawn_staged(
     plan: &SubagentSpawnPlan,
     spec: &SubagentChildSpec,
+    preparation_cancellation: &crate::runtime::cancellation::CancellationSignal,
 ) -> Result<StagedChild, SpawnError> {
+    if preparation_cancellation.is_cancelled() {
+        return Err(SpawnError::Cancelled);
+    }
     // The containment prerequisite is established BEFORE the child exists.
     // A subagent child may create nested supervised process units during
     // its own preparation, and the parent can only contain an orphaned unit
@@ -266,9 +289,7 @@ pub(crate) async fn spawn_staged(
     crate::runtime::process_supervision::ensure_child_subreaper()
         .map_err(|detail| SpawnError::ContainmentPrerequisite { detail })?;
     let runtime_root = plan.child_runtime_root(&spec.subagent_id);
-    std::fs::create_dir_all(&runtime_root).map_err(|error| SpawnError::WorkspaceSetup {
-        detail: format!("{}: {error}", runtime_root.display()),
-    })?;
+    establish_fresh_child_root(&runtime_root)?;
     let mut staged = match spawn_process(plan, spec, &runtime_root).await {
         Ok(staged) => staged,
         Err(error) => {
@@ -276,7 +297,15 @@ pub(crate) async fn spawn_staged(
             return Err(error);
         }
     };
-    if let Err(error) = staged.handshake(spec).await {
+    if let Err(error) = staged.handshake(spec, preparation_cancellation).await {
+        if matches!(error, SpawnError::Cancelled) {
+            return match staged.rollback_cancelled().await {
+                Ok(()) => Err(SpawnError::Cancelled),
+                Err(rollback) => Err(SpawnError::Rollback {
+                    detail: format!("cancelled staging rollback: {rollback}"),
+                }),
+            };
+        }
         return match staged.rollback().await {
             Ok(()) => Err(error),
             Err(rollback) => Err(SpawnError::Rollback {
@@ -285,6 +314,31 @@ pub(crate) async fn spawn_staged(
         };
     }
     Ok(staged)
+}
+
+/// Establishes the child-private runtime root, guaranteed fresh (Issue
+/// #145).
+///
+/// `SubagentId` ordinals are unique within one process lifetime and the
+/// durable ownership watermark reseeds the sequence across restarts, so a
+/// pre-existing directory under this exact identity can only be the stale
+/// leftover of an uncommitted staged child of a crashed process — never a
+/// live authority. Reusing it would let a previous process's half-built
+/// Python environment, Skill copy, or binding become this child's mutable
+/// authority, so the stale tree is removed and the root is always created
+/// empty for the child that owns it now.
+fn establish_fresh_child_root(runtime_root: &std::path::Path) -> Result<(), SpawnError> {
+    if runtime_root.exists() {
+        std::fs::remove_dir_all(runtime_root).map_err(|error| SpawnError::WorkspaceSetup {
+            detail: format!(
+                "remove the stale pre-commit child runtime root {}: {error}",
+                runtime_root.display()
+            ),
+        })?;
+    }
+    std::fs::create_dir_all(runtime_root).map_err(|error| SpawnError::WorkspaceSetup {
+        detail: format!("{}: {error}", runtime_root.display()),
+    })
 }
 
 /// Spawns the child process with the control channel inherited as fd 0 and
@@ -462,7 +516,33 @@ impl StagedChild {
     /// Called on every pre-commit failure and on every rolled-back commit
     /// attempt; the registry's no-rollback and no-stale-partial-record
     /// guarantees extend to the OS process.
-    pub(crate) async fn rollback(mut self) -> Result<(), RollbackError> {
+    pub(crate) async fn rollback(self) -> Result<(), RollbackError> {
+        self.settle(false).await
+    }
+
+    /// Tears down a staged child whose preparation the invoking attempt
+    /// cancelled (Issue #145).
+    ///
+    /// The handshake already delivered the `Cancel` frame, so the child's
+    /// own preparation cancellation authority has fired: it cancels and
+    /// physically settles its preparatory supervised units itself. This
+    /// path first gives the child the cancellation grace to do exactly
+    /// that and exit, then escalates (group `SIGTERM`, then `SIGKILL`),
+    /// reaps, contains every retained nested anchor, and removes the child
+    /// runtime root — the same complete settlement as [`StagedChild::rollback`].
+    pub(crate) async fn rollback_cancelled(self) -> Result<(), RollbackError> {
+        self.settle(true).await
+    }
+
+    /// The one staged-teardown settlement. `cancellation_grace` gives a
+    /// cancelled child the grace window to settle its own preparation
+    /// before signal escalation.
+    async fn settle(mut self, cancellation_grace: bool) -> Result<(), RollbackError> {
+        if cancellation_grace {
+            // The Cancel frame is already on the wire; the child settles
+            // its preparation and exits on its own within the grace.
+            let _ = tokio::time::timeout(CANCEL_GRACE, self.child.wait()).await;
+        }
         kill_group(&self.child, Signal::Term);
         let term_wait = tokio::time::timeout(TERM_GRACE, self.child.wait()).await;
         match term_wait {
@@ -540,29 +620,102 @@ impl StagedChild {
     /// only), so the anchor-offer arm can be exercised without composing a
     /// whole child specification.
     #[cfg(test)]
-    pub(crate) async fn handshake_for_test(&mut self, subagent_id: &str) -> Result<(), SpawnError> {
-        let control = &mut self.control;
-        let child = &mut self.child;
-        let retained = &mut self.retained;
+    pub(crate) async fn handshake_for_test(
+        &mut self,
+        subagent_id: &str,
+        cancellation: &crate::runtime::cancellation::CancellationSignal,
+    ) -> Result<(), SpawnError> {
         let expected = crate::runtime::identity::SubagentId::new(subagent_id);
-        loop {
-            match read_child_frame(control).await {
-                Ok(Some(ChildFrame::Ready(ready))) if ready.subagent_id == expected => {
+        handshake_core(
+            &mut self.control,
+            &mut self.child,
+            &mut self.retained,
+            &expected,
+            cancellation,
+        )
+        .await
+    }
+
+    /// Completes the startup handshake: awaits `Ready` (or an honest
+    /// `StartupError`), bounded by the startup liveness guard.
+    async fn handshake(
+        &mut self,
+        spec: &SubagentChildSpec,
+        cancellation: &crate::runtime::cancellation::CancellationSignal,
+    ) -> Result<(), SpawnError> {
+        let handshake = handshake_core(
+            &mut self.control,
+            &mut self.child,
+            &mut self.retained,
+            &spec.subagent_id,
+            cancellation,
+        );
+        match tokio::time::timeout(STARTUP_LIVENESS, handshake).await {
+            Ok(result) => result,
+            Err(_) => Err(SpawnError::Handshake {
+                detail: "the child did not answer Ready within the startup liveness bound"
+                    .to_owned(),
+            }),
+        }
+    }
+}
+
+/// The one startup-handshake loop: consumes child frames until `Ready`
+/// while the invoking attempt's preparation cancellation participates from
+/// the start (Issue #145).
+///
+/// The cancellation arm is **biased** ahead of the frame arm: once the
+/// attempt cancellation is observable, a `Ready` that is already queued
+/// can never turn the child into a startable staged child. The child is
+/// told via the `Cancel` frame — its own preparation cancellation
+/// authority is driven by it — and the staged teardown then settles every
+/// physical resource before the caller's start decision returns.
+async fn handshake_core(
+    control: &mut tokio::net::UnixStream,
+    child: &mut tokio::process::Child,
+    retained: &mut RetainedProcessUnits,
+    expected: &crate::runtime::identity::SubagentId,
+    cancellation: &crate::runtime::cancellation::CancellationSignal,
+) -> Result<(), SpawnError> {
+    loop {
+        tokio::select! {
+            biased;
+            () = cancellation.cancelled() => {
+                let _ = write_parent_frame(control, &ParentFrame::Cancel).await;
+                return Err(SpawnError::Cancelled);
+            }
+            frame = read_child_frame(control) => match frame {
+                Ok(Some(ChildFrame::Ready(ready))) if ready.subagent_id == *expected => {
                     return Ok(());
                 }
+                Ok(Some(ChildFrame::Ready(_))) => {
+                    return Err(SpawnError::Handshake {
+                        detail: "the child reported the wrong identity".to_owned(),
+                    });
+                }
+                Ok(Some(ChildFrame::StartupError(error))) => {
+                    return Err(SpawnError::Handshake {
+                        detail: error.message,
+                    });
+                }
+                Ok(Some(ChildFrame::Diagnostic(_))) => {}
+                // External capability preparation runs before `Ready`,
+                // so a nested supervised unit can legitimately offer its
+                // anchor here. The staged owner retains it; the child's
+                // local `START` gate opens only after the ACK below.
                 Ok(Some(ChildFrame::AnchorOffered(offer))) => {
-                    answer_anchor_offer(control, retained, &offer)
-                        .await
-                        .map_err(|error| SpawnError::Handshake {
+                    if let Err(error) = answer_anchor_offer(control, retained, &offer).await {
+                        return Err(SpawnError::Handshake {
                             detail: error.to_string(),
-                        })?;
+                        });
+                    }
                 }
                 Ok(Some(ChildFrame::AnchorReleased(release))) => {
                     retained.release(&release.unit_id, release.pgid);
                 }
-                Ok(Some(_)) => {
+                Ok(Some(ChildFrame::Result(_))) => {
                     return Err(SpawnError::Handshake {
-                        detail: "unexpected frame".to_owned(),
+                        detail: "the child produced a result before delegation".to_owned(),
                     });
                 }
                 Ok(None) => {
@@ -577,71 +730,6 @@ impl StagedChild {
                     });
                 }
             }
-        }
-    }
-
-    /// Completes the startup handshake: awaits `Ready` (or an honest
-    /// `StartupError`), bounded by the startup liveness guard.
-    async fn handshake(&mut self, spec: &SubagentChildSpec) -> Result<(), SpawnError> {
-        let control = &mut self.control;
-        let child = &mut self.child;
-        let retained = &mut self.retained;
-        let handshake = async {
-            loop {
-                match read_child_frame(control).await {
-                    Ok(Some(ChildFrame::Ready(ready))) if ready.subagent_id == spec.subagent_id => {
-                        return Ok(());
-                    }
-                    Ok(Some(ChildFrame::Ready(_))) => {
-                        return Err(SpawnError::Handshake {
-                            detail: "the child reported the wrong identity".to_owned(),
-                        });
-                    }
-                    Ok(Some(ChildFrame::StartupError(error))) => {
-                        return Err(SpawnError::Handshake {
-                            detail: error.message,
-                        });
-                    }
-                    Ok(Some(ChildFrame::Diagnostic(_))) => {}
-                    // External capability preparation runs before `Ready`,
-                    // so a nested supervised unit can legitimately offer its
-                    // anchor here. The staged owner retains it; the child's
-                    // local `START` gate opens only after the ACK below.
-                    Ok(Some(ChildFrame::AnchorOffered(offer))) => {
-                        if let Err(error) = answer_anchor_offer(control, retained, &offer).await {
-                            return Err(SpawnError::Handshake {
-                                detail: error.to_string(),
-                            });
-                        }
-                    }
-                    Ok(Some(ChildFrame::AnchorReleased(release))) => {
-                        retained.release(&release.unit_id, release.pgid);
-                    }
-                    Ok(Some(ChildFrame::Result(_))) => {
-                        return Err(SpawnError::Handshake {
-                            detail: "the child produced a result before delegation".to_owned(),
-                        });
-                    }
-                    Ok(None) => {
-                        let exit = try_wait(child);
-                        return Err(SpawnError::Handshake {
-                            detail: format!("the child exited before Ready{exit}"),
-                        });
-                    }
-                    Err(error) => {
-                        return Err(SpawnError::Handshake {
-                            detail: error.to_string(),
-                        });
-                    }
-                }
-            }
-        };
-        match tokio::time::timeout(STARTUP_LIVENESS, handshake).await {
-            Ok(result) => result,
-            Err(_) => Err(SpawnError::Handshake {
-                detail: "the child did not answer Ready within the startup liveness bound"
-                    .to_owned(),
-            }),
         }
     }
 }
@@ -1002,7 +1090,10 @@ mod tests {
         // frame the child already queued.
         tokio::time::timeout(
             DEADLINE,
-            harness.staged.handshake_for_test("conv-1-subagent-1"),
+            harness.staged.handshake_for_test(
+                "conv-1-subagent-1",
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            ),
         )
         .await
         .expect("handshake liveness")
@@ -1047,7 +1138,10 @@ mod tests {
         .expect("ready");
         tokio::time::timeout(
             DEADLINE,
-            harness.staged.handshake_for_test("conv-1-subagent-1"),
+            harness.staged.handshake_for_test(
+                "conv-1-subagent-1",
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            ),
         )
         .await
         .expect("handshake liveness")
@@ -1082,7 +1176,10 @@ mod tests {
         .expect("ready");
         tokio::time::timeout(
             DEADLINE,
-            harness.staged.handshake_for_test("conv-1-subagent-1"),
+            harness.staged.handshake_for_test(
+                "conv-1-subagent-1",
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            ),
         )
         .await
         .expect("handshake liveness")
@@ -1244,10 +1341,45 @@ mod tests {
         };
         assert!(
             matches!(
-                spawn_staged(&plan, &spec).await,
+                spawn_staged(
+                    &plan,
+                    &spec,
+                    &crate::runtime::cancellation::CancellationSignal::new()
+                )
+                .await,
                 Err(super::SpawnError::Spawn { .. })
             ),
             "the prerequisite is consulted first; the spawn itself is what fails here"
+        );
+    }
+
+    /// A stale child-private runtime root left behind by an uncommitted or
+    /// crashed child is NEVER inherited by the next child staged under the
+    /// same identity: staging establishes the root empty, so no stale
+    /// Python environment, Skill copy, or binding can become the new
+    /// child's mutable authority.
+    #[test]
+    fn a_stale_child_runtime_root_never_becomes_the_next_childs_authority() {
+        let dir = tempfile::tempdir().expect("lab");
+        let root = dir
+            .path()
+            .join("runtime")
+            .join("subagents")
+            .join("conv-1-subagent-1");
+        let stale_environment = root.join("environments").join("stale");
+        std::fs::create_dir_all(&stale_environment).expect("the stale tree");
+        std::fs::write(stale_environment.join("pyvenv.cfg"), "stale").expect("the stale artifact");
+
+        super::establish_fresh_child_root(&root).expect("the fresh root is established");
+
+        assert!(
+            root.exists(),
+            "the root exists (including its missing ancestors) for the child being staged"
+        );
+        assert_eq!(
+            std::fs::read_dir(&root).expect("the root listing").count(),
+            0,
+            "the fresh root is empty: nothing stale survived"
         );
     }
 }

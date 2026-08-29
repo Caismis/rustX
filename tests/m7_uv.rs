@@ -62,7 +62,7 @@ async fn production_uv_materializes_a_local_tool_environment() {
         .expect("store");
     let published = store.publish(&package).expect("publish source");
     let environment = store
-        .ensure_environment(&published)
+        .ensure_environment(&published, &rustx::runtime::CancellationSignal::new())
         .await
         .expect("materialize");
     assert!(environment.root.join("RUSTX_ENV_MANIFEST.json").is_file());
@@ -234,7 +234,7 @@ async fn conflicting_local_dependencies_isolate_versions_and_materialize_offline
     for package in &packages {
         let published = store.publish(package).expect("publish source");
         let environment = store
-            .ensure_environment(&published)
+            .ensure_environment(&published, &rustx::runtime::CancellationSignal::new())
             .await
             .expect("materialize offline from local wheels");
         assert!(environment.root.join("bin/python").is_file());

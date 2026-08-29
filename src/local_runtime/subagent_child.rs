@@ -187,7 +187,7 @@ async fn run_child(
     handle: &ChildControlHandle,
     spec: SubagentChildSpec,
 ) -> Result<(), ChildExit> {
-    let Some(core) = compose_cancellably(dispatcher, handle, &spec).await? else {
+    let Some(core) = Box::pin(compose_cancellably(dispatcher, handle, &spec)).await? else {
         // Preparation settled (cancellation or parent loss) before the child
         // was owned: nothing composed, nothing started, no result. The
         // parent settles the cancelled/interrupted terminal itself from the
@@ -209,6 +209,7 @@ async fn run_child(
         }))
         .await
         .map_err(|error| ChildExit::Protocol(error.to_string()))?;
+    mark_ready_sent_if_armed();
 
     // The start gate: no semantic work before the delegation arrives.
     let delegate = match dispatcher.next_event().await {
@@ -348,7 +349,22 @@ async fn compose_cancellably(
         }
     };
     match composed {
-        Ok(core) => Ok(Some(core)),
+        Ok(core) => {
+            // The final stretch of composition after the last guarded step
+            // is not itself cancellation-checked, so a settlement authority
+            // can win the race against the composition's completion. Once
+            // pre-commit cancellation has won, `Ready` is impossible:
+            // settle the composed runtime — its physical capability
+            // runtimes included — and report the settled preparation.
+            if cancellation.is_cancelled() || handle.parent_lost() {
+                let runtime = core.runtime().clone();
+                drop(core);
+                let _ = runtime.shutdown().await;
+                Ok(None)
+            } else {
+                Ok(Some(core))
+            }
+        }
         Err(error) => {
             if cancellation.is_cancelled() || handle.parent_lost() {
                 // A settled preparation is not a startup failure: the child
@@ -536,6 +552,26 @@ fn final_answer(
 fn bound_diagnostic(diagnostic: String) -> String {
     bound_utf8(diagnostic, MAX_RESULT_CONTENT_BYTES)
 }
+
+/// Test-only proof seam of the Issue #145 cancellation regressions: when
+/// armed, the child writes a marker file at the instant it answers
+/// `Ready`, so a parent-side test can prove *after the child's physical
+/// exit* that no `Ready` was ever published. Inert in every other build;
+/// the environment variable is read by nothing there.
+#[cfg(test)]
+fn mark_ready_sent_if_armed() {
+    if let Some(path) = std::env::var_os(READY_MARKER_ENV) {
+        std::fs::write(path, b"ready\n").expect("the Ready marker is writable");
+    }
+}
+
+/// The inert non-test twin of [`mark_ready_sent_if_armed`].
+#[cfg(not(test))]
+const fn mark_ready_sent_if_armed() {}
+
+/// The marker-file path of the Ready proof seam (test builds only).
+#[cfg(test)]
+const READY_MARKER_ENV: &str = "RUSTX_ISSUE145_READY_MARKER";
 
 /// Takes over the inherited control channel on fd 0.
 ///
@@ -915,5 +951,108 @@ mod tests {
             "one request total; cancellation never starts a second model turn"
         );
         runtime.shutdown().await.expect("child runtime drains");
+    }
+
+    /// The Issue #145 local race, deterministically in-process (the e2e
+    /// module covers the cross-process ordering; see
+    /// `local_runtime::issue145_preparation_e2e`): a `Cancel` event sets
+    /// the one preparation cancellation signal, and only THEN the guarded
+    /// external-preparation step completes. The gate is deliberately
+    /// biased to let the completed step win its internal race, so the
+    /// composition's own settlement checks are what must hold: the
+    /// composition must never be publishable as `Ready`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_step_completing_after_cancellation_never_publishes_ready() {
+        let dir = tempfile::tempdir().expect("temp root");
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let runtime_root = dir.path().join("child");
+        let spec = SubagentChildSpec {
+            protocol_version: SUBAGENT_IPC_VERSION,
+            subagent_id: crate::runtime::identity::SubagentId::new("conv-issue145-race-subagent-1"),
+            child_conversation_id: ConversationId::new("conv-issue145-race-subagent-1"),
+            child_agent_id: AgentId::new("agent-child"),
+            parent_agent_id: AgentId::new("agent-parent"),
+            resolved: crate::runtime::subagent::ResolvedSubagentSpec {
+                agent: crate::runtime::subagent::SubagentName::parse("explore")
+                    .expect("canonical name"),
+                definition_digest: serde_json::from_value(serde_json::json!(
+                    "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                ))
+                .expect("digest"),
+                instructions: "frozen child instructions".to_owned(),
+                model: crate::model::frozen::test_frozen_model_spec(
+                    serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),
+                ),
+                tools: Vec::new(),
+                skills: Vec::new(),
+                project_instructions: Vec::new(),
+                materialization:
+                    crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
+            },
+            agent_status: crate::context::AgentStatusConfig::default(),
+            context: SessionContextPolicy {
+                reserve_tokens: 0,
+                keep_recent_tokens: 0,
+                summary_output_cap: None,
+            },
+            workspace,
+            runtime_root: runtime_root.clone(),
+        };
+        let gate = crate::local_runtime::composition::arm_test_preparation_gate(&runtime_root);
+
+        let (parent, child) = tokio::net::UnixStream::pair().expect("control pair");
+        let mut dispatcher = ChildControlDispatcher::start(child);
+        let handle = dispatcher.handle();
+        let composed = tokio::spawn(async move {
+            let outcome = Box::pin(compose_cancellably(&mut dispatcher, &handle, &spec)).await;
+            (outcome, dispatcher)
+        });
+
+        // 1. The child is provably inside external preparation.
+        gate.entered().await;
+
+        // 2. The parent's Cancel frame is written...
+        let (mut parent_read, mut parent_write) = parent.into_split();
+        crate::runtime::subagent::ipc::write_parent_frame(&mut parent_write, &ParentFrame::Cancel)
+            .await
+            .expect("the Cancel frame reaches the child");
+
+        // 3. ...and the child provably consumed it: the exact cancellation
+        //    signal the gated step runs under is now set.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            gate.cancellation().cancelled(),
+        )
+        .await
+        .expect("liveness: the child consumed the Cancel event");
+
+        // 4. Only NOW does the racy external step complete. The gate's
+        //    release arm is biased ahead of its cancellation arm, so the
+        //    step completes `Ok` — the exact shape of the dangerous race.
+        gate.release();
+
+        // 5. The composition is never publishable: it settles instead of
+        //    becoming a runtime the driver would answer `Ready` for.
+        let (outcome, dispatcher) =
+            tokio::time::timeout(std::time::Duration::from_secs(30), composed)
+                .await
+                .expect("liveness: the settled composition must complete")
+                .expect("the composition task must not panic");
+        let outcome = outcome.expect("the settled composition is not a startup failure");
+        assert!(
+            outcome.is_none(),
+            "once pre-commit cancellation has won, Ready is impossible"
+        );
+        // No child frame at all was written: not Ready, not anything. The
+        // dispatcher's explicit shutdown makes the EOF deterministic.
+        dispatcher.shutdown().await;
+        let frame = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            crate::runtime::subagent::ipc::read_child_frame(&mut parent_read),
+        )
+        .await
+        .expect("liveness: the wire closes with the dispatcher");
+        assert_eq!(frame, Ok(None), "the settled child is silent on the wire");
     }
 }
