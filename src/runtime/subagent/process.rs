@@ -27,6 +27,8 @@
 //! loses its parent drains its own runtime and exits; the restarted parent
 //! classifies the durable ownership as interrupted and never reattaches.
 
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -65,6 +67,17 @@ const TERM_GRACE: Duration = Duration::from_secs(5);
 #[cfg(test)]
 const TERM_GRACE: Duration = Duration::from_millis(200);
 
+/// The number of OS-random bytes in one physical spawn-incarnation token.
+/// The token is never semantic state; it only prevents a later process
+/// generation from receiving an earlier child's mutable pathname.
+const INCARNATION_TOKEN_BYTES: usize = 16;
+
+/// A bounded retry budget for the exclusive incarnation-directory create.
+/// A collision is harmless — the existing directory is never opened or
+/// removed — but a broken entropy source must not turn staging into an
+/// unbounded loop.
+const INCARNATION_ALLOCATION_ATTEMPTS: usize = 8;
+
 /// The composition inputs one child process is spawned with.
 ///
 /// Everything the child needs that is not process-inheritable travels in
@@ -77,8 +90,10 @@ pub struct SubagentSpawnPlan {
     pub program: std::path::PathBuf,
     /// The shared read-only workspace root.
     pub workspace: std::path::PathBuf,
-    /// The **parent** runtime-private root; each child gets a disjoint
-    /// `subagents/<subagent_id>` subtree under it.
+    /// The **parent** runtime-private root. Each child gets a fresh physical
+    /// incarnation directory below
+    /// `subagents/<semantic_subagent_id>/`, and only that directory is ever
+    /// given to the child as mutable authority.
     pub runtime_root: std::path::PathBuf,
     /// The launch-scoped Agent Status configuration inherited by the child.
     pub agent_status: AgentStatusConfig,
@@ -87,12 +102,18 @@ pub struct SubagentSpawnPlan {
 }
 
 impl SubagentSpawnPlan {
-    /// The child-private runtime root of one subagent.
-    #[must_use]
-    pub fn child_runtime_root(&self, subagent_id: &SubagentId) -> std::path::PathBuf {
-        self.runtime_root
-            .join("subagents")
-            .join(subagent_id.as_str())
+    /// Reserves one fresh physical runtime namespace for a spawn
+    /// incarnation.
+    ///
+    /// The semantic `SubagentId` is only a grouping component. The mutable
+    /// authority is the exclusively-created `incarnation-...` child below
+    /// that grouping directory, so a stale child can keep writing in its own
+    /// old directory without ever naming a later child's directory.
+    pub(crate) fn allocate_child_runtime_root(
+        &self,
+        subagent_id: &SubagentId,
+    ) -> Result<PhysicalChildRuntimeRoot, SpawnError> {
+        PhysicalChildRuntimeRoot::allocate(&self.runtime_root, subagent_id)
     }
 
     /// The one typed startup specification of a child.
@@ -113,6 +134,7 @@ impl SubagentSpawnPlan {
         child_agent_id: &crate::runtime::identity::AgentId,
         parent_agent_id: &crate::runtime::identity::AgentId,
         resolved: &ResolvedSubagentSpec,
+        runtime_root: &PhysicalChildRuntimeRoot,
     ) -> SubagentChildSpec {
         SubagentChildSpec {
             protocol_version: super::ipc::SUBAGENT_IPC_VERSION,
@@ -124,9 +146,96 @@ impl SubagentSpawnPlan {
             agent_status: self.agent_status.clone(),
             context: self.context,
             workspace: self.workspace.clone(),
-            runtime_root: self.child_runtime_root(subagent_id),
+            runtime_root: runtime_root.path().to_path_buf(),
         }
     }
+}
+
+/// The unique physical mutable namespace of one staged spawn incarnation.
+///
+/// This value is deliberately not `Clone`: the path is one lifecycle-owned
+/// capability. Its pathname contains an OS-random token and was created with
+/// an exclusive directory operation, so it cannot alias a still-existing
+/// namespace from an earlier rustX process generation.
+#[derive(Debug)]
+pub(crate) struct PhysicalChildRuntimeRoot {
+    path: PathBuf,
+}
+
+impl PhysicalChildRuntimeRoot {
+    /// Creates the semantic grouping directory and exclusively creates one
+    /// fresh incarnation directory beneath it.
+    fn allocate(parent: &Path, subagent_id: &SubagentId) -> Result<Self, SpawnError> {
+        let semantic_root = parent.join("subagents").join(subagent_id.as_str());
+        std::fs::create_dir_all(&semantic_root).map_err(|error| SpawnError::WorkspaceSetup {
+            detail: format!(
+                "create semantic child runtime grouping {}: {error}",
+                semantic_root.display()
+            ),
+        })?;
+
+        for _ in 0..INCARNATION_ALLOCATION_ATTEMPTS {
+            let mut token = [0u8; INCARNATION_TOKEN_BYTES];
+            getrandom::fill(&mut token).map_err(|error| SpawnError::WorkspaceSetup {
+                detail: format!(
+                    "generate a physical child spawn-incarnation token for {}: {error}",
+                    semantic_root.display()
+                ),
+            })?;
+            let name = format!("incarnation-{}", hex_token(&token));
+            let path = semantic_root.join(name);
+            match std::fs::create_dir(&path) {
+                Ok(()) => return Ok(Self { path }),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => {
+                    return Err(SpawnError::WorkspaceSetup {
+                        detail: format!(
+                            "create physical child runtime root {}: {error}",
+                            path.display()
+                        ),
+                    });
+                }
+            }
+        }
+
+        Err(SpawnError::WorkspaceSetup {
+            detail: format!(
+                "allocate a fresh physical child runtime root below {} after {} attempts",
+                semantic_root.display(),
+                INCARNATION_ALLOCATION_ATTEMPTS
+            ),
+        })
+    }
+
+    /// The exact path handed to the child and used by its private stores.
+    #[must_use]
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Removes exactly this incarnation directory. The semantic grouping
+    /// directory is intentionally left alone because another incarnation
+    /// may be using it.
+    fn remove(self) -> std::io::Result<()> {
+        std::fs::remove_dir_all(self.path)
+    }
+
+    /// Wraps a test-created directory in the same lifecycle owner used by a
+    /// production staged child.
+    #[cfg(test)]
+    fn from_existing(path: PathBuf) -> Self {
+        Self { path }
+    }
+}
+
+/// Encodes a physical token without introducing another identifier type or
+/// dependency. The result is safe as one directory component.
+fn hex_token(token: &[u8; INCARNATION_TOKEN_BYTES]) -> String {
+    let mut encoded = String::with_capacity(INCARNATION_TOKEN_BYTES * 2);
+    for byte in token {
+        write!(&mut encoded, "{byte:02x}").expect("writing into a String cannot fail");
+    }
+    encoded
 }
 
 /// A failure to stage a child process.
@@ -252,11 +361,13 @@ impl std::error::Error for RollbackError {}
 
 /// Spawns and stages one child behind the start gate.
 ///
-/// Staging performs, in order: child runtime-root preparation, control
-/// channel creation, process spawn into its own process group, the
-/// versioned `Hello` handoff, and the `Ready` handshake. Any failure tears
-/// the stage down completely (the staged process is killed and reaped)
-/// before the error is returned.
+/// The caller reserves the exclusive physical runtime-root token before
+/// invoking this function. Staging then performs, in order: control channel
+/// creation, process spawn into its own process group, the versioned `Hello`
+/// handoff, and the `Ready` handshake. Any failure tears the stage down
+/// completely (the staged process is killed and reaped) before the error is
+/// returned. The supplied root token is consumed by this function and becomes
+/// owned by `StagedChild` before the Hello/Ready handshake begins.
 ///
 /// `preparation_cancellation` is the invoking attempt's cancellation
 /// authority (Issue #145): it participates in staging **from the start**,
@@ -273,10 +384,23 @@ impl std::error::Error for RollbackError {}
 pub(crate) async fn spawn_staged(
     plan: &SubagentSpawnPlan,
     spec: &SubagentChildSpec,
+    runtime_root: PhysicalChildRuntimeRoot,
     preparation_cancellation: &crate::runtime::cancellation::CancellationSignal,
 ) -> Result<StagedChild, SpawnError> {
     if preparation_cancellation.is_cancelled() {
-        return Err(SpawnError::Cancelled);
+        return Err(discard_unstaged_root(runtime_root, SpawnError::Cancelled));
+    }
+    if spec.runtime_root.as_path() != runtime_root.path() {
+        let owned_path = runtime_root.path().display().to_string();
+        let specified_path = spec.runtime_root.display().to_string();
+        return Err(discard_unstaged_root(
+            runtime_root,
+            SpawnError::WorkspaceSetup {
+                detail: format!(
+                    "child spec runtime root {specified_path} does not match the reserved physical incarnation {owned_path}"
+                ),
+            },
+        ));
     }
     // The containment prerequisite is established BEFORE the child exists.
     // A subagent child may create nested supervised process units during
@@ -286,17 +410,39 @@ pub(crate) async fn spawn_staged(
     // lazily inside the child (as the child's own local runner does) would
     // make the child a subreaper, not this process, and the anchors this
     // process retains would be unreachable.
-    crate::runtime::process_supervision::ensure_child_subreaper()
-        .map_err(|detail| SpawnError::ContainmentPrerequisite { detail })?;
-    let runtime_root = plan.child_runtime_root(&spec.subagent_id);
-    establish_fresh_child_root(&runtime_root)?;
-    let mut staged = match spawn_process(plan, spec, &runtime_root).await {
-        Ok(staged) => staged,
-        Err(error) => {
-            let _ = std::fs::remove_dir_all(&runtime_root);
-            return Err(error);
-        }
+    if let Err(detail) = crate::runtime::process_supervision::ensure_child_subreaper() {
+        return Err(discard_unstaged_root(
+            runtime_root,
+            SpawnError::ContainmentPrerequisite { detail },
+        ));
+    }
+    let spawned = match spawn_process(plan, runtime_root.path()) {
+        Ok(spawned) => spawned,
+        Err(error) => return Err(discard_unstaged_root(runtime_root, error)),
     };
+    let mut staged = StagedChild {
+        child: spawned.child,
+        control: spawned.control,
+        runtime_root,
+        retained: RetainedProcessUnits::default(),
+    };
+    // The typed startup specification travels over the control channel; no
+    // temporary configuration file is ever written.
+    if let Err(error) = write_parent_frame(
+        &mut staged.control,
+        &ParentFrame::Hello(Box::new(spec.clone())),
+    )
+    .await
+    {
+        return match staged.rollback().await {
+            Ok(()) => Err(SpawnError::Handshake {
+                detail: error.to_string(),
+            }),
+            Err(rollback) => Err(SpawnError::Rollback {
+                detail: format!("{error}; {rollback}"),
+            }),
+        };
+    }
     if let Err(error) = staged.handshake(spec, preparation_cancellation).await {
         if matches!(error, SpawnError::Cancelled) {
             return match staged.rollback_cancelled().await {
@@ -316,38 +462,25 @@ pub(crate) async fn spawn_staged(
     Ok(staged)
 }
 
-/// Establishes the child-private runtime root, guaranteed fresh (Issue
-/// #145).
-///
-/// `SubagentId` ordinals are unique within one process lifetime and the
-/// durable ownership watermark reseeds the sequence across restarts, so a
-/// pre-existing directory under this exact identity can only be the stale
-/// leftover of an uncommitted staged child of a crashed process — never a
-/// live authority. Reusing it would let a previous process's half-built
-/// Python environment, Skill copy, or binding become this child's mutable
-/// authority, so the stale tree is removed and the root is always created
-/// empty for the child that owns it now.
-fn establish_fresh_child_root(runtime_root: &std::path::Path) -> Result<(), SpawnError> {
-    if runtime_root.exists() {
-        std::fs::remove_dir_all(runtime_root).map_err(|error| SpawnError::WorkspaceSetup {
+/// Returns a pre-spawn failure after removing only the physical root reserved
+/// for that failed spawn. The semantic grouping directory is never removed.
+fn discard_unstaged_root(runtime_root: PhysicalChildRuntimeRoot, error: SpawnError) -> SpawnError {
+    let path = runtime_root.path().display().to_string();
+    match runtime_root.remove() {
+        Ok(()) => error,
+        Err(cleanup) => SpawnError::Rollback {
             detail: format!(
-                "remove the stale pre-commit child runtime root {}: {error}",
-                runtime_root.display()
+                "{error}; could not remove unowned physical child runtime root {path}: {cleanup}"
             ),
-        })?;
+        },
     }
-    std::fs::create_dir_all(runtime_root).map_err(|error| SpawnError::WorkspaceSetup {
-        detail: format!("{}: {error}", runtime_root.display()),
-    })
 }
 
-/// Spawns the child process with the control channel inherited as fd 0 and
-/// hands it the typed startup specification.
-async fn spawn_process(
+/// Spawns the child process with the control channel inherited as fd 0.
+fn spawn_process(
     plan: &SubagentSpawnPlan,
-    spec: &SubagentChildSpec,
-    runtime_root: &std::path::Path,
-) -> Result<StagedChild, SpawnError> {
+    runtime_root: &Path,
+) -> Result<SpawnedProcess, SpawnError> {
     // The control channel: one UnixStream pair. The child end becomes the
     // child's fd 0; both ends are CLOEXEC, so no other descendant of either
     // process can hold the liveness endpoint open.
@@ -380,30 +513,18 @@ async fn spawn_process(
     let child = command.spawn().map_err(|error| SpawnError::Spawn {
         detail: format!("{}: {error}", plan.program.display()),
     })?;
-    let mut staged = StagedChild {
+    Ok(SpawnedProcess {
         child,
         control: parent_end,
-        runtime_root: runtime_root.to_path_buf(),
-        retained: RetainedProcessUnits::default(),
-    };
-    // The typed startup specification travels over the control channel; no
-    // temporary configuration file is ever written.
-    if let Err(error) = write_parent_frame(
-        &mut staged.control,
-        &ParentFrame::Hello(Box::new(spec.clone())),
-    )
-    .await
-    {
-        return match staged.rollback().await {
-            Ok(()) => Err(SpawnError::Handshake {
-                detail: error.to_string(),
-            }),
-            Err(rollback) => Err(SpawnError::Rollback {
-                detail: format!("{error}; {rollback}"),
-            }),
-        };
-    }
-    Ok(staged)
+    })
+}
+
+/// The process and control endpoint that become one `StagedChild` only
+/// after the physical-root token is moved into that owner.
+#[derive(Debug)]
+struct SpawnedProcess {
+    child: tokio::process::Child,
+    control: tokio::net::UnixStream,
 }
 
 /// A spawned child parked behind the start gate, not yet owned by the
@@ -417,7 +538,7 @@ async fn spawn_process(
 pub(crate) struct StagedChild {
     child: tokio::process::Child,
     control: tokio::net::UnixStream,
-    runtime_root: std::path::PathBuf,
+    runtime_root: PhysicalChildRuntimeRoot,
     /// The nested supervised process units this child has anchored in this
     /// process (Issue #145).
     ///
@@ -443,6 +564,10 @@ pub(crate) struct PhysicalSettlement {
     pub outcome: PhysicalOutcome,
     /// The settlement of the child's retained nested process units.
     pub nested: NestedUnitSettlement,
+    /// A failure to remove the exact physical root after the child and all
+    /// proven nested units settled. An unproven nested unit deliberately
+    /// leaves its root in place instead.
+    pub runtime_root_cleanup_error: Option<String>,
 }
 
 impl PhysicalSettlement {
@@ -454,6 +579,7 @@ impl PhysicalSettlement {
                 contained: Vec::new(),
                 unproven: Vec::new(),
             },
+            runtime_root_cleanup_error: None,
         }
     }
 }
@@ -485,6 +611,12 @@ impl StagedChild {
     /// copied, so there is one owner at every instant and no second
     /// containment authority can exist.
     pub(crate) fn into_driver(self, delegate: super::ipc::DelegationFrame) -> ChildDriver {
+        let Self {
+            child,
+            control,
+            runtime_root,
+            retained,
+        } = self;
         let (command_tx, command_rx) = tokio::sync::mpsc::channel(4);
         // The driver owns the OS handle immediately after this call, but it
         // cannot send Delegate until the registry has installed its command
@@ -494,9 +626,10 @@ impl StagedChild {
         let task = tokio::spawn(async move {
             let cancelled_before_start = start_rx.await.unwrap_or(true);
             drive_child(
-                self.child,
-                self.control,
-                self.retained,
+                child,
+                control,
+                retained,
+                runtime_root,
                 delegate,
                 command_rx,
                 cancelled_before_start,
@@ -511,7 +644,8 @@ impl StagedChild {
     }
 
     /// Tears the staged child down completely: kill the process group, reap
-    /// the direct child, and remove the child runtime root.
+    /// the direct child, settle retained anchors, and remove exactly the
+    /// physical incarnation root it owns.
     ///
     /// Called on every pre-commit failure and on every rolled-back commit
     /// attempt; the registry's no-rollback and no-stale-partial-record
@@ -529,7 +663,8 @@ impl StagedChild {
     /// path first gives the child the cancellation grace to do exactly
     /// that and exit, then escalates (group `SIGTERM`, then `SIGKILL`),
     /// reaps, contains every retained nested anchor, and removes the child
-    /// runtime root — the same complete settlement as [`StagedChild::rollback`].
+    /// spawn-incarnation root — the same complete settlement as
+    /// [`StagedChild::rollback`].
     pub(crate) async fn rollback_cancelled(self) -> Result<(), RollbackError> {
         self.settle(true).await
     }
@@ -571,12 +706,13 @@ impl StagedChild {
         if let Some(detail) = settlement.unproven_diagnostic() {
             return Err(RollbackError::NestedContainment { detail });
         }
-        std::fs::remove_dir_all(&self.runtime_root).map_err(|error| RollbackError::Cleanup {
-            detail: format!(
-                "remove child runtime root {}: {error}",
-                self.runtime_root.display()
-            ),
-        })?;
+        let runtime_root = self.runtime_root;
+        let path = runtime_root.path().display().to_string();
+        runtime_root
+            .remove()
+            .map_err(|error| RollbackError::Cleanup {
+                detail: format!("remove child runtime root {path}: {error}"),
+            })?;
         Ok(())
     }
 
@@ -593,7 +729,7 @@ impl StagedChild {
         Self {
             child,
             control,
-            runtime_root,
+            runtime_root: PhysicalChildRuntimeRoot::from_existing(runtime_root),
             retained: RetainedProcessUnits::default(),
         }
     }
@@ -804,6 +940,7 @@ async fn drive_child(
     mut child: tokio::process::Child,
     mut control: tokio::net::UnixStream,
     mut retained: RetainedProcessUnits,
+    runtime_root: PhysicalChildRuntimeRoot,
     delegate: super::ipc::DelegationFrame,
     mut commands: tokio::sync::mpsc::Receiver<DriverCommand>,
     cancelled_before_start: bool,
@@ -823,6 +960,7 @@ async fn drive_child(
                     escalated: true,
                 },
                 &mut retained,
+                runtime_root,
             )
             .await;
         }
@@ -840,6 +978,7 @@ async fn drive_child(
                 escalated: true,
             },
             &mut retained,
+            runtime_root,
         )
         .await;
     }
@@ -926,6 +1065,7 @@ async fn drive_child(
                 escalated: true,
             },
             &mut retained,
+            runtime_root,
         )
         .await;
     }
@@ -940,7 +1080,7 @@ async fn drive_child(
             escalated: kill_deadline.is_some() || cancel_deadline.is_some(),
         },
     };
-    settle_nested(outcome, &mut retained).await
+    settle_nested(outcome, &mut retained, runtime_root).await
 }
 
 /// Settles every anchor the child still had retained when it exited.
@@ -953,9 +1093,27 @@ async fn drive_child(
 async fn settle_nested(
     outcome: PhysicalOutcome,
     retained: &mut RetainedProcessUnits,
+    runtime_root: PhysicalChildRuntimeRoot,
 ) -> PhysicalSettlement {
     let nested = contain_retained(retained.take()).await;
-    PhysicalSettlement { outcome, nested }
+    let runtime_root_cleanup_error = if nested.unproven.is_empty() {
+        let path = runtime_root.path().display().to_string();
+        runtime_root
+            .remove()
+            .err()
+            .map(|error| format!("remove child runtime root {path}: {error}"))
+    } else {
+        // An unproven nested unit may still be alive, so keep its mutable
+        // namespace rather than deleting it before physical settlement is
+        // established. The old incarnation remains isolated from all later
+        // incarnation roots.
+        None
+    };
+    PhysicalSettlement {
+        outcome,
+        nested,
+        runtime_root_cleanup_error,
+    }
 }
 
 /// Reaps the direct child, escalating if it outlives its cancellation
@@ -1021,8 +1179,12 @@ fn kill_group(child: &tokio::process::Child, signal: Signal) {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::{StagedChild, spawn_staged};
-    use crate::runtime::identity::ProcessUnitId;
+    use std::io::{Read as _, Write as _};
+    use std::path::{Path, PathBuf};
+
+    use super::{StagedChild, SubagentSpawnPlan, spawn_staged};
+    use crate::context::{AgentStatusConfig, SessionContextPolicy};
+    use crate::runtime::identity::{ProcessUnitId, SubagentId};
     use crate::runtime::subagent::ipc::{
         ChildFrame, ParentFrame, ProcessUnitAnchorFrame, ReadyFrame, read_parent_frame,
         write_child_frame,
@@ -1034,6 +1196,7 @@ mod tests {
     struct StagedHarness {
         staged: StagedChild,
         child: tokio::net::UnixStream,
+        runtime_root: PathBuf,
         _dir: tempfile::TempDir,
     }
 
@@ -1055,7 +1218,43 @@ mod tests {
         StagedHarness {
             staged: StagedChild::for_test(process, parent, root),
             child,
+            runtime_root: dir.path().join("child"),
             _dir: dir,
+        }
+    }
+
+    fn allocation_plan(runtime_root: PathBuf) -> SubagentSpawnPlan {
+        SubagentSpawnPlan {
+            program: PathBuf::from("/nonexistent/rustx"),
+            workspace: runtime_root.join("workspace"),
+            runtime_root,
+            agent_status: AgentStatusConfig::default(),
+            context: SessionContextPolicy {
+                reserve_tokens: 0,
+                keep_recent_tokens: 0,
+                summary_output_cap: None,
+            },
+        }
+    }
+
+    fn assert_no_named_entry(root: &Path, name: &str) {
+        let mut pending = vec![root.to_path_buf()];
+        while let Some(directory) = pending.pop() {
+            for entry in std::fs::read_dir(directory).expect("walk the physical root") {
+                let entry = entry.expect("read physical-root entry");
+                assert_ne!(
+                    entry.file_name().to_string_lossy(),
+                    name,
+                    "the old marker is absent from the new physical root"
+                );
+                if entry
+                    .file_type()
+                    .expect("inspect physical-root entry")
+                    .is_dir()
+                {
+                    pending.push(entry.path());
+                }
+            }
         }
     }
 
@@ -1277,6 +1476,10 @@ mod tests {
             ),
             "the nested unit group is gone once the settlement is published"
         );
+        assert!(
+            !harness.runtime_root.exists(),
+            "the committed driver, not a separate cleanup owner, removed its exact physical root"
+        );
         drop(nested);
     }
 
@@ -1287,8 +1490,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_containment_prerequisite_precedes_child_staging() {
         // The prerequisite is one-time and sticky per process; consulting it
-        // here is exactly what `spawn_staged` does before it creates the
-        // child runtime root.
+        // here is exactly what `spawn_staged` does before it launches the
+        // child whose root was already reserved by the caller.
         assert_eq!(
             crate::runtime::process_supervision::ensure_child_subreaper(),
             Ok(()),
@@ -1308,7 +1511,7 @@ mod tests {
                 summary_output_cap: None,
             },
         };
-        let spec = crate::runtime::subagent::ipc::SubagentChildSpec {
+        let mut spec = crate::runtime::subagent::ipc::SubagentChildSpec {
             protocol_version: crate::runtime::subagent::ipc::SUBAGENT_IPC_VERSION,
             subagent_id: crate::runtime::identity::SubagentId::new("conv-1-subagent-1"),
             child_conversation_id: crate::runtime::identity::ConversationId::new(
@@ -1339,11 +1542,16 @@ mod tests {
             workspace: dir.path().join("workspace"),
             runtime_root: dir.path().join("runtime"),
         };
+        let runtime_root = plan
+            .allocate_child_runtime_root(&spec.subagent_id)
+            .expect("a physical incarnation root");
+        spec.runtime_root = runtime_root.path().to_path_buf();
         assert!(
             matches!(
                 spawn_staged(
                     &plan,
                     &spec,
+                    runtime_root,
                     &crate::runtime::cancellation::CancellationSignal::new()
                 )
                 .await,
@@ -1353,33 +1561,131 @@ mod tests {
         );
     }
 
-    /// A stale child-private runtime root left behind by an uncommitted or
-    /// crashed child is NEVER inherited by the next child staged under the
-    /// same identity: staging establishes the root empty, so no stale
-    /// Python environment, Skill copy, or binding can become the new
-    /// child's mutable authority.
+    /// A stale physical incarnation is retained as its own namespace; a
+    /// later spawn of the same semantic child receives a fresh sibling
+    /// namespace rather than deleting and recreating the stale pathname.
     #[test]
-    fn a_stale_child_runtime_root_never_becomes_the_next_childs_authority() {
+    fn a_stale_child_incarnation_never_becomes_the_next_childs_authority() {
         let dir = tempfile::tempdir().expect("lab");
-        let root = dir
-            .path()
-            .join("runtime")
+        let runtime_root = dir.path().join("runtime");
+        let plan = allocation_plan(runtime_root);
+        let semantic_id = SubagentId::new("conv-1-subagent-1");
+        let semantic_root = plan
+            .runtime_root
             .join("subagents")
-            .join("conv-1-subagent-1");
-        let stale_environment = root.join("environments").join("stale");
+            .join(semantic_id.as_str());
+        let stale_root = semantic_root.join("incarnation-crashed-earlier");
+        let stale_environment = stale_root.join("environments").join("stale");
         std::fs::create_dir_all(&stale_environment).expect("the stale tree");
         std::fs::write(stale_environment.join("pyvenv.cfg"), "stale").expect("the stale artifact");
 
-        super::establish_fresh_child_root(&root).expect("the fresh root is established");
+        let fresh_root = plan
+            .allocate_child_runtime_root(&semantic_id)
+            .expect("the fresh physical incarnation root");
 
         assert!(
-            root.exists(),
-            "the root exists (including its missing ancestors) for the child being staged"
+            stale_root.exists(),
+            "the stale incarnation remains available to its original owner"
         );
         assert_eq!(
-            std::fs::read_dir(&root).expect("the root listing").count(),
+            std::fs::read_dir(fresh_root.path())
+                .expect("the fresh root listing")
+                .count(),
             0,
-            "the fresh root is empty: nothing stale survived"
+            "the fresh root has no stale mutable state"
         );
+        assert_ne!(
+            stale_root,
+            fresh_root.path(),
+            "the semantic grouping path is not itself a mutable child authority"
+        );
+        fresh_root
+            .remove()
+            .expect("remove only the fresh incarnation");
+    }
+
+    /// A real old process is blocked immediately before its delayed
+    /// filesystem create. A later process generation stages the same
+    /// semantic identity through the production allocator while the old
+    /// process is still alive. The old write then succeeds, but its exact
+    /// pathname is a sibling of — never an alias for — the new root.
+    #[test]
+    fn a_surviving_old_incarnation_can_write_only_to_its_own_root() {
+        let dir = tempfile::tempdir().expect("lab");
+        let plan = allocation_plan(dir.path().join("runtime"));
+        let semantic_id = SubagentId::new("conv-race-subagent-1");
+        let old_root = plan
+            .allocate_child_runtime_root(&semantic_id)
+            .expect("the old physical incarnation root");
+        let old_path = old_root.path().to_path_buf();
+
+        let entered_fifo = dir.path().join("old-writer-entered");
+        let release_fifo = dir.path().join("old-writer-release");
+        let fifo_mode = nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR;
+        nix::unistd::mkfifo(&entered_fifo, fifo_mode).expect("the entered rendezvous");
+        nix::unistd::mkfifo(&release_fifo, fifo_mode).expect("the release rendezvous");
+
+        let mut old_writer = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("printf 'entered\\n' > \"$ENTERED\"; IFS= read -r _ < \"$RELEASE\"; printf 'old' > \"$ROOT/old-marker\"")
+            .env("ENTERED", &entered_fifo)
+            .env("RELEASE", &release_fifo)
+            .env("ROOT", &old_path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("the real old writer process");
+
+        let mut entered = std::fs::File::open(&entered_fifo).expect("open entered rendezvous");
+        let mut announcement = String::new();
+        entered
+            .read_to_string(&mut announcement)
+            .expect("read entered rendezvous");
+        assert_eq!(announcement, "entered\n");
+        assert!(
+            old_writer
+                .try_wait()
+                .expect("probe the old writer")
+                .is_none(),
+            "the old writer is alive and blocked before its filesystem write"
+        );
+
+        // A separate plan value models a later rustX process generation using
+        // the same stable runtime root and the same semantic child identity.
+        let restarted_plan = plan.clone();
+        let new_root = restarted_plan
+            .allocate_child_runtime_root(&semantic_id)
+            .expect("the new physical incarnation root");
+        let new_path = new_root.path().to_path_buf();
+        assert_ne!(old_path, new_path);
+        std::fs::write(new_path.join("new-marker"), "new").expect("new child mutable state");
+
+        // Opening and writing the release FIFO is the exact synchronization
+        // point. No sleep is involved: the old process cannot reach its
+        // marker create until this write completes.
+        let mut release = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&release_fifo)
+            .expect("open release rendezvous");
+        release
+            .write_all(b"release\n")
+            .expect("release the old writer");
+        drop(release);
+        let status = old_writer.wait().expect("wait for the old writer");
+        assert!(status.success(), "the delayed old write succeeded");
+
+        assert_eq!(
+            std::fs::read(old_path.join("old-marker")).expect("the old marker"),
+            b"old"
+        );
+        assert_eq!(
+            std::fs::read(new_path.join("new-marker")).expect("the new marker"),
+            b"new"
+        );
+        assert_no_named_entry(&new_path, "old-marker");
+
+        old_root.remove().expect("old owner removes only old root");
+        new_root.remove().expect("new owner removes only new root");
     }
 }

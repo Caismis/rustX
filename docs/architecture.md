@@ -4685,6 +4685,49 @@ is never restarted, and progressive disclosure is untouched: only bytes on
 disk are materialized, and bodies are still reached through ordinary native
 Read.
 
+##### Semantic child identity and physical spawn incarnation
+
+Semantic `SubagentId` and physical child-process incarnation are separate
+identities. The semantic identity is the durable/canonical identity used by
+the registry, ownership facts, recovery evidence, and Runtime Client
+projections. A crash before `SubagentOwnershipCommitted` may therefore leave a
+semantic identity reusable after restart; that reuse never grants the new
+child the old mutable pathname.
+
+Before launching a child, `SubagentRegistry::prepare` reserves one fresh
+physical directory beneath the stable runtime root:
+
+```text
+<runtime-root>/
+  subagents/
+    <semantic SubagentId>/
+      incarnation-<fresh physical token>/
+        artifacts/
+        environments/
+        python/
+        skills/
+        diagnostics.log
+```
+
+The token is generated independently of the durable ordinal and the
+incarnation directory is created exclusively. The exact path is carried in
+`SubagentChildSpec.runtime_root`, so child composition, Skill materialization,
+Python private environments/bindings/invocations, artifacts, and diagnostics
+all use the same incarnation-private mutable root. The token is a physical
+ownership capability, not user-visible semantic state and is not added to
+canonical conversation history.
+
+The path reservation is owned by the local `StagedChild` lifecycle before the
+child is launched; pre-commit rollback removes only that exact incarnation
+directory. The staged-to-live ownership commit moves the same path token into
+the child driver exactly once, and terminal settlement removes that exact root
+after the direct child and all proven retained anchors settle. If containment
+remains unproven, the old root is left on disk fail-closed. An old incarnation
+may consequently remain temporarily, but a later same-semantic-id staging
+creates a sibling physical root and an old writer has no pathname through
+which to reach it. Empty semantic grouping directories are harmless and are
+never recursively removed as cleanup.
+
 ##### Child preparation is cancellable owned work
 
 External composition may start an MCP process, negotiate a protocol, list a
@@ -4720,11 +4763,12 @@ towards the cancellation — an observable pre-commit cancellation can never
 become a startable staged child. The cancelled rollback then writes
 `ParentFrame::Cancel`, grants the child a bounded grace to settle itself,
 and only then terminates, kills, reaps, contains the retained anchors, and
-removes the child-private runtime root — which `spawn_staged` had
-established empty, so a stale root left by an uncommitted or crashed staging
-can never become a later child's mutable authority. A settled preparation is
-not a startup failure: the child never became owned, and the parent settles
-the terminal from the child's physical outcome.
+removes the exact child spawn-incarnation root. It never removes the semantic
+grouping directory: a stale sibling from an uncommitted or crashed staging
+may still be alive or settling, but it cannot become or write through a later
+incarnation's mutable authority. A settled preparation is not a startup
+failure: the child never became owned, and the parent settles the terminal
+from the child's physical outcome.
 
 ##### Generic nested supervised-process containment
 

@@ -117,7 +117,9 @@ pub(crate) struct SubagentChildSpec {
     pub context: SessionContextPolicy,
     /// The shared (read-only) workspace root.
     pub workspace: PathBuf,
-    /// The child-private runtime root (artifacts store, diagnostics).
+    /// The exact spawn-incarnation-private mutable runtime root (artifacts,
+    /// diagnostics, Skills, and private Python state). It is never the stable
+    /// semantic `SubagentId` grouping path.
     pub runtime_root: PathBuf,
 }
 

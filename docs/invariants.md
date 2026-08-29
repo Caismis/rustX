@@ -1439,11 +1439,28 @@ that a live child produced an Interrupted physical result.
   child-private runtime root. `SubagentRegistry::prepare` returns
   `SubagentStartError::Cancelled`, burns no durable ownership fact, and
   consumes no capacity.
-- **A stale child-private runtime root is never inherited.**
-  `runtime_root/subagents/<SubagentId>` may survive an uncommitted or
-  crashed staging; `spawn_staged` establishes the fresh root by removing any
-  stale tree and recreating it empty, so no leftover Python environment,
-  Skill copy, or binding can become a later child's mutable authority.
+- **Semantic child identity and physical spawn incarnation are separate.**
+  Durable/canonical ownership, recovery evidence, and Runtime Client
+  projections use the semantic `SubagentId`. A crash before
+  `SubagentOwnershipCommitted` may make that semantic identity reusable after
+  restart, but every staged spawn first creates a fresh, exclusively-created
+  physical incarnation directory beneath
+  `runtime_root/subagents/<SubagentId>/`. The physical token is independent of
+  the durable ordinal and is not user-visible semantic state.
+- **All mutable child-local state is incarnation-private.**
+  The exact physical incarnation path is the `SubagentChildSpec.runtime_root`
+  passed to the child and is the root for artifacts, diagnostics, Skill
+  copies, Python private environments, bindings, and invocation scratch. A
+  stale old incarnation may remain on disk while its process settles, but a
+  later reuse of the same semantic `SubagentId` receives a different sibling
+  path, so the old writer cannot contaminate the new child.
+- **Physical-root cleanup follows the one child lifecycle owner.**
+  Pre-commit rollback removes only the exact incarnation reserved by its
+  `StagedChild`; the staged-to-live commit moves that same ownership into the
+  child driver exactly once; terminal settlement removes only that exact root
+  after direct and proven nested settlement. An unproven nested anchor keeps
+  the old root fail-closed, and semantic grouping directories are never
+  recursively deleted or reused as mutable authority.
 
 ### Nested supervised-process containment
 

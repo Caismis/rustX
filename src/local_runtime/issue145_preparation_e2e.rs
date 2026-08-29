@@ -26,7 +26,7 @@
 //!   -> the gated external step settles, preparation settles
 //!   -> the child exits without ever answering Ready
 //!   -> the parent reaps it, contains its retained anchors, removes its
-//!      runtime root, and only then returns SpawnError::Cancelled
+//!      physical incarnation root, and only then returns SpawnError::Cancelled
 //!   -> NO Ready, NO durable SubagentOwnershipCommitted, NO record
 //! ```
 //!
@@ -94,7 +94,7 @@ struct Lab {
     _dir: tempfile::TempDir,
     registry: SubagentRegistry,
     store: Arc<crate::durable::SqliteConversationStore>,
-    child_runtime_root: std::path::PathBuf,
+    child_runtime_group: std::path::PathBuf,
     ready_marker: std::path::PathBuf,
     gate_listener: tokio::net::UnixListener,
 }
@@ -168,14 +168,14 @@ impl Lab {
         });
         // The one ordinal this conversation will allocate: `prepare` burns
         // it for the staged child.
-        let child_runtime_root = runtime_root.join("subagents").join(
-            crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 0).as_str(),
+        let child_runtime_group = runtime_root.join("subagents").join(
+            crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1).as_str(),
         );
         Self {
             _dir: dir,
             registry,
             store,
-            child_runtime_root,
+            child_runtime_group,
             ready_marker,
             gate_listener,
         }
@@ -268,8 +268,15 @@ impl Lab {
             "the child never answered Ready"
         );
         assert!(
-            !self.child_runtime_root.exists(),
-            "the staged child's private runtime root was removed with the rollback"
+            self.child_runtime_group.exists(),
+            "the semantic grouping directory remains owned by the stable runtime root"
+        );
+        assert_eq!(
+            std::fs::read_dir(&self.child_runtime_group)
+                .expect("the semantic child grouping")
+                .count(),
+            0,
+            "rollback removed exactly the staged physical incarnation"
         );
         assert!(
             self.durable_events()

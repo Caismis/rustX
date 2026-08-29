@@ -10,6 +10,7 @@
 //! lifecycle        (typed SubagentLifecycle; terminal publication
 //!                   exactly-once through the durable compound transaction)
 //! identity         (SubagentId ordinals; never a PID)
+//! physical root    (one fresh spawn-incarnation namespace per child)
 //! cancellation     (intent commit -> driver command -> escalation)
 //! settlement       (physical outcome -> terminal candidate -> durable
 //!                   result acceptance -> capacity release)
@@ -607,13 +608,6 @@ impl SubagentRegistry {
         let subagent_id = SubagentId::for_conversation(&self.config.conversation_id, ordinal);
         let child_conversation_id = ConversationId::new(subagent_id.as_str());
         let child_agent_id = AgentId::new(format!("agent-{subagent_id}"));
-        let child_spec = self.config.spawn.child_spec(
-            &subagent_id,
-            &child_conversation_id,
-            &child_agent_id,
-            &self.config.agent_id,
-            &spec.resolved,
-        );
         let staged = {
             #[cfg(test)]
             {
@@ -637,14 +631,37 @@ impl SubagentRegistry {
                     });
                 }
             }
-            super::process::spawn_staged(&self.config.spawn, &child_spec, preparation_cancellation)
-                .await
-                .map_err(|error| match error {
-                    super::process::SpawnError::Cancelled => SubagentStartError::Cancelled,
-                    error => SubagentStartError::Spawn {
-                        detail: error.to_string(),
-                    },
-                })?
+            // Semantic identity may be reused after a pre-commit crash, so
+            // reserve its mutable physical namespace independently of the
+            // durable ordinal before launching the child.
+            let runtime_root = self
+                .config
+                .spawn
+                .allocate_child_runtime_root(&subagent_id)
+                .map_err(|error| SubagentStartError::Spawn {
+                    detail: error.to_string(),
+                })?;
+            let child_spec = self.config.spawn.child_spec(
+                &subagent_id,
+                &child_conversation_id,
+                &child_agent_id,
+                &self.config.agent_id,
+                &spec.resolved,
+                &runtime_root,
+            );
+            super::process::spawn_staged(
+                &self.config.spawn,
+                &child_spec,
+                runtime_root,
+                preparation_cancellation,
+            )
+            .await
+            .map_err(|error| match error {
+                super::process::SpawnError::Cancelled => SubagentStartError::Cancelled,
+                error => SubagentStartError::Spawn {
+                    detail: error.to_string(),
+                },
+            })?
         };
         Ok(PreparedSubagent {
             subagent_id,
@@ -1067,16 +1084,30 @@ impl SubagentRegistry {
     /// physical outcome settles as cancelled — except an explicit
     /// process-control failure (`Lost`), which stays failed. The durable
     /// compound transaction makes the publication exactly-once.
+    #[allow(clippy::too_many_lines)] // one coherent physical-to-durable settlement pipeline
     fn settle_from_driver(&self, subagent_id: &SubagentId, settlement: PhysicalSettlement) {
         if self.config.mailbox.begin_settlement_admission().is_err() {
             return;
         }
-        let PhysicalSettlement { outcome, nested } = settlement;
-        // An unproven nested settlement never changes the child's semantic
-        // terminal — the answer the child produced is still its answer —
-        // but it is never silently dropped either: the runtime says so in
-        // the terminal's own diagnostic.
-        let nested_unproven = nested.unproven_diagnostic();
+        let PhysicalSettlement {
+            outcome,
+            nested,
+            runtime_root_cleanup_error,
+        } = settlement;
+        // An unproven nested settlement or a failed exact-root cleanup never
+        // silently disappears. The child answer remains the semantic
+        // candidate, while the physical settlement diagnostic is carried
+        // alongside it.
+        let settlement_diagnostic = [
+            nested.unproven_diagnostic(),
+            runtime_root_cleanup_error
+                .map(|detail| format!("the child physical runtime root was not removed: {detail}")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        let settlement_diagnostic =
+            (!settlement_diagnostic.is_empty()).then_some(settlement_diagnostic.join("; "));
         let candidate = {
             let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             let Some(&index) = state.index.get(subagent_id) else {
@@ -1155,13 +1186,13 @@ impl SubagentRegistry {
                     timestamp,
                 },
             };
-            let candidate = match nested_unproven {
+            let candidate = match settlement_diagnostic {
                 None => candidate,
-                Some(unproven) => TerminalCandidate {
+                Some(diagnostic) => TerminalCandidate {
                     diagnostic: Some(bound_utf8(
                         match candidate.diagnostic {
-                            Some(existing) => format!("{existing}; {unproven}"),
-                            None => unproven,
+                            Some(existing) => format!("{existing}; {diagnostic}"),
+                            None => diagnostic,
                         },
                         MAX_RESULT_CONTENT_BYTES,
                     )),

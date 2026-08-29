@@ -210,8 +210,9 @@ pub struct LocalRuntimePaths {
     pub exclude_tools: Vec<String>,
     /// The model-visible workspace root.
     pub workspace: PathBuf,
-    /// The runtime-private root from which disjoint private subdirectories
-    /// are derived.
+    /// The exact runtime-private root from which disjoint private
+    /// subdirectories are derived. For a child this is one physical
+    /// spawn-incarnation namespace, never a stable semantic-id path.
     pub runtime_root: PathBuf,
 }
 
@@ -1309,8 +1310,8 @@ impl LocalConversationCore {
             SessionModelState::frozen(&spec.resolved.model, dependencies.credentials.as_ref())?;
 
         // 5-6. The child conversation tool runtime over the shared
-        // read-only workspace and the child-private runtime root. The
-        // child authorizes no environment entries.
+        // read-only workspace and the exact spawn-incarnation-private
+        // runtime root. The child authorizes no environment entries.
         let base_environment = ToolEnvironment::from_authorized(std::iter::empty())
             .map_err(CurrentRuntimeConfigError::Environment)
             .map_err(LocalRuntimeError::RuntimeConfig)?;

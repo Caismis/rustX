@@ -3820,6 +3820,7 @@ dependencies = [
  "chrono-tz",
  "eventsource-stream",
  "futures-util",
+ "getrandom 0.3.4",
  "globset",
  "grep-matcher",
  "grep-regex",
