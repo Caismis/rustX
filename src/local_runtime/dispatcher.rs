@@ -54,6 +54,7 @@ use crate::runtime::subagent::ipc::{
     ChildFrame, DelegationFrame, ParentFrame, ProcessUnitAnchorFrame, read_parent_frame,
     write_child_frame,
 };
+use crate::runtime::types::CancellationReason;
 
 /// The bound of the dispatcher's outbound queue.
 ///
@@ -68,8 +69,13 @@ const OUTBOUND_CAPACITY: usize = 64;
 pub(crate) enum ChildControlEvent {
     /// The delegated task arrived (exactly once, after `Ready`).
     Delegate(DelegationFrame),
-    /// The parent requested cancellation.
-    Cancel,
+    /// The parent requested cancellation. A semantic reason is present for a
+    /// committed child cancellation; `None` is reserved for pre-Ready
+    /// preparation cancellation, which has no child attempt to settle.
+    Cancel {
+        /// The first-winner semantic cancellation cause, when available.
+        reason: Option<CancellationReason>,
+    },
     /// The parent violated the bounded control protocol.
     ProtocolViolation(String),
 }
@@ -341,8 +347,12 @@ impl ChildControlDispatcher {
                             break;
                         }
                     }
-                    Ok(Some(ParentFrame::Cancel)) => {
-                        if events_tx.send(ChildControlEvent::Cancel).await.is_err() {
+                    Ok(Some(ParentFrame::Cancel { reason })) => {
+                        if events_tx
+                            .send(ChildControlEvent::Cancel { reason })
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -458,6 +468,7 @@ mod tests {
         ChildFrame, DelegationFrame, DiagnosticFrame, ParentFrame, ProcessUnitAckFrame,
         ProcessUnitRefusalFrame, read_child_frame, write_parent_frame,
     };
+    use crate::runtime::types::CancellationReason;
 
     fn pair() -> (tokio::net::UnixStream, tokio::net::UnixStream) {
         tokio::net::UnixStream::pair().expect("control socket pair")
@@ -659,16 +670,23 @@ mod tests {
         )
         .await
         .expect("delegate");
-        write_parent_frame(&mut parent, &ParentFrame::Cancel)
-            .await
-            .expect("cancel");
+        write_parent_frame(
+            &mut parent,
+            &ParentFrame::Cancel {
+                reason: Some(CancellationReason::UserRequested),
+            },
+        )
+        .await
+        .expect("cancel");
         assert!(matches!(
             dispatcher.next_event().await,
             Some(ChildControlEvent::Delegate(_))
         ));
         assert_eq!(
             dispatcher.next_event().await,
-            Some(ChildControlEvent::Cancel)
+            Some(ChildControlEvent::Cancel {
+                reason: Some(CancellationReason::UserRequested),
+            })
         );
     }
 

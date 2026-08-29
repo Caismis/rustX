@@ -39,6 +39,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::context::{AgentStatusConfig, SessionContextPolicy};
 use crate::model::deadline::ModelTimeoutPolicy;
 use crate::runtime::identity::{AgentId, ConversationId, ProcessUnitId, SubagentId};
+use crate::runtime::types::CancellationReason;
 
 use super::resolver::ResolvedSubagentSpec;
 
@@ -48,10 +49,11 @@ use super::resolver::ResolvedSubagentSpec;
 /// frozen named-agent semantic specification (Issue #144). Version 3 added
 /// the nested process-unit anchor handshake and the frozen external
 /// materialization plane (Issue #145). Version 4 carries the launch-scoped
-/// frozen `ModelTimeoutPolicy` (Issue #138). There is no compatibility
+/// frozen `ModelTimeoutPolicy` and version 5 carries the parent registry's
+/// typed cancellation provenance (Issue #138). There is no compatibility
 /// decoding: a peer that does not speak exactly this version exits before
 /// composing anything.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 4;
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 5;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -247,8 +249,16 @@ pub(crate) enum ParentFrame {
     Hello(Box<SubagentChildSpec>),
     /// The delegated task (exactly once, after `Ready`).
     Delegate(DelegationFrame),
-    /// Cancellation/shutdown request.
-    Cancel,
+    /// Cancellation/shutdown request. A `Some` cause is the semantic reason
+    /// already committed by the parent registry; the process driver
+    /// transports it but never chooses it. `None` is used only by the
+    /// pre-ownership preparation-cancellation path, where no child attempt
+    /// exists and therefore no attempt-scoped semantic reason is available.
+    Cancel {
+        /// The parent registry's first-winner cancellation cause, when this
+        /// is a committed child cancellation.
+        reason: Option<CancellationReason>,
+    },
     /// The parent retains the named unit's anchor; its local `START` gate
     /// may now open.
     AnchorAccepted(ProcessUnitAckFrame),
@@ -426,7 +436,7 @@ pub(crate) async fn write_parent_frame<W: tokio::io::AsyncWrite + Unpin + ?Sized
         ParentFrame::Delegate(payload) => {
             write_frame(stream, KIND_DELEGATE, &encode(payload)?).await
         }
-        ParentFrame::Cancel => write_frame(stream, KIND_CANCEL, &[]).await,
+        ParentFrame::Cancel { reason } => write_frame(stream, KIND_CANCEL, &encode(reason)?).await,
         ParentFrame::AnchorAccepted(payload) => {
             write_frame(stream, KIND_ANCHOR_ACCEPTED, &encode(payload)?).await
         }
@@ -446,7 +456,9 @@ pub(crate) async fn read_parent_frame<R: tokio::io::AsyncRead + Unpin + ?Sized>(
     let frame = match kind {
         KIND_HELLO => ParentFrame::Hello(Box::new(decode(&payload)?)),
         KIND_DELEGATE => ParentFrame::Delegate(decode(&payload)?),
-        KIND_CANCEL => ParentFrame::Cancel,
+        KIND_CANCEL => ParentFrame::Cancel {
+            reason: decode(&payload)?,
+        },
         KIND_ANCHOR_ACCEPTED => ParentFrame::AnchorAccepted(decode(&payload)?),
         KIND_ANCHOR_REFUSED => ParentFrame::AnchorRefused(decode(&payload)?),
         other => return Err(ProtocolError::UnknownKind { kind: other }),
@@ -618,9 +630,14 @@ mod tests {
         )
         .await
         .expect("write delegate");
-        write_parent_frame(&mut parent, &ParentFrame::Cancel)
-            .await
-            .expect("write cancel");
+        write_parent_frame(
+            &mut parent,
+            &ParentFrame::Cancel {
+                reason: Some(CancellationReason::UserRequested),
+            },
+        )
+        .await
+        .expect("write cancel");
         assert_eq!(
             read_parent_frame(&mut child).await.expect("read hello"),
             Some(ParentFrame::Hello(Box::new(spec)))
@@ -631,7 +648,9 @@ mod tests {
         ));
         assert_eq!(
             read_parent_frame(&mut child).await.expect("read cancel"),
-            Some(ParentFrame::Cancel)
+            Some(ParentFrame::Cancel {
+                reason: Some(CancellationReason::UserRequested),
+            })
         );
 
         write_child_frame(
@@ -650,6 +669,21 @@ mod tests {
                 status: ChildResultStatus::Succeeded,
                 ..
             }))
+        ));
+    }
+
+    /// IPC v5 does not decode the v4 empty Cancel payload. A stale peer is
+    /// rejected as malformed rather than silently losing cancellation
+    /// provenance through a compatibility path.
+    #[tokio::test]
+    async fn the_v4_empty_cancel_payload_is_not_compatibility_decoded() {
+        let (mut parent, mut child) = pair();
+        write_frame(&mut parent, KIND_CANCEL, &[])
+            .await
+            .expect("write the obsolete v4-shaped frame");
+        assert!(matches!(
+            read_parent_frame(&mut child).await,
+            Err(ProtocolError::Malformed { .. })
         ));
     }
 

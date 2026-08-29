@@ -81,7 +81,6 @@ use crate::runtime::subagent::ipc::{
     SUBAGENT_IPC_VERSION, SubagentChildSpec, read_parent_frame, write_child_frame,
 };
 use crate::runtime::subagent::{MAX_RESULT_CONTENT_BYTES, bound_utf8};
-use crate::runtime::types::CancellationReason;
 
 use super::composition::{ChildPreparation, LocalConversationCore, LocalRuntimeDependencies};
 use super::dispatcher::{ChildControlDispatcher, ChildControlEvent, ChildControlHandle};
@@ -241,7 +240,7 @@ pub(crate) async fn serve_child_delegation(
     // The start gate: no semantic work before the delegation arrives.
     let delegate = match dispatcher.next_event().await {
         Some(ChildControlEvent::Delegate(delegate)) => delegate,
-        Some(ChildControlEvent::Cancel) | None => {
+        Some(ChildControlEvent::Cancel { .. }) | None => {
             // Cancelled (or orphaned) before any work began: drain and
             // exit. The parent settles the cancelled/interrupted terminal
             // itself from the physical outcome.
@@ -355,7 +354,7 @@ async fn compose_cancellably(
     let composed = loop {
         tokio::select! {
             event = dispatcher.next_event(), if events_open => match event {
-                Some(ChildControlEvent::Cancel) => cancellation.cancel(),
+                Some(ChildControlEvent::Cancel { .. }) => cancellation.cancel(),
                 Some(ChildControlEvent::Delegate(_)) => {
                     return Err(ChildExit::Protocol(
                         "a delegation arrived before the child answered Ready".to_owned(),
@@ -472,7 +471,7 @@ where
         tokio::select! {
             event = dispatcher.next_event() => {
                 match event {
-                    Some(ChildControlEvent::Cancel) => {
+                    Some(ChildControlEvent::Cancel { reason }) => {
                         // The cancellation commits directly into the
                         // runtime-owned one-shot intent under the
                         // coordinator lock: a current attempt is cancelled
@@ -485,11 +484,12 @@ where
                         // `AttemptAdmitted` observation is not part of this
                         // control path — the frame is never queued behind
                         // observation delivery.
-                        let delivered = runtime
-                            .cancel_current_or_next_attempt(
-                                CancellationReason::UserRequested,
-                            )
-                            .is_some();
+                        let Some(reason) = reason else {
+                            return Err(ChildExit::Protocol(
+                                "a semantic cancellation arrived without a reason".to_owned(),
+                            ));
+                        };
+                        let delivered = runtime.cancel_current_or_next_attempt(reason).is_some();
                         on_cancellation(delivered);
                         // The frame is a request, not a terminal fact: the
                         // canonical AttemptCancelled settles the attempt.
@@ -633,6 +633,7 @@ mod tests {
         RuntimeConversationConfig,
     };
     use crate::runtime::identity::{AgentId, ConversationId};
+    use crate::runtime::types::CancellationReason;
     use crate::scripted_suites::support::fake::{FakeModel, FakeStep};
     use crate::scripted_suites::support::model::scripted_session_model;
     use crate::tools::executor::ToolRegistry;
@@ -717,6 +718,7 @@ mod tests {
     /// `AttemptAdmitted` observation is provably still sitting unread in
     /// the queue when admission proceeds.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
     async fn cancel_before_attempt_admission_arms_the_one_shot_intent() {
         let dir = tempfile::tempdir().expect("temp root");
         let admission_gate = Arc::new(Gate::default());
@@ -760,9 +762,14 @@ mod tests {
         .expect("admission gate entered");
 
         let (mut parent_end, child_end) = tokio::net::UnixStream::pair().expect("control pair");
-        crate::runtime::subagent::ipc::write_parent_frame(&mut parent_end, &ParentFrame::Cancel)
-            .await
-            .expect("parent sends Cancel");
+        crate::runtime::subagent::ipc::write_parent_frame(
+            &mut parent_end,
+            &ParentFrame::Cancel {
+                reason: Some(CancellationReason::UserRequested),
+            },
+        )
+        .await
+        .expect("parent sends Cancel");
         let child_runtime = runtime.clone();
         let child_observations = Arc::clone(&observations);
         let cancellation_before_admission = Arc::new(tokio::sync::Notify::new());
@@ -809,6 +816,26 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event.event, RuntimeEvent::ModelRequestStarted { .. }))
         );
+        let events = runtime
+            .tool_runtime()
+            .durable_store()
+            .read_events(None, 64)
+            .expect("events")
+            .events;
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(
+                    event.event,
+                    RuntimeEvent::AttemptCancelled {
+                        reason: CancellationReason::UserRequested,
+                        ..
+                    }
+                ))
+                .count(),
+            1,
+            "pre-admission cancellation keeps its typed reason in the child journal"
+        );
         // The cancellation committed while the admission worker was still
         // parked (before-probe fired before `release`), so the one-shot
         // intent provably won the admission linearization. The shared
@@ -826,6 +853,7 @@ mod tests {
     /// `CancelledBeforeStart`: zero `ModelRequestStarted`, zero provider
     /// requests.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
     async fn cancel_after_admission_before_request_start_wins_the_m9_frontier() {
         let dir = tempfile::tempdir().expect("temp root");
         let (pause, mut pre_start, _) = StartBoundaryPause::install(true, false);
@@ -857,9 +885,14 @@ mod tests {
             .await;
 
         let (mut parent_end, child_end) = tokio::net::UnixStream::pair().expect("control pair");
-        crate::runtime::subagent::ipc::write_parent_frame(&mut parent_end, &ParentFrame::Cancel)
-            .await
-            .expect("parent sends Cancel");
+        crate::runtime::subagent::ipc::write_parent_frame(
+            &mut parent_end,
+            &ParentFrame::Cancel {
+                reason: Some(CancellationReason::UserRequested),
+            },
+        )
+        .await
+        .expect("parent sends Cancel");
         let child_runtime = runtime.clone();
         let child_observations = Arc::clone(&observations);
         let cancellation_after_admission = Arc::new(tokio::sync::Notify::new());
@@ -903,6 +936,26 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event.event, RuntimeEvent::ModelRequestStarted { .. }))
         );
+        let events = runtime
+            .tool_runtime()
+            .durable_store()
+            .read_events(None, 64)
+            .expect("events")
+            .events;
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(
+                    event.event,
+                    RuntimeEvent::AttemptCancelled {
+                        reason: CancellationReason::UserRequested,
+                        ..
+                    }
+                ))
+                .count(),
+            1,
+            "pre-start cancellation keeps its typed reason in the child journal"
+        );
         runtime.shutdown().await.expect("child runtime drains");
     }
 
@@ -944,9 +997,14 @@ mod tests {
         assert_eq!(model.requests().len(), 1, "exactly one request started");
 
         let (mut parent_end, child_end) = tokio::net::UnixStream::pair().expect("control pair");
-        crate::runtime::subagent::ipc::write_parent_frame(&mut parent_end, &ParentFrame::Cancel)
-            .await
-            .expect("parent sends Cancel");
+        crate::runtime::subagent::ipc::write_parent_frame(
+            &mut parent_end,
+            &ParentFrame::Cancel {
+                reason: Some(CancellationReason::UserRequested),
+            },
+        )
+        .await
+        .expect("parent sends Cancel");
         let child_runtime = runtime.clone();
         let child_observations = Arc::clone(&observations);
         let cancellation_after_admission = Arc::new(tokio::sync::Notify::new());
@@ -1042,9 +1100,12 @@ mod tests {
 
         // 2. The parent's Cancel frame is written...
         let (mut parent_read, mut parent_write) = parent.into_split();
-        crate::runtime::subagent::ipc::write_parent_frame(&mut parent_write, &ParentFrame::Cancel)
-            .await
-            .expect("the Cancel frame reaches the child");
+        crate::runtime::subagent::ipc::write_parent_frame(
+            &mut parent_write,
+            &ParentFrame::Cancel { reason: None },
+        )
+        .await
+        .expect("the Cancel frame reaches the child");
 
         // 3. ...and the child provably consumed it: the exact cancellation
         //    signal the gated step runs under is now set.

@@ -29,11 +29,12 @@ use rustx::runtime_client::types::{
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-/// The outer liveness guard. The scripted run takes ~16s of real retry
-/// backoff (2s + 4s + 8s) plus four 300ms response-start deadlines; the
-/// default 30s policy would exceed this guard, so completing at all proves
-/// the child applied the inherited policy rather than the defaults.
-const LIVENESS: std::time::Duration = std::time::Duration::from_mins(3);
+/// The outer subprocess conformance guard. The inherited 300ms response-start
+/// policy completes the scripted run in roughly 16s (2s + 4s + 8s of real
+/// retry backoff plus four short deadlines). It is deliberately below the
+/// default 30s response-start timeout: if child composition re-defaults the
+/// policy, the first gated request cannot settle before this guard expires.
+const LIVENESS: std::time::Duration = std::time::Duration::from_secs(27);
 
 fn binary() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_BIN_EXE_rustx"))
@@ -132,6 +133,7 @@ impl Process {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        command.kill_on_drop(true);
         let mut child = command.spawn().expect("spawn the rustx binary");
         let stdin = child.stdin.take().expect("stdin is piped");
         let stdout = BufReader::new(child.stdout.take().expect("stdout is piped"));
@@ -224,8 +226,19 @@ fn route(body: &str, gate: &Arc<common::HeaderGate>) -> common::FixtureReply {
 /// and consumes it in an ordinary continuation turn. Nothing about the
 /// retries — ordinals, delays, a "retrying" state — is parent-visible.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[allow(clippy::too_many_lines)]
 async fn a_real_child_inherits_the_frozen_timeout_policy_and_retries_locally() {
+    tokio::time::timeout(
+        LIVENESS,
+        run_real_child_inherits_the_frozen_timeout_policy_and_retries_locally(),
+    )
+    .await
+    .expect(
+        "the inherited 300ms child timeout must settle within 27s; a default 30s timeout cannot",
+    );
+}
+
+#[allow(clippy::too_many_lines)]
+async fn run_real_child_inherits_the_frozen_timeout_policy_and_retries_locally() {
     let gate = common::HeaderGate::new();
     let gate_for_server = Arc::clone(&gate);
     let server = common::FixtureServer::start_with_body(move |_attempt, _head, body| {

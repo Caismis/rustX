@@ -4481,15 +4481,16 @@ commits fail. The runtime never silently adopts a registry with a live
 child started outside its ownership transfer.
 
 The child accepts `Delegate` through its ordinary durable inbound path as
-`UserSource::Agent(parent)`. A child-side `Cancel` commits directly into the
-runtime-owned one-shot cancellation intent
+`UserSource::Agent(parent)`. The registry's committed `CancellationReason`
+travels through the driver's typed command and a child-side `Cancel(reason)`
+into the runtime-owned one-shot cancellation intent
 (`cancel_current_or_next_attempt`): a current attempt's `AgentCancellation`
 is requested immediately, and a still-unadmitted attempt starts
 already-cancelled when admission consumes the intent. `AttemptAdmitted`
 observation is evidence, never a control dependency, and the existing
 durable model-request-start frontier (M9b) decides whether a model request
 may start — zero requests before it, in-flight cancellation after it. The
-child result is only a candidate on IPC;
+process driver transports the reason and never chooses it. The child result is only a candidate on IPC;
 the parent driver reaps first, then the registry freezes a UTF-8-safe
 byte-bounded candidate and asks the parent mailbox to atomically accept the
 terminal inbound plus `SubagentTerminalPublished`. A normal terminal state is
@@ -4915,7 +4916,10 @@ order, so two units with outstanding offers cannot open each other's gates.
 The read half remains the parent-liveness authority, and its EOF is what
 `ChildPreparation` observes during composition. Channels are bounded, there
 is no second socket, no listener, and no network service. The subagent IPC
-version is **4**; there is no compatibility decoding for older versions.
+version is **5**: its typed `Cancel` frame carries the parent registry's
+semantic `CancellationReason` (with an absent reason only for pre-ownership
+preparation cancellation, where no child attempt exists); there is no
+compatibility decoding for older versions.
 
 ##### Recovery-semantics conformance (Issue #138)
 
@@ -4936,7 +4940,7 @@ boundaries described above. The resulting child is an ordinary
 - **The frozen `ModelTimeoutPolicy` is inherited (Issue #135).** The
   composition root resolves the policy once and shares that frozen value with
   the parent runtime and `SubagentSpawnPlan`, which carries it into the typed
-  `SubagentChildSpec` (subagent control protocol version 4); the child
+  `SubagentChildSpec` (subagent control protocol version 5); the child
   composition applies it to its own response-start deadlines, stream-idle
   deadlines, and model-backed compaction summarization. There is no
   parent-side watchdog around child provider requests. A child deadline
@@ -4944,17 +4948,27 @@ boundaries described above. The resulting child is an ordinary
   enters the child's generic retry when budget permits; the summarizer
   follows Issue #135 semantics and is never converted into generic
   primary-model retry.
-- **Cancellation is the ordinary explicit path.** Parent cancellation or
-  runtime drain commits registry intent and forwards the one `Cancel`
-  control frame into the child's ordinary cancellation authority
-  (`cancel_current_or_next_attempt`); there is no retry-specific control
-  message and no shared cancellation token. A cancellation or drain that
-  wins while the child sleeps in retry backoff loses the backoff race
-  deterministically: no next `ModelRequestStarted` commits, the child
-  settles `AttemptCancelled`, and a drain-caused settlement preserves the
-  `RuntimeShutdown` cause end to end (the registry's committed cancel
-  reason is the parent-facing provenance; the cause is never rewritten to
-  `UserRequested` when the drain transition owns the shutdown).
+- **A named child is an ordinary conversation runtime.** Named-definition
+  resolution freezes the full `ResolvedSubagentSpec` before launch, and
+  child-owned preparation materializes the exact Builtin, MCP, Python, and
+  Skill identities under the #145 containment boundary. The resulting child
+  runs retry, timeout, tool-cancellation, terminal publication, and
+  unresolved-output carryover in its own ordinary `ConversationRuntime`/
+  Agent Loop. Retry state, publication audit, and pending Carryover remain
+  conversation-local; a failed one-shot child exposes no partial model output
+  to its parent.
+- **Cancellation is the ordinary explicit path.** The parent registry
+  commits the first `CancellationReason` exactly once and transports it as
+  `DriverCommand::Cancel { reason }` through the typed IPC
+  `ParentFrame::Cancel { reason }` into the child's ordinary
+  `cancel_current_or_next_attempt(reason)` path. The process driver
+  transports but never chooses the semantic reason; parent and child remain
+  separate cancellation authorities, with no retry-specific control message
+  and no shared cancellation token. A cancellation or drain that wins while
+  the child sleeps in retry backoff loses the backoff race deterministically:
+  no next `ModelRequestStarted` commits and the child settles
+  `AttemptCancelled` with that same reason. Runtime drain therefore retains
+  `RuntimeShutdown` provenance rather than being relabeled `UserRequested`.
 - **Tool cancellation phases are child-owned (Issue #136).** A child
   canonical tool call cancelled before the executor-start frontier settles
   `Cancelled { phase: BeforeStart }`; after the frontier it settles
@@ -4972,11 +4986,15 @@ boundaries described above. The resulting child is an ordinary
   publication-audit payload, because none of that crosses the terminal
   candidate boundary (it is not sanitization — the content is never on the
   wire).
-- **Process interruption is not provider retry.** Child process/IPC/runtime
-  loss settles through the existing driver classification (Failed for a
-  live loss, Interrupted for restart recovery) and never triggers an
-  automatic relaunch of the delegated task; unknown external outcome
-  remains fail-closed.
+- **Process interruption is not provider retry.** A semantic child model
+  failure is `Failed`; unexpected child process/IPC/runtime loss without a
+  valid semantic terminal is `Interrupted`, not model `Failed`. It is never
+  provider retry and never triggers automatic relaunch of the delegated task.
+  A process killed by driver escalation after an already-committed
+  cancellation remains `Cancelled` with that committed reason. If process,
+  control, or nested-containment settlement cannot be proven, the explicit
+  infrastructure failure path remains `Failed` rather than a clean
+  `Interrupted` claim.
 
 Representative `models.jsonc` (no real credential ever appears in a catalog
 checked into a repository — `$ENV_VAR` is the reason the literal form exists
