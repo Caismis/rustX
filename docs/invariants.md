@@ -1347,8 +1347,12 @@ that a live child produced an Interrupted physical result.
   stabilizes one process's catalog read; it cannot certify another process's
   generation. `MCP_TOOL_IDENTITY_V1` covers `server_id`, canonical name,
   description, canonical input schema, and the effective execution policy
-  (execution/concurrency/approval), each length-prefixed so component
-  boundaries are unambiguous.
+  (execution/concurrency/approval). The wire frame is fixed-width: every
+  component is a `u64` little-endian length prefix followed by its UTF-8
+  bytes, so the digest never depends on a platform-width `usize` and two
+  architectures derive byte-identical identities. A frozen byte-level test
+  vector pins the frame byte for byte, so a framing change is a test
+  failure, not a silent digest change.
 - **Canonical JSON is rustX-owned.** Object keys are sorted recursively by
   rustX code rather than trusted to arrive sorted; array order is preserved
   because it is semantic in JSON Schema; strings are escaped by one rustX
@@ -1406,8 +1410,40 @@ that a live child produced an Interrupted physical result.
   state: the invoking attempt's cancellation and parent control-channel EOF.
   Parent EOF is observable *while* composition is in progress, so a child
   never finishes a long MCP/uv preparation for a parent that is already gone.
+- **There is exactly one cancellation authority of a pre-commit
+  preparation.** The invoking attempt's `ToolExecutionContext` cancellation
+  derives the one preparation `CancellationSignal` (parent side), the
+  `ParentFrame::Cancel` consumed during composition cancels the child's one
+  preparation signal, and parent control-channel EOF is itself a physical
+  cancellation authority that fires the same signal. That authority reaches
+  every supervised process unit of preparation — the Python runtime-identity
+  probes, the uv lock/sync build (whose owner task captures the establishing
+  preparation's authority, so #153 waiters never cancel shared builds), and
+  the MCP connect owners — so cancellation is never inferred from a dropped
+  future: the unit is physically cancelled and settled, and only then does
+  the preparation outcome arrive.
+- **Once pre-commit cancellation has won, `Ready` is impossible.** A Cancel
+  event sets the child's preparation signal before any settlement decision;
+  the guarded preparation path then refuses to publish a candidate from a
+  settled preparation even when the external step races to completion, and
+  the driver re-checks the settlement authorities after composition and
+  settles the composed runtime instead of answering `Ready`. The parent's
+  handshake arm is biased towards the cancellation too: an observable
+  pre-commit cancellation can never become a startable staged child.
 - **A settled preparation is not a startup failure.** The child never became
   owned; the parent settles the terminal from the child's physical outcome.
+- **The cancelled rollback waits for the child to settle itself first.**
+  After writing `ParentFrame::Cancel` the parent gives the child a bounded
+  grace to finish its own settlement, then terminates, kills, reaps, and
+  contains every retained anchor; the staged rollback removes the
+  child-private runtime root. `SubagentRegistry::prepare` returns
+  `SubagentStartError::Cancelled`, burns no durable ownership fact, and
+  consumes no capacity.
+- **A stale child-private runtime root is never inherited.**
+  `runtime_root/subagents/<SubagentId>` may survive an uncommitted or
+  crashed staging; `spawn_staged` establishes the fresh root by removing any
+  stale tree and recreating it empty, so no leftover Python environment,
+  Skill copy, or binding can become a later child's mutable authority.
 
 ### Nested supervised-process containment
 
@@ -1429,6 +1465,15 @@ that a live child produced an Interrupted physical result.
   anchor is never removed merely because the direct child exited. Releases
   correlate by exact typed `ProcessUnitId`, never by ordering or approximate
   `pgid` matching.
+- **A proven release is never silently dropped.** The release travels the
+  one bounded dispatcher channel as an ordinary reliable `send`: bounded
+  backpressure pends the releaser until the writer drains, and the parent
+  removes exactly the retained anchor it reads. The release proof is
+  carried through the channel, never re-derived parent-side.
+- **Losing an anchor owner never manufactures terminal proof.** Dropping a
+  `ProcessUnitAnchor` without an explicit proven-terminal release emits no
+  `AnchorReleased` and retains the anchor — fail-closed containment, never
+  an inferred settlement.
 
 ### Platform containment contract
 

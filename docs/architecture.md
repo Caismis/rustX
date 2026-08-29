@@ -4618,8 +4618,10 @@ MCP_TOOL_IDENTITY_V1
   -> sha256 digest
 ```
 
-Every component is length-prefixed, so no boundary between components is
-ambiguous. `canonical_json` is rustX-owned and never hashes a Rust in-memory
+Every component is framed by a fixed-width `u64` little-endian length
+prefix, so no boundary between components is ambiguous and the digest never
+depends on a platform-width `usize`; a frozen byte-level test vector pins
+the frame byte for byte. `canonical_json` is rustX-owned and never hashes a Rust in-memory
 representation: object keys are sorted recursively by this code (not trusted
 to arrive sorted from a map implementation), array order is preserved because
 it is semantic in JSON Schema, strings are escaped by one rustX escaper, and
@@ -4699,9 +4701,28 @@ parent control-channel EOF      the parent process disappeared
 > commit prevents durable child ownership and physically settles every staged
 > resource.
 
-The settlement drops the in-flight step, and every owner inside the
-capability plane already settles its process on drop/cancel, so no MCP
-process or uv build survives a settled preparation. A settled preparation is
+The settlement never merely drops the in-flight step: cancellation is
+**physical, not inferred from a dropped future**. The two authorities above
+converge on one preparation `CancellationSignal`, and that signal reaches
+every supervised process unit of preparation — the Python runtime-identity
+probes, the uv lock/sync build (whose #153 owner task captures the
+establishing preparation's authority, so waiters never cancel shared
+builds), and the MCP connect owners. The guard observes the authority, then
+keeps awaiting the step until its units are physically settled; only then
+does the preparation outcome arrive.
+
+Once pre-commit cancellation has won, `Ready` is impossible at every layer:
+the guard refuses to publish a candidate from a settled preparation even
+when the external step races to completion, the child driver re-checks the
+settlement authorities after composition and settles the composed runtime
+instead of answering `Ready`, and the parent's handshake arm is biased
+towards the cancellation — an observable pre-commit cancellation can never
+become a startable staged child. The cancelled rollback then writes
+`ParentFrame::Cancel`, grants the child a bounded grace to settle itself,
+and only then terminates, kills, reaps, contains the retained anchors, and
+removes the child-private runtime root — which `spawn_staged` had
+established empty, so a stale root left by an uncommitted or crashed staging
+can never become a later child's mutable authority. A settled preparation is
 not a startup failure: the child never became owned, and the parent settles
 the terminal from the child's physical outcome.
 
@@ -4758,7 +4779,13 @@ immediately and the existing single-level behaviour is unchanged. The
 cancellation and the invocation deadline stay authoritative while the parent
 decides, and the anchor is released **only** against the unit's own proven
 physical terminality — an unproven settlement deliberately keeps the parent's
-retention alive.
+retention alive. The release is proof-carrying and reliable: it travels the
+one bounded dispatcher channel as an ordinary `send`, so bounded backpressure
+pends the releaser instead of silently dropping the release, and the parent
+removes exactly the retained anchor it reads. Losing the anchor owner is
+fail-closed: dropping a `ProcessUnitAnchor` without an explicit
+proven-terminal release emits no `AnchorReleased` and manufactures no
+terminal proof.
 
 ##### Parent subreaper prerequisite
 
