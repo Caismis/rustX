@@ -237,7 +237,7 @@ pub struct SubagentDefinitionDigest(String);
 /// It is part of the hashed preimage: a later milestone that admits a new
 /// behavior-affecting field bumps this constant, so two framings can never
 /// collide into the same digest.
-pub const SUBAGENT_DEFINITION_DIGEST_VERSION: &str = "rustx-subagent-definition-v1";
+pub const SUBAGENT_DEFINITION_DIGEST_VERSION: &str = "rustx-subagent-definition-v2";
 
 impl SubagentDefinitionDigest {
     /// The stable textual form `sha256:<64 lowercase hex characters>`.
@@ -269,6 +269,7 @@ pub struct SubagentDefinition {
     tools: Vec<SubagentToolSelector>,
     skills: Vec<String>,
     project_instructions: SubagentProjectInstructionPolicy,
+    workspace_policy: super::workspace::SubagentWorkspacePolicy,
     digest: SubagentDefinitionDigest,
 }
 
@@ -295,6 +296,7 @@ impl SubagentDefinition {
         tools: Vec<SubagentToolSelector>,
         skills: Vec<String>,
         project_instructions: SubagentProjectInstructionPolicy,
+        workspace_policy: super::workspace::SubagentWorkspacePolicy,
     ) -> Result<Self, SubagentDefinitionError> {
         if description.trim().is_empty() {
             return Err(SubagentDefinitionError::EmptyDescription { agent: name });
@@ -365,6 +367,7 @@ impl SubagentDefinition {
             &tools,
             &skills,
             &project_instructions,
+            workspace_policy,
         );
         Ok(Self {
             name,
@@ -375,6 +378,7 @@ impl SubagentDefinition {
             tools,
             skills,
             project_instructions,
+            workspace_policy,
             digest,
         })
     }
@@ -425,6 +429,12 @@ impl SubagentDefinition {
     #[must_use]
     pub const fn project_instructions(&self) -> &SubagentProjectInstructionPolicy {
         &self.project_instructions
+    }
+
+    /// The resolved project-workspace policy of this definition.
+    #[must_use]
+    pub const fn workspace_policy(&self) -> super::workspace::SubagentWorkspacePolicy {
+        self.workspace_policy
     }
 
     /// The deterministic semantic identity of this definition.
@@ -639,6 +649,7 @@ impl SubagentCatalog {
 /// canonically ordered by [`SubagentDefinition::new`], and every variable
 /// length value is length-prefixed, so no two distinct definitions can frame
 /// to the same preimage by concatenation.
+#[allow(clippy::too_many_arguments)] // the digest framing is the semantic input boundary
 fn compute_digest(
     name: &SubagentName,
     description: &str,
@@ -647,6 +658,7 @@ fn compute_digest(
     tools: &[SubagentToolSelector],
     skills: &[String],
     project_instructions: &SubagentProjectInstructionPolicy,
+    workspace_policy: super::workspace::SubagentWorkspacePolicy,
 ) -> SubagentDefinitionDigest {
     let mut hasher = Sha256::new();
     hasher.update(SUBAGENT_DEFINITION_DIGEST_VERSION.as_bytes());
@@ -695,6 +707,13 @@ fn compute_digest(
         );
         field(&mut hasher, "project_instruction_content", &file.content);
     }
+    let workspace = match workspace_policy {
+        super::workspace::SubagentWorkspacePolicy::SharedWorkspace => "shared".to_owned(),
+        super::workspace::SubagentWorkspacePolicy::GitWorktree {
+            require_clean_parent,
+        } => format!("git_worktree:require_clean_parent={require_clean_parent}"),
+    };
+    field(&mut hasher, "workspace_policy", &workspace);
     SubagentDefinitionDigest(format!("sha256:{:x}", hasher.finalize()))
 }
 
@@ -716,6 +735,7 @@ mod tests {
     };
     use crate::runtime::identity::McpServerId;
     use crate::runtime::resources::ProjectContextFile;
+    use crate::runtime::subagent::SubagentWorkspacePolicy;
 
     fn policy() -> SubagentProjectInstructionPolicy {
         SubagentProjectInstructionPolicy {
@@ -738,6 +758,7 @@ mod tests {
             tools,
             skills,
             policy(),
+            SubagentWorkspacePolicy::SharedWorkspace,
         )
     }
 
@@ -883,6 +904,7 @@ mod tests {
                 inherit: false,
                 files: Vec::new(),
             },
+            SubagentWorkspacePolicy::SharedWorkspace,
         )
         .expect("definition");
         let with_file = SubagentDefinition::new(
@@ -900,6 +922,7 @@ mod tests {
                     content: "explicit".to_owned(),
                 }],
             },
+            SubagentWorkspacePolicy::SharedWorkspace,
         )
         .expect("definition");
         let changed_content = SubagentDefinition::new(
@@ -917,6 +940,7 @@ mod tests {
                     content: "explicit, revised".to_owned(),
                 }],
             },
+            SubagentWorkspacePolicy::SharedWorkspace,
         )
         .expect("definition");
         let changed_instructions = SubagentDefinition::new(
@@ -928,6 +952,21 @@ mod tests {
             Vec::new(),
             Vec::new(),
             policy(),
+            SubagentWorkspacePolicy::SharedWorkspace,
+        )
+        .expect("definition");
+        let isolated = SubagentDefinition::new(
+            SubagentName::parse("explore").expect("name"),
+            "a description".to_owned(),
+            "instructions".to_owned(),
+            std::path::PathBuf::from("/w/.rustx/subagents/explore.md"),
+            None,
+            Vec::new(),
+            Vec::new(),
+            policy(),
+            SubagentWorkspacePolicy::GitWorktree {
+                require_clean_parent: false,
+            },
         )
         .expect("definition");
         let mut digests = vec![
@@ -936,10 +975,11 @@ mod tests {
             with_file.digest().clone(),
             changed_content.digest().clone(),
             changed_instructions.digest().clone(),
+            isolated.digest().clone(),
         ];
         digests.sort();
         digests.dedup();
-        assert_eq!(digests.len(), 5);
+        assert_eq!(digests.len(), 6);
     }
 
     #[test]
@@ -953,6 +993,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             policy(),
+            SubagentWorkspacePolicy::SharedWorkspace,
         )
         .expect("definition");
         let there = SubagentDefinition::new(
@@ -964,6 +1005,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             policy(),
+            SubagentWorkspacePolicy::SharedWorkspace,
         )
         .expect("definition");
         assert_eq!(

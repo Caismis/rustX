@@ -30,7 +30,7 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 15. An incompatible database
+The SQLite schema is development schema version 18. An incompatible database
 fails explicitly; there is no migration chain, legacy reader, compatibility
 fallback, dual write, or old storage mode. Version 10 froze the structured
 Questionnaire interaction audit vocabulary introduced by Issue #126. Version
@@ -41,10 +41,12 @@ Status emission facts, bounded latest-emission heads, and the Todo-specific
 durable progress sequence. Version 14 freezes the typed
 `ToolCancellationPhase` carried by canonical cancelled tool results. Version
 15 adds the one-shot unresolved-output pending source and the frozen
-request-only carryover representation/anchor in Request Snapshots; version 14
-and every older development schema are rejected rather than decoded with a
-missing carryover contract. The review-only intermediate schema history is not
-a supported format.
+request-only carryover representation/anchor in Request Snapshots. Version 16
+freezes typed compaction-summary metadata, version 17 freezes named-subagent
+ownership identity, and version 18 freezes subagent workspace snapshots and
+preserved-worktree handoffs. Version 17 and every older development schema
+are rejected rather than decoded with missing workspace facts; the
+review-only intermediate schema history is not a supported format.
 File-backed stores
 use WAL, `synchronous=FULL`, foreign-key enforcement, and a busy timeout. A
 successful SQLite commit is the local durability linearization point
@@ -3147,10 +3149,11 @@ is no second AG-UI interpretation path directly from internal runtime
 events. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; the two protocols are not mixed.
 
-The current Runtime Client protocol is version 9. It adds `interrupted` to
-the closed `SubagentState` vocabulary so Rust snapshots and the maintained
-TUI mirror agree that an unexpected child process/control-plane loss has an
-unknown outcome. Superseded Runtime Client versions are rejected explicitly;
+The current Runtime Client protocol is version 10. It adds subagent workspace
+facts and preserved-worktree handoff metadata after version 9 added
+`interrupted` to the closed `SubagentState` vocabulary. Rust snapshots and
+the maintained TUI mirror agree that an unexpected child process/control-plane
+loss has an unknown outcome. Superseded Runtime Client versions are rejected explicitly;
 there is no compatibility decoder.
 
 Module ownership:
@@ -4475,6 +4478,75 @@ later cancellation is in-flight cancellation. The registry retains no
 `tokio::process::Child`; rollback and the committed driver are the only
 physical teardown owners at their respective phases.
 
+#### Deterministic subagent workspaces (Issue #146)
+
+Named definitions carry one bounded project-workspace policy:
+`SharedWorkspace` (the default) or `GitWorktree { require_clean_parent }`.
+`SubagentResolver` resolves that policy, while
+`SubagentWorkspaceManager` is the only component that resolves the source
+repository, invokes Git, acquires worktrees, inspects final state, removes a
+clean runtime-owned worktree, or creates handoff facts. The registry remains
+the owner of live subagent identity, capacity, cancellation, durable
+ownership, and terminal settlement; it is not a Git service and Git is not a
+model-visible Tool capability.
+
+For an isolated child, acquisition is staged in this exact order:
+
+```text
+resolve/freeze named-agent resources
+  → resolve workspace policy and source repository
+  → capture parent HEAD = C
+  → observe parent tracked/index/untracked status
+  → enforce require_clean_parent
+  → git worktree add -b <runtime-ref> <path> C
+  → verify child HEAD = C
+  → complete child preparation and Ready handshake
+  → commit SubagentOwnershipCommitted
+```
+
+`WorkspaceLease` is the physical ownership token for the worktree. It is
+attached to the staged child before preparation can cross into the live
+driver, then moves with the direct process and retained nested-process
+anchors across the one durable ownership commit. A pre-commit failure or
+cancellation must settle that lease and publish no child ownership. The lease
+has no destructive destructor: if ownership is abandoned without a proven
+settlement, the worktree remains available rather than being force-removed.
+
+The runtime ref and path are deterministic and bounded. For semantic
+`SubagentId = S`, rustX hashes the versioned, length-framed preimage
+`rustx-subagent-worktree-v1\n<length(S)>\nS` with SHA-256 and uses the lowercase
+64-hex digest `T` as both the final path component and the ref suffix:
+`<runtime-artifact-root>/worktrees/T` and `rustx/subagent/T`. This depends on
+stable execution identity only; it does not depend on task prose, completion
+order, or a mutable global spawn counter. The path/ref occupancy check and
+Git's ref/worktree creation keep concurrent child allocations distinct.
+
+The child receives the acquired workspace as its authoritative project root,
+including process-launch cwd, native file tools, Bash, and workspace-relative
+MCP setup. This authority is deliberately separate from the frozen runtime
+resource authority: the child still consumes the parent-frozen project
+instruction chain, Skill/version bindings, exact Python `ToolVersionId`, MCP
+definitions, model, and tool definitions. It never rediscovers those from
+the worktree or from a worktree ancestor.
+
+The source snapshot is one committed `HEAD = C`; parent dirty bytes, the
+index, untracked files, stashes, and patches are never copied. Dirty parents
+are allowed by default and the immutable workspace snapshot records that
+fact. `require_clean_parent: true` rejects before durable ownership. Parent
+movement after acquisition cannot change the child's base.
+
+Terminal workspace settlement is ordered after the direct child is reaped
+and every retained Issue #145 nested-process anchor is physically contained
+or explicitly proven uncontainable. Only then does the manager inspect
+`HEAD` and Git status. A clean worktree whose `HEAD == C` is removed together
+with its exact runtime-created ref. Any dirty state, or any
+`HEAD != C` including a clean child commit, produces a `WorkspaceHandoff`
+containing the path, ref, base/head commits, and dirty fact. Cancellation and
+failure do not roll back filesystem changes; retained work is never force-
+destroyed, committed, merged, rebased, cherry-picked, stashed, or copied into
+the parent. Runtime Client and TUI expose these recovery facts only; they do
+not own acquisition, cleanup, or integration policy.
+
 `ConversationRuntime::new` validates the registry's typed ownership domain
 before anything is claimed — the same `ConversationId`, the same parent
 `AgentId`, the exact same canonical mailbox (structural identity, never a
@@ -4683,7 +4755,7 @@ or corrupted version fails closed instead of falling back to rediscovery.
 ##### Skill materialization
 
 A host `SKILL.md` path is a locator, not an identity: its bytes can change
-without the path changing, and Issue #146 will move the child into a
+without the path changing, and an isolated Issue #146 child may run in a
 different worktree entirely. The child therefore copies exactly the frozen
 file set into its own runtime root, recomputes `package_version_id` over the
 copy, compares it to the frozen `SkillVersionId`, and remaps the
@@ -4946,7 +5018,7 @@ boundaries described above. The resulting child is an ordinary
 - **The frozen `ModelTimeoutPolicy` is inherited (Issue #135).** The
   composition root resolves the policy once and shares that frozen value with
   the parent runtime and `SubagentSpawnPlan`, which carries it into the typed
-  `SubagentChildSpec` (subagent control protocol version 5); the child
+  `SubagentChildSpec` (subagent control protocol version 6); the child
   composition applies it to its own response-start deadlines, stream-idle
   deadlines, and model-backed compaction summarization. There is no
   parent-side watchdog around child provider requests. A child deadline
@@ -5085,7 +5157,7 @@ Representative current runtime/project configuration:
 
 ```jsonc
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "agentId": "agent-default",
   "model": {
     "model": "gateway/reasoner",

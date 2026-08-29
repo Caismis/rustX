@@ -181,10 +181,10 @@ questionnaire interaction through the runtime-owned `InteractionCoordinator`.
 The client always offers bounded custom text; the model does not send
 `allow_free_text` or author an `Other` option. A decline is a successful tool
 result, while attempt cancellation and provider unavailability remain distinct.
-The local process speaks the Runtime Client protocol, and its SQLite
-conversation store accepts development schema version 14 only. Runtime Client
+The local process speaks Runtime Client protocol version 10, and its SQLite
+conversation store accepts development schema version 18 only. Runtime Client
 protocol versions superseded by the current one and development schemas before
-version 14 are explicitly rejected rather than migrated.
+version 18 are explicitly rejected rather than migrated.
 
 The harmless `RUSTX_EXAMPLE_MODE` entry demonstrates the authorized runtime
 environment. Keep provider credentials in `models.jsonc`'s `apiKey` reference,

@@ -1664,6 +1664,22 @@ pub(crate) fn subagent_view(
         definition_digest: snapshot.definition_digest.clone(),
         state: snapshot.state,
         detail: snapshot.detail.clone(),
+        workspace: super::snapshot::RuntimeClientSubagentWorkspace {
+            workspace: snapshot.workspace.workspace.clone(),
+            isolated: snapshot.workspace.isolated,
+            base_commit: snapshot.workspace.base_commit.clone(),
+            branch: snapshot.workspace.branch.clone(),
+            parent_had_uncommitted_changes: snapshot.workspace.parent_had_uncommitted_changes,
+            handoff: snapshot.handoff.as_ref().map(|handoff| {
+                super::snapshot::RuntimeClientWorkspaceHandoff {
+                    workspace: handoff.workspace.clone(),
+                    branch: handoff.branch.clone(),
+                    base_commit: handoff.base_commit.clone(),
+                    head_commit: handoff.head_commit.clone(),
+                    dirty: handoff.dirty,
+                }
+            }),
+        },
     }
 }
 

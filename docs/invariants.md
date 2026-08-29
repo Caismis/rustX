@@ -41,7 +41,7 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 15 is the only accepted schema; version 14 and every older
+schema version 18 is the only accepted schema; version 17 and every older
 development schema fail explicitly at open and are not migrated. Version 10
 froze the structured Questionnaire interaction audit vocabulary introduced by
 Issue #126. Version 11 froze the structured Agent Status generation
@@ -50,9 +50,12 @@ canonical-message-coupled Agent Status emission facts, bounded latest-emission
 heads, and the Todo-specific durable progress sequence. Version 14 freezes
 the typed `ToolCancellationPhase` carried by canonical cancelled tool
 results. Version 15 adds the one-shot unresolved-output carryover pointer and
-the frozen request-only carryover/anchor fields in Request Snapshots; version
-14 and every older development schema are rejected rather than decoded with a
-missing carryover contract. The review-only
+the frozen request-only carryover/anchor fields in Request Snapshots. Version
+16 freezes typed compaction-summary metadata, version 17 freezes named-
+subagent ownership identity, and version 18 freezes subagent workspace
+snapshots and preserved-worktree handoffs. Version 17 and every older
+development schema are rejected rather than decoded with missing workspace
+facts. The review-only
 intermediate schema history was never a supported format.
 
 The durable request-start invariant is strict: the provider adapter cannot be
@@ -1289,7 +1292,7 @@ before restart.
   `background_task` have no child-plane implementation at all.
 - **Committed child identity is `(agent, definition_digest)`.**
   `SubagentDefinitionDigest` is SHA-256 over a rustX-owned versioned
-  canonical framing (`rustx-subagent-definition-v1`) of the normalized
+  canonical framing (`rustx-subagent-definition-v2`) of the normalized
   semantic definition — never raw JSONC bytes — so comments, whitespace, key
   order, and selector listing order cannot change it while every semantic
   change does. It is the identity of the **named definition itself**, not of
@@ -1547,11 +1550,78 @@ before restart.
   service.
 - **Anchor acknowledgements route by exact typed identity.** Two units with
   outstanding offers cannot open each other's start gates.
-- **The subagent IPC version is 5 and there is no compatibility decoding.** A
+- **The subagent IPC version is 6 and there is no compatibility decoding.** A
   peer that does not speak exactly this version exits before composing
   anything. The typed `Cancel` payload carries the parent registry's semantic
   `CancellationReason`; only pre-ownership preparation cancellation uses an
   absent reason because no child attempt exists yet.
+
+## Issue #146: deterministic worktree isolation and workspace handoff
+
+- **Workspace policy is bounded definition state.** A named definition
+  resolves to either `SharedWorkspace` or
+  `GitWorktree { require_clean_parent }`. Shared workspace is the default;
+  there is no model-facing per-call override, provider, strategy, or generic
+  workspace backend.
+- **One manager owns physical workspaces.** `SubagentResolver` resolves the
+  policy only. `SubagentWorkspaceManager` owns repository resolution, exact
+  `HEAD` capture, parent-status inspection, worktree/ref creation, final Git
+  inspection, safe removal, and handoff facts. `SubagentRegistry` owns live
+  lifecycle/capacity/cancellation/durability and never executes Git. Git is
+  not a Tool Plane capability.
+- **An isolated child observes one exact committed snapshot.** Before any
+  child ownership commit, the manager captures `HEAD = C`, observes the
+  parent's tracked/index/untracked state, enforces the strict-parent option,
+  and creates the runtime worktree at exactly `C`. Parent movement after that
+  point is irrelevant. Parent dirty bytes, index state, untracked files,
+  stashes, and patches are never implicitly copied, and the immutable
+  `WorkspaceSnapshot` records whether the parent was dirty.
+- **Workspace acquisition is staged ownership.** `WorkspaceLease` is the
+  explicit physical owner from acquisition through child preparation. It
+  moves into the staged child and then the committed driver at the one
+  `SubagentOwnershipCommitted` boundary. A failure, cancellation, EOF, Git
+  error, resource-materialization failure, or process-containment failure
+  before that boundary commits no child and settles every staged resource;
+  there is no second workspace commit point and no lease hidden as a path.
+- **Project workspace authority is separate from frozen resource authority.**
+  The acquired path is the child process cwd and the root for native
+  filesystem tools, Bash, and workspace-relative process setup. It does not
+  become authority for the already-frozen model, project-instruction chain,
+  Skills/resources, MCP definitions, Builtin definitions, or Python
+  `ToolVersionId`. The child performs no ancestor project-instruction
+  discovery, Skill discovery, same-name Python-tool discovery, or arbitrary
+  configuration rediscovery from the worktree.
+- **The default dirty-parent path is intentionally isolated.** A dirty parent
+  is allowed when `require_clean_parent` is false; the child sees the
+  committed tree at `C` only. `require_clean_parent = true` rejects the start
+  before durable ownership and before worktree creation.
+- **Runtime worktree identity is deterministic and bounded.** For semantic
+  `SubagentId = S`, the manager hashes
+  `rustx-subagent-worktree-v1\n<length(S)>\nS` with SHA-256 and uses the
+  lowercase 64-hex digest for both
+  `<runtime-artifact-root>/worktrees/<digest>` and
+  `rustx/subagent/<digest>`. Names depend only on stable execution identity,
+  not task prose, completion order, or race-sensitive counters; path/ref
+  occupancy is checked before Git creation and Git's own ref/worktree
+  operation is authoritative for collision rejection.
+- **Terminality waits for physical process settlement.** A child terminal
+  candidate is not parent-visible until the direct child is reaped and every
+  retained Issue #145 nested-process anchor is physically contained or
+  explicitly proven uncontainable. Workspace inspection and cleanup follow
+  that settlement, never direct PID exit alone. An unresolved anchor prevents
+  cleanup and preserves the worktree fail-closed.
+- **Filesystem failure and cancellation are not rollback.** A child may write
+  files or commit before success, failure, cancellation, or process loss.
+  The manager inspects final Git state: `dirty` means tracked/index/untracked
+  (and ignored work-product state where Git reports it), while
+  `head_commit != base_commit` independently proves retained work. A clean
+  `HEAD == C` worktree is safely removed; all other proven work is preserved.
+- **Handoff is runtime fact, not model output.** A preserved
+  `WorkspaceHandoff` contains only the physical path, runtime ref, base/head
+  commits, and dirty fact. It is not merged, rebased, cherry-picked, stashed,
+  committed, patched, or copied into the parent automatically. Runtime Client
+  and TUI project these facts for recovery and own no acquisition, cleanup,
+  or integration policy.
 
 ## Subagent recovery-semantics conformance (Issue #138)
 
@@ -3845,11 +3915,12 @@ semantic normalization boundary. The frozen invariants:
   RuntimeEvent/Event Journal schema versioning.** Version negotiation is
   explicit at attachment admission; the current protocol is the sole
   supported version, and every superseded version is rejected explicitly.
-- **Runtime Client protocol v9 adds `interrupted` to the closed
-  `SubagentState` vocabulary.** Rust serialization and the maintained TUI
-  mirror describe the same `running | cancelling | publishing_terminal |
-  succeeded | failed | cancelled | interrupted` states; v8 is not decoded
-  compatibly.
+- **Runtime Client protocol v10 adds subagent workspace facts and preserved
+  handoff metadata.** Version 9 added `interrupted` to the closed
+  `SubagentState` vocabulary; Rust serialization and the maintained TUI mirror
+  describe the same `running | cancelling | publishing_terminal | succeeded
+  | failed | cancelled | interrupted` states plus the workspace projection.
+  Superseded versions are not decoded compatibly.
 - **The semantic layer owns protocol negotiation and attachment
   admission; transports are framing only.** `initialize` is dispatched by
   `RuntimeClientEndpoint` and is by itself sufficient to establish the

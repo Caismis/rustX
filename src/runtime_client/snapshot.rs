@@ -702,6 +702,48 @@ pub struct RuntimeClientBackgroundExecution {
     pub result: Option<ToolExecutionResult>,
 }
 
+/// User-recoverable facts about the project workspace authority of one
+/// subagent. Acquisition and settlement policy remain native runtime
+/// responsibilities; this is only a read-model projection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeClientSubagentWorkspace {
+    /// The authoritative project workspace path. In handoff state this is
+    /// the preserved path the user can inspect.
+    pub workspace: std::path::PathBuf,
+    /// Whether the child ran in a runtime-created Git worktree.
+    pub isolated: bool,
+    /// The exact committed source snapshot selected before ownership, when
+    /// isolation was enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_commit: Option<String>,
+    /// The runtime-created branch/ref, when isolation was enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// Whether the parent had uncommitted changes at selection time. Those
+    /// bytes were intentionally not copied into the child.
+    pub parent_had_uncommitted_changes: bool,
+    /// Retained child work-product facts, if the worktree was handed off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff: Option<RuntimeClientWorkspaceHandoff>,
+}
+
+/// The Git facts needed to recover a preserved child worktree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeClientWorkspaceHandoff {
+    /// The preserved worktree path.
+    pub workspace: std::path::PathBuf,
+    /// The runtime-created branch/ref.
+    pub branch: String,
+    /// The selected source commit.
+    pub base_commit: String,
+    /// The final child `HEAD`.
+    pub head_commit: String,
+    /// Whether tracked/index/untracked/ignored child state is dirty.
+    pub dirty: bool,
+}
+
 /// The Runtime Client view of one subagent child (Issue #60).
 ///
 /// A read-model materialization of the authoritative registry snapshot:
@@ -730,6 +772,8 @@ pub struct RuntimeClientSubagent {
     /// cancellation detail), once known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// The model-independent project workspace facts.
+    pub workspace: RuntimeClientSubagentWorkspace,
 }
 
 /// The structured Agent Status view of one composition.

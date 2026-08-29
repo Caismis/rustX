@@ -2002,6 +2002,9 @@ fn audited_proposals_reject_all_dependent_tool_transitions_atomically() {
                 tool_call_id: call_id,
                 agent: "profile".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
+                workspace: rustx::runtime::subagent::WorkspaceSnapshot::shared(
+                    std::path::PathBuf::from("<shared-workspace>"),
+                ),
             },
         );
         subagent.event_id = EventId::new(format!("subagent-committed-event:{subagent_id}"));

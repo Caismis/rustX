@@ -187,6 +187,16 @@ async fn run_child(
     handle: &ChildControlHandle,
     spec: SubagentChildSpec,
 ) -> Result<(), ChildExit> {
+    if let Err(error) = spec.workspace_snapshot.validate() {
+        return Err(ChildExit::Startup(format!(
+            "the child workspace snapshot is invalid: {error}"
+        )));
+    }
+    if spec.resolved.workspace_policy.is_isolated() != spec.workspace_snapshot.isolated {
+        return Err(ChildExit::Startup(
+            "the child workspace path and immutable workspace snapshot disagree".to_owned(),
+        ));
+    }
     let Some(core) = Box::pin(compose_cancellably(dispatcher, handle, &spec)).await? else {
         // Preparation settled (cancellation or parent loss) before the child
         // was owned: nothing composed, nothing started, no result. The
@@ -1065,6 +1075,8 @@ mod tests {
                     "sha256:0000000000000000000000000000000000000000000000000000000000000000"
                 ))
                 .expect("digest"),
+                workspace_policy:
+                    crate::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
                 instructions: "frozen child instructions".to_owned(),
                 model: crate::model::frozen::test_frozen_model_spec(
                     serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),
@@ -1082,7 +1094,9 @@ mod tests {
                 keep_recent_tokens: 0,
                 summary_output_cap: None,
             },
-            workspace,
+            workspace_snapshot: crate::runtime::subagent::WorkspaceSnapshot::shared(
+                workspace.clone(),
+            ),
             runtime_root: runtime_root.clone(),
         };
         let gate = crate::local_runtime::composition::arm_test_preparation_gate(&runtime_root);

@@ -164,9 +164,17 @@ use super::inbox::{
 /// child stays bound to the definition it actually started with even after a
 /// resource reload redefines that agent name.
 ///
-/// A v3/v4/v5/v6/v7/v8/v9/v10/v11/v12/v13/v14/v15/v16 database must fail at
-/// store open; there is no migration or compatibility path.
-pub const SQLITE_SCHEMA_VERSION: i64 = 17;
+/// Version 18 freezes Issue #146's workspace authority facts: a committed
+/// child records its exact workspace snapshot, including the committed base
+/// and runtime-created ref when isolated. A terminal event may additionally
+/// carry the runtime-observed preserved workspace handoff, so recovery cannot
+/// make retained child work undiscoverable. A v17 database has no way to
+/// distinguish the workspace authority, so it is rejected rather than decoded
+/// with invented shared-workspace defaults.
+///
+/// A v3/v4/v5/v6/v7/v8/v9/v10/v11/v12/v13/v14/v15/v16/v17 database must fail
+/// at store open; there is no migration or compatibility path.
+pub const SQLITE_SCHEMA_VERSION: i64 = 18;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -5932,7 +5940,7 @@ fn upsert_agent_status_head_tx(
     Ok(())
 }
 
-/// Resolves the authoritative child agent identity from the one durable
+/// Resolves the authoritative child identity and workspace binding from the one durable
 /// ownership opening fact of a subagent lifecycle.
 ///
 /// Terminal callers restate `child_agent_id` so the compound event remains
@@ -5946,10 +5954,10 @@ fn upsert_agent_status_head_tx(
 /// is trusted as provenance authority. Duplicate ownership facts are
 /// already rejected at commit time by the `lifecycle_state` uniqueness
 /// probe, so a deterministic lookup cannot miss a second opening fact.
-fn find_subagent_ownership_child(
+fn find_subagent_ownership(
     transaction: &Transaction<'_>,
     subagent_id: &crate::runtime::identity::SubagentId,
-) -> Result<AgentId, ConversationStoreError> {
+) -> Result<(AgentId, crate::runtime::subagent::WorkspaceSnapshot), ConversationStoreError> {
     let event_id = crate::runtime::subagent::subagent_ownership_event_id(subagent_id);
     let envelope = find_event_by_id(transaction, &event_id)?.ok_or_else(|| {
         ConversationStoreError::InvalidReference(format!(
@@ -5960,8 +5968,9 @@ fn find_subagent_ownership_child(
         RuntimeEvent::SubagentOwnershipCommitted {
             subagent_id: embedded,
             child_agent_id,
+            workspace,
             ..
-        } if embedded == *subagent_id => Ok(child_agent_id),
+        } if embedded == *subagent_id => Ok((child_agent_id, workspace)),
         RuntimeEvent::SubagentOwnershipCommitted {
             subagent_id: embedded,
             ..
@@ -6178,8 +6187,14 @@ fn validate_event_reference(
         RuntimeEvent::SubagentOwnershipCommitted {
             subagent_id,
             tool_call_id,
+            workspace,
             ..
         } => {
+            workspace.validate().map_err(|detail| {
+                ConversationStoreError::InvalidReference(format!(
+                    "subagent {subagent_id} has an invalid workspace snapshot: {detail}"
+                ))
+            })?;
             record_tool_proposal_dependency(
                 transaction,
                 tool_call_id,
@@ -6465,9 +6480,11 @@ fn validate_event_reference(
             child_agent_id,
             message_id,
             state,
+            workspace_handoff,
             ..
         } => {
-            let committed_child_agent_id = find_subagent_ownership_child(transaction, subagent_id)?;
+            let (committed_child_agent_id, workspace) =
+                find_subagent_ownership(transaction, subagent_id)?;
             if committed_child_agent_id != *child_agent_id {
                 return Err(ConversationStoreError::InvalidReference(format!(
                     "subagent {subagent_id} terminal claims child agent {child_agent_id}, but durable ownership committed {committed_child_agent_id}"
@@ -6492,6 +6509,18 @@ fn validate_event_reference(
             if !provenance_ok || publication.kind != InboundKind::Message {
                 return Err(ConversationStoreError::InvalidReference(format!(
                     "subagent terminal fact references an ineligible publication {message_id}"
+                )));
+            }
+            if let Some(handoff) = workspace_handoff
+                && (handoff.validate().is_err()
+                    || !workspace.isolated
+                    || handoff.workspace != workspace.workspace
+                    || handoff.branch.as_str() != workspace.branch.as_deref().unwrap_or_default()
+                    || handoff.base_commit.as_str()
+                        != workspace.base_commit.as_deref().unwrap_or_default())
+            {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "subagent terminal handoff does not match the owned workspace snapshot for {subagent_id}"
                 )));
             }
         }
@@ -8805,6 +8834,9 @@ mod tests {
                     tool_call_id: crate::runtime::identity::ToolCallId::new("call-sub"),
                     agent: "explore".to_owned(),
                     definition_digest: "sha256:definition".to_owned(),
+                    workspace: crate::runtime::subagent::WorkspaceSnapshot::shared(
+                        std::path::PathBuf::from("<shared-workspace>"),
+                    ),
                 },
             ))
             .unwrap();
@@ -8817,6 +8849,7 @@ mod tests {
                 child_agent_id: child_agent_id.clone(),
                 message_id: message_id.clone(),
                 state: crate::events::types::SubagentTerminalState::Succeeded,
+                workspace_handoff: None,
             },
         );
         // A successful child answer is authored by the child agent.
@@ -8854,6 +8887,7 @@ mod tests {
                 child_agent_id: child_agent_id.clone(),
                 message_id: second_message_id.clone(),
                 state: crate::events::types::SubagentTerminalState::Failed,
+                workspace_handoff: None,
             },
         );
         let second_draft = InboundDraft {
@@ -8885,6 +8919,7 @@ mod tests {
                 child_agent_id: crate::runtime::identity::AgentId::new("agent-other"),
                 message_id: other_message_id.clone(),
                 state: crate::events::types::SubagentTerminalState::Failed,
+                workspace_handoff: None,
             },
         );
         let wrong_draft = InboundDraft {
@@ -8904,6 +8939,86 @@ mod tests {
             Err(ConversationStoreError::InvalidReference(_))
         ));
         assert_eq!(store.load_pending().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn subagent_terminal_persists_a_workspace_handoff_with_the_terminal_fact() {
+        let store = store();
+        let conversation_id = store.conversation_id().clone();
+        let subagent_id =
+            crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1);
+        let child_agent_id = AgentId::new(format!("agent-{subagent_id}"));
+        let workspace = crate::runtime::subagent::WorkspaceSnapshot {
+            workspace: std::path::PathBuf::from("/tmp/rustx-worktree-1"),
+            isolated: true,
+            repository: Some(std::path::PathBuf::from("/tmp/rustx-repository")),
+            base_commit: Some("c1".to_owned()),
+            branch: Some("rustx/subagent/abc".to_owned()),
+            parent_had_uncommitted_changes: true,
+        };
+        let handoff = crate::runtime::subagent::WorkspaceHandoff {
+            workspace: workspace.workspace.clone(),
+            branch: workspace.branch.clone().expect("branch"),
+            base_commit: workspace.base_commit.clone().expect("base"),
+            head_commit: "c2".to_owned(),
+            dirty: false,
+        };
+        store
+            .append_event(envelope(
+                &conversation_id,
+                crate::runtime::subagent::subagent_ownership_event_id(&subagent_id).as_ref(),
+                None,
+                RuntimeEvent::SubagentOwnershipCommitted {
+                    subagent_id: subagent_id.clone(),
+                    child_agent_id: child_agent_id.clone(),
+                    child_conversation_id: crate::runtime::identity::ConversationId::new(
+                        subagent_id.as_str(),
+                    ),
+                    tool_call_id: crate::runtime::identity::ToolCallId::new("call-sub"),
+                    agent: "worker".to_owned(),
+                    definition_digest: "sha256:definition".to_owned(),
+                    workspace,
+                },
+            ))
+            .expect("ownership fact");
+        let message_id = MessageId::new("subagent-handoff-terminal");
+        let event = envelope(
+            &conversation_id,
+            "subagent-handoff-terminal-event",
+            None,
+            RuntimeEvent::SubagentTerminalPublished {
+                subagent_id: subagent_id.clone(),
+                child_agent_id: child_agent_id.clone(),
+                message_id: message_id.clone(),
+                state: SubagentTerminalState::Succeeded,
+                workspace_handoff: Some(handoff.clone()),
+            },
+        );
+        let draft = InboundDraft {
+            message_id: Some(message_id),
+            source: UserSource::Agent {
+                agent_id: child_agent_id,
+            },
+            kind: InboundKind::Message,
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: "child answer".to_owned(),
+            })],
+            timestamp: Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
+            correlation: Some(format!("subagent-terminal:{subagent_id}")),
+        };
+        store
+            .accept_inbound_with_event(draft, event)
+            .expect("terminal handoff");
+        let events = store.read_events(None, 64).expect("events").events;
+        assert!(events.iter().any(|event| {
+            matches!(
+                &event.event,
+                RuntimeEvent::SubagentTerminalPublished {
+                    workspace_handoff: Some(actual),
+                    ..
+                } if actual == &handoff
+            )
+        }));
     }
 
     #[test]
@@ -8932,6 +9047,9 @@ mod tests {
                         )),
                         agent: "explore".to_owned(),
                         definition_digest: "sha256:definition".to_owned(),
+                        workspace: crate::runtime::subagent::WorkspaceSnapshot::shared(
+                            std::path::PathBuf::from("<shared-workspace>"),
+                        ),
                     },
                 ))
                 .expect("ownership fact");
@@ -8954,6 +9072,7 @@ mod tests {
                     child_agent_id: claimed_child.clone(),
                     message_id: message_id.clone(),
                     state,
+                    workspace_handoff: None,
                 },
             );
             let draft = InboundDraft {
@@ -9087,6 +9206,9 @@ mod tests {
                 tool_call_id: crate::runtime::identity::ToolCallId::new("call-a"),
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
+                workspace: crate::runtime::subagent::WorkspaceSnapshot::shared(
+                    std::path::PathBuf::from("<shared-workspace>"),
+                ),
             },
         );
         assert!(matches!(
@@ -9113,6 +9235,9 @@ mod tests {
                 tool_call_id: crate::runtime::identity::ToolCallId::new("call-a"),
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
+                workspace: crate::runtime::subagent::WorkspaceSnapshot::shared(
+                    std::path::PathBuf::from("<shared-workspace>"),
+                ),
             },
         );
         store
@@ -9146,6 +9271,9 @@ mod tests {
                 tool_call_id: crate::runtime::identity::ToolCallId::new("call-b"),
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
+                workspace: crate::runtime::subagent::WorkspaceSnapshot::shared(
+                    std::path::PathBuf::from("<shared-workspace>"),
+                ),
             },
         );
         {
@@ -9192,6 +9320,7 @@ mod tests {
                 child_agent_id: AgentId::new("agent-b"),
                 message_id: message_id.clone(),
                 state: SubagentTerminalState::Succeeded,
+                workspace_handoff: None,
             },
         );
         let draft = InboundDraft {

@@ -44,6 +44,7 @@ use super::ipc::{
     SubagentChildSpec, read_child_frame, write_parent_frame,
 };
 use super::resolver::ResolvedSubagentSpec;
+use super::workspace::{WorkspaceLease, WorkspaceSnapshot};
 
 /// The liveness guard of the startup handshake. The child composes only
 /// local state before `Ready` (catalog file, durable store, capability
@@ -89,8 +90,6 @@ pub struct SubagentSpawnPlan {
     /// The rustX program executed as the child (the current executable in
     /// production; the test binary's sibling `rustx` in tests).
     pub program: std::path::PathBuf,
-    /// The shared read-only workspace root.
-    pub workspace: std::path::PathBuf,
     /// The **parent** runtime-private root. Each child gets a fresh physical
     /// incarnation directory below
     /// `subagents/<semantic_subagent_id>/`, and only that directory is ever
@@ -131,6 +130,7 @@ impl SubagentSpawnPlan {
     /// could open one could observe a catalog edit the parent never
     /// authorized.
     #[must_use]
+    #[allow(clippy::too_many_arguments)] // mirrors the typed child identity/resource boundary
     pub(crate) fn child_spec(
         &self,
         subagent_id: &SubagentId,
@@ -139,6 +139,7 @@ impl SubagentSpawnPlan {
         parent_agent_id: &crate::runtime::identity::AgentId,
         resolved: &ResolvedSubagentSpec,
         runtime_root: &PhysicalChildRuntimeRoot,
+        workspace: &WorkspaceLease,
     ) -> SubagentChildSpec {
         SubagentChildSpec {
             protocol_version: super::ipc::SUBAGENT_IPC_VERSION,
@@ -150,7 +151,7 @@ impl SubagentSpawnPlan {
             model_timeout_policy: self.model_timeout_policy,
             agent_status: self.agent_status.clone(),
             context: self.context,
-            workspace: self.workspace.clone(),
+            workspace_snapshot: workspace.snapshot().clone(),
             runtime_root: runtime_root.path().to_path_buf(),
         }
     }
@@ -347,6 +348,13 @@ pub(crate) enum RollbackError {
         /// The bounded per-unit detail.
         detail: String,
     },
+    /// The staged workspace could not be safely settled before ownership was
+    /// committed. The lease remains conservative: dirty or otherwise
+    /// unproven work is preserved rather than force-destroyed.
+    Workspace {
+        /// The bounded workspace settlement detail.
+        detail: String,
+    },
 }
 
 impl core::fmt::Display for RollbackError {
@@ -358,6 +366,12 @@ impl core::fmt::Display for RollbackError {
                 f,
                 "child nested process-unit containment is unproven: {detail}"
             ),
+            Self::Workspace { detail } => {
+                write!(
+                    f,
+                    "child workspace settlement was not proven safe: {detail}"
+                )
+            }
         }
     }
 }
@@ -372,7 +386,10 @@ impl std::error::Error for RollbackError {}
 /// handoff, and the `Ready` handshake. Any failure tears the stage down
 /// completely (the staged process is killed and reaped) before the error is
 /// returned. The supplied root token is consumed by this function and becomes
-/// owned by `StagedChild` before the Hello/Ready handshake begins.
+/// owned by `StagedChild` before the Hello/Ready handshake begins. The
+/// workspace lease is transferred at the same boundary, so every asynchronous
+/// preparation failure has one staged owner for both the process and the
+/// workspace.
 ///
 /// `preparation_cancellation` is the invoking attempt's cancellation
 /// authority (Issue #145): it participates in staging **from the start**,
@@ -390,22 +407,40 @@ pub(crate) async fn spawn_staged(
     plan: &SubagentSpawnPlan,
     spec: &SubagentChildSpec,
     runtime_root: PhysicalChildRuntimeRoot,
+    workspace: WorkspaceLease,
     preparation_cancellation: &crate::runtime::cancellation::CancellationSignal,
 ) -> Result<StagedChild, SpawnError> {
     if preparation_cancellation.is_cancelled() {
-        return Err(discard_unstaged_root(runtime_root, SpawnError::Cancelled));
+        return Err(
+            discard_unstaged_resources(runtime_root, workspace, SpawnError::Cancelled).await,
+        );
     }
     if spec.runtime_root.as_path() != runtime_root.path() {
         let owned_path = runtime_root.path().display().to_string();
         let specified_path = spec.runtime_root.display().to_string();
-        return Err(discard_unstaged_root(
+        return Err(
+            discard_unstaged_resources(
+                runtime_root,
+                workspace,
+                SpawnError::WorkspaceSetup {
+                    detail: format!(
+                        "child spec runtime root {specified_path} does not match the reserved physical incarnation {owned_path}"
+                    ),
+                },
+            )
+            .await,
+        );
+    }
+    if spec.workspace_snapshot != *workspace.snapshot() {
+        return Err(discard_unstaged_resources(
             runtime_root,
+            workspace,
             SpawnError::WorkspaceSetup {
-                detail: format!(
-                    "child spec runtime root {specified_path} does not match the reserved physical incarnation {owned_path}"
-                ),
+                detail: "child spec workspace snapshot does not match the staged workspace lease"
+                    .to_owned(),
             },
-        ));
+        )
+        .await);
     }
     // The containment prerequisite is established BEFORE the child exists.
     // A subagent child may create nested supervised process units during
@@ -416,19 +451,24 @@ pub(crate) async fn spawn_staged(
     // make the child a subreaper, not this process, and the anchors this
     // process retains would be unreachable.
     if let Err(detail) = crate::runtime::process_supervision::ensure_child_subreaper() {
-        return Err(discard_unstaged_root(
+        return Err(discard_unstaged_resources(
             runtime_root,
+            workspace,
             SpawnError::ContainmentPrerequisite { detail },
-        ));
+        )
+        .await);
     }
-    let spawned = match spawn_process(plan, runtime_root.path()) {
+    let spawned = match spawn_process(plan, runtime_root.path(), workspace.workspace()) {
         Ok(spawned) => spawned,
-        Err(error) => return Err(discard_unstaged_root(runtime_root, error)),
+        Err(error) => {
+            return Err(discard_unstaged_resources(runtime_root, workspace, error).await);
+        }
     };
     let mut staged = StagedChild {
         child: spawned.child,
         control: spawned.control,
         runtime_root,
+        workspace: Some(workspace),
         retained: RetainedProcessUnits::default(),
     };
     // The typed startup specification travels over the control channel; no
@@ -467,15 +507,35 @@ pub(crate) async fn spawn_staged(
     Ok(staged)
 }
 
-/// Returns a pre-spawn failure after removing only the physical root reserved
-/// for that failed spawn. The semantic grouping directory is never removed.
-fn discard_unstaged_root(runtime_root: PhysicalChildRuntimeRoot, error: SpawnError) -> SpawnError {
+/// Settles a pre-spawn failure after removing only the physical child root
+/// reserved for that failed spawn. The semantic grouping directory is never
+/// removed. The acquired workspace is settled through its staged-owner path
+/// before this function returns, so it cannot be forgotten between workspace
+/// acquisition and process staging.
+async fn discard_unstaged_resources(
+    runtime_root: PhysicalChildRuntimeRoot,
+    workspace: WorkspaceLease,
+    error: SpawnError,
+) -> SpawnError {
     let path = runtime_root.path().display().to_string();
-    match runtime_root.remove() {
-        Ok(()) => error,
-        Err(cleanup) => SpawnError::Rollback {
+    let root_error = runtime_root.remove().err().map(|cleanup| {
+        format!("could not remove unowned physical child runtime root {path}: {cleanup}")
+    });
+    let workspace_error = workspace
+        .settle_staged()
+        .await
+        .err()
+        .map(|error| error.detail);
+    match (root_error, workspace_error) {
+        (None, None) => error,
+        (root_error, workspace_error) => SpawnError::Rollback {
             detail: format!(
-                "{error}; could not remove unowned physical child runtime root {path}: {cleanup}"
+                "{error}; {}",
+                [root_error, workspace_error]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join("; ")
             ),
         },
     }
@@ -485,6 +545,7 @@ fn discard_unstaged_root(runtime_root: PhysicalChildRuntimeRoot, error: SpawnErr
 fn spawn_process(
     plan: &SubagentSpawnPlan,
     runtime_root: &Path,
+    project_workspace: &Path,
 ) -> Result<SpawnedProcess, SpawnError> {
     // The control channel: one UnixStream pair. The child end becomes the
     // child's fd 0; both ends are CLOEXEC, so no other descendant of either
@@ -509,6 +570,10 @@ fn spawn_process(
         })?;
     let mut command = tokio::process::Command::new(&plan.program);
     command
+        // The typed child spec is the project-workspace authority. This
+        // matters for subprocesses that inherit cwd in addition to the
+        // native tools that receive ConversationToolRuntime's Workspace.
+        .current_dir(project_workspace)
         .arg("--subagent-child")
         .stdin(child_stdio)
         .stdout(Stdio::null())
@@ -544,6 +609,9 @@ pub(crate) struct StagedChild {
     child: tokio::process::Child,
     control: tokio::net::UnixStream,
     runtime_root: PhysicalChildRuntimeRoot,
+    /// The staged project-workspace owner. It moves into the driver at the
+    /// durable ownership boundary, or is settled by rollback before then.
+    workspace: Option<WorkspaceLease>,
     /// The nested supervised process units this child has anchored in this
     /// process (Issue #145).
     ///
@@ -573,11 +641,13 @@ pub(crate) struct PhysicalSettlement {
     /// proven nested units settled. An unproven nested unit deliberately
     /// leaves its root in place instead.
     pub runtime_root_cleanup_error: Option<String>,
+    /// The final workspace inspection and cleanup/handoff facts.
+    pub workspace: super::workspace::WorkspaceSettlement,
 }
 
 impl PhysicalSettlement {
     /// A settlement with no nested units, for the paths that never had any.
-    pub(crate) const fn of(outcome: PhysicalOutcome) -> Self {
+    pub(crate) fn of(outcome: PhysicalOutcome) -> Self {
         Self {
             outcome,
             nested: NestedUnitSettlement {
@@ -585,6 +655,9 @@ impl PhysicalSettlement {
                 unproven: Vec::new(),
             },
             runtime_root_cleanup_error: None,
+            workspace: super::workspace::WorkspaceSettlement::shared(WorkspaceSnapshot::shared(
+                PathBuf::from("<shared-workspace>"),
+            )),
         }
     }
 }
@@ -628,6 +701,7 @@ impl StagedChild {
             child,
             control,
             runtime_root,
+            workspace,
             retained,
         } = self;
         let (command_tx, command_rx) = tokio::sync::mpsc::channel(4);
@@ -643,6 +717,7 @@ impl StagedChild {
                     control,
                     retained,
                     runtime_root,
+                    workspace,
                     "the registry dropped the child start decision".to_owned(),
                     false,
                 )
@@ -653,6 +728,7 @@ impl StagedChild {
                 control,
                 retained,
                 runtime_root,
+                workspace,
                 delegate,
                 command_rx,
                 cancelled_before_start,
@@ -726,16 +802,55 @@ impl StagedChild {
         // settled: a staged child that created supervised work must not
         // leave that work running behind a "rolled back" ownership answer.
         let settlement = contain_retained(self.retained.take()).await;
+        let workspace_result = if let Some(workspace) = self.workspace.take() {
+            if settlement.unproven.is_empty() {
+                workspace.settle_after_child().await
+            } else {
+                workspace.preserve_after_unresolved_nested(
+                    "a nested supervised process anchor remains physically unresolved",
+                )
+            }
+        } else {
+            super::workspace::WorkspaceSettlement::shared(WorkspaceSnapshot::shared(PathBuf::from(
+                "<test-shared-workspace>",
+            )))
+        };
+        // The child-private runtime root is independent of the project
+        // workspace. Once the direct child and every nested anchor are
+        // settled, remove that disposable root even when the project
+        // workspace must be retained for handoff. Returning early on a dirty
+        // workspace would otherwise leak runtime-private materialization and
+        // diagnostics merely because the user work correctly survived.
+        let runtime_root = self.runtime_root;
+        let runtime_root_cleanup_error = if settlement.unproven.is_empty() {
+            let path = runtime_root.path().display().to_string();
+            runtime_root
+                .remove()
+                .err()
+                .map(|error| format!("remove child runtime root {path}: {error}"))
+        } else {
+            None
+        };
         if let Some(detail) = settlement.unproven_diagnostic() {
             return Err(RollbackError::NestedContainment { detail });
         }
-        let runtime_root = self.runtime_root;
-        let path = runtime_root.path().display().to_string();
-        runtime_root
-            .remove()
-            .map_err(|error| RollbackError::Cleanup {
-                detail: format!("remove child runtime root {path}: {error}"),
-            })?;
+        let workspace_issue = workspace_result.error.clone().or_else(|| {
+            workspace_result
+                .handoff
+                .as_ref()
+                .map(|_| "staged workspace was retained because it contains work".to_owned())
+        });
+        if let Some(detail) = workspace_issue {
+            return Err(RollbackError::Workspace {
+                detail: match runtime_root_cleanup_error {
+                    Some(root_error) => format!("{detail}; {root_error}"),
+                    None => detail,
+                },
+            });
+        }
+        if let Some(detail) = runtime_root_cleanup_error {
+            return Err(RollbackError::Cleanup { detail });
+        }
         Ok(())
     }
 
@@ -753,8 +868,28 @@ impl StagedChild {
             child,
             control,
             runtime_root: PhysicalChildRuntimeRoot::from_existing(runtime_root),
+            workspace: None,
             retained: RetainedProcessUnits::default(),
         }
+    }
+
+    /// Attaches the prepared workspace lease to this staged process. The
+    /// process cannot enter the driver until this transfer is complete.
+    #[cfg(test)]
+    pub(crate) fn with_workspace(mut self, workspace: WorkspaceLease) -> Self {
+        debug_assert!(self.workspace.is_none());
+        self.workspace = Some(workspace);
+        self
+    }
+
+    /// The immutable workspace binding held by the staged owner. The
+    /// registry uses this at its durable ownership boundary instead of
+    /// retaining a parallel prepared-state copy.
+    pub(crate) fn workspace_snapshot(&self) -> &WorkspaceSnapshot {
+        self.workspace
+            .as_ref()
+            .expect("a registry-staged child owns a workspace lease")
+            .snapshot()
     }
 
     /// The number of nested process-unit anchors this staged child
@@ -972,6 +1107,7 @@ async fn settle_after_driver_loss(
     mut control: tokio::net::UnixStream,
     mut retained: RetainedProcessUnits,
     runtime_root: PhysicalChildRuntimeRoot,
+    workspace: Option<WorkspaceLease>,
     diagnostic: String,
     cancellation_delivered: bool,
 ) -> PhysicalSettlement {
@@ -985,7 +1121,7 @@ async fn settle_after_driver_loss(
             diagnostic: format!("{diagnostic}; {error}"),
         },
     };
-    settle_nested(outcome, &mut retained, runtime_root).await
+    settle_nested(outcome, &mut retained, runtime_root, workspace).await
 }
 
 /// The sole driver of one committed child: sends the delegation, observes
@@ -997,11 +1133,13 @@ async fn settle_after_driver_loss(
 /// alone is never treated as proof of shutdown; the proof is always the
 /// reaped process.
 #[allow(clippy::too_many_lines)] // one coherent delegate/observe/settle pipeline
+#[allow(clippy::too_many_arguments)] // one driver owns every physical child resource
 async fn drive_child(
     mut child: tokio::process::Child,
     mut control: tokio::net::UnixStream,
     mut retained: RetainedProcessUnits,
     runtime_root: PhysicalChildRuntimeRoot,
+    workspace: Option<WorkspaceLease>,
     delegate: super::ipc::DelegationFrame,
     mut commands: tokio::sync::mpsc::Receiver<DriverCommand>,
     cancelled_before_start: Option<CancellationReason>,
@@ -1022,6 +1160,7 @@ async fn drive_child(
                 control,
                 retained,
                 runtime_root,
+                workspace,
                 format!("could not deliver the cancellation: {error}"),
                 false,
             )
@@ -1037,6 +1176,7 @@ async fn drive_child(
             control,
             retained,
             runtime_root,
+            workspace,
             format!("could not deliver the delegation: {error}"),
             false,
         )
@@ -1139,6 +1279,7 @@ async fn drive_child(
             control,
             retained,
             runtime_root,
+            workspace,
             format!("the child could not be reaped: {error}"),
             cancellation_delivered,
         )
@@ -1155,7 +1296,7 @@ async fn drive_child(
             cancellation_delivered,
         },
     };
-    settle_nested(outcome, &mut retained, runtime_root).await
+    settle_nested(outcome, &mut retained, runtime_root, workspace).await
 }
 
 /// Settles every anchor the child still had retained when it exited.
@@ -1169,8 +1310,21 @@ async fn settle_nested(
     outcome: PhysicalOutcome,
     retained: &mut RetainedProcessUnits,
     runtime_root: PhysicalChildRuntimeRoot,
+    workspace: Option<WorkspaceLease>,
 ) -> PhysicalSettlement {
     let nested = contain_retained(retained.take()).await;
+    // Workspace inspection is deliberately after nested containment. A
+    // nested process may still hold or mutate the worktree after the direct
+    // child exits; only the complete physical settlement permits cleanup.
+    let workspace = match workspace {
+        Some(lease) if nested.unproven.is_empty() => lease.settle_after_child().await,
+        Some(lease) => lease.preserve_after_unresolved_nested(
+            "a nested supervised process anchor remains physically unresolved",
+        ),
+        None => super::workspace::WorkspaceSettlement::shared(WorkspaceSnapshot::shared(
+            PathBuf::from("<shared-workspace>"),
+        )),
+    };
     let runtime_root_cleanup_error = if nested.unproven.is_empty() {
         let path = runtime_root.path().display().to_string();
         runtime_root
@@ -1188,6 +1342,7 @@ async fn settle_nested(
         outcome,
         nested,
         runtime_root_cleanup_error,
+        workspace,
     }
 }
 
@@ -1257,12 +1412,20 @@ mod tests {
     use std::io::{Read as _, Write as _};
     use std::path::{Path, PathBuf};
 
-    use super::{StagedChild, SubagentSpawnPlan, spawn_staged};
+    use super::{
+        PhysicalChildRuntimeRoot, PhysicalOutcome, StagedChild, SubagentSpawnPlan, settle_nested,
+        spawn_staged,
+    };
     use crate::context::{AgentStatusConfig, SessionContextPolicy};
+    use crate::runtime::cancellation::CancellationSignal;
     use crate::runtime::identity::{ProcessUnitId, SubagentId};
+    use crate::runtime::subagent::anchors::RetainedProcessUnits;
     use crate::runtime::subagent::ipc::{
         ChildFrame, ParentFrame, ProcessUnitAnchorFrame, ReadyFrame, read_parent_frame,
         write_child_frame,
+    };
+    use crate::runtime::subagent::{
+        SubagentWorkspaceManager, SubagentWorkspacePolicy, WorkspaceCleanup,
     };
 
     const DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
@@ -1301,7 +1464,6 @@ mod tests {
     fn allocation_plan(runtime_root: PathBuf) -> SubagentSpawnPlan {
         SubagentSpawnPlan {
             program: PathBuf::from("/nonexistent/rustx"),
-            workspace: runtime_root.join("workspace"),
             runtime_root,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             agent_status: AgentStatusConfig::default(),
@@ -1332,6 +1494,36 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn git(cwd: &Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(cwd)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "rustX tests")
+            .env("GIT_AUTHOR_EMAIL", "rustx-tests@example.invalid")
+            .env("GIT_COMMITTER_NAME", "rustX tests")
+            .env("GIT_COMMITTER_EMAIL", "rustx-tests@example.invalid")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .expect("git");
+        assert!(
+            output.status.success(),
+            "git {:?}: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn git_repository() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("temporary repository");
+        git(dir.path(), &["init"]);
+        std::fs::write(dir.path().join("tracked.txt"), "committed\n").expect("tracked file");
+        git(dir.path(), &["add", "tracked.txt"]);
+        git(dir.path(), &["commit", "-m", "initial"]);
+        dir
     }
 
     /// The parent retains an offered anchor **before** it acknowledges it,
@@ -1499,6 +1691,56 @@ mod tests {
         drop(nested);
     }
 
+    /// A staged child may already have produced project work before the
+    /// durable ownership commit. Rollback preserves that worktree, but its
+    /// independent child-private runtime root is still disposable once the
+    /// direct child and nested anchors have settled.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn staged_workspace_handoff_does_not_leak_the_private_runtime_root() {
+        let repository = git_repository();
+        let artifacts = tempfile::tempdir().expect("artifact root");
+        let manager = SubagentWorkspaceManager::new(repository.path(), artifacts.path());
+        let lease = manager
+            .acquire(
+                SubagentWorkspacePolicy::GitWorktree {
+                    require_clean_parent: false,
+                },
+                &SubagentId::new("conversation-staged-worktree-subagent-1"),
+                &CancellationSignal::new(),
+            )
+            .await
+            .expect("staged worktree");
+        let workspace = lease.workspace().to_path_buf();
+        let branch = lease.snapshot().branch.clone().expect("runtime branch");
+        std::fs::write(workspace.join("staged-work.txt"), "retain me\n")
+            .expect("staged project work");
+
+        let harness = stage();
+        let runtime_root = harness.runtime_root.clone();
+        let error = tokio::time::timeout(DEADLINE, harness.staged.with_workspace(lease).rollback())
+            .await
+            .expect("rollback liveness")
+            .expect_err("staged project work must prevent a clean rollback");
+        assert!(matches!(error, super::RollbackError::Workspace { .. }));
+        assert!(workspace.exists(), "the changed worktree is preserved");
+        assert!(
+            !runtime_root.exists(),
+            "the disposable child-private root is removed independently"
+        );
+
+        // The test owns the retained worktree and can make it clean before
+        // releasing the temporary repository. Production rollback never
+        // force-removes this path.
+        std::fs::remove_file(workspace.join("staged-work.txt")).expect("test work");
+        let workspace_arg = workspace.to_str().expect("workspace path");
+        git(
+            repository.path(),
+            &["worktree", "remove", "--", workspace_arg],
+        );
+        let reference = format!("refs/heads/{branch}");
+        git(repository.path(), &["update-ref", "-d", &reference]);
+    }
+
     /// **Reap is not settlement.** The committed child driver publishes its
     /// physical settlement only after every retained nested anchor is
     /// resolved — so the direct child's exit and reap alone can never make
@@ -1559,6 +1801,55 @@ mod tests {
         drop(nested);
     }
 
+    /// An unresolved nested anchor is a hard barrier for worktree cleanup:
+    /// the lease is preserved without inspecting/removing the workspace, so
+    /// a process that may still own it cannot race the handoff decision.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_unresolved_nested_anchor_preserves_the_worktree() {
+        let repository = git_repository();
+        let runtime_root = repository.path().join("runtime");
+        let manager = SubagentWorkspaceManager::new(repository.path(), &runtime_root);
+        let lease = manager
+            .acquire(
+                SubagentWorkspacePolicy::GitWorktree {
+                    require_clean_parent: false,
+                },
+                &SubagentId::new("conv-workspace-unresolved-anchor"),
+                &CancellationSignal::new(),
+            )
+            .await
+            .expect("worktree lease");
+        let workspace_path = lease.workspace().to_path_buf();
+        let child_runtime = repository.path().join("child-runtime");
+        std::fs::create_dir_all(&child_runtime).expect("child runtime");
+        let mut retained = RetainedProcessUnits::default();
+        // No process owns this impossible group id. The containment primitive
+        // therefore returns an explicit unproven result without signalling a
+        // wildcard or relying on a sleep-based race.
+        retained
+            .retain(ProcessUnitId::new("unresolved"), i32::MAX)
+            .expect("valid anchor shape");
+
+        let settlement = settle_nested(
+            PhysicalOutcome::Lost {
+                diagnostic: "test outcome".to_owned(),
+                cancellation_delivered: false,
+            },
+            &mut retained,
+            PhysicalChildRuntimeRoot::from_existing(child_runtime.clone()),
+            Some(lease),
+        )
+        .await;
+        assert_eq!(settlement.nested.unproven.len(), 1);
+        assert_eq!(settlement.workspace.cleanup, WorkspaceCleanup::Preserved);
+        assert!(settlement.workspace.handoff.is_none());
+        assert!(workspace_path.exists(), "unresolved ownership is preserved");
+        assert!(
+            child_runtime.exists(),
+            "the mutable runtime root is preserved too"
+        );
+    }
+
     /// The Linux containment prerequisite is established **before** any
     /// child is spawned, so an orphaned nested anchor is adoptable by this
     /// process. A spawn that could not establish it must fail rather than
@@ -1578,7 +1869,6 @@ mod tests {
         let dir = tempfile::tempdir().expect("lab");
         let plan = super::SubagentSpawnPlan {
             program: dir.path().join("no-such-rustx"),
-            workspace: dir.path().join("workspace"),
             runtime_root: dir.path().join("runtime"),
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             agent_status: crate::context::AgentStatusConfig::default(),
@@ -1600,6 +1890,8 @@ mod tests {
                 agent: crate::runtime::subagent::SubagentName::parse("explore").expect("name"),
                 definition_digest: serde_json::from_value(serde_json::json!("sha256:frozen"))
                     .expect("digest"),
+                workspace_policy:
+                    crate::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
                 instructions: String::new(),
                 model: crate::model::frozen::test_frozen_model_spec(
                     serde_json::from_value(serde_json::json!("local/model-a")).expect("model"),
@@ -1617,7 +1909,9 @@ mod tests {
                 keep_recent_tokens: 0,
                 summary_output_cap: None,
             },
-            workspace: dir.path().join("workspace"),
+            workspace_snapshot: crate::runtime::subagent::WorkspaceSnapshot::shared(
+                dir.path().join("workspace"),
+            ),
             runtime_root: dir.path().join("runtime"),
         };
         let runtime_root = plan
@@ -1630,6 +1924,17 @@ mod tests {
                     &plan,
                     &spec,
                     runtime_root,
+                    crate::runtime::subagent::SubagentWorkspaceManager::new(
+                        &spec.workspace_snapshot.workspace,
+                        dir.path().join("workspace-artifacts"),
+                    )
+                    .acquire(
+                        crate::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
+                        &spec.subagent_id,
+                        &crate::runtime::cancellation::CancellationSignal::new(),
+                    )
+                    .await
+                    .expect("shared workspace lease"),
                     &crate::runtime::cancellation::CancellationSignal::new()
                 )
                 .await,
