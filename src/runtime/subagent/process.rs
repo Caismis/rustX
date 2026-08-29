@@ -1232,6 +1232,7 @@ mod tests {
             program: PathBuf::from("/nonexistent/rustx"),
             workspace: runtime_root.join("workspace"),
             runtime_root,
+            model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             agent_status: AgentStatusConfig::default(),
             context: SessionContextPolicy {
                 reserve_tokens: 0,
@@ -1508,6 +1509,7 @@ mod tests {
             program: dir.path().join("no-such-rustx"),
             workspace: dir.path().join("workspace"),
             runtime_root: dir.path().join("runtime"),
+            model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             agent_status: crate::context::AgentStatusConfig::default(),
             context: crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
@@ -1537,6 +1539,7 @@ mod tests {
                 materialization:
                     crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
             },
+            model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             agent_status: crate::context::AgentStatusConfig::default(),
             context: crate::context::SessionContextPolicy {
                 reserve_tokens: 0,

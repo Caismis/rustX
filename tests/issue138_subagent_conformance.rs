@@ -1,19 +1,23 @@
-//! Issue #138 (real process boundary): a launched subagent child inherits
-//! the parent runtime's frozen `ModelTimeoutPolicy` and applies it inside
-//! its own ordinary Agent Loop — response-start deadline, generic transient
-//! retry, bounded failure — while the parent observes exactly one terminal
-//! notice and never a retry.
+//! Issue #138 (real process boundary): a launched **named** subagent child
+//! inherits the parent runtime's frozen `ModelTimeoutPolicy` and applies it
+//! inside its own ordinary Agent Loop — response-start deadline, generic
+//! transient retry, bounded failure — while the parent observes exactly one
+//! terminal notice and never a retry.
 //!
 //! This is the one conformance case that must cross the real child process
 //! boundary: the frozen policy travels through the typed `SubagentChildSpec`
-//! handshake into the real child composition. The deterministic gate is
-//! reached by every child provider request and is never released; the
-//! child's very small finite timeout policy (300ms response-start) is the
-//! only trigger. Retry ordinals, backoff, and terminal publication are the
-//! child's ordinary Issue #134 semantics — the four child provider requests
-//! (R0 + 3 retries) and the single parent `Failed` notice are the
-//! observable proof. No race or precedence correctness lives here; those
-//! are proven by the deterministic in-process suites.
+//! handshake into the real child composition. The named definition is
+//! resolved from the invoking resource snapshot and selects both a frozen
+//! Builtin and a Skill, so the child crosses the current #144 resolver and
+//! #145 child-owned Skill materialization boundary before it reaches the
+//! Agent Loop. The deterministic gate is reached by every child provider
+//! request and is never released; the child's very small finite timeout
+//! policy (300ms response-start) is the only trigger. Retry ordinals,
+//! backoff, and terminal publication are the child's ordinary Issue #134
+//! semantics — the four child provider requests (R0 + 3 retries) and the
+//! single parent `Failed` notice are the observable proof. No race or
+//! precedence correctness lives here; those are proven by the deterministic
+//! in-process suites.
 
 mod common;
 
@@ -70,7 +74,19 @@ const SESSION_JSON: &str = r#"{
   "agentId": "agent-parent",
   "model": {"model": "fixture/subagent-model"},
   "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
-  "modelTimeoutPolicy": {"responseStartTimeoutMs": 300, "streamIdleTimeoutMs": 300}
+  "defaultTools": ["read", "subagent"],
+  "modelTimeoutPolicy": {"responseStartTimeoutMs": 300, "streamIdleTimeoutMs": 300},
+  "subagents": {
+    "maxConcurrent": 4,
+    "agents": {
+      "conformance": {
+        "description": "Issue 138 named conformance child.",
+        "instructionsFile": "subagents/conformance.md",
+        "tools": {"builtin": ["read"]},
+        "skills": ["conformance"]
+      }
+    }
+  }
 }"#;
 
 /// One spawned `rustx` process wired to its stdio JSONL transport.
@@ -85,6 +101,19 @@ impl Process {
     fn spawn(root: &std::path::Path, models: &str, session: &str, key: &str) -> Self {
         let workspace = root.join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
+        std::fs::create_dir_all(workspace.join("subagents")).expect("subagent resources");
+        std::fs::write(
+            workspace.join("subagents/conformance.md"),
+            "Execute the delegated conformance task exactly as requested.\n",
+        )
+        .expect("subagent instructions");
+        let skill = workspace.join(".agents/skills/conformance");
+        std::fs::create_dir_all(&skill).expect("skill package");
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: conformance\ndescription: Issue 138 conformance skill.\n---\n\nUse the ordinary child runtime.\n",
+        )
+        .expect("skill manifest");
         std::fs::write(root.join("models.jsonc"), models).expect("models.jsonc");
         std::fs::write(root.join("rustx.jsonc"), session).expect("rustx.jsonc");
         let mut command = tokio::process::Command::new(binary());
@@ -184,7 +213,7 @@ fn route(body: &str, gate: &Arc<common::HeaderGate>) -> common::FixtureReply {
         common::sse_fixture("openai_chat", "plain_text.sse")
     } else {
         // The parent's first turn: delegate.
-        common::sse_fixture("openai_chat", "subagent_tool_call.sse")
+        common::sse_fixture("openai_chat", "issue138_subagent_tool_call.sse")
     }
 }
 
@@ -359,6 +388,14 @@ async fn a_real_child_inherits_the_frozen_timeout_policy_and_retries_locally() {
     assert_eq!(
         child_requests, 4,
         "R0 + 3 ordinary retries inside the child: {bodies:?}"
+    );
+    let first_child_request = bodies
+        .iter()
+        .find(|body| body.contains("count the workspace files"))
+        .expect("the child request body");
+    assert!(
+        first_child_request.contains("skills/conformance/SKILL.md"),
+        "the named child request uses the child-owned materialized Skill path: {first_child_request}"
     );
     let parent_delegations = bodies
         .iter()

@@ -61,8 +61,8 @@ use crate::runtime::inbound::ConversationInboundMailbox;
 use crate::runtime::observation::PendingObservations;
 use crate::runtime::subagent::process::StagedChild;
 use crate::runtime::subagent::{
-    SubagentAccepted, SubagentProfile, SubagentRegistry, SubagentRegistryConfig, SubagentSpawnPlan,
-    SubagentStartOutcome, SubagentStartSpec, SubagentState,
+    ResolvedSubagentSpec, SubagentAccepted, SubagentName, SubagentRegistry, SubagentRegistryConfig,
+    SubagentSpawnPlan, SubagentStartOutcome, SubagentStartSpec, SubagentState,
 };
 
 /// The outer liveness guard of one in-process interaction. No assertion
@@ -191,6 +191,7 @@ async fn child_fixture(
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: tool_runtime.environment().clone(),
             environment_store_root: dir.path().join("child-environments"),
+            python_store_roots: None,
         },
     )
     .expect("child capability coordinator");
@@ -255,12 +256,8 @@ async fn child_fixture(
 fn test_spawn_plan(dir: &tempfile::TempDir, runtime_root: &std::path::Path) -> SubagentSpawnPlan {
     SubagentSpawnPlan {
         program: std::path::PathBuf::from("/nonexistent/rustx"),
-        models: std::path::PathBuf::from("/nonexistent/models.jsonc"),
         workspace: dir.path().join("parent-workspace"),
         runtime_root: runtime_root.to_path_buf(),
-        model: rustx::model::session::SessionModelConfig::of(
-            serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),
-        ),
         // The frozen policy every child launch inherits (Issue #138).
         model_timeout_policy: inherited_policy(),
         agent_status: rustx::context::AgentStatusConfig::default(),
@@ -269,6 +266,30 @@ fn test_spawn_plan(dir: &tempfile::TempDir, runtime_root: &std::path::Path) -> S
             keep_recent_tokens: 0,
             summary_output_cap: None,
         },
+    }
+}
+
+/// A frozen named definition is the only semantic input accepted by the
+/// registry. These deterministic in-process cases exercise the registry and
+/// child IPC without reopening a mutable catalog; the cross-process case
+/// below resolves the same name through the production resource-generation
+/// path.
+fn resolved_child_spec(agent: &str) -> ResolvedSubagentSpec {
+    ResolvedSubagentSpec {
+        agent: SubagentName::parse(agent).expect("canonical subagent name"),
+        definition_digest: serde_json::from_value(serde_json::json!(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        ))
+        .expect("definition digest"),
+        instructions: "Issue 138 conformance child".to_owned(),
+        model: rustx::model::frozen::test_frozen_model_spec(
+            serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),
+        ),
+        tools: Vec::new(),
+        skills: Vec::new(),
+        project_instructions: Vec::new(),
+        materialization:
+            rustx::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
     }
 }
 
@@ -343,6 +364,7 @@ async fn parent_runtime_plane(
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: tool_runtime.environment().clone(),
             environment_store_root: dir.path().join("parent-environments"),
+            python_store_roots: None,
         },
     )
     .expect("parent capability coordinator");
@@ -410,6 +432,7 @@ async fn parent_runtime_plane(
 struct WiredChild {
     accepted: SubagentAccepted,
     serve: tokio::task::JoinHandle<Result<(), crate::local_runtime::subagent_child::ChildExit>>,
+    stop_serve: tokio::sync::oneshot::Sender<()>,
     /// The scripted stand-in process identity (crash tests signal it).
     pid: u32,
 }
@@ -445,12 +468,15 @@ async fn launch_wired_child_with_shell(
         .push_staged_override(StagedChild::for_test(process, driver_end, child_root));
     let prepared = plane
         .registry
-        .prepare(&SubagentStartSpec {
-            profile: SubagentProfile::Explore,
-            task: task.to_owned(),
-            context: None,
-            tool_call_id: ToolCallId::new("call-138"),
-        })
+        .prepare(
+            &SubagentStartSpec {
+                resolved: resolved_child_spec("conformance"),
+                task: task.to_owned(),
+                context: None,
+                tool_call_id: ToolCallId::new("call-138"),
+            },
+            &CancellationSignal::new(),
+        )
         .await
         .expect("child prepared");
     let accepted = match plane
@@ -462,17 +488,31 @@ async fn launch_wired_child_with_shell(
         SubagentStartOutcome::Accepted(accepted) => accepted,
         SubagentStartOutcome::RolledBack => panic!("no cancellation was requested"),
     };
-    let serve = tokio::spawn(
-        crate::local_runtime::subagent_child::serve_child_delegation(
-            child_end,
-            plane.parent_agent_id.clone(),
-            child.runtime.clone(),
-            Arc::clone(&child.observations),
-        ),
-    );
+    let parent_agent_id = plane.parent_agent_id.clone();
+    let child_runtime = child.runtime.clone();
+    let child_observations = Arc::clone(&child.observations);
+    let (stop_serve, stop_receiver) = tokio::sync::oneshot::channel();
+    let serve = tokio::spawn(async move {
+        let mut dispatcher =
+            crate::local_runtime::dispatcher::ChildControlDispatcher::start(child_end);
+        let handle = dispatcher.handle();
+        let result = tokio::select! {
+            result = crate::local_runtime::subagent_child::serve_child_delegation(
+                &mut dispatcher,
+                &handle,
+                parent_agent_id,
+                child_runtime,
+                child_observations,
+            ) => result,
+            _ = stop_receiver => Ok(()),
+        };
+        dispatcher.shutdown().await;
+        result
+    });
     WiredChild {
         accepted,
         serve,
+        stop_serve,
         pid,
     }
 }
@@ -618,12 +658,17 @@ async fn park_child_in_retry_backoff(
 fn the_child_spec_carries_the_frozen_timeout_policy() {
     let dir = tempfile::tempdir().expect("temp root");
     let plan = test_spawn_plan(&dir, &dir.path().join("runtime"));
+    let subagent_id = rustx::runtime::identity::SubagentId::new("conv-x-subagent-1");
+    let physical_root = plan
+        .allocate_child_runtime_root(&subagent_id)
+        .expect("physical child root");
     let spec = plan.child_spec(
-        &rustx::runtime::identity::SubagentId::new("conv-x-subagent-1"),
+        &subagent_id,
         &ConversationId::new("conv-x-subagent-1"),
         &AgentId::new("agent-child"),
         &AgentId::new("agent-parent"),
-        SubagentProfile::Explore,
+        &resolved_child_spec("conformance"),
+        &physical_root,
     );
     assert_eq!(spec.model_timeout_policy, inherited_policy());
     assert_ne!(
@@ -1794,7 +1839,15 @@ async fn child_process_loss_during_backoff_is_terminal_and_never_relaunched() {
         nix::sys::signal::Signal::SIGKILL,
     )
     .expect("SIGKILL the scripted child process");
-    wired.serve.abort();
+    wired
+        .stop_serve
+        .send(())
+        .expect("stop the scripted child control loop");
+    tokio::time::timeout(LIVENESS, wired.serve)
+        .await
+        .expect("child control loop shutdown")
+        .expect("child control loop task")
+        .expect("child control loop result");
 
     let settled = plane
         .registry
