@@ -1,4 +1,4 @@
-//! Issue #37/#130/#136: Runtime Client Protocol v6 wire-contract tests.
+//! Issue #37/#130/#136: Runtime Client wire-contract tests.
 //!
 //! These tests exercise the protocol boundary exclusively through the
 //! public Runtime Client surface: deterministic serialization of every

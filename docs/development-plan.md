@@ -1087,7 +1087,7 @@ tool-start capability. The real ConversationRuntime shutdown path proves that
 pending-map removal is not waiter or attempt settlement: Quiescent waits for
 the waiter handoff, projection callback, AgentExecution, and attempt task.
 
-Runtime Client v7 carries `interaction_respond`, typed acceptance/errors,
+The Runtime Client protocol carries `interaction_respond`, typed acceptance/errors,
 pending/settled events, and `snapshot.pending_interactions`. It also projects
 authoritative effective and pending ApprovalMode state and accepts mode
 changes through runtime control. The TUI remains a projection/client: it

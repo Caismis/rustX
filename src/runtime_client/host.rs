@@ -1,7 +1,7 @@
 //! The Runtime Client host: the projection + control + attachment adapter
 //! over the conversation runtime coordinator (Issue #61).
 //!
-//! [`RuntimeClientHost`] is the Runtime Client boundary of Protocol v6. It
+//! [`RuntimeClientHost`] is the Runtime Client protocol boundary. It
 //! observes and controls the
 //! [`ConversationRuntime`](crate::runtime::conversation_runtime::ConversationRuntime)
 //! of the same conversation; it does **not** own the conversation runtime:
@@ -21,7 +21,7 @@
 //!
 //! The host owns:
 //!
-//! - the one-active-attachment v6 policy;
+//! - the one-active-attachment policy;
 //! - the Runtime Client projection (snapshot read model, cursor allocation,
 //!   bounded replay, subscribers) and its linearization boundary;
 //! - protocol adaptation: request dispatch, `model_set`/`shutdown`/
@@ -143,7 +143,7 @@ pub enum HostConstructionError {
     /// The conversation runtime identity is already bound to a Runtime
     /// Client host.
     ///
-    /// Protocol v6 binds one runtime identity to at most one
+    /// The Runtime Client protocol binds one runtime identity to at most one
     /// [`RuntimeClientHost`] for that identity's lifetime, so cloning a
     /// runtime never yields a second bindable identity and dropping the
     /// bound host never makes it bindable again. Reconnect replaces the
@@ -248,7 +248,7 @@ pub(crate) struct ClientState {
     /// The Runtime Client projection: snapshot read model, cursor,
     /// bounded replay, subscribers.
     projection: RuntimeClientProjection,
-    /// The at-most-one active attachment of Protocol v6.
+    /// The at-most-one active attachment of the Runtime Client protocol.
     attachment: Option<AttachmentState>,
     /// The next attachment identity sequence.
     next_attachment_seq: u64,
@@ -420,7 +420,7 @@ impl ClientInner {
     /// Admits one attachment: the internal primitive behind the
     /// `initialize` protocol method.
     ///
-    /// Protocol v6 allows at most one active attachment; a second
+    /// The Runtime Client protocol allows at most one active attachment; a second
     /// simultaneous attach fails deterministically and never evicts the
     /// first. The returned snapshot and cursor are linearized with the
     /// admission under the one projection synchronization boundary.

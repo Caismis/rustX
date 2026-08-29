@@ -1,4 +1,4 @@
-//! Transport-independent Runtime Client Protocol v6 conformance fixtures
+//! Transport-independent Runtime Client conformance fixtures
 //! (Issue #38).
 //!
 //! # Why this layer exists
@@ -227,7 +227,7 @@ impl StdioJsonlDriver {
 
     /// Writes one request record: JSON payload plus exactly one LF.
     async fn send(&mut self, request: &RuntimeClientRequest) {
-        let mut record = serde_json::to_vec(request).expect("a v6 request serializes");
+        let mut record = serde_json::to_vec(request).expect("a Runtime Client request serializes");
         record.push(b'\n');
         let stream = self.to_session.as_mut().expect("the session is open");
         stream.write_all(&record).await.expect("write the record");

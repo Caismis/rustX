@@ -2,7 +2,7 @@
  * The client-facing attachment lifecycle.
  *
  * ```text
- * spawn -> initialize(v7) -> authoritative snapshot + cursor
+ * spawn -> initialize (protocol negotiation) -> authoritative snapshot + cursor
  *       -> install presentation projection
  *       -> subscribe_events(after cursor)
  *       -> interactive

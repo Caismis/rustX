@@ -1,5 +1,5 @@
-//! Issue #37: capability/tool/Skill inspection of Runtime Client Protocol
-//! v6.
+//! Issue #37: capability/tool/Skill inspection through the Runtime Client
+//! protocol.
 //!
 //! The active capability projection must carry the revision, the
 //! deterministic tool catalog with origin metadata for native, MCP, and

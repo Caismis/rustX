@@ -30,7 +30,7 @@
  * only; it never interprets protocol semantics.
  */
 
-/** The v6 record limit, identical to `STDIO_JSONL_MAX_RECORD_BYTES`. */
+/** The shared record limit, identical to `STDIO_JSONL_MAX_RECORD_BYTES`. */
 export const JSONL_MAX_RECORD_BYTES = 8 * 1024 * 1024;
 
 const LF = 0x0a;

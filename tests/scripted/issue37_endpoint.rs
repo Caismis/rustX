@@ -44,7 +44,7 @@ impl FramingAdapter {
     /// One request frame in, one response frame out.
     fn exchange(&self, line: &str) -> serde_json::Value {
         let request: RuntimeClientRequest =
-            serde_json::from_str(line).expect("the frame decodes to a v6 request");
+            serde_json::from_str(line).expect("the frame decodes to a Runtime Client request");
         let response = self.endpoint.handle_request(request);
         let encoded = serde_json::to_string(&response).expect("the response encodes");
         // Round-trip through the wire shape so the test only ever asserts
@@ -57,7 +57,7 @@ impl FramingAdapter {
 
     async fn exchange_async(&self, line: &str) -> serde_json::Value {
         let request: RuntimeClientRequest =
-            serde_json::from_str(line).expect("the frame decodes to a v6 request");
+            serde_json::from_str(line).expect("the frame decodes to a Runtime Client request");
         let response = self.endpoint.handle_request_async(request).await;
         let encoded = serde_json::to_string(&response).expect("the response encodes");
         let decoded: RuntimeClientResponse =

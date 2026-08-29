@@ -347,8 +347,9 @@ async fn the_endpoint_speaks_for_the_one_composed_host() {
     assert_eq!(conversation_id.as_str(), "conversation-standalone");
     assert_eq!(agent_id.as_str(), "agent-composed");
 
-    // v1 admits at most one attachment: a second endpoint over the same host
-    // is rejected rather than silently evicting the first.
+    // The Runtime Client protocol admits at most one attachment: a second
+    // endpoint over the same host is rejected rather than silently evicting
+    // the first.
     let second = runtime.endpoint();
     let response = second.handle_request(RuntimeClientRequest::Initialize {
         id: RequestId::new(1),
