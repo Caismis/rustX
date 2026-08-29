@@ -3845,6 +3845,11 @@ semantic normalization boundary. The frozen invariants:
   RuntimeEvent/Event Journal schema versioning.** Version negotiation is
   explicit at attachment admission; the current protocol is the sole
   supported version, and every superseded version is rejected explicitly.
+- **Runtime Client protocol v9 adds `interrupted` to the closed
+  `SubagentState` vocabulary.** Rust serialization and the maintained TUI
+  mirror describe the same `running | cancelling | publishing_terminal |
+  succeeded | failed | cancelled | interrupted` states; v8 is not decoded
+  compatibly.
 - **The semantic layer owns protocol negotiation and attachment
   admission; transports are framing only.** `initialize` is dispatched by
   `RuntimeClientEndpoint` and is by itself sufficient to establish the

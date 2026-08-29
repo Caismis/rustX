@@ -225,7 +225,12 @@ pub enum RuntimeClientSessionRequest {
 /// Version 8 carries Issue #144's named-subagent projection: a subagent is
 /// identified by `(agent, definition_digest)` instead of a profile name.
 /// There is no compatibility decoding of the obsolete shape.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 8;
+///
+/// Version 9 carries Issue #158's `Interrupted` subagent terminal state. The
+/// closed Runtime Client lifecycle vocabulary therefore includes an unknown
+/// child process/control-plane outcome without relabelling it as a semantic
+/// model failure. There is no compatibility decoding of version 8.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 9;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1087,7 +1092,7 @@ mod tests {
     use super::{
         RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientCursor, RuntimeClientError,
         RuntimeClientProtocolEvent, RuntimeClientRequest, RuntimeClientResponse,
-        RuntimeClientResult, SessionView,
+        RuntimeClientResult, RuntimeClientSubagent, SessionView,
     };
     use crate::events::types::EVENT_SCHEMA_VERSION;
     use crate::message::content::TextBlock;
@@ -1102,7 +1107,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 8);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 9);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
@@ -1112,6 +1117,27 @@ mod tests {
         let value = serde_json::to_value(request).expect("serialize request");
         assert!(value.get("schema_version").is_none());
         assert!(value.get("event_schema_version").is_none());
+    }
+
+    /// The Runtime Client subagent projection carries the complete closed
+    /// lifecycle vocabulary on the wire, including the unknown-outcome
+    /// `Interrupted` terminal state.
+    #[test]
+    fn interrupted_subagent_projection_serializes_as_the_v9_wire_state() {
+        let subagent = RuntimeClientSubagent {
+            subagent_id: crate::runtime::identity::SubagentId::new("subagent-1"),
+            child_agent_id: crate::runtime::identity::AgentId::new("agent-child"),
+            child_conversation_id: ConversationId::new("conversation-child"),
+            agent: "conformance".to_owned(),
+            definition_digest: "sha256:definition".to_owned(),
+            state: crate::runtime::subagent::SubagentState::Interrupted,
+            detail: Some("child outcome unknown".to_owned()),
+        };
+
+        let value = serde_json::to_value(subagent).expect("serialize subagent projection");
+        assert_eq!(value["state"], "interrupted");
+        assert_eq!(value["agent"], "conformance");
+        assert_eq!(value["definition_digest"], "sha256:definition");
     }
 
     /// Requests serialize deterministically with their method discriminator
@@ -1310,7 +1336,7 @@ mod tests {
         let cases = [
             RuntimeClientError::UnsupportedProtocolVersion {
                 supported: 6,
-                requested: 9,
+                requested: 10,
             },
             RuntimeClientError::NoCurrentAttempt,
             RuntimeClientError::InteractionNotPending {

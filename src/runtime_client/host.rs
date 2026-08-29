@@ -2461,12 +2461,12 @@ mod tests {
         ));
 
         // Incompatible protocol version fails explicitly.
-        let bad = fixture.host.attach(9);
+        let bad = fixture.host.attach(10);
         assert!(matches!(
             bad,
             Err(RuntimeClientError::UnsupportedProtocolVersion {
-                supported: 8,
-                requested: 9,
+                supported: 9,
+                requested: 10,
             })
         ));
 

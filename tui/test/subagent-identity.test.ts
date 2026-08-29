@@ -21,6 +21,7 @@ import { runtimeCursor, snapshot } from "./support/fixtures.ts";
 function subagent(
   agent: string,
   definitionDigest: string,
+  state: RuntimeClientSubagent["state"] = "running",
 ): RuntimeClientSubagent {
   return {
     subagent_id: "conv-1-subagent-1",
@@ -28,13 +29,13 @@ function subagent(
     child_conversation_id: "conv-1-subagent-1",
     agent,
     definition_digest: definitionDigest,
-    state: "running",
+    state,
   };
 }
 
 describe("subagent identity", () => {
-  it("negotiates the protocol version that carries the named identity", () => {
-    assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 8);
+  it("negotiates v9, which carries named identity and interrupted state", () => {
+    assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 9);
   });
 
   it("carries agent and definition_digest from the snapshot", () => {
@@ -77,5 +78,29 @@ describe("subagent identity", () => {
     assert.ok(child);
     assert.equal(child.state, "succeeded");
     assert.equal(child.definition_digest, "sha256:d1");
+  });
+
+  it("carries an interrupted child through the ordinary Runtime Client projection", () => {
+    let state = replaceFromSnapshot(
+      {
+        ...snapshot(),
+        subagents: [subagent("worker", "sha256:d1", "interrupted")],
+      },
+      runtimeCursor(1),
+    );
+    assert.equal(state.subagents[0]?.state, "interrupted");
+
+    state = reduce(state, {
+      cursor: runtimeCursor(2),
+      event: {
+        type: "subagent_updated",
+        subagent: {
+          ...subagent("worker", "sha256:d1", "interrupted"),
+          detail: "child outcome unknown",
+        },
+      },
+    });
+    assert.equal(state.subagents[0]?.state, "interrupted");
+    assert.equal(state.subagents[0]?.detail, "child outcome unknown");
   });
 });

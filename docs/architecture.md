@@ -3147,6 +3147,12 @@ is no second AG-UI interpretation path directly from internal runtime
 events. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; the two protocols are not mixed.
 
+The current Runtime Client protocol is version 9. It adds `interrupted` to
+the closed `SubagentState` vocabulary so Rust snapshots and the maintained
+TUI mirror agree that an unexpected child process/control-plane loss has an
+unknown outcome. Superseded Runtime Client versions are rejected explicitly;
+there is no compatibility decoder.
+
 Module ownership:
 
 ```text
@@ -5788,10 +5794,10 @@ tool proposals remain explicitly complete/incomplete, unaccepted, and not
 executed. Payload is escaped as data inside deterministic non-closable records.
 Carryover is excluded structurally from `ModelBackedSummarizer` input and from
 `LineageSeed`; it has no relationship to Agent Status or provider continuation
-state. This durable-state change is local to development schema version 15;
-`EVENT_SCHEMA_VERSION` remains 1 because no Event Journal envelope changed,
-and the Runtime Client protocol remains unchanged because carryover has no
-wire field or consumption event.
+state. The Issue #137 durable-state change was local to development schema
+version 15; `EVENT_SCHEMA_VERSION` remains 1 because no Event Journal
+envelope changed, and that carryover-only change did not alter the Runtime
+Client protocol because carryover has no wire field or consumption event.
 
 ### 6.1.8 Model-proposed tool calls versus Tool Plane execution
 
