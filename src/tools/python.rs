@@ -584,6 +584,25 @@ struct BuildState {
     notify: tokio::sync::Notify,
 }
 
+/// Test-only waiter-attachment probe: counts callers that selected an
+/// existing in-flight `BuildState` while holding the in-flight ownership
+/// lock. It observes the ownership decision; it never influences it, and
+/// it does not exist in non-test builds.
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct WaiterAttachments {
+    count: std::sync::atomic::AtomicUsize,
+    notify: tokio::sync::Notify,
+}
+
+#[cfg(test)]
+impl WaiterAttachments {
+    fn record(&self) {
+        self.count.fetch_add(1, Ordering::Release);
+        self.notify.notify_waiters();
+    }
+}
+
 /// Completes a process-local build entry if its store-owned task exits
 /// unexpectedly. The guard lives inside that detached owner task, never in a
 /// candidate preparation caller, so caller cancellation cannot release an
@@ -629,6 +648,9 @@ struct PythonToolStoreInner {
     uv_binary: PathBuf,
     python_binary: PathBuf,
     in_flight: Arc<Mutex<BTreeMap<String, Arc<BuildState>>>>,
+    /// Test-only observation of the waiter-attachment ownership decision.
+    #[cfg(test)]
+    waiter_attachments: Arc<WaiterAttachments>,
     next_invocation: Arc<AtomicU64>,
 }
 
@@ -665,6 +687,8 @@ impl PythonToolStore {
                 uv_binary: resolve_executable("uv"),
                 python_binary: resolve_executable("python3"),
                 in_flight: Arc::new(Mutex::new(BTreeMap::new())),
+                #[cfg(test)]
+                waiter_attachments: Arc::new(WaiterAttachments::default()),
                 next_invocation: Arc::new(AtomicU64::new(0)),
             }),
         })
@@ -688,6 +712,7 @@ impl PythonToolStore {
                 uv_binary: resolve_executable("uv"),
                 python_binary: resolve_executable("python3"),
                 in_flight: Arc::new(Mutex::new(BTreeMap::new())),
+                waiter_attachments: Arc::new(WaiterAttachments::default()),
                 next_invocation: Arc::new(AtomicU64::new(0)),
             }),
         })
@@ -901,7 +926,15 @@ impl PythonToolStore {
         let (state, owner) = {
             let mut builds = self.inner.in_flight.lock().expect("Python build lock");
             if let Some(state) = builds.get(&key) {
-                (state.clone(), false)
+                let state = state.clone();
+                // The caller is now irrevocably attached to this existing
+                // build: it selected the in-flight `BuildState` while
+                // holding the ownership lock, so it can never become a
+                // second owner of the digest. The probe only observes this
+                // decision; it never influences it.
+                #[cfg(test)]
+                self.inner.waiter_attachments.record();
+                (state, false)
             } else {
                 let state = Arc::new(BuildState {
                     result: Mutex::new(None),
@@ -2260,6 +2293,37 @@ mod tests {
         (dir, store)
     }
 
+    /// Waits until `count` callers of `store` have selected an existing
+    /// in-flight `BuildState` under the ownership lock — the precise point
+    /// at which a caller is irrevocably committed to that build's terminal
+    /// result and can never become a second owner of the digest. The
+    /// timeout is only a finite deadlock guard; the ordering itself comes
+    /// from the attachment counter.
+    fn wait_for_attached_waiters(store: &PythonToolStore, count: usize) {
+        let probe = store.inner.waiter_attachments.clone();
+        tokio::task::block_in_place(|| {
+            loop {
+                // Register the notification interest BEFORE checking the
+                // count: `notify_waiters()` only wakes registered waiters,
+                // so a merely created (never polled/enabled) `Notified`
+                // would leave a check-then-register hole. `enable()` is
+                // the same no-lost-wakeup pattern the production waiter
+                // loop in `ensure_environment` uses. An attachment recorded
+                // before the count check is observed in the count; an
+                // attachment recorded after `enable()` wakes this
+                // `Notified` through `notify_waiters()`.
+                let mut notified = Box::pin(probe.notify.notified());
+                notified.as_mut().enable();
+                if probe.count.load(std::sync::atomic::Ordering::Acquire) >= count {
+                    return;
+                }
+                tokio::runtime::Handle::current()
+                    .block_on(tokio::time::timeout(Duration::from_secs(15), notified))
+                    .expect("the waiters must attach to the in-flight build");
+            }
+        });
+    }
+
     /// Concurrent same-digest callers coalesce behind exactly one
     /// store-owned owner: while the first materialization is parked, a
     /// second caller waits on the same build and never starts a second
@@ -2351,9 +2415,22 @@ mod tests {
         );
     }
 
-    /// An owner failure publishes a terminal error to every waiting caller
-    /// and removes the in-flight entry, so a retry can acquire ownership
-    /// without overlapping the failed owner.
+    /// An owner failure publishes one terminal error to every caller
+    /// already attached to the in-flight build and removes the in-flight
+    /// entry before waking anyone, so a later retry acquires fresh
+    /// ownership without overlapping the failed owner.
+    ///
+    /// Every ordering edge is explicit synchronization, never scheduler
+    /// progress: `wait_for_materializations(1)` proves the owner holds the
+    /// digest inside its gated materialization; and
+    /// `wait_for_attached_waiters(2)` proves both waiters selected that
+    /// same `BuildState` under the ownership lock before the owner is
+    /// allowed to fail. Attached waiters are committed to that state and
+    /// therefore observe the same terminal result; their observation is
+    /// NOT ordered against ownership removal (a waiter may read the
+    /// published result while the owner is still removing the entry), so
+    /// release-before-retry is proven separately by the explicit
+    /// `in_flight` inspection below.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn owner_error_wakes_all_waiters_and_retry_does_not_overlap() {
         let scripted = Arc::new(ScriptedRunner::new(vec![
@@ -2363,40 +2440,84 @@ mod tests {
         let (_dir, store) = store_with(scripted.clone());
         let published = store.publish(&test_package()).expect("publish");
 
-        let first_store = store.clone();
-        let first_published = published.clone();
-        let first =
-            tokio::spawn(async move { first_store.ensure_environment(&first_published).await });
+        // The owner owns the digest and parks inside its gated first
+        // materialization command.
+        let owner_store = store.clone();
+        let owner_published = published.clone();
+        let owner =
+            tokio::spawn(async move { owner_store.ensure_environment(&owner_published).await });
         scripted.wait_for_materializations(1);
-        let second_store = store.clone();
-        let second_published = published.clone();
-        let second =
-            tokio::spawn(async move { second_store.ensure_environment(&second_published).await });
-        scripted.wait_for_runs(5);
+
+        // Both waiters attach to the owner's in-flight `BuildState` before
+        // the owner is allowed to fail: the attachment probe fires while
+        // the caller holds the ownership lock after cloning the existing
+        // state, so each waiter is irrevocably committed to the owner's
+        // terminal result and can never start a second owner.
+        let waiter_alpha_store = store.clone();
+        let waiter_alpha_published = published.clone();
+        let waiter_alpha = tokio::spawn(async move {
+            waiter_alpha_store
+                .ensure_environment(&waiter_alpha_published)
+                .await
+        });
+        let waiter_beta_store = store.clone();
+        let waiter_beta_published = published.clone();
+        let waiter_beta = tokio::spawn(async move {
+            waiter_beta_store
+                .ensure_environment(&waiter_beta_published)
+                .await
+        });
+        wait_for_attached_waiters(&store, 2);
         assert_eq!(
             scripted.materialization_count(),
             1,
-            "the waiter must not start a second owner"
+            "attached waiters must not start a second owner"
         );
+
+        // Releasing the gate lets the owner fail; `BuildOwnerGuard::finish`
+        // then publishes the terminal error, removes the in-flight entry,
+        // and only then notifies the attached waiters.
         scripted.release_gate();
-        scripted.wait_for_materializations(2);
 
-        let first_error = first
+        let owner_error = owner.await.expect("owner task").expect_err("owner fails");
+        let waiter_alpha_error = waiter_alpha
             .await
-            .expect("first caller task")
-            .expect_err("first fails");
-        let second_error = second
+            .expect("waiter alpha task")
+            .expect_err("waiter alpha fails");
+        let waiter_beta_error = waiter_beta
             .await
-            .expect("second caller task")
-            .expect_err("second fails");
-        assert!(first_error.to_string().contains("injected sync failure"));
+            .expect("waiter beta task")
+            .expect_err("waiter beta fails");
+        assert!(owner_error.to_string().contains("injected sync failure"));
         assert_eq!(
-            first_error, second_error,
-            "both waiters observe the same terminal error"
+            owner_error, waiter_alpha_error,
+            "waiter alpha observes the owner's terminal error"
+        );
+        assert_eq!(
+            owner_error, waiter_beta_error,
+            "waiter beta observes the owner's terminal error"
+        );
+        assert_eq!(
+            scripted.materialization_count(),
+            2,
+            "exactly one materialization sequence ran"
         );
 
-        // The failed owner removed its in-flight entry; the retry starts a
-        // fresh, non-overlapping materialization sequence.
+        // The owner task has completed, so `BuildOwnerGuard::finish` ran
+        // to completion: terminal publication, in-flight removal, and
+        // notification all happened. Prove the ownership release
+        // explicitly before the retry starts: fresh ownership is
+        // serialized through the `in_flight` mutex, so the retry can only
+        // become the next owner because the previous entry is gone.
+        assert!(
+            store
+                .inner
+                .in_flight
+                .lock()
+                .expect("in-flight lock")
+                .is_empty(),
+            "the failed owner released ownership before the retry"
+        );
         *scripted
             .materialization_results
             .lock()
@@ -2406,17 +2527,15 @@ mod tests {
         ]);
         let retry_store = store.clone();
         let retry_published = published.clone();
-        let retry =
-            tokio::spawn(async move { retry_store.ensure_environment(&retry_published).await });
-        scripted.wait_for_materializations(4);
-        assert!(
-            retry.await.expect("retry task").is_ok(),
-            "the retry can acquire ownership after the failed owner published"
-        );
+        let retry_environment = retry_store
+            .ensure_environment(&retry_published)
+            .await
+            .expect("the retry acquires ownership after the failed owner published");
+        assert_eq!(retry_environment.digest.as_str().len(), 7 + 64);
         assert_eq!(
             scripted.materialization_count(),
             4,
-            "the retry started only after the previous owner finished"
+            "the retry ran exactly one fresh materialization sequence"
         );
     }
 
@@ -2802,6 +2921,7 @@ mod tests {
             uv_binary: PathBuf::from("uv"),
             python_binary: PathBuf::from("python3"),
             in_flight: Arc::new(Mutex::new(BTreeMap::new())),
+            waiter_attachments: Arc::new(super::WaiterAttachments::default()),
             next_invocation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
     }
