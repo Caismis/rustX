@@ -3095,6 +3095,9 @@ fn commit_subagent_ownership(store: &SqliteConversationStore, subagent: &Subagen
                 tool_call_id: ToolCallId::new("call-sub"),
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
+                workspace: rustx::runtime::subagent::WorkspaceSnapshot::shared(
+                    std::path::PathBuf::from("<shared-workspace>"),
+                ),
             },
         ))
         .expect("subagent ownership");
@@ -3197,6 +3200,7 @@ fn a_durably_settled_subagent_needs_no_recovery() {
             &AgentId::new(format!("agent-{subagent}")),
             "explore",
             "sha256:definition",
+            None,
             fixed_time(),
         );
         store

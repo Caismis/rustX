@@ -124,7 +124,7 @@ use crate::runtime::resources::{
 };
 use crate::runtime::subagent::{
     ResolvedSubagentTool, SubagentCatalog, SubagentDefinition, SubagentProjectInstructionPolicy,
-    SubagentResolver,
+    SubagentResolver, SubagentWorkspaceManager,
 };
 use crate::runtime_client::endpoint::RuntimeClientEndpoint;
 use crate::runtime_client::host::{
@@ -900,6 +900,7 @@ fn load_subagent_catalog(
                     inherit: agent.agents_md.inherit,
                     files,
                 },
+                agent.worktree.to_policy(),
             )
             .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?,
         );
@@ -1079,12 +1080,15 @@ impl LocalConversationCore {
                         path: PathBuf::from("<current exe>"),
                         detail: error.to_string(),
                     })?,
-                    workspace: paths.workspace.clone(),
                     runtime_root: artifacts_root.clone(),
                     model_timeout_policy,
                     agent_status: runtime_config.agent_status.clone(),
                     context: runtime_config.context_policy(),
                 },
+                workspace: SubagentWorkspaceManager::new(
+                    tool_runtime.workspace().root(),
+                    tool_runtime.artifacts().root(),
+                ),
                 // Launch-scoped: capacity belongs to the live registry, and
                 // resource reload deliberately never resizes it.
                 max_active: runtime_config.subagents.max_concurrent,
@@ -1316,14 +1320,15 @@ impl LocalConversationCore {
         let model =
             SessionModelState::frozen(&spec.resolved.model, dependencies.credentials.as_ref())?;
 
-        // 5-6. The child conversation tool runtime over the shared
-        // read-only workspace and the exact spawn-incarnation-private
-        // runtime root. The child authorizes no environment entries.
+        // 5-6. The child conversation tool runtime over the authoritative
+        // project workspace selected by the parent and the exact
+        // spawn-incarnation-private runtime root. The child authorizes no
+        // environment entries.
         let base_environment = ToolEnvironment::from_authorized(std::iter::empty())
             .map_err(CurrentRuntimeConfigError::Environment)
             .map_err(LocalRuntimeError::RuntimeConfig)?;
         let mut runtime_config = crate::tools::runtime::ConversationRuntimeConfig::new(
-            &spec.workspace,
+            &spec.workspace_snapshot.workspace,
             spec.runtime_root.join("artifacts"),
         );
         runtime_config.environment = Some(base_environment.clone());
@@ -2144,6 +2149,8 @@ mod subagent_child_tests {
                 agent: SubagentName::parse("explore").expect("canonical name"),
                 definition_digest: serde_json::from_value(serde_json::json!("sha256:frozen"))
                     .expect("digest"),
+                workspace_policy:
+                    crate::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
                 instructions: "frozen child instructions".to_owned(),
                 model: crate::model::frozen::test_frozen_model_spec(
                     serde_json::from_value(serde_json::json!("local/model-a")).expect("model ref"),
@@ -2161,7 +2168,9 @@ mod subagent_child_tests {
                 keep_recent_tokens: 0,
                 summary_output_cap: None,
             },
-            workspace: root.join("workspace"),
+            workspace_snapshot: crate::runtime::subagent::WorkspaceSnapshot::shared(
+                root.join("workspace"),
+            ),
             runtime_root: root.join("child"),
         }
     }
@@ -2234,6 +2243,65 @@ mod subagent_child_tests {
             vec!["read"],
             "the child's active set is exactly its authorized set"
         );
+    }
+
+    /// Issue #146: changing the physical project root does not change the
+    /// project-instruction authority. The unrelated AGENTS.md is deliberately
+    /// above the worktree-shaped path; the child still consumes only the
+    /// parent-frozen chain carried in its typed specification.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_worktree_child_never_discovers_ancestor_project_instructions() {
+        let dir = lab();
+        let worktree = dir.path().join("runtime/worktrees/child");
+        std::fs::create_dir_all(&worktree).expect("worktree-shaped workspace");
+        std::fs::write(
+            dir.path().join("AGENTS.md"),
+            "unrelated ancestor instructions\n",
+        )
+        .expect("ancestor AGENTS.md");
+        let mut child_spec = spec(
+            dir.path(),
+            vec![builtin("read")],
+            vec![ProjectContextFile {
+                path: dir.path().join("frozen/AGENTS.md"),
+                content: "frozen parent chain".to_owned(),
+            }],
+            Vec::new(),
+        );
+        child_spec.resolved.workspace_policy =
+            crate::runtime::subagent::SubagentWorkspacePolicy::GitWorktree {
+                require_clean_parent: false,
+            };
+        child_spec.workspace_snapshot = crate::runtime::subagent::WorkspaceSnapshot {
+            workspace: worktree,
+            isolated: true,
+            repository: Some(dir.path().to_path_buf()),
+            base_commit: Some("committed-base".to_owned()),
+            branch: Some("rustx/subagent/frozen".to_owned()),
+            parent_had_uncommitted_changes: true,
+        };
+
+        let core = LocalConversationCore::compose_subagent_child(
+            &child_spec,
+            &dependencies(),
+            &ChildPreparation::detached(),
+        )
+        .await
+        .expect("the worktree child composes");
+        let resources = core.runtime().runtime_resources();
+        assert_eq!(
+            resources.project_context_files(),
+            &[ProjectContextFile {
+                path: dir.path().join("frozen/AGENTS.md"),
+                content: "frozen parent chain".to_owned(),
+            }],
+            "the worktree path is not project-instruction authority"
+        );
+        assert_eq!(
+            resources.project_instructions(),
+            Some("frozen parent chain")
+        );
+        assert_eq!(resources.skill_catalog(), None);
     }
 
     /// A frozen Skill allowlist is **materialized** into the child-private

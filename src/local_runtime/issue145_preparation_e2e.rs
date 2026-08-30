@@ -155,7 +155,6 @@ impl Lab {
             clock: Arc::new(crate::runtime::types::SystemClock),
             spawn: crate::runtime::subagent::SubagentSpawnPlan {
                 program: wrapper,
-                workspace,
                 runtime_root: runtime_root.clone(),
                 model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                 agent_status: crate::context::AgentStatusConfig::default(),
@@ -165,6 +164,10 @@ impl Lab {
                     summary_output_cap: None,
                 },
             },
+            workspace: crate::runtime::subagent::SubagentWorkspaceManager::new(
+                &workspace,
+                &runtime_root,
+            ),
             max_active: 4,
         });
         // The one ordinal this conversation will allocate: `prepare` burns
@@ -198,6 +201,8 @@ impl Lab {
                     "sha256:0000000000000000000000000000000000000000000000000000000000000000"
                 ))
                 .expect("digest"),
+                workspace_policy:
+                    crate::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
                 instructions: "frozen child instructions".to_owned(),
                 model: crate::model::frozen::test_frozen_model_spec(
                     serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),

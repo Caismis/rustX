@@ -6,9 +6,9 @@
 //! #144 froze each selected Skill's immutable identity (`SkillId` +
 //! `SkillVersionId`) plus its model-visible catalog metadata — including a
 //! host `SKILL.md` path. That path is a **locator**, never an identity: the
-//! bytes behind it can change without the path changing, and Issue #146 will
-//! move the child into a different worktree entirely, where the parent's
-//! path may not describe the same tree at all.
+//! bytes behind it can change without the path changing, and an isolated
+//! Issue #146 child may run in a different worktree entirely, where the
+//! parent's path may not describe the same tree at all.
 //!
 //! So the child does the smallest thing that makes the frozen identity
 //! authoritative again:

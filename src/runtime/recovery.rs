@@ -74,10 +74,12 @@
 //! [`ConversationStore`] evidence. The store exposes semantic durable facts
 //! and semantic transactions; it never decides whether an ambiguous request is
 //! safe to replay. Nothing here reads a Runtime Client snapshot, a TUI cache,
-//! an attachment state, current Skill discovery, current `models.jsonc`, the
-//! current filesystem, or a regenerated dynamic context: current configuration
-//! configures **future** work and may never fill a hole in **historical**
-//! work.
+//! an attachment state, current Skill discovery, current `models.jsonc`, or a
+//! regenerated dynamic context: current configuration configures **future**
+//! work and may never fill a hole in **historical** work. The evidence fold
+//! itself never reads the current filesystem; the explicit isolated-workspace
+//! inspection used while settling an orphaned child is a separate physical
+//! reconciliation step.
 //!
 //! [`ConversationRuntime`]: crate::runtime::conversation_runtime::ConversationRuntime
 //!
@@ -114,7 +116,9 @@ use chrono::{DateTime, Utc};
 
 use crate::conversation::{RecoverySafetyError, recovery_safety};
 use crate::durable::{ConversationStore, ConversationStoreError, PendingInboundItem};
-use crate::events::types::{AttemptFailure, RuntimeEvent, RuntimeEventEnvelope};
+use crate::events::types::{
+    AttemptFailure, RuntimeEvent, RuntimeEventEnvelope, SubagentTerminalState,
+};
 use crate::message::types::{AssistantContentBlock, MessageBlock, ToolMessageBlock};
 use crate::publication::{
     PublicationAuditKind, PublicationStreamRecord, select_unresolved_output_source,
@@ -123,6 +127,7 @@ use crate::runtime::identity::{
     AttemptId, ConversationId, EventId, MessageId, PublicationStreamId, RequestId, SubagentId,
     ToolCallId, ToolExecutionId, ToolId,
 };
+use crate::runtime::subagent::{WorkspaceHandoff, WorkspaceSettlement, WorkspaceSnapshot};
 use crate::runtime::types::{CancellationReason, RuntimeClock, RuntimeError};
 use crate::tools::types::{ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus};
 
@@ -355,13 +360,36 @@ pub struct SubagentEvidence {
     /// never the definition the current catalog happens to hold for that
     /// name.
     pub definition_digest: String,
+    /// The ownership event timestamp, retained as the immutable start time
+    /// of the recovered registry projection.
+    pub started_at: DateTime<Utc>,
+    /// The workspace authority selected before ownership committed.
+    pub workspace: WorkspaceSnapshot,
+}
+
+/// A terminal event that durably retained a child worktree for handoff.
+///
+/// The ownership evidence is kept alongside the terminal facts so startup
+/// recovery can restore only the read-model record needed to expose the
+/// preserved worktree. It never recreates the child process or reopens live
+/// ownership.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveredSubagentHandoff {
+    /// The child identity and immutable start facts.
+    pub evidence: SubagentEvidence,
+    /// The durable semantic child terminal state.
+    pub state: SubagentTerminalState,
+    /// The runtime-observed retained workspace facts.
+    pub handoff: WorkspaceHandoff,
 }
 
 /// The complete durable evidence of one conversation at process startup.
 ///
 /// Every field comes from the durable authority alone. Nothing is derived from
 /// current configuration, current plugin/Skill discovery, a Runtime Client
-/// snapshot, or the current filesystem.
+/// snapshot, or the current filesystem. Physical isolated-workspace facts are
+/// collected only later by reconciliation, after this semantic evidence has
+/// been classified.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecoveryEvidence {
     conversation_id: ConversationId,
@@ -404,6 +432,9 @@ pub struct RecoveryEvidence {
     unsettled_background: Vec<BackgroundEvidence>,
     /// Subagent children durably owned and not durably published (Issue #60).
     unsettled_subagents: Vec<SubagentEvidence>,
+    /// Terminally published subagents whose durable terminal fact retained a
+    /// workspace handoff for the recovered read model.
+    settled_subagent_handoffs: Vec<RecoveredSubagentHandoff>,
     /// The highest conversation-scoped attempt ordinal that entered durable
     /// authority, terminal or not.
     highest_attempt_ordinal: Option<u64>,
@@ -470,6 +501,7 @@ impl RecoveryEvidence {
             tool_repairs: BTreeMap::new(),
             unsettled_background: Vec::new(),
             unsettled_subagents: Vec::new(),
+            settled_subagent_handoffs: Vec::new(),
             assistant_attempts: BTreeMap::new(),
             active_ids: std::collections::BTreeSet::new(),
             highest_attempt_ordinal: None,
@@ -490,13 +522,20 @@ impl RecoveryEvidence {
         let mut cursor = None;
         let mut background: BTreeMap<ToolExecutionId, BackgroundEvidence> = BTreeMap::new();
         let mut subagents: BTreeMap<SubagentId, SubagentEvidence> = BTreeMap::new();
+        let mut settled_subagent_handoffs: BTreeMap<SubagentId, RecoveredSubagentHandoff> =
+            BTreeMap::new();
         loop {
             let page = store.read_events(cursor, RECOVERY_PAGE)?;
             if page.events.is_empty() {
                 break;
             }
             for envelope in &page.events {
-                evidence.fold(envelope, &mut background, &mut subagents);
+                evidence.fold(
+                    envelope,
+                    &mut background,
+                    &mut subagents,
+                    &mut settled_subagent_handoffs,
+                );
             }
             cursor = page.next_sequence;
             if cursor.is_none() {
@@ -505,6 +544,7 @@ impl RecoveryEvidence {
         }
         evidence.unsettled_background = background.into_values().collect();
         evidence.unsettled_subagents = subagents.into_values().collect();
+        evidence.settled_subagent_handoffs = settled_subagent_handoffs.into_values().collect();
         Ok(evidence)
     }
 
@@ -515,6 +555,7 @@ impl RecoveryEvidence {
         envelope: &RuntimeEventEnvelope,
         background: &mut BTreeMap<ToolExecutionId, BackgroundEvidence>,
         subagents: &mut BTreeMap<SubagentId, SubagentEvidence>,
+        settled_subagent_handoffs: &mut BTreeMap<SubagentId, RecoveredSubagentHandoff>,
     ) {
         match &envelope.event {
             RuntimeEvent::AttemptStarted { attempt_id } => {
@@ -812,6 +853,7 @@ impl RecoveryEvidence {
                 tool_call_id,
                 agent,
                 definition_digest,
+                workspace,
             } => {
                 if let Some(ordinal) = subagent_id.conversation_ordinal(&self.conversation_id) {
                     self.highest_subagent_ordinal = self.highest_subagent_ordinal.max(ordinal);
@@ -825,15 +867,35 @@ impl RecoveryEvidence {
                         tool_call_id: tool_call_id.clone(),
                         agent: agent.clone(),
                         definition_digest: definition_digest.clone(),
+                        started_at: envelope.timestamp,
+                        workspace: workspace.clone(),
                     },
                 );
             }
-            RuntimeEvent::SubagentTerminalPublished { subagent_id, .. } => {
+            RuntimeEvent::SubagentTerminalPublished {
+                subagent_id,
+                state,
+                workspace_handoff,
+                ..
+            } => {
                 if let Some(ordinal) = subagent_id.conversation_ordinal(&self.conversation_id) {
                     self.highest_subagent_ordinal = self.highest_subagent_ordinal.max(ordinal);
                 }
-                // The terminal publication is absorbing.
-                subagents.remove(subagent_id);
+                // The terminal publication is absorbing. A retained handoff
+                // remains durable read-model evidence even though the live
+                // child lifecycle itself is closed.
+                if let Some(evidence) = subagents.remove(subagent_id)
+                    && let Some(handoff) = workspace_handoff
+                {
+                    settled_subagent_handoffs.insert(
+                        subagent_id.clone(),
+                        RecoveredSubagentHandoff {
+                            evidence,
+                            state: *state,
+                            handoff: handoff.clone(),
+                        },
+                    );
+                }
             }
             // Every remaining fact contributes its attempt identity watermark
             // and nothing else.
@@ -1150,6 +1212,9 @@ pub struct RecoveryPlan {
     attempt: AttemptRecoveryClass,
     background: Vec<BackgroundRecoveryClass>,
     subagents: Vec<SubagentRecoveryClass>,
+    /// Already-terminal subagents whose durable publication retained a
+    /// workspace handoff. These require read-model restoration only.
+    settled_subagent_handoffs: Vec<RecoveredSubagentHandoff>,
     /// The missing canonical `ToolResult` siblings, grouped by their owning
     /// Assistant message, in canonical model-call order.
     tool_repairs: Vec<ToolTurnRepair>,
@@ -1281,6 +1346,7 @@ impl RecoveryPlan {
                     evidence: evidence.clone(),
                 })
                 .collect(),
+            settled_subagent_handoffs: evidence.settled_subagent_handoffs.clone(),
             tool_repairs,
             resume,
             next_attempt_ordinal: evidence.next_attempt_ordinal(),
@@ -1526,6 +1592,12 @@ impl RecoveryPlan {
         &self.subagents
     }
 
+    /// The terminal subagent handoffs already present in the durable journal.
+    #[must_use]
+    pub fn settled_subagent_handoffs(&self) -> &[RecoveredSubagentHandoff] {
+        &self.settled_subagent_handoffs
+    }
+
     /// The publication streams classified as needing audit terminalization.
     #[must_use]
     pub fn publication_classes(&self) -> &[PublicationRecoveryClass] {
@@ -1602,6 +1674,7 @@ impl RecoveryPlan {
             attempt: self.attempt,
             background: self.background,
             subagents: self.subagents,
+            settled_subagent_handoffs: self.settled_subagent_handoffs,
             publications: self.publications,
             resume: self.resume,
             reconciliation: committed,
@@ -1891,18 +1964,35 @@ impl RecoveryPlan {
         committed: &mut RecoveryReconciliation,
     ) -> Result<(), RecoveryError> {
         for class in &self.subagents {
+            // Recovery has no direct-child or nested-anchor proof, so it
+            // never removes a recorded worktree. It does inspect it to make
+            // retained work available to the recovered read model.
+            let workspace = crate::runtime::subagent::SubagentWorkspaceManager::inspect_recovered(
+                &class.evidence.workspace,
+            );
             let (draft, event) = crate::runtime::subagent::recovery_terminal_publication(
                 &self.conversation_id,
                 &class.evidence.subagent_id,
                 &class.evidence.child_agent_id,
                 &class.evidence.agent,
                 &class.evidence.definition_digest,
+                workspace.handoff.as_ref(),
                 clock.now(),
             );
             store.accept_inbound_with_event(draft, event)?;
             committed
                 .subagent_terminals
                 .push(class.evidence.subagent_id.clone());
+            committed
+                .subagent_workspaces
+                .push((class.evidence.subagent_id.clone(), workspace.clone()));
+            if let Some(handoff) = workspace.handoff {
+                committed.subagent_handoffs.push(RecoveredSubagentHandoff {
+                    evidence: class.evidence.clone(),
+                    state: SubagentTerminalState::Interrupted,
+                    handoff,
+                });
+            }
         }
         Ok(())
     }
@@ -1986,6 +2076,13 @@ pub struct RecoveryReconciliation {
     /// Subagent children whose interrupted terminal notice was published
     /// (Issue #60).
     pub subagent_terminals: Vec<SubagentId>,
+    /// The physical workspace inspection paired with each recovered
+    /// interrupted subagent terminal.
+    pub subagent_workspaces: Vec<(SubagentId, WorkspaceSettlement)>,
+    /// Handoffs discovered while settling orphaned subagent ownership during
+    /// this recovery. The terminal event and the read-model restoration share
+    /// these exact runtime-observed facts.
+    pub subagent_handoffs: Vec<RecoveredSubagentHandoff>,
     /// Publication streams terminalized as bounded immutable audits, with the
     /// settlement each one reached (Issue #108).
     pub publication_audits: Vec<(PublicationStreamId, PublicationAuditKind)>,
@@ -2002,6 +2099,8 @@ impl RecoveryReconciliation {
             && self.attempt_terminal.is_none()
             && self.background_terminals.is_empty()
             && self.subagent_terminals.is_empty()
+            && self.subagent_workspaces.is_empty()
+            && self.subagent_handoffs.is_empty()
             && self.publication_audits.is_empty()
     }
 }
@@ -2012,6 +2111,7 @@ pub struct RecoveryReport {
     attempt: AttemptRecoveryClass,
     background: Vec<BackgroundRecoveryClass>,
     subagents: Vec<SubagentRecoveryClass>,
+    settled_subagent_handoffs: Vec<RecoveredSubagentHandoff>,
     publications: Vec<PublicationRecoveryClass>,
     resume: ResumeDisposition,
     reconciliation: RecoveryReconciliation,
@@ -2038,6 +2138,12 @@ impl RecoveryReport {
     #[must_use]
     pub fn subagent_classes(&self) -> &[SubagentRecoveryClass] {
         &self.subagents
+    }
+
+    /// The terminal subagent handoffs already present in the durable journal.
+    #[must_use]
+    pub fn settled_subagent_handoffs(&self) -> &[RecoveredSubagentHandoff] {
+        &self.settled_subagent_handoffs
     }
 
     /// The publication streams classified as needing audit terminalization.
@@ -2179,6 +2285,7 @@ mod tests {
             tool_repairs: BTreeMap::new(),
             unsettled_background: Vec::new(),
             unsettled_subagents: Vec::new(),
+            settled_subagent_handoffs: Vec::new(),
             assistant_attempts: BTreeMap::new(),
             active_ids: std::collections::BTreeSet::new(),
             highest_attempt_ordinal: None,
@@ -2193,11 +2300,72 @@ mod tests {
     fn fold_all(evidence: &mut RecoveryEvidence, events: &[RuntimeEventEnvelope]) {
         let mut background = BTreeMap::new();
         let mut subagents = BTreeMap::new();
+        let mut settled_subagent_handoffs = BTreeMap::new();
         for envelope in events {
-            evidence.fold(envelope, &mut background, &mut subagents);
+            evidence.fold(
+                envelope,
+                &mut background,
+                &mut subagents,
+                &mut settled_subagent_handoffs,
+            );
         }
         evidence.unsettled_background = background.into_values().collect();
         evidence.unsettled_subagents = subagents.into_values().collect();
+        evidence.settled_subagent_handoffs = settled_subagent_handoffs.into_values().collect();
+    }
+
+    #[test]
+    fn a_durable_terminal_handoff_survives_recovery_classification() {
+        let mut evidence = base_evidence();
+        let subagent_id = SubagentId::for_conversation(&conversation(), 1);
+        let child_agent_id = crate::runtime::identity::AgentId::new("agent-child");
+        let workspace = WorkspaceSnapshot {
+            workspace: std::path::PathBuf::from("/tmp/rustx-worktree-1"),
+            isolated: true,
+            repository: Some(std::path::PathBuf::from("/tmp/repository")),
+            base_commit: Some("c1".to_owned()),
+            branch: Some("rustx/subagent/abc".to_owned()),
+            parent_had_uncommitted_changes: true,
+        };
+        let handoff = WorkspaceHandoff {
+            workspace: workspace.workspace.clone(),
+            branch: workspace.branch.clone().expect("branch"),
+            base_commit: workspace.base_commit.clone().expect("base"),
+            head_commit: "c2".to_owned(),
+            dirty: false,
+        };
+        let ownership = envelope(
+            RuntimeEvent::SubagentOwnershipCommitted {
+                subagent_id: subagent_id.clone(),
+                child_agent_id: child_agent_id.clone(),
+                child_conversation_id: ConversationId::new(subagent_id.as_str()),
+                tool_call_id: ToolCallId::new("call-child"),
+                agent: "worker".to_owned(),
+                definition_digest: "sha256:definition".to_owned(),
+                workspace,
+            },
+            None,
+        );
+        let terminal = envelope(
+            RuntimeEvent::SubagentTerminalPublished {
+                subagent_id: subagent_id.clone(),
+                child_agent_id,
+                message_id: MessageId::new("terminal-child"),
+                state: SubagentTerminalState::Succeeded,
+                workspace_handoff: Some(handoff.clone()),
+            },
+            None,
+        );
+
+        fold_all(&mut evidence, &[ownership, terminal]);
+        let plan = RecoveryPlan::classify(&evidence);
+        assert!(evidence.unsettled_subagents.is_empty());
+        assert_eq!(plan.settled_subagent_handoffs().len(), 1);
+        assert_eq!(plan.settled_subagent_handoffs()[0].handoff, handoff);
+        assert_eq!(
+            plan.settled_subagent_handoffs()[0].state,
+            SubagentTerminalState::Succeeded
+        );
     }
 
     fn trailing_human(id: &str) -> MessageBlock {

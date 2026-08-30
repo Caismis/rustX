@@ -3107,6 +3107,18 @@ impl ConversationRuntime {
             #[cfg(test)]
             test_pre_tool_policy: Mutex::new(None),
         });
+        // Recovery has already durably terminalized every orphaned child.
+        // Restore only terminal read-model records and their inspected
+        // workspace handoffs; no child process, policy, or frozen resource is
+        // reconstructed from current configuration.
+        if let Some(subagents) = &inner.subagents {
+            for handoff in inner.recovery.settled_subagent_handoffs() {
+                subagents.restore_recovered_handoff(handoff);
+            }
+            for handoff in &inner.recovery.reconciliation().subagent_handoffs {
+                subagents.restore_recovered_handoff(handoff);
+            }
+        }
         // The runtime is the durability-health owner of its background
         // plane (Issue #63): install the narrow failure seam the
         // background settlement owner reports an exhausted
@@ -5148,6 +5160,7 @@ mod tests {
                 "sha256:0000000000000000000000000000000000000000000000000000000000000000"
             ))
             .expect("digest"),
+            workspace_policy: crate::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
             instructions: "instructions".to_owned(),
             model: crate::model::frozen::test_frozen_model_spec(
                 serde_json::from_value(serde_json::json!("local/model")).expect("model reference"),
@@ -5756,7 +5769,6 @@ mod tests {
                 clock: Arc::new(crate::runtime::types::SystemClock),
                 spawn: crate::runtime::subagent::SubagentSpawnPlan {
                     program: std::path::PathBuf::from("/nonexistent/rustx"),
-                    workspace: workspace.clone(),
                     runtime_root: dir.path().join("subagents"),
                     model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                     agent_status: crate::context::AgentStatusConfig::default(),
@@ -5766,6 +5778,10 @@ mod tests {
                         summary_output_cap: None,
                     },
                 },
+                workspace: crate::runtime::subagent::SubagentWorkspaceManager::new(
+                    &workspace,
+                    dir.path().join("subagents"),
+                ),
                 max_active: 4,
             },
         );
@@ -5862,7 +5878,6 @@ mod tests {
                 clock: Arc::new(crate::runtime::types::SystemClock),
                 spawn: crate::runtime::subagent::SubagentSpawnPlan {
                     program: std::path::PathBuf::from("/nonexistent/rustx"),
-                    workspace: workspace.clone(),
                     runtime_root: dir.path().join("subagents"),
                     model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                     agent_status: crate::context::AgentStatusConfig::default(),
@@ -5872,6 +5887,10 @@ mod tests {
                         summary_output_cap: None,
                     },
                 },
+                workspace: crate::runtime::subagent::SubagentWorkspaceManager::new(
+                    &workspace,
+                    dir.path().join("subagents"),
+                ),
                 max_active: 4,
             },
         );

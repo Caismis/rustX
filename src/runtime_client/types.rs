@@ -230,7 +230,11 @@ pub enum RuntimeClientSessionRequest {
 /// closed Runtime Client lifecycle vocabulary therefore includes an unknown
 /// child process/control-plane outcome without relabelling it as a semantic
 /// model failure. There is no compatibility decoding of version 8.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 9;
+///
+/// Version 10 carries Issue #146's bounded subagent workspace facts and
+/// preserved-worktree handoff metadata. There is no compatibility decoding
+/// of version 9.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 10;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1085,7 +1089,10 @@ pub struct RuntimeClientProtocolEvent {
 }
 
 // Re-exported for use by the public protocol docs.
-pub use super::snapshot::{RuntimeClientBackgroundExecution, RuntimeClientSubagent};
+pub use super::snapshot::{
+    RuntimeClientBackgroundExecution, RuntimeClientSubagent, RuntimeClientSubagentWorkspace,
+    RuntimeClientWorkspaceHandoff,
+};
 
 #[cfg(test)]
 mod tests {
@@ -1107,7 +1114,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 9);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 10);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
@@ -1123,7 +1130,7 @@ mod tests {
     /// lifecycle vocabulary on the wire, including the unknown-outcome
     /// `Interrupted` terminal state.
     #[test]
-    fn interrupted_subagent_projection_serializes_as_the_v9_wire_state() {
+    fn interrupted_subagent_projection_serializes_as_the_v10_wire_state() {
         let subagent = RuntimeClientSubagent {
             subagent_id: crate::runtime::identity::SubagentId::new("subagent-1"),
             child_agent_id: crate::runtime::identity::AgentId::new("agent-child"),
@@ -1132,6 +1139,14 @@ mod tests {
             definition_digest: "sha256:definition".to_owned(),
             state: crate::runtime::subagent::SubagentState::Interrupted,
             detail: Some("child outcome unknown".to_owned()),
+            workspace: super::RuntimeClientSubagentWorkspace {
+                workspace: std::path::PathBuf::from("<shared-workspace>"),
+                isolated: false,
+                base_commit: None,
+                branch: None,
+                parent_had_uncommitted_changes: false,
+                handoff: None,
+            },
         };
 
         let value = serde_json::to_value(subagent).expect("serialize subagent projection");

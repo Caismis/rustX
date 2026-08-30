@@ -245,6 +245,7 @@ impl ToolExecutor for SubagentExecutor {
 #[cfg(test)]
 mod tests {
     use super::{SubagentInput, definition};
+    use crate::runtime::subagent::SubagentWorkspacePolicy;
     use crate::runtime::subagent::catalog::{
         SubagentCatalog, SubagentDefinition, SubagentName, SubagentProjectInstructionPolicy,
     };
@@ -263,6 +264,7 @@ mod tests {
                     inherit: true,
                     files: Vec::new(),
                 },
+                SubagentWorkspacePolicy::SharedWorkspace,
             )
             .expect("definition"),
             SubagentDefinition::new(
@@ -277,6 +279,7 @@ mod tests {
                     inherit: true,
                     files: Vec::new(),
                 },
+                SubagentWorkspacePolicy::SharedWorkspace,
             )
             .expect("definition"),
         ])
@@ -316,7 +319,15 @@ mod tests {
 
     #[test]
     fn per_call_capability_overrides_are_not_representable() {
-        for field in ["model", "tools", "skills", "instructions", "agents_md"] {
+        for field in [
+            "model",
+            "tools",
+            "skills",
+            "instructions",
+            "agents_md",
+            "workspace",
+            "worktree",
+        ] {
             assert!(
                 SubagentInput::parse(&serde_json::json!({
                     "agent": "explore",

@@ -98,7 +98,7 @@ fn protocol_envelopes_round_trip_deterministically() {
 fn protocol_errors_round_trip_with_stable_categories() {
     let cases = [
         RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 9,
+            supported: 10,
             requested: 4,
         },
         RuntimeClientError::AttachmentInUse {
@@ -336,19 +336,19 @@ async fn attachment_request_correlation_and_version_negotiation() {
 
     // Incompatible version negotiation fails explicitly, in both
     // directions and including every superseded wire contract.
-    let incompatible = host.attach(10);
+    let incompatible = host.attach(11);
     assert!(matches!(
         incompatible,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 9,
-            requested: 10,
+            supported: 10,
+            requested: 11,
         })
     ));
     let old_protocol = host.attach(7);
     assert!(matches!(
         old_protocol,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 9,
+            supported: 10,
             requested: 7,
         })
     ));
@@ -358,7 +358,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         profile_shaped,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 9,
+            supported: 10,
             requested: 6,
         })
     ));
@@ -366,7 +366,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     // The initialize method cannot re-initialize an admitted attachment.
     let reinit = attachment.handle_request(RuntimeClientRequest::Initialize {
         id: request_id(9),
-        protocol_version: 9,
+        protocol_version: 10,
     });
     assert!(matches!(
         reinit.error,

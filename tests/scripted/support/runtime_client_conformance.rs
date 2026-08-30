@@ -628,7 +628,7 @@ pub async fn unsupported_protocol_version_is_typed(factory: &dyn DriverFactory) 
     let response = driver
         .request(RuntimeClientRequest::Initialize {
             id: RequestId::new(7),
-            protocol_version: 10,
+            protocol_version: 11,
         })
         .await;
     assert_eq!(response.id, RequestId::new(7));
@@ -636,7 +636,7 @@ pub async fn unsupported_protocol_version_is_typed(factory: &dyn DriverFactory) 
         error(response),
         RuntimeClientError::UnsupportedProtocolVersion {
             supported: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
-            requested: 10,
+            requested: 11,
         }
     );
 
@@ -648,7 +648,7 @@ pub async fn unsupported_protocol_version_is_typed(factory: &dyn DriverFactory) 
         })
         .await;
     assert_eq!(error(response), RuntimeClientError::NotAttached);
-    initialize(&mut *driver, 9).await;
+    initialize(&mut *driver, 10).await;
 }
 
 /// Responses echo request ids exactly, including out-of-order and repeated

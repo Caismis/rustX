@@ -30,12 +30,17 @@ function subagent(
     agent,
     definition_digest: definitionDigest,
     state,
+    workspace: {
+      workspace: "<shared-workspace>",
+      isolated: false,
+      parent_had_uncommitted_changes: false,
+    },
   };
 }
 
 describe("subagent identity", () => {
-  it("negotiates v9, which carries named identity and interrupted state", () => {
-    assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 9);
+  it("negotiates v10, which carries named identity and workspace handoffs", () => {
+    assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 10);
   });
 
   it("carries agent and definition_digest from the snapshot", () => {

@@ -23,14 +23,16 @@ use crate::model::deadline::{
 use crate::model::session::SessionModelConfig;
 use crate::runtime::ApprovalMode;
 use crate::runtime::identity::{AgentId, McpServerId};
-use crate::runtime::subagent::{MAX_SUBAGENT_DEFINITIONS, SubagentName, SubagentToolSelector};
+use crate::runtime::subagent::{
+    MAX_SUBAGENT_DEFINITIONS, SubagentName, SubagentToolSelector, SubagentWorkspacePolicy,
+};
 use crate::tools::environment::{ToolEnvironment, ToolEnvironmentError};
 use crate::tools::mcp::{McpServerBinding, McpServerBindings, McpTransportConfig};
 use crate::tools::native::NativeToolPolicies;
 use crate::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy, ToolInvocationPolicy};
 
 /// The only current runtime configuration schema version this runtime accepts.
-pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 3;
+pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 4;
 
 /// The explicit current runtime/project configuration.
 ///
@@ -151,6 +153,9 @@ pub struct SubagentDocument {
     /// The project-instruction policy of this agent.
     #[serde(default)]
     pub agents_md: SubagentAgentsMdDocument,
+    /// The bounded project-workspace policy of this agent.
+    #[serde(default)]
+    pub worktree: SubagentWorktreeDocument,
 }
 
 /// The three-origin capability selection of one named definition.
@@ -212,6 +217,32 @@ impl Default for SubagentAgentsMdDocument {
         Self {
             inherit: true,
             files: Vec::new(),
+        }
+    }
+}
+
+/// The JSONC representation of a named subagent's optional Git worktree
+/// isolation. An omitted or disabled value is the existing shared-workspace
+/// behavior; there is no model-facing per-call override.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+pub struct SubagentWorktreeDocument {
+    /// Whether this named definition uses an isolated Git worktree.
+    pub enabled: bool,
+    /// Whether acquisition rejects a dirty parent workspace/index.
+    pub require_clean_parent: bool,
+}
+
+impl SubagentWorktreeDocument {
+    /// Resolves the configuration document into the bounded runtime policy.
+    #[must_use]
+    pub const fn to_policy(self) -> SubagentWorkspacePolicy {
+        if self.enabled {
+            SubagentWorkspacePolicy::GitWorktree {
+                require_clean_parent: self.require_clean_parent,
+            }
+        } else {
+            SubagentWorkspacePolicy::SharedWorkspace
         }
     }
 }
@@ -854,6 +885,35 @@ mod tests {
                 .expect("environment")
                 .authorized_entries()
                 .is_empty()
+        );
+    }
+
+    /// Worktree isolation is definition state, with a disabled/omitted
+    /// document resolving to the existing shared-workspace policy and the
+    /// strict parent check remaining an explicit opt-in.
+    #[test]
+    fn named_subagent_worktree_policy_is_bounded_and_definition_scoped() {
+        let json = MINIMAL.replace(
+            r#""agentId": "agent-a""#,
+            r#""agentId": "agent-a", "subagents": {"agents": {"worker": {"description": "worker", "instructionsFile": "worker.md", "worktree": {"enabled": true, "requireCleanParent": true}}}}"#,
+        );
+        let config = CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect("valid");
+        let policy = config
+            .subagents
+            .agents
+            .get(&crate::runtime::subagent::SubagentName::parse("worker").expect("name"))
+            .expect("worker definition")
+            .worktree
+            .to_policy();
+        assert_eq!(
+            policy,
+            crate::runtime::subagent::SubagentWorkspacePolicy::GitWorktree {
+                require_clean_parent: true,
+            }
+        );
+        assert_eq!(
+            super::SubagentWorktreeDocument::default().to_policy(),
+            crate::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace
         );
     }
 

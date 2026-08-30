@@ -69,7 +69,7 @@ describe("RuntimeClientAttachment", () => {
     assert.equal(initialize?.method, "initialize");
     assert.equal(
       initialize?.method === "initialize" ? initialize.protocol_version : null,
-      9,
+      10,
     );
     assert.equal(subscribe?.method, "subscribe_events");
     assert.equal(

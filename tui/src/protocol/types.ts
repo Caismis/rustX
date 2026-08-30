@@ -23,8 +23,12 @@
  * camelCase.
  */
 
-/** Version 9 adds `interrupted` to the closed subagent lifecycle vocabulary. */
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 9;
+/**
+ * Version 10 adds bounded subagent workspace facts and preserved-worktree
+ * handoff metadata; version 9 added `interrupted` to the closed lifecycle
+ * vocabulary.
+ */
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 10;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -719,6 +723,27 @@ export interface RuntimeClientBackgroundExecution {
   result?: ToolExecutionResult;
 }
 
+/** User-recoverable project workspace facts for one subagent. */
+export interface RuntimeClientSubagentWorkspace {
+  /** The authoritative project workspace path for this child. */
+  workspace: string;
+  isolated: boolean;
+  base_commit?: string;
+  branch?: string;
+  parent_had_uncommitted_changes: boolean;
+  handoff?: RuntimeClientWorkspaceHandoff;
+}
+
+/** Git facts for a preserved child worktree. */
+export interface RuntimeClientWorkspaceHandoff {
+  workspace: string;
+  branch: string;
+  base_commit: string;
+  head_commit: string;
+  /** Whether ordinary tracked/index/untracked-non-ignored child state is dirty. */
+  dirty: boolean;
+}
+
 /**
  * The Runtime Client view of one subagent child (Issue #60), carrying the
  * named-agent identity of Issue #144.
@@ -736,6 +761,7 @@ export interface RuntimeClientSubagent {
   definition_digest: string;
   state: SubagentState;
   detail?: string;
+  workspace: RuntimeClientSubagentWorkspace;
 }
 
 export type RuntimeClientStatusSection =

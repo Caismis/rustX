@@ -94,6 +94,7 @@ use crate::runtime::identity::{
     AgentId, AttemptId, ConversationId, EventId, InteractionId, MessageId, RequestId, SubagentId,
     ToolCallId, ToolExecutionId, ToolId, TurnId,
 };
+use crate::runtime::subagent::{WorkspaceHandoff, WorkspaceSnapshot};
 use crate::runtime::types::{CancellationReason, RuntimeError, TokenMeasurement};
 use crate::tools::types::{ToolExecutionResult, ToolProgress};
 
@@ -434,6 +435,9 @@ pub enum RuntimeEvent {
         /// already-committed child bound to the definition it actually
         /// started with.
         definition_digest: String,
+        /// The immutable project workspace authority selected before this
+        /// ownership fact committed.
+        workspace: WorkspaceSnapshot,
     },
     /// A subagent child's terminal publication was durably accepted. The
     /// event is committed in the same transaction as the Pending Inbound
@@ -453,6 +457,11 @@ pub enum RuntimeEvent {
         message_id: MessageId,
         /// The terminal state represented by the publication.
         state: SubagentTerminalState,
+        /// Runtime-observed retained work, when terminal settlement preserved
+        /// an isolated worktree for handoff. This is execution evidence, not
+        /// model-authored output, and is committed with the terminal fact so
+        /// a restart cannot make retained work undiscoverable.
+        workspace_handoff: Option<WorkspaceHandoff>,
     },
 
     /// One human interaction was requested (Issue #109).

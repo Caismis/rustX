@@ -253,10 +253,9 @@ async fn child_fixture(
 
 /// The spawn plan of the test parent plane, carrying the frozen policy
 /// exactly like the production composition root.
-fn test_spawn_plan(dir: &tempfile::TempDir, runtime_root: &std::path::Path) -> SubagentSpawnPlan {
+fn test_spawn_plan(runtime_root: &std::path::Path) -> SubagentSpawnPlan {
     SubagentSpawnPlan {
         program: std::path::PathBuf::from("/nonexistent/rustx"),
-        workspace: dir.path().join("parent-workspace"),
         runtime_root: runtime_root.to_path_buf(),
         // The frozen policy every child launch inherits (Issue #138).
         model_timeout_policy: inherited_policy(),
@@ -281,6 +280,7 @@ fn resolved_child_spec(agent: &str) -> ResolvedSubagentSpec {
             "sha256:0000000000000000000000000000000000000000000000000000000000000000"
         ))
         .expect("definition digest"),
+        workspace_policy: rustx::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
         instructions: "Issue 138 conformance child".to_owned(),
         model: rustx::model::frozen::test_frozen_model_spec(
             serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),
@@ -318,7 +318,11 @@ fn standalone_parent_plane(dir: &tempfile::TempDir, conversation: &str) -> Paren
         agent_id: AgentId::new("agent-parent-138"),
         mailbox,
         clock: Arc::new(SystemClock),
-        spawn: test_spawn_plan(dir, &runtime_root),
+        spawn: test_spawn_plan(&runtime_root),
+        workspace: rustx::runtime::subagent::SubagentWorkspaceManager::new(
+            dir.path().join("parent-workspace"),
+            &runtime_root,
+        ),
         max_active: 4,
     });
     ParentPlane {
@@ -375,7 +379,11 @@ async fn parent_runtime_plane(
         agent_id: AgentId::new("agent-parent-138"),
         mailbox: tool_runtime.mailbox(),
         clock: Arc::new(SystemClock),
-        spawn: test_spawn_plan(dir, &runtime_root),
+        spawn: test_spawn_plan(&runtime_root),
+        workspace: rustx::runtime::subagent::SubagentWorkspaceManager::new(
+            &workspace,
+            &runtime_root,
+        ),
         max_active: 4,
     });
     let model = fake_model(parent_scripts);
@@ -654,14 +662,27 @@ async fn park_child_in_retry_backoff(
 /// inherited deadline contract. The end-to-end application of that policy
 /// inside a real child process is covered by the `tests/issue138_*`
 /// integration binary.
-#[test]
-fn the_child_spec_carries_the_frozen_timeout_policy() {
+#[tokio::test]
+async fn the_child_spec_carries_the_frozen_timeout_policy() {
     let dir = tempfile::tempdir().expect("temp root");
-    let plan = test_spawn_plan(&dir, &dir.path().join("runtime"));
+    let plan = test_spawn_plan(&dir.path().join("runtime"));
     let subagent_id = rustx::runtime::identity::SubagentId::new("conv-x-subagent-1");
     let physical_root = plan
         .allocate_child_runtime_root(&subagent_id)
         .expect("physical child root");
+    let workspace_path = dir.path().join("parent-workspace");
+    std::fs::create_dir_all(&workspace_path).expect("parent workspace");
+    let workspace = rustx::runtime::subagent::SubagentWorkspaceManager::new(
+        &workspace_path,
+        &plan.runtime_root,
+    )
+    .acquire(
+        rustx::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
+        &subagent_id,
+        &CancellationSignal::new(),
+    )
+    .await
+    .expect("shared workspace lease");
     let spec = plan.child_spec(
         &subagent_id,
         &ConversationId::new("conv-x-subagent-1"),
@@ -669,6 +690,7 @@ fn the_child_spec_carries_the_frozen_timeout_policy() {
         &AgentId::new("agent-parent"),
         &resolved_child_spec("conformance"),
         &physical_root,
+        &workspace,
     );
     assert_eq!(spec.model_timeout_policy, inherited_policy());
     assert_ne!(

@@ -10,7 +10,7 @@
 // `runtime-root` and is never overwritten by this file.
 {
   // The only runtime configuration schema version this runtime accepts.
-  "schemaVersion": 3,
+  "schemaVersion": 4,
 
   // The agent identity recorded on this conversation's attempts and
   // inherited by its subagents. Any non-empty name.
@@ -262,6 +262,16 @@
       //   "agentsMd": {
       //     "inherit": true,
       //     "files": [".rustx/subagents/explore/AGENTS.md"],
+      //   },
+      //
+      //   // Omit or disable for the existing shared-workspace behavior.
+      //   // When enabled, the child worktree starts at one exact committed
+      //   // HEAD; parent dirty bytes are never copied. Set
+      //   // requireCleanParent to true to reject a dirty parent before
+      //   // child ownership is committed.
+      //   "worktree": {
+      //     "enabled": true,
+      //     "requireCleanParent": false,
       //   },
       // },
     },

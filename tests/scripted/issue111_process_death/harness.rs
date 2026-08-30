@@ -106,7 +106,7 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
         default_tools.push("todo");
     }
     serde_json::json!({
-        "schemaVersion": 3,
+        "schemaVersion": 4,
         "agentId": "agent-fnd06",
         "model": {"model": MODEL},
         "approvalMode": "policy",

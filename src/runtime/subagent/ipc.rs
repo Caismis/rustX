@@ -42,6 +42,7 @@ use crate::runtime::identity::{AgentId, ConversationId, ProcessUnitId, SubagentI
 use crate::runtime::types::CancellationReason;
 
 use super::resolver::ResolvedSubagentSpec;
+use super::workspace::WorkspaceSnapshot;
 
 /// The only subagent control protocol version this build speaks.
 ///
@@ -50,10 +51,12 @@ use super::resolver::ResolvedSubagentSpec;
 /// the nested process-unit anchor handshake and the frozen external
 /// materialization plane (Issue #145). Version 4 carries the launch-scoped
 /// frozen `ModelTimeoutPolicy` and version 5 carries the parent registry's
-/// typed cancellation provenance (Issue #138). There is no compatibility
+/// typed cancellation provenance (Issue #138). Version 6 carries the
+/// resolved workspace authority and immutable Git snapshot facts (Issue
+/// #146). There is no compatibility
 /// decoding: a peer that does not speak exactly this version exits before
 /// composing anything.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 5;
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 6;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -125,8 +128,10 @@ pub(crate) struct SubagentChildSpec {
     pub agent_status: AgentStatusConfig,
     /// The session context policy of the child.
     pub context: SessionContextPolicy,
-    /// The shared (read-only) workspace root.
-    pub workspace: PathBuf,
+    /// The authoritative project workspace path and runtime-owned snapshot
+    /// facts selected by the parent. In worktree mode this also carries the
+    /// exact committed base and runtime-created ref.
+    pub workspace_snapshot: WorkspaceSnapshot,
     /// The exact spawn-incarnation-private mutable runtime root (artifacts,
     /// diagnostics, Skills, and private Python state). It is never the stable
     /// semantic `SubagentId` grouping path.
@@ -502,6 +507,7 @@ mod tests {
             agent: SubagentName::parse("explore").expect("name"),
             definition_digest: serde_json::from_value(serde_json::json!("sha256:abc"))
                 .expect("digest"),
+            workspace_policy: crate::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
             instructions: "instructions".to_owned(),
             model: crate::model::frozen::test_frozen_model_spec(
                 serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),
@@ -615,7 +621,7 @@ mod tests {
                 keep_recent_tokens: 2,
                 summary_output_cap: None,
             },
-            workspace: PathBuf::from("/tmp/ws"),
+            workspace_snapshot: WorkspaceSnapshot::shared(PathBuf::from("/tmp/ws")),
             runtime_root: PathBuf::from("/tmp/rr"),
         };
         write_parent_frame(&mut parent, &ParentFrame::Hello(Box::new(spec.clone())))

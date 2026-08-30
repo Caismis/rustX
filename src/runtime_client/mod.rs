@@ -120,10 +120,12 @@ pub use snapshot::{
     PostToolBatchStatusOpportunityView, RuntimeClientAttempt, RuntimeClientAttemptPhase,
     RuntimeClientBackgroundExecution, RuntimeClientCompactionView, RuntimeClientContextFile,
     RuntimeClientContextView, RuntimeClientResourcesView, RuntimeClientSkill,
-    RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTodoStatusTask,
-    RuntimeClientTool, RuntimeClientTranscriptCursor, RuntimeClientTranscriptEntry,
+    RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientSubagent,
+    RuntimeClientSubagentWorkspace, RuntimeClientTodoStatusTask, RuntimeClientTool,
+    RuntimeClientTranscriptCursor, RuntimeClientTranscriptEntry,
     RuntimeClientTranscriptInteractionRequested, RuntimeClientTranscriptInteractionSettled,
-    RuntimeClientTranscriptItem, RuntimeClientTranscriptPage, RuntimeDurabilityFailure,
+    RuntimeClientTranscriptItem, RuntimeClientTranscriptPage, RuntimeClientWorkspaceHandoff,
+    RuntimeDurabilityFailure,
 };
 pub use types::{
     AttachmentId, RUNTIME_CLIENT_PROTOCOL_VERSION, RequestId, RuntimeClientCursor,

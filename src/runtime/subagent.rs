@@ -73,6 +73,7 @@
 pub mod catalog;
 mod registry;
 pub mod resolver;
+pub mod workspace;
 
 pub(crate) mod anchors;
 
@@ -95,6 +96,10 @@ pub use registry::{
 pub use resolver::{
     ResolvedSubagentSkill, ResolvedSubagentSpec, ResolvedSubagentTool, SubagentResolutionError,
     SubagentResolver,
+};
+pub use workspace::{
+    SubagentWorkspaceManager, SubagentWorkspacePolicy, WorkspaceCleanup, WorkspaceHandoff,
+    WorkspaceLease, WorkspaceSettlement, WorkspaceSnapshot,
 };
 
 use std::sync::Arc;
@@ -280,6 +285,7 @@ pub(crate) fn ownership_event(
     tool_call_id: &ToolCallId,
     agent: &SubagentName,
     definition_digest: &SubagentDefinitionDigest,
+    workspace: &WorkspaceSnapshot,
     timestamp: DateTime<Utc>,
 ) -> RuntimeEventEnvelope {
     RuntimeEventEnvelope {
@@ -297,6 +303,7 @@ pub(crate) fn ownership_event(
             tool_call_id: tool_call_id.clone(),
             agent: agent.as_str().to_owned(),
             definition_digest: definition_digest.as_str().to_owned(),
+            workspace: workspace.clone(),
         },
     }
 }
@@ -329,6 +336,7 @@ pub(crate) fn terminal_publication(
     child_agent_id: &AgentId,
     state: SubagentTerminalState,
     content: Vec<UserContentBlock>,
+    workspace_handoff: Option<&WorkspaceHandoff>,
     timestamp: DateTime<Utc>,
 ) -> (InboundDraft, RuntimeEventEnvelope) {
     debug_assert!(
@@ -359,6 +367,7 @@ pub(crate) fn terminal_publication(
             child_agent_id: child_agent_id.clone(),
             message_id: message.id.clone(),
             state,
+            workspace_handoff: workspace_handoff.cloned(),
         },
     };
     let draft = InboundDraft {
@@ -401,6 +410,7 @@ pub fn recovery_terminal_publication(
     child_agent_id: &AgentId,
     agent: &str,
     definition_digest: &str,
+    workspace_handoff: Option<&WorkspaceHandoff>,
     timestamp: DateTime<Utc>,
 ) -> (InboundDraft, RuntimeEventEnvelope) {
     terminal_publication(
@@ -415,6 +425,7 @@ pub fn recovery_terminal_publication(
                  not restarted."
             ),
         })],
+        workspace_handoff,
         timestamp,
     )
 }

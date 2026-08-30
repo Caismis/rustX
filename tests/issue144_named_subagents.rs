@@ -130,7 +130,7 @@ impl Lab {
 
     fn write_config_with_tools(&self, subagents: &serde_json::Value, default_tools: &[&str]) {
         let document = serde_json::json!({
-            "schemaVersion": 3,
+            "schemaVersion": 4,
             "agentId": "agent-issue144",
             "model": {"model": "local/model-a"},
             "context": {"reserveTokens": 0, "keepRecentTokens": 0},
@@ -560,7 +560,7 @@ async fn recursive_and_child_unsafe_selections_are_rejected_at_admission() {
 async fn an_unavailable_source_keeps_the_runtime_healthy_but_blocks_the_agent_that_needs_it() {
     let lab = Lab::new();
     let document = serde_json::json!({
-        "schemaVersion": 3,
+        "schemaVersion": 4,
         "agentId": "agent-issue144",
         "model": {"model": "local/model-a"},
         "context": {"reserveTokens": 0, "keepRecentTokens": 0},
@@ -861,7 +861,7 @@ async fn the_definition_digest_ignores_incidental_formatting_and_tracks_semantic
         lab.root().join("rustx.jsonc"),
         r#"{
   // A comment cannot change the semantic identity of a definition.
-  "schemaVersion": 3, "agentId": "agent-issue144",
+  "schemaVersion": 4, "agentId": "agent-issue144",
   "context": {"keepRecentTokens": 0, "reserveTokens": 0},
   "model": {"model": "local/model-a"},
   "defaultTools": ["read", "subagent"],
@@ -1047,6 +1047,9 @@ fn the_committed_identity_survives_a_durable_round_trip() {
             tool_call_id: ToolCallId::new("call-sub"),
             agent: "explore".to_owned(),
             definition_digest: "sha256:d1".to_owned(),
+            workspace: rustx::runtime::subagent::WorkspaceSnapshot::shared(
+                std::path::PathBuf::from("<shared-workspace>"),
+            ),
         },
     };
     store
@@ -1083,6 +1086,10 @@ fn the_runtime_client_projection_carries_the_named_identity() {
         tool_call_id: ToolCallId::new("call-1"),
         agent: "explore".to_owned(),
         definition_digest: "sha256:d1".to_owned(),
+        workspace: rustx::runtime::subagent::WorkspaceSnapshot::shared(std::path::PathBuf::from(
+            "<shared-workspace>",
+        )),
+        handoff: None,
         state: SubagentState::Running,
         detail: None,
         publication_abandoned: false,
@@ -1097,6 +1104,14 @@ fn the_runtime_client_projection_carries_the_named_identity() {
         definition_digest: snapshot.definition_digest.clone(),
         state: snapshot.state,
         detail: None,
+        workspace: rustx::runtime_client::snapshot::RuntimeClientSubagentWorkspace {
+            workspace: snapshot.workspace.workspace.clone(),
+            isolated: snapshot.workspace.isolated,
+            base_commit: snapshot.workspace.base_commit.clone(),
+            branch: snapshot.workspace.branch.clone(),
+            parent_had_uncommitted_changes: snapshot.workspace.parent_had_uncommitted_changes,
+            handoff: None,
+        },
     };
     let wire = serde_json::to_value(&view).expect("serialize the projection");
     assert_eq!(wire["agent"], "explore");
@@ -1276,7 +1291,7 @@ async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
     let lab = Lab::new();
     // The generation admits `grep` with a non-default policy on every axis.
     let document = serde_json::json!({
-        "schemaVersion": 3,
+        "schemaVersion": 4,
         "agentId": "agent-issue144",
         "model": {"model": "local/model-a"},
         "context": {"reserveTokens": 0, "keepRecentTokens": 0},
@@ -1349,7 +1364,7 @@ async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
 async fn an_unavailable_source_cannot_hide_a_later_invalid_selector() {
     let lab = Lab::new();
     let document = serde_json::json!({
-        "schemaVersion": 3,
+        "schemaVersion": 4,
         "agentId": "agent-issue144",
         "model": {"model": "local/model-a"},
         "context": {"reserveTokens": 0, "keepRecentTokens": 0},
