@@ -348,6 +348,7 @@ async fn responses_pre_start_arguments_are_generation_progress_and_replayed_once
             ModelStreamProgress::Generation,
             ModelStreamProgress::Generation,
             ModelStreamProgress::Generation,
+            ModelStreamProgress::Generation,
         ]
     );
     let events = canonical_events(&items);
@@ -393,6 +394,57 @@ async fn responses_pre_start_arguments_are_generation_progress_and_replayed_once
         1
     );
     assert_eq!(server.attempt_count(), 1, "the adapter never retries");
+}
+
+#[tokio::test]
+async fn responses_function_call_arguments_done_refreshes_stream_idle_after_start() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        common::sse_fixture("openai_responses", "pre_start_tool_arguments.sse")
+    })
+    .await;
+    let items = common::collect_items(
+        &OpenAiResponsesAdapter::new(OpenAiAdapterConfig::new("test-key", server.url("/v1"))),
+        request_with_tools(ModelProtocol::OpenAiResponses),
+    )
+    .await;
+
+    let tool_started_index = items
+        .iter()
+        .position(|item| {
+            matches!(
+                item,
+                ModelStreamItem::Event(ModelEvent::ToolCallStarted { .. })
+            )
+        })
+        .expect("Responses tool call starts canonically");
+    let done_progress_index = items
+        .iter()
+        .enumerate()
+        .skip(tool_started_index + 1)
+        .find_map(|(index, item)| {
+            matches!(
+                item,
+                ModelStreamItem::Progress(ModelStreamProgress::Generation)
+            )
+            .then_some(index)
+        })
+        .expect("function_call_arguments.done is visible as post-start progress");
+
+    let clock = ManualMonotonicClock::new();
+    let mut deadline = ModelRequestDeadline::new(timeout_policy(100, 10), clock.now_millis());
+    for item in &items[..done_progress_index] {
+        deadline.observe(item, clock.now_millis());
+    }
+    assert_eq!(deadline.phase(), ModelDeadlinePhase::Streaming);
+    assert_eq!(deadline.deadline_millis(), Some(10));
+
+    // The provider's known finalization event arrives just before the old
+    // stream-idle boundary. Its ephemeral Generation item must move that
+    // boundary forward even though it emits no canonical argument delta.
+    clock.advance(9);
+    deadline.observe(&items[done_progress_index], clock.now_millis());
+    assert_eq!(deadline.phase(), ModelDeadlinePhase::Streaming);
+    assert_eq!(deadline.deadline_millis(), Some(19));
 }
 
 #[tokio::test]
@@ -547,6 +599,9 @@ async fn true_silence_after_generation_times_out_once_without_adapter_retry() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn large_write_progress_crosses_idle_timeout_without_retry_or_duplicate_execution() {
+    const GENERATION_GAP_MS: u64 = 6;
+    const STREAM_IDLE_MS: u64 = 10;
+
     let fixture = common::native_fixture();
     let content = "0123456789abcdef".repeat(4096);
     let arguments = serde_json::json!({
@@ -604,7 +659,7 @@ async fn large_write_progress_crosses_idle_timeout_without_retry_or_duplicate_ex
     ]);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let clock = Arc::new(ManualMonotonicClock::new());
-    let policy = timeout_policy(100, 10);
+    let policy = timeout_policy(100, STREAM_IDLE_MS);
     let (pause, mut reached, pause_release) =
         crate::agent::execution::test_sync::ModelStreamItemPause::install();
     let mut execution = make_execution(ExecutionSetup {
@@ -627,12 +682,20 @@ async fn large_write_progress_crosses_idle_timeout_without_retry_or_duplicate_ex
                 .wait_for(|observed| *observed >= count)
                 .await
                 .expect("large-write item pause remains open");
-            pause_release.send(()).expect("release large-write item");
+            // `reached == count` is the linearization point after the current
+            // provider item has been processed and before the next provider
+            // item can be admitted. Advance the clock while the Agent Loop is
+            // held at that point, then release exactly one next item.
             // The five explicit Generation items are six logical milliseconds
             // apart: total generation time is 30ms while stream idle is 10ms.
-            if (2..=6).contains(&count) {
-                controller_clock.advance(6);
+            if (1..=5).contains(&count) {
+                let before = controller_clock.now_millis();
+                controller_clock.advance(GENERATION_GAP_MS);
+                let interval = controller_clock.now_millis() - before;
+                assert_eq!(interval, GENERATION_GAP_MS);
+                assert!(interval < STREAM_IDLE_MS);
             }
+            pause_release.send(()).expect("release large-write item");
         }
     });
     let publication = common::RecordingPublicationObserver::default();
@@ -648,6 +711,8 @@ async fn large_write_progress_crosses_idle_timeout_without_retry_or_duplicate_ex
     .expect("large-write execution must settle");
     controller.await.expect("large-write controller completes");
 
+    assert_eq!(clock.now_millis(), GENERATION_GAP_MS * 5);
+    assert!(clock.now_millis() > STREAM_IDLE_MS);
     assert!(matches!(audit.outcome, AttemptOutcome::Completed { .. }));
     assert_eq!(
         model.requests().len(),

@@ -509,7 +509,11 @@ impl ResponsesNormalizer {
             .tool_calls
             .get(&output_index)
             .is_none_or(|assembly| !assembly.started);
-        if pre_start && !arguments.is_empty() {
+        if !pre_start || !arguments.is_empty() {
+            // Before identity exists, a non-empty cumulative snapshot is
+            // generation progress. Once the canonical call has started, the
+            // recognized done notification is generation progress even though
+            // its cumulative payload remains a canonical no-op.
             self.pending_progress = Some(ModelStreamProgress::Generation);
         }
         let assembly = self.tool_assembly(output_index);
