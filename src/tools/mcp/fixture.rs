@@ -22,6 +22,7 @@
 pub mod legacy;
 
 use std::borrow::Cow;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -73,6 +74,11 @@ pub const RESULT_BYTES_ENV: &str = "RUSTX_M7_FIXTURE_RESULT_BYTES";
 /// deterministic newline representation, so their aggregate can cross the
 /// bound even when each block is individually below it.
 pub const RESULT_BLOCK_BYTES_ENV: &str = "RUSTX_M7_FIXTURE_RESULT_BLOCK_BYTES";
+/// The environment variable naming a marker file to which each successful
+/// `echo` call appends one line. This keeps exactly-once assertions
+/// deterministic for self-spawned stdio fixtures, whose server state lives
+/// in another process.
+pub const ECHO_CALL_COUNT_FILE_ENV: &str = "RUSTX_M7_FIXTURE_ECHO_CALL_COUNT_FILE";
 /// Parses a comma-separated protocol revision list.
 ///
 /// Every MCP revision string is accepted, including ones no SDK knows: that
@@ -117,6 +123,7 @@ impl FixtureServer {
                     .filter_map(|entry| entry.parse::<usize>().ok())
                     .collect()
             }),
+            echo_call_count_file: std::env::var_os(ECHO_CALL_COUNT_FILE_ENV).map(PathBuf::from),
             ..Self::default()
         }
     }
@@ -208,6 +215,9 @@ pub struct FixtureServer {
     /// When set, the successful `echo` tool returns one text block for each
     /// listed byte length.
     pub result_block_bytes: Option<Vec<usize>>,
+    /// When set, each successful `echo` invocation appends one line to this
+    /// file for deterministic cross-process exactly-once assertions.
+    pub echo_call_count_file: Option<PathBuf>,
 }
 
 impl FixtureServer {
@@ -219,6 +229,25 @@ impl FixtureServer {
             ..Self::default()
         }
     }
+}
+
+fn record_echo_call(path: Option<&std::path::Path>) -> Result<(), rmcp::ErrorData> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| {
+            rmcp::ErrorData::internal_error(
+                format!("cannot record fixture echo call: {error}"),
+                None,
+            )
+        })?;
+    writeln!(file, "echo").map_err(|error| {
+        rmcp::ErrorData::internal_error(format!("cannot record fixture echo call: {error}"), None)
+    })
 }
 
 impl ServerHandler for FixtureServer {
@@ -326,11 +355,13 @@ impl ServerHandler for FixtureServer {
         let cancel_observed_file = self.cancel_observed_file.clone();
         let result_bytes = self.result_bytes;
         let result_block_bytes = self.result_block_bytes.clone();
+        let echo_call_count_file = self.echo_call_count_file.clone();
         let echo_name = self.tool_name("echo");
         let mutate_name = self.tool_name("mutate");
         let slow_name = self.tool_name("slow");
         async move {
             if request.name == echo_name {
+                record_echo_call(echo_call_count_file.as_deref())?;
                 let blocks = result_block_bytes.map_or_else(
                     || {
                         vec![ContentBlock::text(result_bytes.map_or_else(

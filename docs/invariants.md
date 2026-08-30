@@ -230,7 +230,11 @@ stream and normally commits exactly one terminal `RuntimeEvent`:
   holds only refusal blocks. Malformed streams (content before `Started`,
   events after the terminal event, a second terminal, orphaned or
   duplicated tool-call deltas, unfinished tool calls at the terminal) are
-  explicit contract-violation failures, never silently accepted.
+  explicit contract-violation failures, never silently accepted. A completed
+  turn has a bidirectional tool-call invariant: `ToolCalls` means the
+  assembled canonical tool-call collection is non-empty, and any non-empty
+  collection requires `ToolCalls`. The canonical assembler rejects either
+  mismatch before the Agent Loop can preflight, execute, or commit the turn.
 
 - A logical primary model step may contain several actual provider requests.
   Context admission happens once and freezes the request semantics; every

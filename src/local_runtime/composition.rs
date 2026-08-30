@@ -2977,3 +2977,424 @@ mod subagent_child_tests {
         );
     }
 }
+
+#[cfg(all(test, feature = "mcp-fixture"))]
+mod issue163_composition_tests {
+    use std::sync::Arc;
+
+    use super::{LocalConversationCore, LocalRuntimeDependencies, LocalRuntimePaths};
+    use crate::events::types::{AttemptOutcome, RuntimeEvent};
+    use crate::message::content::TextBlock;
+    use crate::message::types::{AssistantContentBlock, MessageBlock, UserContentBlock};
+    use crate::model::event::ModelEvent;
+    use crate::model::finish::ModelFinishReason;
+    use crate::model::types::{ModelProtocol, ModelRequest};
+    use crate::runtime::identity::{ConversationId, McpServerId, ToolCallId, ToolId};
+    use crate::scripted_suites::support::fake::{FakeModel, FakeStep, fake_model};
+    use crate::scripted_suites::support::model::{
+        FixtureModel, ScriptedAdapterFactory, fixture_catalog_document, fixture_registry,
+    };
+    use crate::tools::mcp::fixture::{
+        ECHO_CALL_COUNT_FILE_ENV, FIXTURE_MODE_ENV, FixtureServer, TOOL_PREFIX_ENV,
+        fixture_spawn_args, serve_if_fixture_mode,
+    };
+    use crate::tools::types::{ToolCall, ToolCallStart, ToolExecutionStatus};
+
+    const SERVER_NAME: &str = "fixture";
+    const TOOL_NAME: &str = "fixture_echo";
+    const TEST_AGENT: &str = "explore";
+
+    struct ComposedFixture {
+        _root: tempfile::TempDir,
+        runtime: crate::local_runtime::HeadlessConversationRuntime,
+        model: Arc<FakeModel>,
+        echo_call_count_file: std::path::PathBuf,
+        tool_id: ToolId,
+    }
+
+    fn paths(root: &std::path::Path, workspace: std::path::PathBuf) -> LocalRuntimePaths {
+        LocalRuntimePaths {
+            models: root.join("models.jsonc"),
+            config: root.join("rustx.jsonc"),
+            skill_paths: Vec::new(),
+            no_skills: true,
+            no_builtin_tools: false,
+            no_tools: false,
+            startup_session: super::StartupSession::Empty,
+            session_name: None,
+            tools: None,
+            exclude_tools: Vec::new(),
+            workspace,
+            runtime_root: root.join("runtime"),
+        }
+    }
+
+    fn mcp_call_script(tool_id: &ToolId, arguments: serde_json::Value) -> Vec<FakeStep> {
+        let call_id = ToolCallId::new("mcp-call-163");
+        vec![
+            FakeStep::Emit(ModelEvent::Started),
+            FakeStep::Emit(ModelEvent::ToolCallStarted {
+                block_index: crate::message::types::ContentBlockIndex::new(0),
+                call: ToolCallStart {
+                    id: call_id.clone(),
+                    tool_id: tool_id.clone(),
+                    name: TOOL_NAME.to_owned(),
+                },
+            }),
+            FakeStep::Emit(ModelEvent::ToolCallCompleted {
+                block_index: crate::message::types::ContentBlockIndex::new(0),
+                call: ToolCall {
+                    id: call_id,
+                    tool_id: tool_id.clone(),
+                    name: TOOL_NAME.to_owned(),
+                    arguments,
+                },
+            }),
+            FakeStep::Emit(ModelEvent::Completed {
+                finish_reason: ModelFinishReason::ToolCalls,
+                usage: None,
+            }),
+        ]
+    }
+
+    fn final_answer_script() -> Vec<FakeStep> {
+        vec![
+            FakeStep::Emit(ModelEvent::Started),
+            FakeStep::Emit(ModelEvent::TextDelta {
+                block_index: crate::message::types::ContentBlockIndex::new(0),
+                text: "done".to_owned(),
+            }),
+            FakeStep::Emit(ModelEvent::Completed {
+                finish_reason: ModelFinishReason::Stop,
+                usage: None,
+            }),
+        ]
+    }
+
+    async fn compose_fixture(test_name: &str, arguments: serde_json::Value) -> ComposedFixture {
+        let root = tempfile::tempdir().expect("fixture root");
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(workspace.join("subagents")).expect("workspace");
+        std::fs::write(
+            workspace.join("subagents/explore.md"),
+            "Read-only fixture subagent instructions.\n",
+        )
+        .expect("subagent instructions");
+
+        let server_id = McpServerId::new(SERVER_NAME);
+        let tool_id = ToolId::new(crate::tools::mcp::mcp_tool_id(&server_id, TOOL_NAME));
+        let model = fake_model(vec![
+            mcp_call_script(&tool_id, arguments),
+            final_answer_script(),
+        ]);
+        let adapter: Arc<dyn crate::model::adapter::ModelAdapter> = model.clone();
+        let fixture_model =
+            FixtureModel::text("scripted/scripted", ModelProtocol::OpenAiChatCompletions);
+        let factory = ScriptedAdapterFactory::new(adapter);
+        let registry = fixture_registry(std::slice::from_ref(&fixture_model), &factory);
+        std::fs::write(
+            root.path().join("models.jsonc"),
+            serde_json::to_vec_pretty(&fixture_catalog_document(std::slice::from_ref(
+                &fixture_model,
+            )))
+            .expect("model catalog"),
+        )
+        .expect("models.jsonc");
+
+        let echo_call_count_file = root.path().join("echo-call-count");
+        let executable = std::env::current_exe().expect("test executable");
+        let config_document = serde_json::json!({
+            "schemaVersion": 4,
+            "agentId": "agent-parent",
+            "model": {"model": "scripted/scripted"},
+            "context": {"reserveTokens": 0, "keepRecentTokens": 0},
+            "defaultTools": ["read", "subagent", TOOL_NAME],
+            "mcpServers": {
+                SERVER_NAME: {
+                    "type": "stdio",
+                    "command": executable,
+                    "args": fixture_spawn_args(test_name),
+                    "env": {
+                        FIXTURE_MODE_ENV: "1",
+                        TOOL_PREFIX_ENV: "fixture_",
+                        ECHO_CALL_COUNT_FILE_ENV: echo_call_count_file,
+                    },
+                },
+            },
+            "subagents": {
+                "maxConcurrent": 4,
+                "agents": {
+                    TEST_AGENT: {
+                        "description": "Read the workspace",
+                        "instructionsFile": "subagents/explore.md",
+                        "tools": {"builtin": ["read"]},
+                    },
+                },
+            },
+        });
+        let config_bytes = serde_json::to_vec_pretty(&config_document).expect("runtime config");
+        std::fs::write(root.path().join("rustx.jsonc"), &config_bytes).expect("rustx.jsonc");
+        let runtime_config =
+            super::super::config::CurrentRuntimeConfig::from_jsonc_slice(&config_bytes)
+                .expect("config");
+        let runtime = LocalConversationCore::compose_from_config(
+            &paths(root.path(), workspace),
+            &LocalRuntimeDependencies::default(),
+            registry,
+            runtime_config.clone(),
+            super::super::session::SessionPersistentState {
+                model: runtime_config.model.clone(),
+            },
+            ConversationId::new("conv-163-composition"),
+            root.path().join("artifacts"),
+        )
+        .await
+        .expect("real production composition");
+
+        ComposedFixture {
+            _root: root,
+            runtime: runtime.into_headless(),
+            model,
+            echo_call_count_file,
+            tool_id,
+        }
+    }
+
+    async fn settle(fixture: &ComposedFixture) {
+        let settled = fixture.runtime.runtime().settlement_signal().notified();
+        fixture
+            .runtime
+            .runtime()
+            .submit_inbound(vec![UserContentBlock::Text(TextBlock {
+                text: "use the fixture tool".to_owned(),
+            })])
+            .expect("inbound accepted");
+        tokio::time::timeout(std::time::Duration::from_secs(10), settled)
+            .await
+            .expect("runtime settlement liveness");
+    }
+
+    fn request_tool_names(request: &ModelRequest) -> Vec<String> {
+        request.tools.iter().map(|tool| tool.name.clone()).collect()
+    }
+
+    fn canonical_tool_call(ledger: &[MessageBlock]) -> ToolCall {
+        ledger
+            .iter()
+            .find_map(|message| match message {
+                MessageBlock::Assistant(assistant) => assistant.content.iter().find_map(|block| {
+                    if let AssistantContentBlock::ToolCall(call) = block {
+                        Some(call.clone())
+                    } else {
+                        None
+                    }
+                }),
+                _ => None,
+            })
+            .expect("canonical assistant tool call")
+    }
+
+    fn journal(fixture: &ComposedFixture) -> Vec<RuntimeEvent> {
+        fixture
+            .runtime
+            .tool_runtime()
+            .durable_store()
+            .read_events(None, 256)
+            .expect("event journal")
+            .events
+            .into_iter()
+            .map(|event| event.event)
+            .collect()
+    }
+
+    /// The real local composition publishes a non-empty named-subagent
+    /// intrinsic and an MCP fixture tool into one frozen request surface.
+    /// The parent then calls only MCP, commits its result, and continues; the
+    /// mere presence of `subagent` never enters child execution.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn named_subagent_and_mcp_share_one_frozen_parent_generation() {
+        if serve_if_fixture_mode(FixtureServer::from_env()).await {
+            return;
+        }
+        let test_name = "local_runtime::composition::issue163_composition_tests::named_subagent_and_mcp_share_one_frozen_parent_generation";
+        let fixture = compose_fixture(test_name, serde_json::json!({})).await;
+        settle(&fixture).await;
+
+        let requests = fixture.model.requests();
+        assert_eq!(
+            requests.len(),
+            2,
+            "MCP result continues into one next model turn"
+        );
+        let request_surface = fixture.runtime.runtime().runtime_resources();
+        let frozen_tools = request_surface
+            .capability()
+            .tool_registry()
+            .model_definitions();
+        assert_eq!(requests[0].tools, frozen_tools);
+        assert_eq!(requests[1].tools, requests[0].tools);
+        let names = request_tool_names(&requests[0]);
+        assert!(names.iter().any(|name| name == "subagent"), "{names:?}");
+        assert!(names.iter().any(|name| name == TOOL_NAME), "{names:?}");
+
+        let expected_call = ToolCall {
+            id: ToolCallId::new("mcp-call-163"),
+            tool_id: fixture.tool_id.clone(),
+            name: TOOL_NAME.to_owned(),
+            arguments: serde_json::json!({}),
+        };
+        let ledger = fixture
+            .runtime
+            .runtime()
+            .historical_canonical_history()
+            .expect("canonical history");
+        assert_eq!(canonical_tool_call(&ledger), expected_call);
+        let tool_result = ledger
+            .iter()
+            .find_map(|message| match message {
+                MessageBlock::Tool(tool) => Some(tool),
+                _ => None,
+            })
+            .expect("committed MCP ToolResult");
+        assert_eq!(tool_result.tool_call_id, expected_call.id);
+        assert_eq!(tool_result.tool_id, expected_call.tool_id);
+        assert!(matches!(
+            tool_result.result.status,
+            ToolExecutionStatus::Success
+        ));
+        assert_eq!(
+            std::fs::read_to_string(&fixture.echo_call_count_file)
+                .expect("MCP echo call count")
+                .lines()
+                .count(),
+            1,
+            "the MCP fixture executes exactly once"
+        );
+        assert!(requests[1].messages.iter().any(|message| matches!(
+            message,
+            crate::model::input::ModelInputMessage::Canonical(MessageBlock::Tool(tool))
+                if tool.tool_call_id == expected_call.id
+        )));
+
+        let journal = journal(&fixture);
+        assert!(matches!(
+            journal.last(),
+            Some(RuntimeEvent::AttemptCompleted {
+                finish_reason: ModelFinishReason::Stop,
+                ..
+            })
+        ));
+        assert_eq!(
+            journal
+                .iter()
+                .filter(|event| AttemptOutcome::from_terminal_event(event).is_some())
+                .count(),
+            1
+        );
+        assert!(
+            fixture
+                .runtime
+                .runtime()
+                .subagents()
+                .expect("parent subagent registry")
+                .all_snapshots()
+                .is_empty()
+        );
+        assert!(!journal.iter().any(|event| matches!(
+            event,
+            RuntimeEvent::SubagentOwnershipCommitted { .. }
+                | RuntimeEvent::SubagentTerminalPublished { .. }
+        )));
+
+        fixture
+            .runtime
+            .runtime()
+            .shutdown()
+            .await
+            .expect("runtime shutdown");
+    }
+
+    /// A structurally complete MCP call with invalid business arguments still
+    /// crosses canonical assembly and reaches the ordinary strict preflight
+    /// rejection; the fixture executor is never entered.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn malformed_mcp_arguments_remain_a_normal_preflight_rejection() {
+        if serve_if_fixture_mode(FixtureServer::from_env()).await {
+            return;
+        }
+        let test_name = "local_runtime::composition::issue163_composition_tests::malformed_mcp_arguments_remain_a_normal_preflight_rejection";
+        let fixture = compose_fixture(test_name, serde_json::json!({"unexpected": true})).await;
+        settle(&fixture).await;
+
+        let ledger = fixture
+            .runtime
+            .runtime()
+            .historical_canonical_history()
+            .expect("canonical history");
+        let expected_call_id = ToolCallId::new("mcp-call-163");
+        assert_eq!(
+            canonical_tool_call(&ledger),
+            ToolCall {
+                id: expected_call_id.clone(),
+                tool_id: fixture.tool_id.clone(),
+                name: TOOL_NAME.to_owned(),
+                arguments: serde_json::json!({"unexpected": true}),
+            }
+        );
+        let tool_result = ledger
+            .iter()
+            .find_map(|message| match message {
+                MessageBlock::Tool(tool) if tool.tool_call_id == expected_call_id => Some(tool),
+                _ => None,
+            })
+            .expect("preflight ToolResult");
+        let ToolExecutionStatus::Failed { error } = &tool_result.result.status else {
+            panic!(
+                "strict preflight must produce a failed result slot: {:?}",
+                tool_result.result.status
+            );
+        };
+        assert!(error.contains("canonical schema"));
+        assert!(error.contains("unexpected"));
+        assert_eq!(
+            std::fs::read_to_string(&fixture.echo_call_count_file)
+                .unwrap_or_default()
+                .lines()
+                .count(),
+            0,
+            "strict preflight rejects before MCP dispatch"
+        );
+        let requests = fixture.model.requests();
+        assert_eq!(requests.len(), 2, "the normal failed result continues");
+        assert!(requests[1].messages.iter().any(|message| matches!(
+            message,
+            crate::model::input::ModelInputMessage::Canonical(MessageBlock::Tool(tool))
+                if tool.tool_call_id == expected_call_id
+        )));
+        let events = journal(&fixture);
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, RuntimeEvent::ToolExecutionStarted { .. }))
+        );
+        assert!(events.iter().any(|event| matches!(
+            event,
+            RuntimeEvent::ToolMessageCommitted { tool_call_id, .. }
+                if *tool_call_id == expected_call_id
+        )));
+        assert!(matches!(
+            events.last(),
+            Some(RuntimeEvent::AttemptCompleted {
+                finish_reason: ModelFinishReason::Stop,
+                ..
+            })
+        ));
+
+        fixture
+            .runtime
+            .runtime()
+            .shutdown()
+            .await
+            .expect("runtime shutdown");
+    }
+}

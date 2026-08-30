@@ -18,6 +18,8 @@
 //!   provisional output that a later refusal invalidates);
 //! - provider continuation state attaches to its reasoning block, and the
 //!   boundary (greatest-block-index) state is reported for the next request.
+//! - a `ToolCalls` terminal has at least one complete canonical tool call, and
+//!   any complete canonical tool call requires a `ToolCalls` terminal.
 //!
 //! Violations of the canonical contract are explicit
 //! [`RuntimeError::ContractViolation`] failures; impossible streams are
@@ -238,12 +240,14 @@ impl ModelEventAssembler {
     }
 
     /// Finalizes the turn: rolls back provisional content on a refusal and
-    /// rejects streams with tool calls that never completed.
+    /// rejects streams with incomplete or semantically inconsistent tool
+    /// calls.
     ///
     /// # Errors
     ///
     /// Returns [`RuntimeError::ContractViolation`] when a started tool call
-    /// never completed before the terminal event.
+    /// never completed before the terminal event, or when the terminal finish
+    /// reason and assembled canonical tool-call collection disagree.
     pub fn finish(
         self,
         finish_reason: &ModelFinishReason,
@@ -269,6 +273,19 @@ impl ModelEventAssembler {
         let mut completed_calls = self.completed_calls;
         completed_calls.sort_by_key(|(block_index, _)| *block_index);
         let tool_calls: Vec<ToolCall> = completed_calls.into_iter().map(|(_, call)| call).collect();
+        match (finish_reason, tool_calls.is_empty()) {
+            (ModelFinishReason::ToolCalls, true) => {
+                return Err(violation(
+                    "model stream terminated with ToolCalls but produced no complete canonical tool call",
+                ));
+            }
+            (_, false) if *finish_reason != ModelFinishReason::ToolCalls => {
+                return Err(violation(&format!(
+                    "model stream produced complete canonical tool calls but terminated with {finish_reason:?}"
+                )));
+            }
+            _ => {}
+        }
         Ok(AssembledTurn {
             content,
             tool_calls,
@@ -590,6 +607,72 @@ mod tests {
         assert!(matches!(&turn.content[2], AssistantContentBlock::Text(t) if t.text == "Answer."));
         assert_eq!(turn.tool_calls.len(), 1);
         assert_eq!(turn.tool_calls[0].arguments, serde_json::json!({"x": 1}));
+    }
+
+    /// A `ToolCalls` terminal without a complete canonical call is rejected
+    /// at the canonical assembly boundary.
+    #[test]
+    fn tool_calls_finish_without_a_complete_call_is_rejected() {
+        let mut assembler = ModelEventAssembler::new();
+        assembler.push(&ModelEvent::Started).expect("started");
+        assembler
+            .push(&completed(ModelFinishReason::ToolCalls))
+            .expect("completed");
+
+        let error = assembler
+            .finish(&ModelFinishReason::ToolCalls, None)
+            .expect_err("an empty ToolCalls turn is invalid");
+        let RuntimeError::ContractViolation { message } = error else {
+            panic!("expected a canonical contract violation");
+        };
+        assert!(message.contains("ToolCalls"));
+        assert!(message.contains("no complete canonical tool call"));
+    }
+
+    /// A complete canonical call requires the matching `ToolCalls` terminal;
+    /// the assembler never lets the loop infer a different finish semantic.
+    #[test]
+    fn complete_tool_call_with_stop_is_rejected() {
+        let mut assembler = ModelEventAssembler::new();
+        assembler.push(&ModelEvent::Started).expect("started");
+        assembler.push(&call_start(0, "call-1")).expect("start");
+        assembler
+            .push(&call_done(0, "call-1", serde_json::json!({"x": 1})))
+            .expect("done");
+        assembler
+            .push(&completed(ModelFinishReason::Stop))
+            .expect("completed");
+
+        let error = assembler
+            .finish(&ModelFinishReason::Stop, None)
+            .expect_err("a call under Stop is invalid");
+        let RuntimeError::ContractViolation { message } = error else {
+            panic!("expected a canonical contract violation");
+        };
+        assert!(message.contains("complete canonical tool calls"));
+        assert!(message.contains("Stop"));
+    }
+
+    /// Multiple complete canonical calls remain valid under `ToolCalls`.
+    #[test]
+    fn multiple_complete_tool_calls_with_tool_calls_are_valid() {
+        let turn = assemble(
+            &[
+                call_start(0, "call-1"),
+                call_done(0, "call-1", serde_json::json!({"x": 1})),
+                call_start(1, "call-2"),
+                call_done(1, "call-2", serde_json::json!({"x": 2})),
+                completed(ModelFinishReason::ToolCalls),
+            ],
+            &ModelFinishReason::ToolCalls,
+        );
+        assert_eq!(
+            turn.tool_calls
+                .iter()
+                .map(|call| call.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["call-1", "call-2"]
+        );
     }
 
     /// A refusal terminal rolls back provisional content: only the refusal
