@@ -1212,9 +1212,27 @@ fn worktree_listing_entry_matches(
         .branch
         .as_deref()
         .map(|branch| format!("refs/heads/{branch}"));
-    path == Some(snapshot.workspace.as_path())
+    paths_refer_to_same_worktree(path, Some(snapshot.workspace.as_path()))
         && branch == expected_branch.as_deref()
         && (!require_base || head == snapshot.base_commit.as_deref())
+}
+
+/// Git may report a macOS temporary-directory path through its canonical
+/// `/private` spelling even when the caller supplied the equivalent `/var`
+/// spelling (and the inverse can occur for other symlinked system roots).
+/// Compare the lexical form first, then the canonical physical path. This
+/// preserves exact lease ownership while avoiding a platform-specific false
+/// negative in the Git registration proof.
+fn paths_refer_to_same_worktree(actual: Option<&Path>, expected: Option<&Path>) -> bool {
+    let (Some(actual), Some(expected)) = (actual, expected) else {
+        return actual == expected;
+    };
+    actual == expected
+        || actual
+            .canonicalize()
+            .ok()
+            .zip(expected.canonicalize().ok())
+            .is_some_and(|(actual, expected)| actual == expected)
 }
 
 #[cfg(test)]
