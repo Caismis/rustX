@@ -478,7 +478,10 @@ impl SubagentWorkspaceManager {
             branch_created: false,
             created: false,
         };
-        // `worktree add -b` is Git's atomic branch-registration operation.
+        // `git -c core.hooksPath=/dev/null worktree add -b` is Git's atomic
+        // branch-registration operation with checkout hooks suppressed. A
+        // repository hook is outside the child's frozen execution authority
+        // and could mutate the new path before the child owns it.
         // A losing same-identity acquisition must never infer ownership from
         // the path/ref that the winning command just created, so `created` is
         // set only when this command itself returned success *and* the exact
@@ -487,6 +490,12 @@ impl SubagentWorkspaceManager {
             .git_raw(
                 &self.parent_workspace,
                 vec![
+                    // Worktree creation performs a checkout, and Git runs
+                    // repository checkout hooks for it. Disable hooks for
+                    // this one native allocation command so the acquired
+                    // bytes are exactly the selected commit.
+                    "-c".into(),
+                    "core.hooksPath=/dev/null".into(),
                     "worktree".into(),
                     "add".into(),
                     "-b".into(),
@@ -1399,6 +1408,11 @@ mod tests {
         commit(path, "ignore build output");
     }
 
+    #[cfg(unix)]
+    fn shell_quote(path: &std::path::Path) -> String {
+        format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
+    }
+
     fn ref_exists(path: &std::path::Path, branch: &str) -> bool {
         std::process::Command::new("git")
             .arg("-C")
@@ -1507,6 +1521,58 @@ mod tests {
         let settlement = lease.settle_after_child().await;
         assert_eq!(settlement.cleanup, WorkspaceCleanup::Removed);
         assert!(settlement.handoff.is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn worktree_creation_suppresses_checkout_hook_mutations() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = repository();
+        let runtime_root = dir.path().join("artifacts");
+        let subagent_id = SubagentId::new("conversation-hook-subagent-1");
+        let workspace = runtime_root
+            .join("worktrees")
+            .join(super::deterministic_worktree_name(&subagent_id));
+        let hook_marker = dir.path().join("post-checkout-hook-ran");
+        let hook = dir.path().join(".git/hooks/post-checkout");
+        std::fs::write(
+            &hook,
+            format!(
+                "#!/bin/sh\nprintf 'hook mutation\\n' > {}\nprintf 'ran\\n' > {}\n",
+                shell_quote(&workspace.join("hook-mutated.txt")),
+                shell_quote(&hook_marker),
+            ),
+        )
+        .expect("post-checkout hook");
+        let mut permissions = std::fs::metadata(&hook)
+            .expect("hook metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&hook, permissions).expect("executable hook");
+
+        let manager = SubagentWorkspaceManager::new(dir.path(), &runtime_root);
+        let lease = manager
+            .acquire(
+                SubagentWorkspacePolicy::GitWorktree {
+                    require_clean_parent: false,
+                },
+                &subagent_id,
+                &CancellationSignal::new(),
+            )
+            .await
+            .expect("worktree");
+
+        assert_eq!(head(lease.workspace()), head(dir.path()));
+        assert!(
+            !workspace.join("hook-mutated.txt").exists(),
+            "checkout hook must not mutate the exact-snapshot worktree"
+        );
+        assert!(!hook_marker.exists(), "checkout hook must not run");
+        assert_eq!(
+            lease.settle_after_child().await.cleanup,
+            WorkspaceCleanup::Removed
+        );
     }
 
     #[tokio::test]

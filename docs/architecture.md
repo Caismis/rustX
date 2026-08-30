@@ -4498,7 +4498,7 @@ resolve/freeze named-agent resources
   → capture parent HEAD = C
   → observe parent tracked/index/untracked status
   → enforce require_clean_parent
-  → git worktree add -b <runtime-ref> <path> C
+  → git -c core.hooksPath=/dev/null worktree add -b <runtime-ref> <path> C
   → verify child HEAD = C
   → complete child preparation and Ready handshake
   → commit SubagentOwnershipCommitted
@@ -4511,6 +4511,9 @@ anchors across the one durable ownership commit. A pre-commit failure or
 cancellation must settle that lease and publish no child ownership. The lease
 has no destructive destructor: if ownership is abandoned without a proven
 settlement, the worktree remains available rather than being force-removed.
+Checkout hooks are suppressed for the allocation command so repository hook
+side effects cannot change the selected committed snapshot before child
+ownership begins.
 
 The runtime ref and path are deterministic and bounded. For semantic
 `SubagentId = S`, rustX hashes the versioned, length-framed preimage
