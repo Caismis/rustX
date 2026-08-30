@@ -1631,4 +1631,33 @@ mod tests {
         assert!(encoded.contains("runtime_shutdown"));
         assert!(encoded.contains("did not start execution"));
     }
+
+    #[test]
+    fn failed_tool_status_reaches_the_provider_as_correction_evidence() {
+        let message = ToolMessageBlock {
+            id: MessageId::new("tool-result-failed"),
+            tool_call_id: ToolCallId::new("call-failed"),
+            tool_id: ToolId::new("tool-web-search-exa"),
+            result: ToolExecutionResult {
+                status: ToolExecutionStatus::Failed {
+                    error: "input schema validation failed: query is required".to_owned(),
+                },
+                content: Vec::new(),
+                duration_ms: 0,
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+                managed_output: None,
+            },
+        };
+        let encoded = serde_json::to_value(
+            translate_tool_message(&message).expect("translate rejected tool result"),
+        )
+        .expect("serialize provider message");
+        assert_eq!(encoded["tool_call_id"], "call-failed");
+        assert_eq!(
+            encoded["content"][0]["text"],
+            "Tool call failed: input schema validation failed: query is required"
+        );
+    }
 }

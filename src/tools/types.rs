@@ -471,31 +471,33 @@ pub enum ToolExecutionStatus {
 }
 
 impl ToolExecutionStatus {
-    /// Renders the cancellation fact for inclusion in a model-facing tool
-    /// result. The typed status remains the source of truth; this text is
-    /// presentation only and is never parsed back into a phase or reason.
+    /// Renders a failure or cancellation fact for inclusion in a model-facing
+    /// tool result. The typed status remains the source of truth; this text is
+    /// presentation only and is never parsed back into structured status.
     #[must_use]
     pub fn model_facing_text(&self) -> Option<String> {
-        let Self::Cancelled { reason, phase } = self else {
-            return None;
-        };
-
-        let reason = match reason {
-            CancellationReason::UserRequested => "user_requested",
-            CancellationReason::RuntimeShutdown => "runtime_shutdown",
-            CancellationReason::ParentCancelled => "parent_cancelled",
-        };
-        let phase = match phase {
-            ToolCancellationPhase::BeforeStart => {
-                "rustX did not start execution of this tool call."
+        match self {
+            Self::Failed { error } => Some(format!("Tool call failed: {error}")),
+            Self::Cancelled { reason, phase } => {
+                let reason = match reason {
+                    CancellationReason::UserRequested => "user_requested",
+                    CancellationReason::RuntimeShutdown => "runtime_shutdown",
+                    CancellationReason::ParentCancelled => "parent_cancelled",
+                };
+                let phase = match phase {
+                    ToolCancellationPhase::BeforeStart => {
+                        "rustX did not start execution of this tool call."
+                    }
+                    ToolCancellationPhase::DuringExecution => {
+                        "Execution had already started, but cancellation occurred before normal completion. Partial side effects may have occurred."
+                    }
+                };
+                Some(format!(
+                    "Tool call was cancelled (reason: {reason}). {phase}"
+                ))
             }
-            ToolCancellationPhase::DuringExecution => {
-                "Execution had already started, but cancellation occurred before normal completion. Partial side effects may have occurred."
-            }
-        };
-        Some(format!(
-            "Tool call was cancelled (reason: {reason}). {phase}"
-        ))
+            Self::Success | Self::Denied { .. } | Self::TimedOut | Self::Interrupted => None,
+        }
     }
 }
 
@@ -746,5 +748,17 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn failed_tool_status_is_visible_to_the_model() {
+        let status = ToolExecutionStatus::Failed {
+            error: "input schema validation failed: query is required".to_owned(),
+        };
+        assert_eq!(
+            status.model_facing_text().as_deref(),
+            Some("Tool call failed: input schema validation failed: query is required")
+        );
+        assert_eq!(ToolExecutionStatus::Success.model_facing_text(), None);
     }
 }

@@ -68,22 +68,26 @@ pub const SUBAGENT_TOOL_NAME: &str = "subagent";
 pub(super) fn registration(
     subagents: SubagentRegistry,
     catalog: &SubagentCatalog,
-) -> NativeToolRegistration {
-    NativeToolRegistration::new(
-        definition(catalog),
-        std::sync::Arc::new(SubagentExecutor { subagents }),
-    )
+) -> Option<NativeToolRegistration> {
+    definition(catalog).map(|definition| {
+        NativeToolRegistration::new(
+            definition,
+            std::sync::Arc::new(SubagentExecutor { subagents }),
+        )
+    })
 }
 
-/// The canonical schema of the `subagent` intrinsic.
+/// The canonical schema of the `subagent` intrinsic when this generation has
+/// at least one satisfiable route.
 ///
-/// The description is generated from the admitted catalog of the same
-/// resource generation this registration belongs to, so the model is told
-/// exactly which agents exist and what each is for. Generation is
-/// deterministic and bounded: names appear in canonical order and each
-/// routing description is already bounded by definition admission.
-fn definition(catalog: &SubagentCatalog) -> ToolDefinition {
-    ToolDefinition {
+/// An empty catalog produces no definition: capability composition must never
+/// expose a model-facing Tool which every possible invocation is guaranteed
+/// to reject.
+fn definition(catalog: &SubagentCatalog) -> Option<ToolDefinition> {
+    if catalog.is_empty() {
+        return None;
+    }
+    Some(ToolDefinition {
         id: crate::runtime::identity::ToolId::new("tool-subagent"),
         name: SUBAGENT_TOOL_NAME.to_owned(),
         description: format!(
@@ -101,7 +105,7 @@ fn definition(catalog: &SubagentCatalog) -> ToolDefinition {
         approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
-    }
+    })
 }
 
 /// The typed model-facing input contract of the `subagent` intrinsic.
@@ -342,7 +346,7 @@ mod tests {
 
     #[test]
     fn the_tool_description_is_derived_from_the_admitted_catalog() {
-        let described = definition(&catalog());
+        let described = definition(&catalog()).expect("a non-empty catalog has a route");
         assert!(
             described
                 .description
@@ -358,8 +362,10 @@ mod tests {
             "no hard-coded profile prose survives: {}",
             described.description
         );
-        let empty = definition(&SubagentCatalog::empty());
-        assert!(empty.description.contains("admits no named subagent"));
+        assert!(
+            definition(&SubagentCatalog::empty()).is_none(),
+            "an unsatisfiable subagent tool never enters the model-facing capability set"
+        );
 
         // The schema stays small: exactly agent/task/context.
         let properties = described.input_schema["properties"]

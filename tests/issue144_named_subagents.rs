@@ -178,6 +178,38 @@ impl Lab {
     }
 }
 
+/// A model-visible Tool must have at least one satisfiable invocation in the
+/// same frozen resource generation. Owning a subagent runtime is insufficient
+/// when that generation admits no named agent.
+#[tokio::test]
+async fn an_empty_named_agent_catalog_exposes_no_subagent_tool() {
+    let lab = Lab::new();
+    lab.write_config(&serde_json::json!({
+        "maxConcurrent": 4,
+        "agents": {},
+    }));
+    let product = lab.compose().await;
+    let resources = product.runtime().runtime_resources();
+    let capability = resources.capability();
+
+    assert!(
+        capability
+            .available_tools()
+            .definitions()
+            .iter()
+            .all(|definition| definition.name != "subagent"),
+        "an unsatisfiable intrinsic is absent from availability, not merely inactive"
+    );
+    assert!(
+        capability
+            .tool_registry()
+            .definitions()
+            .iter()
+            .all(|definition| definition.name != "subagent"),
+        "the frozen model-facing registry cannot advertise an invocation that always fails"
+    );
+}
+
 /// A definition selecting exactly the named built-ins.
 fn explore(builtin: &[&str]) -> serde_json::Value {
     serde_json::json!({
