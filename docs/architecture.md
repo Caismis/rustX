@@ -2273,11 +2273,15 @@ semantics from property names such as `full_output`, `partial_output`, or
 `note`), `artifacts` holds genuine semantic artifacts, and
 `managed_output` is the rustX-owned typed continuation metadata of managed
 textual output (absolute read-only locator plus typed complete/partial
-state). The generic background terminal publication consumes only the
-typed metadata; tool-owned JSON projects verbatim, and the complete
-terminal result projection — bounded body plus structurally retained
-continuation with bounded diagnostics — never exceeds
-`MAX_MODEL_TOOL_RESULT_BYTES`.
+state). A failing result is passed back to the model as correction evidence:
+the typed status remains authoritative, while
+`ToolExecutionResult::model_facing_projection` combines tool-owned content,
+runtime status feedback, and managed-output continuation into one
+provider-independent representation. That complete projection — including
+structurally retained continuation and bounded diagnostics — never exceeds
+`MAX_MODEL_TOOL_RESULT_BYTES`; provider adapters only translate it to their
+wire formats. The generic background terminal publication consumes the same
+projection, and tool-owned JSON remains ordinary tool-owned content.
 
 Bash treats one invocation as one complete lifecycle:
 spawn one per-invocation supervisor, capture stdout/stderr/combined, let
@@ -2296,9 +2300,9 @@ output spills lazily into `results/result_N.txt` only once the preview
 bound is crossed, while a background execution streams into its
 dispatch-allocated live-output file `tasks/exec_N.output` from the first
 byte on (the absolute path is runtime-owned typed continuation metadata —
-`ToolExecutionResult::managed_output` — which the producer presents inside
-its ordinary textual result content; the result's `artifacts` stay empty —
-text overflow is not an artifact),
+`ToolExecutionResult::managed_output` — which the canonical model-facing
+projection presents exactly once; the result's `artifacts` stay empty — text
+overflow is not an artifact),
 `TERM -> BASH_TERM_GRACE -> KILL` cancellation driven by the supervisor,
 typed result semantics (zero exit success, non-zero exit failed with the
 code preserved, timeout as `TimedOut`, cancellation as `Cancelled`),
@@ -2313,19 +2317,23 @@ success that lost the retained output.
 
 Native, MCP, and Python executors produce a logical result; they do not
 choose independent oversized-result policies. The shared Tool Plane seam in
-`src/tools/output.rs` owns deterministic textual representation, byte
-accounting, bounded preview, UTF-8 handling, managed-output retention, and
-typed `TruncationState`/`ManagedOutputContinuation` publication. The origin
-adapters remain protocol translators: MCP translates `CallToolResult`, and
-Python translates its private runtime status/result transport.
+`src/tools/output.rs` owns capture, deterministic previews, UTF-8 handling,
+managed-output retention, and typed `TruncationState`/
+`ManagedOutputContinuation` publication. The canonical result projection in
+`src/tools/types.rs` owns the model-facing status/content/continuation
+composition and the one aggregate byte bound. The origin adapters remain
+protocol translators: MCP translates `CallToolResult`, and Python translates
+its private runtime status/result transport; model providers only translate
+the already-decided canonical projection.
 
 The limits have deliberately different meanings:
 
 - `FOREGROUND_TOOL_RESULT_PREVIEW_BYTES` (currently 16 KiB) is the shared
   foreground projection threshold;
 - `MAX_MODEL_TOOL_RESULT_BYTES` (currently 64 KiB) is the absolute
-  canonical/model-facing safety bound, including a bounded background
-  continuation;
+  canonical/model-facing safety bound for every complete
+  `ToolExecutionResult::model_facing_projection`, including tool-owned
+  content, runtime status feedback, and managed continuation;
 - managed output is auxiliary storage for the complete logical text (or an
   explicitly partial prefix after a storage failure), not canonical history
   and not a semantic artifact/File result.

@@ -210,6 +210,71 @@ async fn an_empty_named_agent_catalog_exposes_no_subagent_tool() {
     );
 }
 
+/// A capability reload owns the subagent registration per resource
+/// generation: R2 may remove an empty catalog without mutating an already
+/// frozen R1 lease.
+#[tokio::test]
+async fn reloading_non_empty_catalog_to_empty_removes_only_the_current_subagent_tool() {
+    let lab = Lab::new();
+    lab.write_config(&explore(&["read"]));
+    let product = lab.compose().await;
+    let r1 = product.runtime().runtime_resources();
+    let r1_definition = r1
+        .capability()
+        .tool_registry()
+        .definitions()
+        .into_iter()
+        .find(|definition| definition.name == "subagent")
+        .expect("R1 registers subagent for the non-empty catalog");
+    assert!(
+        r1.capability()
+            .available_tools()
+            .definitions()
+            .iter()
+            .any(|definition| definition.name == "subagent")
+    );
+
+    lab.write_config(&serde_json::json!({
+        "maxConcurrent": 4,
+        "agents": {},
+    }));
+    product
+        .runtime()
+        .reload_resources()
+        .await
+        .expect("the empty R2 publishes");
+    let r2 = product.runtime().runtime_resources();
+    assert!(r2.revision().get() > r1.revision().get());
+    assert!(
+        r2.capability()
+            .available_tools()
+            .definitions()
+            .iter()
+            .all(|definition| definition.name != "subagent"),
+        "R2 availability omits the unsatisfiable native tool"
+    );
+    assert!(
+        r2.capability()
+            .tool_registry()
+            .definitions()
+            .iter()
+            .all(|definition| definition.name != "subagent"),
+        "R2's frozen model-facing registry omits the unsatisfiable native tool"
+    );
+
+    let r1_again = r1
+        .capability()
+        .tool_registry()
+        .definitions()
+        .into_iter()
+        .find(|definition| definition.name == "subagent")
+        .expect("the frozen R1 lease retains subagent");
+    assert_eq!(
+        r1_again, r1_definition,
+        "R1 keeps the exact catalog-derived definition after R2 publishes"
+    );
+}
+
 /// A definition selecting exactly the named built-ins.
 fn explore(builtin: &[&str]) -> serde_json::Value {
     serde_json::json!({

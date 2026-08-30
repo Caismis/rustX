@@ -354,10 +354,11 @@ mod unix_tests {
                 .count(),
             1
         );
-        assert!(over.content.iter().any(|content| matches!(
-            content,
-            rustx::tools::types::ToolResultContent::Text(text) if text.text.contains("Read or Grep")
-        )));
+        assert!(
+            over.model_facing_projection()
+                .as_text()
+                .contains("Read or Grep")
+        );
 
         // Each block is below 16 KiB, but the deterministic newline-joined
         // aggregate is above it. Per-block truncation would incorrectly

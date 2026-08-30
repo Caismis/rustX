@@ -571,40 +571,28 @@ fn translate_assistant_content(
     Ok(content)
 }
 
+/// Translates the canonical model-facing tool-result projection into the
+/// Anthropic tool-result block shape. Projection policy, status rendering,
+/// and aggregate bounding are owned by the Tool Plane.
 fn translate_tool_result(
     tool: &crate::message::types::ToolMessageBlock,
 ) -> Result<serde_json::Value, ModelError> {
-    let mut content = Vec::new();
-    for result_content in &tool.result.content {
-        match result_content {
-            crate::tools::types::ToolResultContent::Text(text) => {
-                content.push(serde_json::json!({
-                    "type": "text",
-                    "text": text.text,
-                }));
-            }
-            crate::tools::types::ToolResultContent::Json { value } => {
-                content.push(serde_json::json!({
-                    "type": "text",
-                    "text": serde_json::to_string(value).map_err(|e| {
-                        unsupported(&format!("tool JSON result is not serializable: {e}"))
-                    })?,
-                }));
-            }
-            crate::tools::types::ToolResultContent::File(_)
-            | crate::tools::types::ToolResultContent::Image(_) => {
-                return Err(unsupported(
-                    "Anthropic cannot represent file/image tool results",
-                ));
-            }
-        }
+    let projection = tool.result.model_facing_projection();
+    if projection.contains_non_text_content() {
+        return Err(unsupported(
+            "Anthropic cannot represent file/image tool results",
+        ));
     }
-    if let Some(status) = tool.result.status.model_facing_text() {
-        content.push(serde_json::json!({
-            "type": "text",
-            "text": status,
-        }));
-    }
+    let content: Vec<serde_json::Value> = projection
+        .parts()
+        .iter()
+        .map(|text| {
+            serde_json::json!({
+                "type": "text",
+                "text": text,
+            })
+        })
+        .collect();
     Ok(serde_json::json!({
         "type": "tool_result",
         "tool_use_id": tool.tool_call_id,
@@ -720,12 +708,15 @@ mod tests {
     use super::{
         map_finish_reason, normalize_http_error, stream_retry_disposition, translate_tool_result,
     };
+    use crate::message::content::TextBlock;
     use crate::message::types::ToolMessageBlock;
     use crate::model::error::{ModelErrorKind, ModelRetryDisposition};
     use crate::model::finish::ModelFinishReason;
     use crate::runtime::identity::{MessageId, ToolCallId, ToolId};
     use crate::runtime::types::CancellationReason;
-    use crate::tools::types::{ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus};
+    use crate::tools::types::{
+        ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus, ToolResultContent,
+    };
 
     /// The adapter — not the agent loop — recovers the provider's own
     /// measurement of a rejected oversized request, and it crosses the
@@ -824,6 +815,38 @@ mod tests {
             encoded["content"][0]["text"],
             "Tool call was cancelled (reason: parent_cancelled). Execution had already started, but cancellation occurred before normal completion. Partial side effects may have occurred."
         );
+    }
+
+    #[test]
+    fn anthropic_translation_consumes_the_canonical_failed_result_projection() {
+        let message = ToolMessageBlock {
+            id: MessageId::new("tool-result-failed"),
+            tool_call_id: ToolCallId::new("call-failed"),
+            tool_id: ToolId::new("tool-web-search-exa"),
+            result: ToolExecutionResult {
+                status: ToolExecutionStatus::Failed {
+                    error: "input schema validation failed: query is required".to_owned(),
+                },
+                content: vec![ToolResultContent::Text(TextBlock {
+                    text: "existing tool content".to_owned(),
+                })],
+                duration_ms: 0,
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+                managed_output: None,
+            },
+        };
+        let encoded = translate_tool_result(&message).expect("translate failed tool result");
+        let projection = message.result.model_facing_projection();
+        let wire_parts: Vec<String> = encoded["content"]
+            .as_array()
+            .expect("content array")
+            .iter()
+            .map(|part| part["text"].as_str().expect("text part").to_owned())
+            .collect();
+        assert_eq!(wire_parts.as_slice(), projection.parts());
+        assert!(wire_parts[0].contains("input schema validation failed: query is required"));
     }
 
     #[test]

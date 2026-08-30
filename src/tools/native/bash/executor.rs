@@ -779,13 +779,10 @@ async fn run_bash_unix(
             .map(|diagnostic| ManagedOutputContinuation::Unavailable { diagnostic }),
         (true, _, None) => unreachable!("a background capture always owns its live-output file"),
     };
-    // The model must be able to locate the managed output of a FOREGROUND
-    // result from the result content itself, so Bash presents its own
-    // continuation as an ordinary tool-owned text block. A background
-    // result needs no such block: the accepted dispatch result already
-    // advertised the live-output path, and the generic background terminal
-    // publication renders the typed continuation structurally.
-    let mut result_content = vec![ToolResultContent::Json {
+    // Managed output remains typed runtime metadata. The canonical
+    // ToolExecutionResult projection renders the continuation once for both
+    // foreground provider requests and background terminal publication.
+    let result_content = vec![ToolResultContent::Json {
         value: serde_json::json!({
             "exit_code": exit_code,
             "stdout": stdout.0,
@@ -793,13 +790,6 @@ async fn run_bash_unix(
             "combined": combined.preview,
         }),
     }];
-    if !background && let Some(continuation) = &managed_output {
-        result_content.push(ToolResultContent::Text(
-            crate::message::content::TextBlock {
-                text: continuation.render(),
-            },
-        ));
-    }
     ToolExecutionResult {
         status,
         content: result_content,

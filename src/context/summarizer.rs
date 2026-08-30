@@ -263,7 +263,7 @@ fn render_tool(tool: &ToolMessageBlock, parts: &mut Vec<String>) {
         ToolExecutionStatus::Cancelled { .. } => tool
             .result
             .status
-            .model_facing_text()
+            .feedback_text()
             .expect("cancelled status has model-facing text"),
         ToolExecutionStatus::TimedOut => "timed out".to_owned(),
         ToolExecutionStatus::Interrupted => "interrupted".to_owned(),

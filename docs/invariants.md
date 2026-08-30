@@ -2517,7 +2517,10 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   one authorized read-only root. `FOREGROUND_TOOL_RESULT_PREVIEW_BYTES`
   (currently 16 KiB) is the shared foreground projection threshold;
   `MAX_MODEL_TOOL_RESULT_BYTES` (currently 64 KiB) is the absolute
-  canonical/model-facing safety bound; and managed output is complete
+  canonical/model-facing safety bound for every complete
+  `ToolExecutionResult::model_facing_projection`, including tool-owned
+  content, runtime-owned status feedback, and managed continuation; and
+  managed output is complete
   auxiliary execution text, not canonical history or a semantic artifact.
   Foreground output at or below the threshold remains a direct result and
   creates no file. Once the complete deterministic representation crosses
@@ -2529,8 +2532,15 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   never a `FileReference`, never a semantic artifact, and never a model
   `File` modality). Allocation failure is `Unavailable`; a write failure
   retains the locator as `Partial`; result size alone never turns semantic
-  success into failure. The bounded preview is the canonical replayable
-  record and the model can Read/Grep the complete auxiliary path explicitly.
+  success into failure. Failing tool results are intentionally passed back
+  to the model as bounded correction evidence. `ToolExecutionStatus` remains
+  the typed canonical state; `ToolExecutionResult::model_facing_projection`
+  is the single provider-independent owner of status rendering,
+  content/continuation priority, UTF-8-safe truncation, and the aggregate byte
+  bound. Provider adapters only translate that projection and do not choose
+  failure policy or truncate independently. The bounded preview is the
+  canonical replayable record and the model can Read/Grep the complete
+  auxiliary path explicitly.
   MCP content blocks are budgeted collectively, and Python's logical return
   transport is streamed so UTF-8/JSON framing is never delegated to bounded
   subprocess stdout capture.
@@ -2604,9 +2614,10 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   metadata: the absolute locator and its fixed Read/Grep guidance are
   structurally retained under bounding, advisory diagnostics are bounded
   to `MAX_OUTPUT_CONTINUATION_DIAGNOSTIC_BYTES`, and the complete
-  terminal result projection — body plus continuation — never exceeds
-  `MAX_MODEL_TOOL_RESULT_BYTES`. The bounded textual record remains the
-  canonical replayable history; managed output files are auxiliary.
+  complete model-facing result projection — status, body, and continuation —
+  never exceeds `MAX_MODEL_TOOL_RESULT_BYTES`. The bounded textual record
+  remains the canonical replayable history; managed output files are
+  auxiliary.
 - Bash owns a distinct process group per invocation inside a dedicated
   invocation session created by a small per-invocation supervisor;
   cancellation/timeout signals the owned group (`TERM`, then a bounded

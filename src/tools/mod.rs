@@ -69,6 +69,6 @@ pub use types::{
     ToolCancellationPhase, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
     ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode,
     ToolInvocationPolicy, ToolOrigin, ToolProgress, ToolReplayPolicy, ToolResultContent,
-    TruncationState,
+    ToolResultProjection, TruncationState,
 };
 pub use workspace::{Workspace, WorkspaceError};

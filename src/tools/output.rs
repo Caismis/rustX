@@ -9,15 +9,18 @@
 //! - background output is written to the sink that the background registry
 //!   allocated and advertised at dispatch time.
 //!
-//! The complete managed output is auxiliary execution output. The bounded
-//! preview and typed continuation are the only model-facing projection.
+//! The complete managed output is auxiliary execution output. Capture owns
+//! previews and typed continuation metadata;
+//! [`crate::tools::types::ToolExecutionResult::model_facing_projection`] is the
+//! single aggregate model-facing projection that combines those facts with
+//! status and tool-owned content.
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES;
 use crate::tools::managed_output::{BackgroundOutput, ManagedToolOutput, ResultSpill};
-use crate::tools::types::{ManagedOutputContinuation, ToolResultContent, TruncationState};
+use crate::tools::types::{ManagedOutputContinuation, TruncationState};
 
 /// Test-only observation seam for committed background appends.
 #[cfg(test)]
@@ -468,17 +471,6 @@ pub(crate) fn truncation_for_capture(captured: &CapturedOutput) -> Option<Trunca
     truncated.then_some(TruncationState {
         truncated: true,
         original_bytes: captured.complete.then_some(captured.total_bytes),
-    })
-}
-
-/// Renders a foreground continuation through the one typed renderer.
-pub(crate) fn foreground_continuation_block(
-    continuation: Option<&ManagedOutputContinuation>,
-) -> Option<ToolResultContent> {
-    continuation.map(|continuation| {
-        ToolResultContent::Text(crate::message::content::TextBlock {
-            text: continuation.render(),
-        })
     })
 }
 

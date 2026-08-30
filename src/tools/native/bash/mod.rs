@@ -111,8 +111,8 @@
 //!   prefix, and stream every subsequent fragment into it; the absolute
 //!   spill path is runtime-owned typed metadata
 //!   (`ToolExecutionResult::managed_output`, never a magic JSON key and
-//!   never a `FileReference`), and Bash presents it to the model as an
-//!   ordinary tool-owned text block inside the foreground result.
+//!   never a `FileReference`); the canonical result projection presents it
+//!   to the model exactly once.
 //!   Foreground output at or below the bound creates no file at all, and
 //!   a spill write failure is an explicit invocation failure.
 //! - **Background**: the live-output file (`tasks/exec_N.output`) is
