@@ -56,6 +56,7 @@ use support::fake::{
     success_result, tool_call_events,
 };
 
+use crate::agent::execution::test_sync::RetryBackoffPause;
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::inbound::ConversationInboundMailbox;
 use crate::runtime::observation::PendingObservations;
@@ -1712,6 +1713,8 @@ async fn child_stream_idle_timeout_enters_generic_retry() {
         Vec::new(),
     )
     .await;
+    let (retry_pause, mut retry_reached, retry_release) = RetryBackoffPause::install();
+    child.runtime.install_retry_backoff_pause(retry_pause);
     let wired = launch_wired_child(&plane, &child, "inspect").await;
 
     // Generation began: the stream-idle deadline now owns the request.
@@ -1728,6 +1731,17 @@ async fn child_stream_idle_timeout_enters_generic_retry() {
         "the stream-idle timeout enters ordinary generic retry",
     )
     .await;
+    // The durable schedule commits before the backoff wait captures its
+    // absolute deadline. Wait for that capture frontier before advancing the
+    // manual clock; otherwise the test could advance first and make the
+    // retry calculate its deadline from the already-advanced clock.
+    tokio::time::timeout(LIVENESS, retry_reached.wait_for(|count| *count >= 1))
+        .await
+        .expect("the retry backoff captures its deadline")
+        .expect("retry backoff pause stays open");
+    retry_release
+        .send(())
+        .expect("release the captured retry deadline");
     child.clock.advance(2_000);
 
     let settled = plane
