@@ -1633,6 +1633,8 @@ async fn child_response_start_timeout_enters_generic_retry() {
         Vec::new(),
     )
     .await;
+    let (retry_pause, mut retry_reached, retry_release) = RetryBackoffPause::install();
+    child.runtime.install_retry_backoff_pause(retry_pause);
     let wired = launch_wired_child(&plane, &child, "inspect").await;
 
     // The request was dispatched and is awaiting its first event.
@@ -1652,7 +1654,17 @@ async fn child_response_start_timeout_enters_generic_retry() {
         "the response-start timeout enters ordinary generic retry",
     )
     .await;
-    // Release the backoff: the captured deadline is 2000ms ahead.
+    // The durable schedule commits before the backoff wait captures its
+    // absolute deadline. Wait for that capture frontier before advancing the
+    // manual clock; otherwise the test could advance first and make the
+    // retry calculate its deadline from the already-advanced clock.
+    tokio::time::timeout(LIVENESS, retry_reached.wait_for(|count| *count >= 1))
+        .await
+        .expect("the retry backoff captures its deadline")
+        .expect("retry backoff pause stays open");
+    retry_release
+        .send(())
+        .expect("release the captured retry deadline");
     child.clock.advance(2_000);
 
     let settled = plane
