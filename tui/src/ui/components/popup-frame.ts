@@ -24,16 +24,18 @@
  *    top edge
  * 4. the inner rectangle excludes the border and one cell of horizontal
  *    padding
- * 5. the body is rendered into — and clipped to — the remaining finite
- *    rectangle
+ * 5. the body is rendered into the remaining finite rectangle — components
+ *    derive their visible layout from it (see {@link PopupContent.setBodyHeight});
+ *    the frame's own clipping below is only defensive containment, never the
+ *    viewport implementation
  * 6. the footer/help lines sit inside the same boundary, below a separator
  * ```
  *
  * The wrapped component never sees the border cells: it is rendered at the
- * inner content width, and components that manage a viewport
- * ({@link PopupContent.setBodyHeight}) receive the exact number of body rows
- * the frame allocated, so scrolling content cannot push the bottom border or
- * the footer off the surface.
+ * inner content width and receives the exact number of body rows the frame
+ * allocated, so scrolling content cannot push the bottom border or the
+ * footer off the surface, and a selection can never move into rows the frame
+ * would have clipped away.
  *
  * Constrained terminals degrade gracefully and in one place: horizontal
  * padding yields first, then vertical padding, then the footer, and the body
@@ -70,12 +72,18 @@ export interface PopupContent extends Component {
   /** Help/hint lines rendered inside the boundary, below a separator. */
   popupFooter(): string[];
   /**
-   * Optional viewport hook for components that manage their own scrollable
-   * or split content. The frame calls it with the exact number of body rows
-   * allocated for the current render pass, after border, padding, and footer
-   * are subtracted.
+   * The finite-layout hook every popup body must implement.
+   *
+   * The frame calls this with the exact number of body rows allocated for
+   * the current render pass — after border, padding, and footer are
+   * subtracted — before every `render`. The component must derive its
+   * visible layout from this budget in physical rendered rows: headers and
+   * interactive input first, the currently selected item always, surrounding
+   * items as space permits, and subordinate metadata only with what remains.
+   * A selection the user can move to must never fall outside the rows the
+   * component returns.
    */
-  setBodyHeight?(height: number): void;
+  setBodyHeight(height: number): void;
 }
 
 export class PopupFrame implements Component {
@@ -157,7 +165,10 @@ export class PopupFrame implements Component {
 
     let bodyLines: string[] = [];
     if (bodyHeight > 0) {
-      this.#content.setBodyHeight?.(bodyHeight);
+      // The one semantic path: the body lays itself out inside the finite
+      // rectangle it is handed. The slice below is defensive containment
+      // against a misbehaving body, not a viewport mechanism.
+      this.#content.setBodyHeight(bodyHeight);
       bodyLines = this.#content
         .render(contentWidth)
         .slice(0, bodyHeight)
@@ -208,4 +219,45 @@ function dash(count: number): string {
 
 function pad(line: string, width: number): string {
   return line + " ".repeat(Math.max(0, width - visibleWidth(line)));
+}
+
+/**
+ * A physical-row window into a popup list, anchored on the selected item.
+ *
+ * Popup bodies derive their visible viewport from the finite row budget the
+ * PopupFrame allocated, in *physical rendered rows* — one item may cost
+ * several rows (a selected row with details, a session row with metadata).
+ * The selected index is always inside the returned window, even when its own
+ * cost exceeds the budget (the caller then renders the entry's leading rows,
+ * which carry the selection marker). The window grows downward first, then
+ * upward, so the reading direction is preferred when both fit partially.
+ *
+ * This is geometry over abstract row costs only; it knows nothing about any
+ * selector's items, and it never changes the logical selection.
+ */
+export function windowAroundSelected(
+  count: number,
+  selected: number,
+  budget: number,
+  rowCost: (index: number) => number,
+): { start: number; end: number } {
+  if (count === 0) return { start: 0, end: 0 };
+  const anchor = Math.max(0, Math.min(selected, count - 1));
+  let start = anchor;
+  let end = anchor + 1;
+  let used = rowCost(anchor);
+  for (;;) {
+    if (end < count && used + rowCost(end) <= budget) {
+      used += rowCost(end);
+      end += 1;
+      continue;
+    }
+    if (start > 0 && used + rowCost(start - 1) <= budget) {
+      used += rowCost(start - 1);
+      start -= 1;
+      continue;
+    }
+    break;
+  }
+  return { start, end };
 }

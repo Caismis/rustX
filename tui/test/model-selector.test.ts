@@ -473,6 +473,88 @@ describe("catalog reasoning is never presented as current configuration", () => 
   });
 });
 
+describe("finite viewport", () => {
+  // Issue #161 blocker regression: the selector must lay out its list inside
+  // the finite body rows PopupFrame allocated, so a selection the user can
+  // move to is always visible — never clipped away by the frame.
+  // Budget 16 is a realistic constrained popup: a 24-row terminal at the
+  // selector's 70% overlay height.
+  const manyModels = Array.from({ length: 12 }, (_, index) =>
+    catalogModel(`prov/model-${index}`),
+  );
+
+  function framedSelector(budget = 16) {
+    const component = new ModelSelector({
+      models: manyModels,
+      sessionModel: sessionModel("prov/model-0"),
+    });
+    const frame = new PopupFrame(component);
+    frame.setViewportHeight(budget);
+    return { component, frame };
+  }
+
+  function interiorRows(frame: PopupFrame): string[] {
+    return frame
+      .render(80)
+      .map(plainText)
+      .filter((line) => line.startsWith("│"));
+  }
+
+  it("keeps the selected model visible when selection moves beyond the first viewport", () => {
+    const { component, frame } = framedSelector();
+    const chosen: string[] = [];
+    component.onSelect = (model) => chosen.push(model.model);
+
+    // The initial window cannot hold all twelve models at this budget.
+    const initial = interiorRows(frame).join("\n");
+    assert.doesNotMatch(initial, /model-11/);
+
+    // Move the logical selection well beyond the first viewport.
+    for (let index = 0; index < 7; index += 1) component.handleInput("\u001b[B");
+    assert.equal(component.selectedModel()?.model, "prov/model-7");
+
+    const rows = interiorRows(frame);
+    const markerRow = rows.find((line) => line.includes("❯"));
+    assert.ok(markerRow?.includes("prov/model-7"), "the selected row is visible and marked");
+    // The selected entry keeps its detail rows when the budget allows them.
+    assert.ok(
+      rows.some((line) => line.includes("catalog reasoning")),
+      "the selected entry's detail rows render",
+    );
+
+    // Enter selects exactly the visible, marked item.
+    component.handleInput("\r");
+    assert.deepEqual(chosen, ["prov/model-7"]);
+
+    // Moving back to the beginning shows the first model again.
+    for (let index = 0; index < 7; index += 1) component.handleInput("\u001b[A");
+    assert.equal(component.selectedModel()?.model, "prov/model-0");
+    const back = interiorRows(frame);
+    assert.ok(
+      back.find((line) => line.includes("❯"))?.includes("prov/model-0"),
+      "selection at the start of the list is visible and marked",
+    );
+  });
+
+  it("yields the subordinate context block before the selected entry", () => {
+    // Body rows: frame budget 10 → 4 body rows (6 chrome). The selected entry
+    // alone costs 3; the configured/effective/reasoning context must yield.
+    const { component, frame } = framedSelector(10);
+    for (let index = 0; index < 5; index += 1) component.handleInput("\u001b[B");
+    const rows = interiorRows(frame);
+    assert.ok(
+      rows.find((line) => line.includes("❯"))?.includes("prov/model-5"),
+      "the selected model is still visible",
+    );
+    assert.ok(
+      rows.every((line) => !line.includes("configured reasoning")),
+      "subordinate context yields under constrained height",
+    );
+    // The interactive search header is required context and never yields.
+    assert.ok(rows.some((line) => line.includes("Search:")));
+  });
+});
+
 describe("keyboard selection", () => {
   it("navigates, selects, and cancels", () => {
     const component = selector();

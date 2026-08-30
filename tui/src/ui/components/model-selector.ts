@@ -65,10 +65,16 @@ import {
   describeReasoning,
 } from "../../presentation/selectors.ts";
 import { role, style, plainText, plainWidth } from "../theme.ts";
-import type { PopupContent } from "./popup-frame.ts";
+import {
+  windowAroundSelected,
+  type PopupContent,
+} from "./popup-frame.ts";
 
-/** How many rows the list shows before it scrolls. */
-const VISIBLE_ROWS = 6;
+/** Default body rows when rendered without a frame (component tests). */
+const DEFAULT_BODY_HEIGHT = 24;
+
+/** Physical rows one list entry costs: the head row, plus details when selected. */
+const SELECTED_ENTRY_ROWS = 3;
 
 export interface ModelSelectorOptions {
   models: CatalogModelView[];
@@ -89,6 +95,7 @@ export class ModelSelector implements PopupContent, Focusable {
   readonly #searchInput: Input;
   #query = "";
   #selected = 0;
+  #bodyHeight = DEFAULT_BODY_HEIGHT;
 
   constructor(options: ModelSelectorOptions) {
     this.#models = options.models;
@@ -146,6 +153,15 @@ export class ModelSelector implements PopupContent, Focusable {
     return ["↑↓ navigate · Enter select · Esc close"];
   }
 
+  /**
+   * The finite body-row budget the PopupFrame allocated for this pass. The
+   * list viewport below is derived from it in physical rendered rows, so the
+   * selected entry can never scroll into rows the frame would clip.
+   */
+  setBodyHeight(height: number): void {
+    this.#bodyHeight = Math.max(1, Math.floor(height));
+  }
+
   invalidate(): void {
     // Nothing is cached: the component renders from its inputs every time.
   }
@@ -188,35 +204,53 @@ export class ModelSelector implements PopupContent, Focusable {
     const visible = this.visibleModels();
     const searchWidth = Math.max(1, width - plainWidth("Search: "));
     const search = this.#searchInput.render(searchWidth)[0] ?? "";
-    const lines: string[] = [
-      truncate(`${role.meta("Search:")} ${search}`, width),
-      "",
-    ];
+    // The interactive header always renders first: it owns the input focus.
+    const header = [truncate(`${role.meta("Search:")} ${search}`, width), ""];
+    const budget = Math.max(1, this.#bodyHeight);
 
     if (visible.length === 0) {
-      lines.push(role.meta(`no model matches ${JSON.stringify(this.#query)}`));
-    } else {
-      const start = Math.max(
-        0,
-        Math.min(
-          this.#selected - Math.floor(VISIBLE_ROWS / 2),
-          visible.length - VISIBLE_ROWS,
-        ),
-      );
-      const window = visible.slice(start, start + VISIBLE_ROWS);
-      window.forEach((model, index) => {
-        lines.push(...this.#renderRow(model, start + index === this.#selected, width));
-      });
-      if (visible.length > VISIBLE_ROWS) {
-        lines.push(
-          role.meta(`${this.#selected + 1}/${visible.length}`),
-        );
-      }
+      return [
+        ...header,
+        role.meta(`no model matches ${JSON.stringify(this.#query)}`),
+        "",
+        ...this.#renderContext(),
+      ].slice(0, budget);
     }
 
-    lines.push("");
-    lines.push(...this.#renderContext());
-    return lines;
+    // The selectable list owns the first claim on body rows after the
+    // header, and the selected entry is always inside the window. The
+    // trailing block — scroll position, then the configured/effective/
+    // attempt context — is subordinate: it fills the rows the list leaves
+    // and yields, lowest priority last-line-first, before the selected entry
+    // ever would.
+    const tail: string[] = [
+      role.meta(`${this.#selected + 1}/${visible.length}`),
+      "",
+      ...this.#renderContext(),
+    ];
+    let listBudget = budget - header.length - tail.length;
+    while (listBudget < SELECTED_ENTRY_ROWS && tail.length > 0) {
+      tail.pop();
+      listBudget += 1;
+    }
+    const window = windowAroundSelected(
+      visible.length,
+      this.#selected,
+      Math.max(1, listBudget),
+      (index) => (index === this.#selected ? SELECTED_ENTRY_ROWS : 1),
+    );
+    const lines = [...header];
+    for (let index = window.start; index < window.end; index += 1) {
+      lines.push(
+        ...this.#renderRow(visible[index]!, index === this.#selected, width),
+      );
+    }
+    if (window.start === 0 && window.end === visible.length) {
+      // Nothing is scrolled out of view, so the position line is noise.
+      tail.shift();
+    }
+    lines.push(...tail.slice(0, Math.max(0, budget - lines.length)));
+    return lines.slice(0, budget);
   }
 
   #selectCurrent(): void {

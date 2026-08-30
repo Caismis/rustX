@@ -32,7 +32,7 @@ class StubContent implements PopupContent {
   invalidated = 0;
   received: string[] = [];
   bodyHeights: number[] = [];
-  lastWidth: number | undefined;
+  widths: number[] = [];
 
   readonly body: string[];
   readonly title: string;
@@ -69,7 +69,7 @@ class StubContent implements PopupContent {
   }
 
   render(width: number): string[] {
-    this.lastWidth = width;
+    this.widths.push(width);
     return this.body;
   }
 }
@@ -153,10 +153,40 @@ describe("PopupFrame geometry", () => {
     // 20 budget − 2 borders − 2 vertical padding − 1 separator − 1 footer.
     assert.deepEqual(content.bodyHeights, [14]);
     // 40 outer − 2 borders − 2 horizontal padding.
-    assert.equal(content.lastWidth, 36);
+    assert.deepEqual(content.widths, [36]);
   });
 
-  it("clips an overlong body instead of letting it push the border out", () => {
+  it("hands the exact finite body rectangle to the content on every render pass", () => {
+    // The strengthened PopupContent contract: there is one layout model, and
+    // every body receives its finite allocation — after border, padding, and
+    // footer — before every render.
+    const content = new StubContent(["row"]);
+    const frame = new PopupFrame(content);
+    frame.setViewportHeight(20);
+    frame.render(40);
+    frame.setViewportHeight(12);
+    frame.render(60);
+    // 20 − 6 chrome = 14, then 12 − 6 = 6; widths 40 − 4 and 60 − 4.
+    assert.deepEqual(content.bodyHeights, [14, 6]);
+    assert.deepEqual(content.widths, [36, 56]);
+  });
+
+  it("never clips a body that honours its allocation", () => {
+    // The frame's slice is defensive containment for a misbehaving body; a
+    // conforming body's rows pass through whole.
+    const probe = new StubContent(["row"]);
+    const probeFrame = new PopupFrame(probe);
+    probeFrame.setViewportHeight(20);
+    probeFrame.render(40);
+    const allocated = probe.bodyHeights[0]!;
+    const conforming = new StubContent(
+      Array.from({ length: allocated }, (_, index) => `row-${index}`),
+    );
+    const lines = framed(conforming, 40, 20).map(plainText).join("\n");
+    assert.match(lines, new RegExp(`row-${allocated - 1}`));
+  });
+
+  it("clips an overlong body only as defensive containment", () => {
     const content = new StubContent(
       Array.from({ length: 100 }, (_, index) => `body-${index}`),
     );
