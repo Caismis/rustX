@@ -669,12 +669,14 @@ impl ManagedOutputContinuation {
 
     fn minimum_render(&self) -> String {
         match self {
-            Self::Complete { .. } => format!(
-                "Complete output: [locator truncated]\n{}",
+            Self::Complete { locator } => format!(
+                "Complete output: {}\n{}",
+                locator.display(),
                 Self::COMPLETE_GUIDANCE
             ),
-            Self::Partial { .. } => format!(
-                "Partial output only: [locator truncated]\n{}",
+            Self::Partial { locator, .. } => format!(
+                "Partial output only: {}\n{}",
+                locator.display(),
                 Self::PARTIAL_GUIDANCE
             ),
             Self::Unavailable { .. } => "The output capture did not complete; the bounded result content is the only record and no complete output file is available.".to_owned(),
@@ -1123,5 +1125,33 @@ mod tests {
         let marker = "\n...[tool-owned result content truncated]";
         let prefix = text.strip_suffix(marker).expect("truncation marker");
         assert_eq!(prefix.len() % "😀".len(), 0);
+    }
+
+    #[test]
+    fn model_facing_projection_keeps_continuation_structure_before_status_tail() {
+        let bound = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES;
+        let status = ToolExecutionStatus::Failed {
+            error: "e".repeat(bound.saturating_mul(2)),
+        };
+        let result = ToolExecutionResult {
+            status: status.clone(),
+            content: Vec::new(),
+            duration_ms: 0,
+            exit_code: None,
+            artifacts: Vec::new(),
+            truncation: None,
+            managed_output: Some(super::ManagedOutputContinuation::Complete {
+                locator: std::path::PathBuf::from("/tmp/rustx/results/result_8.txt"),
+            }),
+        };
+
+        let projection = result.model_facing_projection();
+        assert!(projection.byte_len() <= bound);
+        let text = projection.as_text();
+        assert!(text.contains("Tool call failed: e"));
+        assert!(text.contains("...[tool status truncated]"));
+        assert!(text.contains("Complete output: /tmp/rustx/results/result_8.txt"));
+        assert!(text.contains("Read or Grep"));
+        assert_eq!(result.status, status, "typed status remains authoritative");
     }
 }
