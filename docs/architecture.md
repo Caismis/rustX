@@ -1075,6 +1075,18 @@ carries only the data known at start (`ToolCallStart`: call id, tool id,
 name); raw argument fragments stream via `ToolCallArgumentsDelta`, and the
 fully assembled `ToolCall` is emitted only at `ToolCallCompleted`.
 
+The provider adapter normalizes protocol events into this canonical stream;
+`ModelEventAssembler` then retains the canonical `Completed` event it actually
+consumed as the sole successful terminal authority and validates semantic
+coherence before the Agent Loop can act on the result. Its `finish()` operation
+has no caller-supplied terminal override: the assembled turn carries the
+consumed event's finish reason and terminal usage. In particular, a completed
+turn satisfies the bidirectional tool-call rule: `ModelFinishReason::ToolCalls`
+occurs if and only if the assembled turn contains at least one complete
+canonical `ToolCall`. An empty `ToolCalls` turn and canonical tool calls under
+any other finish reason are explicit `RuntimeError::ContractViolation`
+failures, never successful no-tool turns or normalized finish reasons.
+
 ### 2.4 Tool execution event identity
 
 Every tool execution event carries the executing tool call identity:

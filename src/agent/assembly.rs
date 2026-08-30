@@ -18,6 +18,10 @@
 //!   provisional output that a later refusal invalidates);
 //! - provider continuation state attaches to its reasoning block, and the
 //!   boundary (greatest-block-index) state is reported for the next request.
+//! - the successful `Completed` event is retained as the sole terminal
+//!   authority, including its finish reason and terminal usage;
+//! - a `ToolCalls` terminal has at least one complete canonical tool call, and
+//!   any complete canonical tool call requires a `ToolCalls` terminal.
 //!
 //! Violations of the canonical contract are explicit
 //! [`RuntimeError::ContractViolation`] failures; impossible streams are
@@ -40,6 +44,9 @@ use crate::tools::types::ToolCall;
 /// The assembled result of one completed model turn.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AssembledTurn {
+    /// The finish reason from the canonical `Completed` event consumed by
+    /// this assembler.
+    pub finish_reason: ModelFinishReason,
     /// The assembled content blocks in index order, after refusal rollback.
     pub content: Vec<AssistantContentBlock>,
     /// The fully assembled tool calls of this turn, in block order. These
@@ -60,6 +67,18 @@ struct PendingCall {
     completed: bool,
 }
 
+/// The terminal fact consumed by the assembler.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AssemblyTerminal {
+    /// A successful canonical model completion and its terminal data.
+    Completed {
+        finish_reason: ModelFinishReason,
+        usage: Option<ModelUsage>,
+    },
+    /// A normalized model failure. It cannot produce an [`AssembledTurn`].
+    Failed,
+}
+
 /// Assemblies one canonical `ModelEvent` stream into an ordered message.
 ///
 /// The assembler owns no runtime event emission and no identities; the loop
@@ -70,9 +89,9 @@ pub struct ModelEventAssembler {
     tool_calls: BTreeMap<ToolCallId, PendingCall>,
     completed_calls: Vec<(ContentBlockIndex, ToolCall)>,
     continuation: Option<(ContentBlockIndex, ProviderContinuationState)>,
-    usage: Option<ModelUsage>,
+    latest_usage: Option<ModelUsage>,
     started: bool,
-    terminal: bool,
+    terminal: Option<AssemblyTerminal>,
 }
 
 impl ModelEventAssembler {
@@ -92,7 +111,7 @@ impl ModelEventAssembler {
     /// event, a content delta targeting a foreign or skipped block, or a
     /// tool-call delta that cannot be attributed to an open call.
     pub fn push(&mut self, event: &ModelEvent) -> Result<(), RuntimeError> {
-        if self.terminal {
+        if self.terminal.is_some() {
             return Err(violation("model event after the terminal event"));
         }
         match event {
@@ -104,14 +123,20 @@ impl ModelEventAssembler {
                 Ok(())
             }
             ModelEvent::Failed { .. } => {
-                self.terminal = true;
+                self.terminal = Some(AssemblyTerminal::Failed);
                 Ok(())
             }
-            ModelEvent::Completed { .. } => {
+            ModelEvent::Completed {
+                finish_reason,
+                usage,
+            } => {
                 if !self.started {
                     return Err(violation("terminal Completed before Started"));
                 }
-                self.terminal = true;
+                self.terminal = Some(AssemblyTerminal::Completed {
+                    finish_reason: finish_reason.clone(),
+                    usage: usage.clone(),
+                });
                 Ok(())
             }
             _ => {
@@ -140,7 +165,7 @@ impl ModelEventAssembler {
                         self.complete_tool_call(*block_index, call)
                     }
                     ModelEvent::UsageUpdate { usage } => {
-                        self.usage = Some(usage.clone());
+                        self.latest_usage = Some(usage.clone());
                         Ok(())
                     }
                     ModelEvent::ContinuationState { block_index, state } => {
@@ -154,12 +179,14 @@ impl ModelEventAssembler {
         }
     }
 
-    /// Returns the latest cumulative usage snapshot observed for this exact
-    /// provider request. Snapshots are replaced, never summed, so a failure
-    /// can retain trustworthy usage without fabricating a terminal total.
+    /// Returns the latest cumulative `UsageUpdate` snapshot observed for this
+    /// exact provider request. Snapshots are replaced, never summed, so a
+    /// failed request can retain trustworthy usage without fabricating a
+    /// terminal total. Successful terminal usage is exposed only through
+    /// [`AssembledTurn::usage`].
     #[must_use]
     pub fn latest_usage(&self) -> Option<ModelUsage> {
-        self.usage.clone()
+        self.latest_usage.clone()
     }
 
     /// Appends a text delta to its block.
@@ -238,17 +265,28 @@ impl ModelEventAssembler {
     }
 
     /// Finalizes the turn: rolls back provisional content on a refusal and
-    /// rejects streams with tool calls that never completed.
+    /// rejects streams without a successful `Completed` terminal, with
+    /// incomplete tool calls, or with semantically inconsistent tool calls.
     ///
     /// # Errors
     ///
-    /// Returns [`RuntimeError::ContractViolation`] when a started tool call
-    /// never completed before the terminal event.
-    pub fn finish(
-        self,
-        finish_reason: &ModelFinishReason,
-        reported_usage: Option<ModelUsage>,
-    ) -> Result<AssembledTurn, RuntimeError> {
+    /// Returns [`RuntimeError::ContractViolation`] when the stream did not
+    /// end in a successful `Completed` event, when a started tool call never
+    /// completed before the terminal event, or when the terminal finish
+    /// reason and assembled canonical tool-call collection disagree.
+    pub fn finish(self) -> Result<AssembledTurn, RuntimeError> {
+        let (finish_reason, terminal_usage) = match self.terminal {
+            Some(AssemblyTerminal::Completed {
+                finish_reason,
+                usage,
+            }) => (finish_reason, usage),
+            Some(AssemblyTerminal::Failed) => {
+                return Err(violation(
+                    "a failed model stream cannot produce a successful assembled turn",
+                ));
+            }
+            None => return Err(violation("model stream ended without a terminal event")),
+        };
         for (call_id, pending) in &self.tool_calls {
             if !pending.completed {
                 return Err(violation(&format!(
@@ -256,7 +294,7 @@ impl ModelEventAssembler {
                 )));
             }
         }
-        let refusal = *finish_reason == ModelFinishReason::Refusal;
+        let refusal = finish_reason == ModelFinishReason::Refusal;
         let mut content = Vec::with_capacity(self.blocks.len());
         for block in self.blocks {
             let Some(block) = block else {
@@ -269,11 +307,23 @@ impl ModelEventAssembler {
         let mut completed_calls = self.completed_calls;
         completed_calls.sort_by_key(|(block_index, _)| *block_index);
         let tool_calls: Vec<ToolCall> = completed_calls.into_iter().map(|(_, call)| call).collect();
+        let has_tool_calls = !tool_calls.is_empty();
+        if finish_reason == ModelFinishReason::ToolCalls && !has_tool_calls {
+            return Err(violation(
+                "model stream terminated with ToolCalls but produced no complete canonical tool call",
+            ));
+        }
+        if finish_reason != ModelFinishReason::ToolCalls && has_tool_calls {
+            return Err(violation(&format!(
+                "model stream produced complete canonical tool calls but terminated with {finish_reason:?}"
+            )));
+        }
         Ok(AssembledTurn {
+            finish_reason,
             content,
             tool_calls,
             continuation: self.continuation.map(|(_, state)| state),
-            usage: reported_usage.or(self.usage),
+            usage: terminal_usage.or(self.latest_usage),
         })
     }
 
@@ -467,7 +517,7 @@ impl BlockKind {
 
 #[cfg(test)]
 mod tests {
-    use super::{AssembledTurn, ModelEventAssembler};
+    use super::{AssembledTurn, AssemblyTerminal, ModelEventAssembler};
     use crate::message::types::{AssistantContentBlock, ContentBlockIndex};
     use crate::model::error::{ModelError, ModelErrorKind};
     use crate::model::event::ModelEvent;
@@ -536,31 +586,29 @@ mod tests {
         }
     }
 
-    fn assemble(events: &[ModelEvent], finish: &ModelFinishReason) -> AssembledTurn {
+    fn assemble(events: &[ModelEvent]) -> AssembledTurn {
         let mut assembler = ModelEventAssembler::new();
         assembler.push(&ModelEvent::Started).expect("started");
         for event in events {
             assembler.push(event).expect("valid stream");
         }
-        assembler.finish(finish, None).expect("finish turn")
+        assembler.finish().expect("finish turn")
     }
 
     /// A plain text turn assembles deltas in order into one text block.
     #[test]
     fn text_deltas_concatenate_in_order() {
-        let turn = assemble(
-            &[
-                text(0, "hello"),
-                text(0, " world"),
-                completed(ModelFinishReason::Stop),
-            ],
-            &ModelFinishReason::Stop,
-        );
+        let turn = assemble(&[
+            text(0, "hello"),
+            text(0, " world"),
+            completed(ModelFinishReason::Stop),
+        ]);
         assert_eq!(turn.content.len(), 1);
         let AssistantContentBlock::Text(block) = &turn.content[0] else {
             panic!("expected a text block");
         };
         assert_eq!(block.text, "hello world");
+        assert_eq!(turn.finish_reason, ModelFinishReason::Stop);
         assert!(turn.tool_calls.is_empty());
         assert!(turn.continuation.is_none());
     }
@@ -568,17 +616,14 @@ mod tests {
     /// Interleaved reasoning, tool call, and text assemble in index order.
     #[test]
     fn interleaved_blocks_assemble_in_order() {
-        let turn = assemble(
-            &[
-                reasoning(0, "Think."),
-                call_start(1, "call-1"),
-                call_args(1, "call-1", r#"{"x":1}"#),
-                call_done(1, "call-1", serde_json::json!({"x": 1})),
-                text(2, "Answer."),
-                completed(ModelFinishReason::ToolCalls),
-            ],
-            &ModelFinishReason::ToolCalls,
-        );
+        let turn = assemble(&[
+            reasoning(0, "Think."),
+            call_start(1, "call-1"),
+            call_args(1, "call-1", r#"{"x":1}"#),
+            call_done(1, "call-1", serde_json::json!({"x": 1})),
+            text(2, "Answer."),
+            completed(ModelFinishReason::ToolCalls),
+        ]);
         assert_eq!(turn.content.len(), 3);
         assert!(matches!(
             &turn.content[0],
@@ -590,38 +635,98 @@ mod tests {
         assert!(matches!(&turn.content[2], AssistantContentBlock::Text(t) if t.text == "Answer."));
         assert_eq!(turn.tool_calls.len(), 1);
         assert_eq!(turn.tool_calls[0].arguments, serde_json::json!({"x": 1}));
+        assert_eq!(turn.finish_reason, ModelFinishReason::ToolCalls);
+    }
+
+    /// A `ToolCalls` terminal without a complete canonical call is rejected
+    /// at the canonical assembly boundary.
+    #[test]
+    fn tool_calls_finish_without_a_complete_call_is_rejected() {
+        let mut assembler = ModelEventAssembler::new();
+        assembler.push(&ModelEvent::Started).expect("started");
+        assembler
+            .push(&completed(ModelFinishReason::ToolCalls))
+            .expect("completed");
+
+        let error = assembler
+            .finish()
+            .expect_err("an empty ToolCalls turn is invalid");
+        let RuntimeError::ContractViolation { message } = error else {
+            panic!("expected a canonical contract violation");
+        };
+        assert!(message.contains("ToolCalls"));
+        assert!(message.contains("no complete canonical tool call"));
+    }
+
+    /// A complete canonical call requires the matching `ToolCalls` terminal;
+    /// the assembler never lets the loop infer a different finish semantic.
+    #[test]
+    fn complete_tool_call_with_stop_is_rejected() {
+        let mut assembler = ModelEventAssembler::new();
+        assembler.push(&ModelEvent::Started).expect("started");
+        assembler.push(&call_start(0, "call-1")).expect("start");
+        assembler
+            .push(&call_done(0, "call-1", serde_json::json!({"x": 1})))
+            .expect("done");
+        assembler
+            .push(&completed(ModelFinishReason::Stop))
+            .expect("completed");
+
+        let error = assembler
+            .finish()
+            .expect_err("a call under Stop is invalid");
+        let RuntimeError::ContractViolation { message } = error else {
+            panic!("expected a canonical contract violation");
+        };
+        assert!(message.contains("complete canonical tool calls"));
+        assert!(message.contains("Stop"));
+    }
+
+    /// Multiple complete canonical calls remain valid under `ToolCalls`.
+    #[test]
+    fn multiple_complete_tool_calls_with_tool_calls_are_valid() {
+        let turn = assemble(&[
+            call_start(0, "call-1"),
+            call_done(0, "call-1", serde_json::json!({"x": 1})),
+            call_start(1, "call-2"),
+            call_done(1, "call-2", serde_json::json!({"x": 2})),
+            completed(ModelFinishReason::ToolCalls),
+        ]);
+        assert_eq!(turn.finish_reason, ModelFinishReason::ToolCalls);
+        assert_eq!(
+            turn.tool_calls
+                .iter()
+                .map(|call| call.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["call-1", "call-2"]
+        );
     }
 
     /// A refusal terminal rolls back provisional content: only the refusal
     /// blocks remain in the committed message.
     #[test]
     fn refusal_rolls_back_provisional_content() {
-        let turn = assemble(
-            &[
-                text(0, "I would normally answer, but"),
-                refusal(1, "I cannot comply."),
-                completed(ModelFinishReason::Refusal),
-            ],
-            &ModelFinishReason::Refusal,
-        );
+        let turn = assemble(&[
+            text(0, "I would normally answer, but"),
+            refusal(1, "I cannot comply."),
+            completed(ModelFinishReason::Refusal),
+        ]);
         assert_eq!(turn.content.len(), 1);
         assert!(
             matches!(&turn.content[0], AssistantContentBlock::Refusal(r) if r.text == "I cannot comply.")
         );
+        assert_eq!(turn.finish_reason, ModelFinishReason::Refusal);
         assert!(turn.tool_calls.is_empty());
     }
 
     /// Multiple refusal deltas concatenate into one refusal block.
     #[test]
     fn refusal_deltas_concatenate() {
-        let turn = assemble(
-            &[
-                refusal(0, "I cannot "),
-                refusal(0, "comply."),
-                completed(ModelFinishReason::Refusal),
-            ],
-            &ModelFinishReason::Refusal,
-        );
+        let turn = assemble(&[
+            refusal(0, "I cannot "),
+            refusal(0, "comply."),
+            completed(ModelFinishReason::Refusal),
+        ]);
         let AssistantContentBlock::Refusal(block) = &turn.content[0] else {
             panic!("expected a refusal block");
         };
@@ -638,6 +743,54 @@ mod tests {
             .expect("completed");
         let error = assembler.push(&text(0, "late")).expect_err("rejected");
         assert!(matches!(error, RuntimeError::ContractViolation { .. }));
+    }
+
+    /// A successful assembled turn exposes the reason retained from its own
+    /// `Completed` event; there is no second finish-reason input to override
+    /// it during finalization.
+    #[test]
+    fn completed_terminal_reason_is_retained_by_assembled_turn() {
+        let turn = assemble(&[completed(ModelFinishReason::Length)]);
+        assert_eq!(turn.finish_reason, ModelFinishReason::Length);
+    }
+
+    /// Only a successful `Completed` terminal can produce an assembled turn.
+    #[test]
+    fn finish_rejects_missing_or_failed_terminal() {
+        let mut without_terminal = ModelEventAssembler::new();
+        without_terminal
+            .push(&ModelEvent::Started)
+            .expect("started");
+        let error = without_terminal
+            .finish()
+            .expect_err("a stream without Completed cannot assemble");
+        assert!(matches!(
+            error,
+            RuntimeError::ContractViolation { message }
+                if message.contains("without a terminal event")
+        ));
+
+        let mut failed = ModelEventAssembler::new();
+        failed
+            .push(&ModelEvent::Failed {
+                error: ModelError {
+                    kind: ModelErrorKind::Timeout,
+                    message: "boom".to_owned(),
+                    retry_disposition: crate::model::error::ModelRetryDisposition::Never,
+                    retry_after_ms: None,
+                    provider_code: None,
+                    context_overflow: None,
+                },
+            })
+            .expect("failed terminal");
+        let error = failed
+            .finish()
+            .expect_err("a failed stream cannot assemble successfully");
+        assert!(matches!(
+            error,
+            RuntimeError::ContractViolation { message }
+                if message.contains("failed model stream")
+        ));
     }
 
     /// Content before `Started` and a second terminal are rejected.
@@ -678,7 +831,7 @@ mod tests {
                 },
             })
             .expect("legal rejected request");
-        assert!(assembler.terminal);
+        assert!(matches!(assembler.terminal, Some(AssemblyTerminal::Failed)));
         assert!(!assembler.started);
     }
 
@@ -715,10 +868,12 @@ mod tests {
         assembler
             .push(&completed(ModelFinishReason::ToolCalls))
             .expect("completed");
-        let error = assembler
-            .finish(&ModelFinishReason::ToolCalls, None)
-            .expect_err("rejected");
-        assert!(matches!(error, RuntimeError::ContractViolation { .. }));
+        let error = assembler.finish().expect_err("rejected");
+        assert!(matches!(
+            error,
+            RuntimeError::ContractViolation { message }
+                if message.contains("never completed")
+        ));
     }
 
     /// A skipped block index is a contract violation, never a silent gap.
@@ -735,10 +890,16 @@ mod tests {
     /// Usage updates are tracked and the terminal reported usage wins.
     #[test]
     fn usage_tracks_updates_with_terminal_winning() {
-        let usage = ModelUsage {
+        let latest_usage = ModelUsage {
             input_tokens: 1,
             output_tokens: 2,
             total_tokens: 3,
+            details: None,
+        };
+        let terminal_usage = ModelUsage {
+            input_tokens: 4,
+            output_tokens: 5,
+            total_tokens: 9,
             details: None,
         };
         let mut assembler = ModelEventAssembler::new();
@@ -746,16 +907,36 @@ mod tests {
         assembler.push(&text(0, "hi")).expect("text");
         assembler
             .push(&ModelEvent::UsageUpdate {
-                usage: usage.clone(),
+                usage: latest_usage,
             })
             .expect("usage");
         assembler.push(&text(0, "!")).expect("text");
         assembler
-            .push(&completed(ModelFinishReason::Stop))
+            .push(&ModelEvent::Completed {
+                finish_reason: ModelFinishReason::Stop,
+                usage: Some(terminal_usage.clone()),
+            })
             .expect("completed");
-        let turn = assembler
-            .finish(&ModelFinishReason::Stop, Some(usage.clone()))
-            .expect("finish");
+        let turn = assembler.finish().expect("finish");
+        assert_eq!(turn.usage, Some(terminal_usage));
+    }
+
+    /// When `Completed` omits usage, the latest cumulative update remains the
+    /// successful turn's usage fallback.
+    #[test]
+    fn usage_updates_are_the_successful_terminal_fallback() {
+        let usage = ModelUsage {
+            input_tokens: 1,
+            output_tokens: 2,
+            total_tokens: 3,
+            details: None,
+        };
+        let turn = assemble(&[
+            ModelEvent::UsageUpdate {
+                usage: usage.clone(),
+            },
+            completed(ModelFinishReason::Stop),
+        ]);
         assert_eq!(turn.usage, Some(usage));
     }
 }

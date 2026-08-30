@@ -584,10 +584,9 @@ struct OpenPublication {
 
 /// How one model stream of a turn ended.
 enum StreamTerminal {
-    Completed {
-        finish_reason: ModelFinishReason,
-        usage: Option<ModelUsage>,
-    },
+    /// The canonical assembler owns the successful terminal data; this
+    /// marker only tells the loop which control-flow path to take.
+    Completed,
     Failed {
         error: ModelError,
     },
@@ -1339,13 +1338,8 @@ impl<'a> AgentExecution<'a> {
                 terminal,
             } = invocation;
             match terminal {
-                StreamTerminal::Completed {
-                    finish_reason,
-                    usage,
-                } => {
-                    return self
-                        .complete_turn(message_id, finish_reason, usage, assembler)
-                        .await;
+                StreamTerminal::Completed => {
+                    return self.complete_turn(message_id, assembler).await;
                 }
                 StreamTerminal::Failed { error } => {
                     let Some(failed_request_id) = self.last_request_id.clone() else {
@@ -1431,11 +1425,9 @@ impl<'a> AgentExecution<'a> {
     async fn complete_turn(
         &mut self,
         assistant_message_id: MessageId,
-        finish_reason: ModelFinishReason,
-        usage: Option<ModelUsage>,
         assembler: ModelEventAssembler,
     ) -> Option<Terminal> {
-        let turn_assembly = match assembler.finish(&finish_reason, usage) {
+        let turn_assembly = match assembler.finish() {
             Ok(assembly) => assembly,
             Err(error) => {
                 return Some(Terminal::Failed {
@@ -1463,6 +1455,9 @@ impl<'a> AgentExecution<'a> {
             });
         };
         // P: the provider outcome of this exact request becomes durable.
+        // This downstream copy is derived only after canonical assembly has
+        // validated and retained the event's terminal fact.
+        let finish_reason = turn_assembly.finish_reason.clone();
         self.emit(RuntimeEvent::ModelRequestCompleted {
             request_id,
             finish_reason: finish_reason.clone(),
@@ -3425,14 +3420,8 @@ impl<'a> AgentExecution<'a> {
                 });
             }
             match &event {
-                ModelEvent::Completed {
-                    finish_reason,
-                    usage,
-                } => {
-                    stream_terminal = Some(StreamTerminal::Completed {
-                        finish_reason: finish_reason.clone(),
-                        usage: usage.clone(),
-                    });
+                ModelEvent::Completed { .. } => {
+                    stream_terminal = Some(StreamTerminal::Completed);
                 }
                 ModelEvent::Failed { error } => {
                     self.settle_model_request_failure(assembler, error)?;
@@ -6637,6 +6626,107 @@ mod tests {
             "the failed terminal transaction leaves no durable terminal fact"
         );
         assert_eq!(store.terminal_event_attempts(), 1);
+    }
+
+    /// A completed canonical stream whose finish reason says `ToolCalls` but
+    /// contains no complete call fails the attempt before provider completion,
+    /// publication settlement, canonical history commit, or tool dispatch.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn empty_tool_calls_finish_is_a_terminal_contract_failure() {
+        let adapter = Arc::new(ScriptedAdapter::new(vec![vec![
+            ModelEvent::Started,
+            ModelEvent::Completed {
+                finish_reason: ModelFinishReason::ToolCalls,
+                usage: None,
+            },
+        ]]));
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
+                .expect("store"),
+        );
+        let tool_runtime = tool_runtime_with_store("conv-1", Some(store.clone()));
+        let (_dir, _coordinator, lease) =
+            capability_lease(ToolRegistry::new(), &tool_runtime).await;
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let observer = RecordingObserver::default();
+        let mut execution = AgentExecution::new(
+            request(&adapter),
+            lease,
+            &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
+            runtime(&adapter),
+            &tool_runtime,
+            crate::agent::AttemptLifecycle::inert(),
+        )
+        .expect("execution construction");
+        execution.observe(&observer);
+
+        let result = execution.run().await;
+
+        assert!(matches!(
+            &result.outcome,
+            AttemptOutcome::Failed {
+                error: crate::events::types::AttemptFailure::Runtime {
+                    error: crate::runtime::types::RuntimeError::ContractViolation { message }
+                }
+            } if message.contains("ToolCalls")
+                && message.contains("no complete canonical tool call")
+        ));
+        assert!(matches!(
+            result.terminal_state,
+            crate::agent::state::ExecutionState::Failed
+        ));
+        assert_eq!(
+            adapter.request_count(),
+            1,
+            "the invalid stream is consumed once"
+        );
+
+        let events = event_history(store.as_ref());
+        let terminal_events = events
+            .iter()
+            .filter(|event| AttemptOutcome::from_terminal_event(event).is_some())
+            .collect::<Vec<_>>();
+        assert_eq!(terminal_events.len(), 1, "exactly one terminal event");
+        assert!(matches!(
+            events.last(),
+            Some(RuntimeEvent::AttemptFailed {
+                error: crate::events::types::AttemptFailure::Runtime {
+                    error: crate::runtime::types::RuntimeError::ContractViolation { message }
+                },
+                ..
+            }) if message.contains("no complete canonical tool call")
+        ));
+        assert!(events.iter().all(|event| !matches!(
+            event,
+            RuntimeEvent::ModelRequestCompleted { .. }
+                | RuntimeEvent::AssistantMessageCommitted { .. }
+                | RuntimeEvent::ToolExecutionStarted { .. }
+                | RuntimeEvent::ToolMessageCommitted { .. }
+                | RuntimeEvent::TurnCompleted
+                | RuntimeEvent::AttemptCompleted { .. }
+        )));
+        assert!(
+            store
+                .load_canonical()
+                .expect("canonical history")
+                .is_empty(),
+            "an invalid model turn is not committed as assistant history"
+        );
+
+        let observed_events = observer.events();
+        assert_eq!(
+            observed_events
+                .iter()
+                .filter(|event| AttemptOutcome::from_terminal_event(event).is_some())
+                .count(),
+            1,
+            "the observer sees exactly one terminal event"
+        );
+        assert!(matches!(
+            observed_events.last(),
+            Some(RuntimeEvent::AttemptFailed { .. })
+        ));
     }
 
     #[tokio::test]
