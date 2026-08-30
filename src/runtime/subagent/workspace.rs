@@ -18,6 +18,12 @@
 //! The parent path is never consulted again to choose the child's base.  A
 //! dirty parent is therefore allowed by default without copying any of its
 //! bytes, and a later parent commit cannot move an already acquired child.
+//!
+//! Terminal changed-state is deliberately two-dimensional:
+//! `dirty = ordinary tracked/index/untracked-non-ignored Git status`, while
+//! `changed = dirty || (final HEAD != base_commit)`. Ignored build/cache
+//! artifacts alone are disposable execution output and do not force a
+//! handoff.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -158,9 +164,10 @@ pub struct WorkspaceHandoff {
     pub base_commit: String,
     /// The final child `HEAD` observed during settlement.
     pub head_commit: String,
-    /// Whether the final tracked/index/untracked/ignored Git status was
-    /// dirty. Ignored files are included at terminal settlement because a
-    /// generated ignored artifact can still be a user-relevant handoff.
+    /// Whether the final ordinary Git status was dirty. This includes
+    /// tracked/index changes and untracked non-ignored files; ignored files
+    /// alone do not make a handoff dirty. A committed child change is tracked
+    /// independently by `head_commit != base_commit`.
     pub dirty: bool,
 }
 
@@ -329,6 +336,8 @@ pub struct SubagentWorkspaceManager {
     runtime_root: PathBuf,
     #[cfg(test)]
     acquisition_hook: Option<std::sync::Arc<WorkspaceAcquireHook>>,
+    #[cfg(test)]
+    settlement_hook: Option<std::sync::Arc<WorkspaceSettlementHook>>,
 }
 
 impl SubagentWorkspaceManager {
@@ -341,6 +350,8 @@ impl SubagentWorkspaceManager {
             runtime_root: runtime_root.as_ref().to_path_buf(),
             #[cfg(test)]
             acquisition_hook: None,
+            #[cfg(test)]
+            settlement_hook: None,
         }
     }
 
@@ -349,6 +360,18 @@ impl SubagentWorkspaceManager {
     #[cfg(test)]
     pub(crate) fn install_acquisition_hook(&mut self, hook: std::sync::Arc<WorkspaceAcquireHook>) {
         self.acquisition_hook = Some(hook);
+    }
+
+    /// Installs a one-shot test seam immediately before final workspace Git
+    /// inspection. The hook is intentionally manager-local: it injects a
+    /// physical settlement failure after the child driver has completed its
+    /// semantic result, without adding a production failure mode.
+    #[cfg(test)]
+    pub(crate) fn install_settlement_hook(
+        &mut self,
+        hook: std::sync::Arc<WorkspaceSettlementHook>,
+    ) {
+        self.settlement_hook = Some(hook);
     }
 
     /// Acquires one workspace according to the resolved named-agent policy.
@@ -414,11 +437,7 @@ impl SubagentWorkspaceManager {
         let parent_status = self
             .git_text(
                 &self.parent_workspace,
-                vec![
-                    "status".into(),
-                    "--porcelain=v1".into(),
-                    "--untracked-files=all".into(),
-                ],
+                ordinary_workspace_status_args(),
                 Some(cancellation),
             )
             .await?;
@@ -709,15 +728,7 @@ impl SubagentWorkspaceManager {
             );
         };
         let head = run_git_sync(&snapshot.workspace, &["rev-parse", "HEAD"]);
-        let status = run_git_sync(
-            &snapshot.workspace,
-            &[
-                "status",
-                "--porcelain=v1",
-                "--untracked-files=all",
-                "--ignored=matching",
-            ],
-        );
+        let status = run_git_sync(&snapshot.workspace, &ORDINARY_WORKSPACE_STATUS_ARGS);
         let (head, status) = match (head, status) {
             (Ok(head), Ok(status)) => (head, status),
             (Err(error), _) | (_, Err(error)) => {
@@ -763,6 +774,7 @@ impl SubagentWorkspaceManager {
                 ),
             );
         }
+        let (dirty, _) = workspace_change_facts(snapshot.base_commit.as_deref(), &head, &status);
         WorkspaceSettlement {
             snapshot: snapshot.clone(),
             handoff: Some(WorkspaceHandoff {
@@ -770,7 +782,7 @@ impl SubagentWorkspaceManager {
                 branch,
                 base_commit,
                 head_commit: head,
-                dirty: !status.is_empty(),
+                dirty,
             }),
             cleanup: WorkspaceCleanup::Preserved,
             error: None,
@@ -880,6 +892,12 @@ impl WorkspaceLease {
 
     async fn settle_registered(self) -> WorkspaceSettlement {
         let snapshot = self.snapshot.clone();
+        #[cfg(test)]
+        if let Some(hook) = &self.manager.settlement_hook
+            && let Some(settlement) = hook.maybe_fail(&snapshot).await
+        {
+            return settlement;
+        }
         let head = match self
             .manager
             .git_text(
@@ -894,16 +912,7 @@ impl WorkspaceLease {
         };
         let status = match self
             .manager
-            .git_text(
-                &snapshot.workspace,
-                vec![
-                    "status".into(),
-                    "--porcelain=v1".into(),
-                    "--untracked-files=all".into(),
-                    "--ignored=matching".into(),
-                ],
-                None,
-            )
+            .git_text(&snapshot.workspace, ordinary_workspace_status_args(), None)
             .await
         {
             Ok(status) => status,
@@ -938,8 +947,8 @@ impl WorkspaceLease {
                 ),
             );
         }
-        let dirty = !status.is_empty();
-        let changed = dirty || snapshot.base_commit.as_deref() != Some(head.as_str());
+        let (dirty, changed) =
+            workspace_change_facts(snapshot.base_commit.as_deref(), &head, &status);
         let handoff = WorkspaceHandoff {
             workspace: snapshot.workspace.clone(),
             branch,
@@ -1086,6 +1095,33 @@ impl SubagentWorkspaceManager {
             ))
         }
     }
+}
+
+/// The one Git status definition used by live and recovery workspace
+/// settlement. Git's ordinary porcelain status reports tracked/index deltas
+/// and untracked non-ignored files; `--ignored=matching` is deliberately not
+/// present because execution caches are not handoff work by themselves.
+const ORDINARY_WORKSPACE_STATUS_ARGS: [&str; 3] =
+    ["status", "--porcelain=v1", "--untracked-files=all"];
+
+fn ordinary_workspace_status_args() -> Vec<OsString> {
+    ORDINARY_WORKSPACE_STATUS_ARGS
+        .iter()
+        .map(OsString::from)
+        .collect()
+}
+
+/// Returns the two independent terminal Git facts shared by live settlement
+/// and recovery inspection. Ordinary status determines `dirty`; committed
+/// child work is retained separately when `HEAD != base_commit`.
+fn workspace_change_facts(
+    base_commit: Option<&str>,
+    head_commit: &str,
+    status: &str,
+) -> (bool, bool) {
+    let dirty = !status.is_empty();
+    let changed = dirty || base_commit != Some(head_commit);
+    (dirty, changed)
 }
 
 /// Stable, race-independent runtime worktree identity derived from the
@@ -1266,6 +1302,50 @@ impl WorkspaceAcquireHook {
 }
 
 #[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct WorkspaceSettlementHook {
+    before_inspection: tokio::sync::Barrier,
+    release: tokio::sync::Barrier,
+    failure: std::sync::Mutex<Option<String>>,
+}
+
+#[cfg(test)]
+impl WorkspaceSettlementHook {
+    pub(crate) fn new() -> Self {
+        Self {
+            before_inspection: tokio::sync::Barrier::new(2),
+            release: tokio::sync::Barrier::new(2),
+            failure: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Arms one deterministic inspection failure. The failure is consumed
+    /// only when a committed child reaches final workspace settlement.
+    pub(crate) fn fail_next(&self, detail: impl Into<String>) {
+        *self.failure.lock().expect("workspace settlement hook") = Some(detail.into());
+    }
+
+    async fn maybe_fail(&self, snapshot: &WorkspaceSnapshot) -> Option<WorkspaceSettlement> {
+        let detail = self
+            .failure
+            .lock()
+            .expect("workspace settlement hook")
+            .take()?;
+        self.before_inspection.wait().await;
+        self.release.wait().await;
+        Some(WorkspaceSettlement::unresolved(snapshot.clone(), detail))
+    }
+
+    pub(crate) async fn wait_until_entered(&self) {
+        self.before_inspection.wait().await;
+    }
+
+    pub(crate) async fn release(&self) {
+        self.release.wait().await;
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::{
         SubagentWorkspaceManager, SubagentWorkspacePolicy, WorkspaceAcquireHook, WorkspaceCleanup,
@@ -1312,6 +1392,24 @@ mod tests {
     fn commit(path: &std::path::Path, message: &str) {
         git(path, &["add", "--all"]);
         git(path, &["commit", "-m", message]);
+    }
+
+    fn ignore_target(path: &std::path::Path) {
+        std::fs::write(path.join(".gitignore"), "/target/\n").expect("ignore file");
+        commit(path, "ignore build output");
+    }
+
+    fn ref_exists(path: &std::path::Path, branch: &str) -> bool {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(["show-ref", "--verify", "--quiet"])
+            .arg(format!("refs/heads/{branch}"))
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .status()
+            .expect("git")
+            .success()
     }
 
     #[test]
@@ -1412,6 +1510,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ignored_only_child_artifact_is_cleaned_without_a_handoff() {
+        let dir = repository();
+        ignore_target(dir.path());
+        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let lease = manager
+            .acquire(
+                SubagentWorkspacePolicy::GitWorktree {
+                    require_clean_parent: false,
+                },
+                &SubagentId::new("conversation-ignored-only-subagent-1"),
+                &CancellationSignal::new(),
+            )
+            .await
+            .expect("worktree");
+        let path = lease.workspace().to_path_buf();
+        let branch = lease.snapshot().branch.clone().expect("branch");
+        std::fs::create_dir_all(path.join("target/debug")).expect("target");
+        std::fs::write(path.join("target/debug/generated"), "cache\n").expect("cache");
+
+        let settlement = lease.settle_after_child().await;
+
+        assert_eq!(settlement.cleanup, WorkspaceCleanup::Removed);
+        assert!(settlement.handoff.is_none());
+        assert!(!path.exists(), "ignored-only output is disposable cache");
+        assert!(!ref_exists(dir.path(), &branch), "runtime ref was removed");
+    }
+
+    #[tokio::test]
     async fn parent_movement_after_acquisition_cannot_change_the_child_base() {
         let dir = repository();
         let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
@@ -1499,6 +1625,95 @@ mod tests {
         assert!(!handoff.dirty);
         assert_ne!(handoff.head_commit, base);
         assert_eq!(handoff.head_commit, head(&handoff.workspace));
+    }
+
+    #[tokio::test]
+    async fn committed_child_work_with_ignored_cache_is_dirty_false_but_changed() {
+        let dir = repository();
+        ignore_target(dir.path());
+        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let lease = manager
+            .acquire(
+                SubagentWorkspacePolicy::GitWorktree {
+                    require_clean_parent: false,
+                },
+                &SubagentId::new("conversation-committed-ignored-subagent-1"),
+                &CancellationSignal::new(),
+            )
+            .await
+            .expect("worktree");
+        let base = lease.snapshot().base_commit.clone().expect("base");
+        std::fs::write(lease.workspace().join("tracked.txt"), "child commit\n")
+            .expect("child file");
+        commit(lease.workspace(), "child commit");
+        std::fs::create_dir_all(lease.workspace().join("target/debug")).expect("target");
+        std::fs::write(lease.workspace().join("target/debug/generated"), "cache\n").expect("cache");
+
+        let settlement = lease.settle_after_child().await;
+        let handoff = settlement.handoff.expect("committed handoff");
+
+        assert_eq!(settlement.cleanup, WorkspaceCleanup::Preserved);
+        assert!(!handoff.dirty);
+        assert_ne!(handoff.head_commit, base);
+    }
+
+    #[tokio::test]
+    async fn untracked_source_and_ignored_cache_preserve_a_dirty_handoff() {
+        let dir = repository();
+        ignore_target(dir.path());
+        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let lease = manager
+            .acquire(
+                SubagentWorkspacePolicy::GitWorktree {
+                    require_clean_parent: false,
+                },
+                &SubagentId::new("conversation-source-ignored-subagent-1"),
+                &CancellationSignal::new(),
+            )
+            .await
+            .expect("worktree");
+        std::fs::write(
+            lease.workspace().join("new-source.rs"),
+            "fn generated() {}\n",
+        )
+        .expect("source");
+        std::fs::create_dir_all(lease.workspace().join("target/debug")).expect("target");
+        std::fs::write(lease.workspace().join("target/debug/generated"), "cache\n").expect("cache");
+
+        let settlement = lease.settle_after_child().await;
+        let handoff = settlement.handoff.expect("source handoff");
+
+        assert_eq!(settlement.cleanup, WorkspaceCleanup::Preserved);
+        assert!(handoff.dirty);
+        assert_eq!(handoff.base_commit, handoff.head_commit);
+    }
+
+    #[tokio::test]
+    async fn recovered_inspection_uses_the_same_ordinary_dirty_definition() {
+        let dir = repository();
+        ignore_target(dir.path());
+        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let lease = manager
+            .acquire(
+                SubagentWorkspacePolicy::GitWorktree {
+                    require_clean_parent: false,
+                },
+                &SubagentId::new("conversation-recovered-ignored-subagent-1"),
+                &CancellationSignal::new(),
+            )
+            .await
+            .expect("worktree");
+        let snapshot = lease.snapshot().clone();
+        std::fs::create_dir_all(lease.workspace().join("target/debug")).expect("target");
+        std::fs::write(lease.workspace().join("target/debug/generated"), "cache\n").expect("cache");
+        drop(lease);
+
+        let settlement = SubagentWorkspaceManager::inspect_recovered(&snapshot);
+        let handoff = settlement.handoff.expect("recovered handoff");
+
+        assert_eq!(settlement.cleanup, WorkspaceCleanup::Preserved);
+        assert!(!handoff.dirty);
+        assert_eq!(handoff.base_commit, handoff.head_commit);
     }
 
     #[tokio::test]

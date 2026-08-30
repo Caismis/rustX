@@ -740,7 +740,9 @@ pub struct RuntimeClientWorkspaceHandoff {
     pub base_commit: String,
     /// The final child `HEAD`.
     pub head_commit: String,
-    /// Whether tracked/index/untracked/ignored child state is dirty.
+    /// Whether ordinary tracked/index/untracked-non-ignored child state is
+    /// dirty. A changed child `HEAD` is reported independently by
+    /// `head_commit` and `base_commit`.
     pub dirty: bool,
 }
 

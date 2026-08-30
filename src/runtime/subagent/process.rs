@@ -631,6 +631,10 @@ pub(crate) struct StagedChild {
 /// The driver therefore publishes both facts together, and only after both
 /// are decided: the direct child's terminal outcome and the settlement of
 /// every nested supervised process unit the child anchored here.
+/// The registry consumes the complete value as a physical proof boundary: an
+/// unproven nested, workspace, or private-runtime settlement is an existing
+/// runtime `Failed` terminal input, never a warning that can leave a semantic
+/// success published as ordinary `Succeeded`.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PhysicalSettlement {
     /// The direct child's terminal outcome.

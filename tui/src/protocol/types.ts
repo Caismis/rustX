@@ -740,7 +740,7 @@ export interface RuntimeClientWorkspaceHandoff {
   branch: string;
   base_commit: string;
   head_commit: string;
-  /** Whether tracked/index/untracked/ignored child state is dirty. */
+  /** Whether ordinary tracked/index/untracked-non-ignored child state is dirty. */
   dirty: boolean;
 }
 

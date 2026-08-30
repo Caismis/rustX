@@ -4544,8 +4544,17 @@ with its exact runtime-created ref. Any dirty state, or any
 containing the path, ref, base/head commits, and dirty fact. Cancellation and
 failure do not roll back filesystem changes; retained work is never force-
 destroyed, committed, merged, rebased, cherry-picked, stashed, or copied into
-the parent. Runtime Client and TUI expose these recovery facts only; they do
-not own acquisition, cleanup, or integration policy.
+the parent.
+
+Here `dirty` means ordinary tracked/index/untracked non-ignored Git status;
+`HEAD != C` independently records committed child work. Ignored build/cache
+files alone therefore do not leak a worktree. A semantic child success cannot
+remain an ordinary `Succeeded` terminal when required nested, workspace, or
+private-runtime physical settlement is unproven; the registry classifies that
+boundary through the existing runtime-authored `Failed` terminal. A
+successfully inspected handoff remains a normal success. Runtime Client and
+TUI expose these recovery facts only; they do not own acquisition, cleanup, or
+integration policy.
 
 `ConversationRuntime::new` validates the registry's typed ownership domain
 before anything is claimed — the same `ConversationId`, the same parent

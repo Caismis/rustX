@@ -1612,10 +1612,20 @@ before restart.
   cleanup and preserves the worktree fail-closed.
 - **Filesystem failure and cancellation are not rollback.** A child may write
   files or commit before success, failure, cancellation, or process loss.
-  The manager inspects final Git state: `dirty` means tracked/index/untracked
-  (and ignored work-product state where Git reports it), while
-  `head_commit != base_commit` independently proves retained work. A clean
+  The manager inspects final Git state: `dirty` means ordinary
+  tracked/index/untracked non-ignored changes, while `head_commit !=
+  base_commit` independently proves retained committed work. Ignored files
+  alone are execution cache and do not make a handoff dirty. A clean
   `HEAD == C` worktree is safely removed; all other proven work is preserved.
+- **Semantic success cannot hide physical settlement failure.** A child
+  semantic success remains `Succeeded` only when direct-child reaping,
+  retained nested-unit containment, workspace inspection/cleanup or handoff,
+  and private runtime-root settlement are all proven. A required physical
+  settlement failure is classified through the existing runtime `Failed`
+  terminal, with a bounded runtime-authored diagnostic and no child success
+  content crossing the failed provenance boundary. A successfully inspected
+  and preserved changed worktree is not a failure: it is a normal `Succeeded`
+  terminal with durable handoff facts.
 - **Handoff is runtime fact, not model output.** A preserved
   `WorkspaceHandoff` contains only the physical path, runtime ref, base/head
   commits, and dirty fact. It is not merged, rebased, cherry-picked, stashed,

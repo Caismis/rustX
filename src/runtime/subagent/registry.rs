@@ -1240,10 +1240,11 @@ impl SubagentRegistry {
             runtime_root_cleanup_error,
             workspace,
         } = settlement;
-        // An unproven nested settlement or a failed exact-root cleanup never
-        // silently disappears. The child answer remains the semantic
-        // candidate, while the physical settlement diagnostic is carried
-        // alongside it.
+        // An unproven nested settlement, workspace settlement, or failed
+        // exact-root cleanup is a terminal classification input, not an
+        // ignorable warning. A successful semantic frame cannot become a
+        // parent-facing success until every required physical boundary is
+        // proven settled.
         let settlement_diagnostic = [
             nested.unproven_diagnostic(),
             workspace
@@ -1378,6 +1379,28 @@ impl SubagentRegistry {
             };
             let candidate = match settlement_diagnostic {
                 None => candidate,
+                Some(diagnostic) if physical_settlement_unproven => {
+                    // Physical settlement failure is an infrastructure
+                    // failure even when the child emitted a semantic success
+                    // (or a cancellation frame). Never carry successful
+                    // child content across this failed provenance boundary.
+                    let diagnostic = match candidate.diagnostic {
+                        Some(existing) => format!("{existing}; {diagnostic}"),
+                        None => diagnostic,
+                    };
+                    TerminalCandidate {
+                        state: TerminalState::Failed,
+                        content: None,
+                        diagnostic: Some(bound_utf8(
+                            format!(
+                                "required child physical settlement was not proven: {diagnostic}"
+                            ),
+                            MAX_RESULT_CONTENT_BYTES,
+                        )),
+                        reason: None,
+                        timestamp: candidate.timestamp,
+                    }
+                }
                 Some(diagnostic) => TerminalCandidate {
                     diagnostic: Some(bound_utf8(
                         match candidate.diagnostic {
@@ -1822,6 +1845,7 @@ mod tests {
         store: Arc<crate::durable::SqliteConversationStore>,
         conversation_id: ConversationId,
         runtime_root: std::path::PathBuf,
+        workspace_settlement_hook: Arc<super::super::workspace::WorkspaceSettlementHook>,
     }
 
     fn plane(max_active: usize) -> TestPlane {
@@ -1836,6 +1860,10 @@ mod tests {
                 .expect("in-memory store"),
         );
         let mailbox = ConversationInboundMailbox::over_store(store.clone());
+        let workspace_settlement_hook =
+            Arc::new(super::super::workspace::WorkspaceSettlementHook::new());
+        let mut workspace_manager = SubagentWorkspaceManager::new(&workspace, &runtime_root);
+        workspace_manager.install_settlement_hook(workspace_settlement_hook.clone());
         let registry = SubagentRegistry::new(SubagentRegistryConfig {
             conversation_id: conversation_id.clone(),
             agent_id: AgentId::new("agent-parent"),
@@ -1852,7 +1880,7 @@ mod tests {
                     summary_output_cap: None,
                 },
             },
-            workspace: SubagentWorkspaceManager::new(&workspace, &runtime_root),
+            workspace: workspace_manager,
             max_active,
         });
         TestPlane {
@@ -1861,6 +1889,7 @@ mod tests {
             store,
             conversation_id,
             runtime_root,
+            workspace_settlement_hook,
         }
     }
 
@@ -1885,12 +1914,17 @@ mod tests {
         );
     }
 
-    fn make_dirty_git_workspace(plane: &TestPlane) {
+    fn make_clean_git_workspace(plane: &TestPlane) {
         let workspace = plane.dir.path().join("workspace");
         git(&workspace, &["init"]);
         std::fs::write(workspace.join("tracked.txt"), "committed\n").expect("tracked file");
         git(&workspace, &["add", "tracked.txt"]);
         git(&workspace, &["commit", "-m", "initial"]);
+    }
+
+    fn make_dirty_git_workspace(plane: &TestPlane) {
+        make_clean_git_workspace(plane);
+        let workspace = plane.dir.path().join("workspace");
         std::fs::write(workspace.join("tracked.txt"), "dirty parent\n").expect("dirty file");
     }
 
@@ -2167,6 +2201,185 @@ mod tests {
                 ..
             } if *subagent_id == accepted.subagent_id
         )));
+        assert!(
+            settled
+                .detail
+                .as_deref()
+                .is_none_or(|detail| !detail.contains("physical settlement")),
+            "a clean semantic success has no settlement diagnostic"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn successful_worktree_child_publishes_a_valid_handoff_and_client_projection() {
+        let plane = plane(4);
+        make_clean_git_workspace(&plane);
+        let child = stage_stubborn(&plane);
+        let mut spec = start_spec("write a source change");
+        spec.resolved.workspace_policy =
+            crate::runtime::subagent::SubagentWorkspacePolicy::GitWorktree {
+                require_clean_parent: false,
+            };
+        let accepted = start(&plane, &spec).await;
+        let workspace = plane
+            .registry
+            .snapshot(&accepted.subagent_id)
+            .expect("running snapshot")
+            .workspace
+            .workspace;
+        std::fs::write(workspace.join("child-work.txt"), "retain me\n").expect("child work");
+
+        child
+            .complete(ChildResultStatus::Succeeded, Some("the answer"))
+            .await;
+        let settled = plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("settled");
+
+        assert_eq!(settled.state, SubagentState::Succeeded);
+        let handoff = settled.handoff.clone().expect("handoff");
+        assert!(handoff.dirty);
+        assert_eq!(handoff.base_commit, handoff.head_commit);
+        let view = crate::runtime_client::projection::subagent_view(&settled);
+        assert_eq!(
+            view.workspace.handoff.as_ref().map(|item| &item.workspace),
+            Some(&handoff.workspace)
+        );
+        assert!(events(&plane).iter().any(|event| matches!(
+            event,
+            crate::events::types::RuntimeEvent::SubagentTerminalPublished {
+                subagent_id,
+                state: SubagentTerminalState::Succeeded,
+                workspace_handoff: Some(actual),
+                ..
+            } if *subagent_id == accepted.subagent_id && actual == &handoff
+        )));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn semantic_success_with_workspace_settlement_failure_is_failed_runtime_notice() {
+        let plane = plane(4);
+        make_clean_git_workspace(&plane);
+        plane
+            .workspace_settlement_hook
+            .fail_next("injected final workspace inspection failure");
+        let child = stage_stubborn(&plane);
+        let mut spec = start_spec("write a source change");
+        spec.resolved.workspace_policy =
+            crate::runtime::subagent::SubagentWorkspacePolicy::GitWorktree {
+                require_clean_parent: false,
+            };
+        let accepted = start(&plane, &spec).await;
+
+        child
+            .complete(
+                ChildResultStatus::Succeeded,
+                Some("child success must not leak"),
+            )
+            .await;
+        // The manager hook is reached only after the driver has received the
+        // semantic result, reaped the direct child, and settled nested units.
+        plane.workspace_settlement_hook.wait_until_entered().await;
+        plane.workspace_settlement_hook.release().await;
+
+        let settled = plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("settled");
+        assert_eq!(settled.state, SubagentState::Failed);
+        assert!(settled.handoff.is_none());
+        let detail = settled.detail.as_deref().expect("failure diagnostic");
+        assert!(detail.contains("required child physical settlement was not proven"));
+        assert!(detail.contains("workspace"));
+        assert!(!detail.contains("child success must not leak"));
+
+        let pending = plane
+            .store
+            .select_pending_batch()
+            .expect("pending")
+            .expect("terminal notice");
+        assert!(matches!(
+            pending.items[0].message.source,
+            crate::message::types::UserSource::Runtime
+        ));
+        let parent_notice = match &pending.items[0].message.content[0] {
+            crate::message::types::UserContentBlock::Text(text) => &text.text,
+            other => panic!("unexpected terminal content: {other:?}"),
+        };
+        assert!(parent_notice.contains("physical settlement was not proven"));
+        assert!(!parent_notice.contains("child success must not leak"));
+        assert!(events(&plane).iter().any(|event| matches!(
+            event,
+            crate::events::types::RuntimeEvent::SubagentTerminalPublished {
+                subagent_id,
+                state: SubagentTerminalState::Failed,
+                workspace_handoff: None,
+                ..
+            } if *subagent_id == accepted.subagent_id
+        )));
+        assert!(!events(&plane).iter().any(|event| matches!(
+            event,
+            crate::events::types::RuntimeEvent::SubagentTerminalPublished {
+                subagent_id,
+                state: SubagentTerminalState::Succeeded,
+                ..
+            } if *subagent_id == accepted.subagent_id
+        )));
+        let view = crate::runtime_client::projection::subagent_view(&settled);
+        assert_eq!(view.state, crate::runtime::subagent::SubagentState::Failed);
+        assert_eq!(view.detail.as_deref(), Some(detail));
+    }
+
+    #[tokio::test]
+    async fn semantic_success_with_unresolved_nested_containment_is_failed() {
+        let plane = plane(4);
+        let child = stage_exit0(&plane);
+        let accepted = start(&plane, &start_spec("inspect")).await;
+        let settlement = PhysicalSettlement {
+            outcome: PhysicalOutcome::Completed(ResultFrame {
+                status: ChildResultStatus::Succeeded,
+                content: Some("child success must not leak".to_owned()),
+                diagnostic: None,
+            }),
+            nested: super::super::anchors::NestedUnitSettlement {
+                contained: Vec::new(),
+                unproven: vec![(
+                    crate::runtime::identity::ProcessUnitId::new("unit-unresolved"),
+                    "test containment proof is unavailable".to_owned(),
+                )],
+            },
+            runtime_root_cleanup_error: None,
+            workspace: super::super::workspace::WorkspaceSettlement::shared(
+                WorkspaceSnapshot::shared(std::path::PathBuf::from("<shared-workspace>")),
+            ),
+        };
+        plane
+            .registry
+            .settle_from_driver(&accepted.subagent_id, settlement);
+        drop(child.peer);
+
+        let settled = plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("settled");
+        assert_eq!(settled.state, SubagentState::Failed);
+        assert!(
+            settled
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("nested supervised process unit"))
+        );
+        assert!(
+            !settled
+                .detail
+                .as_deref()
+                .unwrap_or_default()
+                .contains("child success must not leak")
+        );
     }
 
     #[tokio::test]
@@ -2712,6 +2925,71 @@ mod tests {
                 .select_pending_batch()
                 .expect("pending")
                 .is_none()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn physical_settlement_failure_keeps_terminal_retry_classification_stable() {
+        let plane = plane(4);
+        make_clean_git_workspace(&plane);
+        plane
+            .workspace_settlement_hook
+            .fail_next("injected terminal workspace settlement failure");
+        let child = stage_stubborn(&plane);
+        let mut spec = start_spec("inspect");
+        spec.resolved.workspace_policy =
+            crate::runtime::subagent::SubagentWorkspacePolicy::GitWorktree {
+                require_clean_parent: false,
+            };
+        let accepted = start(&plane, &spec).await;
+        plane.store.arm_fail_accept_times(3);
+        child
+            .complete(
+                ChildResultStatus::Succeeded,
+                Some("success must stay private"),
+            )
+            .await;
+        plane.workspace_settlement_hook.wait_until_entered().await;
+        plane.workspace_settlement_hook.release().await;
+
+        let abandoned = plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("publication abandoned");
+        assert_eq!(abandoned.state, SubagentState::PublishingTerminal);
+        assert!(abandoned.publication_abandoned);
+        let diagnostic = abandoned.detail.clone().expect("stable diagnostic");
+        assert!(diagnostic.contains("physical settlement was not proven"));
+        assert!(!diagnostic.contains("success must stay private"));
+
+        assert!(
+            plane
+                .registry
+                .retry_terminal_publication(&accepted.subagent_id)
+                .expect("retry")
+        );
+        let settled = plane
+            .registry
+            .snapshot(&accepted.subagent_id)
+            .expect("settled snapshot");
+        assert_eq!(settled.state, SubagentState::Failed);
+        assert!(!settled.publication_abandoned);
+        assert_eq!(settled.detail.as_deref(), Some(diagnostic.as_str()));
+        assert_eq!(
+            events(&plane)
+                .into_iter()
+                .filter(|event| matches!(
+                    event,
+                    crate::events::types::RuntimeEvent::SubagentTerminalPublished {
+                        subagent_id,
+                        state: SubagentTerminalState::Failed,
+                        ..
+                    } if *subagent_id == accepted.subagent_id
+                ))
+                .count(),
+            1,
+            "retry publishes the frozen failed classification exactly once"
         );
     }
 
