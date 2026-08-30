@@ -100,7 +100,9 @@ pub enum ModelEvent {
         /// The provider continuation state to preserve.
         state: ProviderContinuationState,
     },
-    /// The generation completed successfully.
+    /// The generation completed successfully. The canonical assembler retains
+    /// this event's finish reason and usage as the sole successful terminal
+    /// authority for the assembled turn.
     Completed {
         /// Why the generation finished.
         finish_reason: ModelFinishReason,

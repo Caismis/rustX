@@ -1046,6 +1046,14 @@ provider terminal
     ↓ commit_canonical_publication     C — Ledger + Surface + event + staging clear
 ```
 
+The canonical assembler retains the `Completed` event it consumed, including
+its finish reason and terminal usage, as the sole successful terminal
+authority. `assembler.finish()` accepts no caller-supplied terminal semantic;
+it validates that authoritative reason against the complete canonical tool-call
+collection and returns both on `AssembledTurn`. The Agent Loop acts only on
+that assembled result, so a provider adapter's normalized terminal cannot be
+silently replaced or normalized after assembly.
+
 The latency policy is an oldest-payload bound, not a quiet-period debounce.
 When the first payload enters an empty coalescer, it creates one absolute
 monotonic deadline. Later provider events use only the remaining budget and

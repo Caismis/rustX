@@ -584,10 +584,9 @@ struct OpenPublication {
 
 /// How one model stream of a turn ended.
 enum StreamTerminal {
-    Completed {
-        finish_reason: ModelFinishReason,
-        usage: Option<ModelUsage>,
-    },
+    /// The canonical assembler owns the successful terminal data; this
+    /// marker only tells the loop which control-flow path to take.
+    Completed,
     Failed {
         error: ModelError,
     },
@@ -1339,13 +1338,8 @@ impl<'a> AgentExecution<'a> {
                 terminal,
             } = invocation;
             match terminal {
-                StreamTerminal::Completed {
-                    finish_reason,
-                    usage,
-                } => {
-                    return self
-                        .complete_turn(message_id, finish_reason, usage, assembler)
-                        .await;
+                StreamTerminal::Completed => {
+                    return self.complete_turn(message_id, assembler).await;
                 }
                 StreamTerminal::Failed { error } => {
                     let Some(failed_request_id) = self.last_request_id.clone() else {
@@ -1431,11 +1425,9 @@ impl<'a> AgentExecution<'a> {
     async fn complete_turn(
         &mut self,
         assistant_message_id: MessageId,
-        finish_reason: ModelFinishReason,
-        usage: Option<ModelUsage>,
         assembler: ModelEventAssembler,
     ) -> Option<Terminal> {
-        let turn_assembly = match assembler.finish(&finish_reason, usage) {
+        let turn_assembly = match assembler.finish() {
             Ok(assembly) => assembly,
             Err(error) => {
                 return Some(Terminal::Failed {
@@ -1463,6 +1455,9 @@ impl<'a> AgentExecution<'a> {
             });
         };
         // P: the provider outcome of this exact request becomes durable.
+        // This downstream copy is derived only after canonical assembly has
+        // validated and retained the event's terminal fact.
+        let finish_reason = turn_assembly.finish_reason.clone();
         self.emit(RuntimeEvent::ModelRequestCompleted {
             request_id,
             finish_reason: finish_reason.clone(),
@@ -3425,14 +3420,8 @@ impl<'a> AgentExecution<'a> {
                 });
             }
             match &event {
-                ModelEvent::Completed {
-                    finish_reason,
-                    usage,
-                } => {
-                    stream_terminal = Some(StreamTerminal::Completed {
-                        finish_reason: finish_reason.clone(),
-                        usage: usage.clone(),
-                    });
+                ModelEvent::Completed { .. } => {
+                    stream_terminal = Some(StreamTerminal::Completed);
                 }
                 ModelEvent::Failed { error } => {
                     self.settle_model_request_failure(assembler, error)?;
