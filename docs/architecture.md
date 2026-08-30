@@ -4027,7 +4027,7 @@ durable history reachable through `/resume`. `--continue`
 instead, which is how a client completes a switch that required a process
 replacement. An active Session that was never used — one `New` root node whose
 conversation is still at its initial Surface revision, with no canonical
-message and an empty Pending Inbound — already *is* that empty Session, so it
+message and no committed durable inbound acceptance — already *is* that empty Session, so it
 is reused and repeated launches cannot accumulate empty internal shells. Deferred lineage recovery follows from this: an interrupted
 attempt in a Session this launch does not open is reconciled by the ordinary
 per-conversation recovery pass the next time that lineage is composed, not by
@@ -4163,7 +4163,11 @@ Session catalog and the conversation SQLite store are separate durable
 authorities, and the shell exists for crash-safe ownership and composition.
 One lifecycle predicate — the catalog's unused classification — is shared by
 startup, `/new`, and `/resume`. A Session crosses from unused to used exactly
-once, at durable acceptance of user work into Pending Inbound; canonical
+once, at durable acceptance of user work into Pending Inbound, and never
+crosses back: the classifier reads the conversation store's monotonic
+acceptance watermark (`ConversationStore::has_accepted_inbound`), one atomic
+durable fact that adoption cannot rewind, rather than assembling usage from
+independently changing Surface and Pending-Inbox snapshots. Canonical
 adoption, model invocation, and assistant output all happen later and change
 nothing about the classification, and Session-local metadata (a name, a model
 choice) never crosses it. Branch/clone/fork provenance is always user-owned

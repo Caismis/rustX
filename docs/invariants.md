@@ -5097,8 +5097,8 @@ already committed; the client never names the destination itself.
 
 An active Session that has never been used — exactly one `New` root node whose
 conversation is still at its initial Surface revision, with no canonical
-message and nothing accepted into its Pending Inbound — already is that empty
-Session, so it is bound as-is. Pending Inbound counts as use on purpose:
+message and no durable inbound acceptance ever committed — already is that empty
+Session, so it is bound as-is. Durable acceptance counts as use on purpose:
 composing that lineage is what adopts an accepted-but-unadopted message, so
 reusing such a Session would resurrect a previous launch's prompt inside the
 empty Session the user asked for. Repeated
@@ -5133,6 +5133,17 @@ and resume-visible: that prompt is work the Session owns, recovery is what
 adopts it, and hiding the Session would strand it. Session-local metadata
 alone — a name, a model selection — never crosses the line: an otherwise
 untouched shell stays internal, stays reusable by `/new`, and stays hidden.
+
+The transition is **monotonic**: once used, a Session never classifies as
+unused again. The classifier asks the conversation's durable authority for
+one atomic monotonic fact — `ConversationStore::has_accepted_inbound`, the
+acceptance watermark that advances inside the acceptance commit and that
+adoption never rewinds — instead of combining two independently changing
+current-state projections (Surface head, Pending Inbox) whose interleaved
+reads could assemble a state that never existed and hide already-accepted
+work while the Agent Loop adopts it. Canonical adoption only moves the user
+work from Pending Inbound into canonical history; it cannot change the
+Session's usage classification.
 
 The classification is deliberately narrow so provenance can never be
 misclassified: anything beyond one untouched `New` root node — a branch node,

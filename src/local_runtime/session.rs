@@ -47,7 +47,13 @@
 //! The transition point is durable acceptance of user work into Pending
 //! Inbound, never canonical adoption, model invocation, or assistant output:
 //! an accepted-but-unadopted prompt is work the Session already owns, and
-//! recovery is what adopts it. Session-local metadata alone never crosses the
+//! recovery is what adopts it. The transition is monotonic — once used, a
+//! Session never classifies as unused again — because the classifier reads
+//! the conversation store's monotonic acceptance watermark
+//! (`ConversationStore::has_accepted_inbound`) rather than combining the
+//! independently changing Surface and Pending-Inbox projections, whose
+//! interleaved reads could otherwise hide already-accepted work while the
+//! Agent Loop adopts it. Session-local metadata alone never crosses the
 //! line, so naming or configuring an otherwise untouched shell does not make
 //! it history.
 
@@ -468,6 +474,11 @@ pub struct SessionCatalog {
     published: bool,
     #[cfg(test)]
     write_fault: Arc<Mutex<Option<CatalogWriteFault>>>,
+    /// Test-only gate parked between the Surface-head observation and the
+    /// acceptance-watermark read of `is_unused`, so a race regression can
+    /// replay the exact adoption interleaving against the classifier.
+    #[cfg(test)]
+    classification_gate: Option<Arc<crate::runtime::conversation_runtime::Gate>>,
 }
 
 impl SessionCatalog {
@@ -507,6 +518,8 @@ impl SessionCatalog {
             published: true,
             #[cfg(test)]
             write_fault: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            classification_gate: None,
         }))
     }
 
@@ -622,6 +635,8 @@ impl SessionCatalog {
             published: false,
             #[cfg(test)]
             write_fault: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            classification_gate: None,
         })
     }
 
@@ -783,14 +798,18 @@ impl SessionCatalog {
     ///   with no parent/branch lineage;
     /// - that node's durable conversation is still at its initial Surface
     ///   revision, with no canonical message;
-    /// - its Pending Inbound is empty.
+    /// - that conversation has never committed a durable inbound acceptance.
     ///
-    /// Anything else is used. Pending Inbound is part of the question, not a
-    /// detail: a message that was accepted durably but never adopted is work
-    /// this Session owns, and composing that lineage again is what adopts it.
-    /// Treating it as unused would resurrect a previous launch's prompt inside
-    /// what the user asked to be an empty Session — and would hide from
-    /// `/resume` a Session whose only copy of that prompt is the pending one.
+    /// The last condition is the monotonic usage fact owned by the
+    /// conversation's durable authority (`ConversationStore::has_accepted_inbound`),
+    /// not a pair of independently changing projections. Reading the current
+    /// Surface head and the current Pending Inbox separately could assemble a
+    /// state that never existed — a pre-adoption head plus a post-adoption
+    /// empty inbox — and classify a Session whose prompt was already durably
+    /// accepted as unused. The acceptance watermark cannot do that: durable
+    /// acceptance is the used transition, adoption never rewinds it, and once
+    /// a Session is used it never classifies as unused again.
+    ///
     /// Provenance is equally decisive: a clone, fork, or tree branch is user
     /// work by construction, so it is used even when its destination
     /// conversation is legitimately empty at the selected cut (a fork at the
@@ -818,8 +837,29 @@ impl SessionCatalog {
         if head.revision != SurfaceRevision::INITIAL || !head.active_message_ids.is_empty() {
             return Ok(false);
         }
-        let pending = store.load_pending().map_err(SessionError::Store)?;
-        Ok(pending.is_empty())
+        #[cfg(test)]
+        if let Some(gate) = &self.classification_gate {
+            gate.enter();
+        }
+        // The decisive read is last and is a single atomic query against a
+        // monotonic watermark: every acceptance committed before this read
+        // is observed, however adoption raced the head read above, and an
+        // acceptance committed only after it legitimately postdates this
+        // classification.
+        Ok(!store.has_accepted_inbound().map_err(SessionError::Store)?)
+    }
+
+    /// Arms the test-only classification boundary gate, parking the next
+    /// `is_unused` read between its Surface-head observation and its
+    /// acceptance-watermark read.
+    #[cfg(test)]
+    pub(crate) fn arm_classification_gate(
+        &mut self,
+    ) -> Arc<crate::runtime::conversation_runtime::Gate> {
+        let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        gate.arm();
+        self.classification_gate = Some(gate.clone());
+        gate
     }
 
     /// Returns one Session snapshot.
@@ -2576,6 +2616,86 @@ mod tests {
         let reopened = reopen_catalog(directory.path());
         assert!(reopened.active_is_unused().expect("reopened new session"));
         assert_eq!(visible(&reopened), vec![source_session]);
+    }
+
+    /// The Issue #167 race regression. The classification used to combine
+    /// two independent durable reads — the current Surface head and the
+    /// current Pending Inbox — and adoption commits between them produced a
+    /// state that never existed: pre-adoption head + post-adoption empty
+    /// inbox = a false "unused". This test forces exactly that interleaving
+    /// through the real classifier: it parks `is_unused` after the
+    /// pre-adoption head observation, runs the Agent Loop's atomic adoption,
+    /// and then lets the classification finish. The monotonic acceptance
+    /// watermark must still settle it as used.
+    #[test]
+    fn adoption_racing_classification_cannot_hide_accepted_work() {
+        let (directory, mut catalog, _config) = open_catalog();
+        let (session_id, node, _) = catalog.active_lineage().expect("root lineage");
+        let store = store_for(&catalog, &session_id, &node.conversation_id);
+
+        // Durable acceptance of user work, not yet adopted: the state the
+        // race starts from.
+        let accepted = store
+            .accept_inbound(crate::durable::InboundDraft {
+                message_id: None,
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                content: vec![text("racing prompt")],
+                timestamp: Utc::now(),
+                correlation: None,
+            })
+            .expect("accept user work");
+        assert_eq!(
+            store.load_head().expect("head before adoption").revision,
+            SurfaceRevision::INITIAL
+        );
+
+        // Park the classifier between its Surface-head observation and its
+        // acceptance-watermark read: it has provably observed the
+        // pre-adoption half of the durable state.
+        let gate = catalog.arm_classification_gate();
+        let classifying = {
+            let catalog = catalog.clone();
+            std::thread::spawn(move || catalog.active_is_unused())
+        };
+        gate.wait_entered();
+
+        // The Agent Loop's atomic adoption transition: canonical append,
+        // Surface advance, and Pending removal in one commit.
+        let adopted = store
+            .adopt_pending_batch(
+                accepted.sequence,
+                crate::durable::inbox::inbound_adoption_event(
+                    store.conversation_id(),
+                    None,
+                    vec![accepted.message_id.clone()],
+                ),
+            )
+            .expect("adopt pending inbound");
+        assert_eq!(adopted.len(), 1);
+        assert!(
+            store
+                .load_pending()
+                .expect("pending after adopt")
+                .is_empty(),
+            "the old torn read would now observe an empty Pending Inbox"
+        );
+
+        gate.release();
+        let unused = classifying
+            .join()
+            .expect("classification thread")
+            .expect("classification");
+        assert!(
+            !unused,
+            "durable acceptance is monotonic: adoption can never make an accepted Session unused"
+        );
+
+        // The classification stays used after the adoption and across a
+        // restart.
+        assert!(!catalog.active_is_unused().expect("post-adoption"));
+        let reopened = reopen_catalog(directory.path());
+        assert!(!reopened.active_is_unused().expect("reopened"));
     }
 
     /// Provenance is user work even when the destination conversation is

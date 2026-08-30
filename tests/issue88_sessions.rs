@@ -690,6 +690,85 @@ async fn restart_preserves_resume_visibility_until_a_shell_owns_work() {
     drop(third);
 }
 
+/// `SubmitInbound` reports success strictly after the durable acceptance
+/// commit, so a `/new` issued immediately afterwards must classify the
+/// Session as used in *every* adoption interleaving — the acceptance
+/// watermark is committed before the client can even issue the command —
+/// and take the real switch path rather than the unused no-op.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn new_after_accepted_submission_never_takes_the_unused_noop() {
+    let root = tempfile::tempdir().expect("temp root");
+    let paths = paths(root.path());
+    let dependencies = dependencies();
+    let runtime_root = root.path().join("runtime");
+
+    let product = LocalSessionProduct::compose(&paths, &dependencies)
+        .await
+        .expect("compose root product");
+    let endpoint = product.endpoint();
+    let initialized = endpoint.handle_request(RuntimeClientRequest::Initialize {
+        id: request_id(1),
+        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
+    });
+    assert!(matches!(
+        initialized.result,
+        Some(RuntimeClientResult::Initialized { .. })
+    ));
+    let current = session_request(
+        &endpoint,
+        RuntimeClientRequest::SessionGet { id: request_id(2) },
+    )
+    .await;
+    let Some(RuntimeClientResult::Session { session: root_view }) = current.result else {
+        panic!("session_get must return native metadata: {current:?}");
+    };
+
+    // The response linearizes after the durable acceptance commit; the
+    // attempt's adoption of that prompt races the classification below on
+    // purpose and must not matter.
+    let submitted = session_request(
+        &endpoint,
+        RuntimeClientRequest::SubmitInbound {
+            id: request_id(3),
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: "accepted work".to_owned(),
+            })],
+        },
+    )
+    .await;
+    assert!(matches!(
+        submitted.result,
+        Some(RuntimeClientResult::InboundAccepted { .. })
+    ));
+
+    let created = session_request(
+        &endpoint,
+        RuntimeClientRequest::SessionNew { id: request_id(4) },
+    )
+    .await;
+    let Some(RuntimeClientResult::SessionChanged {
+        session: new_view,
+        restart_required,
+        ..
+    }) = created.result
+    else {
+        panic!("session_new after acceptance must be a real switch: {created:?}");
+    };
+    assert!(restart_required);
+    assert_ne!(
+        new_view.id, root_view.id,
+        "a Session with durably accepted work never takes the unused no-op"
+    );
+    assert_eq!(
+        visible_session_ids(&runtime_root),
+        vec![rustx::local_runtime::SessionId::new(root_view.id)],
+        "the used Session is resume-visible; the new shell is not"
+    );
+    assert_eq!(persisted_ids(&runtime_root).len(), 2);
+    drop(endpoint);
+    drop(product);
+}
+
 /// Naming a Session at launch binds it and publishes that selection.
 ///
 /// This is the startup form of `/resume`: the destination is committed to the
