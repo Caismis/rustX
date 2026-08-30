@@ -35,6 +35,7 @@ use crate::message::types::{
     AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, ToolMessageBlock,
     UserContentBlock, UserMessageBlock, UserSource,
 };
+use crate::model::adapter::ModelStreamItem;
 use crate::model::deadline::{ModelRequestDeadline, ModelTimeoutPolicy};
 use crate::model::event::ModelEvent;
 use crate::model::invocation::ResolvedModelInvocation;
@@ -452,7 +453,7 @@ impl ContextSummarizer for ModelBackedSummarizer {
                 };
                 let next = tokio::select! {
                     biased;
-                    event = stream.next() => event,
+                    item = stream.next() => item,
                     () = cancellation.cancelled() => {
                         return Err(ContextError::new(
                             ContextErrorKind::Cancelled,
@@ -464,62 +465,69 @@ impl ContextSummarizer for ModelBackedSummarizer {
                         return Err(summary_failed("summary generation timed out"));
                     }
                 };
-                let Some(event) = next else {
+                let Some(item) = next else {
                     break;
                 };
-                // The shared state machine owns event classification and
+                // The shared state machine owns provider-item classification and
                 // phase transitions. Publication/compaction work never
                 // reaches this call and therefore cannot reset a deadline.
-                deadline.observe(&event, self.monotonic_clock.now_millis());
+                deadline.observe(&item, self.monotonic_clock.now_millis());
                 // Malformed canonical orderings are compaction failures,
                 // never silently folded into a canonical message.
-                state.accept(&event)?;
-                match event {
-                    ModelEvent::Started
-                    | ModelEvent::UsageUpdate { .. }
-                    | ModelEvent::ReasoningDelta { .. }
-                    | ModelEvent::ContinuationState { .. } => {}
-                    ModelEvent::TextDelta { text: delta, .. } => text.push_str(&delta),
-                    ModelEvent::RefusalDelta { .. } => {
-                        return Err(summary_failed("summary generation refused"));
-                    }
-                    ModelEvent::ToolCallStarted { .. }
-                    | ModelEvent::ToolCallArgumentsDelta { .. }
-                    | ModelEvent::ToolCallCompleted { .. } => {
-                        return Err(summary_failed("summary generation must not request tools"));
-                    }
-                    ModelEvent::Completed {
-                        finish_reason: reason,
-                        ..
-                    } => {
-                        finish_reason = Some(reason);
-                    }
-                    ModelEvent::Failed { error } => {
-                        return Err(match error.kind {
-                            crate::model::error::ModelErrorKind::Cancelled => ContextError::new(
-                                ContextErrorKind::Cancelled,
-                                "summary generation cancelled",
-                            ),
-                            // The summary request itself did not fit the
-                            // summary model. This is not a dead end: it is
-                            // evidence that the planned span was estimated
-                            // too optimistically, and the pipeline replans
-                            // against a smaller budget.
-                            crate::model::error::ModelErrorKind::ContextWindowExceeded => {
-                                ContextError::new(
-                                    ContextErrorKind::SummaryInputTooLarge,
-                                    format!(
-                                        "the summary request exceeded the summary model context window: {}",
-                                        error.message
-                                    ),
-                                )
-                            }
-                            _ => summary_failed(&format!(
-                                "summary generation failed: {}",
-                                error.message
-                            )),
-                        });
-                    }
+                state.accept(&item)?;
+                match item {
+                    ModelStreamItem::Progress(_) => {}
+                    ModelStreamItem::Event(event) => match event {
+                        ModelEvent::Started
+                        | ModelEvent::UsageUpdate { .. }
+                        | ModelEvent::ReasoningDelta { .. }
+                        | ModelEvent::ContinuationState { .. } => {}
+                        ModelEvent::TextDelta { text: delta, .. } => text.push_str(&delta),
+                        ModelEvent::RefusalDelta { .. } => {
+                            return Err(summary_failed("summary generation refused"));
+                        }
+                        ModelEvent::ToolCallStarted { .. }
+                        | ModelEvent::ToolCallArgumentsDelta { .. }
+                        | ModelEvent::ToolCallCompleted { .. } => {
+                            return Err(summary_failed(
+                                "summary generation must not request tools",
+                            ));
+                        }
+                        ModelEvent::Completed {
+                            finish_reason: reason,
+                            ..
+                        } => {
+                            finish_reason = Some(reason);
+                        }
+                        ModelEvent::Failed { error } => {
+                            return Err(match error.kind {
+                                crate::model::error::ModelErrorKind::Cancelled => {
+                                    ContextError::new(
+                                        ContextErrorKind::Cancelled,
+                                        "summary generation cancelled",
+                                    )
+                                }
+                                // The summary request itself did not fit the
+                                // summary model. This is not a dead end: it is
+                                // evidence that the planned span was estimated
+                                // too optimistically, and the pipeline replans
+                                // against a smaller budget.
+                                crate::model::error::ModelErrorKind::ContextWindowExceeded => {
+                                    ContextError::new(
+                                        ContextErrorKind::SummaryInputTooLarge,
+                                        format!(
+                                            "the summary request exceeded the summary model context window: {}",
+                                            error.message
+                                        ),
+                                    )
+                                }
+                                _ => summary_failed(&format!(
+                                    "summary generation failed: {}",
+                                    error.message
+                                )),
+                            });
+                        }
+                    },
                 }
             }
             if !state.terminal {
@@ -559,7 +567,9 @@ fn summary_failed(message: &str) -> ContextError {
 /// summary messages: the summary stream must start with `Started` (or a bare
 /// terminal `Failed` for a request rejected before provider execution),
 /// `Started` occurs at most once, `Completed` requires `Started`, and no
-/// event follows the terminal event. This is the same canonical contract
+/// event follows the terminal event. Ephemeral progress is accepted only
+/// after `Started` and never changes the canonical state. This is the same
+/// canonical contract
 /// the agent loop enforces, kept provider-neutral and without recursing
 /// into `AgentExecution`.
 #[derive(Debug, Default)]
@@ -569,19 +579,26 @@ struct SummaryStreamState {
 }
 
 impl SummaryStreamState {
-    /// Accepts one event, validating the canonical stream ordering.
+    /// Accepts one stream item, validating canonical event ordering while
+    /// keeping progress ephemeral.
     ///
     /// # Errors
     ///
     /// Returns [`ContextErrorKind::SummaryFailed`] for a malformed
     /// ordering: content before `Started`, a duplicate `Started`,
     /// `Completed` without `Started`, or any event after the terminal.
-    fn accept(&mut self, event: &ModelEvent) -> Result<(), ContextError> {
+    fn accept(&mut self, item: &ModelStreamItem) -> Result<(), ContextError> {
         if self.terminal {
             return Err(summary_failed(
-                "summary stream event after the terminal event",
+                "summary stream item after the terminal event",
             ));
         }
+        let ModelStreamItem::Event(event) = item else {
+            if self.started {
+                return Ok(());
+            }
+            return Err(summary_failed("summary stream progress before Started"));
+        };
         match event {
             ModelEvent::Started => {
                 if self.started {

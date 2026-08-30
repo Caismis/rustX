@@ -1,4 +1,5 @@
-//! Provider-neutral model requests, model events, usage, errors, and provider adapters.
+//! Provider-neutral model requests, canonical model events, stream progress,
+//! usage, errors, and provider adapters.
 //!
 //! M1 implements the provider-neutral model contracts: `ModelRequest`, `ModelEvent`,
 //! `ModelUsage`, normalized finish reasons, normalized errors, and the model
@@ -25,7 +26,9 @@ pub use adapter::anthropic::{AnthropicAdapterConfig, AnthropicMessagesAdapter};
 pub use adapter::openai::{
     OpenAiAdapterConfig, OpenAiChatCompletionsAdapter, OpenAiResponsesAdapter,
 };
-pub use adapter::{ModelAdapter, ModelEventStream, model_event_stream_of_failure};
+pub use adapter::{
+    ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
+};
 pub use catalog::{
     ChatMaxTokensField, ChatReasoningReplay, ChatStreamUsage, CredentialSource,
     CredentialSourceView, Modality, ModelCapabilities, ModelCatalog, ModelCatalogError,
@@ -33,8 +36,8 @@ pub use catalog::{
     ReasoningProfile, ReasoningProfileId, ResolvedModelCatalog, ResponsesStorageMode,
 };
 pub use deadline::{
-    DEFAULT_RESPONSE_START_TIMEOUT, DEFAULT_STREAM_IDLE_TIMEOUT, ModelDeadlinePhase,
-    ModelEventProgress, ModelRequestDeadline, ModelTimeoutPolicy,
+    DEFAULT_RESPONSE_START_TIMEOUT, DEFAULT_STREAM_IDLE_TIMEOUT, ModelDeadlinePhase, ModelProgress,
+    ModelRequestDeadline, ModelTimeoutPolicy,
 };
 pub use error::{ContextOverflowReport, ModelError, ModelErrorKind, ModelRetryDisposition};
 pub use event::ModelEvent;

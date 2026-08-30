@@ -26,8 +26,9 @@ use rustx::message::content::TextBlock;
 use rustx::message::types::{
     ContentBlockIndex, InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
+use rustx::model::adapter::ModelStreamItem;
 use rustx::model::deadline::{
-    ModelDeadlinePhase, ModelEventProgress, ModelRequestDeadline, ModelTimeoutPolicy,
+    ModelDeadlinePhase, ModelProgress, ModelRequestDeadline, ModelTimeoutPolicy,
 };
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
@@ -289,7 +290,7 @@ async fn run_first_timeout(
     let publication = common::RecordingPublicationObserver::default();
     let clock = Arc::new(ManualMonotonicClock::new());
     let (event_pause, mut reached, event_release) =
-        crate::agent::execution::test_sync::ModelEventPause::install();
+        crate::agent::execution::test_sync::ModelStreamItemPause::install();
     let execution = make_execution(
         attempt,
         &model,
@@ -300,7 +301,7 @@ async fn run_first_timeout(
     )
     .await;
     let mut execution = execution;
-    execution.install_model_event_pause(event_pause);
+    execution.install_model_stream_item_pause(event_pause);
     let controller_clock = clock.clone();
     let controller_cancellation = cancellation.clone();
     let mut exited = model.streams_exited();
@@ -309,8 +310,10 @@ async fn run_first_timeout(
             reached
                 .wait_for(|observed| *observed >= count)
                 .await
-                .expect("model event pause remains open");
-            event_release.send(()).expect("release model event pause");
+                .expect("model stream item pause remains open");
+            event_release
+                .send(())
+                .expect("release model stream item pause");
         }
         controller_clock.advance(
             u64::try_from(policy.response_start_timeout.as_millis())
@@ -388,13 +391,13 @@ fn deadline_classification_is_shared_and_phase_transitions_are_explicit() {
     ];
     for event in generation_events {
         assert_eq!(
-            ModelEventProgress::classify(&event),
-            ModelEventProgress::Generation
+            ModelProgress::classify(&ModelStreamItem::Event(event.clone())),
+            ModelProgress::Generation
         );
         let clock = ManualMonotonicClock::new();
         let mut deadline = ModelRequestDeadline::new(policy, clock.now_millis());
         clock.advance(10);
-        deadline.observe(&event, clock.now_millis());
+        deadline.observe(&ModelStreamItem::Event(event), clock.now_millis());
         assert_eq!(deadline.phase(), ModelDeadlinePhase::Streaming);
         assert_eq!(deadline.deadline_millis(), Some(30));
     }
@@ -405,22 +408,25 @@ fn early_usage_and_continuation_do_not_end_response_start_but_later_liveness_res
     let policy = timeout_policy(10, 20);
     let clock = ManualMonotonicClock::new();
     let mut deadline = ModelRequestDeadline::new(policy, clock.now_millis());
-    deadline.observe(&ModelEvent::Started, clock.now_millis());
+    deadline.observe(
+        &ModelStreamItem::Event(ModelEvent::Started),
+        clock.now_millis(),
+    );
     clock.advance(5);
-    deadline.observe(&usage(1, 1), clock.now_millis());
-    deadline.observe(&continuation(), clock.now_millis());
+    deadline.observe(&ModelStreamItem::Event(usage(1, 1)), clock.now_millis());
+    deadline.observe(&ModelStreamItem::Event(continuation()), clock.now_millis());
     assert_eq!(deadline.phase(), ModelDeadlinePhase::AwaitingGeneration);
     assert_eq!(deadline.deadline_millis(), Some(10));
-    deadline.observe(&text("first"), clock.now_millis());
+    deadline.observe(&ModelStreamItem::Event(text("first")), clock.now_millis());
     assert_eq!(deadline.deadline_millis(), Some(25));
     clock.advance(5);
-    deadline.observe(&usage(2, 2), clock.now_millis());
+    deadline.observe(&ModelStreamItem::Event(usage(2, 2)), clock.now_millis());
     assert_eq!(deadline.deadline_millis(), Some(30));
     clock.advance(5);
-    deadline.observe(&continuation(), clock.now_millis());
+    deadline.observe(&ModelStreamItem::Event(continuation()), clock.now_millis());
     assert_eq!(deadline.deadline_millis(), Some(35));
     clock.advance(5);
-    deadline.observe(&text("second"), clock.now_millis());
+    deadline.observe(&ModelStreamItem::Event(text("second")), clock.now_millis());
     assert_eq!(deadline.deadline_millis(), Some(40));
 }
 
@@ -500,7 +506,7 @@ async fn late_adapter_terminal_after_timeout_cannot_create_a_second_outcome() {
     let publication = common::RecordingPublicationObserver::default();
     let clock = Arc::new(ManualMonotonicClock::new());
     let (event_pause, mut reached, event_release) =
-        crate::agent::execution::test_sync::ModelEventPause::install();
+        crate::agent::execution::test_sync::ModelStreamItemPause::install();
     let mut execution = make_execution(
         "attempt-135-late-terminal",
         &model,
@@ -510,7 +516,7 @@ async fn late_adapter_terminal_after_timeout_cannot_create_a_second_outcome() {
         clock.clone(),
     )
     .await;
-    execution.install_model_event_pause(event_pause);
+    execution.install_model_stream_item_pause(event_pause);
     let controller_clock = clock.clone();
     let controller_cancellation = cancellation.clone();
     let mut exited = model.streams_exited();
@@ -622,7 +628,7 @@ async fn publication_flush_wins_before_timeout_at_the_same_cut_and_does_not_rese
     let tool_runtime = common::tool_runtime(CONVERSATION);
     let clock = Arc::new(ManualMonotonicClock::new());
     let (event_pause, mut reached, event_release) =
-        crate::agent::execution::test_sync::ModelEventPause::install();
+        crate::agent::execution::test_sync::ModelStreamItemPause::install();
     let (arbitration_pause, mut arbitration_reached, arbitration_release) =
         crate::agent::execution::test_sync::ModelArbitrationPause::install(2);
     let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
@@ -648,7 +654,7 @@ async fn publication_flush_wins_before_timeout_at_the_same_cut_and_does_not_rese
         clock.clone() as Arc<dyn MonotonicClock>,
     );
     execution.install_model_timeout_policy(timeout_policy(100, 5));
-    execution.install_model_event_pause(event_pause);
+    execution.install_model_stream_item_pause(event_pause);
     execution.install_model_arbitration_pause(arbitration_pause);
     let observer = OrderingObserver::default();
     let controller_clock = clock.clone();
@@ -659,8 +665,10 @@ async fn publication_flush_wins_before_timeout_at_the_same_cut_and_does_not_rese
             reached
                 .wait_for(|observed| *observed >= count)
                 .await
-                .expect("model event pause remains open");
-            event_release.send(()).expect("release model event pause");
+                .expect("model stream item pause remains open");
+            event_release
+                .send(())
+                .expect("release model stream item pause");
         }
         arbitration_reached
             .wait_for(|entered| *entered)
@@ -703,12 +711,12 @@ async fn publication_flush_wins_before_timeout_at_the_same_cut_and_does_not_rese
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn provider_event_wins_when_ready_with_response_timeout() {
+async fn provider_progress_wins_when_ready_with_response_timeout() {
     let (provider_release, provider_release_rx) = model_release();
     let model = fake_model(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::ParkUntilReleased(provider_release_rx),
-        FakeStep::Emit(text("first")),
+        FakeStep::Progress(rustx::model::ModelStreamProgress::Generation),
         FakeStep::Emit(completed()),
     ]]);
     let cancellation =
@@ -716,7 +724,7 @@ async fn provider_event_wins_when_ready_with_response_timeout() {
     let tool_runtime = common::tool_runtime(CONVERSATION);
     let clock = Arc::new(ManualMonotonicClock::new());
     let (event_pause, mut reached, event_release) =
-        crate::agent::execution::test_sync::ModelEventPause::install();
+        crate::agent::execution::test_sync::ModelStreamItemPause::install();
     let (arbitration_pause, mut arbitration_reached, arbitration_release) =
         crate::agent::execution::test_sync::ModelArbitrationPause::install(1);
     let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
@@ -739,7 +747,7 @@ async fn provider_event_wins_when_ready_with_response_timeout() {
         clock.clone() as Arc<dyn MonotonicClock>,
     );
     execution.install_model_timeout_policy(timeout_policy(10, 100));
-    execution.install_model_event_pause(event_pause);
+    execution.install_model_stream_item_pause(event_pause);
     execution.install_model_arbitration_pause(arbitration_pause);
     let controller = tokio::spawn(async move {
         reached
@@ -754,7 +762,9 @@ async fn provider_event_wins_when_ready_with_response_timeout() {
         // These operations happen without an await between them. The
         // provider release and response-start wake become ready before the
         // biased arbitration is released and polled.
-        provider_release.send(true).expect("release provider event");
+        provider_release
+            .send(true)
+            .expect("release provider progress");
         clock.advance(10);
         arbitration_release
             .send(())
@@ -800,7 +810,7 @@ async fn cancellation_wins_same_cut_and_retains_cancellation_provenance() {
     let tool_runtime = common::tool_runtime(CONVERSATION);
     let clock = Arc::new(ManualMonotonicClock::new());
     let (event_pause, mut reached, event_release) =
-        crate::agent::execution::test_sync::ModelEventPause::install();
+        crate::agent::execution::test_sync::ModelStreamItemPause::install();
     let (arbitration_pause, mut arbitration_reached, arbitration_release) =
         crate::agent::execution::test_sync::ModelArbitrationPause::install(1);
     let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
@@ -823,7 +833,7 @@ async fn cancellation_wins_same_cut_and_retains_cancellation_provenance() {
         clock.clone() as Arc<dyn MonotonicClock>,
     );
     execution.install_model_timeout_policy(timeout_policy(10, 20));
-    execution.install_model_event_pause(event_pause);
+    execution.install_model_stream_item_pause(event_pause);
     execution.install_model_arbitration_pause(arbitration_pause);
     let controller_cancellation = cancellation.clone();
     let controller = tokio::spawn(async move {
@@ -890,7 +900,7 @@ async fn repeated_runtime_timeouts_use_the_bounded_generic_retry_budget_without_
     let clock = Arc::new(ManualMonotonicClock::new());
     let (pause, mut retry_reached, retry_release) = RetryBackoffPause::install();
     let (event_pause, mut event_reached, event_release) =
-        crate::agent::execution::test_sync::ModelEventPause::install();
+        crate::agent::execution::test_sync::ModelStreamItemPause::install();
     let mut execution = make_execution(
         "attempt-135-budget",
         &model,
@@ -901,12 +911,12 @@ async fn repeated_runtime_timeouts_use_the_bounded_generic_retry_budget_without_
     )
     .await;
     execution.install_retry_backoff_pause(pause);
-    execution.install_model_event_pause(event_pause);
+    execution.install_model_stream_item_pause(event_pause);
     let controller_clock = clock.clone();
     let mut exited = model.streams_exited();
     let controller = tokio::spawn(async move {
         for request_number in 1..=4_u64 {
-            // ModelEventPause is after the primary loop has observed Started
+            // ModelStreamItemPause is after the primary loop has observed Started
             // and applied its deadline state. The fake provider's emitted
             // counter is intentionally not used as a consumption frontier.
             event_reached

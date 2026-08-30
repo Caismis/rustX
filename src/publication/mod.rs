@@ -39,7 +39,7 @@
 //!
 //! [`PublicationCoalescer`] owns the bounded deterministic flush policy. When
 //! the first payload enters an empty buffer it owns one absolute deadline;
-//! later provider events never reset it. The runtime [`MonotonicClock`] owns
+//! later canonical provider events never reset it. The runtime [`MonotonicClock`] owns
 //! the wake-up mechanism, so deterministic tests use
 //! [`ManualMonotonicClock`](crate::runtime::ManualMonotonicClock) and never a
 //! sleep.

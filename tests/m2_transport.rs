@@ -10,8 +10,8 @@ use std::time::Duration;
 use common::{error_fixture, simple_request, sse_fixture};
 use rustx::model::{
     AnthropicAdapterConfig, AnthropicMessagesAdapter, ModelAdapter, ModelErrorKind, ModelEvent,
-    ModelProtocol, ModelRequest, OpenAiAdapterConfig, OpenAiChatCompletionsAdapter,
-    OpenAiResponsesAdapter,
+    ModelProtocol, ModelRequest, ModelStreamItem, OpenAiAdapterConfig,
+    OpenAiChatCompletionsAdapter, OpenAiResponsesAdapter,
 };
 use rustx::model::{
     CarryoverBlockKind, CarryoverOmissionCounts, ModelInputMessage, RenderedCarryoverRecord,
@@ -298,8 +298,10 @@ async fn cancellation_before_network_creates_no_request() {
         let events: Vec<ModelEvent> = {
             use futures_util::StreamExt;
             let mut collected = Vec::new();
-            while let Some(event) = stream.next().await {
-                collected.push(event);
+            while let Some(item) = stream.next().await {
+                if let ModelStreamItem::Event(event) = item {
+                    collected.push(event);
+                }
             }
             collected
         };
@@ -344,18 +346,21 @@ async fn cancellation_in_flight_openai_chat() {
     let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await
         .expect("first event within timeout");
-    assert_eq!(first, Some(ModelEvent::Started));
+    assert_eq!(first, Some(ModelStreamItem::Event(ModelEvent::Started)));
     let second = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await
         .expect("text delta within timeout");
-    assert!(matches!(second, Some(ModelEvent::TextDelta { .. })));
+    assert!(matches!(
+        second,
+        Some(ModelStreamItem::Event(ModelEvent::TextDelta { .. }))
+    ));
     // Cancel while the provider stream is actually in flight.
     cancellation.cancel();
     let usage_or_terminal = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await
         .expect("terminal within timeout");
     let terminal = match usage_or_terminal {
-        Some(ModelEvent::UsageUpdate { usage }) => {
+        Some(ModelStreamItem::Event(ModelEvent::UsageUpdate { usage })) => {
             assert_eq!(usage.input_tokens, 5);
             tokio::time::timeout(Duration::from_secs(5), stream.next())
                 .await
@@ -365,7 +370,8 @@ async fn cancellation_in_flight_openai_chat() {
     };
     assert!(matches!(
         terminal,
-        Some(ModelEvent::Failed { error }) if error.kind == ModelErrorKind::Cancelled
+        Some(ModelStreamItem::Event(ModelEvent::Failed { error }))
+            if error.kind == ModelErrorKind::Cancelled
     ));
     // The stream terminates; nothing is emitted after the terminal event.
     let after = tokio::time::timeout(Duration::from_secs(5), stream.next())
@@ -399,17 +405,20 @@ async fn cancellation_in_flight_anthropic() {
     let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await
         .expect("first event within timeout");
-    assert_eq!(first, Some(ModelEvent::Started));
+    assert_eq!(first, Some(ModelStreamItem::Event(ModelEvent::Started)));
     let delta = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await
         .expect("text delta within timeout");
-    assert!(matches!(delta, Some(ModelEvent::TextDelta { .. })));
+    assert!(matches!(
+        delta,
+        Some(ModelStreamItem::Event(ModelEvent::TextDelta { .. }))
+    ));
     cancellation.cancel();
     let usage_or_terminal = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await
         .expect("terminal within timeout");
     let terminal = match usage_or_terminal {
-        Some(ModelEvent::UsageUpdate { usage }) => {
+        Some(ModelStreamItem::Event(ModelEvent::UsageUpdate { usage })) => {
             assert_eq!(usage.input_tokens, 5);
             tokio::time::timeout(Duration::from_secs(5), stream.next())
                 .await
@@ -419,7 +428,8 @@ async fn cancellation_in_flight_anthropic() {
     };
     assert!(matches!(
         terminal,
-        Some(ModelEvent::Failed { error }) if error.kind == ModelErrorKind::Cancelled
+        Some(ModelStreamItem::Event(ModelEvent::Failed { error }))
+            if error.kind == ModelErrorKind::Cancelled
     ));
     let after = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await
@@ -452,18 +462,22 @@ async fn cancellation_in_flight_openai_responses() {
     let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await
         .expect("first event within timeout");
-    assert_eq!(first, Some(ModelEvent::Started));
+    assert_eq!(first, Some(ModelStreamItem::Event(ModelEvent::Started)));
     let delta = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await
         .expect("text delta within timeout");
-    assert!(matches!(delta, Some(ModelEvent::TextDelta { .. })));
+    assert!(matches!(
+        delta,
+        Some(ModelStreamItem::Event(ModelEvent::TextDelta { .. }))
+    ));
     cancellation.cancel();
     let terminal = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await
         .expect("terminal within timeout");
     assert!(matches!(
         terminal,
-        Some(ModelEvent::Failed { error }) if error.kind == ModelErrorKind::Cancelled
+        Some(ModelStreamItem::Event(ModelEvent::Failed { error }))
+            if error.kind == ModelErrorKind::Cancelled
     ));
     let after = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await
@@ -484,12 +498,17 @@ async fn cancellation_while_headers_delayed_anthropic() {
     .await;
     let cancellation = CancellationSignal::new();
     let mut stream = anthropic(&server).stream(anthropic_request(), cancellation.clone());
-    assert_eq!(stream.next().await, Some(ModelEvent::Started));
+    assert_eq!(
+        stream.next().await,
+        Some(ModelStreamItem::Event(ModelEvent::Started))
+    );
     // Drive the stream in the background so the connection attempt happens.
     let collector = tokio::spawn(async move {
         let mut events = Vec::new();
-        while let Some(event) = stream.next().await {
-            events.push(event);
+        while let Some(item) = stream.next().await {
+            if let ModelStreamItem::Event(event) = item {
+                events.push(event);
+            }
         }
         events
     });
@@ -541,11 +560,16 @@ async fn cancellation_while_headers_delayed_openai_chat() {
     .await;
     let cancellation = CancellationSignal::new();
     let mut stream = openai_chat(&server).stream(chat_request(), cancellation.clone());
-    assert_eq!(stream.next().await, Some(ModelEvent::Started));
+    assert_eq!(
+        stream.next().await,
+        Some(ModelStreamItem::Event(ModelEvent::Started))
+    );
     let collector = tokio::spawn(async move {
         let mut events = Vec::new();
-        while let Some(event) = stream.next().await {
-            events.push(event);
+        while let Some(item) = stream.next().await {
+            if let ModelStreamItem::Event(event) = item {
+                events.push(event);
+            }
         }
         events
     });
@@ -595,11 +619,16 @@ async fn cancellation_while_headers_delayed_openai_responses() {
     .await;
     let cancellation = CancellationSignal::new();
     let mut stream = openai_responses(&server).stream(responses_request(), cancellation.clone());
-    assert_eq!(stream.next().await, Some(ModelEvent::Started));
+    assert_eq!(
+        stream.next().await,
+        Some(ModelStreamItem::Event(ModelEvent::Started))
+    );
     let collector = tokio::spawn(async move {
         let mut events = Vec::new();
-        while let Some(event) = stream.next().await {
-            events.push(event);
+        while let Some(item) = stream.next().await {
+            if let ModelStreamItem::Event(event) = item {
+                events.push(event);
+            }
         }
         events
     });

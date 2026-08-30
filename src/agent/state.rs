@@ -36,7 +36,7 @@ use crate::runtime::types::RuntimeError;
 pub enum ExecutionState {
     /// The attempt has not started executing.
     Idle,
-    /// The attempt is consuming one canonical model event stream.
+    /// The attempt is consuming one provider-independent model stream.
     RunningModel,
     /// The attempt is executing the tool calls of the current turn.
     WaitingForTool,

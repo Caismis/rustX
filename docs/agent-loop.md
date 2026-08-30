@@ -12,7 +12,8 @@ The loop (`src/agent`) executes one attempt to its single terminal outcome:
 - attempt lifecycle (`AttemptStarted` → one terminal settlement candidate,
   normally one committed terminal event)
 - turn lifecycle (one model response plus its tool calls and results)
-- canonical `ModelEvent` stream consumption, validation, and message assembly
+- provider-independent `ModelStreamItem` consumption and canonical `Event`
+  validation/message assembly
 - the durable publication stream of every model request (Issue #108): opening
   it, feeding the bounded coalescer, committing frames before releasing them,
   committing the publication terminal (U) after the provider outcome (P), and
@@ -138,23 +139,30 @@ Streaming ---------no generation/liveness progress---> Timeout
 AwaitingGeneration or Streaming --Completed/Failed---> Terminal
 ```
 
-`Started` is lifecycle-only and does not reset response-start. Generation
-progress is `TextDelta`, `ReasoningDelta`, `RefusalDelta`, `ToolCallStarted`,
-`ToolCallArgumentsDelta`, and `ToolCallCompleted`. `UsageUpdate` and
-`ContinuationState` are liveness progress: before generation they leave the
-response-start deadline unchanged; after generation they reset stream-idle.
-Terminal events transfer deadline ownership away. Publication flushes,
-durable frame commits, projection, status work, context work, and retry
-backoff are never provider progress.
+`ModelAdapter::stream` has one provider-independent output contract:
+`ModelStreamItem::Event(ModelEvent)` for canonical output and
+`ModelStreamItem::Progress(ModelStreamProgress)` for ephemeral provider-derived
+execution progress. `Started` is lifecycle-only and does not reset
+response-start. Generation progress is every canonical text/reasoning/refusal/
+tool-call event plus explicit `Progress(Generation)`. `UsageUpdate` and
+`ContinuationState` retain their liveness meaning, and adapters may report
+explicit `Progress(Liveness)` for a protocol event whose semantics genuinely
+prove the opened stream is alive. Early liveness leaves response-start
+unchanged; generation enters streaming; generation or liveness after that
+resets stream-idle. Terminal events transfer deadline ownership away.
+Progress is consumed only as execution state: it never enters the assembler,
+publication, canonical history, Event Journal, request snapshot, or provider
+continuation. Publication flushes, durable frame commits, projection, status
+work, context work, and retry backoff are never provider progress.
 
 The primary loop uses one explicitly biased four-way wait for every provider
 pull, including an empty publication buffer:
 
 ```text
-provider event > attempt cancellation > publication flush > request timeout
+provider stream item > attempt cancellation > publication flush > request timeout
 ```
 
-Thus a provider event wins a simultaneous cut, cancellation retains its
+Thus either a canonical event or explicit progress wins a simultaneous cut, cancellation retains its
 `AgentCancellation` provenance and wins before timeout, and a committed-for-
 release publication frame flushes before a timeout at the same cut. A flush
 never resets stream-idle. When the timeout branch wins, the loop drops only
@@ -184,11 +192,13 @@ execution state always represent the same settlement boundary.
 
 ## 2. What provider adapters own
 
-Adapters own provider protocol translation only: one canonical
-`ModelRequest` in, one canonical `ModelEvent` stream out. They never
-execute tools, never decide attempt outcomes, and never emit
-`RuntimeEvent` values. Provider SDK and wire types terminate inside the
-adapter modules. The loop never branches on a provider protocol.
+Adapters own provider protocol translation only: one canonical `ModelRequest`
+in, one provider-independent `ModelStreamItem` stream out. They classify
+swallowed provider activity as ephemeral `Generation`, `Liveness`, or neither,
+and keep provider-specific buffering and identity state inside the adapter.
+They never execute tools, decide attempt outcomes, or emit `RuntimeEvent`
+values. Provider SDK and wire types terminate inside the adapter modules. The
+loop never branches on a provider protocol.
 
 ## 3. What tools own
 
@@ -1033,7 +1043,7 @@ linearization points in a fixed order:
 ```text
 provider stream begins
     ↓ open_publication_stream          (frozen attempt/turn/request/message identity)
-provider deltas
+provider stream items
     ↓ assembler.push  +  coalescer     (bytes / oldest-deadline latency / structure)
     ↓ stage_publication_frames         durable staging commit
     ↓ release to the observation seam  ← never before its own commit
@@ -1056,7 +1066,7 @@ silently replaced or normalized after assembly.
 
 The latency policy is an oldest-payload bound, not a quiet-period debounce.
 When the first payload enters an empty coalescer, it creates one absolute
-monotonic deadline. Later provider events use only the remaining budget and
+monotonic deadline. Later canonical provider events use only the remaining budget and
 cannot restart or extend it; a quiet provider is woken by that deadline. The
 coalescer owns both the deadline and the runtime monotonic-clock wake future, so
 the Agent Loop does not maintain a second time domain. Byte, structural,

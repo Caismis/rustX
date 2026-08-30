@@ -7,6 +7,7 @@
 
 use std::time::Duration;
 
+use crate::model::adapter::{ModelStreamItem, ModelStreamProgress};
 use crate::model::event::ModelEvent;
 
 /// The finite response-start timeout used when a runtime configuration does
@@ -29,7 +30,7 @@ pub const DEFAULT_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 /// inherits its parent runtime's frozen policy (Issue #138).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ModelTimeoutPolicy {
-    /// Maximum time from request dispatch until the first generation event.
+    /// Maximum time from request dispatch until the first generation progress.
     pub response_start_timeout: Duration,
     /// Maximum time between generation/liveness events after generation has
     /// begun.
@@ -62,9 +63,9 @@ impl ModelTimeoutPolicy {
     }
 }
 
-/// The semantic liveness class of a normalized model event.
+/// The semantic progress class of one provider stream item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ModelEventProgress {
+pub enum ModelProgress {
     /// Lifecycle evidence only; it does not prove provider response progress.
     Lifecycle,
     /// Provider-derived generation progress.
@@ -76,20 +77,27 @@ pub enum ModelEventProgress {
     Terminal,
 }
 
-impl ModelEventProgress {
-    /// Classifies a normalized provider event for deadline semantics.
+impl ModelProgress {
+    /// Classifies canonical events and explicit adapter progress for deadline
+    /// semantics.
     #[must_use]
-    pub const fn classify(event: &ModelEvent) -> Self {
-        match event {
-            ModelEvent::Started => Self::Lifecycle,
-            ModelEvent::TextDelta { .. }
-            | ModelEvent::ReasoningDelta { .. }
-            | ModelEvent::RefusalDelta { .. }
-            | ModelEvent::ToolCallStarted { .. }
-            | ModelEvent::ToolCallArgumentsDelta { .. }
-            | ModelEvent::ToolCallCompleted { .. } => Self::Generation,
-            ModelEvent::UsageUpdate { .. } | ModelEvent::ContinuationState { .. } => Self::Liveness,
-            ModelEvent::Completed { .. } | ModelEvent::Failed { .. } => Self::Terminal,
+    pub const fn classify(item: &ModelStreamItem) -> Self {
+        match item {
+            ModelStreamItem::Event(event) => match event {
+                ModelEvent::Started => Self::Lifecycle,
+                ModelEvent::TextDelta { .. }
+                | ModelEvent::ReasoningDelta { .. }
+                | ModelEvent::RefusalDelta { .. }
+                | ModelEvent::ToolCallStarted { .. }
+                | ModelEvent::ToolCallArgumentsDelta { .. }
+                | ModelEvent::ToolCallCompleted { .. } => Self::Generation,
+                ModelEvent::UsageUpdate { .. } | ModelEvent::ContinuationState { .. } => {
+                    Self::Liveness
+                }
+                ModelEvent::Completed { .. } | ModelEvent::Failed { .. } => Self::Terminal,
+            },
+            ModelStreamItem::Progress(ModelStreamProgress::Generation) => Self::Generation,
+            ModelStreamItem::Progress(ModelStreamProgress::Liveness) => Self::Liveness,
         }
     }
 }
@@ -97,7 +105,7 @@ impl ModelEventProgress {
 /// The request-local phase that owns the current deadline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelDeadlinePhase {
-    /// No generation event has been observed yet.
+    /// No generation progress has been observed yet.
     AwaitingGeneration,
     /// Generation has begun; the deadline is now stream-idle.
     Streaming,
@@ -108,7 +116,7 @@ pub enum ModelDeadlinePhase {
 /// The narrow request-local deadline state machine shared by model paths.
 ///
 /// The caller supplies the runtime monotonic timestamp at construction and
-/// at each event. Waiting on that timestamp is intentionally left to the
+/// at each stream item. Waiting on that timestamp is intentionally left to the
 /// caller so the Agent Loop and summarizer retain ownership of their own
 /// arbitration and outcome semantics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,21 +140,21 @@ impl ModelRequestDeadline {
         }
     }
 
-    /// Applies one provider event to the request-local phase machine.
-    pub fn observe(&mut self, event: &ModelEvent, now_millis: u64) {
+    /// Applies one provider stream item to the request-local phase machine.
+    pub fn observe(&mut self, item: &ModelStreamItem, now_millis: u64) {
         if self.phase == ModelDeadlinePhase::Terminal {
             return;
         }
-        match ModelEventProgress::classify(event) {
-            ModelEventProgress::Lifecycle => {}
-            ModelEventProgress::Generation => {
+        match ModelProgress::classify(item) {
+            ModelProgress::Lifecycle => {}
+            ModelProgress::Generation => {
                 self.phase = ModelDeadlinePhase::Streaming;
                 self.deadline_millis = Some(Self::deadline_after(
                     now_millis,
                     self.policy.stream_idle_timeout,
                 ));
             }
-            ModelEventProgress::Liveness => {
+            ModelProgress::Liveness => {
                 if self.phase == ModelDeadlinePhase::Streaming {
                     self.deadline_millis = Some(Self::deadline_after(
                         now_millis,
@@ -154,7 +162,7 @@ impl ModelRequestDeadline {
                     ));
                 }
             }
-            ModelEventProgress::Terminal => {
+            ModelProgress::Terminal => {
                 self.phase = ModelDeadlinePhase::Terminal;
                 self.deadline_millis = None;
             }
@@ -180,8 +188,9 @@ impl ModelRequestDeadline {
 
 #[cfg(test)]
 mod tests {
-    use super::{ModelDeadlinePhase, ModelEventProgress, ModelRequestDeadline, ModelTimeoutPolicy};
+    use super::{ModelDeadlinePhase, ModelProgress, ModelRequestDeadline, ModelTimeoutPolicy};
     use crate::message::types::ContentBlockIndex;
+    use crate::model::adapter::{ModelStreamItem, ModelStreamProgress};
     use crate::model::event::ModelEvent;
     use crate::model::types::ModelUsage;
     use crate::runtime::continuation::{OpenAiResponsesContinuation, ProviderContinuationState};
@@ -206,48 +215,50 @@ mod tests {
     #[test]
     fn classification_matches_the_request_contract() {
         assert_eq!(
-            ModelEventProgress::classify(&ModelEvent::Started),
-            ModelEventProgress::Lifecycle
+            ModelProgress::classify(&ModelStreamItem::Event(ModelEvent::Started)),
+            ModelProgress::Lifecycle
         );
         assert_eq!(
-            ModelEventProgress::classify(&text()),
-            ModelEventProgress::Generation
+            ModelProgress::classify(&ModelStreamItem::Event(text())),
+            ModelProgress::Generation
         );
         assert_eq!(
-            ModelEventProgress::classify(&ModelEvent::ReasoningDelta {
+            ModelProgress::classify(&ModelStreamItem::Event(ModelEvent::ReasoningDelta {
                 block_index: ContentBlockIndex::new(0),
                 text: "reasoning".to_owned(),
-            }),
-            ModelEventProgress::Generation
+            })),
+            ModelProgress::Generation
         );
         assert_eq!(
-            ModelEventProgress::classify(&ModelEvent::RefusalDelta {
+            ModelProgress::classify(&ModelStreamItem::Event(ModelEvent::RefusalDelta {
                 block_index: ContentBlockIndex::new(0),
                 text: "refusal".to_owned(),
-            }),
-            ModelEventProgress::Generation
+            })),
+            ModelProgress::Generation
         );
         assert_eq!(
-            ModelEventProgress::classify(&ModelEvent::ToolCallStarted {
+            ModelProgress::classify(&ModelStreamItem::Event(ModelEvent::ToolCallStarted {
                 block_index: ContentBlockIndex::new(0),
                 call: crate::tools::types::ToolCallStart {
                     id: ToolCallId::new("call-1"),
                     tool_id: ToolId::new("tool-1"),
                     name: "tool".to_owned(),
                 },
-            }),
-            ModelEventProgress::Generation
+            })),
+            ModelProgress::Generation
         );
         assert_eq!(
-            ModelEventProgress::classify(&ModelEvent::ToolCallArgumentsDelta {
-                block_index: ContentBlockIndex::new(0),
-                call_id: ToolCallId::new("call-1"),
-                arguments_delta: "{}".to_owned(),
-            }),
-            ModelEventProgress::Generation
+            ModelProgress::classify(&ModelStreamItem::Event(
+                ModelEvent::ToolCallArgumentsDelta {
+                    block_index: ContentBlockIndex::new(0),
+                    call_id: ToolCallId::new("call-1"),
+                    arguments_delta: "{}".to_owned(),
+                }
+            )),
+            ModelProgress::Generation
         );
         assert_eq!(
-            ModelEventProgress::classify(&ModelEvent::ToolCallCompleted {
+            ModelProgress::classify(&ModelStreamItem::Event(ModelEvent::ToolCallCompleted {
                 block_index: ContentBlockIndex::new(0),
                 call: ToolCall {
                     id: ToolCallId::new("call-1"),
@@ -255,33 +266,33 @@ mod tests {
                     name: "tool".to_owned(),
                     arguments: serde_json::json!({}),
                 },
-            }),
-            ModelEventProgress::Generation
+            })),
+            ModelProgress::Generation
         );
         assert_eq!(
-            ModelEventProgress::classify(&ModelEvent::UsageUpdate {
+            ModelProgress::classify(&ModelStreamItem::Event(ModelEvent::UsageUpdate {
                 usage: ModelUsage {
                     input_tokens: 1,
                     output_tokens: 1,
                     total_tokens: 2,
                     details: None,
                 },
-            }),
-            ModelEventProgress::Liveness
+            })),
+            ModelProgress::Liveness
         );
         assert_eq!(
-            ModelEventProgress::classify(&ModelEvent::ContinuationState {
+            ModelProgress::classify(&ModelStreamItem::Event(ModelEvent::ContinuationState {
                 block_index: ContentBlockIndex::new(0),
                 state: ProviderContinuationState::OpenAiResponses(
                     OpenAiResponsesContinuation::Stored {
                         previous_response_id: "response-1".to_owned(),
                     },
                 ),
-            }),
-            ModelEventProgress::Liveness
+            })),
+            ModelProgress::Liveness
         );
         assert_eq!(
-            ModelEventProgress::classify(&ModelEvent::Failed {
+            ModelProgress::classify(&ModelStreamItem::Event(ModelEvent::Failed {
                 error: crate::model::error::ModelError {
                     kind: crate::model::error::ModelErrorKind::Transport,
                     message: "failed".to_owned(),
@@ -290,8 +301,16 @@ mod tests {
                     provider_code: None,
                     context_overflow: None,
                 },
-            }),
-            ModelEventProgress::Terminal
+            })),
+            ModelProgress::Terminal
+        );
+        assert_eq!(
+            ModelProgress::classify(&ModelStreamItem::Progress(ModelStreamProgress::Generation)),
+            ModelProgress::Generation
+        );
+        assert_eq!(
+            ModelProgress::classify(&ModelStreamItem::Progress(ModelStreamProgress::Liveness)),
+            ModelProgress::Liveness
         );
     }
 
@@ -301,17 +320,20 @@ mod tests {
         let mut deadline = ModelRequestDeadline::new(policy(), clock.now_millis());
         assert_eq!(deadline.phase(), ModelDeadlinePhase::AwaitingGeneration);
         assert_eq!(deadline.deadline_millis(), Some(10));
-        deadline.observe(&ModelEvent::Started, clock.now_millis());
+        deadline.observe(
+            &ModelStreamItem::Event(ModelEvent::Started),
+            clock.now_millis(),
+        );
         clock.advance(5);
         deadline.observe(
-            &ModelEvent::UsageUpdate {
+            &ModelStreamItem::Event(ModelEvent::UsageUpdate {
                 usage: ModelUsage {
                     input_tokens: 1,
                     output_tokens: 1,
                     total_tokens: 2,
                     details: None,
                 },
-            },
+            }),
             clock.now_millis(),
         );
         assert_eq!(deadline.phase(), ModelDeadlinePhase::AwaitingGeneration);
@@ -323,33 +345,33 @@ mod tests {
         let clock = ManualMonotonicClock::new();
         let mut deadline = ModelRequestDeadline::new(policy(), clock.now_millis());
         clock.advance(10);
-        deadline.observe(&text(), clock.now_millis());
+        deadline.observe(&ModelStreamItem::Event(text()), clock.now_millis());
         assert_eq!(deadline.phase(), ModelDeadlinePhase::Streaming);
         assert_eq!(deadline.deadline_millis(), Some(30));
         clock.advance(5);
         deadline.observe(
-            &ModelEvent::UsageUpdate {
+            &ModelStreamItem::Event(ModelEvent::UsageUpdate {
                 usage: ModelUsage {
                     input_tokens: 2,
                     output_tokens: 2,
                     total_tokens: 4,
                     details: None,
                 },
-            },
+            }),
             clock.now_millis(),
         );
         assert_eq!(deadline.deadline_millis(), Some(35));
         deadline.observe(
-            &ModelEvent::Completed {
+            &ModelStreamItem::Event(ModelEvent::Completed {
                 finish_reason: crate::model::finish::ModelFinishReason::Stop,
                 usage: None,
-            },
+            }),
             clock.now_millis(),
         );
         assert_eq!(deadline.phase(), ModelDeadlinePhase::Terminal);
         assert_eq!(deadline.deadline_millis(), None);
         clock.advance(100);
-        deadline.observe(&text(), clock.now_millis());
+        deadline.observe(&ModelStreamItem::Event(text()), clock.now_millis());
         assert_eq!(deadline.phase(), ModelDeadlinePhase::Terminal);
         assert_eq!(deadline.deadline_millis(), None);
     }
@@ -368,5 +390,24 @@ mod tests {
 
         assert_eq!(first.deadline_millis(), Some(10));
         assert_eq!(later.deadline_millis(), Some(110));
+    }
+
+    #[test]
+    fn explicit_progress_has_the_same_phase_semantics_as_canonical_output() {
+        let clock = ManualMonotonicClock::new();
+        let mut deadline = ModelRequestDeadline::new(policy(), clock.now_millis());
+        clock.advance(10);
+        deadline.observe(
+            &ModelStreamItem::Progress(ModelStreamProgress::Generation),
+            clock.now_millis(),
+        );
+        assert_eq!(deadline.phase(), ModelDeadlinePhase::Streaming);
+        assert_eq!(deadline.deadline_millis(), Some(30));
+        clock.advance(5);
+        deadline.observe(
+            &ModelStreamItem::Progress(ModelStreamProgress::Liveness),
+            clock.now_millis(),
+        );
+        assert_eq!(deadline.deadline_millis(), Some(35));
     }
 }

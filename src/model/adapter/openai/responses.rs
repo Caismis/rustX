@@ -25,7 +25,7 @@ use crate::model::adapter::openai::mapping::{
     normalize_error, resolve_tool, stream_retry_disposition,
 };
 use crate::model::adapter::traits::{
-    ModelAdapter, ModelEventStream, model_event_stream_of_failure,
+    ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
 };
 use crate::model::adapter::validation::{ValidatedTools, validate_request};
 use crate::model::catalog::ResponsesStorageMode;
@@ -73,15 +73,15 @@ impl ModelAdapter for OpenAiResponsesAdapter {
         ModelProtocol::OpenAiResponses
     }
 
-    fn stream(&self, request: ModelRequest, cancellation: CancellationSignal) -> ModelEventStream {
+    fn stream(&self, request: ModelRequest, cancellation: CancellationSignal) -> ModelStream {
         let validated = match validate_request(&request, self.protocol()) {
             Ok(validated) => validated,
-            Err(error) => return model_event_stream_of_failure(error),
+            Err(error) => return model_stream_of_failure(error),
         };
         let storage_mode = request.invocation.compat.responses_storage;
         let translated = match translate_request(&request, &validated, storage_mode) {
             Ok(translated) => translated,
-            Err(error) => return model_event_stream_of_failure(error),
+            Err(error) => return model_stream_of_failure(error),
         };
         let client = self.client.clone();
         let normalizer = ResponsesNormalizer::new(validated, storage_mode);
@@ -97,7 +97,7 @@ impl ModelAdapter for OpenAiResponsesAdapter {
     }
 }
 
-async fn responses_phase_next(phase: ResponsesPhase) -> Option<(ModelEvent, ResponsesPhase)> {
+async fn responses_phase_next(phase: ResponsesPhase) -> Option<(ModelStreamItem, ResponsesPhase)> {
     match phase {
         ResponsesPhase::Preparing {
             client,
@@ -107,9 +107,9 @@ async fn responses_phase_next(phase: ResponsesPhase) -> Option<(ModelEvent, Resp
         } => {
             if cancellation.is_cancelled() {
                 return Some((
-                    ModelEvent::Failed {
+                    ModelStreamItem::Event(ModelEvent::Failed {
                         error: cancelled_error(),
-                    },
+                    }),
                     ResponsesPhase::Finished,
                 ));
             }
@@ -117,7 +117,7 @@ async fn responses_phase_next(phase: ResponsesPhase) -> Option<(ModelEvent, Resp
             // the network-opening await so the lifecycle stays consistent
             // when cancellation interrupts that await.
             Some((
-                ModelEvent::Started,
+                ModelStreamItem::Event(ModelEvent::Started),
                 ResponsesPhase::Opening {
                     client,
                     request,
@@ -137,9 +137,9 @@ async fn responses_phase_next(phase: ResponsesPhase) -> Option<(ModelEvent, Resp
                 outcome = api.create_stream_byot(&request) => outcome,
                 () = cancellation.cancelled() => {
                     return Some((
-                        ModelEvent::Failed {
+                        ModelStreamItem::Event(ModelEvent::Failed {
                             error: cancelled_error(),
-                        },
+                        }),
                         ResponsesPhase::Finished,
                     ));
                 }
@@ -162,9 +162,9 @@ async fn responses_phase_next(phase: ResponsesPhase) -> Option<(ModelEvent, Resp
                     Some((event, next_phase))
                 }
                 Err(error) => Some((
-                    ModelEvent::Failed {
+                    ModelStreamItem::Event(ModelEvent::Failed {
                         error: normalize_error(error),
-                    },
+                    }),
                     ResponsesPhase::Finished,
                 )),
             }
@@ -193,36 +193,38 @@ async fn responses_phase_next(phase: ResponsesPhase) -> Option<(ModelEvent, Resp
     }
 }
 
-/// Pulls provider events into `pending` until at least one event is ready or
-/// the invocation is over.
+/// Pulls provider wire events into `pending` until at least one stream item is
+/// ready or the invocation is over.
 async fn responses_pull(
     stream: &mut async_openai::types::stream::StreamResponse<serde_json::Value>,
     normalizer: &mut ResponsesNormalizer,
     cancellation: &CancellationSignal,
-    pending: &mut VecDeque<ModelEvent>,
+    pending: &mut VecDeque<ModelStreamItem>,
 ) {
     while pending.is_empty() {
         let item = tokio::select! {
             item = stream.next() => item,
             () = cancellation.cancelled() => {
-                pending.push_back(ModelEvent::Failed {
+                pending.push_back(ModelStreamItem::Event(ModelEvent::Failed {
                     error: cancelled_error(),
-                });
+                }));
                 break;
             }
         };
         match item {
             Some(Ok(event)) => match normalizer.push(&event) {
                 Ok(events) => pending.extend(events),
-                Err(error) => pending.push_back(ModelEvent::Failed { error }),
+                Err(error) => {
+                    pending.push_back(ModelStreamItem::Event(ModelEvent::Failed { error }));
+                }
             },
             Some(Err(error)) => {
                 if is_done_marker(&error) {
                     finish_responses(normalizer, pending);
                 } else {
-                    pending.push_back(ModelEvent::Failed {
+                    pending.push_back(ModelStreamItem::Event(ModelEvent::Failed {
                         error: normalize_error(error),
-                    });
+                    }));
                 }
                 break;
             }
@@ -234,21 +236,25 @@ async fn responses_pull(
     }
 }
 
-fn finish_responses(normalizer: &mut ResponsesNormalizer, pending: &mut VecDeque<ModelEvent>) {
+fn finish_responses(normalizer: &mut ResponsesNormalizer, pending: &mut VecDeque<ModelStreamItem>) {
     match normalizer.finish() {
-        Ok(events) => pending.extend(events),
-        Err(error) => pending.push_back(ModelEvent::Failed { error }),
+        Ok(events) => extend_events(pending, events),
+        Err(error) => pending.push_back(ModelStreamItem::Event(ModelEvent::Failed { error })),
     }
+}
+
+fn extend_events(pending: &mut VecDeque<ModelStreamItem>, events: Vec<ModelEvent>) {
+    pending.extend(events.into_iter().map(ModelStreamItem::Event));
 }
 
 fn is_done_marker(error: &OpenAIError) -> bool {
     matches!(error, OpenAIError::JSONDeserialize(_, content) if content == "[DONE]")
 }
 
-fn is_terminal(event: &ModelEvent) -> bool {
+fn is_terminal(event: &ModelStreamItem) -> bool {
     matches!(
         event,
-        ModelEvent::Completed { .. } | ModelEvent::Failed { .. }
+        ModelStreamItem::Event(ModelEvent::Completed { .. } | ModelEvent::Failed { .. })
     )
 }
 
@@ -280,7 +286,7 @@ enum ResponsesPhase {
         stream: async_openai::types::stream::StreamResponse<serde_json::Value>,
         normalizer: ResponsesNormalizer,
         cancellation: CancellationSignal,
-        pending: VecDeque<ModelEvent>,
+        pending: VecDeque<ModelStreamItem>,
     },
     Finished,
 }
@@ -330,6 +336,7 @@ struct ResponsesNormalizer {
     output_items_done: BTreeSet<u32>,
     terminal_emitted: bool,
     response_id: Option<String>,
+    pending_progress: Option<ModelStreamProgress>,
 }
 
 impl ResponsesNormalizer {
@@ -346,19 +353,41 @@ impl ResponsesNormalizer {
             output_items_done: BTreeSet::new(),
             terminal_emitted: false,
             response_id: None,
+            pending_progress: None,
         }
     }
 
-    /// Processes one raw stream event, returning the normalized events.
-    fn push(&mut self, event: &serde_json::Value) -> Result<Vec<ModelEvent>, ModelError> {
+    /// Processes one raw stream event into canonical output and ephemeral
+    /// provider-derived progress in the single adapter stream contract.
+    fn push(&mut self, event: &serde_json::Value) -> Result<Vec<ModelStreamItem>, ModelError> {
+        self.pending_progress = None;
+        let events = self.push_events(event)?;
+        let mut items = events
+            .into_iter()
+            .map(ModelStreamItem::Event)
+            .collect::<Vec<_>>();
+        if let Some(progress) = self.pending_progress.take() {
+            items.push(ModelStreamItem::Progress(progress));
+        }
+        Ok(items)
+    }
+
+    /// Processes one raw stream event into canonical events. Provider status
+    /// and pre-start argument details are classified by `push` without
+    /// exposing the provider wire representation outside this adapter.
+    fn push_events(&mut self, event: &serde_json::Value) -> Result<Vec<ModelEvent>, ModelError> {
         let event_type = str_field(event, "type").unwrap_or("");
         match event_type {
-            "response.created"
-            | "response.in_progress"
-            | "response.queued"
-            | "response.reasoning_summary_part.added"
-            | "response.reasoning_summary_part.done"
-            | "response.function_call_arguments.done" => Ok(Vec::new()),
+            "response.created" | "response.in_progress" | "response.queued" => {
+                // These known response lifecycle notifications establish that
+                // the opened provider stream is alive, but do not establish
+                // that model generation has begun.
+                self.pending_progress = Some(ModelStreamProgress::Liveness);
+                Ok(Vec::new())
+            }
+            "response.reasoning_summary_part.added" | "response.reasoning_summary_part.done" => {
+                Ok(Vec::new())
+            }
             "response.output_item.added" => self.push_output_item_added(event),
             "response.output_item.done" => self.push_output_item_done(event),
             "response.content_part.added" => self.push_content_part_added(event),
@@ -410,28 +439,10 @@ impl ResponsesNormalizer {
             "response.reasoning_text.done" => self.push_reasoning_done(event, false),
             "response.reasoning.done" => self.push_openrouter_reasoning(event, true),
             "response.function_call_arguments.delta" => {
-                let output_index = u32_field(event, "output_index")?;
-                let assembly = self.tool_assembly(output_index);
-                if !assembly.started {
-                    // Identity is not yet known; fragments stay buffered.
-                    if let Some(function) = event.get("delta").and_then(serde_json::Value::as_str) {
-                        assembly.arguments.push_str(function);
-                    }
-                    return Ok(Vec::new());
-                }
-                let call_id = assembly.call_id.clone().expect("started implies known id");
-                let mut events = Vec::new();
-                if let Some(delta) = event.get("delta").and_then(serde_json::Value::as_str) {
-                    assembly.arguments.push_str(delta);
-                    if !delta.is_empty() {
-                        events.push(ModelEvent::ToolCallArgumentsDelta {
-                            block_index: assembly.block_index,
-                            call_id,
-                            arguments_delta: delta.to_owned(),
-                        });
-                    }
-                }
-                Ok(events)
+                self.push_function_call_arguments_delta(event)
+            }
+            "response.function_call_arguments.done" => {
+                self.push_function_call_arguments_done(event)
             }
             "response.completed" | "response.incomplete" => {
                 self.finish_terminal(event, event_type == "response.incomplete")
@@ -447,6 +458,74 @@ impl ResponsesNormalizer {
                 Ok(Vec::new())
             }
         }
+    }
+
+    fn push_function_call_arguments_delta(
+        &mut self,
+        event: &serde_json::Value,
+    ) -> Result<Vec<ModelEvent>, ModelError> {
+        let output_index = u32_field(event, "output_index")?;
+        let delta = event.get("delta").and_then(serde_json::Value::as_str);
+        let pre_start = self
+            .tool_calls
+            .get(&output_index)
+            .is_none_or(|assembly| !assembly.started);
+        if pre_start && delta.is_some_and(|delta| !delta.is_empty()) {
+            self.pending_progress = Some(ModelStreamProgress::Generation);
+        }
+        let assembly = self.tool_assembly(output_index);
+        if !assembly.started {
+            // Identity is not yet known; fragments stay buffered.
+            if let Some(delta) = delta {
+                assembly.arguments.push_str(delta);
+            }
+            return Ok(Vec::new());
+        }
+        let call_id = assembly.call_id.clone().expect("started implies known id");
+        let mut events = Vec::new();
+        if let Some(delta) = delta {
+            assembly.arguments.push_str(delta);
+            if !delta.is_empty() {
+                events.push(ModelEvent::ToolCallArgumentsDelta {
+                    block_index: assembly.block_index,
+                    call_id,
+                    arguments_delta: delta.to_owned(),
+                });
+            }
+        }
+        Ok(events)
+    }
+
+    fn push_function_call_arguments_done(
+        &mut self,
+        event: &serde_json::Value,
+    ) -> Result<Vec<ModelEvent>, ModelError> {
+        let output_index = u32_field(event, "output_index")?;
+        let arguments = event
+            .get("arguments")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let pre_start = self
+            .tool_calls
+            .get(&output_index)
+            .is_none_or(|assembly| !assembly.started);
+        if pre_start && !arguments.is_empty() {
+            self.pending_progress = Some(ModelStreamProgress::Generation);
+        }
+        let assembly = self.tool_assembly(output_index);
+        if !assembly.started && !arguments.is_empty() {
+            if assembly.arguments.is_empty() || arguments.starts_with(&assembly.arguments) {
+                arguments.clone_into(&mut assembly.arguments);
+            } else if !assembly.arguments.starts_with(arguments) {
+                return Err(provider_error(format!(
+                    "Responses function call completion disagrees with buffered arguments at output index {output_index}"
+                )));
+            }
+        }
+        // The provider's done notification carries cumulative data; canonical
+        // argument deltas are emitted only by the delta path or when identity
+        // becomes available.
+        Ok(Vec::new())
     }
 
     fn content_block(
@@ -733,7 +812,6 @@ impl ResponsesNormalizer {
             "message" | "function_call_output" | "reasoning" => Ok(Vec::new()),
             "function_call" => {
                 let output_index = u32_field(event, "output_index")?;
-                let block_index = self.blocks.allocate(ResponsesBlockKey::Item(output_index));
                 let call_id = item
                     .get("call_id")
                     .and_then(serde_json::Value::as_str)
@@ -754,17 +832,54 @@ impl ResponsesNormalizer {
                     tool_id,
                     name: name.to_owned(),
                 };
-                self.tool_calls.insert(
-                    output_index,
-                    ToolAssembly {
+                let canonical_call_id = call.id.clone();
+                let item_arguments = item.get("arguments").and_then(serde_json::Value::as_str);
+                let (block_index, buffered_arguments, started_now) = {
+                    let assembly = self.tool_assembly(output_index);
+                    if assembly
+                        .call_id
+                        .as_ref()
+                        .is_some_and(|known| known != &call.id)
+                        || assembly
+                            .name
+                            .as_ref()
+                            .is_some_and(|known| known != &call.name)
+                    {
+                        return Err(provider_error(format!(
+                            "provider changed the identity of Responses tool call at output index {output_index}"
+                        )));
+                    }
+                    if assembly.started {
+                        return Ok(Vec::new());
+                    }
+                    assembly.call_id = Some(call.id.clone());
+                    assembly.name = Some(call.name.clone());
+                    if let Some(item_arguments) = item_arguments {
+                        if assembly.arguments.is_empty()
+                            || item_arguments.starts_with(&assembly.arguments)
+                        {
+                            item_arguments.clone_into(&mut assembly.arguments);
+                        } else if !assembly.arguments.starts_with(item_arguments) {
+                            return Err(provider_error(format!(
+                                "Responses function call item disagrees with buffered arguments at output index {output_index}"
+                            )));
+                        }
+                    }
+                    assembly.started = true;
+                    (assembly.block_index, assembly.arguments.clone(), true)
+                };
+                let mut events = Vec::with_capacity(2);
+                if started_now {
+                    events.push(ModelEvent::ToolCallStarted { block_index, call });
+                }
+                if !buffered_arguments.is_empty() {
+                    events.push(ModelEvent::ToolCallArgumentsDelta {
                         block_index,
-                        call_id: Some(call.id.clone()),
-                        name: Some(call.name.clone()),
-                        arguments: String::new(),
-                        started: true,
-                    },
-                );
-                Ok(vec![ModelEvent::ToolCallStarted { block_index, call }])
+                        call_id: canonical_call_id,
+                        arguments_delta: buffered_arguments,
+                    });
+                }
+                Ok(events)
             }
             other => Err(unsupported(format!(
                 "provider-hosted or unsupported output item type {other:?}; \

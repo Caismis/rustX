@@ -961,11 +961,12 @@ config_format.rs           the one JSONC reader behind models.jsonc and
                            other relaxation, and no schema of its own
 model/finish.rs            ModelFinishReason
 model/error.rs             ModelError, ModelErrorKind
-model/event.rs             ModelEvent (adapter-to-kernel streaming protocol)
+model/event.rs             ModelEvent (canonical arm of the adapter stream)
 events/types.rs            RuntimeEventEnvelope, RuntimeEvent, AttemptOutcome,
                            AttemptFailure
 protocol/manifest.rs       RuntimeManifest and capability/context/limit sections
-model/adapter/traits.rs    ModelAdapter runtime-owned interface, ModelEventStream
+model/adapter/traits.rs    ModelAdapter runtime-owned interface, ModelStream,
+                           ModelStreamItem, and ephemeral ModelStreamProgress
 (cancellation lives in runtime/cancellation.rs; model adapters receive
                            the shared CancellationSignal)
 model/adapter/validation.rs    deterministic local capability validation
@@ -1075,10 +1076,13 @@ carries only the data known at start (`ToolCallStart`: call id, tool id,
 name); raw argument fragments stream via `ToolCallArgumentsDelta`, and the
 fully assembled `ToolCall` is emitted only at `ToolCallCompleted`.
 
-The provider adapter normalizes protocol events into this canonical stream;
-`ModelEventAssembler` then retains the canonical `Completed` event it actually
-consumed as the sole successful terminal authority and validates semantic
-coherence before the Agent Loop can act on the result. Its `finish()` operation
+The provider adapter normalizes protocol events into one `ModelStream` contract.
+Its `Event(ModelEvent)` items are canonical output; its ephemeral
+`Progress(Generation | Liveness)` items preserve provider-derived execution
+progress that cannot yet be represented canonically. `ModelEventAssembler`
+receives only the canonical event arm, then retains the canonical `Completed`
+event it actually consumed as the sole successful terminal authority and
+validates semantic coherence before the Agent Loop can act on the result. Its `finish()` operation
 has no caller-supplied terminal override: the assembled turn carries the
 consumed event's finish reason and terminal usage. In particular, a completed
 turn satisfies the bidirectional tool-call rule: `ModelFinishReason::ToolCalls`
@@ -1231,7 +1235,7 @@ the tool execution contract in `src/tools/executor.rs` (the provisional M3
 ```text
 canonical input state
         |
-ModelAdapter (canonical ModelRequest in, ModelEvent stream out)
+ModelAdapter (canonical ModelRequest in, ModelStreamItem stream out)
         |
 ExecutionStateMachine: Idle -> RunningModel -> WaitingForTool -> RunningModel -> Completed
         |
@@ -2627,8 +2631,13 @@ Governing rules:
 
 Provider SDK and wire types terminate inside the adapter modules
 (`src/model/adapter/openai`, `src/model/adapter/anthropic`); the agent kernel
-operates only on the runtime-owned `ModelAdapter` interface and the
-`ModelEvent` stream.
+operates only on the runtime-owned `ModelAdapter` interface and the one
+`ModelStreamItem` stream. Adapters own protocol classification: Chat
+Completions and Responses report Generation when tool arguments are buffered
+before canonical identity/start, while Anthropic reports Liveness for its
+defined `Ping` heartbeat. Unknown provider events remain neither. Progress is
+consumed by deadline state, never by assembly, publication, history, or the
+durable Event Journal.
 
 #### Logical model steps and actual requests (Issue #134)
 
@@ -2723,7 +2732,8 @@ the current Messages API. The Anthropic adapter therefore talks to
 
 - correct current streaming semantics (incremental `text_delta`,
   `thinking_delta`, `signature_delta`, and `input_json_delta` deltas emit
-  canonical events as they arrive; cumulative `message_delta` usage;
+  canonical events as they arrive; cumulative `message_delta` usage; a
+  protocol `ping` is exposed only as ephemeral Liveness progress;
   `pause_turn`; `model_context_window_exceeded`);
 - explicit rejection of server-side fallback: a provider `fallback` block is
   `Unsupported` (never silently discarded), because its position carries
@@ -5644,10 +5654,13 @@ failed required terminal append publishes neither the terminal event nor a
 synthetic replacement; the owning runtime reports the durable failure.
 
 A canonical `AssistantMessageBlock` is committed only when a complete model
-response has been assembled. The model plane communicates through the
-normalized `ModelEvent` streaming protocol, which is an adapter-to-kernel fact
-stream and is never inserted into the canonical conversation history; the
-agent kernel assembles one `AssistantMessageBlock` from it.
+response has been assembled. The model plane communicates through the one
+normalized `ModelStreamItem` protocol. Canonical `Event(ModelEvent)` items are
+adapter-to-kernel facts; the ephemeral `Progress(Generation | Liveness)` arm
+is provider-derived execution evidence only. Neither arm is inserted directly
+into canonical history: the agent kernel assembles one `AssistantMessageBlock`
+from canonical events, while progress is consumed only by request-local
+deadline state.
 
 Partial model deltas are **not** Event Journal facts. They belong to the
 durable publication plane described in section 6.1, which owns the user-facing
@@ -5730,7 +5743,7 @@ fails.
 Provider chunk size is not the publication unit:
 
 ```text
-Provider ModelEvent delta
+Provider ModelStreamItem::Event canonical delta
   -> in-memory assembler            (canonical message assembly)
   -> bounded publication coalescer  (bytes / latency / structure / terminal)
   -> typed publication frame
@@ -5742,7 +5755,7 @@ The coalescer (`src/publication/coalescer.rs`) flushes on a bounded
 deterministic policy: a maximum byte threshold, a structural boundary (a
 tool-call proposal start or completion), or the stream terminal. When the
 first payload enters an empty buffer, it owns one absolute monotonic deadline
-`oldest_pending_time + max_latency`; later provider events never reset it. The
+`oldest_pending_time + max_latency`; later canonical provider events never reset it. The
 coalescer owns that deadline and asks the runtime monotonic clock for the
 wake-up future, so a quiet provider still flushes at the deadline and the
 Agent Loop never starts a fresh full-duration debounce timer. Deterministic

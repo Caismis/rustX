@@ -20,7 +20,7 @@ use reqwest::header::HeaderValue;
 use crate::message::types::ContentBlockIndex;
 use crate::model::adapter::block_index::BlockAllocator;
 use crate::model::adapter::traits::{
-    ModelAdapter, ModelEventStream, model_event_stream_of_failure,
+    ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
 };
 use crate::model::adapter::validation::{ValidatedTools, validate_request};
 use crate::model::error::{
@@ -89,14 +89,14 @@ impl ModelAdapter for AnthropicMessagesAdapter {
         ModelProtocol::AnthropicMessages
     }
 
-    fn stream(&self, request: ModelRequest, cancellation: CancellationSignal) -> ModelEventStream {
+    fn stream(&self, request: ModelRequest, cancellation: CancellationSignal) -> ModelStream {
         let validated = match validate_request(&request, self.protocol()) {
             Ok(validated) => validated,
-            Err(error) => return model_event_stream_of_failure(error),
+            Err(error) => return model_stream_of_failure(error),
         };
         let wire_request = match translate_request(&request, &validated) {
             Ok(translated) => translated,
-            Err(error) => return model_event_stream_of_failure(error),
+            Err(error) => return model_stream_of_failure(error),
         };
         let state = AnthropicPhase::Preparing {
             api_key: self.api_key.clone(),
@@ -111,7 +111,7 @@ impl ModelAdapter for AnthropicMessagesAdapter {
     }
 }
 
-async fn anthropic_phase_next(phase: AnthropicPhase) -> Option<(ModelEvent, AnthropicPhase)> {
+async fn anthropic_phase_next(phase: AnthropicPhase) -> Option<(ModelStreamItem, AnthropicPhase)> {
     match phase {
         AnthropicPhase::Preparing {
             api_key,
@@ -126,9 +126,9 @@ async fn anthropic_phase_next(phase: AnthropicPhase) -> Option<(ModelEvent, Anth
                 // Cancellation before any network request: no provider
                 // attempt, no Started, exactly one Failed(Cancelled).
                 return Some((
-                    ModelEvent::Failed {
+                    ModelStreamItem::Event(ModelEvent::Failed {
                         error: cancelled_error(),
-                    },
+                    }),
                     AnthropicPhase::Finished,
                 ));
             }
@@ -136,7 +136,7 @@ async fn anthropic_phase_next(phase: AnthropicPhase) -> Option<(ModelEvent, Anth
             // the network-opening await so the lifecycle stays consistent
             // when cancellation interrupts that await.
             Some((
-                ModelEvent::Started,
+                ModelStreamItem::Event(ModelEvent::Started),
                 AnthropicPhase::Opening {
                     api_key,
                     url,
@@ -183,9 +183,10 @@ async fn anthropic_phase_next(phase: AnthropicPhase) -> Option<(ModelEvent, Anth
                     };
                     Some((event, next_phase))
                 }
-                OpeningOutcome::Failed(error) => {
-                    Some((ModelEvent::Failed { error }, AnthropicPhase::Finished))
-                }
+                OpeningOutcome::Failed(error) => Some((
+                    ModelStreamItem::Event(ModelEvent::Failed { error }),
+                    AnthropicPhase::Finished,
+                )),
             }
         }
         AnthropicPhase::Streaming {
@@ -212,8 +213,8 @@ async fn anthropic_phase_next(phase: AnthropicPhase) -> Option<(ModelEvent, Anth
     }
 }
 
-/// Pulls provider events into `pending` until at least one event is ready
-/// or the invocation is over.
+/// Pulls provider wire events into `pending` until at least one stream item is
+/// ready or the invocation is over.
 enum OpeningOutcome {
     Streaming(SseStream),
     Failed(ModelError),
@@ -285,19 +286,19 @@ async fn open_stream(
     }
 }
 
-/// Pulls provider events into `pending` until at least one event is ready or
-/// the invocation is over.
+/// Pulls provider wire events into `pending` until at least one stream item is
+/// ready or the invocation is over.
 async fn streaming_pull(
     stream: &mut SseStream,
     normalizer: &mut AnthropicStreamNormalizer,
     cancellation: &CancellationSignal,
-    pending: &mut std::collections::VecDeque<ModelEvent>,
+    pending: &mut std::collections::VecDeque<ModelStreamItem>,
 ) {
     while pending.is_empty() {
         let item = tokio::select! {
             biased;
             () = cancellation.cancelled() => {
-                pending.extend(normalizer.failure_events(cancelled_error()));
+                extend_events(pending, normalizer.failure_events(cancelled_error()));
                 break;
             }
             item = stream.next() => item,
@@ -305,18 +306,18 @@ async fn streaming_pull(
         match item {
             Some(Ok(event)) => match normalizer.push_event(&event.data) {
                 Ok(events) => pending.extend(events),
-                Err(error) => pending.extend(normalizer.failure_events(error)),
+                Err(error) => extend_events(pending, normalizer.failure_events(error)),
             },
             Some(Err(error)) => {
-                pending.extend(normalizer.failure_events(sse_failure(&error)));
+                extend_events(pending, normalizer.failure_events(sse_failure(&error)));
                 break;
             }
             None => {
                 // The provider stream ended; if the normalizer has not
                 // already emitted a terminal event this is a failure.
                 match normalizer.finish() {
-                    Ok(events) => pending.extend(events),
-                    Err(error) => pending.extend(normalizer.failure_events(error)),
+                    Ok(events) => extend_events(pending, events),
+                    Err(error) => extend_events(pending, normalizer.failure_events(error)),
                 }
                 break;
             }
@@ -324,10 +325,17 @@ async fn streaming_pull(
     }
 }
 
-fn is_terminal(event: &ModelEvent) -> bool {
+fn extend_events(
+    pending: &mut std::collections::VecDeque<ModelStreamItem>,
+    events: Vec<ModelEvent>,
+) {
+    pending.extend(events.into_iter().map(ModelStreamItem::Event));
+}
+
+fn is_terminal(event: &ModelStreamItem) -> bool {
     matches!(
         event,
-        ModelEvent::Completed { .. } | ModelEvent::Failed { .. }
+        ModelStreamItem::Event(ModelEvent::Completed { .. } | ModelEvent::Failed { .. })
     )
 }
 
@@ -384,7 +392,7 @@ enum AnthropicPhase {
         stream: SseStream,
         normalizer: AnthropicStreamNormalizer,
         cancellation: CancellationSignal,
-        pending: std::collections::VecDeque<ModelEvent>,
+        pending: std::collections::VecDeque<ModelStreamItem>,
     },
     Finished,
 }
@@ -451,6 +459,7 @@ struct AnthropicStreamNormalizer {
     stop_details: Option<super::wire::WireStopDetails>,
     refusal_block: Option<ContentBlockIndex>,
     terminal_emitted: bool,
+    pending_progress: Option<ModelStreamProgress>,
 }
 
 impl AnthropicStreamNormalizer {
@@ -465,10 +474,24 @@ impl AnthropicStreamNormalizer {
             stop_details: None,
             refusal_block: None,
             terminal_emitted: false,
+            pending_progress: None,
         }
     }
 
-    fn push_event(&mut self, data: &str) -> Result<Vec<ModelEvent>, ModelError> {
+    fn push_event(&mut self, data: &str) -> Result<Vec<ModelStreamItem>, ModelError> {
+        self.pending_progress = None;
+        let events = self.push_events(data)?;
+        let mut items = events
+            .into_iter()
+            .map(ModelStreamItem::Event)
+            .collect::<Vec<_>>();
+        if let Some(progress) = self.pending_progress.take() {
+            items.push(ModelStreamItem::Progress(progress));
+        }
+        Ok(items)
+    }
+
+    fn push_events(&mut self, data: &str) -> Result<Vec<ModelEvent>, ModelError> {
         let event = parse_event(data)
             .map_err(|e| provider_error(format!("malformed Anthropic stream event: {e}")))?;
         match event {
@@ -538,7 +561,17 @@ impl AnthropicStreamNormalizer {
                 }
             }
             WireEvent::MessageStop => self.terminal(),
-            WireEvent::Ping | WireEvent::Unknown => Ok(Vec::new()),
+            WireEvent::Ping => {
+                // Anthropic defines ping as an SSE heartbeat. It proves that
+                // the opened stream is alive, but it carries no generation.
+                self.pending_progress = Some(ModelStreamProgress::Liveness);
+                Ok(Vec::new())
+            }
+            WireEvent::Unknown => {
+                // Unknown/future events are deliberately not heartbeats: the
+                // adapter cannot infer their protocol semantics.
+                Ok(Vec::new())
+            }
             WireEvent::Error { error } => {
                 let provider_code = error
                     .precise_error_type

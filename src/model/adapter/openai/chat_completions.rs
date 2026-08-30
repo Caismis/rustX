@@ -55,7 +55,7 @@ use crate::model::adapter::openai::mapping::{
     stream_retry_disposition,
 };
 use crate::model::adapter::traits::{
-    ModelAdapter, ModelEventStream, model_event_stream_of_failure,
+    ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
 };
 use crate::model::adapter::validation::{ValidatedTools, validate_request};
 use crate::model::catalog::{ChatReasoningReplay, ChatStreamUsage};
@@ -96,14 +96,14 @@ impl ModelAdapter for OpenAiChatCompletionsAdapter {
         ModelProtocol::OpenAiChatCompletions
     }
 
-    fn stream(&self, request: ModelRequest, cancellation: CancellationSignal) -> ModelEventStream {
+    fn stream(&self, request: ModelRequest, cancellation: CancellationSignal) -> ModelStream {
         let validated = match validate_request(&request, self.protocol()) {
             Ok(validated) => validated,
-            Err(error) => return model_event_stream_of_failure(error),
+            Err(error) => return model_stream_of_failure(error),
         };
         let translated = match translate_request(&request) {
             Ok(translated) => translated,
-            Err(error) => return model_event_stream_of_failure(error),
+            Err(error) => return model_stream_of_failure(error),
         };
         let client = self.client.clone();
         Box::pin(futures_util::stream::unfold(
@@ -118,7 +118,7 @@ impl ModelAdapter for OpenAiChatCompletionsAdapter {
     }
 }
 
-async fn chat_phase_next(phase: ChatPhase) -> Option<(ModelEvent, ChatPhase)> {
+async fn chat_phase_next(phase: ChatPhase) -> Option<(ModelStreamItem, ChatPhase)> {
     match phase {
         ChatPhase::Preparing {
             client,
@@ -133,7 +133,7 @@ async fn chat_phase_next(phase: ChatPhase) -> Option<(ModelEvent, ChatPhase)> {
             // the network-opening await so the lifecycle stays consistent
             // when cancellation interrupts that await.
             Some((
-                ModelEvent::Started,
+                ModelStreamItem::Event(ModelEvent::Started),
                 ChatPhase::Opening {
                     client,
                     request,
@@ -199,13 +199,13 @@ async fn chat_phase_next(phase: ChatPhase) -> Option<(ModelEvent, ChatPhase)> {
     }
 }
 
-/// Pulls provider events into `pending` until at least one event is ready or
-/// the invocation is over.
+/// Pulls provider wire events into `pending` until at least one stream item is
+/// ready or the invocation is over.
 async fn chat_pull(
     stream: &mut async_openai::types::stream::StreamResponse<serde_json::Value>,
     normalizer: &mut ChatStreamNormalizer,
     cancellation: &CancellationSignal,
-    pending: &mut VecDeque<ModelEvent>,
+    pending: &mut VecDeque<ModelStreamItem>,
 ) {
     while pending.is_empty() {
         let item = tokio::select! {
@@ -238,26 +238,30 @@ async fn chat_pull(
 
 /// Emits the terminal event the stream was waiting for (completion or
 /// unexpected-end failure) into `pending`.
-fn finish(normalizer: &mut ChatStreamNormalizer, pending: &mut VecDeque<ModelEvent>) {
+fn finish(normalizer: &mut ChatStreamNormalizer, pending: &mut VecDeque<ModelStreamItem>) {
     match normalizer.finish() {
-        Ok(events) => pending.extend(events),
+        Ok(events) => extend_events(pending, events),
         Err(error) => pending.push_back(failed(error)),
     }
+}
+
+fn extend_events(pending: &mut VecDeque<ModelStreamItem>, events: Vec<ModelEvent>) {
+    pending.extend(events.into_iter().map(ModelStreamItem::Event));
 }
 
 fn is_done_marker(error: &OpenAIError) -> bool {
     matches!(error, OpenAIError::JSONDeserialize(_, content) if content == "[DONE]")
 }
 
-fn is_terminal(event: &ModelEvent) -> bool {
+fn is_terminal(event: &ModelStreamItem) -> bool {
     matches!(
         event,
-        ModelEvent::Completed { .. } | ModelEvent::Failed { .. }
+        ModelStreamItem::Event(ModelEvent::Completed { .. } | ModelEvent::Failed { .. })
     )
 }
 
-fn failed(error: ModelError) -> ModelEvent {
-    ModelEvent::Failed { error }
+fn failed(error: ModelError) -> ModelStreamItem {
+    ModelStreamItem::Event(ModelEvent::Failed { error })
 }
 
 fn cancelled_error() -> ModelError {
@@ -293,7 +297,7 @@ enum ChatPhase {
         stream: async_openai::types::stream::StreamResponse<serde_json::Value>,
         normalizer: ChatStreamNormalizer,
         cancellation: CancellationSignal,
-        pending: VecDeque<ModelEvent>,
+        pending: VecDeque<ModelStreamItem>,
     },
     Finished,
 }
@@ -538,6 +542,7 @@ struct ChatStreamNormalizer {
     text_buffer: Option<String>,
     reasoning_buffer: Option<String>,
     refusal_buffer: Option<String>,
+    buffered_generation: bool,
 }
 
 impl ChatStreamNormalizer {
@@ -551,12 +556,30 @@ impl ChatStreamNormalizer {
             text_buffer: None,
             reasoning_buffer: None,
             refusal_buffer: None,
+            buffered_generation: false,
         }
     }
 
-    /// Processes one raw chunk, returning the normalized events.
+    /// Processes one raw chunk, returning canonical events and ephemeral
+    /// provider-derived progress in the same stream contract.
+    fn push(&mut self, chunk: &serde_json::Value) -> Result<Vec<ModelStreamItem>, ModelError> {
+        self.buffered_generation = false;
+        let events = self.push_events(chunk)?;
+        let mut items = events
+            .into_iter()
+            .map(ModelStreamItem::Event)
+            .collect::<Vec<_>>();
+        if self.buffered_generation {
+            items.push(ModelStreamItem::Progress(ModelStreamProgress::Generation));
+        }
+        Ok(items)
+    }
+
+    /// Processes one raw chunk into canonical events. Argument fragments that
+    /// cannot yet be attributed to a canonical call are reported by `push` as
+    /// ephemeral generation progress, while remaining buffered here.
     #[allow(clippy::too_many_lines)] // one provider stream chunk state machine
-    fn push(&mut self, chunk: &serde_json::Value) -> Result<Vec<ModelEvent>, ModelError> {
+    fn push_events(&mut self, chunk: &serde_json::Value) -> Result<Vec<ModelEvent>, ModelError> {
         if let Some(error) = chunk.get("error") {
             return Err(chat_stream_error(error));
         }
@@ -825,6 +848,22 @@ impl ChatStreamNormalizer {
             ));
         }
         if let Some(existing) = self.tool_calls.get(&index) {
+            if !existing.started {
+                let has_argument_fragment = snapshot
+                    .function
+                    .as_ref()
+                    .and_then(|function| function.arguments.as_deref())
+                    .is_some_and(|arguments| !arguments.is_empty());
+                self.merge_tool_call_snapshot(index, snapshot)?;
+                let identity_complete = self
+                    .tool_calls
+                    .get(&index)
+                    .is_some_and(|assembly| assembly.call_id.is_some() && assembly.name.is_some());
+                if has_argument_fragment && !identity_complete {
+                    self.buffered_generation = true;
+                }
+                return self.start_buffered_tool_call(index, events);
+            }
             let snapshot_id = snapshot.id.as_deref().filter(|id| !id.is_empty());
             if snapshot_id.is_some_and(|id| {
                 existing
@@ -869,6 +908,96 @@ impl ChatStreamNormalizer {
         )
     }
 
+    fn merge_tool_call_snapshot(
+        &mut self,
+        index: u32,
+        snapshot: &ChatToolCallSnapshotWire,
+    ) -> Result<(), ModelError> {
+        let assembly = self
+            .tool_calls
+            .get_mut(&index)
+            .expect("snapshot merge has an existing assembly");
+        if let Some(id) = snapshot.id.as_deref().filter(|id| !id.is_empty()) {
+            let id = ToolCallId::new(id);
+            if assembly.call_id.as_ref().is_some_and(|known| known != &id) {
+                return Err(provider_error(format!(
+                    "tool call snapshot changed the invocation id at index {index}"
+                )));
+            }
+            assembly.call_id = Some(id);
+        }
+        if let Some(function) = &snapshot.function {
+            if let Some(name) = &function.name {
+                if assembly.name.as_ref().is_some_and(|known| known != name) {
+                    return Err(provider_error(format!(
+                        "tool call snapshot changed the function name at index {index}"
+                    )));
+                }
+                assembly.name = Some(name.clone());
+            }
+            if let Some(arguments) = &function.arguments {
+                if assembly.arguments.is_empty() || arguments.starts_with(&assembly.arguments) {
+                    arguments.clone_into(&mut assembly.arguments);
+                } else if !assembly.arguments.starts_with(arguments) {
+                    return Err(provider_error(format!(
+                        "tool call snapshot disagrees with streamed arguments at index {index}"
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn start_buffered_tool_call(
+        &mut self,
+        index: u32,
+        events: &mut Vec<ModelEvent>,
+    ) -> Result<(), ModelError> {
+        let (block_index, call_id, name, arguments) = {
+            let assembly = self
+                .tool_calls
+                .get(&index)
+                .expect("buffered tool call has an assembly");
+            if assembly.started {
+                return Ok(());
+            }
+            let Some(call_id) = assembly.call_id.clone() else {
+                return Ok(());
+            };
+            let Some(name) = assembly.name.clone() else {
+                return Ok(());
+            };
+            (
+                assembly.block_index,
+                call_id,
+                name,
+                assembly.arguments.clone(),
+            )
+        };
+        let tool_id = resolve_tool(&self.tools, &name)?;
+        let assembly = self
+            .tool_calls
+            .get_mut(&index)
+            .expect("buffered tool call has an assembly");
+        assembly.started = true;
+        events.push(ModelEvent::ToolCallStarted {
+            block_index,
+            call: ToolCallStart {
+                id: call_id.clone(),
+                tool_id,
+                name,
+            },
+        });
+        if !arguments.is_empty() {
+            events.push(ModelEvent::ToolCallArgumentsDelta {
+                block_index,
+                call_id,
+                arguments_delta: arguments,
+            });
+        }
+        Ok(())
+    }
+
     fn push_tool_call_chunk(
         &mut self,
         chunk: &ChatToolCallChunkWire,
@@ -885,6 +1014,7 @@ impl ChatStreamNormalizer {
                 "custom Chat Completions tool calls cannot be represented as canonical JSON function calls",
             ));
         }
+        self.mark_buffered_generation(chunk);
         let assembly = self
             .tool_calls
             .entry(chunk.index)
@@ -963,6 +1093,37 @@ impl ChatStreamNormalizer {
             });
         }
         Ok(())
+    }
+
+    fn mark_buffered_generation(&mut self, chunk: &ChatToolCallChunkWire) {
+        let has_argument_fragment = chunk
+            .function
+            .as_ref()
+            .and_then(|function| function.arguments.as_deref())
+            .is_some_and(|arguments| !arguments.is_empty());
+        let call_id_known = self
+            .tool_calls
+            .get(&chunk.index)
+            .and_then(|assembly| assembly.call_id.as_ref())
+            .is_some()
+            || chunk.id.is_some();
+        let name_known = self
+            .tool_calls
+            .get(&chunk.index)
+            .and_then(|assembly| assembly.name.as_ref())
+            .is_some()
+            || chunk
+                .function
+                .as_ref()
+                .and_then(|function| function.name.as_ref())
+                .is_some();
+        let call_is_unstarted = self
+            .tool_calls
+            .get(&chunk.index)
+            .is_none_or(|assembly| !assembly.started);
+        if has_argument_fragment && call_is_unstarted && !(call_id_known && name_known) {
+            self.buffered_generation = true;
+        }
     }
 
     /// Produces the terminal events for the invocation once the provider

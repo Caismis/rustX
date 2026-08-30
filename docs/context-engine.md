@@ -655,10 +655,13 @@ The provider-backed `ModelBackedSummarizer` is a runtime-owned request path,
 so the Conversation Runtime injects the same finite, frozen
 `ModelTimeoutPolicy` and shared `MonotonicClock` that it injects into the
 primary Agent Loop. Its response-start deadline begins at summary adapter dispatch;
-the first generation event changes it to stream-idle, generation/liveness
-events reset stream-idle only after that transition, and terminal events end
-deadline ownership. `Started` and pre-generation usage/continuation do not
-prove response progress. A summary timeout drops only the request-local
+the first generation progress item changes it to stream-idle, and generation
+or liveness progress items reset stream-idle only after that transition.
+Canonical model events are one source of generation progress; an adapter may
+also report ephemeral `ModelStreamItem::Progress(Generation)` or, when its
+protocol semantics genuinely establish stream liveness, `Progress(Liveness)`.
+`Started` and early liveness/usage/continuation do not end response-start.
+Terminal events end deadline ownership. A summary timeout drops only the request-local
 stream and crosses the existing `SummaryFailed` context/compaction boundary;
 it does not create a primary request identity, Event Journal request facts, or
 generic model retry. `ContextRuntime` owns context projection/compaction state

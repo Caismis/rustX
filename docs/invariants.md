@@ -356,16 +356,24 @@ stream and normally commits exactly one terminal `RuntimeEvent`:
   `AwaitingGeneration → Streaming → Terminal`. The response-start deadline
   starts only after the primary `RequestSnapshot + ModelRequestStarted` commit,
   reconstruction verification, and adapter dispatch begin. It changes to
-  stream-idle exactly once on the first generation-progress event. `Started`
-  is lifecycle evidence only. `TextDelta`, `ReasoningDelta`, `RefusalDelta`,
-  `ToolCallStarted`, `ToolCallArgumentsDelta`, and `ToolCallCompleted` are
-  generation progress. `UsageUpdate` and `ContinuationState` are liveness
-  progress only: before generation they leave response-start unchanged, and
-  afterward they reset stream-idle. `Completed` and `Failed` terminate
-  deadline ownership. Publication activity is never provider progress.
+  stream-idle exactly once on the first generation-progress item. The one
+  provider-independent adapter stream carries either canonical
+  `ModelStreamItem::Event(ModelEvent)` or ephemeral
+  `ModelStreamItem::Progress(ModelStreamProgress)`. `Started` is lifecycle
+  evidence only. `TextDelta`, `ReasoningDelta`, `RefusalDelta`,
+  `ToolCallStarted`, `ToolCallArgumentsDelta`, and `ToolCallCompleted`, plus
+  explicit `Progress(Generation)`, are generation progress. `UsageUpdate` and
+  `ContinuationState` retain liveness semantics, and an adapter may report
+  explicit `Progress(Liveness)` only for a protocol event that genuinely proves
+  the opened stream is alive. Early liveness leaves response-start unchanged;
+  generation enters streaming; generation or liveness afterward resets
+  stream-idle. `Completed` and `Failed` terminate deadline ownership.
+  Progress is ephemeral execution state and never enters assembly, publication,
+  canonical history, request snapshots, continuation state, or the Event
+  Journal. Publication activity is never provider progress.
 - Every primary provider pull, whether publication has buffered payload or
   not, participates in one explicitly biased arbitration:
-  `provider event > attempt cancellation > publication flush > request
+  `provider stream item > attempt cancellation > publication flush > request
   timeout`. At an exact ready cut, provider evidence wins first, observable
   cancellation retains cancellation provenance and wins before timeout, and a
   committed-for-release publication flush happens before timeout. Publication
@@ -4203,7 +4211,7 @@ Provider chunk size is not the publication unit. The bounded coalescer flushes
 on maximum bytes, a structural boundary (a tool-call proposal start or
 completion), or the stream terminal. When the first payload enters an empty
 buffer, it owns one absolute monotonic deadline `oldest_pending_time +
-max_latency`; later provider events do not reset or extend it. The coalescer
+max_latency`; later canonical provider events do not reset or extend it. The coalescer
 owns the deadline and the runtime monotonic clock owns the wake-up mechanism,
 so a quiet provider is released at the deadline without a provider event and
 no new full-duration debounce timer can postpone it. Nothing is released
@@ -4621,8 +4629,10 @@ contracts and provider protocols. These invariants are frozen by M2:
   (`src/model/adapter/openai`, `src/model/adapter/anthropic`). No provider
   type appears in a canonical contract or in the agent kernel.
 
-- One `ModelEvent` stream has exactly one terminal outcome (`Completed` or
-  `Failed`), no events after the terminal event, and never both.
+- One `ModelStreamItem` stream has exactly one canonical terminal outcome
+  (`Event(Completed)` or `Event(Failed)`), no item after the terminal event,
+  and never both. Progress is accepted only before that terminal boundary and
+  never creates a second terminal path.
 
 - Canonical content block identity is assigned by rustX, not by providers.
   Provider block indexes, tool indexes, control markers, and content-part
@@ -4634,13 +4644,17 @@ contracts and provider protocols. These invariants are frozen by M2:
   explicitly (`ModelErrorKind::Unsupported`) rather than silently discarding
   them, and no canonical block or continuation state is fabricated for them.
 
-- Provider content deltas stream as canonical deltas when received:
-  `text_delta` → `TextDelta`, `thinking_delta` → `ReasoningDelta`, and
-  `input_json_delta` → `ToolCallArgumentsDelta` immediately, never buffered
-  until the terminal provider event. `ModelEvent` is provisional adapter
-  output; completed `AssistantMessageBlock` assembly (including any rollback of
-  partial output after a refusal) is owned by the future Agent Loop, never
-  by M2.
+- Provider content deltas stream as canonical deltas when received and
+  canonically attributable: `text_delta` → `TextDelta`, `thinking_delta` →
+  `ReasoningDelta`, and `input_json_delta` → `ToolCallArgumentsDelta` are not
+  buffered until the terminal provider event. Chat Completions and Responses
+  argument fragments that arrive before their provider identity is available
+  are the deliberate exception: the adapter buffers them, reports each
+  non-empty fragment as ephemeral `Progress(Generation)`, and replays the
+  complete prefix exactly once when canonical identity becomes valid.
+  `ModelEvent` is provisional adapter output; completed
+  `AssistantMessageBlock` assembly (including any rollback of partial output
+  after a refusal) is owned by the future Agent Loop, never by M2.
 
 - When a provider emits both incremental deltas and a cumulative terminal
   snapshot for the same semantic content, the adapter compares the exact
