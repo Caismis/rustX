@@ -2246,8 +2246,14 @@ runtime semantics are outside the ordinary-native-tool contract alignment,
 and it is never moved, renamed, or re-schema'd to make `tools/native/` look
 uniform. It owns only routing: every request is dispatched by explicit
 `kind` to the owning domain registry (`ConversationBackgroundRegistry` for
-`kind = tool`, `SubagentRegistry` for `kind = subagent`), whose authoritative
-snapshot is returned unchanged inside a bounded tagged envelope. The
+`kind = tool`, `SubagentRegistry` for `kind = subagent`), which returns its
+authoritative snapshot; the intrinsic projects that snapshot into a bounded
+tagged model-facing representation. The tool projection carries the
+`BackgroundExecutionSnapshot`; the subagent projection carries lifecycle,
+identity, and control facts only and deliberately excludes the registry's
+internal terminal `detail` — which carries the successful child answer — so
+the canonical inbound child-agent message remains the **only** child-result
+delivery channel and `execution` never becomes a result channel. The
 intrinsic never guesses a kind from an id, never tries one registry and
 falls through to another, and never owns lifecycle state, cancellation
 implementation, durability, or result publication.

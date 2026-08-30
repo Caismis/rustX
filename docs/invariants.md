@@ -2525,12 +2525,27 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   cancellation never reaches around `SubagentRegistry` to the child
   process driver. The kind is never inferred from an id string, no
   registry fall-through exists, and a cross-conversation id stays
-  indistinguishable from an unknown id at the owning domain boundary. The
-  intrinsic participates in the common tool execution plane; it is not an
+  indistinguishable from an unknown id at the owning domain boundary.
+  The intrinsic participates in the common tool execution plane; it is not an
   ordinary native tool. Its contract and
   runtime semantics are outside the ordinary-native-tool contract
   alignment, and it is never moved, renamed, or re-schema'd to make the
   native tool directory look uniform.
+- **The `execution` subagent response is a bounded projection, never a
+  result channel.** The intrinsic obtains the authoritative
+  `SubagentSnapshot` from the registry and projects it into the
+  model-facing `SubagentExecutionSnapshot`: lifecycle, identity, and
+  control facts only (`subagent_id`, `child_agent_id`,
+  `child_conversation_id`, `tool_call_id`, `agent`, `definition_digest`,
+  `workspace`, `handoff`, `state`, `publication_abandoned`, `settled`,
+  `started_at`). The registry's internal `detail` field — which the
+  subagent settlement path populates with the successful child answer —
+  is deliberately excluded, in every lifecycle state including
+  `PublishingTerminal`, so the canonical inbound child-agent message is
+  the **only** child-result delivery channel and `execution(status|cancel)`
+  never exposes the answer. The projection is derived from the
+  registry's authoritative read model at response time; it is not a
+  second lifecycle record or authority.
 - Model-facing output is bounded by named limits. Text overflow is not an
   artifact (Issue #86): native Bash, MCP, and Python logical results all
   cross the shared Tool Plane normalization seam in `tools/output.rs`. The

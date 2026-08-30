@@ -1121,7 +1121,13 @@ async fn execution_tool_status_and_cancel() {
     .await;
     assert_eq!(again.status, ToolExecutionStatus::Success);
     let execution_id = ToolExecutionId::new("exec_1");
-    wait_for_state(&registry, &execution_id, BackgroundLifecycle::Cancelled).await;
+    // Deterministic settlement synchronization through the registry's own
+    // state-version watch, never scheduler-yield polling.
+    let settled = registry
+        .wait_until_terminal(&execution_id)
+        .await
+        .expect("the registry settles the cancellation");
+    assert_eq!(settled.state, BackgroundLifecycle::Cancelled);
     let terminal = common::run_tool(
         &fixture,
         "execution",

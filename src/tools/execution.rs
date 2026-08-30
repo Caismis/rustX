@@ -65,7 +65,15 @@ impl ExecutionKind {
 /// model-facing id string — never a guessed kind, never a bare id. The
 /// domain identity types (`ToolExecutionId`, `SubagentId`) remain internal
 /// to their registries; the handle is their model-facing projection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+///
+/// The handle is also the `execution` intrinsic's typed target input: the
+/// model echoes back the exact handle a creation result returned, so the
+/// input contract and the continuation affordance are one type. `Deserialize`
+/// and `JsonSchema` exist for that input role; the handle is always
+/// serialized in creation results and deserialized only as a control-plane
+/// target.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ExecutionHandle {
     /// The explicit execution kind.
     pub kind: ExecutionKind,

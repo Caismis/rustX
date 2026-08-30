@@ -511,17 +511,21 @@ async fn execution_cancel_routes_tool_targets_to_the_background_registry() {
     .await;
     assert_eq!(again.status, ToolExecutionStatus::Success);
     let execution_id = ToolExecutionId::new("exec_1");
-    for _ in 0..400 {
-        let snapshot = registry.snapshot(&execution_id).expect("snapshot");
-        if snapshot.state == BackgroundLifecycle::Cancelled {
-            break;
-        }
-        tokio::task::yield_now().await;
-    }
+    // Deterministic settlement synchronization: the registry's own
+    // state-version watch resolves when the absorbing terminal transition
+    // commits. No scheduler-yield polling proves the transition.
+    let terminal = registry
+        .wait_until_terminal(&execution_id)
+        .await
+        .expect("the registry settles the cancellation");
     assert_eq!(
-        registry.snapshot(&execution_id).expect("snapshot").state,
+        terminal.state,
         BackgroundLifecycle::Cancelled,
         "the registry's own settlement reached the terminal state"
+    );
+    assert_eq!(
+        registry.snapshot(&execution_id).expect("snapshot").state,
+        BackgroundLifecycle::Cancelled
     );
 }
 
@@ -764,9 +768,15 @@ async fn cross_conversation_ids_are_indistinguishable_from_unknown_ids() {
 // Result delivery stays canonical inbound
 // ---------------------------------------------------------------------------
 
+/// The unique marker answer of the result-channel regressions. It must
+/// appear exactly once, in the canonical inbound message, and nowhere in
+/// any `execution(status|cancel)` response.
+const SECRET_CHILD_ANSWER: &str = "issue162-secret-child-answer";
+
 /// A subagent's terminal answer still arrives exactly once through the
 /// existing canonical inbound message path, and `execution(status)` is
-/// observation, not a second result-delivery channel.
+/// observation, not a second result-delivery channel: the complete status
+/// response never contains the child answer, under any field.
 #[tokio::test]
 async fn subagent_terminal_answer_arrives_exactly_once_through_canonical_inbound() {
     let plane = subagent_plane();
@@ -775,7 +785,7 @@ async fn subagent_terminal_answer_arrives_exactly_once_through_canonical_inbound
     let fixture = execution_fixture(Some(plane.registry.clone()));
 
     child
-        .complete(ChildResultStatus::Succeeded, Some("the answer"))
+        .complete(ChildResultStatus::Succeeded, Some(SECRET_CHILD_ANSWER))
         .await;
     let settled = plane
         .registry
@@ -817,12 +827,123 @@ async fn subagent_terminal_answer_arrives_exactly_once_through_canonical_inbound
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        text.contains("the answer"),
+        text.contains(SECRET_CHILD_ANSWER),
         "the canonical inbound carries the child's answer: {text}"
     );
 
     // `execution(status)` observes the authoritative terminal snapshot; it
-    // does not deliver anything and creates no second channel.
+    // reports lifecycle facts only and never the child answer.
+    let status = run_execution(
+        &fixture,
+        serde_json::json!({
+            "action": "status",
+            "target": {"kind": "subagent", "id": accepted.subagent_id.to_string()},
+        }),
+    )
+    .await;
+    assert_eq!(status.status, ToolExecutionStatus::Success);
+    let snapshot = json_content(&status);
+    assert_eq!(snapshot["kind"], "subagent");
+    assert_eq!(snapshot["state"], "succeeded");
+    assert_eq!(snapshot["subagent_id"], accepted.subagent_id.to_string());
+    assert!(
+        snapshot.get("detail").is_none(),
+        "no success-result field exposes the answer: {snapshot}"
+    );
+    // The complete serialized model-facing response never contains the
+    // unique answer marker, so a future accidental field cannot silently
+    // reintroduce the result channel.
+    let serialized = serde_json::to_string(&snapshot).expect("serializes");
+    assert!(
+        !serialized.contains(SECRET_CHILD_ANSWER),
+        "execution(status) must never carry the child answer: {serialized}"
+    );
+
+    // `execution(cancel)` after terminal settlement is an idempotent no-op
+    // returning the current snapshot; it must show the same non-result-
+    // channel property.
+    let cancelled = run_execution(
+        &fixture,
+        serde_json::json!({
+            "action": "cancel",
+            "target": {"kind": "subagent", "id": accepted.subagent_id.to_string()},
+        }),
+    )
+    .await;
+    assert_eq!(cancelled.status, ToolExecutionStatus::Success);
+    let cancelled_snapshot = json_content(&cancelled);
+    assert_eq!(cancelled_snapshot["state"], "succeeded");
+    let cancelled_serialized = serde_json::to_string(&cancelled_snapshot).expect("serializes");
+    assert!(
+        !cancelled_serialized.contains(SECRET_CHILD_ANSWER),
+        "execution(cancel) must never carry the child answer: {cancelled_serialized}"
+    );
+
+    // Neither call published or delivered anything: the canonical inbound
+    // still holds exactly one item with the answer.
+    let pending = plane
+        .store
+        .select_pending_batch()
+        .expect("pending")
+        .expect("one pending batch");
+    assert_eq!(pending.items.len(), 1);
+    let text = pending.items[0]
+        .message
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            rustx::message::types::UserContentBlock::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        text.contains(SECRET_CHILD_ANSWER),
+        "the canonical inbound is the only channel carrying the answer: {text}"
+    );
+}
+
+/// While the registry is still in `PublishingTerminal` (terminal publication
+/// has not yet reached the durable authority), the pending child answer must
+/// not be model-visible through `execution(status)` either.
+#[tokio::test]
+async fn publishing_terminal_does_not_expose_the_pending_child_answer() {
+    let plane = subagent_plane();
+    let child = stage_exit0(&plane);
+    let accepted = start_subagent(&plane, "inspect the tool plane").await;
+    let fixture = execution_fixture(Some(plane.registry.clone()));
+
+    // Deterministic publication failure: the initial durable acceptance and
+    // both bounded retries fail, so the registry settles into the explicit
+    // non-terminal `PublishingTerminal` state with the answer retained in
+    // its internal pending terminal.
+    plane.store.arm_fail_accept_times(3);
+    child
+        .complete(ChildResultStatus::Succeeded, Some(SECRET_CHILD_ANSWER))
+        .await;
+    let unsettled = plane
+        .registry
+        .wait_until_settled(&accepted.subagent_id)
+        .await
+        .expect("publication abandoned resolves the wait");
+    assert_eq!(unsettled.state, SubagentState::PublishingTerminal);
+    assert!(unsettled.publication_abandoned);
+    assert_eq!(
+        unsettled.detail.as_deref(),
+        Some(SECRET_CHILD_ANSWER),
+        "the registry authority retains the pending answer internally"
+    );
+    assert!(
+        plane
+            .store
+            .select_pending_batch()
+            .expect("pending")
+            .is_none(),
+        "nothing reached the durable inbound"
+    );
+
+    // The status response may expose the lifecycle state, but never the
+    // pending answer.
     let status = run_execution(
         &fixture,
         serde_json::json!({
@@ -833,18 +954,16 @@ async fn subagent_terminal_answer_arrives_exactly_once_through_canonical_inbound
     .await;
     let snapshot = json_content(&status);
     assert_eq!(snapshot["kind"], "subagent");
-    assert_eq!(snapshot["state"], "succeeded");
-    assert_eq!(snapshot["subagent_id"], accepted.subagent_id.to_string());
-    assert_eq!(
-        plane
-            .store
-            .select_pending_batch()
-            .expect("pending")
-            .expect("one pending batch")
-            .items
-            .len(),
-        1,
-        "execution(status) published nothing and delivered nothing"
+    assert_eq!(snapshot["state"], "publishing_terminal");
+    assert_eq!(snapshot["publication_abandoned"], true);
+    assert!(
+        snapshot.get("detail").is_none(),
+        "the pending answer is never a model-facing field: {snapshot}"
+    );
+    let serialized = serde_json::to_string(&snapshot).expect("serializes");
+    assert!(
+        !serialized.contains(SECRET_CHILD_ANSWER),
+        "PublishingTerminal must not expose the pending answer: {serialized}"
     );
 }
 

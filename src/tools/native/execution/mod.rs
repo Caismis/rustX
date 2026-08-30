@@ -49,8 +49,11 @@
 //! indistinguishable from unknown ids at the owning domain boundary.
 //!
 //! `status` is observation; `cancel` is control. Neither is a result
-//! channel: a subagent's final answer still arrives exactly once through
-//! the existing canonical inbound message path.
+//! channel: the subagent response is a bounded [`SubagentExecutionSnapshot`]
+//! projection that deliberately excludes the registry's internal terminal
+//! `detail` (which carries the successful child answer), so a subagent's
+//! final answer still arrives exactly once through the existing canonical
+//! inbound message path — never through `execution`.
 //!
 //! The intrinsic's policies are fixed to foreground-only sequential
 //! execution and it may never become background-dispatchable (enforced by
@@ -60,8 +63,12 @@ mod input;
 
 use futures_util::future::BoxFuture;
 
-use crate::runtime::identity::{SubagentId, ToolExecutionId};
-use crate::runtime::subagent::SubagentRegistry;
+use chrono::{DateTime, Utc};
+
+use crate::runtime::identity::{AgentId, ConversationId, SubagentId, ToolCallId, ToolExecutionId};
+use crate::runtime::subagent::{
+    SubagentRegistry, SubagentSnapshot, SubagentState, WorkspaceHandoff, WorkspaceSnapshot,
+};
 use crate::runtime::types::CancellationReason;
 use crate::tools::background::{BackgroundExecutionSnapshot, ConversationBackgroundRegistry};
 use crate::tools::execution::ExecutionKind;
@@ -203,19 +210,111 @@ fn run_execution(
                 }
             };
             match snapshot {
-                Some(snapshot) => snapshot_result(ExecutionSnapshot::Subagent { snapshot }),
+                Some(snapshot) => snapshot_result(ExecutionSnapshot::Subagent {
+                    snapshot: snapshot.into(),
+                }),
                 None => failed(format!("unknown subagent execution {id}")),
             }
         }
     }
 }
 
+/// The bounded model-facing projection of one subagent child execution
+/// (Issue #162).
+///
+/// Derived from the registry's authoritative [`SubagentSnapshot`] at
+/// response time — it is a projection of the registry's read model, never
+/// an authority of its own and never a second lifecycle record.
+///
+/// The projection exposes lifecycle/identity/control facts only. It
+/// deliberately excludes the registry's internal `detail` field, which the
+/// subagent settlement path populates with the successful child answer
+/// content: the model-facing control plane must never carry the child's
+/// answer, so the canonical inbound child-agent message stays the **only**
+/// result-delivery channel and `execution(status|cancel)` stays pure
+/// lifecycle observation/control. The same guarantee holds while the
+/// registry is still in `PublishingTerminal`: the pending answer is never
+/// model-visible through the intrinsic.
+///
+/// [`SubagentSnapshot`]: crate::runtime::subagent::SubagentSnapshot
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct SubagentExecutionSnapshot {
+    /// The conversation-owned subagent identity.
+    pub subagent_id: SubagentId,
+    /// The child agent identity (provenance of its answer).
+    pub child_agent_id: AgentId,
+    /// The child's own durable conversation identity.
+    pub child_conversation_id: ConversationId,
+    /// The delegating tool call.
+    pub tool_call_id: ToolCallId,
+    /// The canonical named-agent identity frozen at start (Issue #144).
+    pub agent: String,
+    /// The deterministic definition digest frozen at start (Issue #144).
+    pub definition_digest: String,
+    /// The immutable project-workspace authority selected before ownership.
+    pub workspace: WorkspaceSnapshot,
+    /// Retained work-product metadata, when terminal settlement preserves an
+    /// isolated worktree for handoff.
+    pub handoff: Option<WorkspaceHandoff>,
+    /// The lifecycle state.
+    pub state: SubagentState,
+    /// Whether a terminal publication could not reach the durable
+    /// authority and was abandoned.
+    pub publication_abandoned: bool,
+    /// Whether the child reached a settled state (terminal, publication
+    /// not abandoned).
+    pub settled: bool,
+    /// When the ownership committed.
+    pub started_at: DateTime<Utc>,
+}
+
+impl From<SubagentSnapshot> for SubagentExecutionSnapshot {
+    fn from(snapshot: SubagentSnapshot) -> Self {
+        // The registry's authoritative snapshot is projected field by
+        // field. `detail` — the registry-internal terminal detail that
+        // carries the successful child answer — is intentionally dropped:
+        // it is domain-internal state, never model-facing result content.
+        let SubagentSnapshot {
+            subagent_id,
+            child_agent_id,
+            child_conversation_id,
+            tool_call_id,
+            agent,
+            definition_digest,
+            workspace,
+            handoff,
+            state,
+            detail: _,
+            publication_abandoned,
+            settled,
+            started_at,
+        } = snapshot;
+        Self {
+            subagent_id,
+            child_agent_id,
+            child_conversation_id,
+            tool_call_id,
+            agent,
+            definition_digest,
+            workspace,
+            handoff,
+            state,
+            publication_abandoned,
+            settled,
+            started_at,
+        }
+    }
+}
+
 /// The bounded tagged model-facing response of one `execution` call.
 ///
-/// The outer envelope carries the explicit kind; the domain snapshot's own
-/// fields are preserved verbatim, so no lifecycle semantics are erased. The
-/// intrinsic owns this envelope only — the state it projects is always the
-/// owning registry's authoritative snapshot.
+/// The outer envelope carries the explicit kind. The tool variant carries
+/// the authoritative `BackgroundExecutionSnapshot`; the subagent variant
+/// carries the bounded [`SubagentExecutionSnapshot`] projection derived
+/// from the registry's authoritative snapshot. No lifecycle semantics are
+/// erased, and no result payload is introduced: the intrinsic owns this
+/// envelope only — the state it projects is always the owning registry's
+/// authoritative snapshot.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ExecutionSnapshot {
@@ -224,10 +323,11 @@ pub enum ExecutionSnapshot {
         #[serde(flatten)]
         snapshot: BackgroundExecutionSnapshot,
     },
-    /// The authoritative snapshot of one subagent child.
+    /// The authoritative snapshot of one subagent child, projected into
+    /// the bounded model-facing [`SubagentExecutionSnapshot`].
     Subagent {
         #[serde(flatten)]
-        snapshot: crate::runtime::subagent::SubagentSnapshot,
+        snapshot: SubagentExecutionSnapshot,
     },
 }
 
@@ -393,5 +493,50 @@ mod tests {
         assert_eq!(value["execution_id"], "exec_1");
         assert_eq!(value["tool_name"], "bash");
         assert_eq!(value["state"], "running");
+    }
+
+    /// The subagent projection keeps every lifecycle/identity/control fact
+    /// but can never expose the registry-internal terminal `detail` that
+    /// carries the successful child answer.
+    #[test]
+    fn the_subagent_projection_never_exposes_the_child_answer() {
+        use crate::runtime::identity::{AgentId, ConversationId, SubagentId, ToolCallId};
+        use crate::runtime::subagent::{SubagentSnapshot, SubagentState, WorkspaceSnapshot};
+        let snapshot = SubagentSnapshot {
+            subagent_id: SubagentId::new("conversation-1-subagent-2"),
+            child_agent_id: AgentId::new("agent-child"),
+            child_conversation_id: ConversationId::new("conversation-1-subagent-2"),
+            tool_call_id: ToolCallId::new("call-1"),
+            agent: "explore".to_owned(),
+            definition_digest: "sha256:d1".to_owned(),
+            workspace: WorkspaceSnapshot::shared(std::path::PathBuf::from("<shared-workspace>")),
+            handoff: None,
+            state: SubagentState::Succeeded,
+            // The registry-internal terminal detail carries the successful
+            // child answer; the projection must drop it.
+            detail: Some("issue162-secret-child-answer".to_owned()),
+            publication_abandoned: false,
+            settled: true,
+            started_at: chrono::Utc::now(),
+        };
+        let projection: super::SubagentExecutionSnapshot = snapshot.clone().into();
+        assert_eq!(projection.subagent_id, snapshot.subagent_id);
+        assert_eq!(projection.child_agent_id, snapshot.child_agent_id);
+        assert_eq!(projection.agent, "explore");
+        assert_eq!(projection.state, SubagentState::Succeeded);
+        assert!(projection.settled);
+
+        let value = serde_json::to_value(projection).expect("serializes");
+        assert_eq!(value["subagent_id"], "conversation-1-subagent-2");
+        assert_eq!(value["state"], "succeeded");
+        assert!(
+            value.get("detail").is_none(),
+            "detail is not a model-facing field: {value}"
+        );
+        let serialized = serde_json::to_string(&value).expect("string");
+        assert!(
+            !serialized.contains("issue162-secret-child-answer"),
+            "the child answer never appears in the projection: {serialized}"
+        );
     }
 }

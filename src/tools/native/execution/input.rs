@@ -4,17 +4,23 @@
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::tools::execution::ExecutionKind;
+use crate::tools::execution::ExecutionHandle;
 use crate::tools::native::input::decode;
 
 /// The canonical input contract of the `execution` intrinsic.
+///
+/// The target is the canonical typed [`ExecutionHandle`] itself — the same
+/// handle every creation result returns — so the model echoes back the exact
+/// handle it was given instead of reconstructing a structurally identical
+/// shape. The kind is always explicit; the intrinsic never infers a kind
+/// from an id prefix and never falls through from one registry to another.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ExecutionInput {
     /// The requested operation.
     pub action: ExecutionAction,
     /// The explicit tagged target of the operation.
-    pub target: ExecutionTarget,
+    pub target: ExecutionHandle,
 }
 
 /// The two operations of the intrinsic. There is intentionally no list, no
@@ -30,21 +36,6 @@ pub(super) enum ExecutionAction {
     Status,
     // Requests cancellation and returns the canonical snapshot afterwards.
     Cancel,
-}
-
-/// The explicit tagged target: kind + id.
-///
-/// The kind is always explicit. The intrinsic never infers a kind from an
-/// id prefix and never falls through from one registry to another; a
-/// mismatched kind/id pair is resolved by the selected domain authority as
-/// an unknown id.
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(super) struct ExecutionTarget {
-    /// The explicit execution kind.
-    pub kind: ExecutionKind,
-    /// The owning domain's model-facing id string.
-    pub id: String,
 }
 
 impl ExecutionInput {
