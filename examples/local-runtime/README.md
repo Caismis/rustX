@@ -170,9 +170,13 @@ composed roots and `execution_mode` included. The same rule applies to
 `mcpToolPolicies` and to Python tool packages, which is worth knowing before
 switching an MCP server's tools to `model_selectable`: their schemas come from
 the server verbatim, and a server that ships a composed root will be rejected
-until you pick a fixed policy for it. The runtime intrinsics `background_task` and
+until you pick a fixed policy for it. The runtime intrinsics `execution` and
 `ask_user`, and the `todo` task list, are not configured in this table: all
-three are fixed foreground, sequential, approval-never tools. `todo` keeps the
+three are fixed foreground, sequential, approval-never tools. `execution` is
+the single model-facing control plane for conversation-owned asynchronous
+executions (detached background tool executions and asynchronous subagent
+children): call it with the typed execution handle (`kind` + `id`) a creation
+result returned. `todo` keeps the
 conversation's own task list — one call per change, and every settled call
 returns the complete list, which is also what a restarted or resumed runtime
 rebuilds the list from. `ask_user` accepts one structured

@@ -15,6 +15,7 @@
 pub mod artifacts;
 pub mod background;
 pub mod environment;
+pub mod execution;
 pub mod executor;
 pub mod limits;
 pub mod locator;
@@ -37,8 +38,9 @@ pub use background::{
     ConversationBackgroundRegistry,
 };
 pub use environment::{ToolEnvironment, ToolEnvironmentError};
+pub use execution::{ExecutionHandle, ExecutionKind};
 pub use executor::{
-    ASK_USER_TOOL_NAME, BACKGROUND_TASK_TOOL_NAME, PreflightOutcome, PreparedInvocation,
+    ASK_USER_TOOL_NAME, EXECUTION_TOOL_NAME, PreflightOutcome, PreparedInvocation,
     ProgressReporter, ToolExecutionContext, ToolExecutor, ToolPreflightError, ToolRegistry,
     ToolRegistryError,
 };

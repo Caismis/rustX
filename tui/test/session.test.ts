@@ -550,7 +550,7 @@ describe("RuntimeClientAttachment", () => {
       execution: {
         execution_id: "exec-1",
         tool_id: "tool-background",
-        tool_name: "background_task",
+        tool_name: "bash",
         state: "cancelling",
       },
     });
@@ -568,7 +568,7 @@ describe("RuntimeClientAttachment", () => {
       execution: {
         execution_id: "exec-1",
         tool_id: "tool-background",
-        tool_name: "background_task",
+        tool_name: "bash",
         state: "cancelled",
       },
     });

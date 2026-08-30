@@ -28,7 +28,7 @@ const NATIVE_TOOL_NAMES: [&str; 9] = [
     "glob",
     "grep",
     "bash",
-    "background_task",
+    "execution",
     "ask_user",
     "todo",
 ];
@@ -256,7 +256,7 @@ fn optional_native_properties_are_absent_not_nullable_and_registry_metadata_stay
 }
 
 #[test]
-fn native_tools_preserve_legal_execution_policies_and_fixed_background_task_policy() {
+fn native_tools_preserve_legal_execution_policies_and_fixed_execution_intrinsic_policy() {
     use rustx::runtime::identity::{ConversationId, ToolId};
     use rustx::tools::executor::ToolRegistry;
     use rustx::tools::native::{NativeToolPolicies, NativeToolResources, register_native_tools};
@@ -322,17 +322,17 @@ fn native_tools_preserve_legal_execution_policies_and_fixed_background_task_poli
             }
         );
 
-        let background_task = registry
+        let execution = registry
             .definitions()
             .into_iter()
-            .find(|definition| definition.name == "background_task")
-            .expect("background_task definition");
+            .find(|definition| definition.name == "execution")
+            .expect("execution definition");
         assert_eq!(
-            background_task.execution_policy,
+            execution.execution_policy,
             ToolExecutionPolicy::ForegroundOnly
         );
         assert_eq!(
-            background_task.concurrency_policy,
+            execution.concurrency_policy,
             ToolConcurrencyPolicy::Sequential
         );
     }

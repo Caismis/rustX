@@ -39,6 +39,7 @@ use crate::message::types::{
 };
 use crate::runtime::identity::MessageId;
 use crate::tools::background::{BackgroundExecutionSnapshot, ConversationBackgroundRegistry};
+use crate::tools::execution::ExecutionKind;
 use crate::tools::todo::{ConversationTodoList, TodoSnapshot, TodoStatus};
 use crate::tools::types::ToolProgress;
 
@@ -1407,8 +1408,13 @@ fn render_sections(sections: &[AgentStatusSection]) -> String {
                 }
                 lines.push("Background executions:".to_owned());
                 for execution in executions {
+                    // The identity vocabulary matches the model-facing
+                    // execution handle (Issue #162): explicit kind plus id,
+                    // so the model can construct an execution request
+                    // without guessing a namespace.
                     let mut line = format!(
-                        "- {} | {} | {}",
+                        "- {} {} | {} | {}",
+                        ExecutionKind::Tool.name(),
                         execution.execution_id.as_str(),
                         execution.tool_name,
                         execution.state.name()
@@ -1816,8 +1822,8 @@ mod tests {
     fn background_snapshot(index: usize, detail: &str) -> BackgroundExecutionSnapshot {
         BackgroundExecutionSnapshot {
             execution_id: ToolExecutionId::new(format!("exec-{index}")),
-            tool_id: ToolId::new("background_task"),
-            tool_name: "background_task".to_owned(),
+            tool_id: ToolId::new("tool-bash"),
+            tool_name: "bash".to_owned(),
             state: BackgroundLifecycle::Running,
             progress: Some(ToolProgress {
                 message: Some(detail.to_owned()),

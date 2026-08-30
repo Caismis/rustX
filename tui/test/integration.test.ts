@@ -227,7 +227,7 @@ describe("real rustx child integration", { skip: SKIP }, () => {
 
     const capabilities = await session.capabilityGet();
     const toolNames = (capabilities.tools ?? []).map((tool) => tool.name);
-    for (const expected of ["bash", "read", "write", "background_task"]) {
+    for (const expected of ["bash", "read", "write", "execution"]) {
       assert.ok(toolNames.includes(expected), `${expected} in ${toolNames}`);
     }
 

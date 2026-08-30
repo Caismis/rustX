@@ -192,7 +192,10 @@ Implemented in the M5 tool plane PR (Issue #8):
   `ConversationBackgroundRegistry` with the dispatch ownership commit,
   lifecycle state machine, cancel-vs-complete linearization, and
   exactly-once terminal inbound publication
-- The `background_task` runtime intrinsic (status and idempotent cancel)
+- The `execution` runtime intrinsic: the single model-facing observation
+  and cancellation control plane for conversation-owned asynchronous
+  executions (status and idempotent cancel over explicit `kind` + `id`
+  targets, routed to the owning domain registry)
 - The runtime-owned Agent Status `background_execution` built-in section
 - Native Read, Write, Edit, Glob, Grep, and Bash tools plus the workspace
   boundary, artifact store, managed tool-output store, and explicit tool
@@ -206,7 +209,7 @@ Implemented in the M5 tool plane PR (Issue #8):
 - The concrete bounded `NativeToolPolicies` configuration: each ordinary
   native tool independently selects its `ToolInvocationPolicy` (execution +
   concurrency axes; foreground-only sequential by default), with
-  `background_task` fixed foreground-only sequential outside the
+  `execution` fixed foreground-only sequential outside the
   configurable set
 - One canonical conversation mailbox owned by the conversation tool
   runtime, drained by the Agent Loop at every safe boundary; a configured

@@ -145,15 +145,7 @@ async fn composition_owns_one_conversation_domain() {
         .iter()
         .map(|tool| tool.name.as_str())
         .collect();
-    for expected in [
-        "background_task",
-        "read",
-        "write",
-        "edit",
-        "glob",
-        "grep",
-        "bash",
-    ] {
+    for expected in ["execution", "read", "write", "edit", "glob", "grep", "bash"] {
         assert!(
             names.contains(&expected),
             "the native tool {expected} must be composed: {names:?}"
@@ -177,14 +169,14 @@ async fn composition_owns_one_conversation_domain() {
         .capabilities
         .tools
         .iter()
-        .find(|tool| tool.name == "background_task")
-        .expect("background_task is registered");
+        .find(|tool| tool.name == "execution")
+        .expect("execution is registered");
     assert_eq!(
         background.execution_policy,
         rustx::tools::types::ToolExecutionPolicy::ForegroundOnly
     );
 
-    // `background_task` dispatches into *this* conversation's background
+    // `execution` dispatches into *this* conversation's background
     // registry: the composed registry and the host's projection agree.
     assert!(
         runtime

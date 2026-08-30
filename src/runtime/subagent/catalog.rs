@@ -449,10 +449,11 @@ impl SubagentDefinition {
 ///
 /// `ask_user` is the exact case: the native Questionnaire capability needs a
 /// Runtime Client questionnaire authority, and a subagent child is composed
-/// without any Runtime Client host at all. `background_task` is the second:
-/// its lifecycle owner is the *conversation* that outlives the attempt, and
-/// a one-shot child conversation terminates with its single answer, so a
-/// detached execution in a child has no owner to settle it.
+/// without any Runtime Client host at all. `execution` is the second: its
+/// control plane owns no lifecycle of its own and routes to the
+/// conversation-owned registries, and a one-shot child conversation
+/// terminates with its single answer, so there is no detached execution or
+/// child registry in a child for it to control.
 ///
 /// Naming either is a configuration error rather than a silently dropped
 /// capability. This is a short explicit list of known lifecycle owners
@@ -460,7 +461,7 @@ impl SubagentDefinition {
 /// framework.
 pub const CHILD_UNSAFE_BUILTIN_TOOLS: [&str; 2] = [
     crate::tools::executor::ASK_USER_TOOL_NAME,
-    "background_task",
+    crate::tools::executor::EXECUTION_TOOL_NAME,
 ];
 
 /// A definition-level validation failure.

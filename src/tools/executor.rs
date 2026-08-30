@@ -393,7 +393,7 @@ pub struct PreparedInvocation {
 /// (duplicate ids, duplicate model-facing names, invalid identities,
 /// invalid JSON Schema, reserved runtime-property collisions, invalid
 /// policy combinations, and the fixed intrinsic policies of
-/// `background_task`) and resolves model-issued calls unambiguously. There
+/// `execution`) and resolves model-issued calls unambiguously. There
 /// is no ID-first/name-fallback behavior: a canonical call whose id and name
 /// disagree is a contract violation.
 #[derive(Default)]
@@ -462,8 +462,8 @@ impl ToolRegistration {
     }
 }
 
-/// The name of the runtime intrinsic background inspection tool.
-pub const BACKGROUND_TASK_TOOL_NAME: &str = "background_task";
+/// The name of the runtime intrinsic execution-control tool.
+pub const EXECUTION_TOOL_NAME: &str = "execution";
 /// The native human-questionnaire tool.
 pub const ASK_USER_TOOL_NAME: &str = "ask_user";
 
@@ -565,13 +565,13 @@ impl ToolRegistry {
                 name: definition.name.clone(),
                 reason: error.to_string(),
             })?;
-        if definition.name == BACKGROUND_TASK_TOOL_NAME
+        if definition.name == EXECUTION_TOOL_NAME
             && (definition.execution_policy
                 != crate::tools::types::ToolExecutionPolicy::ForegroundOnly
                 || definition.concurrency_policy != ToolConcurrencyPolicy::Sequential)
         {
             return Err(ToolRegistryError::InvalidPolicy(format!(
-                "the runtime intrinsic {BACKGROUND_TASK_TOOL_NAME} is fixed to \
+                "the runtime intrinsic {EXECUTION_TOOL_NAME} is fixed to \
                  foreground-only sequential execution and may never be background-dispatchable"
             )));
         }
@@ -815,8 +815,7 @@ fn identity_arguments(arguments: &serde_json::Value) -> Result<serde_json::Value
 #[cfg(test)]
 mod tests {
     use super::{
-        BACKGROUND_TASK_TOOL_NAME, PreflightOutcome, ToolPreflightError, ToolRegistry,
-        ToolRegistryError,
+        EXECUTION_TOOL_NAME, PreflightOutcome, ToolPreflightError, ToolRegistry, ToolRegistryError,
     };
     use crate::runtime::identity::{ConversationId, ToolCallId, ToolId};
     use crate::tools::artifacts::ArtifactStore;
@@ -1025,15 +1024,15 @@ mod tests {
         );
     }
 
-    /// The runtime intrinsic `background_task` cannot be background-capable.
+    /// The runtime intrinsic `execution` cannot be background-capable.
     #[test]
-    fn background_task_cannot_be_background_capable() {
+    fn execution_cannot_be_background_capable() {
         let mut registry = ToolRegistry::new();
         let error = register(
             &mut registry,
             definition(
-                BACKGROUND_TASK_TOOL_NAME,
-                BACKGROUND_TASK_TOOL_NAME,
+                EXECUTION_TOOL_NAME,
+                EXECUTION_TOOL_NAME,
                 ToolExecutionPolicy::BackgroundOnly,
                 ToolConcurrencyPolicy::Sequential,
                 object_schema(),
@@ -1044,8 +1043,8 @@ mod tests {
         let error = register(
             &mut registry,
             definition(
-                BACKGROUND_TASK_TOOL_NAME,
-                BACKGROUND_TASK_TOOL_NAME,
+                EXECUTION_TOOL_NAME,
+                EXECUTION_TOOL_NAME,
                 ToolExecutionPolicy::ForegroundOnly,
                 ToolConcurrencyPolicy::Parallel,
                 object_schema(),
@@ -1056,8 +1055,8 @@ mod tests {
         register(
             &mut registry,
             definition(
-                BACKGROUND_TASK_TOOL_NAME,
-                BACKGROUND_TASK_TOOL_NAME,
+                EXECUTION_TOOL_NAME,
+                EXECUTION_TOOL_NAME,
                 ToolExecutionPolicy::ForegroundOnly,
                 ToolConcurrencyPolicy::Sequential,
                 object_schema(),

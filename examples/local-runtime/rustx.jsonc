@@ -104,7 +104,7 @@
   // simple — no allOf/anyOf/oneOf/$ref/const/enum at the root, and no
   // `execution_mode` of its own.
   //
-  // The `background_task` and `ask_user` intrinsics are deliberately absent:
+  // The `execution` and `ask_user` intrinsics are deliberately absent:
   // they are fixed foreground, sequential, approval-never.
   "nativeTools": {
     "read": {
@@ -175,8 +175,8 @@
   // built-ins available but inactive, and `--no-builtin-tools` / `--no-tools`
   // / `--tools` / `--exclude-tools` refine this after discovery.
   "defaultTools": [
-    "background_task", // spawn and manage conversation-owned background work
-    "ask_user",        // publish one bounded Question to the human
+    "execution", // inspect/cancel conversation-owned background work and subagents
+    "ask_user",  // publish one bounded Question to the human
     "read",
     "write",
     "edit",

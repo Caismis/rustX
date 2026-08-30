@@ -62,6 +62,7 @@ mod issue136_tool_cancellation_phase;
 mod issue137_unresolved_output_carryover;
 mod issue138_subagent_conformance;
 mod issue140_compaction_metadata;
+mod issue162_execution_intrinsic;
 mod issue27_multi_compaction;
 mod issue37_binding;
 mod issue37_capability;

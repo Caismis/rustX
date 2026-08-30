@@ -8,7 +8,7 @@
 //! `ModelSelectable` execution, `Sequential`/`Parallel` concurrency, and
 //! `Never`/`Always` approval through the concrete bounded
 //! [`NativeToolPolicies`] configuration. The only intentionally fixed
-//! policy is the runtime intrinsic `background_task` (foreground-only,
+//! policy is the runtime intrinsic `execution` (foreground-only,
 //! sequential, approval-never), and `ask_user` and `todo` are likewise
 //! fixed to foreground-only, sequential, approval-never: one is the native
 //! Questionnaire capability itself, and the other mutates conversation-owned
@@ -41,9 +41,9 @@
 //! [`ToolExecutor`]: crate::tools::executor::ToolExecutor
 
 mod ask_user;
-mod background_task;
 mod bash;
 mod edit;
+pub(crate) mod execution;
 mod glob;
 mod grep;
 mod input;
@@ -53,7 +53,7 @@ mod registration;
 // tool: it is never registered, never reaches the model, and exists only
 // because Glob and Grep must observe one filesystem universe.
 mod search;
-mod subagent;
+pub(crate) mod subagent;
 mod support;
 mod todo;
 mod write;
@@ -130,7 +130,7 @@ pub(crate) fn native_file_operation(call: &ToolCall) -> Option<NativeFileOperati
 /// execution context.
 #[derive(Clone)]
 pub struct NativeToolResources {
-    /// The conversation background registry used by the `background_task`
+    /// The conversation background registry used by the `execution`
     /// intrinsic.
     pub background: ConversationBackgroundRegistry,
     /// The conversation subagent registry used by the `subagent` intrinsic
@@ -150,7 +150,7 @@ pub struct NativeToolResources {
 }
 
 /// The concrete, bounded per-tool policy configuration of the six ordinary
-/// configurable native tools. `ask_user`, `background_task`, and `todo` own
+/// configurable native tools. `ask_user`, `execution`, and `todo` own
 /// fixed policies and are not configurable through this table.
 ///
 /// Execution policy belongs to the registered tool definition, not to the
@@ -203,14 +203,14 @@ impl NativeToolPolicies {
 /// `read` from `policies.read`, `write` from `policies.write`, `edit` from
 /// `policies.edit`, `glob` from `policies.glob`, `grep` from
 /// `policies.grep`, and `bash` from `policies.bash`. The runtime intrinsic
-/// `background_task` is intentionally outside this configurable set and
+/// `execution` is intentionally outside this configurable set and
 /// stays fixed to foreground-only sequential execution, which the registry
 /// enforces regardless of the configured policies.
 ///
 /// # Errors
 ///
 /// Returns the specific [`ToolRegistryError`] of the first registration
-/// violation; the fixed intrinsic policy of `background_task` is enforced by
+/// violation; the fixed intrinsic policy of `execution` is enforced by
 /// the registry itself.
 pub fn register_native_tools(
     registry: &mut ToolRegistry,
@@ -246,7 +246,7 @@ pub(crate) fn native_tool_registrations(
         subagent_catalog,
     } = resources;
     let mut registrations = vec![
-        background_task::registration(background),
+        execution::registration(background, subagents.clone()),
         ask_user::registration(),
         read::registration(policies.read),
         write::registration(policies.write),
@@ -276,7 +276,7 @@ pub(crate) fn native_tool_registrations(
 /// deliberately not a factory, plugin loader, strategy registry, or
 /// reflective lookup. Three capabilities are structurally absent from it and
 /// therefore unregistrable in a child however a definition was written:
-/// `subagent` (recursive delegation), and `ask_user` and `background_task`
+/// `subagent` (recursive delegation), and `ask_user` and `execution`
 /// (a headless child holds no Runtime Client questionnaire authority and no
 /// conversation-owned detached execution plane of its own).
 ///
@@ -452,7 +452,7 @@ mod tests {
     /// unregistrable in a child, independently of definition admission.
     #[test]
     fn child_unsafe_capabilities_are_structurally_absent() {
-        for name in ["subagent", "ask_user", "background_task"] {
+        for name in ["subagent", "ask_user", "execution"] {
             assert!(
                 subagent_child_definition(name, ToolInvocationPolicy::default()).is_none(),
                 "{name} has no child-plane implementation at all"

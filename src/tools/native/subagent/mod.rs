@@ -16,10 +16,12 @@
 //! than being silently reinterpreted.
 //!
 //! The call returns **immediately after the ownership commit** with a
-//! running handle — the child runtime works asynchronously and its bounded
-//! final answer arrives later as an ordinary inbound turn from the child
-//! agent. There is no wait/poll mode and no result channel outside the
-//! conversation's own message bus.
+//! running execution handle — the child runtime works asynchronously and its
+//! bounded final answer arrives later as an ordinary inbound turn from the
+//! child agent. There is no wait/poll mode and no result channel outside the
+//! conversation's own message bus. The returned execution handle (Issue
+//! #162) is the canonical continuation affordance: pass it to the
+//! `execution` intrinsic to inspect or cancel the child.
 //!
 //! # Where the authority comes from
 //!
@@ -45,7 +47,7 @@ use futures_util::future::BoxFuture;
 use crate::runtime::subagent::catalog::{SubagentCatalog, SubagentName};
 use crate::runtime::subagent::resolver::render_agent_routing;
 use crate::runtime::subagent::{
-    SubagentRegistry, SubagentStartError, SubagentStartOutcome, SubagentStartSpec,
+    SubagentAccepted, SubagentRegistry, SubagentStartError, SubagentStartOutcome, SubagentStartSpec,
 };
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, input_schema};
@@ -56,6 +58,27 @@ use crate::tools::types::{
 
 use super::input::decode;
 use super::support::{failed_result, success_json};
+
+/// The deterministic model-facing creation result of an accepted subagent
+/// start (Issue #162).
+///
+/// The result returns the typed execution handle (`kind` `subagent` plus
+/// the subagent id) as the canonical continuation affordance — the same
+/// handle the `execution` intrinsic accepts — alongside the running state
+/// and the frozen child identity. The final child answer is **not** part of
+/// this result: it arrives later, exactly once, through the canonical
+/// inbound message path.
+pub(crate) fn accepted_result(accepted: SubagentAccepted) -> ToolExecutionResult {
+    let mut result = accepted.result;
+    result["execution"] = serde_json::to_value(crate::tools::execution::ExecutionHandle::subagent(
+        &accepted.subagent_id,
+    ))
+    .expect("execution handles serialize");
+    result["child_agent_id"] = serde_json::Value::String(accepted.child_agent_id.to_string());
+    result["agent"] = serde_json::Value::String(accepted.agent);
+    result["definition_digest"] = serde_json::Value::String(accepted.definition_digest);
+    success_json(result)
+}
 
 /// The canonical model-facing name of the intrinsic.
 pub const SUBAGENT_TOOL_NAME: &str = "subagent";
@@ -93,10 +116,11 @@ fn definition(catalog: &SubagentCatalog) -> Option<ToolDefinition> {
         description: format!(
             "Delegate a bounded task to a one-shot child agent runtime. The child runs \
              asynchronously in its own isolated conversation and process; this call returns \
-             as soon as the child is durably started, and the child's final answer arrives \
-             later as a new message from the child agent. Each named agent has its own \
-             fixed instructions, model, capabilities, and Skills, which this call cannot \
-             override.\n\n{}",
+             as soon as the child is durably started, together with the execution handle you \
+             can pass to the execution tool to inspect or cancel the child. The child's final \
+             answer arrives later as a new message from the child agent. Each named agent has \
+             its own fixed instructions, model, capabilities, and Skills, which this call \
+             cannot override.\n\n{}",
             render_agent_routing(catalog)
         ),
         input_schema: input_schema::<SubagentInput>(),
@@ -210,17 +234,7 @@ impl ToolExecutor for SubagentExecutor {
                 Err(error) => return failed_result(error.to_string()),
             };
             match self.subagents.commit(prepared, &child_cancellation).await {
-                Ok(SubagentStartOutcome::Accepted(accepted)) => {
-                    let mut result = accepted.result;
-                    result["subagent_id"] =
-                        serde_json::Value::String(accepted.subagent_id.to_string());
-                    result["child_agent_id"] =
-                        serde_json::Value::String(accepted.child_agent_id.to_string());
-                    result["agent"] = serde_json::Value::String(accepted.agent);
-                    result["definition_digest"] =
-                        serde_json::Value::String(accepted.definition_digest);
-                    success_json(result)
-                }
+                Ok(SubagentStartOutcome::Accepted(accepted)) => accepted_result(accepted),
                 // The attempt cancellation won the race against the
                 // ownership commit: nothing was published, the staged child
                 // is already torn down, and the tool result is the
@@ -253,6 +267,7 @@ mod tests {
     use crate::runtime::subagent::catalog::{
         SubagentCatalog, SubagentDefinition, SubagentName, SubagentProjectInstructionPolicy,
     };
+    use crate::tools::types::{ToolExecutionStatus, ToolResultContent};
 
     fn catalog() -> SubagentCatalog {
         SubagentCatalog::new([
@@ -318,6 +333,48 @@ mod tests {
                 "task": "inspect",
             }))
             .is_err()
+        );
+    }
+
+    #[test]
+    fn the_accepted_creation_result_returns_a_typed_execution_handle() {
+        use crate::runtime::subagent::SubagentAccepted;
+        let accepted = SubagentAccepted {
+            subagent_id: crate::runtime::identity::SubagentId::new("conversation-1-subagent-2"),
+            child_agent_id: crate::runtime::identity::AgentId::new("agent-child"),
+            child_conversation_id: crate::runtime::identity::ConversationId::new(
+                "conversation-1-subagent-2",
+            ),
+            agent: "explore".to_owned(),
+            definition_digest: "sha256:d1".to_owned(),
+            result: serde_json::json!({
+                "state": "running",
+                "note": "The child runtime is running asynchronously. Its answer arrives \
+                         as a new turn from the child agent; do not retry or poll for it."
+            }),
+        };
+        let result = super::accepted_result(accepted);
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+        let value = match &result.content[0] {
+            ToolResultContent::Json { value } => value.clone(),
+            other => panic!("expected JSON, got {other:?}"),
+        };
+        assert_eq!(
+            value["execution"],
+            serde_json::json!({"kind": "subagent", "id": "conversation-1-subagent-2"}),
+            "the creation result returns the typed execution handle"
+        );
+        assert_eq!(value["state"], "running");
+        assert_eq!(value["agent"], "explore");
+        assert_eq!(value["definition_digest"], "sha256:d1");
+        assert_eq!(value["child_agent_id"], "agent-child");
+        assert!(
+            value.get("subagent_id").is_none(),
+            "the bare id is replaced by the tagged handle"
+        );
+        assert!(
+            value.get("status").is_none(),
+            "the status spelling is replaced by the state vocabulary"
         );
     }
 

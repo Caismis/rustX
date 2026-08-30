@@ -1296,7 +1296,7 @@ before restart.
   strategy registry — and compares the reconstruction against the frozen
   definition, failing closed on any mismatch rather than substituting
   different semantics under the same tool name. `subagent`, `ask_user`, and
-  `background_task` have no child-plane implementation at all.
+  `execution` have no child-plane implementation at all.
 - **Committed child identity is `(agent, definition_digest)`.**
   `SubagentDefinitionDigest` is SHA-256 over a rustX-owned versioned
   canonical framing (`rustx-subagent-definition-v2`) of the normalized
@@ -2272,7 +2272,7 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
 - The registry is a validity boundary: duplicate ids, duplicate model-facing
   names, empty identities, invalid or non-root JSON Schema, reserved
   property collisions, invalid policy combinations, and background-capable
-  `background_task` registrations are rejected. A canonical call whose id
+  `execution` registrations are rejected. A canonical call whose id
   and name disagree is a contract violation, never an id-first fallback.
 - The native executor implementation and its execution-ownership policy are
   independent: each ordinary native tool (Read/Write/Edit/Glob/Grep/Bash)
@@ -2280,7 +2280,7 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   concrete bounded `NativeToolPolicies` configuration and may use any legal
   execution policy (`ForegroundOnly`, `BackgroundOnly`, `ModelSelectable`);
   the default is foreground-only sequential for every ordinary tool. Only
-  the runtime intrinsic `background_task` is intentionally fixed
+  the runtime intrinsic `execution` is intentionally fixed
   (foreground-only, sequential) and is outside the configurable set.
 - Invocation order is frozen: resolve tool, extract/resolve invocation
   metadata, strip metadata, apply tool-owned business-argument normalization,
@@ -2512,11 +2512,40 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   No unit conversion exists anywhere below it: the executor, supervisor,
   process-group lifecycle, cancellation, timeout settlement, descendant
   termination, and output capture keep their existing native representation.
-- `background_task` is a runtime intrinsic that participates in the common
-  tool execution plane; it is not an ordinary native tool. Its contract and
+- `execution` is the single model-facing observation and cancellation
+  control plane for conversation-owned asynchronous executions (Issue
+  #162). Every model-visible creation result — a detached background tool
+  dispatch and a subagent start — returns a typed execution handle
+  (`kind` + `id`), and `execution(status|cancel)` dispatches an explicit
+  `kind = tool` target only to `ConversationBackgroundRegistry` and a
+  `kind = subagent` target only to `SubagentRegistry`. The intrinsic owns
+  no lifecycle state and no cancellation implementation: the domain
+  registries remain the sole authorities for lifecycle, cancellation,
+  durability, settlement, and terminal publication, and subagent
+  cancellation never reaches around `SubagentRegistry` to the child
+  process driver. The kind is never inferred from an id string, no
+  registry fall-through exists, and a cross-conversation id stays
+  indistinguishable from an unknown id at the owning domain boundary.
+  The intrinsic participates in the common tool execution plane; it is not an
+  ordinary native tool. Its contract and
   runtime semantics are outside the ordinary-native-tool contract
   alignment, and it is never moved, renamed, or re-schema'd to make the
   native tool directory look uniform.
+- **The `execution` subagent response is a bounded projection, never a
+  result channel.** The intrinsic obtains the authoritative
+  `SubagentSnapshot` from the registry and projects it into the
+  model-facing `SubagentExecutionSnapshot`: lifecycle, identity, and
+  control facts only (`subagent_id`, `child_agent_id`,
+  `child_conversation_id`, `tool_call_id`, `agent`, `definition_digest`,
+  `workspace`, `handoff`, `state`, `publication_abandoned`, `settled`,
+  `started_at`). The registry's internal `detail` field — which the
+  subagent settlement path populates with the successful child answer —
+  is deliberately excluded, in every lifecycle state including
+  `PublishingTerminal`, so the canonical inbound child-agent message is
+  the **only** child-result delivery channel and `execution(status|cancel)`
+  never exposes the answer. The projection is derived from the
+  registry's authoritative read model at response time; it is not a
+  second lifecycle record or authority.
 - Model-facing output is bounded by named limits. Text overflow is not an
   artifact (Issue #86): native Bash, MCP, and Python logical results all
   cross the shared Tool Plane normalization seam in `tools/output.rs`. The
