@@ -8,7 +8,6 @@ import {
   fuzzyMatch,
   matchesKey,
   truncateToWidth,
-  type Component,
   type Focusable,
 } from "@earendil-works/pi-tui";
 
@@ -18,6 +17,7 @@ import type {
 } from "../../protocol/types.ts";
 import { sessionRowLabel } from "../../presentation/selectors.ts";
 import { role, style } from "../theme.ts";
+import type { PopupContent } from "./popup-frame.ts";
 
 const VISIBLE_ROWS = 8;
 
@@ -27,7 +27,7 @@ export interface SessionSelectorOptions {
   query?: string;
 }
 
-export class SessionSelector implements Component, Focusable {
+export class SessionSelector implements PopupContent, Focusable {
   focused = false;
   onSelect?: (session: SessionSummaryView) => void;
   onCancel?: () => void;
@@ -62,6 +62,16 @@ export class SessionSelector implements Component, Focusable {
     this.#nextOffset = nextOffset;
     this.#loading = false;
     this.onChange?.();
+  }
+
+  /** The popup's frame title. */
+  popupTitle(): string {
+    return "Resume session";
+  }
+
+  /** The popup's help line, contained by the frame below the body. */
+  popupFooter(): string[] {
+    return ["↑↓ navigate · Enter select · Esc close"];
   }
 
   invalidate(): void {
@@ -116,7 +126,6 @@ export class SessionSelector implements Component, Focusable {
   render(width: number): string[] {
     const visible = this.visibleSessions();
     const lines = [
-      role.strong("Resume session"),
       `${role.meta("Search:")} ${this.#query}${this.focused ? role.accent("▌") : ""}`,
       "",
     ];
@@ -147,7 +156,6 @@ export class SessionSelector implements Component, Focusable {
         lines.push(role.meta("↓ load more matching Sessions"));
       }
     }
-    lines.push("", role.meta("↑↓ navigate · Enter select · Esc close"));
     return lines.map((line) => truncateToWidth(line, width, "…"));
   }
 
@@ -164,7 +172,7 @@ export interface BoundarySelectorOptions {
   nextOffset?: number;
 }
 
-export class BoundarySelector implements Component, Focusable {
+export class BoundarySelector implements PopupContent, Focusable {
   focused = false;
   onSelect?: (boundary: SessionUserMessageBoundaryView) => void;
   onCancel?: () => void;
@@ -187,6 +195,16 @@ export class BoundarySelector implements Component, Focusable {
 
   invalidate(): void {
     // The selector has no cached render state.
+  }
+
+  /** The popup's frame title. */
+  popupTitle(): string {
+    return this.#title;
+  }
+
+  /** The popup's help line, contained by the frame below the body. */
+  popupFooter(): string[] {
+    return ["↑↓ navigate · Enter select · Esc close"];
   }
 
   /** Appends one bounded native history page. */
@@ -239,7 +257,6 @@ export class BoundarySelector implements Component, Focusable {
   render(width: number): string[] {
     const visible = this.visible();
     const lines = [
-      role.strong(this.#title),
       role.meta("Select a committed user boundary; the prompt will return to the editor."),
       `${role.meta("Search:")} ${this.#query}${this.focused ? role.accent("▌") : ""}`,
       "",
@@ -259,7 +276,6 @@ export class BoundarySelector implements Component, Focusable {
         lines.push(role.meta("↓ load more committed boundaries"));
       }
     }
-    lines.push("", role.meta("↑↓ navigate · Enter select · Esc close"));
     return lines.map((line) => truncateToWidth(line, width, "…"));
   }
 

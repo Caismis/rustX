@@ -7,6 +7,7 @@ import {
   BoundarySelector,
   SessionSelector,
 } from "../src/ui/components/session-selector.ts";
+import { PopupFrame } from "../src/ui/components/popup-frame.ts";
 import { TreeSelector } from "../src/ui/components/tree-selector.ts";
 import type { SessionNodeView } from "../src/protocol/types.ts";
 import { plainText } from "../src/ui/theme.ts";
@@ -137,7 +138,7 @@ describe("native Session selectors", () => {
 
     assert.deepEqual(selections, ["branch", "node"]);
     assert.match(
-      selector.render(120).map(plainText).join("\n"),
+      new PopupFrame(selector).render(120).map(plainText).join("\n"),
       /Session tree/,
     );
   });

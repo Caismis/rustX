@@ -362,7 +362,7 @@ describe("QuestionnaireOverlay", () => {
       multi_select: false,
     });
     const view = singleOverlay(specification, () => {});
-    view.setViewportHeight(16);
+    view.setBodyHeight(16);
 
     for (let row = 0; row <= labels.length; row += 1) {
       const lines = view.render(56);
@@ -398,7 +398,7 @@ describe("QuestionnaireOverlay", () => {
       multi_select: false,
     });
     const view = singleOverlay(specification, () => {});
-    view.setViewportHeight(14);
+    view.setBodyHeight(14);
 
     const narrow = view.render(56);
     assertBounded(narrow, 56, 14);
@@ -433,7 +433,7 @@ describe("QuestionnaireOverlay", () => {
         }),
         () => {},
       );
-      view.setViewportHeight(14);
+      view.setBodyHeight(14);
 
       const initial = view.render(width);
       assertBounded(initial, width, 14);
@@ -504,7 +504,7 @@ describe("QuestionnaireOverlay", () => {
         }),
         () => {},
       );
-      view.setViewportHeight(14);
+      view.setBodyHeight(14);
 
       let current = previewPage(view, width);
       const visited = new Set<number>();
@@ -575,7 +575,7 @@ describe("QuestionnaireOverlay", () => {
       }),
       () => {},
     );
-    view.setViewportHeight(14);
+    view.setBodyHeight(14);
 
     const initialWide = previewPage(view, 120);
     assertBounded(initialWide.lines, 120, 14);

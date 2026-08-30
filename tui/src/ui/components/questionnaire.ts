@@ -6,7 +6,6 @@ import {
   truncateToWidth,
   visibleWidth,
   wrapTextWithAnsi,
-  type Component,
 } from "@earendil-works/pi-tui";
 
 import type {
@@ -17,9 +16,14 @@ import type {
   QuestionnaireSpecification,
 } from "../../protocol/types.ts";
 import { markdownTheme, role } from "../theme.ts";
+import type { PopupContent } from "./popup-frame.ts";
 
 const MAX_CUSTOM_ANSWER_CHARS = 4096;
 const PREVIEW_CONTENT_LINES = 12;
+
+const POPUP_TITLE = "Ask user · questionnaire";
+const POPUP_FOOTER =
+  "Tab/Shift+Tab tabs · arrows rows · Enter choose/submit · Space toggle · PageUp/PageDown preview · Esc decline · Ctrl+C cancel attempt";
 
 export interface QuestionnaireOverlayOptions {
   interactionId: string;
@@ -44,7 +48,7 @@ type RenderedBody = {
  * The runtime remains authoritative: the surface sends a response once, and
  * disappears when the pending interaction leaves the projection.
  */
-export class QuestionnaireOverlay implements Component {
+export class QuestionnaireOverlay implements PopupContent {
   readonly interactionId: string;
   readonly questionnaire: QuestionnaireSpecification;
   readonly #onSubmit: (response: QuestionnaireResponse) => void;
@@ -57,7 +61,7 @@ export class QuestionnaireOverlay implements Component {
   #tab = 0;
   #row = 0;
   #submitting = false;
-  #viewportHeight = 24;
+  #bodyHeight = 24;
   #previewOffset = 0;
   #previewLineCount = 0;
   #previewContentViewport = PREVIEW_CONTENT_LINES;
@@ -79,10 +83,20 @@ export class QuestionnaireOverlay implements Component {
     // replacement creates a new instance and therefore discards only drafts.
   }
 
-  /** Sets the self-managed viewport supplied by the owning app/overlay host. */
-  setViewportHeight(height: number): void {
+  /** The popup's frame title. */
+  popupTitle(): string {
+    return POPUP_TITLE;
+  }
+
+  /** The popup's help line, contained by the frame below the body. */
+  popupFooter(): string[] {
+    return [POPUP_FOOTER];
+  }
+
+  /** Sets the finite body-row budget the PopupFrame allocated for this pass. */
+  setBodyHeight(height: number): void {
     const next = Math.max(1, Math.floor(height));
-    if (next !== this.#viewportHeight) this.#viewportHeight = next;
+    if (next !== this.#bodyHeight) this.#bodyHeight = next;
   }
 
   /** Marks an explicit submission/decline as in flight. */
@@ -179,30 +193,21 @@ export class QuestionnaireOverlay implements Component {
   render(width: number): string[] {
     const safeWidth = Math.max(1, Math.floor(width));
     const header = [
-      fitLine(role.strong("Ask user · questionnaire"), safeWidth),
       fitLine(role.meta(`interaction ${this.interactionId}`), safeWidth),
       ...this.#renderTabs(safeWidth),
     ];
-    const footer = [
-      fitLine(
-        role.meta(
-          "Tab/Shift+Tab tabs · arrows rows · Enter choose/submit · Space toggle · PageUp/PageDown preview · Esc decline · Ctrl+C cancel attempt",
-        ),
-        safeWidth,
-      ),
-    ];
-    const available = Math.max(1, this.#viewportHeight - header.length - footer.length);
+    const available = Math.max(1, this.#bodyHeight - header.length);
     const body = this.#submitting
       ? { lines: [role.pending("Submitting response…")], focusLine: 0 }
       : this.#tab === this.questionnaire.questions.length
         ? this.#renderReview(safeWidth, available)
         : this.#renderQuestion(safeWidth, available);
-    const lines = [...header, ...body.lines, ...footer];
+    const lines = [...header, ...body.lines];
 
-    // Tiny test terminals cannot display the full frame. Keep the contract
-    // explicit even there: no line escapes the component's requested height
-    // or width. Normal overlays have enough room for header, body, and help.
-    return lines.slice(0, this.#viewportHeight).map((line) => fitLine(line, safeWidth));
+    // Tiny test terminals cannot display the full body. Keep the contract
+    // explicit even there: no line escapes the finite rectangle the frame
+    // allocated. Normal popups have enough room for header and body.
+    return lines.slice(0, this.#bodyHeight).map((line) => fitLine(line, safeWidth));
   }
 
   #renderTabs(width: number): string[] {

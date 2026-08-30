@@ -27,6 +27,11 @@
  * below composes a background into a string.
  */
 
+// The width measure the band filler pads by must be the terminal's own cell
+// accounting: code-point counts misjudge wide graphemes, and a line padded by
+// the wrong measure either leaks past its rectangle or leaves the band short.
+import { visibleWidth } from "@earendil-works/pi-tui";
+
 const wrap = (open: string) => (text: string) => `[${open}m${text}[0m`;
 
 // ---------------------------------------------------------------------------
@@ -58,6 +63,8 @@ export const palette = {
   toolSuccessBg: "#283228",
   /** A tool call the runtime settled as anything but a success. */
   toolErrorBg: "#3c2828",
+  /** The raised surface of a modal/popup overlay above the transcript. */
+  popupBg: "#2a2a3a",
 } as const;
 
 /**
@@ -153,13 +160,31 @@ function fg(hex: string): (text: string) => string {
   return (text: string) => `${open}${text}[39m`;
 }
 
-/** A background colour wrapper. Only the background is reset. */
-function bg(hex: string): (text: string) => string {
+/** A background band wrapper plus its raw SGR opener. */
+export interface BackgroundBand {
+  (text: string): string;
+  /** The band's raw SGR opener, for re-opening after a mid-line full reset. */
+  readonly open: string;
+}
+
+/**
+ * A background colour wrapper. Only the background is reset.
+ *
+ * The raw SGR opener is exposed as {@link BackgroundBand.open} so the layout
+ * shell that owns a band can re-open it after a full reset (`[0m`) inside the
+ * content: emphasis styles like bold end in a full reset, and without a
+ * re-open they would punch a hole in the band for the rest of the line.
+ */
+function bg(hex: string): BackgroundBand {
   const { r, g, b } = hexToRgb(hex);
   const open = truecolor
     ? `[48;2;${r};${g};${b}m`
     : `[48;5;${rgbTo256(r, g, b)}m`;
-  return (text: string) => `${open}${text}[49m`;
+  const band = Object.assign(
+    (text: string) => `${open}${text}[49m`,
+    { open },
+  );
+  return band;
 }
 
 // ---------------------------------------------------------------------------
@@ -233,10 +258,25 @@ export const background = {
   toolPending: bg(palette.toolPendingBg),
   toolSuccess: bg(palette.toolSuccessBg),
   toolError: bg(palette.toolErrorBg),
+  popup: bg(palette.popupBg),
 };
 
 /** The name of one background band. */
 export type BackgroundRole = keyof typeof background;
+
+/**
+ * Fills one laid-out line with a background band, edge to edge.
+ *
+ * This is the shell-level composition the band language reserves for the
+ * layer that knows the width: the line is padded to `width` first, and the
+ * band is re-opened after every full reset inside the content so an emphasis
+ * style cannot leave the remainder of the line — including the padding that
+ * makes the band a rectangle — on the terminal's default background.
+ */
+export function fillBand(band: BackgroundBand, line: string, width: number): string {
+  const padded = line + " ".repeat(Math.max(0, width - visibleWidth(line)));
+  return `${band.open}${padded.replaceAll(`[0m`, `[0m${band.open}`)}[49m`;
+}
 
 /** The markdown theme handed to Pi's renderer. */
 export const markdownTheme = {

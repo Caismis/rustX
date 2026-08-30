@@ -4,7 +4,6 @@ import {
   fuzzyMatch,
   matchesKey,
   truncateToWidth,
-  type Component,
   type Focusable,
 } from "@earendil-works/pi-tui";
 import type {
@@ -13,6 +12,7 @@ import type {
   SessionView,
 } from "../../protocol/types.ts";
 import { role, style } from "../theme.ts";
+import type { PopupContent } from "./popup-frame.ts";
 
 export type TreeSelection =
   | { kind: "node"; node: SessionNodeView }
@@ -39,7 +39,7 @@ function pageCursor(offset: number | undefined): PageCursor {
   return offset === undefined ? { state: "exhausted" } : { state: "active", offset };
 }
 
-export class TreeSelector implements Component, Focusable {
+export class TreeSelector implements PopupContent, Focusable {
   focused = false;
   onSelect?: (selection: TreeSelection) => void;
   onCancel?: () => void;
@@ -110,6 +110,16 @@ export class TreeSelector implements Component, Focusable {
     // The selector has no cached render state.
   }
 
+  /** The popup's frame title. */
+  popupTitle(): string {
+    return "Session tree";
+  }
+
+  /** The popup's help line, contained by the frame below the body. */
+  popupFooter(): string[] {
+    return ["↑↓ navigate · Enter select · Esc close"];
+  }
+
   private items(): TreeSelection[] {
     const items: TreeSelection[] = this.#nodes.map((node) => ({
       kind: "node",
@@ -157,7 +167,6 @@ export class TreeSelector implements Component, Focusable {
   render(width: number): string[] {
     const visible = this.items();
     const lines = [
-      role.strong("Session tree"),
       role.meta("Select a node to activate it, or a user boundary to create a new node."),
       `${role.meta("Search:")} ${this.#query}${this.focused ? role.accent("▌") : ""}`,
       "",
@@ -183,7 +192,6 @@ export class TreeSelector implements Component, Focusable {
         lines.push(role.meta("↓ load more native tree/history rows"));
       }
     }
-    lines.push("", role.meta("↑↓ navigate · Enter select · Esc close"));
     return lines.map((line) => truncateToWidth(line, width, "…"));
   }
 

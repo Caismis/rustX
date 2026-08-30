@@ -15,6 +15,7 @@ import {
   reasoningLine,
   searchTerms,
 } from "../src/ui/components/model-selector.ts";
+import { PopupFrame } from "../src/ui/components/popup-frame.ts";
 import { plainText } from "../src/ui/theme.ts";
 import type { CatalogModelView } from "../src/protocol/types.ts";
 import { attemptModel, catalogModel, sessionModel } from "./support/fixtures.ts";
@@ -514,11 +515,15 @@ describe("keyboard selection", () => {
     assert.equal(component.selectedModel()?.model, "alpha/model-a");
   });
 
-  it("shows the keyboard hints", () => {
+  it("shows the keyboard hints inside the popup frame", () => {
+    const framed = new PopupFrame(selector()).render(80).map(plainText);
     assert.ok(
-      lines(selector()).some((line) =>
+      framed.some((line) =>
         line.includes("↑↓ navigate · Enter select · Esc close"),
       ),
     );
+    // The hint is contained: it is not the popup's outer boundary row.
+    const hint = framed.findIndex((line) => line.includes("↑↓ navigate"));
+    assert.ok(hint > 0 && hint < framed.length - 1);
   });
 });
