@@ -8,7 +8,6 @@ import {
   fuzzyMatch,
   matchesKey,
   truncateToWidth,
-  type Component,
   type Focusable,
 } from "@earendil-works/pi-tui";
 
@@ -18,8 +17,19 @@ import type {
 } from "../../protocol/types.ts";
 import { sessionRowLabel } from "../../presentation/selectors.ts";
 import { role, style } from "../theme.ts";
+import {
+  windowAroundSelected,
+  type PopupContent,
+} from "./popup-frame.ts";
 
-const VISIBLE_ROWS = 8;
+/** Default body rows when rendered without a frame (component tests). */
+const DEFAULT_BODY_HEIGHT = 24;
+
+/** Physical rows one session entry costs: the label row and its id/metadata row. */
+const SESSION_ENTRY_ROWS = 2;
+
+/** Physical rows one boundary entry costs: the message row and its revision row. */
+const BOUNDARY_ENTRY_ROWS = 2;
 
 export interface SessionSelectorOptions {
   sessions: SessionSummaryView[];
@@ -27,7 +37,7 @@ export interface SessionSelectorOptions {
   query?: string;
 }
 
-export class SessionSelector implements Component, Focusable {
+export class SessionSelector implements PopupContent, Focusable {
   focused = false;
   onSelect?: (session: SessionSummaryView) => void;
   onCancel?: () => void;
@@ -40,6 +50,7 @@ export class SessionSelector implements Component, Focusable {
   #query: string;
   #selected = 0;
   #loading = false;
+  #bodyHeight = DEFAULT_BODY_HEIGHT;
 
   constructor(options: SessionSelectorOptions) {
     this.#sessions = options.sessions;
@@ -62,6 +73,27 @@ export class SessionSelector implements Component, Focusable {
     this.#nextOffset = nextOffset;
     this.#loading = false;
     this.onChange?.();
+  }
+
+  /** The popup's frame title. */
+  popupTitle(): string {
+    return "Resume session";
+  }
+
+  /** The popup's help line, contained by the frame below the body. */
+  popupFooter(): string[] {
+    return ["↑↓ navigate · Enter select · Esc close"];
+  }
+
+  /**
+   * The finite body-row budget the PopupFrame allocated for this pass. The
+   * list viewport below is derived from it in physical rendered rows — two
+   * per session — so the selected session can never scroll into rows the
+   * frame would clip. Logical selection still spans the complete filtered
+   * set; only the visible window moves.
+   */
+  setBodyHeight(height: number): void {
+    this.#bodyHeight = Math.max(1, Math.floor(height));
   }
 
   invalidate(): void {
@@ -115,40 +147,54 @@ export class SessionSelector implements Component, Focusable {
 
   render(width: number): string[] {
     const visible = this.visibleSessions();
-    const lines = [
-      role.strong("Resume session"),
+    // The interactive header always renders first: it owns the query input.
+    const header = [
       `${role.meta("Search:")} ${this.#query}${this.focused ? role.accent("▌") : ""}`,
       "",
     ];
+    const budget = Math.max(1, this.#bodyHeight);
+    const lines = [...header];
     if (visible.length === 0) {
       lines.push(role.meta("no persisted session matches the search"));
-    } else {
-      const start = Math.max(
-        0,
-        Math.min(
-          this.#selected - Math.floor(VISIBLE_ROWS / 2),
-          Math.max(0, visible.length - VISIBLE_ROWS),
-        ),
-      );
-      for (const [offset, session] of visible
-        .slice(start, start + VISIBLE_ROWS)
-        .entries()) {
-        const index = start + offset;
-        const marker = index === this.#selected ? role.accent("❯") : " ";
-        const active = session.active ? role.success(" active") : "";
-        const label = sessionRowLabel(session);
-        lines.push(`${marker} ${index === this.#selected ? style.bold(label) : label}${active}`);
-        lines.push(`    ${role.meta(`${session.id} · node ${session.active_node}`)}`);
-      }
-      if (visible.length > VISIBLE_ROWS) {
-        lines.push(role.meta(`${this.#selected + 1}/${visible.length}`));
-      }
-      if (this.#nextOffset !== undefined) {
-        lines.push(role.meta("↓ load more matching Sessions"));
-      }
+      return lines
+        .slice(0, budget)
+        .map((line) => truncateToWidth(line, width, "…"));
     }
-    lines.push("", role.meta("↑↓ navigate · Enter select · Esc close"));
-    return lines.map((line) => truncateToWidth(line, width, "…"));
+
+    // The list owns the first claim on the remaining body rows, anchored on
+    // the selected session; the scroll position and the load-more hint are
+    // subordinate and yield first under constrained heights.
+    const tail: string[] = [role.meta(`${this.#selected + 1}/${visible.length}`)];
+    if (this.#nextOffset !== undefined) {
+      tail.push(role.meta("↓ load more matching Sessions"));
+    }
+    let listBudget = budget - header.length - tail.length;
+    while (listBudget < SESSION_ENTRY_ROWS && tail.length > 0) {
+      tail.pop();
+      listBudget += 1;
+    }
+    const window = windowAroundSelected(
+      visible.length,
+      this.#selected,
+      Math.max(1, listBudget),
+      () => SESSION_ENTRY_ROWS,
+    );
+    for (let index = window.start; index < window.end; index += 1) {
+      const session = visible[index]!;
+      const marker = index === this.#selected ? role.accent("❯") : " ";
+      const active = session.active ? role.success(" active") : "";
+      const label = sessionRowLabel(session);
+      lines.push(`${marker} ${index === this.#selected ? style.bold(label) : label}${active}`);
+      lines.push(`    ${role.meta(`${session.id} · node ${session.active_node}`)}`);
+    }
+    if (window.start === 0 && window.end === visible.length) {
+      // Nothing is scrolled out of view, so the position line is noise.
+      tail.shift();
+    }
+    lines.push(...tail.slice(0, Math.max(0, budget - lines.length)));
+    return lines
+      .slice(0, budget)
+      .map((line) => truncateToWidth(line, width, "…"));
   }
 
   #move(delta: number, length: number): void {
@@ -164,7 +210,7 @@ export interface BoundarySelectorOptions {
   nextOffset?: number;
 }
 
-export class BoundarySelector implements Component, Focusable {
+export class BoundarySelector implements PopupContent, Focusable {
   focused = false;
   onSelect?: (boundary: SessionUserMessageBoundaryView) => void;
   onCancel?: () => void;
@@ -177,6 +223,7 @@ export class BoundarySelector implements Component, Focusable {
   #query = "";
   #selected = 0;
   #loading = false;
+  #bodyHeight = DEFAULT_BODY_HEIGHT;
 
   constructor(options: BoundarySelectorOptions) {
     this.#boundaries = options.boundaries;
@@ -187,6 +234,27 @@ export class BoundarySelector implements Component, Focusable {
 
   invalidate(): void {
     // The selector has no cached render state.
+  }
+
+  /** The popup's frame title. */
+  popupTitle(): string {
+    return this.#title;
+  }
+
+  /** The popup's help line, contained by the frame below the body. */
+  popupFooter(): string[] {
+    return ["↑↓ navigate · Enter select · Esc close"];
+  }
+
+  /**
+   * The finite body-row budget the PopupFrame allocated for this pass. The
+   * list viewport below is derived from it in physical rendered rows — two
+   * per boundary — so the selected boundary can never scroll into rows the
+   * frame would clip. Logical selection still spans the complete filtered
+   * set; only the visible window moves.
+   */
+  setBodyHeight(height: number): void {
+    this.#bodyHeight = Math.max(1, Math.floor(height));
   }
 
   /** Appends one bounded native history page. */
@@ -238,29 +306,50 @@ export class BoundarySelector implements Component, Focusable {
 
   render(width: number): string[] {
     const visible = this.visible();
-    const lines = [
-      role.strong(this.#title),
+    // The interactive header always renders first: hint, then the query row.
+    const header = [
       role.meta("Select a committed user boundary; the prompt will return to the editor."),
       `${role.meta("Search:")} ${this.#query}${this.focused ? role.accent("▌") : ""}`,
       "",
     ];
+    const budget = Math.max(1, this.#bodyHeight);
+    const lines = [...header];
     if (visible.length === 0) {
       lines.push(role.meta("no branchable user message matches the search"));
-    } else {
-      const start = Math.max(0, Math.min(this.#selected - 3, visible.length - VISIBLE_ROWS));
-      visible.slice(start, start + VISIBLE_ROWS).forEach((boundary, offset) => {
-        const index = start + offset;
-        const message = previewUserMessage(boundary);
-        const marker = index === this.#selected ? role.accent("❯") : " ";
-        lines.push(`${marker} ${index === this.#selected ? style.bold(message) : message}`);
-        lines.push(`    ${role.meta(`revision ${boundary.surface_revision} · ${index + 1}/${visible.length}`)}`);
-      });
-      if (this.#nextOffset !== undefined) {
-        lines.push(role.meta("↓ load more committed boundaries"));
-      }
+      return lines
+        .slice(0, budget)
+        .map((line) => truncateToWidth(line, width, "…"));
     }
-    lines.push("", role.meta("↑↓ navigate · Enter select · Esc close"));
-    return lines.map((line) => truncateToWidth(line, width, "…"));
+
+    // The list owns the first claim on the remaining body rows, anchored on
+    // the selected boundary; the load-more hint is subordinate and yields
+    // first under constrained heights.
+    const tail: string[] = [];
+    if (this.#nextOffset !== undefined) {
+      tail.push(role.meta("↓ load more committed boundaries"));
+    }
+    let listBudget = budget - header.length - tail.length;
+    while (listBudget < BOUNDARY_ENTRY_ROWS && tail.length > 0) {
+      tail.pop();
+      listBudget += 1;
+    }
+    const window = windowAroundSelected(
+      visible.length,
+      this.#selected,
+      Math.max(1, listBudget),
+      () => BOUNDARY_ENTRY_ROWS,
+    );
+    for (let index = window.start; index < window.end; index += 1) {
+      const boundary = visible[index]!;
+      const message = previewUserMessage(boundary);
+      const marker = index === this.#selected ? role.accent("❯") : " ";
+      lines.push(`${marker} ${index === this.#selected ? style.bold(message) : message}`);
+      lines.push(`    ${role.meta(`revision ${boundary.surface_revision} · ${index + 1}/${visible.length}`)}`);
+    }
+    lines.push(...tail.slice(0, Math.max(0, budget - lines.length)));
+    return lines
+      .slice(0, budget)
+      .map((line) => truncateToWidth(line, width, "…"));
   }
 
   #move(delta: number, length: number): void {

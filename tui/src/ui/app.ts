@@ -47,6 +47,7 @@ import {
   TUI,
   matchesKey,
   type OverlayHandle,
+  type SizeValue,
 } from "@earendil-works/pi-tui";
 
 import { SlashCommandAutocompleteProvider } from "../commands/autocomplete.ts";
@@ -83,6 +84,7 @@ import {
 } from "./components/activity.ts";
 import { ModelSelector } from "./components/model-selector.ts";
 import { InspectionView } from "./components/inspection-view.ts";
+import { PopupFrame, type PopupContent } from "./components/popup-frame.ts";
 import { TransientFeedbackSurface } from "./components/transient-feedback.ts";
 import {
   renderFooter,
@@ -598,26 +600,48 @@ export class RustxTuiApp {
   /** Opens the shared focused surface for substantial read-only information. */
   #showInspection(title: string, body: string, lease: PresentationLease): void {
     if (!this.#isCurrentPresentationLease(lease)) return;
-    this.#closeOverlay();
-    const viewportLines = Math.max(
-      1,
-      Math.floor(this.#tui.terminal.rows * 0.7) - 3,
-    );
-    const inspection = new InspectionView({ title, body, viewportLines });
-    const handle = this.#tui.showOverlay(inspection, {
-      width: "85%",
-      maxHeight: "70%",
-      anchor: "center",
-    });
-    this.#overlay = handle;
+    const inspection = new InspectionView({ title, body });
+    const handle = this.#showPopup(inspection, { width: "85%", heightPercent: 70 });
     inspection.onChange = () => {
       if (this.#isCurrentPresentationLease(lease)) this.#tui.requestRender();
     };
     inspection.onClose = () => {
       if (this.#overlay === handle) this.#closeOverlay();
     };
+  }
+
+  /**
+   * Presents one transient surface inside the shared PopupFrame.
+   *
+   * The frame owns the popup's geometry — outer rectangle, boundary, title,
+   * padding, background, footer — while the wrapped component keeps its
+   * feature semantics. The height budget the frame receives is the same
+   * percentage declared as pi-tui's `maxHeight`, so pi-tui never has to clip
+   * the frame and the bottom boundary always renders. The `visible` hook
+   * re-derives the budget on every render cycle, including terminal resizes.
+   */
+  #showPopup(
+    content: PopupContent,
+    options: { width: SizeValue; heightPercent: number; minWidth?: number },
+  ): OverlayHandle {
+    this.#closeOverlay();
+    const frame = new PopupFrame(content);
+    const handle = this.#tui.showOverlay(frame, {
+      width: options.width,
+      minWidth: options.minWidth,
+      maxHeight: `${options.heightPercent}%`,
+      anchor: "center",
+      visible: (_width, height) => {
+        frame.setViewportHeight(
+          Math.max(1, Math.floor((height * options.heightPercent) / 100)),
+        );
+        return true;
+      },
+    });
+    this.#overlay = handle;
     handle.focus();
     this.#tui.requestRender();
+    return handle;
   }
 
   /**
@@ -637,19 +661,11 @@ export class RustxTuiApp {
       sessionModel: state.sessionModel,
       attempt: state.attempt,
     });
-    const handle = this.#tui.showOverlay(selector, {
-      width: "80%",
-      maxHeight: "70%",
-      anchor: "center",
-    });
-    this.#overlay = handle;
+    const handle = this.#showPopup(selector, { width: "80%", heightPercent: 70 });
 
     const close = () => {
       if (this.#overlay !== handle) return;
-      handle.hide();
-      this.#overlay = undefined;
-      this.#tui.setFocus(this.#editor);
-      this.#tui.requestRender();
+      this.#closeOverlay();
     };
 
     selector.onChange = () => {
@@ -669,9 +685,6 @@ export class RustxTuiApp {
           }
         });
     };
-
-    handle.focus();
-    this.#tui.requestRender();
   }
 
   #showSessionSelector(
@@ -689,12 +702,7 @@ export class RustxTuiApp {
     let currentNextOffset = nextOffset;
     let requestSerial = 0;
     const selector = new SessionSelector({ sessions, nextOffset, query });
-    const handle = this.#tui.showOverlay(selector, {
-      width: "80%",
-      maxHeight: "70%",
-      anchor: "center",
-    });
-    this.#overlay = handle;
+    const handle = this.#showPopup(selector, { width: "80%", heightPercent: 70 });
     selector.onChange = () => {
       if (this.#isCurrentPresentationLease(lease)) this.#tui.requestRender();
     };
@@ -742,8 +750,6 @@ export class RustxTuiApp {
           }
         });
     };
-    handle.focus();
-    this.#tui.requestRender();
   }
 
   #showBoundarySelector(
@@ -763,12 +769,7 @@ export class RustxTuiApp {
     }
     let currentNextOffset = nextOffset;
     const selector = new BoundarySelector({ boundaries, title, nextOffset });
-    const handle = this.#tui.showOverlay(selector, {
-      width: "80%",
-      maxHeight: "70%",
-      anchor: "center",
-    });
-    this.#overlay = handle;
+    const handle = this.#showPopup(selector, { width: "80%", heightPercent: 70 });
     selector.onChange = () => {
       if (this.#isCurrentPresentationLease(lease)) this.#tui.requestRender();
     };
@@ -804,8 +805,6 @@ export class RustxTuiApp {
           }
         });
     };
-    handle.focus();
-    this.#tui.requestRender();
   }
 
   #showTreeSelector(
@@ -824,12 +823,7 @@ export class RustxTuiApp {
       boundaries,
       nextHistoryOffset,
     });
-    const handle = this.#tui.showOverlay(selector, {
-      width: "80%",
-      maxHeight: "70%",
-      anchor: "center",
-    });
-    this.#overlay = handle;
+    const handle = this.#showPopup(selector, { width: "80%", heightPercent: 70 });
     selector.onChange = () => {
       if (this.#isCurrentPresentationLease(lease)) this.#tui.requestRender();
     };
@@ -869,8 +863,6 @@ export class RustxTuiApp {
           }
         });
     };
-    handle.focus();
-    this.#tui.requestRender();
   }
 
   #closeOverlay(): void {
@@ -1329,23 +1321,8 @@ export class RustxTuiApp {
       onInterrupt: () => void this.#onInterrupt(),
       onChange: () => this.#tui.requestRender(),
     });
-    // The component owns the scroll viewport because Pi's overlay maxHeight
-    // only clips already-rendered lines. Keep it in sync with the actual
-    // terminal height, including resize cycles handled inside Pi-TUI.
-    overlay.setViewportHeight(Math.max(1, Math.floor(this.#tui.terminal.rows * 0.9)));
-    const handle = this.#tui.showOverlay(overlay, {
-      width: "94%",
-      minWidth: 44,
-      maxHeight: "90%",
-      anchor: "center",
-      visible: (_width, height) => {
-        overlay.setViewportHeight(Math.max(1, Math.floor(height * 0.9)));
-        return true;
-      },
-    });
-    this.#overlay = handle;
+    this.#showPopup(overlay, { width: "94%", minWidth: 44, heightPercent: 90 });
     this.#questionnaireOverlay = overlay;
-    handle.focus();
   }
 
   #submitQuestionnaire(

@@ -20,7 +20,7 @@ describe("InspectionView", () => {
     });
 
     const initial = view.render(32);
-    assert.ok(initial.length <= 6, "title, range, body viewport, and help stay bounded");
+    assert.ok(initial.length <= 4, "the range indicator and the body viewport stay bounded");
     assert.ok(initial.every((line) => visibleWidth(line) <= 32));
     assert.match(plain(initial), /marker-0/);
     assert.doesNotMatch(plain(initial), /marker-11/);

@@ -4,7 +4,6 @@ import {
   fuzzyMatch,
   matchesKey,
   truncateToWidth,
-  type Component,
   type Focusable,
 } from "@earendil-works/pi-tui";
 import type {
@@ -13,6 +12,16 @@ import type {
   SessionView,
 } from "../../protocol/types.ts";
 import { role, style } from "../theme.ts";
+import {
+  windowAroundSelected,
+  type PopupContent,
+} from "./popup-frame.ts";
+
+/** Default body rows when rendered without a frame (component tests). */
+const DEFAULT_BODY_HEIGHT = 24;
+
+/** Physical rows one tree entry costs: the item row and its metadata row. */
+const TREE_ENTRY_ROWS = 2;
 
 export type TreeSelection =
   | { kind: "node"; node: SessionNodeView }
@@ -39,7 +48,7 @@ function pageCursor(offset: number | undefined): PageCursor {
   return offset === undefined ? { state: "exhausted" } : { state: "active", offset };
 }
 
-export class TreeSelector implements Component, Focusable {
+export class TreeSelector implements PopupContent, Focusable {
   focused = false;
   onSelect?: (selection: TreeSelection) => void;
   onCancel?: () => void;
@@ -54,6 +63,7 @@ export class TreeSelector implements Component, Focusable {
   #query = "";
   #selected = 0;
   #loading = false;
+  #bodyHeight = DEFAULT_BODY_HEIGHT;
 
   constructor(options: TreeSelectorOptions) {
     this.#session = options.session;
@@ -110,6 +120,27 @@ export class TreeSelector implements Component, Focusable {
     // The selector has no cached render state.
   }
 
+  /** The popup's frame title. */
+  popupTitle(): string {
+    return "Session tree";
+  }
+
+  /** The popup's help line, contained by the frame below the body. */
+  popupFooter(): string[] {
+    return ["↑↓ navigate · Enter select · Esc close"];
+  }
+
+  /**
+   * The finite body-row budget the PopupFrame allocated for this pass. The
+   * list viewport below is derived from it in physical rendered rows — two
+   * per node/branch entry — so the selected entry can never scroll into rows
+   * the frame would clip. Logical selection still spans the complete
+   * filtered set; only the visible window moves.
+   */
+  setBodyHeight(height: number): void {
+    this.#bodyHeight = Math.max(1, Math.floor(height));
+  }
+
   private items(): TreeSelection[] {
     const items: TreeSelection[] = this.#nodes.map((node) => ({
       kind: "node",
@@ -156,35 +187,56 @@ export class TreeSelector implements Component, Focusable {
 
   render(width: number): string[] {
     const visible = this.items();
-    const lines = [
-      role.strong("Session tree"),
+    // The interactive header always renders first: hint, then the query row.
+    const header = [
       role.meta("Select a node to activate it, or a user boundary to create a new node."),
       `${role.meta("Search:")} ${this.#query}${this.focused ? role.accent("▌") : ""}`,
       "",
     ];
+    const budget = Math.max(1, this.#bodyHeight);
+    const lines = [...header];
     if (visible.length === 0) {
       lines.push(role.meta("no tree item matches the search"));
-    } else {
-      const start = Math.max(0, Math.min(this.#selected - 3, visible.length - 8));
-      visible.slice(start, start + 8).forEach((item, offset) => {
-        const index = start + offset;
-        const marker = index === this.#selected ? role.accent("❯") : " ";
-        if (item.kind === "node") {
-          const active = item.node.id === this.#session.active_node ? role.success(" active") : "";
-          const prefix = item.node.parent === undefined ? "├─" : "└─";
-          lines.push(`${marker} ${prefix} ${index === this.#selected ? style.bold(item.node.id) : item.node.id}${active}`);
-          lines.push(`      ${role.meta(`${item.node.conversation_id} · ${originLabel(item.node.origin.type)}`)}`);
-        } else {
-          lines.push(`${marker} ${style.italic(`branch at: ${preview(item.boundary)}`)}`);
-          lines.push(`      ${role.meta(`revision ${item.boundary.surface_revision}`)}`);
-        }
-      });
-      if (this.#nodeCursor.state === "active" || this.#historyCursor.state === "active") {
-        lines.push(role.meta("↓ load more native tree/history rows"));
+      return lines
+        .slice(0, budget)
+        .map((line) => truncateToWidth(line, width, "…"));
+    }
+
+    // The list owns the first claim on the remaining body rows, anchored on
+    // the selected entry; the load-more hint is subordinate and yields first
+    // under constrained heights.
+    const tail: string[] = [];
+    if (this.#nodeCursor.state === "active" || this.#historyCursor.state === "active") {
+      tail.push(role.meta("↓ load more native tree/history rows"));
+    }
+    let listBudget = budget - header.length - tail.length;
+    while (listBudget < TREE_ENTRY_ROWS && tail.length > 0) {
+      tail.pop();
+      listBudget += 1;
+    }
+    const window = windowAroundSelected(
+      visible.length,
+      this.#selected,
+      Math.max(1, listBudget),
+      () => TREE_ENTRY_ROWS,
+    );
+    for (let index = window.start; index < window.end; index += 1) {
+      const item = visible[index]!;
+      const marker = index === this.#selected ? role.accent("❯") : " ";
+      if (item.kind === "node") {
+        const active = item.node.id === this.#session.active_node ? role.success(" active") : "";
+        const prefix = item.node.parent === undefined ? "├─" : "└─";
+        lines.push(`${marker} ${prefix} ${index === this.#selected ? style.bold(item.node.id) : item.node.id}${active}`);
+        lines.push(`      ${role.meta(`${item.node.conversation_id} · ${originLabel(item.node.origin.type)}`)}`);
+      } else {
+        lines.push(`${marker} ${style.italic(`branch at: ${preview(item.boundary)}`)}`);
+        lines.push(`      ${role.meta(`revision ${item.boundary.surface_revision}`)}`);
       }
     }
-    lines.push("", role.meta("↑↓ navigate · Enter select · Esc close"));
-    return lines.map((line) => truncateToWidth(line, width, "…"));
+    lines.push(...tail.slice(0, Math.max(0, budget - lines.length)));
+    return lines
+      .slice(0, budget)
+      .map((line) => truncateToWidth(line, width, "…"));
   }
 
   #move(delta: number, length: number): void {

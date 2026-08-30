@@ -11,35 +11,56 @@ import {
   Markdown,
   matchesKey,
   truncateToWidth,
-  type Component,
   type Focusable,
 } from "@earendil-works/pi-tui";
 
 import { markdownTheme, role } from "../theme.ts";
+import type { PopupContent } from "./popup-frame.ts";
 
 export interface InspectionViewOptions {
   title: string;
   body: string;
-  /** Number of Markdown-rendered body lines visible at once. */
-  viewportLines: number;
+  /**
+   * Initial number of Markdown-rendered body lines visible at once. The
+   * PopupFrame keeps it in sync with the allocated body height.
+   */
+  viewportLines?: number;
 }
 
 /** One reusable scrollable inspection surface for all read-only commands. */
-export class InspectionView implements Component, Focusable {
+export class InspectionView implements PopupContent, Focusable {
   focused = false;
   onClose?: () => void;
   onChange?: () => void;
 
   readonly #title: string;
-  readonly #viewportLines: number;
+  #viewportLines: number;
   readonly #markdown: Markdown;
   #offset = 0;
   #bodyLineCount = 0;
 
   constructor(options: InspectionViewOptions) {
     this.#title = options.title;
-    this.#viewportLines = Math.max(1, Math.floor(options.viewportLines));
+    this.#viewportLines = Math.max(1, Math.floor(options.viewportLines ?? 10));
     this.#markdown = new Markdown(options.body, 0, 0, markdownTheme);
+  }
+
+  /** The popup's frame title. */
+  popupTitle(): string {
+    return this.#title;
+  }
+
+  /** The popup's help line, contained by the frame below the body. */
+  popupFooter(): string[] {
+    return ["↑↓ scroll · PageUp/PageDown · Home/End · Esc close"];
+  }
+
+  /**
+   * The finite body-row budget the PopupFrame allocated for this pass. One
+   * row is reserved for the range indicator above the scrollable body.
+   */
+  setBodyHeight(height: number): void {
+    this.#viewportLines = Math.max(1, Math.floor(height) - 1);
   }
 
   /** Current first visible body line, exposed for deterministic component tests. */
@@ -95,10 +116,8 @@ export class InspectionView implements Component, Focusable {
       this.#bodyLineCount,
     );
     const lines = [
-      role.strong(this.#title),
       role.meta(`lines ${first}-${last} of ${this.#bodyLineCount}`),
       ...bodyLines.slice(this.#offset, this.#offset + this.#viewportLines),
-      role.meta("↑↓ scroll · PageUp/PageDown · Home/End · Esc close"),
     ];
     return lines.map((line) => truncateToWidth(line, safeWidth, "…"));
   }
