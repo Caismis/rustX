@@ -1433,42 +1433,28 @@ fn translate_assistant_message(
     ))
 }
 
-/// Translates a canonical tool result into a provider tool message. Only the
-/// model-facing content is represented; runtime-only semantics stay behind.
+/// Translates the canonical model-facing tool-result projection into the
+/// provider's tool-message shape. Projection policy, status rendering, and
+/// aggregate bounding are owned by the Tool Plane.
 fn translate_tool_message(
     message: &ToolMessageBlock,
 ) -> Result<ChatCompletionRequestToolMessage, ModelError> {
-    let mut parts = Vec::new();
-    for content in &message.result.content {
-        match content {
-            crate::tools::types::ToolResultContent::Text(text) => {
-                parts.push(ChatCompletionRequestToolMessageContentPart::Text(
-                    ChatCompletionRequestMessageContentPartText {
-                        text: text.text.clone(),
-                    },
-                ));
-            }
-            crate::tools::types::ToolResultContent::Json { value } => {
-                let text = serde_json::to_string(value).map_err(|e| {
-                    unsupported(format!("tool JSON result is not serializable: {e}"))
-                })?;
-                parts.push(ChatCompletionRequestToolMessageContentPart::Text(
-                    ChatCompletionRequestMessageContentPartText { text },
-                ));
-            }
-            crate::tools::types::ToolResultContent::File(_)
-            | crate::tools::types::ToolResultContent::Image(_) => {
-                return Err(unsupported(
-                    "OpenAI Chat Completions cannot represent file/image tool results",
-                ));
-            }
-        }
-    }
-    if let Some(status) = message.result.status.model_facing_text() {
-        parts.push(ChatCompletionRequestToolMessageContentPart::Text(
-            ChatCompletionRequestMessageContentPartText { text: status },
+    let projection = message.result.model_facing_projection();
+    if projection.contains_non_text_content() {
+        return Err(unsupported(
+            "OpenAI Chat Completions cannot represent file/image tool results",
         ));
     }
+    let parts = projection
+        .parts()
+        .iter()
+        .cloned()
+        .map(|text| {
+            ChatCompletionRequestToolMessageContentPart::Text(
+                ChatCompletionRequestMessageContentPartText { text },
+            )
+        })
+        .collect();
     Ok(ChatCompletionRequestToolMessage {
         content: ChatCompletionRequestToolMessageContent::Array(parts),
         tool_call_id: message.tool_call_id.as_str().to_owned(),
@@ -1521,6 +1507,7 @@ fn invalid_request(message: &str) -> ModelError {
 #[cfg(test)]
 mod tests {
     use super::{ChatStreamNormalizer, translate_tool_message, translate_tools};
+    use crate::message::content::TextBlock;
     use crate::message::types::ToolMessageBlock;
     use crate::model::adapter::validation::ValidatedTools;
     use crate::model::error::{ModelErrorKind, ModelRetryDisposition};
@@ -1528,6 +1515,7 @@ mod tests {
     use crate::runtime::types::CancellationReason;
     use crate::tools::types::{
         ModelToolDefinition, ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus,
+        ToolResultContent,
     };
     use serde_json::json;
 
@@ -1630,5 +1618,46 @@ mod tests {
         .expect("serialize provider message");
         assert!(encoded.contains("runtime_shutdown"));
         assert!(encoded.contains("did not start execution"));
+    }
+
+    #[test]
+    fn failed_tool_status_reaches_the_provider_as_correction_evidence() {
+        let message = ToolMessageBlock {
+            id: MessageId::new("tool-result-failed"),
+            tool_call_id: ToolCallId::new("call-failed"),
+            tool_id: ToolId::new("tool-web-search-exa"),
+            result: ToolExecutionResult {
+                status: ToolExecutionStatus::Failed {
+                    error: "input schema validation failed: query is required".to_owned(),
+                },
+                content: vec![
+                    ToolResultContent::Text(TextBlock {
+                        text: "existing tool content".to_owned(),
+                    }),
+                    ToolResultContent::Json {
+                        value: json!({"ok": true}),
+                    },
+                ],
+                duration_ms: 0,
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+                managed_output: None,
+            },
+        };
+        let encoded = serde_json::to_value(
+            translate_tool_message(&message).expect("translate rejected tool result"),
+        )
+        .expect("serialize provider message");
+        assert_eq!(encoded["tool_call_id"], "call-failed");
+        let projection = message.result.model_facing_projection();
+        let wire_parts: Vec<String> = encoded["content"]
+            .as_array()
+            .expect("text content array")
+            .iter()
+            .map(|part| part["text"].as_str().expect("text part").to_owned())
+            .collect();
+        assert_eq!(wire_parts.as_slice(), projection.parts());
+        assert!(wire_parts[0].contains("input schema validation failed: query is required"));
     }
 }

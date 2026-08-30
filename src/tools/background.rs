@@ -1934,7 +1934,7 @@ fn accepted_result(
 /// The message is a compact fixed-format outer header (`Background
 /// execution <id> (<tool>) settled: <state>` plus the `Result:` section
 /// marker) followed by the **bounded** model-visible textual projection
-/// of the terminal result (see [`terminal_result_projection`]), which
+/// of the canonical [`ToolExecutionResult::model_facing_projection`], which
 /// never exceeds
 /// [`MAX_MODEL_TOOL_RESULT_BYTES`](crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES):
 /// the model receives the bounded result — including the runtime-owned
@@ -1960,9 +1960,10 @@ fn terminal_inbound_message(
         execution_id.as_str(),
         state.name()
     );
-    if let Some(projection) = terminal_result_projection(result) {
+    let projection = result.model_facing_projection();
+    if !projection.is_empty() {
         text.push_str("\n\nResult:\n");
-        text.push_str(&projection);
+        text.push_str(&projection.as_text());
     }
     let mut content = vec![UserContentBlock::Text(TextBlock { text })];
     for artifact in &result.artifacts {
@@ -1975,130 +1976,6 @@ fn terminal_inbound_message(
         kind: InboundKind::Message,
         timestamp: Some(timestamp),
     }
-}
-
-/// The deterministic bounded textual projection of one terminal tool
-/// result for the canonical background terminal inbound message.
-///
-/// Text blocks publish verbatim, JSON blocks publish compactly serialized
-/// (the same model-facing representation a provider adapter produces), and
-/// file/image content blocks publish as a short textual mention — genuine
-/// semantic artifacts publish separately as `UserContentBlock::File`
-/// blocks, so the textual projection stays text-only.
-///
-/// # Tool-owned content is never interpreted
-///
-/// [`ToolResultContent::Json`] is arbitrary tool-owned structured data:
-/// the projection serializes it verbatim and NEVER infers runtime
-/// semantics from property names. No ordinary JSON key (`full_output`,
-/// `partial_output`, `note`, or any other) is removed, reserved, or
-/// reinterpreted — a business-domain payload of the same names projects
-/// unchanged.
-///
-/// # Runtime-owned continuation metadata is structural, never bounded away
-///
-/// The runtime-owned [`ManagedOutputContinuation`] metadata
-/// (`result.managed_output`) is rendered into a dedicated continuation
-/// section appended AFTER the bounded body, so result bounding can never
-/// truncate away the absolute managed-output locator or its Read/Grep
-/// continuation guidance. The advisory continuation diagnostic is itself
-/// bounded (see [`ManagedOutputContinuation::render`]), and the rendered
-/// continuation is capped at the projection bound, so the COMPLETE
-/// projection — body plus continuation — always stays within
-/// [`MAX_MODEL_TOOL_RESULT_BYTES`](crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES):
-/// the body budget is the projection bound minus the exact continuation
-/// length, and an oversized continuation can never push the total past
-/// the bound or shrink the body budget below zero.
-///
-/// A `None` result (no status detail, no content, no continuation)
-/// projects to nothing.
-///
-/// [`ManagedOutputContinuation`]: crate::tools::types::ManagedOutputContinuation
-fn terminal_result_projection(result: &ToolExecutionResult) -> Option<String> {
-    /// The explicit marker appended when the body crosses its bound.
-    const PROJECTION_TRUNCATED_MARKER: &str = "\n...[terminal result projection truncated]";
-    let bound = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES;
-    // The boundable projection parts: status detail and tool-owned content
-    // bodies, projected verbatim.
-    let mut parts: Vec<String> = Vec::new();
-    match &result.status {
-        ToolExecutionStatus::Failed { error } => parts.push(format!("Error: {error}")),
-        ToolExecutionStatus::Denied { reason } => parts.push(format!("Denied: {reason}")),
-        ToolExecutionStatus::Success
-        | ToolExecutionStatus::Cancelled { .. }
-        | ToolExecutionStatus::TimedOut
-        | ToolExecutionStatus::Interrupted => {}
-    }
-    for block in &result.content {
-        match block {
-            ToolResultContent::Text(text) => parts.push(text.text.clone()),
-            ToolResultContent::Json { value } => parts.push(
-                serde_json::to_string(value)
-                    .unwrap_or_else(|_| "<unserializable JSON result>".to_owned()),
-            ),
-            ToolResultContent::File(reference) => parts.push(format!(
-                "[file artifact: {}]",
-                reference
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| reference.artifact_id.as_str().to_owned())
-            )),
-            ToolResultContent::Image(_) => parts.push("[image content]".to_owned()),
-        }
-    }
-    // The runtime-owned continuation section: rendered from the typed
-    // metadata only, structurally retained, and itself capped at the
-    // projection bound. A managed locator is a short runtime-generated
-    // path, so the cap only engages for a pathological over-long
-    // rendering; that case is bounded deterministically rather than
-    // silently breaking the canonical bounded-record invariant.
-    let continuation = result.managed_output.as_ref().map(|continuation| {
-        // The "\n\n" separator prepended below is part of the capped
-        // budget, so the whole continuation section never exceeds the
-        // projection bound.
-        crate::tools::limits::bound_utf8_text(continuation.render(), bound.saturating_sub(2))
-    });
-    if parts.is_empty() && continuation.is_none() {
-        return None;
-    }
-    let suffix = continuation.map_or_else(String::new, |text| format!("\n\n{text}"));
-    debug_assert!(
-        suffix.len() <= bound,
-        "the continuation rendering is capped at the projection bound"
-    );
-    // The body is bounded against the projection bound MINUS the exact
-    // continuation length: the continuation section is appended after the
-    // bounded body and can never be truncated away, and the total
-    // projection never exceeds the bound.
-    let body_bound = bound - suffix.len();
-    let mut projection = String::new();
-    for part in parts {
-        if !projection.is_empty() {
-            projection.push('\n');
-        }
-        if projection.len() + part.len() + PROJECTION_TRUNCATED_MARKER.len() > body_bound {
-            let remaining = body_bound.saturating_sub(projection.len());
-            if remaining > PROJECTION_TRUNCATED_MARKER.len() {
-                let budget = remaining - PROJECTION_TRUNCATED_MARKER.len();
-                projection.push_str(&crate::tools::limits::bound_utf8_text(part, budget));
-                projection.push_str(PROJECTION_TRUNCATED_MARKER);
-            } else {
-                // The budget is nearly exhausted (an oversized continuation
-                // section claimed almost the whole bound): fill what
-                // remains without the marker, so the total projection —
-                // body, marker, and continuation — never exceeds the
-                // bound.
-                projection.push_str(&crate::tools::limits::bound_utf8_text(part, remaining));
-            }
-            projection.push_str(&suffix);
-            debug_assert!(projection.len() <= bound);
-            return Some(projection);
-        }
-        projection.push_str(&part);
-    }
-    projection.push_str(&suffix);
-    debug_assert!(projection.len() <= bound);
-    Some(projection)
 }
 
 fn inbound_draft(notification: UserMessageBlock, correlation: String) -> InboundDraft {
@@ -2330,7 +2207,7 @@ mod tests {
     use super::test_sync::CommitBoundaryHook;
     use super::{
         BACKGROUND_CANCEL_REASON, BackgroundDispatchOutcome, BackgroundLifecycle,
-        BackgroundResources, ConversationBackgroundRegistry, terminal_result_projection,
+        BackgroundResources, ConversationBackgroundRegistry,
     };
     use crate::durable::inbox::ConversationStore;
     use crate::events::{RecordingEventSink, RuntimeEvent};
@@ -4296,7 +4173,7 @@ mod tests {
         };
         // The exact, directly testable bound: the result PROJECTION never
         // exceeds MAX_MODEL_TOOL_RESULT_BYTES, continuation included.
-        let projection = terminal_result_projection(&result).expect("the result projects to text");
+        let projection = result.model_facing_projection().as_text();
         assert!(
             projection.len() <= crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES,
             "the projection — body plus continuation — stays within the exact bound: {} bytes",
@@ -4447,7 +4324,7 @@ mod tests {
                 diagnostic: enormous.clone(),
             }),
         };
-        let projection = terminal_result_projection(&result).expect("projection");
+        let projection = result.model_facing_projection().as_text();
         assert!(
             projection.len() <= bound,
             "the complete projection stays inside the exact bound: {} bytes",
@@ -4484,7 +4361,7 @@ mod tests {
             }),
             ..result.clone()
         };
-        let projection = terminal_result_projection(&pathological).expect("projection");
+        let projection = pathological.model_facing_projection().as_text();
         assert!(
             projection.len() <= bound,
             "even a pathological locator never breaks the bound: {} bytes",

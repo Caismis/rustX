@@ -278,12 +278,15 @@ pub struct ToolInvocation {
 pub struct ToolExecutionResult {
     /// Typed execution status, including interrupted/unknown outcomes.
     pub status: ToolExecutionStatus,
-    /// Model-facing result content.
+    /// Tool-owned result content.
     ///
     /// This content is TOOL-OWNED: [`ToolResultContent::Json`] is arbitrary
     /// tool-owned structured data, and the runtime never infers semantics
     /// from its property names. rustX reserves no ordinary JSON field names;
-    /// runtime-owned facts live in the typed fields of this struct.
+    /// runtime-owned facts live in the typed fields of this struct. A
+    /// provider-independent, bounded model-facing representation is produced
+    /// by [`Self::model_facing_projection`]; producers do not append runtime
+    /// status or managed-output continuation text here.
     #[serde(default)]
     pub content: Vec<ToolResultContent>,
     /// Execution duration in integer milliseconds (stable for persistence).
@@ -308,6 +311,187 @@ pub struct ToolExecutionResult {
     /// consumes only this typed field, never arbitrary JSON keys.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_output: Option<ManagedOutputContinuation>,
+}
+
+/// The provider-independent model-facing representation of one tool result.
+///
+/// The projection is text-oriented because the three current tool-result
+/// protocol surfaces translate tool text and compact JSON into textual wire
+/// content. Runtime-owned status feedback and managed-output continuation are
+/// added here, rather than by an executor or provider adapter. The complete
+/// joined representation is always bounded by
+/// [`MAX_MODEL_TOOL_RESULT_BYTES`](crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES).
+///
+/// Tool-owned file/image references remain marked as non-text content so
+/// protocol adapters can reject them when their wire format cannot represent
+/// them. Their bounded textual mention is still available to text-only
+/// consumers such as background terminal publication.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolResultProjection {
+    parts: Vec<String>,
+    contains_non_text_content: bool,
+}
+
+impl ToolResultProjection {
+    /// Returns the already-bounded text parts in canonical order.
+    #[must_use]
+    pub fn parts(&self) -> &[String] {
+        &self.parts
+    }
+
+    /// Returns the complete bounded representation with canonical separators.
+    #[must_use]
+    pub fn as_text(&self) -> String {
+        self.parts.join("\n")
+    }
+
+    /// Returns the exact byte length of [`Self::as_text`].
+    #[must_use]
+    pub fn byte_len(&self) -> usize {
+        self.parts.iter().fold(0usize, |length, part| {
+            length
+                .saturating_add(part.len())
+                .saturating_add(usize::from(length > 0))
+        })
+    }
+
+    /// Whether the canonical result contained a file/image block that a
+    /// text-only provider protocol cannot represent natively.
+    #[must_use]
+    pub fn contains_non_text_content(&self) -> bool {
+        self.contains_non_text_content
+    }
+
+    /// Whether this result has no model-facing text.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.parts.is_empty()
+    }
+}
+
+impl ToolExecutionResult {
+    /// Produces the one canonical model-facing projection of this result.
+    ///
+    /// The deterministic policy is:
+    ///
+    /// 1. render typed runtime status feedback first;
+    /// 2. reserve the structural managed-output continuation (including its
+    ///    locator and complete/partial truth) next;
+    /// 3. use the remaining bytes for ordinary tool-owned content.
+    ///
+    /// Status feedback and continuation therefore survive pressure before
+    /// ordinary content. Oversized status/content text is shortened at a
+    /// UTF-8 boundary with an explicit marker. Continuation diagnostics are
+    /// advisory; the bounded continuation renderer prioritizes its fixed
+    /// complete/partial label, locator, and guidance. The typed status and
+    /// managed-output fields remain unchanged and authoritative.
+    #[must_use]
+    pub fn model_facing_projection(&self) -> ToolResultProjection {
+        const CONTENT_TRUNCATION_MARKER: &str = "\n...[tool-owned result content truncated]";
+        const STATUS_TRUNCATION_MARKER: &str = "\n...[tool status truncated]";
+        let bound = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES;
+
+        let status = self.status.feedback_text();
+        let (content, contains_non_text_content) = render_tool_owned_content(&self.content);
+        // Reserve the minimum truthful continuation before allowing a large
+        // status diagnostic to consume the result budget. This makes the
+        // locator/guidance structural rather than something that can be
+        // accidentally truncated away by an error string.
+        let continuation_minimum = self
+            .managed_output
+            .as_ref()
+            .map(ManagedOutputContinuation::minimum_render)
+            .map_or(0, |text| text.len());
+        let status_budget = bound.saturating_sub(
+            continuation_minimum + usize::from(status.is_some() && self.managed_output.is_some()),
+        );
+        let status = status
+            .map(|text| bounded_projection_text(&text, status_budget, STATUS_TRUNCATION_MARKER));
+
+        // Continuation is allocated after status, before ordinary content.
+        // Its structural minimum is guaranteed by the reservation above.
+        let continuation_budget = bound
+            .saturating_sub(status.as_ref().map_or(0, String::len) + usize::from(status.is_some()));
+        let continuation = self
+            .managed_output
+            .as_ref()
+            .map(|continuation| continuation.render_bounded(continuation_budget));
+
+        let reserved = status.as_ref().map_or(0, String::len)
+            + continuation.as_ref().map_or(0, String::len)
+            + usize::from(status.is_some() && continuation.is_some());
+        let content_budget = bound.saturating_sub(
+            reserved
+                + if content.is_empty() {
+                    0
+                } else {
+                    usize::from(status.is_some()) + usize::from(continuation.is_some())
+                },
+        );
+        let content = (!content.is_empty())
+            .then(|| bounded_projection_text(&content, content_budget, CONTENT_TRUNCATION_MARKER));
+
+        let parts = [status, content, continuation]
+            .into_iter()
+            .flatten()
+            .filter(|part| !part.is_empty())
+            .collect();
+        let projection = ToolResultProjection {
+            parts,
+            contains_non_text_content,
+        };
+        debug_assert!(
+            projection.byte_len() <= bound,
+            "the complete model-facing tool result projection is bounded"
+        );
+        projection
+    }
+}
+
+fn render_tool_owned_content(content: &[ToolResultContent]) -> (String, bool) {
+    let mut rendered = String::new();
+    let mut contains_non_text_content = false;
+    for (index, block) in content.iter().enumerate() {
+        let (text, non_text) = match block {
+            ToolResultContent::Text(text) => (text.text.clone(), false),
+            ToolResultContent::Json { value } => (
+                serde_json::to_string(value)
+                    .unwrap_or_else(|_| "<unserializable JSON result>".to_owned()),
+                false,
+            ),
+            ToolResultContent::File(reference) => (
+                format!(
+                    "[file artifact: {}]",
+                    reference
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| reference.artifact_id.as_str().to_owned())
+                ),
+                true,
+            ),
+            ToolResultContent::Image(_) => ("[image content]".to_owned(), true),
+        };
+        if index > 0 {
+            rendered.push('\n');
+        }
+        rendered.push_str(&text);
+        contains_non_text_content |= non_text;
+    }
+    (rendered, contains_non_text_content)
+}
+
+fn bounded_projection_text(text: &str, bound: usize, marker: &str) -> String {
+    if text.len() <= bound {
+        return text.to_owned();
+    }
+    if bound > marker.len() {
+        let prefix = crate::tools::limits::bound_utf8_text(
+            text.to_owned(),
+            bound.saturating_sub(marker.len()),
+        );
+        return format!("{prefix}{marker}");
+    }
+    crate::tools::limits::bound_utf8_text(marker.to_owned(), bound)
 }
 
 /// Runtime-owned managed textual-output continuation metadata of one tool
@@ -366,19 +550,13 @@ impl ManagedOutputContinuation {
     const PARTIAL_GUIDANCE: &'static str =
         "The output storage did not complete; this file does NOT hold the complete output.";
 
-    /// The model-facing textual rendering of this continuation.
+    /// The complete textual rendering of this continuation.
     ///
-    /// This is the ONE rendering of runtime-owned continuation metadata,
-    /// used both by a producer that presents its own continuation inside
-    /// its tool-owned result content (a foreground result the model
-    /// receives directly) and by the generic background terminal
-    /// publication (which appends it as the structurally retained
-    /// continuation section). The absolute locator and the fixed guidance
-    /// are essential continuation state and always survive; the advisory
-    /// diagnostic is bounded to
-    /// [`MAX_OUTPUT_CONTINUATION_DIAGNOSTIC_BYTES`](crate::tools::limits::MAX_OUTPUT_CONTINUATION_DIAGNOSTIC_BYTES)
-    /// so an arbitrary diagnostic can never make canonical history
-    /// unbounded.
+    /// The provider-independent bounded model-facing projection uses
+    /// [`Self::render_bounded`] rather than this complete rendering. The
+    /// diagnostic is bounded here, but a pathological locator may still be
+    /// longer than the model-result budget until the canonical projection
+    /// applies its structural bound.
     #[must_use]
     pub fn render(&self) -> String {
         let bound_diagnostic = |diagnostic: &String| {
@@ -408,6 +586,117 @@ impl ManagedOutputContinuation {
                 bound_diagnostic(diagnostic)
             ),
         }
+    }
+
+    /// Renders this continuation within `bound` bytes while preserving its
+    /// complete/partial truth and fixed Read/Grep guidance whenever the bound
+    /// can hold the structural form. A locator is essential, so an oversized
+    /// locator is shortened with an explicit marker; diagnostics are advisory
+    /// and are omitted before structural continuation text is lost.
+    #[must_use]
+    pub(crate) fn render_bounded(&self, bound: usize) -> String {
+        let complete_prefix = "Complete output: ";
+        let partial_prefix = "Partial output only: ";
+        let diagnostic_prefix = "\nDiagnostic: ";
+        let locator_marker = "[locator truncated]";
+
+        match self {
+            Self::Complete { locator } => {
+                let guidance = format!("\n{}", Self::COMPLETE_GUIDANCE);
+                let structural = format!("{complete_prefix}{locator_marker}{guidance}");
+                if bound < structural.len() {
+                    return crate::tools::limits::bound_utf8_text(structural, bound);
+                }
+                let locator_budget = bound
+                    .saturating_sub(complete_prefix.len())
+                    .saturating_sub(guidance.len());
+                format!(
+                    "{complete_prefix}{}{}",
+                    bound_locator(locator, locator_budget, locator_marker),
+                    guidance
+                )
+            }
+            Self::Partial {
+                locator,
+                diagnostic,
+            } => {
+                let guidance = format!("\n{}", Self::PARTIAL_GUIDANCE);
+                let structural = format!("{partial_prefix}{locator_marker}{guidance}");
+                if bound < structural.len() {
+                    return crate::tools::limits::bound_utf8_text(structural, bound);
+                }
+                let locator_text = locator.to_string_lossy();
+                let structural_with_locator = format!("{partial_prefix}{locator_text}{guidance}");
+                if structural_with_locator.len() > bound {
+                    let locator_budget = bound
+                        .saturating_sub(partial_prefix.len())
+                        .saturating_sub(guidance.len());
+                    return format!(
+                        "{partial_prefix}{}{}",
+                        bound_locator(locator, locator_budget, locator_marker),
+                        guidance
+                    );
+                }
+                let remaining = bound.saturating_sub(structural_with_locator.len());
+                if remaining < diagnostic_prefix.len() + 1 {
+                    return structural_with_locator;
+                }
+                let diagnostic_budget = remaining
+                    .saturating_sub(diagnostic_prefix.len())
+                    .min(crate::tools::limits::MAX_OUTPUT_CONTINUATION_DIAGNOSTIC_BYTES);
+                let bounded =
+                    crate::tools::limits::bound_utf8_text(diagnostic.clone(), diagnostic_budget);
+                format!("{structural_with_locator}{diagnostic_prefix}{bounded}")
+            }
+            Self::Unavailable { diagnostic } => {
+                let prefix = "The output capture did not complete; the bounded result content is the only record and no complete output file is available.";
+                if bound < prefix.len() {
+                    return crate::tools::limits::bound_utf8_text(prefix.to_owned(), bound);
+                }
+                let remaining = bound.saturating_sub(prefix.len());
+                if remaining < diagnostic_prefix.len() + 1 {
+                    return prefix.to_owned();
+                }
+                let diagnostic_budget = remaining
+                    .saturating_sub(diagnostic_prefix.len())
+                    .min(crate::tools::limits::MAX_OUTPUT_CONTINUATION_DIAGNOSTIC_BYTES);
+                let bounded =
+                    crate::tools::limits::bound_utf8_text(diagnostic.clone(), diagnostic_budget);
+                format!("{prefix}{diagnostic_prefix}{bounded}")
+            }
+        }
+    }
+
+    fn minimum_render(&self) -> String {
+        match self {
+            Self::Complete { locator } => format!(
+                "Complete output: {}\n{}",
+                locator.display(),
+                Self::COMPLETE_GUIDANCE
+            ),
+            Self::Partial { locator, .. } => format!(
+                "Partial output only: {}\n{}",
+                locator.display(),
+                Self::PARTIAL_GUIDANCE
+            ),
+            Self::Unavailable { .. } => "The output capture did not complete; the bounded result content is the only record and no complete output file is available.".to_owned(),
+        }
+    }
+}
+
+fn bound_locator(locator: &std::path::Path, bound: usize, marker: &str) -> String {
+    let locator = locator.to_string_lossy();
+    if locator.len() <= bound {
+        return locator.into_owned();
+    }
+    if bound > marker.len() {
+        let prefix = crate::tools::limits::bound_utf8_text(
+            locator.into_owned(),
+            bound.saturating_sub(marker.len()),
+        );
+        format!("{prefix}{marker}")
+    } else {
+        crate::tools::limits::bound_utf8_text(marker.to_owned(), bound)
     }
 }
 
@@ -471,31 +760,34 @@ pub enum ToolExecutionStatus {
 }
 
 impl ToolExecutionStatus {
-    /// Renders the cancellation fact for inclusion in a model-facing tool
-    /// result. The typed status remains the source of truth; this text is
-    /// presentation only and is never parsed back into a phase or reason.
+    /// Renders the status detail consumed by the canonical result projection.
+    /// The typed status remains authoritative; this helper does not enforce
+    /// the model-result byte budget and is never called by a provider adapter.
     #[must_use]
-    pub fn model_facing_text(&self) -> Option<String> {
-        let Self::Cancelled { reason, phase } = self else {
-            return None;
-        };
-
-        let reason = match reason {
-            CancellationReason::UserRequested => "user_requested",
-            CancellationReason::RuntimeShutdown => "runtime_shutdown",
-            CancellationReason::ParentCancelled => "parent_cancelled",
-        };
-        let phase = match phase {
-            ToolCancellationPhase::BeforeStart => {
-                "rustX did not start execution of this tool call."
+    pub(crate) fn feedback_text(&self) -> Option<String> {
+        match self {
+            Self::Failed { error } => Some(format!("Tool call failed: {error}")),
+            Self::Denied { reason } => Some(format!("Denied: {reason}")),
+            Self::Cancelled { reason, phase } => {
+                let reason = match reason {
+                    CancellationReason::UserRequested => "user_requested",
+                    CancellationReason::RuntimeShutdown => "runtime_shutdown",
+                    CancellationReason::ParentCancelled => "parent_cancelled",
+                };
+                let phase = match phase {
+                    ToolCancellationPhase::BeforeStart => {
+                        "rustX did not start execution of this tool call."
+                    }
+                    ToolCancellationPhase::DuringExecution => {
+                        "Execution had already started, but cancellation occurred before normal completion. Partial side effects may have occurred."
+                    }
+                };
+                Some(format!(
+                    "Tool call was cancelled (reason: {reason}). {phase}"
+                ))
             }
-            ToolCancellationPhase::DuringExecution => {
-                "Execution had already started, but cancellation occurred before normal completion. Partial side effects may have occurred."
-            }
-        };
-        Some(format!(
-            "Tool call was cancelled (reason: {reason}). {phase}"
-        ))
+            Self::Success | Self::TimedOut | Self::Interrupted => None,
+        }
     }
 }
 
@@ -726,7 +1018,7 @@ mod tests {
                 ToolCancellationPhase::DuringExecution,
             ] {
                 let status = ToolExecutionStatus::Cancelled { reason, phase };
-                let text = status.model_facing_text().expect("cancelled text");
+                let text = status.feedback_text().expect("cancelled text");
                 assert!(text.contains(reason_label));
                 match phase {
                     ToolCancellationPhase::BeforeStart => {
@@ -746,5 +1038,120 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn failed_tool_status_is_visible_to_the_model() {
+        let status = ToolExecutionStatus::Failed {
+            error: "input schema validation failed: query is required".to_owned(),
+        };
+        let result = ToolExecutionResult {
+            status: status.clone(),
+            content: Vec::new(),
+            duration_ms: 0,
+            exit_code: None,
+            artifacts: Vec::new(),
+            truncation: None,
+            managed_output: None,
+        };
+        let projection = result.model_facing_projection();
+        assert_eq!(
+            projection.as_text(),
+            "Tool call failed: input schema validation failed: query is required"
+        );
+        assert_eq!(result.status, status);
+        assert!(ToolExecutionStatus::Success.feedback_text().is_none());
+    }
+
+    #[test]
+    fn model_facing_projection_bounds_content_status_and_continuation_together() {
+        let bound = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES;
+        let status = ToolExecutionStatus::Failed {
+            error: format!(
+                "input schema validation failed: query is required; {}",
+                "e".repeat(4 * 1024)
+            ),
+        };
+        let result = ToolExecutionResult {
+            status: status.clone(),
+            content: vec![super::ToolResultContent::Text(
+                crate::message::content::TextBlock {
+                    text: "o".repeat(bound.saturating_sub(128)),
+                },
+            )],
+            duration_ms: 0,
+            exit_code: None,
+            artifacts: Vec::new(),
+            truncation: None,
+            managed_output: Some(super::ManagedOutputContinuation::Complete {
+                locator: std::path::PathBuf::from("/tmp/rustx/results/result_7.txt"),
+            }),
+        };
+
+        let first = result.model_facing_projection();
+        let second = result.model_facing_projection();
+        assert_eq!(first, second, "projection is deterministic");
+        assert!(first.byte_len() <= bound);
+        let text = first.as_text();
+        assert!(
+            text.contains("Tool call failed: input schema validation failed: query is required")
+        );
+        assert!(text.contains("Complete output: /tmp/rustx/results/result_7.txt"));
+        assert!(text.contains("Read or Grep"));
+        assert!(text.contains("tool-owned result content truncated"));
+        assert_eq!(result.status, status, "typed status remains authoritative");
+    }
+
+    #[test]
+    fn model_facing_projection_truncates_only_at_utf8_boundaries() {
+        let result = ToolExecutionResult {
+            status: ToolExecutionStatus::Success,
+            content: vec![super::ToolResultContent::Text(
+                crate::message::content::TextBlock {
+                    text: "😀".repeat(crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES),
+                },
+            )],
+            duration_ms: 0,
+            exit_code: None,
+            artifacts: Vec::new(),
+            truncation: None,
+            managed_output: None,
+        };
+        let projection = result.model_facing_projection();
+        assert!(projection.byte_len() <= crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES);
+        let text = projection.as_text();
+        assert!(text.is_char_boundary(text.len()));
+        assert!(text.contains("tool-owned result content truncated"));
+        let marker = "\n...[tool-owned result content truncated]";
+        let prefix = text.strip_suffix(marker).expect("truncation marker");
+        assert_eq!(prefix.len() % "😀".len(), 0);
+    }
+
+    #[test]
+    fn model_facing_projection_keeps_continuation_structure_before_status_tail() {
+        let bound = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES;
+        let status = ToolExecutionStatus::Failed {
+            error: "e".repeat(bound.saturating_mul(2)),
+        };
+        let result = ToolExecutionResult {
+            status: status.clone(),
+            content: Vec::new(),
+            duration_ms: 0,
+            exit_code: None,
+            artifacts: Vec::new(),
+            truncation: None,
+            managed_output: Some(super::ManagedOutputContinuation::Complete {
+                locator: std::path::PathBuf::from("/tmp/rustx/results/result_8.txt"),
+            }),
+        };
+
+        let projection = result.model_facing_projection();
+        assert!(projection.byte_len() <= bound);
+        let text = projection.as_text();
+        assert!(text.contains("Tool call failed: e"));
+        assert!(text.contains("...[tool status truncated]"));
+        assert!(text.contains("Complete output: /tmp/rustx/results/result_8.txt"));
+        assert!(text.contains("Read or Grep"));
+        assert_eq!(result.status, status, "typed status remains authoritative");
     }
 }

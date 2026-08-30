@@ -71,7 +71,7 @@ use crate::tools::limits::{
 };
 use crate::tools::output::{
     CapturedOutput, TextPreviewCapture, ToolOutputCapture, ToolOutputWriter,
-    continuation_for_capture, foreground_continuation_block, truncation_for_capture,
+    continuation_for_capture, truncation_for_capture,
 };
 use crate::tools::types::{
     ManagedOutputContinuation, ToolCancellationPhase, ToolDefinition, ToolExecutionResult,
@@ -2124,13 +2124,8 @@ fn translate_result(
         .as_deref()
         .or(captured.unsupported.as_deref());
     let continuation = continuation_for_capture(&capture_result, background, output_diagnostic);
-    let (model_blocks, aggregate_error) = materialize_mcp_blocks(
-        captured.pending_blocks,
-        &capture_result,
-        continuation.as_ref(),
-        background,
-        context.artifacts,
-    );
+    let (model_blocks, aggregate_error) =
+        materialize_mcp_blocks(captured.pending_blocks, &capture_result, context.artifacts);
     let unsupported = captured.unsupported.or(aggregate_error);
     let status = if let Some(error) = captured.storage_error {
         ToolExecutionStatus::Failed {
@@ -2157,12 +2152,14 @@ fn translate_result(
     }
 }
 
-/// The one MCP-owned accounting state for the aggregate canonical result.
+/// The one MCP-owned accounting state for materialized result content.
 ///
 /// Textual overflow is normalized by the shared Tool Plane capture first; the
 /// complete spill is auxiliary and therefore does not consume this budget.
-/// Every component that remains in the model-facing MCP projection consumes
-/// this same counter, including semantic image content.
+/// Every materialized MCP content component consumes this same counter,
+/// including semantic image content. The complete status/content/continuation
+/// model-facing aggregate is bounded later by
+/// [`ToolExecutionResult::model_facing_projection`].
 #[derive(Debug)]
 struct McpAggregateBudget {
     remaining: usize,
@@ -2195,31 +2192,18 @@ enum McpPendingBlock {
     Image(Vec<u8>),
 }
 
-/// Materializes semantic MCP blocks only after the complete model-facing
-/// aggregate has one deterministic budget reservation.
+/// Materializes semantic MCP blocks under MCP's content accounting. The
+/// provider-independent complete result projection applies the final
+/// aggregate model-facing bound after status and continuation are known.
 fn materialize_mcp_blocks(
     pending_blocks: Vec<McpPendingBlock>,
     capture_result: &CapturedOutput,
-    continuation: Option<&ManagedOutputContinuation>,
-    background: bool,
     artifacts: &ArtifactStore,
 ) -> (Vec<ToolResultContent>, Option<String>) {
     let textual_overflow = capture_result.truncated || !capture_result.complete;
     let mut budget = McpAggregateBudget::new();
     let mut model_blocks = Vec::new();
     let mut aggregate_error = None;
-    let continuation_block = (!background)
-        .then(|| foreground_continuation_block(continuation))
-        .flatten();
-    let continuation_fits = continuation_block.as_ref().is_none_or(|block| {
-        let ToolResultContent::Text(text) = block else {
-            return false;
-        };
-        budget.consume(text.text.len())
-    });
-    if !continuation_fits {
-        aggregate_error = Some(MCP_AGGREGATE_BUDGET_ERROR.to_owned());
-    }
 
     if textual_overflow {
         // The shared capture still owns the complete textual spill and its
@@ -2273,10 +2257,6 @@ fn materialize_mcp_blocks(
                 }
             }
         }
-    }
-
-    if continuation_fits && let Some(block) = continuation_block {
-        model_blocks.push(block);
     }
 
     (model_blocks, aggregate_error)
@@ -2834,23 +2814,18 @@ mod tests {
         );
 
         assert_eq!(result.status, ToolExecutionStatus::Success);
-        assert_eq!(
-            content_kinds(&result.content),
-            vec!["image", "text", "text"]
-        );
+        assert_eq!(content_kinds(&result.content), vec!["image", "text"]);
         assert!(matches!(
             &result.content[1],
             ToolResultContent::Text(text) if text.text.contains('B')
         ));
-        assert!(matches!(
-            &result.content[2],
-            ToolResultContent::Text(text) if text.text.contains("Read or Grep")
-        ));
-        let Some(ManagedOutputContinuation::Complete { locator }) = result.managed_output else {
+        let projection = result.model_facing_projection();
+        assert!(projection.as_text().contains("Read or Grep"));
+        let Some(ManagedOutputContinuation::Complete { locator }) = &result.managed_output else {
             panic!("overflow MCP text must remain Complete: {result:?}");
         };
         assert_eq!(
-            std::fs::read(&locator).expect("complete text spill"),
+            std::fs::read(locator).expect("complete text spill"),
             text.as_bytes()
         );
         assert_eq!(
@@ -2882,7 +2857,7 @@ mod tests {
         assert_eq!(result.status, ToolExecutionStatus::Success);
         assert_eq!(
             content_kinds(&result.content),
-            vec!["text", "image", "text", "text"]
+            vec!["text", "image", "text"]
         );
         assert!(matches!(
             &result.content[0],
@@ -2892,12 +2867,18 @@ mod tests {
             &result.content[2],
             ToolResultContent::Text(text) if text.text == second
         ));
-        let Some(ManagedOutputContinuation::Complete { locator }) = result.managed_output else {
+        let Some(ManagedOutputContinuation::Complete { locator }) = &result.managed_output else {
             panic!("mixed overflow MCP text must remain Complete: {result:?}");
         };
         assert_eq!(
-            std::fs::read(&locator).expect("complete mixed text spill"),
+            std::fs::read(locator).expect("complete mixed text spill"),
             format!("{first}\n{second}").as_bytes()
+        );
+        assert!(
+            result
+                .model_facing_projection()
+                .as_text()
+                .contains("Read or Grep")
         );
     }
 
@@ -2921,7 +2902,7 @@ mod tests {
         assert_eq!(result.status, ToolExecutionStatus::Success);
         assert_eq!(
             content_kinds(&result.content),
-            vec!["text", "image", "text", "image", "text"]
+            vec!["text", "image", "text", "image"]
         );
         assert!(matches!(
             &result.content[0],
@@ -2939,12 +2920,18 @@ mod tests {
             &result.content[3],
             ToolResultContent::Image(image) if image.artifact_id.as_str() == "artifact_2"
         ));
-        let Some(ManagedOutputContinuation::Complete { locator }) = result.managed_output else {
+        let Some(ManagedOutputContinuation::Complete { locator }) = &result.managed_output else {
             panic!("mixed overflow MCP text must remain Complete: {result:?}");
         };
         assert_eq!(
-            std::fs::read(&locator).expect("complete mixed text spill"),
+            std::fs::read(locator).expect("complete mixed text spill"),
             format!("{first}\n{second}").as_bytes()
+        );
+        assert!(
+            result
+                .model_facing_projection()
+                .as_text()
+                .contains("Read or Grep")
         );
     }
 
@@ -2974,7 +2961,7 @@ mod tests {
         assert!(error.contains("aggregate model-facing result limit"));
         assert_eq!(
             content_kinds(&result.content),
-            vec!["text", "image", "text", "text"]
+            vec!["text", "image", "text"]
         );
         assert!(matches!(
             &result.content[0],
@@ -2989,6 +2976,12 @@ mod tests {
             ToolResultContent::Image(image) if image.artifact_id.as_str() == "artifact_1"
         ));
         assert!(result.managed_output.is_some());
+        assert!(
+            result
+                .model_facing_projection()
+                .as_text()
+                .contains("Complete output:")
+        );
     }
 
     #[test]

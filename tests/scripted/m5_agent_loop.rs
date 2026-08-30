@@ -696,12 +696,7 @@ async fn cancellation_during_mixed_batch_settles_structurally() {
 #[allow(clippy::doc_markdown)]
 #[tokio::test]
 async fn business_schema_violation_is_a_normal_failed_result_slot() {
-    let call = scripted(
-        "call-1",
-        "tool-read",
-        "read",
-        serde_json::json!({"path": 42}),
-    );
+    let call = scripted("call-1", "tool-read", "read", serde_json::json!({}));
     let model = fake_model(tool_turn_then_stop(&[&call]));
     let tool = FakeTool::new(
         common::tool_policies(
@@ -744,6 +739,35 @@ async fn business_schema_violation_is_a_normal_failed_result_slot() {
     assert!(matches!(
         messages[0].result.status,
         ToolExecutionStatus::Failed { .. }
+    ));
+    let requests = model.requests();
+    let correction = requests
+        .get(1)
+        .and_then(|request| {
+            request.messages.iter().find_map(|message| match message {
+                rustx::model::ModelInputMessage::Canonical(MessageBlock::Tool(tool)) => Some(tool),
+                rustx::model::ModelInputMessage::Canonical(
+                    MessageBlock::User(_) | MessageBlock::Assistant(_),
+                )
+                | rustx::model::ModelInputMessage::RequestOnly(_) => None,
+            })
+        })
+        .expect("the rejected result reaches the next model request");
+    let projection = correction.result.model_facing_projection();
+    assert!(projection.byte_len() <= rustx::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES);
+    assert!(
+        projection
+            .as_text()
+            .contains("Tool call failed: tool arguments violate the canonical schema")
+    );
+    assert!(
+        projection
+            .as_text()
+            .contains("\"path\" is a required property")
+    );
+    assert!(matches!(
+        &correction.result.status,
+        ToolExecutionStatus::Failed { error } if error.contains("path")
     ));
     assert!(
         tokio::time::timeout(

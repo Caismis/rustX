@@ -1185,6 +1185,12 @@ pub(crate) struct RuntimeInner {
     /// configuration surface.
     #[cfg(test)]
     test_pre_tool_policy: Mutex<Option<Arc<dyn crate::agent::PreToolPolicy>>>,
+    /// Test-only retry-backoff frontier for runtime-created attempts. The
+    /// pause is installed into the next execution after its retry schedule
+    /// commits and its absolute deadline is captured, so manual-clock tests
+    /// can advance time without racing that calculation.
+    #[cfg(test)]
+    retry_backoff_pause: Mutex<Option<crate::agent::execution::test_sync::RetryBackoffPause>>,
 }
 
 /// Cancellation-safe ownership of the narrow resource-reload admission gate.
@@ -2067,6 +2073,14 @@ impl RuntimeInner {
                 .and_then(|probe| probe.tool_start_pause.take());
             if let Some(pause) = pause {
                 execution.install_tool_start_pause(pause);
+            }
+            let pause = self
+                .retry_backoff_pause
+                .lock()
+                .expect("retry backoff pause lock")
+                .take();
+            if let Some(pause) = pause {
+                execution.install_retry_backoff_pause(pause);
             }
         }
         execution.observe(&observer);
@@ -3106,6 +3120,8 @@ impl ConversationRuntime {
             probe: Mutex::new(None),
             #[cfg(test)]
             test_pre_tool_policy: Mutex::new(None),
+            #[cfg(test)]
+            retry_backoff_pause: Mutex::new(None),
         });
         // Recovery has already durably terminalized every orphaned child.
         // Restore only terminal read-model records and their inspected
@@ -5143,6 +5159,22 @@ impl ConversationRuntime {
             .test_pre_tool_policy
             .lock()
             .expect("test pre-tool policy lock") = Some(policy);
+    }
+
+    /// Installs a retry-backoff frontier for the next runtime-created
+    /// attempt. This is test-only synchronization: the execution signals
+    /// after the durable retry schedule and absolute deadline capture, then
+    /// waits until the test releases the frontier.
+    #[cfg(test)]
+    pub(crate) fn install_retry_backoff_pause(
+        &self,
+        pause: crate::agent::execution::test_sync::RetryBackoffPause,
+    ) {
+        *self
+            .inner
+            .retry_backoff_pause
+            .lock()
+            .expect("retry backoff pause lock") = Some(pause);
     }
 }
 

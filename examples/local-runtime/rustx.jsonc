@@ -183,7 +183,8 @@
     "glob",
     "grep",
     "bash",
-    "subagent",        // delegate to a child runtime of this agent
+    // Add "subagent" when `subagents.agents` below contains at least one
+    // named agent; an empty catalog intentionally exposes no subagent tool.
     "todo",            // track multi-step work as a visible task list
   ],
 

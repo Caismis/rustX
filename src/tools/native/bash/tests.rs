@@ -439,16 +439,9 @@ async fn cancellation_owns_the_outcome_and_a_failed_spill_is_never_advertised() 
         diagnostic.contains("capture"),
         "the bounded capture diagnostic is retained: {diagnostic}"
     );
-    // The foreground result presents its own continuation as ordinary
-    // tool-owned text so the model learns the truth from the result.
-    let note = result
-        .content
-        .iter()
-        .find_map(|block| match block {
-            crate::tools::types::ToolResultContent::Text(text) => Some(text.text.clone()),
-            _ => None,
-        })
-        .expect("the foreground continuation text block");
+    // The canonical result projection presents the typed continuation once
+    // so the model learns the truth from the result.
+    let note = result.model_facing_projection().as_text();
     assert!(
         note.contains("did not complete"),
         "the capture diagnostic reaches the model: {note}"
@@ -508,7 +501,7 @@ async fn large_output_spills_lazily_with_an_absolute_locator() {
     .await;
     assert_eq!(result.status, ToolExecutionStatus::Success);
     assert!(result.artifacts.is_empty(), "no semantic artifact exists");
-    let truncation = result.truncation.expect("truncation state");
+    let truncation = result.truncation.as_ref().expect("truncation state");
     assert!(truncation.truncated);
     let Some(original_bytes) = truncation.original_bytes else {
         panic!("the complete byte count is known");
@@ -547,16 +540,9 @@ async fn large_output_spills_lazily_with_an_absolute_locator() {
         full_output.starts_with(tool_output.root().to_str().expect("utf8 managed root")),
         "the spill locator lives under the managed root: {full_output}"
     );
-    // The foreground result presents the locator to the model as ordinary
-    // tool-owned text, including the Read/Grep continuation guidance.
-    let continuation_text = result
-        .content
-        .iter()
-        .find_map(|block| match block {
-            crate::tools::types::ToolResultContent::Text(text) => Some(text.text.clone()),
-            _ => None,
-        })
-        .expect("the foreground continuation text block");
+    // The canonical result projection presents the locator to the model,
+    // including the Read/Grep continuation guidance.
+    let continuation_text = result.model_facing_projection().as_text();
     assert!(
         continuation_text.contains(&format!("Complete output: {full_output}")),
         "the model-facing text carries the exact locator: {continuation_text}"

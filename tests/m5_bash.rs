@@ -549,7 +549,7 @@ async fn bash_large_output_spills_to_managed_output() {
         result.artifacts.is_empty(),
         "oversized text never becomes a semantic artifact"
     );
-    let truncation = result.truncation.expect("truncation metadata");
+    let truncation = result.truncation.as_ref().expect("truncation metadata");
     assert!(truncation.truncated);
     assert!(truncation.original_bytes.is_some());
     // The spill locator is typed runtime-owned metadata: absolute and
@@ -573,16 +573,9 @@ async fn bash_large_output_spills_to_managed_output() {
         std::path::Path::new(full_output).starts_with(fixture.runtime.tool_output().root()),
         "the spill lives in the managed tool-output root: {full_output}"
     );
-    // The foreground result presents the locator plus the Read/Grep
-    // continuation guidance to the model as ordinary tool-owned text.
-    let continuation_text = result
-        .content
-        .iter()
-        .find_map(|block| match block {
-            ToolResultContent::Text(text) => Some(text.text.clone()),
-            _ => None,
-        })
-        .expect("the foreground continuation text block");
+    // The canonical result projection presents the locator plus the
+    // Read/Grep continuation guidance to the model.
+    let continuation_text = result.model_facing_projection().as_text();
     assert!(
         continuation_text.contains(&format!("Complete output: {full_output}")),
         "the model-facing text carries the exact locator: {continuation_text}"

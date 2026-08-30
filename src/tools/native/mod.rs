@@ -134,16 +134,18 @@ pub struct NativeToolResources {
     /// intrinsic.
     pub background: ConversationBackgroundRegistry,
     /// The conversation subagent registry used by the `subagent` intrinsic
-    /// (Issue #60). `None` — for example inside a subagent child itself —
-    /// means the intrinsic is not registered at all, so recursive
-    /// delegation is absent by construction.
+    /// (Issue #60). Registration also requires a non-empty catalog below;
+    /// `None` — for example inside a subagent child itself — means the
+    /// intrinsic is not registered at all, so recursive delegation is absent
+    /// by construction.
     pub subagents: Option<crate::runtime::subagent::SubagentRegistry>,
     /// The named-subagent catalog of the resource generation this
     /// registration set belongs to (Issue #144).
     ///
-    /// It supplies the model-facing routing description of the `subagent`
-    /// intrinsic, so the description a generation publishes always names
-    /// exactly the agents that generation admits.
+    /// It controls whether the intrinsic exists and, when non-empty, supplies
+    /// its model-facing routing description. The description a generation
+    /// publishes therefore always names exactly the agents that generation
+    /// admits, and an empty generation publishes no unsatisfiable Tool.
     pub subagent_catalog: crate::runtime::subagent::SubagentCatalog,
 }
 
@@ -255,9 +257,14 @@ pub(crate) fn native_tool_registrations(
         todo::registration(),
     ];
     // The `subagent` intrinsic exists only in a runtime that owns a
-    // subagent registry (never inside a child runtime).
-    if let Some(subagents) = subagents {
-        registrations.push(subagent::registration(subagents, &subagent_catalog));
+    // subagent registry (never inside a child runtime) and whose frozen
+    // resource generation admits at least one named agent. An empty catalog
+    // has no satisfiable invocation, so publishing a Tool definition for it
+    // would make the model-facing capability set untruthful.
+    if let Some(subagents) = subagents
+        && let Some(registration) = subagent::registration(subagents, &subagent_catalog)
+    {
+        registrations.push(registration);
     }
     registrations
 }

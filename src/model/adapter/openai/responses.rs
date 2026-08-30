@@ -1419,35 +1419,22 @@ fn translate_assistant_inputs(
     Ok(items)
 }
 
+/// Translates the canonical model-facing tool-result projection into the
+/// Responses function-call-output shape. Projection policy, status rendering,
+/// and aggregate bounding are owned by the Tool Plane.
 fn translate_tool_result(
     tool: &crate::message::types::ToolMessageBlock,
 ) -> Result<serde_json::Value, ModelError> {
-    let mut text_parts = Vec::new();
-    for content in &tool.result.content {
-        match content {
-            crate::tools::types::ToolResultContent::Text(text) => {
-                text_parts.push(text.text.clone());
-            }
-            crate::tools::types::ToolResultContent::Json { value } => {
-                text_parts.push(serde_json::to_string(value).map_err(|e| {
-                    unsupported(format!("tool JSON result is not serializable: {e}"))
-                })?);
-            }
-            crate::tools::types::ToolResultContent::File(_)
-            | crate::tools::types::ToolResultContent::Image(_) => {
-                return Err(unsupported(
-                    "OpenAI Responses cannot represent file/image tool results",
-                ));
-            }
-        }
-    }
-    if let Some(status) = tool.result.status.model_facing_text() {
-        text_parts.push(status);
+    let projection = tool.result.model_facing_projection();
+    if projection.contains_non_text_content() {
+        return Err(unsupported(
+            "OpenAI Responses cannot represent file/image tool results",
+        ));
     }
     Ok(serde_json::json!({
         "type": "function_call_output",
         "call_id": tool.tool_call_id,
-        "output": text_parts.join("\n"),
+        "output": projection.as_text(),
     }))
 }
 
@@ -1609,11 +1596,13 @@ fn unsupported(message: impl Into<String>) -> ModelError {
 #[cfg(test)]
 mod tests {
     use super::{translate_tool_result, translate_tools};
+    use crate::message::content::TextBlock;
     use crate::message::types::ToolMessageBlock;
     use crate::runtime::identity::{MessageId, ToolCallId, ToolId};
     use crate::runtime::types::CancellationReason;
     use crate::tools::types::{
         ModelToolDefinition, ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus,
+        ToolResultContent,
     };
     use serde_json::json;
 
@@ -1690,6 +1679,41 @@ mod tests {
         assert_eq!(
             encoded["output"].as_str().expect("text output"),
             "Tool call was cancelled (reason: user_requested). Execution had already started, but cancellation occurred before normal completion. Partial side effects may have occurred."
+        );
+    }
+
+    #[test]
+    fn responses_translation_consumes_the_canonical_failed_result_projection() {
+        let message = ToolMessageBlock {
+            id: MessageId::new("tool-result-failed"),
+            tool_call_id: ToolCallId::new("call-failed"),
+            tool_id: ToolId::new("tool-web-search-exa"),
+            result: ToolExecutionResult {
+                status: ToolExecutionStatus::Failed {
+                    error: "input schema validation failed: query is required".to_owned(),
+                },
+                content: vec![ToolResultContent::Text(TextBlock {
+                    text: "existing tool content".to_owned(),
+                })],
+                duration_ms: 0,
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+                managed_output: None,
+            },
+        };
+        let encoded = translate_tool_result(&message).expect("translate failed tool result");
+        let projection = message.result.model_facing_projection();
+        assert_eq!(encoded["call_id"], "call-failed");
+        assert_eq!(
+            encoded["output"].as_str().expect("text output"),
+            projection.as_text()
+        );
+        assert!(
+            encoded["output"]
+                .as_str()
+                .expect("text output")
+                .contains("input schema validation failed: query is required")
         );
     }
 }

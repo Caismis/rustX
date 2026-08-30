@@ -84,10 +84,7 @@ use crate::skills::environments::{ENVIRONMENT_COMMAND_TIMEOUT, RUNTIME_PROBE_TIM
 use crate::tools::environment::{ToolEnvironment, ToolEnvironmentOverlay};
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES;
-use crate::tools::output::{
-    ToolOutputCapture, continuation_for_capture, foreground_continuation_block,
-    truncation_for_capture,
-};
+use crate::tools::output::{ToolOutputCapture, continuation_for_capture, truncation_for_capture};
 use crate::tools::types::{
     ManagedOutputContinuation, ToolApprovalPolicy, ToolCancellationPhase, ToolConcurrencyPolicy,
     ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
@@ -2099,14 +2096,11 @@ fn python_capture_result(
     let status = bound_status(status);
     let continuation = continuation_for_capture(&captured, background, diagnostic);
     let truncation = truncation_for_capture(&captured);
-    let mut content = vec![ToolResultContent::Text(
+    let content = vec![ToolResultContent::Text(
         crate::message::content::TextBlock {
             text: captured.preview,
         },
     )];
-    if !background && let Some(block) = foreground_continuation_block(continuation.as_ref()) {
-        content.push(block);
-    }
     ToolExecutionResult {
         status,
         content,
@@ -4023,10 +4017,12 @@ mod tests {
             result.content.first(),
             Some(ToolResultContent::Text(text)) if text.text.len() <= FOREGROUND_TOOL_RESULT_PREVIEW_BYTES
         ));
-        assert!(result
-            .content
-            .iter()
-            .any(|content| matches!(content, ToolResultContent::Text(text) if text.text.contains("Read or Grep"))));
+        assert!(
+            result
+                .model_facing_projection()
+                .as_text()
+                .contains("Read or Grep")
+        );
         assert_eq!(
             result
                 .truncation
