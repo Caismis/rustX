@@ -2226,7 +2226,7 @@ fn commit_background_ownership(store: &SqliteConversationStore, execution: &Tool
                 execution_id: execution.clone(),
                 tool_call_id: ToolCallId::new("call-bg"),
                 tool_id: ToolId::new("tool-bg"),
-                tool_name: "background_task".to_owned(),
+                tool_name: "bash".to_owned(),
             },
         ))
         .expect("background ownership");

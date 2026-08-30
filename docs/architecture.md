@@ -905,7 +905,7 @@ tools/runtime.rs           ConversationToolRuntime: the per-conversation
                            AgentExecution
 tools/native/             the native tool plane: one module per native
                            capability (read/, write/, edit/, glob/, grep/,
-                           bash/, background_task/, todo/), each owning its name,
+                           bash/, execution/, todo/), each owning its name,
                            description, typed input contract, generated
                            schema, executor, and private helpers;
                            registration.rs owns the NativeToolRegistration
@@ -1997,7 +1997,7 @@ implements `execution_mode` handling of its own.
 The registry is a correctness boundary: duplicate `ToolId`s, duplicate
 model-facing names, empty identities, invalid or non-root JSON Schema,
 reserved `__rustx_*` collisions, invalid policy combinations, and
-background-capable `background_task` registrations are rejected; a
+background-capable `execution` registrations are rejected; a
 canonical call whose id and name disagree is a contract violation. Tool
 definitions reach the model in deterministic registration order, and the
 context engine accounts the exact compiled definitions.
@@ -2029,8 +2029,17 @@ state machine (`Starting -> Running -> Cancelling -> terminal`), a
 two-stage dispatch with an explicit ownership commit linearization
 point, a cancel-vs-completion linearization rule, bounded latest progress
 snapshots, and exactly-once terminal inbound mailbox publication
-(`background-exec_N-terminal`). The `background_task` intrinsic
-(foreground-only, sequential) provides `status` and idempotent `cancel`.
+(`background-exec_N-terminal`). The `execution` intrinsic
+(foreground-only, sequential) is the **single model-facing observation and
+cancellation control plane** for conversation-owned asynchronous
+executions (Issue #162): every creation result returns a typed execution
+handle (`kind` + `id`), and `execution(status|cancel)` routes an explicit
+`kind = tool` target only to `ConversationBackgroundRegistry` and a
+`kind = subagent` target only to `SubagentRegistry`. The intrinsic owns no
+lifecycle state — the domain registries remain the sole authorities for
+lifecycle, cancellation, durability, settlement, and terminal publication
+— and it never infers a kind from an id string or falls through from one
+domain to another.
 
 The bundle also owns the conversation's `ConversationTodoList`: the task
 list the native `todo` tool mutates. It is deliberately *not* a second
@@ -2140,7 +2149,7 @@ configuration: each ordinary native tool independently selects its
 execution and concurrency policy (foreground-only sequential by default,
 with `BackgroundOnly` and `ModelSelectable` as legal per-tool choices).
 The only intentionally fixed policy remains the runtime intrinsic
-`background_task`.
+`execution`.
 
 One native capability owns one module boundary. A native tool module owns
 its name, description, typed input contract, generated schema, executor,
@@ -2229,10 +2238,19 @@ full line. These tool-owned projections remain below the global 64KB runtime
 safety boundary; the global limiter is not changed and remains the last
 resort for Bash, MCP, and other result types.
 
-`background_task` is a runtime intrinsic that happens to participate in the
-common tool execution plane. It is not an ordinary native tool, its contract
-and runtime semantics are outside this alignment, and it is never moved,
-renamed, or re-schema'd to make `tools/native/` look uniform.
+`execution` is a runtime intrinsic that happens to participate in the
+common tool execution plane. It is not an ordinary native tool: it is the
+single model-facing observation and cancellation control plane for
+conversation-owned asynchronous executions (Issue #162). Its contract and
+runtime semantics are outside the ordinary-native-tool contract alignment,
+and it is never moved, renamed, or re-schema'd to make `tools/native/` look
+uniform. It owns only routing: every request is dispatched by explicit
+`kind` to the owning domain registry (`ConversationBackgroundRegistry` for
+`kind = tool`, `SubagentRegistry` for `kind = subagent`), whose authoritative
+snapshot is returned unchanged inside a bounded tagged envelope. The
+intrinsic never guesses a kind from an id, never tries one registry and
+falls through to another, and never owns lifecycle state, cancellation
+implementation, durability, or result publication.
 
 Native tool input schemas are generated from tool-owned Rust input types,
 so the typed contract is the single source of truth for the model-facing
@@ -4472,7 +4490,7 @@ re-derive any of it. Three representations carry that weight:
   explicit `match` — no factory, plugin loader, strategy registry, or
   reflective lookup — then compares the reconstructed definition against the
   frozen one and fails closed on any mismatch. `subagent`, `ask_user`, and
-  `background_task` have no entry in that `match` at all, so recursion and
+  `execution` have no entry in that `match` at all, so recursion and
   headless-unsafe surfaces are structurally absent rather than filtered.
 - **Skill.** The immutable `SkillId` + `SkillVersionId` binding of each
   selected package crosses alongside its model-visible catalog metadata. The

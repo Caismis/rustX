@@ -300,7 +300,7 @@ const fn default_schema_version() -> u32 {
 
 fn default_tools() -> Vec<String> {
     [
-        "background_task",
+        "execution",
         "ask_user",
         "read",
         "write",
@@ -542,7 +542,7 @@ pub struct ContextPolicyDocument {
 /// The per-tool execution, concurrency, and approval policies of the native
 /// tool plane.
 ///
-/// `background_task`, `ask_user`, and `todo` are deliberately outside this
+/// `execution`, `ask_user`, and `todo` are deliberately outside this
 /// set: they own fixed foreground-only, sequential, approval-never policies,
 /// and the registry enforces the intrinsic ones itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

@@ -101,7 +101,7 @@ fn models_json() -> String {
 
 /// The runtime configuration a child composes from.
 fn runtime_json(read_approval: &str, include_todo: bool) -> String {
-    let mut default_tools = vec!["read", "bash", "background_task", "subagent"];
+    let mut default_tools = vec!["read", "bash", "execution", "subagent"];
     if include_todo {
         default_tools.push("todo");
     }

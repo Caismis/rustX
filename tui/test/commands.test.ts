@@ -1141,7 +1141,7 @@ describe("CommandDispatcher", () => {
       execution: {
         execution_id: "exec-7",
         tool_id: "tool-background",
-        tool_name: "background_task",
+        tool_name: "bash",
         state: "cancelling",
       },
     });

@@ -2229,7 +2229,8 @@ fn assert_cut_lineage(scenario: &str) {
         "the copied tool result names the source's background execution: {copied}"
     );
     assert!(
-        copied.contains("Background executions:") && copied.contains("exec_1 | bash | running"),
+        copied.contains("Background executions:")
+            && copied.contains("tool exec_1 | bash | running"),
         "a copied Agent Status names the source's live execution: {copied}"
     );
     assert!(
@@ -2482,7 +2483,7 @@ fn assert_publication_is_atomic(
 /// This is the row the seed makes dangerous rather than safe. The destination
 /// context genuinely contains `exec_1`, `conversation-1-subagent-1`,
 /// `agent-conversation-1-subagent-1`, the source's private tool-output path,
-/// and three Agent Status footers reading `exec_1 | bash | running` — all
+/// and three Agent Status footers reading `tool exec_1 | bash | running` — all
 /// copied verbatim from a lineage whose execution is still owned elsewhere. A
 /// runtime that resolved ownership from history would find every one of them.
 ///
@@ -2514,7 +2515,7 @@ fn a_cut_lineage_never_resolves_the_copied_source_identities() {
     let copied = canonical_text(&seeded.canonical());
     for identity in [
         "exec_1",
-        "exec_1 | bash | running",
+        "tool exec_1 | bash | running",
         source_subagents[0].as_str(),
         "agent-conversation-1-subagent-1",
     ] {
@@ -2708,7 +2709,7 @@ fn a_reopened_runtime_never_relaunches_a_dead_background_execution() {
 /// The trap this row closes is specific. Agent Status is a **canonical
 /// message**: the status admitted for the second turn was composed while a
 /// real detached execution was live, so it literally says
-/// `Background executions: exec_1 | bash | …`, and it stays in the Ledger
+/// `Background executions: tool exec_1 | bash | …`, and it stays in the Ledger
 /// forever. A reopened runtime reads that message back as ordinary history.
 /// If ownership were ever reconstructed from what history *says* — instead of
 /// from the durable ownership facts and the process-local registry — the

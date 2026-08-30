@@ -200,7 +200,7 @@ use crate::tools::workspace::Workspace;
 /// The **default** cancellation reason of conversation-owned background
 /// cancellation.
 ///
-/// Direct control-path cancellation (`background_task(action = cancel)` or
+/// Direct control-path cancellation (`execution(action = cancel)` or
 /// [`ConversationBackgroundRegistry::cancel`]) is a user-requested control
 /// action and therefore defaults to this reason. It is not the only possible
 /// reason: runtime drain (M9c) requests cancellation of every owned execution
@@ -338,8 +338,8 @@ impl BackgroundLifecycle {
 
 /// The one canonical read-only snapshot of one background execution.
 ///
-/// The snapshot is reused by registry queries, `background_task(status)`,
-/// `background_task(cancel)`, Agent Status projection input, and
+/// The snapshot is reused by registry queries, `execution(status)`,
+/// `execution(cancel)`, Agent Status projection input, and
 /// deterministic tests. It never exposes internal task handles or process
 /// ids.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1895,11 +1895,15 @@ fn snapshot_of(record: &BackgroundRecord) -> BackgroundExecutionSnapshot {
 
 /// The deterministic accepted result of a successful background dispatch.
 ///
-/// The accepted result advertises the stable read-only live-output locator
-/// of the execution (Issue #86): the file was allocated at dispatch time
-/// and the executor appends decoded textual output to it from the first
-/// byte on, so the model may Read/Grep it while the execution runs. The
-/// locator is ordinary textual metadata, never a `File` modality.
+/// The result is the model-facing creation result of the dispatched
+/// execution: it returns the typed execution handle (kind `tool` plus the
+/// execution id) as the canonical continuation affordance — the same handle
+/// the `execution` intrinsic accepts — and advertises the stable read-only
+/// live-output locator of the execution (Issue #86): the file was allocated
+/// at dispatch time and the executor appends decoded textual output to it
+/// from the first byte on, so the model may Read/Grep it while the
+/// execution runs. The locator is ordinary textual metadata, never a
+/// `File` modality.
 fn accepted_result(
     execution_id: &ToolExecutionId,
     tool_name: &str,
@@ -1909,15 +1913,18 @@ fn accepted_result(
         status: ToolExecutionStatus::Success,
         content: vec![ToolResultContent::Json {
             value: serde_json::json!({
-                "execution_id": execution_id.as_str(),
+                "execution": crate::tools::execution::ExecutionHandle::tool(execution_id),
                 "state": "starting",
                 "tool": tool_name,
                 "output_path": output_path.to_string_lossy(),
                 "note": format!(
-                    "Background execution {execution_id} started. Live textual output, when \
-                     produced, is appended to the absolute path in output_path as the execution \
-                     runs; use Read or Grep with this absolute path to inspect committed output \
-                     while the execution is running."
+                    "Background execution {} started. Use the execution tool with the \
+                     returned execution handle (kind tool, id {}) to inspect or cancel it. \
+                     Live textual output, when produced, is appended to the absolute path in \
+                     output_path as the execution runs; use Read or Grep with this absolute \
+                     path to inspect committed output while the execution is running.",
+                    execution_id.as_str(),
+                    execution_id.as_str(),
                 ),
             }),
         }],
@@ -1944,7 +1951,7 @@ fn accepted_result(
 /// inside ordinary canonical text. Full oversized output is never dumped
 /// into the inbound message: the bounded canonical text remains
 /// replayable even if the auxiliary output file later disappears, and
-/// detailed inspection remains `background_task(status)`. Genuine
+/// detailed inspection remains `execution(status)`. Genuine
 /// semantic artifact references publish as their own
 /// `UserContentBlock::File` blocks; a textual result never becomes a File
 /// block.

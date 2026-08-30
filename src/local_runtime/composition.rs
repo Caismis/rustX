@@ -1053,7 +1053,7 @@ impl LocalConversationCore {
 
         // 7-8. The base tool registry with the explicit native composition,
         // using *this* conversation's background registry for the
-        // `background_task` intrinsic and this conversation's subagent
+        // `execution` intrinsic and this conversation's subagent
         // registry for the `subagent` intrinsic (Issue #60).
         // The named-subagent catalog of the launch generation. It is
         // loaded before the base registry, because the `subagent`

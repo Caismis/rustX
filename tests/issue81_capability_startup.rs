@@ -242,15 +242,7 @@ async fn a_python_capability_failure_is_isolated_from_runtime_startup() {
     let snapshot = attach_snapshot(&runtime);
 
     let names = tool_names(&snapshot);
-    for expected in [
-        "background_task",
-        "read",
-        "write",
-        "edit",
-        "glob",
-        "grep",
-        "bash",
-    ] {
+    for expected in ["execution", "read", "write", "edit", "glob", "grep", "bash"] {
         assert!(
             names.contains(&expected),
             "the native tool {expected} must survive the Python failure: {names:?}"

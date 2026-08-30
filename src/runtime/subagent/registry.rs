@@ -245,8 +245,10 @@ pub enum SubagentState {
 /// A consistency snapshot of one subagent child.
 ///
 /// Read-model materialization only: every field is derived from the
-/// registry's state machine, never an authority of its own.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// registry's state machine, never an authority of its own. The snapshot is
+/// also the domain payload of the model-facing `execution(status)` response
+/// (Issue #162), so it serializes as the authoritative state projection.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct SubagentSnapshot {
     /// The conversation-owned subagent identity.
     pub subagent_id: SubagentId,
@@ -1075,7 +1077,7 @@ impl SubagentRegistry {
                     agent: agent.as_str().to_owned(),
                     definition_digest: definition_digest.as_str().to_owned(),
                     result: serde_json::json!({
-                        "status": "running",
+                        "state": "running",
                         "note": "The child runtime is running asynchronously. Its answer \
                                  arrives as a new turn from the child agent; do not retry \
                                  or poll for it."

@@ -4,7 +4,7 @@
 //! deterministic `exec_N` allocation, the two-stage dispatch ownership
 //! commit, the cancel-vs-completion linearization rule, exactly-once
 //! terminal settlement and mailbox publication, bounded progress
-//! snapshots, cross-conversation isolation, the `background_task`
+//! snapshots, cross-conversation isolation, the `execution`
 //! intrinsic, the mailbox boundary races for terminal inbound
 //! notifications, and the runtime-owned Agent Status background section.
 //! All concurrency is driven by explicit gates (watches and channels); no
@@ -379,7 +379,16 @@ async fn ownership_commit_wins_over_later_attempt_cancellation() {
         ToolResultContent::Json { value } => value.clone(),
         other => panic!("expected JSON, got {other:?}"),
     };
-    assert_eq!(accepted["execution_id"], "exec_1");
+    // Issue #162: the accepted result returns the typed execution handle.
+    assert_eq!(
+        accepted["execution"],
+        serde_json::json!({"kind": "tool", "id": "exec_1"}),
+        "the creation result returns the execution handle"
+    );
+    assert!(
+        accepted.get("execution_id").is_none(),
+        "the bare execution id is replaced by the tagged handle"
+    );
     assert_eq!(accepted["state"], "starting");
     assert_eq!(accepted["tool"], "bash");
     // Issue #86: the accepted result advertises the stable read-only
@@ -884,7 +893,11 @@ async fn background_completion_after_attempt_terminal_does_not_alter_the_attempt
         ToolResultContent::Json { value } => value.clone(),
         other => panic!("expected JSON, got {other:?}"),
     };
-    assert_eq!(accepted["execution_id"], "exec_1");
+    // Issue #162: the accepted result returns the typed execution handle.
+    assert_eq!(
+        accepted["execution"],
+        serde_json::json!({"kind": "tool", "id": "exec_1"})
+    );
     let committed_count = result.messages().len();
     let terminal_events = result
         .event_history
@@ -1043,13 +1056,14 @@ async fn terminal_inbound_before_snapshot_joins_the_batch() {
 }
 
 // ---------------------------------------------------------------------------
-// background_task intrinsic
+// execution intrinsic
 // ---------------------------------------------------------------------------
 
-/// The foreground-only `background_task` intrinsic reports the canonical
-/// snapshot and supports idempotent cancel.
+/// The foreground-only `execution` intrinsic reports the canonical snapshot
+/// of a tool-kind target and supports idempotent cancel through the
+/// conversation background registry.
 #[tokio::test]
-async fn background_task_status_and_cancel() {
+async fn execution_tool_status_and_cancel() {
     let fixture = common::native_fixture();
     // Dispatch one parking background execution through the intrinsic's own
     // registry.
@@ -1072,8 +1086,8 @@ async fn background_task_status_and_cancel() {
 
     let status = common::run_tool(
         &fixture,
-        "background_task",
-        serde_json::json!({"execution_id": "exec_1", "action": "status"}),
+        "execution",
+        serde_json::json!({"action": "status", "target": {"kind": "tool", "id": "exec_1"}}),
     )
     .await;
     assert_eq!(status.status, ToolExecutionStatus::Success);
@@ -1081,14 +1095,15 @@ async fn background_task_status_and_cancel() {
         ToolResultContent::Json { value } => value.clone(),
         other => panic!("expected JSON, got {other:?}"),
     };
+    assert_eq!(snapshot["kind"], "tool");
     assert_eq!(snapshot["execution_id"], "exec_1");
     assert_eq!(snapshot["tool_name"], "bash");
     assert_eq!(snapshot["state"], "running");
 
     let cancelled = common::run_tool(
         &fixture,
-        "background_task",
-        serde_json::json!({"execution_id": "exec_1", "action": "cancel"}),
+        "execution",
+        serde_json::json!({"action": "cancel", "target": {"kind": "tool", "id": "exec_1"}}),
     )
     .await;
     assert_eq!(cancelled.status, ToolExecutionStatus::Success);
@@ -1100,8 +1115,8 @@ async fn background_task_status_and_cancel() {
     // Repeated cancel is idempotent.
     let again = common::run_tool(
         &fixture,
-        "background_task",
-        serde_json::json!({"execution_id": "exec_1", "action": "cancel"}),
+        "execution",
+        serde_json::json!({"action": "cancel", "target": {"kind": "tool", "id": "exec_1"}}),
     )
     .await;
     assert_eq!(again.status, ToolExecutionStatus::Success);
@@ -1109,8 +1124,8 @@ async fn background_task_status_and_cancel() {
     wait_for_state(&registry, &execution_id, BackgroundLifecycle::Cancelled).await;
     let terminal = common::run_tool(
         &fixture,
-        "background_task",
-        serde_json::json!({"execution_id": "exec_1", "action": "cancel"}),
+        "execution",
+        serde_json::json!({"action": "cancel", "target": {"kind": "tool", "id": "exec_1"}}),
     )
     .await;
     let snapshot = match &terminal.content[0] {
@@ -1126,34 +1141,34 @@ async fn background_task_status_and_cancel() {
 /// Unknown execution ids (including another conversation's ids, which are
 /// indistinguishable) return a normal failed tool result.
 #[tokio::test]
-async fn background_task_unknown_and_foreign_ids_fail_normally() {
+async fn execution_unknown_and_foreign_ids_fail_normally() {
     let fixture = common::native_fixture();
     let unknown = common::run_tool(
         &fixture,
-        "background_task",
-        serde_json::json!({"execution_id": "exec_999", "action": "status"}),
+        "execution",
+        serde_json::json!({"action": "status", "target": {"kind": "tool", "id": "exec_999"}}),
     )
     .await;
     assert!(matches!(unknown.status, ToolExecutionStatus::Failed { .. }));
     let foreign = common::run_tool(
         &fixture,
-        "background_task",
-        serde_json::json!({"execution_id": "exec_1", "action": "cancel"}),
+        "execution",
+        serde_json::json!({"action": "cancel", "target": {"kind": "tool", "id": "exec_1"}}),
     )
     .await;
     assert!(matches!(foreign.status, ToolExecutionStatus::Failed { .. }));
 }
 
-/// `background_task` is fixed to foreground-only sequential execution: it
+/// `execution` is fixed to foreground-only sequential execution: it
 /// can never be dispatched to the background registry.
 #[test]
-fn background_task_is_never_background_dispatchable() {
+fn execution_is_never_background_dispatchable() {
     let fixture = common::native_fixture();
     let call = ToolCall {
         id: ToolCallId::new("call-x"),
-        tool_id: ToolId::new("tool-background-task"),
-        name: "background_task".to_owned(),
-        arguments: serde_json::json!({"execution_mode": "background", "execution_id": "exec_1", "action": "status"}),
+        tool_id: ToolId::new("tool-execution"),
+        name: "execution".to_owned(),
+        arguments: serde_json::json!({"execution_mode": "background", "action": "status", "target": {"kind": "tool", "id": "exec_1"}}),
     };
     let outcome = fixture.registry.preflight(&call).expect("preflight");
     assert!(
@@ -1249,9 +1264,11 @@ fn agent_status_background_section_rendering() {
     assert_eq!(*omitted_count, 0);
     let rendered = render_agent_status(&status);
     assert!(rendered.contains("Background executions:"));
-    assert!(rendered.contains("- exec_1 | bash | starting"));
-    assert!(rendered.contains("- exec_2 | bash | running | compiling workspace"));
-    assert!(rendered.contains("- exec_3 | grep | cancelling"));
+    // Issue #162: the identity vocabulary is kind + id, the same handle the
+    // model passes to the execution intrinsic.
+    assert!(rendered.contains("- tool exec_1 | bash | starting"));
+    assert!(rendered.contains("- tool exec_2 | bash | running | compiling workspace"));
+    assert!(rendered.contains("- tool exec_3 | grep | cancelling"));
     // Full output never appears: the rendered status carries identities and
     // states only.
     assert!(!rendered.contains("BackgroundExecutionSnapshot"));

@@ -741,7 +741,7 @@ describe("presentation projection", () => {
       },
       {
         type: "message_committed",
-        message: runtimeInbound("m9", "background_task finished"),
+        message: runtimeInbound("m9", "bash finished"),
         transcript_cursor: transcriptCursor(1),
       },
     ]);

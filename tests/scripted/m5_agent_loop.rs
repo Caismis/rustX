@@ -491,7 +491,11 @@ async fn mixed_foreground_background_group_does_not_wait_for_detached_terminal()
         rustx::tools::types::ToolResultContent::Json { value } => value.clone(),
         other => panic!("expected JSON accepted content, got {other:?}"),
     };
-    assert_eq!(accepted_json["execution_id"], "exec_1");
+    assert_eq!(
+        accepted_json["execution"],
+        serde_json::json!({"kind": "tool", "id": "exec_1"}),
+        "the accepted background result returns the typed execution handle"
+    );
     assert_eq!(accepted_json["state"], "starting");
     assert_eq!(accepted_json["tool"], "beta");
     let next = next_request(&result, &model);
@@ -646,7 +650,10 @@ async fn cancellation_during_mixed_batch_settles_structurally() {
         rustx::tools::types::ToolResultContent::Json { value } => value.clone(),
         other => panic!("expected JSON, got {other:?}"),
     };
-    assert_eq!(accepted["execution_id"], "exec_1");
+    assert_eq!(
+        accepted["execution"],
+        serde_json::json!({"kind": "tool", "id": "exec_1"})
+    );
     assert!(matches!(
         messages[2].result.status,
         ToolExecutionStatus::Cancelled {

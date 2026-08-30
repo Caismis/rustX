@@ -232,7 +232,7 @@ async fn the_process_serves_a_real_conversation_runtime() {
         .iter()
         .map(|tool| tool.name.as_str())
         .collect();
-    for expected in ["background_task", "read", "write", "bash"] {
+    for expected in ["execution", "read", "write", "bash"] {
         assert!(
             names.contains(&expected),
             "{expected} missing from {names:?}"

@@ -295,7 +295,7 @@ export function backgroundExecution(
   return {
     execution_id: executionId,
     tool_id: "tool-background",
-    tool_name: "background_task",
+    tool_name: "bash",
     state,
     ...overrides,
   };

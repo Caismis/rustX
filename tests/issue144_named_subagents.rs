@@ -637,7 +637,7 @@ async fn statically_invalid_references_fail_composition_closed() {
 /// definition admission, so no resolution path has to defend against them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn recursive_and_child_unsafe_selections_are_rejected_at_admission() {
-    for capability in ["subagent", "ask_user", "background_task"] {
+    for capability in ["subagent", "ask_user", "execution"] {
         let lab = Lab::new();
         lab.write_config(&explore(&[capability]));
         let error = LocalSessionProduct::compose(&lab.paths(), &dependencies())
