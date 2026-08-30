@@ -284,6 +284,28 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         vec!["read"]
     );
     assert!(!capabilities.available_tools.is_empty());
+    // `/new` over an untouched empty Session is a semantic no-op, so the
+    // switch this test fences needs the active Session to own durable user
+    // work first. Durable Pending Inbound acceptance is exactly that
+    // boundary; the attempt against the unreachable provider then fails and
+    // settles on its own.
+    let submitted = resumed_endpoint
+        .handle_request_async(RuntimeClientRequest::SubmitInbound {
+            id: RequestId::new(6),
+            content: vec![rustx::message::types::UserContentBlock::Text(
+                rustx::message::content::TextBlock {
+                    text: "resume work".to_owned(),
+                },
+            )],
+        })
+        .await;
+    assert!(
+        matches!(
+            submitted.result,
+            Some(RuntimeClientResult::InboundAccepted { .. })
+        ),
+        "unexpected SubmitInbound response: {submitted:?}"
+    );
     let new_session = resumed_endpoint
         .handle_request_async(RuntimeClientRequest::SessionNew {
             id: RequestId::new(4),

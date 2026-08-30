@@ -5102,9 +5102,62 @@ Session, so it is bound as-is. Pending Inbound counts as use on purpose:
 composing that lineage is what adopts an accepted-but-unadopted message, so
 reusing such a Session would resurrect a previous launch's prompt inside the
 empty Session the user asked for. Repeated
-launches therefore cannot accumulate empty `/resume` rows, and a Session-local
+launches therefore cannot accumulate empty internal shells, and a Session-local
 model choice made in such a Session survives the relaunch as ordinary
 Session-local state.
+
+### Used Sessions are resume-visible; untouched empty shells are not
+
+A published Session is durable immediately, but durability is not history.
+One lifecycle predicate — `SessionCatalog`'s unused classification — decides
+whether a persisted Session is an untouched empty shell, and startup, `/new`,
+and `/resume` all derive from that single definition rather than inventing
+their own notions of emptiness:
+
+```text
+Session shell created/published
+    |
+    | metadata only (name, Session-local model choice)
+    v
+unused internal shell -- hidden from `/resume`, reused by startup and `/new`
+    |
+    | durable Pending Inbound acceptance of user work
+    v
+used Session -- immediately resume-visible
+```
+
+The transition point is **durable acceptance of user work into Pending
+Inbound**, never canonical adoption, model invocation, or assistant output.
+A Session whose only durable fact is an accepted-but-unadopted prompt is used
+and resume-visible: that prompt is work the Session owns, recovery is what
+adopts it, and hiding the Session would strand it. Session-local metadata
+alone — a name, a model selection — never crosses the line: an otherwise
+untouched shell stays internal, stays reusable by `/new`, and stays hidden.
+
+The classification is deliberately narrow so provenance can never be
+misclassified: anything beyond one untouched `New` root node — a branch node,
+a parent link, `Clone`/`Fork` origin — is user-owned history even when the
+selected destination conversation is legitimately empty at the chosen cut (a
+fork at the very first user message seeds exactly the empty lineage).
+
+The empty shell remains internally valid on purpose: the Session catalog and
+the conversation SQLite store are separate durable authorities, so the shell
+exists for crash-safe ownership and composition. It is simply not historical
+Session content until it owns durable user work.
+
+`/resume` lists resume-visible Sessions only. `SessionCatalog::list_page`
+classifies first and then applies search and offset/limit, so offsets and
+`next_offset` describe the visible matching set: hidden shells open no holes
+in pages, shift no offsets, duplicate no continuation rows, and are never
+matched by a query.
+
+`/new` over an unused active Session is a semantic no-op with respect to
+Session identity and runtime replacement: it reuses the empty shell,
+allocates no new `SessionId`/`SessionNodeId`/`ConversationId`, publishes no
+catalog row, and does not quiesce or replace the live runtime to exchange one
+empty shell for another. `/new` from a used Session keeps its transition
+semantics: the old used Session remains resumable and a fresh independent
+empty shell — internally durable, initially hidden — becomes active.
 
 Recovery follows the lineage, not the launch: an interrupted attempt in a
 Session this process does not open stays unreconciled until that lineage is
@@ -5126,7 +5179,9 @@ lineage: derived from that lineage's durable store when the page is built,
 never stored in the catalog, so the catalog holds no second copy of history
 that could disagree with the conversation itself. The root node is the subject
 because branch nodes are seeded copies — a row must not change what it says
-when the active node moves. A Session that has said nothing yet shows neither.
+when the active node moves. A listed Session that has no first user message
+yet — its work is still only pending, or its lineage copy is empty — shows
+neither.
 
 Naming is metadata-only, and normalization is part of the contract: a name is
 collapsed to a single whitespace-normalized line, bounded to
@@ -5349,7 +5404,10 @@ kept.
 ### Bounded native projections
 
 The native owner, not TypeScript rendering, enforces the projection bounds.
-`session_list` accepts an optional case-insensitive query over a row's
+`session_list` pages and searches the resume-visible set only — unused
+internal shells are classified out before query and offset/limit are applied,
+so offsets and `next_offset` count visible matching rows alone. The optional
+case-insensitive query matches a visible row's
 identity, its name, and the derived first-message line an unnamed row shows,
 plus a bounded `limit` and offset continuation. Rows are ordered by ascending
 Session id. `session_tree_get` returns bounded

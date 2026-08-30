@@ -1820,7 +1820,8 @@ mod tests {
     use crate::local_runtime::{CurrentRuntimeConfig, LocalSessionSupervisor, SessionCatalog};
     use crate::message::content::TextBlock;
     use crate::message::types::{
-        ContentBlockIndex, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+        ContentBlockIndex, InboundKind, MessageBlock, UserContentBlock, UserMessageBlock,
+        UserSource,
     };
     use crate::model::adapter::{ModelAdapter, ModelEventStream};
     use crate::model::error::{ModelError, ModelErrorKind};
@@ -2859,6 +2860,35 @@ mod tests {
             .expect("destination conversation store")
             .load_canonical()
             .expect("destination canonical history")
+    }
+
+    /// Accepts one durable Pending Inbound prompt into the catalog-owned
+    /// conversation store of the active Session — the exact durable boundary
+    /// that makes a Session used and resume-visible. The fixture runtime
+    /// owns a *separate* store file for the same `ConversationId`, so a
+    /// runtime-side `submit_inbound` never reaches the catalog's
+    /// classification authority; Session-lifecycle assertions must write
+    /// through the catalog's own store.
+    fn accept_catalog_pending_inbound(catalog_root: &std::path::Path, text: &str) {
+        let catalog = SessionCatalog::open_existing(catalog_root)
+            .expect("open catalog")
+            .expect("catalog exists");
+        let (session_id, node, _) = catalog.active_lineage().expect("active lineage");
+        let store = SqliteConversationStore::open(
+            node.conversation_id.clone(),
+            &catalog.database_path(&session_id, &node.conversation_id),
+        )
+        .expect("catalog conversation store");
+        store
+            .accept_inbound(crate::durable::InboundDraft {
+                message_id: None,
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                content: submit_content(text),
+                timestamp: chrono::Utc::now(),
+                correlation: None,
+            })
+            .expect("accept catalog pending inbound");
     }
 
     /// Submitting while an attempt is running queues the message in the
@@ -5953,6 +5983,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
     async fn catalog_publication_outcomes_fence_the_runtime_client_typed() {
         for post_rename in [false, true] {
             let (_adapter, _fixture, endpoint, supervisor, catalog_root, _config) =
@@ -5966,6 +5997,11 @@ mod tests {
             let Some(RuntimeClientResult::Session { session: initial }) = initial.result else {
                 panic!("initial metadata must be readable: {initial:?}");
             };
+            // `/new` is a semantic no-op over an untouched empty shell, so
+            // the transition this test fences needs the root Session to own
+            // durable user work first. Durable Pending Inbound acceptance in
+            // the catalog-owned store is exactly that boundary.
+            accept_catalog_pending_inbound(catalog_root.path(), "root work");
             if post_rename {
                 supervisor.arm_catalog_write_fault_after_rename().await;
             } else {
@@ -6043,23 +6079,156 @@ mod tests {
             let Some(RuntimeClientResult::SessionList { sessions, .. }) = list.result else {
                 panic!("bounded metadata remains readable: {list:?}");
             };
-            assert_eq!(sessions.len(), if post_rename { 2 } else { 1 });
+            assert_eq!(
+                sessions.len(),
+                1,
+                "the used source is the only resume-visible Session either way"
+            );
 
             if post_rename {
                 let reopened = SessionCatalog::open_existing(catalog_root.path())
                     .expect("open visible catalog")
                     .expect("reopen visible catalog");
                 assert_eq!(
+                    reopened.persisted_session_ids().len(),
+                    2,
+                    "post-rename failure still leaves the new catalog visible"
+                );
+                assert_eq!(
                     reopened
                         .list_page(None, 0, crate::local_runtime::SESSION_LIST_PAGE_LIMIT)
                         .expect("reopened page")
                         .sessions
                         .len(),
-                    2,
-                    "post-rename failure still leaves the new catalog visible"
+                    1,
+                    "the published empty shell is durable, not resume history"
                 );
             }
         }
+    }
+
+    /// `/new` asks for an empty Session, and an untouched empty active
+    /// Session already is one. The command is then a semantic no-op — same
+    /// Session, same node, same conversation, byte-identical catalog, live
+    /// runtime — while the same command over a used Session remains a real
+    /// switch.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
+    async fn session_new_over_an_unused_session_is_a_semantic_noop() {
+        let (_adapter, _fixture, endpoint, _supervisor, catalog_root, _config) =
+            local_session_endpoint(Vec::new(), None).await;
+        initialize_endpoint(&endpoint);
+        let initial = endpoint
+            .handle_request_async(RuntimeClientRequest::SessionGet {
+                id: crate::runtime_client::RequestId::new(10),
+            })
+            .await;
+        let Some(RuntimeClientResult::Session { session: initial }) = initial.result else {
+            panic!("initial metadata must be readable: {initial:?}");
+        };
+        let catalog_path = catalog_root.path().join("sessions").join("catalog.json");
+        let catalog_before = std::fs::read(&catalog_path).expect("catalog before /new");
+
+        let noop = endpoint
+            .handle_request_async(RuntimeClientRequest::SessionNew {
+                id: crate::runtime_client::RequestId::new(2),
+            })
+            .await;
+        let Some(RuntimeClientResult::SessionChanged {
+            session,
+            editor_content,
+            restart_required,
+        }) = noop.result
+        else {
+            panic!("session_new over an unused Session must succeed: {noop:?}");
+        };
+        assert!(noop.error.is_none());
+        assert!(
+            !restart_required,
+            "reusing the empty shell replaces no runtime"
+        );
+        assert_eq!(editor_content, None);
+        assert_eq!(session.id, initial.id, "no new SessionId");
+        assert_eq!(
+            session.active_node, initial.active_node,
+            "no new SessionNodeId"
+        );
+        assert_eq!(
+            session.active_conversation_id, initial.active_conversation_id,
+            "no new ConversationId"
+        );
+        assert_eq!(
+            std::fs::read(&catalog_path).expect("catalog after /new"),
+            catalog_before,
+            "the no-op publishes no catalog row and moves no ordinal"
+        );
+
+        // The runtime was not quiesced to exchange one empty shell for
+        // another: a repeated `/new` no-ops again instead of hitting the
+        // absorbing replacement fence, and ordinary submission through the
+        // same live runtime still works.
+        let repeated = endpoint
+            .handle_request_async(RuntimeClientRequest::SessionNew {
+                id: crate::runtime_client::RequestId::new(3),
+            })
+            .await;
+        assert!(
+            matches!(
+                repeated.result,
+                Some(RuntimeClientResult::SessionChanged {
+                    restart_required: false,
+                    ..
+                })
+            ),
+            "a repeated /new over the still-unused Session no-ops: {repeated:?}"
+        );
+        let submitted = endpoint
+            .handle_request_async(RuntimeClientRequest::SubmitInbound {
+                id: crate::runtime_client::RequestId::new(4),
+                content: submit_content("real work"),
+            })
+            .await;
+        assert!(
+            matches!(
+                submitted.result,
+                Some(RuntimeClientResult::InboundAccepted { .. })
+            ),
+            "the same live runtime still accepts work: {submitted:?}"
+        );
+
+        // Durable Pending Inbound acceptance — in the catalog-owned store,
+        // the classification authority — made the Session used: `/resume`
+        // lists it immediately, and `/new` is a real switch again.
+        accept_catalog_pending_inbound(catalog_root.path(), "real work");
+        let list = endpoint
+            .handle_request_async(RuntimeClientRequest::SessionList {
+                id: crate::runtime_client::RequestId::new(5),
+                query: None,
+                offset: 0,
+                limit: crate::local_runtime::SESSION_LIST_PAGE_LIMIT,
+            })
+            .await;
+        let Some(RuntimeClientResult::SessionList { sessions, .. }) = list.result else {
+            panic!("the used Session is resume-visible: {list:?}");
+        };
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, initial.id);
+
+        let switched = endpoint
+            .handle_request_async(RuntimeClientRequest::SessionNew {
+                id: crate::runtime_client::RequestId::new(6),
+            })
+            .await;
+        let Some(RuntimeClientResult::SessionChanged {
+            session: new_session,
+            restart_required,
+            ..
+        }) = switched.result
+        else {
+            panic!("session_new over a used Session must switch: {switched:?}");
+        };
+        assert!(restart_required);
+        assert_ne!(new_session.id, initial.id);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -6070,6 +6239,10 @@ mod tests {
         initialize_endpoint(&endpoint);
         let (revision, message_id, source_messages) =
             await_text_boundary(&fixture.runtime, &adapter, prompt).await;
+        // The runtime-side turn lives in the fixture store; the catalog's
+        // own store is the classification authority, so the source Session
+        // owns durable user work there too.
+        accept_catalog_pending_inbound(catalog_root.path(), "source work");
         let source = SessionCatalog::open_existing(catalog_root.path())
             .expect("open source catalog")
             .expect("source catalog")
@@ -6143,6 +6316,10 @@ mod tests {
         initialize_endpoint(&endpoint);
         let (revision, message_id, source_messages) =
             await_text_boundary(&fixture.runtime, &adapter, prompt).await;
+        // The runtime-side turn lives in the fixture store; the catalog's
+        // own store is the classification authority, so the source Session
+        // owns durable user work there too.
+        accept_catalog_pending_inbound(catalog_root.path(), "source work");
         let source = SessionCatalog::open_existing(catalog_root.path())
             .expect("open source catalog")
             .expect("source catalog")
@@ -6343,6 +6520,10 @@ mod tests {
                 }),
             )
             .await;
+        // `/new` no-ops over an untouched empty shell, so the catalog's
+        // active Session must own durable user work before the switch below
+        // is a real transition at all.
+        accept_catalog_pending_inbound(catalog_root.path(), "catalog work");
         let before = SessionCatalog::open_existing(catalog_root.path())
             .expect("open catalog before switch")
             .expect("catalog before switch")

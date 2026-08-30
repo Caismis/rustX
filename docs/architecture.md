@@ -4028,7 +4028,7 @@ instead, which is how a client completes a switch that required a process
 replacement. An active Session that was never used — one `New` root node whose
 conversation is still at its initial Surface revision, with no canonical
 message and an empty Pending Inbound — already *is* that empty Session, so it
-is reused and repeated launches cannot accumulate empty `/resume` rows. Deferred lineage recovery follows from this: an interrupted
+is reused and repeated launches cannot accumulate empty internal shells. Deferred lineage recovery follows from this: an interrupted
 attempt in a Session this launch does not open is reconciled by the ordinary
 per-conversation recovery pass the next time that lineage is composed, not by
 an unrelated launch. The lower
@@ -4158,6 +4158,28 @@ persisted Sessions are reachable only through `/resume` and `/tree`. Because
 an unused active Session already satisfies that, it is bound as-is rather than
 publishing another empty one beside it.
 
+A published empty Session is an **internal durable shell**, not history: the
+Session catalog and the conversation SQLite store are separate durable
+authorities, and the shell exists for crash-safe ownership and composition.
+One lifecycle predicate — the catalog's unused classification — is shared by
+startup, `/new`, and `/resume`. A Session crosses from unused to used exactly
+once, at durable acceptance of user work into Pending Inbound; canonical
+adoption, model invocation, and assistant output all happen later and change
+nothing about the classification, and Session-local metadata (a name, a model
+choice) never crosses it. Branch/clone/fork provenance is always user-owned
+history, even when the selected destination lineage is legitimately empty at
+the chosen cut.
+
+`/resume` therefore lists only Sessions that own durable user work:
+`SessionCatalog::list_page` classifies resume-visible Sessions first, then
+applies search and offset/limit over that visible set, so hidden shells open
+no holes in pages and `next_offset` continuations never duplicate or skip
+visible rows. `/new` over an unused active Session is a semantic no-op — it
+reuses the shell, allocates no new Session/node/conversation identity,
+publishes no catalog row, and does not quiesce or replace the live runtime —
+while `/new` from a used Session publishes a fresh independent empty shell
+and leaves the used Session resumable.
+
 A Session is published **unnamed**. A name is display metadata a user
 chooses, never an identity: `--session`, `/resume`, and every switch resolve
 the identity the catalog published, and nothing anywhere resolves a name. An
@@ -4170,8 +4192,10 @@ launch bound — empty, continued, or selected — after that decision has been
 made, so naming can never be part of making it. A replacement spawn drops it,
 because it labelled the Session the user launched into.
 
-`/new` prepares an empty private destination and publishes a new Session and
-root node only after its durable conversation seed is valid. `/name` commits
+`/new` asks for an empty Session: over a used Session it prepares an empty
+private destination and publishes a new Session and
+root node only after its durable conversation seed is valid, while over an
+unused active Session it is the no-op described above. `/name` commits
 metadata only. `/resume` selects persisted metadata, `/tree` selects a node or
 prepares a new node, and both replace the active process attachment only after
 `ConversationRuntime::shutdown()` has returned successfully. The supervisor's
@@ -4183,9 +4207,12 @@ quiescence or any terminal publication outcome. The last state is absorbing;
 The TUI renders typed projections and owns only picker query/focus/editor
 state; it never opens the catalog or a conversation database. Ordinary
 Session metadata is a bounded native projection: `/resume` accepts an optional
-case-insensitive query over what a row can be recognized by — its id, its
+case-insensitive query over what a visible row can be recognized by — its id,
+its
 name, and the first-message line an unnamed row shows — and an offset with a
-native maximum page size, and returns a continuation offset. Rows are ordered by Session identity.
+native maximum page size, and returns a continuation offset. Visibility
+classification precedes query and pagination, so offsets and the continuation
+describe the resume-visible matching set alone. Rows are ordered by Session identity.
 `/session` returns active metadata only,
 not the graph. `/tree` returns independently bounded node and historical
 user-message pages with deterministic continuations. Older Sessions and

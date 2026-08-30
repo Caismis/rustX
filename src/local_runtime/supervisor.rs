@@ -13,6 +13,11 @@
 //! barrier returns a typed committed-transition result, including any
 //! transient fork/tree editor payload. The catalog publication is authoritative
 //! throughout.
+//!
+//! `/new` over an active Session that is still an untouched empty shell is
+//! not a switch at all: the shared `SessionCatalog` unused classification
+//! makes it a semantic no-op that reuses the shell and leaves the live
+//! runtime, the catalog, and every identity allocator untouched.
 
 use std::sync::Arc;
 
@@ -268,6 +273,15 @@ impl LocalSessionSupervisor {
 
     /// Creates a new empty Session and switches to it.
     ///
+    /// `/new` asks for an empty Session, and an active Session that is still
+    /// an untouched empty shell already *is* one — the same
+    /// `SessionCatalog::active_is_unused` invariant startup and `/resume`
+    /// share. The command is then a semantic no-op: it allocates no new
+    /// `SessionId`/`SessionNodeId`/`ConversationId`, publishes no catalog
+    /// row, and does not quiesce or replace the live runtime to exchange one
+    /// empty shell for another. From a used Session, `/new` publishes a fresh
+    /// independent empty shell and leaves the used Session resumable.
+    ///
     /// # Errors
     ///
     /// Returns [`SessionSupervisorError`] when seed preparation, runtime
@@ -275,6 +289,14 @@ impl LocalSessionSupervisor {
     pub async fn new_session(&self) -> Result<SessionSwitchResult, SessionSupervisorError> {
         let mut state = self.state.lock().await;
         ensure_live(&state.runtime)?;
+        if state.catalog.active_is_unused()? {
+            return Ok(SessionSwitchResult {
+                session: state.catalog.active_snapshot()?,
+                editor_content: None,
+                restart_required: false,
+                committed_restart_diagnostic: None,
+            });
+        }
         let template = super::session::SessionPersistentState {
             model: state.default_model.clone(),
         };
