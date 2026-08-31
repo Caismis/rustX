@@ -5698,6 +5698,28 @@ mod tests {
         scripts: Vec<Vec<FakeStep>>,
         probe: Option<CoordinatorProbe>,
     ) -> (ConversationRuntime, Arc<FakeModel>) {
+        headless_runtime_over_store_with_policy(
+            dir,
+            conversation_id,
+            store,
+            scripts,
+            probe,
+            crate::model::ModelTimeoutPolicy::default(),
+        )
+        .await
+    }
+
+    /// The same durable-authority fixture with an explicit model deadline.
+    /// Long-lived parked-provider tests use this to keep their deterministic
+    /// channel/barrier ordering independent of full-suite wall-clock load.
+    async fn headless_runtime_over_store_with_policy(
+        dir: &tempfile::TempDir,
+        conversation_id: &str,
+        store: Arc<dyn ConversationStore>,
+        scripts: Vec<Vec<FakeStep>>,
+        probe: Option<CoordinatorProbe>,
+        model_timeout_policy: crate::model::ModelTimeoutPolicy,
+    ) -> (ConversationRuntime, Arc<FakeModel>) {
         let conversation_id = ConversationId::new(conversation_id);
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
@@ -5735,7 +5757,7 @@ mod tests {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter),
             approval_mode: ApprovalMode::Policy,
-            model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+            model_timeout_policy,
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -13186,7 +13208,7 @@ mod tests {
             }),
         ];
         let drain_supervision = Arc::new(tokio::sync::Notify::new());
-        let (runtime, model) = headless_runtime_over_store_with(
+        let (runtime, model) = headless_runtime_over_store_with_policy(
             &dir,
             "conv-m9c-provider",
             store.clone(),
@@ -13195,6 +13217,10 @@ mod tests {
                 drain_supervision: Some(drain_supervision.clone()),
                 ..CoordinatorProbe::default()
             }),
+            crate::model::ModelTimeoutPolicy::new(
+                std::time::Duration::from_mins(5),
+                std::time::Duration::from_mins(5),
+            ),
         )
         .await;
         let pending = Arc::new(PendingObservations::new());
