@@ -1034,6 +1034,13 @@ pub(crate) struct CoordinatorProbe {
     /// model-turn start-boundary pause (Issue #12). `take`n by the next
     /// `run_attempt`, so it arms exactly one attempt.
     pub(crate) start_boundary_pause: Option<crate::agent::execution::test_sync::StartBoundaryPause>,
+    /// Installed into the next admitted attempt's model stream: parks after
+    /// the selected provider item has been fully processed and before the
+    /// next provider/cancellation arbitration. `take`n by the next
+    /// `run_attempt`, so a drain test can hold an actually-started provider
+    /// turn live while shutdown cancellation is requested.
+    pub(crate) model_arbitration_pause:
+        Option<crate::agent::execution::test_sync::ModelArbitrationPause>,
     /// Installed into the next admitted attempt's foreground tool batch:
     /// parks after the first `ToolExecutionStarted` fact so a test can
     /// linearize drain against the sibling start frontier.
@@ -1591,6 +1598,18 @@ impl RuntimeInner {
         }
     }
 
+    /// Takes the one-shot model-arbitration pause for the next attempt.
+    #[cfg(test)]
+    fn take_model_arbitration_pause(
+        &self,
+    ) -> Option<crate::agent::execution::test_sync::ModelArbitrationPause> {
+        self.probe
+            .lock()
+            .expect("coordinator probe lock poisoned")
+            .as_mut()
+            .and_then(|probe| probe.model_arbitration_pause.take())
+    }
+
     /// Returns the durable failure that prevents this runtime from claiming
     /// successful quiescence, if one has been recorded.
     fn durability_failure_diagnostic(&self) -> Option<String> {
@@ -2072,6 +2091,9 @@ impl RuntimeInner {
                 .and_then(|probe| probe.start_boundary_pause.take());
             if let Some(pause) = pause {
                 execution.install_start_boundary_pause(pause);
+            }
+            if let Some(pause) = self.take_model_arbitration_pause() {
+                execution.install_model_arbitration_pause(pause);
             }
             let pause = self
                 .probe
@@ -7422,6 +7444,7 @@ mod tests {
             mcp_failure_drain_gate: None,
             drain_linearization: None,
             start_boundary_pause: None,
+            model_arbitration_pause: None,
             tool_start_pause: None,
             drain_supervision: None,
             attempt_exit_gate: None,
@@ -10683,6 +10706,7 @@ mod tests {
             mcp_failure_drain_gate: None,
             drain_linearization: None,
             start_boundary_pause: None,
+            model_arbitration_pause: None,
             tool_start_pause: None,
             drain_supervision: None,
             attempt_exit_gate: None,
@@ -10767,6 +10791,7 @@ mod tests {
             mcp_failure_drain_gate: None,
             drain_linearization: None,
             start_boundary_pause: None,
+            model_arbitration_pause: None,
             tool_start_pause: None,
             drain_supervision: None,
             attempt_exit_gate: None,
@@ -13293,17 +13318,22 @@ mod tests {
     /// execution exhausts its bounded terminal-publication budget while a
     /// provider turn is still parked; drain must keep supervising the live
     /// provider and may return its aggregated settlement failure only after
-    /// the provider has physically settled.
+    /// the Agent Loop has crossed its explicit settlement barrier.
     ///
-    /// Happens-before: `drain_supervision` fires only from inside the drain
-    /// task, so observing it proves drain reached supervision *with the
-    /// durability failure already recorded* instead of short-circuiting; the
+    /// Happens-before: the model-arbitration pause holds the started provider
+    /// stream immediately before the next provider/cancellation arbitration.
+    /// `drain_supervision` then fires only from inside the drain task, so
+    /// observing it proves drain reached supervision *with the durability
+    /// failure already recorded* instead of short-circuiting; the
     /// current-attempt slot is still occupied at that instant, and the
-    /// shutdown result channel is still empty. Only the explicit provider
-    /// release lets the attempt settle, and only then does shutdown return.
+    /// shutdown result channel is still empty. Releasing the exact
+    /// arbitration barrier lets the already-requested cancellation settle the
+    /// attempt, and only then does shutdown return.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)]
     async fn durability_failure_never_abandons_a_live_provider_turn() {
+        use crate::agent::execution::test_sync::ModelArbitrationPause;
+
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
@@ -13311,7 +13341,7 @@ mod tests {
             ))
             .expect("in-memory store"),
         );
-        let (release_tx, release_rx) = crate::scripted_suites::support::fake::model_release();
+        let (_release_tx, release_rx) = crate::scripted_suites::support::fake::model_release();
         let script = vec![
             FakeStep::Emit(crate::model::event::ModelEvent::Started),
             FakeStep::ParkUntilReleased(release_rx),
@@ -13326,14 +13356,17 @@ mod tests {
                 },
             }),
         ];
+        let (model_pause, mut model_pause_reached, model_pause_release) =
+            ModelArbitrationPause::install(1);
         let drain_supervision = Arc::new(tokio::sync::Notify::new());
-        let (runtime, model) = headless_runtime_over_store_with_policy(
+        let (runtime, _model) = headless_runtime_over_store_with_policy(
             &dir,
             "conv-m9c-provider",
             store.clone(),
             vec![script],
             Some(CoordinatorProbe {
                 drain_supervision: Some(drain_supervision.clone()),
+                model_arbitration_pause: Some(model_pause),
                 ..CoordinatorProbe::default()
             }),
             crate::model::ModelTimeoutPolicy::new(
@@ -13350,11 +13383,15 @@ mod tests {
         runtime
             .submit_inbound(text_content("park the provider"))
             .expect("accepted");
-        let mut parked = model.parked();
-        parked
-            .wait_for(|is_parked| *is_parked)
+        // The provider has emitted Started and the Agent Loop now owns its
+        // open stream, but the next provider/cancellation arbitration is
+        // held behind an exact test barrier. Shutdown can therefore request
+        // cancellation without racing the attempt to settle before drain
+        // begins supervision.
+        model_pause_reached
+            .wait_for(|is_reached| *is_reached)
             .await
-            .expect("provider gate stays open");
+            .expect("model arbitration pause channel stays open");
 
         // A *different* owner records the durability failure: one background
         // execution spends its whole bounded terminal-publication budget.
@@ -13408,9 +13445,10 @@ mod tests {
             ConversationLifecycleState::Draining
         );
 
-        // Physical provider settlement is the only thing that may release the
-        // supervisor.
-        release_tx.send_replace(true);
+        // Release the exact post-Started arbitration. The already-requested
+        // cancellation then wins the next Agent Loop arbitration while the
+        // fake provider stream is still pending, and the attempt settles.
+        let _ = model_pause_release.send(());
         let shutdown = done_rx.await.expect("shutdown result channel");
         assert!(
             matches!(
