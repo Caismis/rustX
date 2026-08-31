@@ -15,19 +15,27 @@ The intended layout is:
 
 ```text
 examples/local-runtime/
+├── README.md
 ├── models.jsonc
 ├── rustx.jsonc
 ├── workspace/
-│   ├── .rustx/
-│   │   └── workflows/       # explicitly registered YAML programs
+│   ├── AGENTS.md
 │   └── .agents/
-│       └── tools/
-│           └── echo/
-│               ├── TOOL.toml
-│               ├── input.schema.json
-│               ├── pyproject.toml
-│               ├── uv.lock
-│               └── tool.py
+│       ├── skills/
+│       │   └── review-guidance/SKILL.md
+│       ├── tools/
+│       │   └── echo/
+│       │       ├── TOOL.toml
+│       │       ├── input.schema.json
+│       │       ├── pyproject.toml
+│       │       ├── uv.lock
+│       │       └── tool.py
+│       ├── subagents/
+│       │   ├── navigator/{instructions.md,AGENTS.md}
+│       │   └── reviewer/{instructions.md,AGENTS.md}
+│       └── workflows/
+│           ├── review_pr.yaml
+│           └── parallel_review.yaml
 └── .rustx/        # runtime-root; generated state, normally absent initially
 ```
 
@@ -38,7 +46,10 @@ examples/local-runtime/
 | `models.jsonc` | The runtime's provider/model authority: endpoint, credential source, model limits, capabilities, opaque request parameters, reasoning profiles, and protocol compatibility. |
 | `rustx.jsonc` | The current runtime/project configuration: default model for new Sessions, context, launch-scoped Agent Status modules/timezone, native-tool policy and activation, MCP sources, Skill roots, and authorized environment. |
 | `workspace/` | The authoritative execution cwd and conventional project/source tree, including Skills and editable custom Python tool packages. Relative native file-tool paths resolve here. This is not a general filesystem sandbox for Read/Write/Edit/Grep/Glob. |
+| `workspace/.agents/skills/*` | Canonical project Skills, automatically discovered through the Skill plane's own semantics; a directory does not register a Workflow or Subagent. |
 | `workspace/.agents/tools/*` | Automatically discovered custom Python tool source packages; there is no separate registration entry in `rustx.jsonc`. |
+| `workspace/.agents/subagents/*` | Explicitly defined/admitted Subagent instruction and project-guidance sources. The config controls admission; filesystem presence alone does not expose a profile. |
+| `workspace/.agents/workflows/*` | Explicitly registered native Workflow YAML sources. The config controls both registration and model visibility; the directory is never scanned. |
 | `.rustx/` (`runtime-root`) | Runtime-owned generated artifacts, immutable Python tool versions, environments, and Session storage. Keep it disjoint from `workspace/`; it is a separate ownership domain, not a promise that every file under it is unreachable through every filesystem mechanism. |
 
 Native Read/Write/Edit/Grep/Glob paths may be relative to the execution cwd or
@@ -52,7 +63,9 @@ The runtime root is not a general filesystem-security boundary. See the
 
 The runtime owns generated state under `runtime-root` (the example uses
 `examples/local-runtime/.rustx`) separately from the model's conventional
-project tree. Native file-tool paths are not implicitly confined to that tree.
+project tree. Project-authored Agent resources belong to the workspace-owned
+`.agents/` namespace; `.rustx/` is not their canonical home. Native
+file-tool paths are not implicitly confined to either tree.
 
 ## Configuration format
 
@@ -208,6 +221,10 @@ forwards these controls, as well as repeatable `--skill <path>` and
 
 Skills are discovered from the current user/global and project roots, plus any
 explicit `skills` paths in this file or repeatable `--skill` arguments.
+`.agents/skills/` is the canonical project layout. The Skill plane retains its
+existing automatic roots, including `~/.rustx/skills/`, `~/.agents/skills/`,
+`<workspace>/.rustx/skills/`, and `<workspace>/.agents/skills/`; this example
+deliberately uses only `workspace/.agents/skills/`.
 `disable-model-invocation: true`
 keeps a validated Skill in runtime resource state but omits it from the
 model-visible catalog.
@@ -219,14 +236,15 @@ discover every YAML file under the workspace. A registered id such as
 `review_pr` resolves exactly to:
 
 ```text
-workspace/.rustx/workflows/review_pr.yaml
+workspace/.agents/workflows/review_pr.yaml
 ```
 
 `workflows.definitions` is the registration set and `workflows.main` is the
 independent model-visible set. Every id in `workflows.main` becomes one
 concrete Tool named by that id, using the YAML `description` and `input`
 schema. A registered-but-not-main workflow remains available to native
-runtime composition but is not offered to the model.
+runtime composition but is not offered to the model. An unregistered YAML
+file, even a malformed one, is irrelevant.
 
 The YAML is serialization only. It deserializes into a `WorkflowDefinition`,
 which is statically checked and compiled into an immutable `WorkflowProgram`;
@@ -246,10 +264,11 @@ child transcripts do not enter the parent conversation history.
 
 Workflow subagent admission is independent from `subagents.main`: a profile
 must be listed in `subagents.workflow` to be usable by a Workflow Agent, and
-being main-visible does not grant Workflow admission. A reload constructs and
-validates the complete candidate, then publishes it atomically; an active run
-keeps the immutable program snapshot with which it started. Unfinished runs
-are not replayed after a crash.
+being main-visible does not grant Workflow admission. In this example
+`navigator` is main-admitted while `reviewer` is Workflow-only. A reload
+constructs and validates the complete candidate, then publishes it atomically;
+an active run keeps the immutable program snapshot with which it started.
+Unfinished runs are not replayed after a crash.
 
 ## MCP servers
 

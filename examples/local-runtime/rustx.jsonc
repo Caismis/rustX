@@ -1,62 +1,32 @@
-// rustx.jsonc — the current runtime/project configuration.
+// rustx.jsonc — a complete, copyable local-runtime launch configuration.
 //
-// This file is JSONC: ordinary JSON plus `//` and `/* */` comments and
-// trailing commas. Unknown fields are rejected, so a typo fails startup
-// instead of silently changing runtime semantics.
-//
-// Everything here is *current-launch* state, re-read on every process start
-// including resume. None of it is Session history: an existing Session's
-// explicitly selected model lives in the runtime-owned Session catalog under
-// `runtime-root` and is never overwritten by this file.
+// This file is JSONC: ordinary JSON plus comments and trailing commas.
+// `models.jsonc` is the provider/model catalog; this file selects the model
+// and defines the current runtime's policies and admitted resources.
 {
-  // The only runtime configuration schema version this runtime accepts.
   "schemaVersion": 5,
-
-  // The agent identity recorded on this conversation's attempts and
-  // inherited by its subagents. Any non-empty name.
   "agentId": "default-agent",
 
-  // The model a brand-new Session starts with. `models.jsonc` declares what
-  // exists; this block picks one and overrides its defaults.
+  // The default model/session policy. The model catalog supplies the provider
+  // endpoint, credentials reference, context window, and model defaults.
   "model": {
-    // The canonical `provider/model` reference. It must exist in
-    // `models.jsonc` or startup fails before any Session is created.
     "model": "example/demo-model",
-
-    // A profile name from that model's `reasoning.profiles`. Omit to take
-    // the model's own `defaultProfile`.
     "reasoningProfile": "off",
-
-    // Session-level provider wire parameters, overlaid on the model-level
-    // `requestParams` key by key. A key owned by the selected reasoning
-    // profile may not be repeated here.
     "requestParams": {
       "temperature": 0.1,
     },
-
-    // The output budget for this Session. Omit to use the model's
-    // configured `maxOutputTokens`.
     "maxOutputTokens": 2048,
-
-    // Which model writes compaction summaries:
-    //   {"mode": "session"}  follow the admitted attempt's primary model
-    //   {"mode": "explicit", "model": "...", ...}  a dedicated model,
-    //       optionally with its own reasoningProfile, requestParams, and
-    //       maxOutputTokens — useful when the primary model is expensive.
+    // Use the active Session model for summaries. Replace with an explicit
+    // model block when summaries should use a cheaper/dedicated model.
     "summaryModel": {
       "mode": "session",
     },
   },
 
-  // The runtime-wide HITL mode, applied at attempt boundaries:
-  //   "policy"       honor each Tool's configured approval policy
-  //   "full_access"  suppress approval prompts for this runtime only
-  // It is never restored from Session history.
+  // Current-launch HITL behavior; this is never restored from Session history.
   "approvalMode": "policy",
 
-  // Optional, launch-scoped Agent Status modules. Omitting this block enables
-  // both built-in modules. Time owns its optional IANA timezone; omit it for
-  // UTC. Resource reload never rereads this launch configuration.
+  // Optional Agent Status modules and their launch-scoped environment.
   "agentStatus": {
     "time": {
       "enabled": true,
@@ -67,45 +37,23 @@
     },
   },
 
-  // Context policy. The context *window* is not here: it belongs to the
-  // selected model and is taken from that attempt's model snapshot.
+  // Reserve part of the model window, retain recent context, and cap summary
+  // output independently of the primary model output limit.
   "context": {
-    // Tokens permanently held out of whichever window is in force.
     "reserveTokens": 4096,
-    // Tokens of recent conversation kept uncompressed by compaction.
     "keepRecentTokens": 12000,
-    // The output cap applied to the summary invocation itself. Optional;
-    // must be positive when present.
     "summaryOutputCap": 1024,
   },
-
-  // One finite runtime-owned policy shared by primary model requests and
-  // compaction summary requests. These fields are elapsed milliseconds;
-  // they are not part of ModelRequest or Session history.
   "modelTimeoutPolicy": {
     "responseStartTimeoutMs": 30000,
     "streamIdleTimeoutMs": 15000,
   },
 
-  // Native tool policy. Three independent axes per tool, each with a
-  // deterministic default, so a tool listed here only to change one axis
-  // still reads explicitly:
-  //   execution:   "foreground_only" | "background_only" | "model_selectable"
-  //   concurrency: "sequential" | "parallel"
-  //   approval:    "never" | "always"   (defaults to "never")
-  //
-  // Availability, activation, approval, approval mode, execution ownership,
-  // and concurrency are separate facts; none implies another.
-  //
-  // "model_selectable" makes the model choose ownership per call through a
-  // required top-level `execution_mode` argument that rustX injects into the
-  // schema and strips before the tool sees it. Because rustX writes into the
-  // root schema under that policy, such a tool's schema root must stay
-  // simple — no allOf/anyOf/oneOf/$ref/const/enum at the root, and no
-  // `execution_mode` of its own.
-  //
-  // The `execution` and `ask_user` intrinsics are deliberately absent:
-  // they are fixed foreground, sequential, approval-never.
+  // Native tools have independent execution, concurrency, and approval axes.
+  // `model_selectable` makes the model choose foreground/background for Bash;
+  // `always` makes every Bash call require approval in policy mode.
+  // `execution`, `ask_user`, and `todo` are fixed intrinsics and are therefore
+  // intentionally absent from this configurable policy table.
   "nativeTools": {
     "read": {
       "execution": "foreground_only",
@@ -124,178 +72,117 @@
       "concurrency": "parallel",
     },
     "grep": {
-      "execution": "foreground_only",
+      "execution": "background_only",
       "concurrency": "parallel",
     },
     "bash": {
-      // The model picks foreground or background per call. Add
-      // "approval": "always" to require a human decision for every call.
       "execution": "model_selectable",
       "concurrency": "sequential",
+      "approval": "always",
     },
   },
 
-  // MCP servers, keyed by server identity, in the same shape mainstream MCP
-  // clients use — an entry can be copied straight from a server's own
-  // README. The baseline is empty so this example needs no external process.
-  //
-  // Exactly two transports exist. There is no `streamable-http` alias, no
-  // `sse`, and no `ws`. `{"url": ...}` alone means http and
-  // `{"command": ...}` alone means stdio; anything ambiguous or
-  // contradictory fails startup rather than being guessed at.
-  //
-  // "exa": {
-  //   "type": "http",
-  //   "url": "https://mcp.exa.ai/mcp",
-  //   "headers": {"x-api-key": "YOUR_EXA_API_KEY"},
-  // },
-  // "local": {
-  //   "type": "stdio",
-  //   "command": "npx",
-  //   "args": ["-y", "some-mcp-server"],
-  //   "env": {"SOME_API_KEY": "..."},
-  //   "cwd": "subdir",            // workspace-relative
-  // },
-  "mcpServers": {},
+  // The baseline is MCP-free. Uncomment one of these entries when an external
+  // service is intentionally part of a local project. Both transport forms
+  // stay inside the named server map:
+  "mcpServers": {
+    // "http-server": {
+    //   "type": "http",
+    //   "url": "https://example.invalid/mcp",
+    //   "headers": {"Authorization": "Bearer YOUR_TOKEN"},
+    // },
+    // "stdio-server": {
+    //   "type": "stdio",
+    //   "command": "npx",
+    //   "args": ["-y", "some-mcp-server"],
+    //   "env": {"SERVICE_TOKEN": "YOUR_TOKEN"},
+    //   "cwd": "workspace-relative-subdirectory",
+    // },
+  },
 
-  // rustX's own invocation policy for an MCP server's tools, keyed by the
-  // same identity. It is deliberately separate so `mcpServers` entries stay
-  // copy-pasteable. A server without an entry gets foreground_only +
-  // sequential; an entry naming an undeclared server fails startup.
-  //
-  // "exa": {
-  //   "execution": "foreground_only",
-  //   "concurrency": "parallel",
-  //   "approval": "never",
-  // },
-  "mcpToolPolicies": {},
+  // rustX invocation policy is separate from the transport/server definition.
+  // A declared server with no entry uses foreground-only, sequential,
+  // approval-never defaults. Uncomment the matching entry when adding a
+  // server above.
+  "mcpToolPolicies": {
+    // "http-server": {
+    //   "execution": "foreground_only",
+    //   "concurrency": "parallel",
+    //   "approval": "never",
+    // },
+  },
 
-  // Which optional built-in tools are active. Mandatory native Read stays
-  // active and available whatever this list says — `[]` leaves the optional
-  // built-ins available but inactive, and `--no-builtin-tools` / `--no-tools`
-  // / `--tools` / `--exclude-tools` refine this after discovery.
+  // Optional native capabilities active in the main Agent. Fixed intrinsics
+  // keep their intrinsic semantics; `subagent` exposes only `subagents.main`.
   "defaultTools": [
-    "execution", // inspect/cancel conversation-owned background work and subagents
-    "ask_user",  // publish one bounded Question to the human
+    "execution",
+    "ask_user",
     "read",
     "write",
     "edit",
     "glob",
     "grep",
     "bash",
-    // Add "subagent" when `subagents.definitions` below contains at least one
-    // named agent; an empty catalog intentionally exposes no subagent tool.
-    "todo",            // track multi-step work as a visible task list
+    "subagent",
+    "todo",
   ],
 
-  // Extra Skill roots, package directories, or SKILL.md paths. Relative
-  // paths resolve against the canonical workspace root. These are additions:
-  // `~/.rustx/skills`, `~/.agents/skills`, `<workspace>/.rustx/skills`, and
-  // `<workspace>/.agents/skills` are discovered automatically (and
-  // `--no-skills` drops those automatic roots). Unlike an automatic root, a
-  // path listed here must exist.
-  //
-  // "skills": ["../shared-skills", "workspace/.agents/skills/pdf"],
+  // Additional Skill roots/packages. `.agents/skills/` is the canonical
+  // project layout and is discovered automatically. Skill discovery also
+  // retains its existing `.rustx/skills` roots; this example does not rely on
+  // them. Skills are not explicit Workflow-style registrations.
   "skills": [],
 
-  // Named subagents. Each entry is one immutable definition admitted into
-  // the runtime resource generation; the map key *is* the agent name, so a
-  // definition never repeats it. The model chooses only which named agent
-  // runs — `{"agent": "...", "task": "...", "context": "..."}` — and can
-  // never override a definition's model, tools, Skills, or instructions.
-  //
-  // A subagent resolves against the immutable generation owned by the
-  // attempt that invoked it, so a config reload mid-turn cannot change what
-  // an in-flight attempt's subagent sees.
+  // Project-owned Subagent definitions live under workspace/.agents/subagents.
+  // Parent composition resolves and freezes their instruction sources before
+  // execution; a child cannot rediscover this config or walk project ancestors.
   "subagents": {
-    // Launch-scoped: the per-conversation concurrency bound is read once, at
-    // startup, and resource reload deliberately never resizes it.
     "maxConcurrent": 4,
-
     "definitions": {
-      // "explore": {
-      //   // The bounded routing description the model sees in the
-      //   // `subagent` tool description.
-      //   "description": "Read-only repository exploration.",
-      //
-      //   // The child's instruction document. Relative paths resolve
-      //   // against the canonical workspace root, and the parent freezes
-      //   // the file's content into the definition: the child never
-      //   // reads this file, or this config, itself.
-      //   "instructionsFile": ".rustx/subagents/explore.md",
-      //
-      //   // Omit to inherit the *invoking attempt's* frozen effective
-      //   // model. A named model must exist in `models.jsonc` or startup
-      //   // fails.
-      //   "model": "example/demo-model",
-      //
-      //   // Exact, source-qualified capability selection. Origins are
-      //   // named rather than collapsed into bare strings, so a built-in
-      //   // `read` and an MCP server's `read` are never interchangeable.
-      //   // There are no wildcards: a selection is an exact list.
-      //   //
-      //   // A selection may name a capability the *parent* has available
-      //   // but inactive — a subagent is an independent projection of the
-      //   // same runtime authority. It can never name one the runtime
-      //   // does not authorize at all.
-      //   //
-      //   // `subagent` and `ask_user` are rejected: nested delegation is
-      //   // unsupported, and a headless child has no questionnaire
-      //   // authority.
-      //   "tools": {
-      //     "builtin": ["read", "glob", "grep"],
-      //     "mcp": {"exa": ["web_search_exa"]},
-      //     "python": ["repository_symbols"],
-      //   },
-      //
-      //   // An exact allowlist over the Skills this generation admitted.
-      //   // Unselected Skills are absent from the child's catalog, and an
-      //   // unknown name fails startup rather than being dropped.
-      //   // Progressive disclosure is preserved: the child sees catalog
-      //   // metadata and loads bodies through ordinary Skill semantics.
-      //   "skills": ["repository-navigation"],
-      //
-      //   // Project instructions are parent-resolved and frozen; the child
-      //   // never walks ancestors of its own.
-      //   //   inherit: true   this generation's normal AGENTS.md chain,
-      //   //                   then the explicit files in configured order
-      //   //   inherit: false  the explicit files only
-      //   "agentsMd": {
-      //     "inherit": true,
-      //     "files": [".rustx/subagents/explore/AGENTS.md"],
-      //   },
-      //
-      //   // Omit or disable for the existing shared-workspace behavior.
-      //   // When enabled, the child worktree starts at one exact committed
-      //   // HEAD; parent dirty bytes are never copied. Set
-      //   // requireCleanParent to true to reject a dirty parent before
-      //   // child ownership is committed.
-      //   "worktree": {
-      //     "enabled": true,
-      //     "requireCleanParent": false,
-      //   },
-      // },
+      "navigator": {
+        "description": "Read-only repository navigation and evidence gathering.",
+        "instructionsFile": ".agents/subagents/navigator/instructions.md",
+        "tools": {
+          "builtin": ["read", "glob", "grep"],
+        },
+        "skills": ["review-guidance"],
+        "agentsMd": {
+          "inherit": true,
+          "files": [".agents/subagents/navigator/AGENTS.md"],
+        },
+      },
+      "reviewer": {
+        "description": "Review one bounded request and return a concise result.",
+        "instructionsFile": ".agents/subagents/reviewer/instructions.md",
+        "model": "example/demo-model",
+        "tools": {
+          "builtin": ["read"],
+        },
+        "skills": ["review-guidance"],
+        "agentsMd": {
+          "inherit": false,
+          "files": [".agents/subagents/reviewer/AGENTS.md"],
+        },
+      },
     },
-
-    // Definition and admission are separate. A profile may be main-only,
-    // Workflow-only, both, or defined but admitted to neither domain.
-    "main": [],
-    "workflow": [],
+    // Main exposure and Workflow admission are deliberately independent:
+    // navigator is directly callable, while reviewer is Workflow-only.
+    "main": ["navigator"],
+    "workflow": ["reviewer"],
   },
 
-  // Workflow YAML is registered explicitly by id. The id resolves exactly
-  // to `<workspace>/.rustx/workflows/<id>.yaml`; directory contents are not
-  // discovered, and `workflows.main` is the separate model-visible set.
-  // Each Workflow-main id becomes one concrete Tool with the YAML input
-  // schema and description.
+  // Each id explicitly registers exactly one YAML file at
+  // workspace/.agents/workflows/<id>.yaml. Directory presence alone does not
+  // register a Workflow, and `main` independently controls model visibility.
+  // YAML serializes a statically checked WorkflowDefinition which compiles to
+  // one immutable WorkflowProgram; it is not a scripting language or an
+  // expression/interpolation engine.
   "workflows": {
-    "definitions": [],
-    "main": [],
+    "definitions": ["review_pr", "parallel_review"],
+    "main": ["review_pr", "parallel_review"],
   },
 
-  // The base authorized tool environment. Every entry is explicit: no
-  // process environment variable reaches a tool implicitly. Keep provider
-  // credentials in `models.jsonc`'s `apiKey` reference instead of here.
+  // Only this explicitly authorized environment reaches tools.
   "environment": {
     "RUSTX_EXAMPLE_MODE": "local-runtime",
   },

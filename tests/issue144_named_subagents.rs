@@ -20,11 +20,13 @@ use rustx::model::invocation::ModelBindingRegistry;
 use rustx::model::session::SessionModelConfig;
 use rustx::runtime::RuntimeResourceSnapshot;
 use rustx::runtime::subagent::{
-    ResolvedSubagentTool, SubagentDefinitionDigest, SubagentName, SubagentResolutionError,
-    SubagentResolver,
+    ResolvedSubagentSpec, ResolvedSubagentTool, SubagentDefinitionDigest, SubagentName,
+    SubagentResolutionError, SubagentResolver,
 };
 
 const KEY_ENV: &str = "RUSTX_ISSUE144_KEY";
+const EXPLORE_AGENTS: &str = ".agents/subagents/explore/AGENTS.md";
+const EXPLORE_EXTRA: &str = ".agents/subagents/explore/EXTRA.md";
 
 const MODELS: &str = r#"{
   "providers": {
@@ -81,6 +83,13 @@ fn inherited_model() -> SessionModelConfig {
     SessionModelConfig::of(ModelRef::parse("local/model-a").expect("model reference"))
 }
 
+fn project_instruction_contents(spec: &ResolvedSubagentSpec) -> Vec<String> {
+    spec.project_instructions
+        .iter()
+        .map(|file| file.content.clone())
+        .collect()
+}
+
 /// One temporary world: models, workspace, config, and subagent resources.
 struct Lab {
     dir: tempfile::TempDir,
@@ -91,10 +100,13 @@ impl Lab {
         let lab = Self {
             dir: tempfile::tempdir().expect("lab directory"),
         };
-        std::fs::create_dir_all(lab.workspace().join("subagents")).expect("subagent resources");
+        for profile in ["explore", "research", "pinned", "isolated"] {
+            std::fs::create_dir_all(lab.workspace().join(format!(".agents/subagents/{profile}")))
+                .expect("subagent resources");
+        }
         std::fs::write(lab.root().join("models.jsonc"), MODELS).expect("models.jsonc");
         std::fs::write(
-            lab.workspace().join("subagents/explore.md"),
+            lab.subagent_file("explore", "instructions.md"),
             "Explore the shared workspace read-only.\n",
         )
         .expect("explore instructions");
@@ -104,12 +116,12 @@ impl Lab {
         )
         .expect("AGENTS.md");
         std::fs::write(
-            lab.workspace().join("subagents/explore-AGENTS.md"),
+            lab.subagent_file("explore", "AGENTS.md"),
             "explicit agent instructions\n",
         )
         .expect("agent AGENTS.md");
         std::fs::write(
-            lab.workspace().join("subagents/explore-EXTRA.md"),
+            lab.subagent_file("explore", "EXTRA.md"),
             "second explicit file\n",
         )
         .expect("second agent AGENTS.md");
@@ -122,6 +134,13 @@ impl Lab {
 
     fn workspace(&self) -> std::path::PathBuf {
         self.root().join("workspace")
+    }
+
+    fn subagent_file(&self, profile: &str, file: &str) -> std::path::PathBuf {
+        self.workspace()
+            .join(".agents/subagents")
+            .join(profile)
+            .join(file)
     }
 
     fn write_config(&self, subagents: &serde_json::Value) {
@@ -301,7 +320,7 @@ fn explore(builtin: &[&str]) -> serde_json::Value {
         "definitions": {
             "explore": {
                 "description": "Read-only repository exploration.",
-                "instructionsFile": "subagents/explore.md",
+                "instructionsFile": ".agents/subagents/explore/instructions.md",
                 "tools": {"builtin": builtin},
             }
         },
@@ -325,7 +344,8 @@ fn digest_of(resources: &RuntimeResourceSnapshot, name: &str) -> SubagentDefinit
 async fn only_named_catalog_definitions_are_admitted() {
     let lab = Lab::new();
     std::fs::write(
-        lab.workspace().join("subagents/research.md"),
+        lab.workspace()
+            .join(".agents/subagents/research/instructions.md"),
         "Research broadly.\n",
     )
     .expect("research instructions");
@@ -334,11 +354,11 @@ async fn only_named_catalog_definitions_are_admitted() {
         "definitions": {
             "research": {
                 "description": "Deep research.",
-                "instructionsFile": "subagents/research.md",
+                "instructionsFile": ".agents/subagents/research/instructions.md",
             },
             "explore": {
                 "description": "Read-only repository exploration.",
-                "instructionsFile": "subagents/explore.md",
+                "instructionsFile": ".agents/subagents/explore/instructions.md",
                 "tools": {"builtin": ["read", "grep"]},
             }
         }
@@ -408,12 +428,14 @@ async fn an_attempt_frozen_on_r1_resolves_r1_after_r2_becomes_current() {
 
     // R2 redefines `explore` and adds `research`.
     std::fs::write(
-        lab.workspace().join("subagents/research.md"),
+        lab.workspace()
+            .join(".agents/subagents/research/instructions.md"),
         "Research broadly.\n",
     )
     .expect("research instructions");
     std::fs::write(
-        lab.workspace().join("subagents/explore.md"),
+        lab.workspace()
+            .join(".agents/subagents/explore/instructions.md"),
         "Explore the shared workspace read-only, and summarize.\n",
     )
     .expect("revised explore instructions");
@@ -422,12 +444,12 @@ async fn an_attempt_frozen_on_r1_resolves_r1_after_r2_becomes_current() {
         "definitions": {
             "explore": {
                 "description": "Read-only repository exploration.",
-                "instructionsFile": "subagents/explore.md",
+                "instructionsFile": ".agents/subagents/explore/instructions.md",
                 "tools": {"builtin": ["read"]},
             },
             "research": {
                 "description": "Deep research.",
-                "instructionsFile": "subagents/research.md",
+                "instructionsFile": ".agents/subagents/research/instructions.md",
             }
         }
     }));
@@ -491,7 +513,7 @@ async fn a_failed_reload_leaves_the_previous_generation_completely_authoritative
         "definitions": {
             "explore": {
                 "description": "Read-only repository exploration.",
-                "instructionsFile": "subagents/explore.md",
+                "instructionsFile": ".agents/subagents/explore/instructions.md",
                 "tools": {"builtin": ["definitely_not_a_capability"]},
             }
         }
@@ -590,7 +612,7 @@ async fn statically_invalid_references_fail_composition_closed() {
                 "maxConcurrent": 4,
                 "definitions": {"explore": {
                     "description": "d",
-                    "instructionsFile": "subagents/explore.md",
+                    "instructionsFile": ".agents/subagents/explore/instructions.md",
                     "tools": {"builtin": ["not_a_builtin"]},
                 }}
             }),
@@ -601,7 +623,7 @@ async fn statically_invalid_references_fail_composition_closed() {
                 "maxConcurrent": 4,
                 "definitions": {"explore": {
                     "description": "d",
-                    "instructionsFile": "subagents/explore.md",
+                    "instructionsFile": ".agents/subagents/explore/instructions.md",
                     "tools": {"mcp": {"unconfigured": ["anything"]}},
                 }}
             }),
@@ -612,7 +634,7 @@ async fn statically_invalid_references_fail_composition_closed() {
                 "maxConcurrent": 4,
                 "definitions": {"explore": {
                     "description": "d",
-                    "instructionsFile": "subagents/explore.md",
+                    "instructionsFile": ".agents/subagents/explore/instructions.md",
                     "tools": {"python": ["not_a_python_tool"]},
                 }}
             }),
@@ -623,7 +645,7 @@ async fn statically_invalid_references_fail_composition_closed() {
                 "maxConcurrent": 4,
                 "definitions": {"explore": {
                     "description": "d",
-                    "instructionsFile": "subagents/explore.md",
+                    "instructionsFile": ".agents/subagents/explore/instructions.md",
                     "model": "local/model-missing",
                 }}
             }),
@@ -634,7 +656,7 @@ async fn statically_invalid_references_fail_composition_closed() {
                 "maxConcurrent": 4,
                 "definitions": {"explore": {
                     "description": "d",
-                    "instructionsFile": "subagents/explore.md",
+                    "instructionsFile": ".agents/subagents/explore/instructions.md",
                     "skills": ["no-such-skill"],
                 }}
             }),
@@ -691,7 +713,7 @@ async fn an_unavailable_source_keeps_the_runtime_healthy_but_blocks_the_agent_th
             "definitions": {
                 "explore": {
                     "description": "Read-only repository exploration.",
-                    "instructionsFile": "subagents/explore.md",
+                    "instructionsFile": ".agents/subagents/explore/instructions.md",
                     "tools": {"mcp": {"offline": ["get_issue"]}},
                 }
             },
@@ -744,7 +766,8 @@ async fn an_unavailable_source_keeps_the_runtime_healthy_but_blocks_the_agent_th
 async fn model_semantics_inherit_the_invoking_attempt_or_freeze_the_explicit_selection() {
     let lab = Lab::new();
     std::fs::write(
-        lab.workspace().join("subagents/pinned.md"),
+        lab.workspace()
+            .join(".agents/subagents/pinned/instructions.md"),
         "Run on the pinned model.\n",
     )
     .expect("pinned instructions");
@@ -753,11 +776,11 @@ async fn model_semantics_inherit_the_invoking_attempt_or_freeze_the_explicit_sel
         "definitions": {
             "explore": {
                 "description": "Inherits the invoking attempt's model.",
-                "instructionsFile": "subagents/explore.md",
+                "instructionsFile": ".agents/subagents/explore/instructions.md",
             },
             "pinned": {
                 "description": "Runs on its own model.",
-                "instructionsFile": "subagents/pinned.md",
+                "instructionsFile": ".agents/subagents/pinned/instructions.md",
                 "model": "local/model-b",
             }
         }
@@ -802,22 +825,22 @@ async fn model_semantics_inherit_the_invoking_attempt_or_freeze_the_explicit_sel
 async fn project_instruction_policy_freezes_a_deterministic_chain() {
     let lab = Lab::new();
     std::fs::write(
-        lab.workspace().join("subagents/isolated.md"),
+        lab.subagent_file("isolated", "instructions.md"),
         "Ignore the workspace chain.\n",
     )
     .expect("isolated instructions");
-    let files = serde_json::json!(["subagents/explore-AGENTS.md", "subagents/explore-EXTRA.md"]);
+    let files = serde_json::json!([EXPLORE_AGENTS, EXPLORE_EXTRA]);
     lab.write_config(&serde_json::json!({
         "maxConcurrent": 4,
         "definitions": {
             "explore": {
                 "description": "Inherits the parent chain.",
-                "instructionsFile": "subagents/explore.md",
+                "instructionsFile": ".agents/subagents/explore/instructions.md",
                 "agentsMd": {"inherit": true, "files": files},
             },
             "isolated": {
                 "description": "Explicit files only.",
-                "instructionsFile": "subagents/isolated.md",
+                "instructionsFile": ".agents/subagents/isolated/instructions.md",
                 "agentsMd": {"inherit": false, "files": files},
             }
         }
@@ -836,11 +859,7 @@ async fn project_instruction_policy_freezes_a_deterministic_chain() {
     let inherited =
         SubagentResolver::resolve(&resources, &agent("explore"), &inherited_model(), &registry)
             .expect("the inheriting agent resolves");
-    let inherited_contents = inherited
-        .project_instructions
-        .iter()
-        .map(|file| file.content.clone())
-        .collect::<Vec<_>>();
+    let inherited_contents = project_instruction_contents(&inherited);
     let mut expected = parent_chain.clone();
     expected.push("explicit agent instructions\n".to_owned());
     expected.push("second explicit file\n".to_owned());
@@ -857,11 +876,7 @@ async fn project_instruction_policy_freezes_a_deterministic_chain() {
     )
     .expect("the isolated agent resolves");
     assert_eq!(
-        isolated
-            .project_instructions
-            .iter()
-            .map(|file| file.content.clone())
-            .collect::<Vec<_>>(),
+        project_instruction_contents(&isolated),
         vec![
             "explicit agent instructions\n".to_owned(),
             "second explicit file\n".to_owned(),
@@ -871,12 +886,12 @@ async fn project_instruction_policy_freezes_a_deterministic_chain() {
 
     // Ordering is configuration order, not filesystem or map order: the same
     // files listed the other way round produce the other order.
-    let reversed = serde_json::json!(["subagents/explore-EXTRA.md", "subagents/explore-AGENTS.md"]);
+    let reversed = serde_json::json!([EXPLORE_EXTRA, EXPLORE_AGENTS]);
     lab.write_config(&serde_json::json!({
         "maxConcurrent": 4,
         "definitions": {"isolated": {
             "description": "Explicit files only.",
-            "instructionsFile": "subagents/isolated.md",
+            "instructionsFile": ".agents/subagents/isolated/instructions.md",
             "agentsMd": {"inherit": false, "files": reversed},
         }}
     }));
@@ -890,11 +905,7 @@ async fn project_instruction_policy_freezes_a_deterministic_chain() {
         SubagentResolver::resolve(&reloaded, &agent("isolated"), &inherited_model(), &registry)
             .expect("the isolated agent resolves");
     assert_eq!(
-        reordered
-            .project_instructions
-            .iter()
-            .map(|file| file.content.clone())
-            .collect::<Vec<_>>(),
+        project_instruction_contents(&reordered),
         vec![
             "second explicit file\n".to_owned(),
             "explicit agent instructions\n".to_owned(),
@@ -918,7 +929,7 @@ async fn the_skill_allowlist_is_exact_and_preserves_progressive_disclosure() {
         "maxConcurrent": 4,
         "definitions": {"explore": {
             "description": "Read-only repository exploration.",
-            "instructionsFile": "subagents/explore.md",
+            "instructionsFile": ".agents/subagents/explore/instructions.md",
             "skills": ["alpha"],
         }}
     }));
@@ -968,7 +979,7 @@ async fn the_definition_digest_ignores_incidental_formatting_and_tracks_semantic
         "maxConcurrent": 4,
         "definitions": {"explore": {
             "description": "Read-only repository exploration.",
-            "instructionsFile": "subagents/explore.md",
+            "instructionsFile": ".agents/subagents/explore/instructions.md",
             "tools": {"builtin": ["read", "grep"]},
         }}
     }));
@@ -989,7 +1000,7 @@ async fn the_definition_digest_ignores_incidental_formatting_and_tracks_semantic
     "definitions": {
       "explore": {
         "tools": {"builtin": ["grep", "read"]},
-        "instructionsFile":    "subagents/explore.md",
+        "instructionsFile":    ".agents/subagents/explore/instructions.md",
         "description": "Read-only repository exploration.",
       },
     },
@@ -1016,7 +1027,7 @@ async fn the_definition_digest_ignores_incidental_formatting_and_tracks_semantic
         "maxConcurrent": 4,
         "definitions": {"explore": {
             "description": "Read-only repository exploration.",
-            "instructionsFile": "subagents/explore.md",
+            "instructionsFile": ".agents/subagents/explore/instructions.md",
             "tools": {"builtin": ["read"]},
         }}
     }));
@@ -1082,7 +1093,7 @@ async fn max_concurrent_is_launch_scoped() {
         "maxConcurrent": 1,
         "definitions": {"explore": {
             "description": "Read-only repository exploration.",
-            "instructionsFile": "subagents/explore.md",
+            "instructionsFile": ".agents/subagents/explore/instructions.md",
             "tools": {"builtin": ["read"]},
         }}
     }));
@@ -1094,7 +1105,7 @@ async fn max_concurrent_is_launch_scoped() {
         "maxConcurrent": 8,
         "definitions": {"explore": {
             "description": "Read-only repository exploration, revised.",
-            "instructionsFile": "subagents/explore.md",
+            "instructionsFile": ".agents/subagents/explore/instructions.md",
             "tools": {"builtin": ["read"]},
         }}
     }));
@@ -1500,7 +1511,7 @@ async fn an_unavailable_source_cannot_hide_a_later_invalid_selector() {
             "definitions": {
                 "explore": {
                     "description": "Read-only repository exploration.",
-                    "instructionsFile": "subagents/explore.md",
+                    "instructionsFile": ".agents/subagents/explore/instructions.md",
                     "tools": {
                         // `mcp:` sorts before `python:` in canonical selector
                         // order, so the unavailable source is inspected first.
@@ -1542,7 +1553,7 @@ async fn skill_version_identity_is_frozen_across_the_boundary() {
         "maxConcurrent": 4,
         "definitions": {"explore": {
             "description": "Read-only repository exploration.",
-            "instructionsFile": "subagents/explore.md",
+            "instructionsFile": ".agents/subagents/explore/instructions.md",
             "skills": ["alpha"],
         }}
     }));

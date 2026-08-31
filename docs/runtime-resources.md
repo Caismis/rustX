@@ -160,6 +160,34 @@ this child?".
 
 ## Project instruction discovery
 
+### Workspace-owned Agent resources
+
+Project-authored resources whose purpose is to define or guide Agent behavior
+share the workspace-owned `.agents/` namespace:
+
+```text
+workspace/
+├── AGENTS.md
+└── .agents/
+    ├── skills/
+    ├── tools/
+    ├── subagents/
+    └── workflows/
+```
+
+This is an ownership namespace, not one implicit activation mechanism. Skills
+and Python tools retain their automatic discovery contracts. Subagent profiles
+and native Workflows remain explicit configuration surfaces: a Subagent must
+be defined and admitted, and a Workflow id must be listed in
+`workflows.definitions`. The configured runtime root (often `.rustx/`) is
+runtime-owned/generated state and is not the canonical home for these
+project-authored resources.
+
+`.agents/skills/` is the canonical project layout. Skill discovery retains its
+pre-existing automatic roots `~/.rustx/skills/`, `~/.agents/skills/`,
+`<workspace>/.rustx/skills/`, and `<workspace>/.agents/skills/`; retaining the
+`.rustx/skills/` roots does not make them the canonical project layout.
+
 At runtime creation or explicit reload, applicable directories are traversed
 deterministically from filesystem root to the workspace/cwd. At most one file
 is selected per directory with this precedence:

@@ -1,14 +1,32 @@
-use std::path::{Path, PathBuf};
+mod common;
 
-use rustx::local_runtime::CurrentRuntimeConfig;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use rustx::local_runtime::{
+    CurrentRuntimeConfig, HeadlessConversationRuntime, LocalConversationRuntime,
+    LocalRuntimeDependencies, LocalRuntimePaths, StartupSession,
+};
+use rustx::message::content::TextBlock;
+use rustx::message::types::UserContentBlock;
 use rustx::model::catalog::{
     ChatReasoningReplay, MapCredentialEnvironment, ModelCatalog, ModelRef, ReasoningProfileId,
 };
 use rustx::model::session::SummaryModelPolicy;
 use rustx::model::types::ModelProtocol;
+use rustx::runtime::RuntimeResourceSnapshot;
+use rustx::runtime::workflow::{WorkflowId, WorkflowNodeProgram};
+use rustx::runtime_client::host::EventDelivery;
+use rustx::runtime_client::types::RuntimeClientResult;
+use rustx::runtime_client::{
+    RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientEvent, RuntimeClientOutcome,
+};
+use rustx::skills::{SkillDiscovery, SkillDiscoveryConfig};
 use rustx::tools::Workspace;
 use rustx::tools::python::PythonToolDiscovery;
-use rustx::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy};
+use rustx::tools::types::{ToolApprovalPolicy, ToolConcurrencyPolicy, ToolExecutionPolicy};
+
+use common::provider_emulator::ProviderEmulator;
 
 fn examples_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/local-runtime")
@@ -16,6 +34,111 @@ fn examples_root() -> PathBuf {
 
 fn read_example(name: &str) -> Vec<u8> {
     std::fs::read(examples_root().join(name)).expect("committed example file")
+}
+
+const REQUIRED_EXAMPLE_FILES: &[&str] = &[
+    "AGENTS.md",
+    ".agents/skills/review-guidance/SKILL.md",
+    ".agents/tools/echo/TOOL.toml",
+    ".agents/tools/echo/input.schema.json",
+    ".agents/tools/echo/pyproject.toml",
+    ".agents/tools/echo/uv.lock",
+    ".agents/tools/echo/tool.py",
+    ".agents/subagents/navigator/instructions.md",
+    ".agents/subagents/navigator/AGENTS.md",
+    ".agents/subagents/reviewer/instructions.md",
+    ".agents/subagents/reviewer/AGENTS.md",
+    ".agents/workflows/review_pr.yaml",
+    ".agents/workflows/parallel_review.yaml",
+];
+
+fn assert_example_files_exist(workspace: &Path) {
+    for relative in REQUIRED_EXAMPLE_FILES {
+        assert!(
+            workspace.join(relative).is_file(),
+            "missing example file {relative}"
+        );
+    }
+}
+
+fn assert_example_resource_snapshot(resources: &RuntimeResourceSnapshot) {
+    assert_eq!(
+        resources
+            .subagents()
+            .names()
+            .into_iter()
+            .map(rustx::runtime::subagent::SubagentName::as_str)
+            .collect::<Vec<_>>(),
+        vec!["navigator", "reviewer"]
+    );
+    assert_eq!(
+        resources
+            .subagent_main_admission()
+            .iter()
+            .map(rustx::runtime::subagent::SubagentName::as_str)
+            .collect::<Vec<_>>(),
+        vec!["navigator"]
+    );
+    assert_eq!(
+        resources
+            .subagent_workflow_admission()
+            .iter()
+            .map(rustx::runtime::subagent::SubagentName::as_str)
+            .collect::<Vec<_>>(),
+        vec!["reviewer"]
+    );
+    assert!(
+        resources
+            .skill_catalog()
+            .expect("project Skill catalog")
+            .contains("review-guidance")
+    );
+
+    let review = resources
+        .workflows()
+        .get(&WorkflowId::parse("review_pr").expect("workflow id"))
+        .expect("review_pr is registered");
+    assert!(
+        review
+            .nodes()
+            .values()
+            .any(|node| matches!(node, WorkflowNodeProgram::Agent(_)))
+    );
+    assert!(
+        review
+            .nodes()
+            .values()
+            .any(|node| matches!(node, WorkflowNodeProgram::Branch { .. }))
+    );
+    assert!(
+        review
+            .nodes()
+            .values()
+            .any(|node| matches!(node, WorkflowNodeProgram::Return { .. }))
+    );
+
+    let parallel = resources
+        .workflows()
+        .get(&WorkflowId::parse("parallel_review").expect("workflow id"))
+        .expect("parallel_review is registered");
+    assert!(
+        parallel
+            .nodes()
+            .values()
+            .any(|node| matches!(node, WorkflowNodeProgram::Parallel { .. }))
+    );
+    assert!(
+        parallel
+            .nodes()
+            .values()
+            .any(|node| matches!(node, WorkflowNodeProgram::Return { .. }))
+    );
+
+    let tool_names = resources.capability().tool_registry().names();
+    assert!(tool_names.contains(&"review_pr"));
+    assert!(tool_names.contains(&"parallel_review"));
+    assert!(tool_names.contains(&"subagent"));
+    assert!(tool_names.contains(&"echo"));
 }
 
 #[test]
@@ -114,6 +237,36 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
     assert!(config.mcp_servers.is_empty());
     assert!(config.mcp_tool_policies.is_empty());
     assert_eq!(config.environment["RUSTX_EXAMPLE_MODE"], "local-runtime");
+    assert!(config.default_tools.iter().any(|name| name == "subagent"));
+    assert_eq!(config.subagents.definitions.len(), 2);
+    assert_eq!(
+        config
+            .subagents
+            .main
+            .iter()
+            .map(rustx::runtime::subagent::SubagentName::as_str)
+            .collect::<Vec<_>>(),
+        vec!["navigator"]
+    );
+    assert_eq!(
+        config
+            .subagents
+            .workflow
+            .iter()
+            .map(rustx::runtime::subagent::SubagentName::as_str)
+            .collect::<Vec<_>>(),
+        vec!["reviewer"]
+    );
+    assert_eq!(
+        config
+            .workflows
+            .definitions
+            .iter()
+            .map(rustx::runtime::workflow::WorkflowId::as_str)
+            .collect::<Vec<_>>(),
+        vec!["review_pr", "parallel_review"]
+    );
+    assert_eq!(config.workflows.main, config.workflows.definitions);
 
     let policies = config.native_tools.to_policies();
     assert_eq!(policies.read.execution, ToolExecutionPolicy::ForegroundOnly);
@@ -122,7 +275,9 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
         policies.bash.execution,
         ToolExecutionPolicy::ModelSelectable
     );
+    assert_eq!(policies.grep.execution, ToolExecutionPolicy::BackgroundOnly);
     assert_eq!(policies.bash.concurrency, ToolConcurrencyPolicy::Sequential);
+    assert_eq!(policies.bash.approval, ToolApprovalPolicy::Always);
 }
 
 #[test]
@@ -173,4 +328,164 @@ fn committed_echo_tool_is_found_by_production_python_discovery() {
             "discovered package must include {required}"
         );
     }
+}
+
+#[test]
+fn committed_example_skill_is_found_by_project_agents_discovery() {
+    let workspace_path = examples_root().join("workspace");
+    let workspace = Workspace::new(&workspace_path).expect("example workspace");
+    let packages = SkillDiscovery::with_config(
+        &workspace,
+        SkillDiscoveryConfig {
+            automatic_roots: vec![workspace_path.join(".agents/skills")],
+            explicit_paths: Vec::new(),
+        },
+    )
+    .discover()
+    .expect("example Skill must be discoverable");
+    assert_eq!(
+        packages
+            .iter()
+            .map(rustx::skills::SkillPackage::name)
+            .collect::<Vec<_>>(),
+        vec!["review-guidance"]
+    );
+    assert!(packages[0].description().contains("bounded"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn checked_in_local_runtime_example_composes_its_real_resources() {
+    let root = tempfile::tempdir().expect("temporary runtime root");
+    let examples = examples_root();
+    let workspace = examples.join("workspace");
+    assert_example_files_exist(&workspace);
+    let runtime = HeadlessConversationRuntime::compose(
+        &LocalRuntimePaths {
+            models: examples.join("models.jsonc"),
+            config: examples.join("rustx.jsonc"),
+            // Keep this test independent of the developer's home directory
+            // while exercising the actual checked-in project Skill root.
+            skill_paths: vec![workspace.join(".agents/skills")],
+            no_skills: true,
+            no_builtin_tools: false,
+            no_tools: false,
+            startup_session: StartupSession::Empty,
+            session_name: None,
+            tools: None,
+            exclude_tools: Vec::new(),
+            workspace,
+            runtime_root: root.path().join("runtime-root"),
+        },
+        &LocalRuntimeDependencies {
+            credentials: Arc::new(MapCredentialEnvironment::new([(
+                "RUSTX_EXAMPLE_API_KEY".to_owned(),
+                "smoke-test-secret".to_owned(),
+            )])),
+            ..LocalRuntimeDependencies::default()
+        },
+    )
+    .await
+    .expect("checked-in local-runtime example must compose");
+
+    assert_example_resource_snapshot(runtime.runtime().runtime_resources().as_ref());
+}
+
+fn example_models_for_emulator(emulator: &ProviderEmulator) -> String {
+    String::from_utf8(read_example("models.jsonc"))
+        .expect("example models are UTF-8")
+        .replace("\"example\": {", "\"emulator\": {")
+        .replace("\"id\": \"demo-model\"", "\"id\": \"workflow-model\"")
+        .replace(
+            "https://api.example.invalid/v1",
+            &emulator.openai_base_url(),
+        )
+        .replace("$RUSTX_EXAMPLE_API_KEY", "smoke-test-secret")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn checked_in_review_workflow_runs_through_the_existing_provider_emulator() {
+    let Some(emulator) = ProviderEmulator::start("workflow_output").await else {
+        return;
+    };
+    let root = tempfile::tempdir().expect("temporary runtime root");
+    let examples = examples_root();
+    let workspace = examples.join("workspace");
+    let config = String::from_utf8(read_example("rustx.jsonc"))
+        .expect("example config is UTF-8")
+        .replace("example/demo-model", "emulator/workflow-model");
+    std::fs::write(
+        root.path().join("models.jsonc"),
+        example_models_for_emulator(&emulator),
+    )
+    .expect("emulator model catalog");
+    std::fs::write(root.path().join("rustx.jsonc"), config).expect("emulator runtime config");
+
+    let runtime = LocalConversationRuntime::compose(
+        &LocalRuntimePaths {
+            models: root.path().join("models.jsonc"),
+            config: root.path().join("rustx.jsonc"),
+            skill_paths: vec![workspace.join(".agents/skills")],
+            no_skills: true,
+            no_builtin_tools: false,
+            no_tools: false,
+            startup_session: StartupSession::Empty,
+            session_name: None,
+            tools: None,
+            exclude_tools: Vec::new(),
+            workspace,
+            runtime_root: root.path().join("runtime-root"),
+        },
+        &LocalRuntimeDependencies {
+            credentials: Arc::new(MapCredentialEnvironment::new([(
+                "RUSTX_EXAMPLE_API_KEY".to_owned(),
+                "smoke-test-secret".to_owned(),
+            )])),
+            child_program: Some(std::path::PathBuf::from(env!("CARGO_BIN_EXE_rustx"))),
+            ..LocalRuntimeDependencies::default()
+        },
+    )
+    .await
+    .expect("example runtime composes against the local emulator");
+    let (attachment, initialized) = runtime
+        .host()
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .expect("attach");
+    let RuntimeClientResult::Initialized { cursor, .. } = initialized else {
+        panic!("initialize returns the initial snapshot");
+    };
+    let (events, _) = runtime
+        .host()
+        .subscribe_events(attachment.attachment_id(), cursor)
+        .expect("subscribe");
+    runtime
+        .host()
+        .submit_inbound(vec![UserContentBlock::Text(TextBlock {
+            text: "workflow conformance request".to_owned(),
+        })])
+        .expect("inbound accepted");
+
+    let stream = events;
+    let outcome = loop {
+        let delivery = tokio::time::timeout(std::time::Duration::from_secs(30), stream.next())
+            .await
+            .expect("checked-in Workflow settles");
+        match delivery {
+            EventDelivery::Event(published) => {
+                if let RuntimeClientEvent::AttemptSettled { outcome, .. } = published.event {
+                    break outcome;
+                }
+            }
+            other => panic!("Runtime Client event stream ended: {other:?}"),
+        }
+    };
+    let requests = emulator.requests().await;
+    assert!(
+        matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+        "checked-in Workflow outcome: {outcome:?}"
+    );
+    let snapshot = runtime.host().snapshot().expect("snapshot");
+    let snapshot_json = serde_json::to_string(&snapshot).expect("snapshot JSON");
+    assert!(snapshot_json.contains("native workflow child committed"));
+    assert_eq!(requests.len(), 3, "parent, child, then parent continuation");
+    emulator.finish().await;
 }

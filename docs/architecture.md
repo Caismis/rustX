@@ -2976,6 +2976,31 @@ terminal error and removes the in-flight entry).
 
 ### Layer 5: Skill plane
 
+#### Workspace-owned Agent resources (Issue #172)
+
+The workspace-owned `.agents/` namespace is the canonical home for
+project-authored resources whose purpose is to define or guide Agent behavior:
+
+```text
+workspace/
+├── AGENTS.md
+└── .agents/
+    ├── skills/
+    ├── tools/
+    ├── subagents/
+    └── workflows/
+```
+
+This common ownership namespace does not collapse activation semantics.
+Skills and Python tools retain their automatic discovery behavior, while
+Subagent profiles and native Workflows remain explicit configuration surfaces.
+In particular, a Workflow id must be registered in
+`workflows.definitions` and a Subagent must be defined and admitted to the
+relevant domain. Filesystem presence alone never grants either capability.
+The configured runtime root (often `.rustx/`) is a separate runtime-owned
+namespace for generated state, immutable materializations, and Session data;
+it is not a canonical project-resource root or a fallback lookup location.
+
 Skills are filesystem/workflow packages. A skill may include:
 
 - `SKILL.md`
@@ -2991,14 +3016,17 @@ All active skills in one conversation share one Python environment and one Node 
 
 The M6 implementation (`src/skills`) freezes the Skill plane boundary:
 
-- **Skill roots.** Current resource discovery is bounded to user/global
-  `~/.rustx/skills/` and `~/.agents/skills/`, project
-  `<workspace>/.rustx/skills/` and `<workspace>/.agents/skills/`, plus
-  explicit project-config and CLI paths. Configured and CLI paths may be
-  relative or otherwise non-canonical; discovery is the one place that
-  normalizes them, so an accepted package always has a canonical absolute
-  UTF-8 root and every consumer of the published location resolves the same
-  file. Missing automatic roots are empty;
+- **Skill roots.** `.agents/skills/` is the canonical project authoring
+  convention. Skill discovery retains its existing automatic roots:
+  `~/.rustx/skills/`, `~/.agents/skills/`,
+  `<workspace>/.rustx/skills/`, and `<workspace>/.agents/skills/`, plus
+  explicit project-config and CLI paths. The retained `.rustx/skills/` roots
+  are discovery behavior, not the canonical Issue #172 project layout.
+  Configured and CLI paths may be relative or otherwise non-canonical;
+  discovery is the one place that normalizes them, so an accepted package
+  always has a canonical absolute UTF-8 root and every consumer of the
+  published location resolves the same file. Missing automatic roots are
+  empty;
   missing explicit paths fail. Hidden root entries and unrelated files are
   ignored; results are deterministically ordered by validated Skill name;
   any malformed candidate fails the whole discovery transaction; symlinked
@@ -5302,7 +5330,7 @@ Representative current runtime/project configuration:
   },
   "environment": { "RUSTX_PROJECT": "demo" },
   "defaultTools": ["read", "write", "edit", "glob", "grep", "bash"],
-  "skills": [".rustx/skills"]
+  "skills": [".agents/skills"]
 }
 ```
 
@@ -5601,7 +5629,7 @@ rustx.jsonc
     +--> workflow registration + main exposure
                   |
                   v
-      .rustx/workflows/<configured-id>.yaml
+      .agents/workflows/<configured-id>.yaml
                   |
                   v
          WorkflowDefinition
@@ -5652,7 +5680,7 @@ model-facing Tools. Unknown ids are configuration errors.
 
 The configured Workflow id is the identity of the definition, catalog entry,
 and Tool. `review_pr` resolves to
-`.rustx/workflows/review_pr.yaml` relative to the configured workspace. The
+`.agents/workflows/review_pr.yaml` relative to the configured workspace. The
 loader never scans that directory for admission, and YAML has no duplicate
 authoritative `name` field. A Tool is an invocation surface, a Workflow is a
 compiled bounded program, and a Skill is reusable resource/instruction

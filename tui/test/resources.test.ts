@@ -94,7 +94,7 @@ describe("loaded resources", () => {
               version_id: "skill-generation@1",
               name: "generation-skill",
               description: "published together",
-              location: ".rustx/skills/generation/SKILL.md",
+              location: ".agents/skills/generation/SKILL.md",
             },
           ],
         },

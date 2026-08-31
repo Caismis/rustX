@@ -82,7 +82,7 @@ const SESSION_JSON: &str = r#"{
     "definitions": {
       "conformance": {
         "description": "Issue 138 named conformance child.",
-        "instructionsFile": "subagents/conformance.md",
+        "instructionsFile": ".agents/subagents/conformance/instructions.md",
         "tools": {"builtin": ["read"]},
         "skills": ["conformance"]
       }
@@ -104,9 +104,10 @@ impl Process {
     fn spawn(root: &std::path::Path, models: &str, session: &str, key: &str) -> Self {
         let workspace = root.join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        std::fs::create_dir_all(workspace.join("subagents")).expect("subagent resources");
+        std::fs::create_dir_all(workspace.join(".agents/subagents/conformance"))
+            .expect("subagent resources");
         std::fs::write(
-            workspace.join("subagents/conformance.md"),
+            workspace.join(".agents/subagents/conformance/instructions.md"),
             "Execute the delegated conformance task exactly as requested.\n",
         )
         .expect("subagent instructions");

@@ -2,9 +2,13 @@
 //!
 //! # Skill root contract
 //!
-//! Current discovery is bounded to user/global and project roots, plus
-//! explicit configuration and CLI paths. An accepted package is an ordinary
-//! host directory: the model receives the host path of its `SKILL.md` and
+//! Current discovery retains the existing automatic roots `~/.rustx/skills`,
+//! `~/.agents/skills`, `<workspace>/.rustx/skills`, and
+//! `<workspace>/.agents/skills`, plus explicit configuration and CLI paths.
+//! `.agents/skills/` is the canonical project authoring location; the
+//! retained `.rustx/skills` roots are Skill discovery behavior, not the
+//! canonical project-resource layout. An accepted package is an ordinary host
+//! directory: the model receives the host path of its `SKILL.md` and
 //! reaches the package's own scripts, references, and assets by resolving the
 //! relative spellings in `SKILL.md` against that directory. No virtual
 //! namespace exists, so every native tool — Read, Bash, Grep, Glob — sees the
@@ -80,7 +84,7 @@ use crate::tools::workspace::Workspace;
 
 /// The canonical Skill root directory name below the Workspace root.
 pub const SKILLS_DIRECTORY: &str = ".agents";
-/// The rustX project-local Skill root directory.
+/// The retained rustX project-local Skill root directory.
 pub const RUSTX_SKILLS_DIRECTORY: &str = ".rustx";
 pub const SKILLS_ROOT: &str = "skills";
 /// The canonical primary instructions file name of a Skill package.
@@ -428,9 +432,18 @@ fn canonical_package_root(root: &Path) -> Result<PathBuf, SkillPackageError> {
 }
 
 fn default_discovery_config(workspace: &Workspace) -> SkillDiscoveryConfig {
-    let mut automatic_roots = Vec::new();
-    if let Some(home) = std::env::var_os("HOME") {
-        let home = PathBuf::from(home);
+    SkillDiscoveryConfig {
+        automatic_roots: automatic_skill_roots(
+            std::env::var_os("HOME").as_deref().map(Path::new),
+            workspace,
+        ),
+        explicit_paths: Vec::new(),
+    }
+}
+
+fn automatic_skill_roots(home: Option<&Path>, workspace: &Workspace) -> Vec<PathBuf> {
+    let mut automatic_roots = Vec::with_capacity(4);
+    if let Some(home) = home {
         automatic_roots.push(home.join(RUSTX_SKILLS_DIRECTORY).join(SKILLS_ROOT));
         automatic_roots.push(home.join(SKILLS_DIRECTORY).join(SKILLS_ROOT));
     }
@@ -441,10 +454,7 @@ fn default_discovery_config(workspace: &Workspace) -> SkillDiscoveryConfig {
             .join(SKILLS_ROOT),
     );
     automatic_roots.push(workspace.root().join(SKILLS_DIRECTORY).join(SKILLS_ROOT));
-    SkillDiscoveryConfig {
-        automatic_roots,
-        explicit_paths: Vec::new(),
-    }
+    automatic_roots
 }
 
 fn collect_root(
@@ -939,6 +949,25 @@ mod frontmatter_tests {
             &[
                 std::path::PathBuf::from("SKILL.md"),
                 std::path::PathBuf::from("references.md")
+            ]
+        );
+    }
+
+    #[test]
+    fn default_skill_roots_preserve_legacy_and_agents_locations() {
+        let directory = tempfile::tempdir().expect("temporary root");
+        let workspace_root = directory.path().join("workspace");
+        std::fs::create_dir_all(&workspace_root).expect("workspace");
+        let workspace = Workspace::new(&workspace_root).expect("workspace");
+        let home = directory.path().join("home");
+
+        assert_eq!(
+            super::automatic_skill_roots(Some(&home), &workspace),
+            vec![
+                home.join(".rustx/skills"),
+                home.join(".agents/skills"),
+                workspace.root().join(".rustx/skills"),
+                workspace.root().join(".agents/skills"),
             ]
         );
     }
