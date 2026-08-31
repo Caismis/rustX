@@ -340,7 +340,6 @@ mod tests {
             .definition
             .description;
         assert!(description.contains("absolute paths are used as host filesystem paths"));
-        assert!(!description.contains(".rustx/skills"));
     }
 
     #[test]
@@ -479,13 +478,15 @@ mod tests {
         };
         assert!(text.text.contains("procedure"));
 
-        // The retired virtual spelling is now an ordinary workspace-relative
-        // path, and resolves to nothing.
-        let (invocation, execution) =
-            context("read-skill-virtual", ".rustx/skills/release-guide/SKILL.md");
-        let virtual_result = ReadTool.execute(invocation, execution).await;
+        // A missing workspace-relative path still fails; Skill locations are
+        // ordinary host paths, not virtual aliases.
+        let (invocation, execution) = context(
+            "read-skill-missing",
+            ".agents/skills/release-guide/SKILL.md",
+        );
+        let missing_result = ReadTool.execute(invocation, execution).await;
         assert!(matches!(
-            virtual_result.status,
+            missing_result.status,
             ToolExecutionStatus::Failed { .. }
         ));
     }

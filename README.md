@@ -115,6 +115,12 @@ user-visible command surface.
 conventional project/source tree. It is not a general filesystem sandbox for
 native Read, Write, Edit, Grep, or Glob.
 
+Project-authored Agent resources use the workspace-owned `.agents/` namespace:
+Skills and Python tools retain their discovery semantics, while Subagents and
+native Workflows are admitted explicitly by `rustx.jsonc`. The configured
+`--runtime-root` (often named `.rustx/`) is runtime-owned/generated state and
+is not a project-resource fallback.
+
 For those native file tools, relative paths resolve from the execution cwd and
 absolute paths are valid host filesystem paths. `.` and `..` are resolved
 lexically before filesystem or symlink behavior. Runtime-owned

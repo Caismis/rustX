@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use common::provider_emulator::ProviderEmulator;
 use rustx::local_runtime::composition::{
-    LocalConversationRuntime, LocalRuntimeDependencies, LocalRuntimePaths,
+    LocalConversationCore, LocalConversationRuntime, LocalRuntimeDependencies, LocalRuntimePaths,
 };
 use rustx::message::content::TextBlock;
 use rustx::message::types::UserContentBlock;
@@ -36,11 +36,11 @@ use rustx::runtime_client::{
 const MODEL: &str = "workflow-model";
 const KEY: &str = "RUSTX_ISSUE83_KEY";
 
-fn models_json(emulator: &ProviderEmulator) -> String {
+fn models_json_for_base_url(base_url: &str) -> String {
     serde_json::json!({
         "providers": {
             "emulator": {
-                "baseUrl": emulator.openai_base_url(),
+                "baseUrl": base_url,
                 "apiKey": "issue83-secret",
                 "models": [{
                     "id": MODEL,
@@ -61,6 +61,10 @@ fn models_json(emulator: &ProviderEmulator) -> String {
     .to_string()
 }
 
+fn models_json(emulator: &ProviderEmulator) -> String {
+    models_json_for_base_url(&emulator.openai_base_url())
+}
+
 const CONFIG: &str = r#"{
   "schemaVersion": 5,
   "agentId": "agent-issue83",
@@ -72,7 +76,7 @@ const CONFIG: &str = r#"{
     "definitions": {
       "reviewer": {
         "description": "The Workflow-only reviewer.",
-        "instructionsFile": "subagents/reviewer.md"
+        "instructionsFile": ".agents/subagents/reviewer/instructions.md"
       }
     },
     "main": [],
@@ -155,23 +159,24 @@ impl Driver {
     async fn start(emulator: &ProviderEmulator) -> Self {
         let root = tempfile::tempdir().expect("temp root");
         let workspace = root.path().join("workspace");
-        std::fs::create_dir_all(workspace.join("subagents")).expect("subagent directory");
-        std::fs::create_dir_all(workspace.join(".rustx/workflows")).expect("workflow directory");
+        std::fs::create_dir_all(workspace.join(".agents/subagents/reviewer"))
+            .expect("subagent directory");
+        std::fs::create_dir_all(workspace.join(".agents/workflows")).expect("workflow directory");
         std::fs::write(root.path().join("models.jsonc"), models_json(emulator))
             .expect("models.jsonc");
         std::fs::write(root.path().join("rustx.jsonc"), CONFIG).expect("rustx.jsonc");
         std::fs::write(
-            workspace.join("subagents/reviewer.md"),
+            workspace.join(".agents/subagents/reviewer/instructions.md"),
             "Review requests carefully.\n",
         )
         .expect("reviewer instructions");
-        std::fs::write(workspace.join(".rustx/workflows/review_pr.yaml"), WORKFLOW)
+        std::fs::write(workspace.join(".agents/workflows/review_pr.yaml"), WORKFLOW)
             .expect("workflow YAML");
         // This deliberately is not registered. It is also malformed, proving
         // that the loader uses configured ids rather than scanning the YAML
         // directory as an implicit admission surface.
         std::fs::write(
-            workspace.join(".rustx/workflows/inactive.yaml"),
+            workspace.join(".agents/workflows/inactive.yaml"),
             "this is not a registered Workflow definition: [",
         )
         .expect("inactive workflow YAML");
@@ -278,6 +283,122 @@ impl Driver {
             }
         }
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_registered_workflow_rejects_the_obsolete_workspace_rustx_path() {
+    let root = tempfile::tempdir().expect("temp root");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(workspace.join(".agents/subagents/reviewer"))
+        .expect("subagent directory");
+    std::fs::create_dir_all(workspace.join(".rustx/workflows")).expect("obsolete directory");
+    std::fs::write(
+        root.path().join("models.jsonc"),
+        models_json_for_base_url("http://127.0.0.1:1/v1"),
+    )
+    .expect("models.jsonc");
+    std::fs::write(root.path().join("rustx.jsonc"), CONFIG).expect("rustx.jsonc");
+    std::fs::write(
+        workspace.join(".agents/subagents/reviewer/instructions.md"),
+        "Review requests carefully.\n",
+    )
+    .expect("reviewer instructions");
+    std::fs::write(workspace.join(".rustx/workflows/review_pr.yaml"), WORKFLOW)
+        .expect("legacy workflow YAML");
+
+    let paths = LocalRuntimePaths {
+        models: root.path().join("models.jsonc"),
+        config: root.path().join("rustx.jsonc"),
+        skill_paths: Vec::new(),
+        no_skills: true,
+        no_builtin_tools: false,
+        no_tools: false,
+        startup_session: rustx::local_runtime::StartupSession::Empty,
+        session_name: None,
+        tools: None,
+        exclude_tools: Vec::new(),
+        workspace,
+        runtime_root: root.path().join("private"),
+    };
+    let dependencies = LocalRuntimeDependencies {
+        credentials: Arc::new(MapCredentialEnvironment::new([(
+            KEY.to_owned(),
+            "issue83-secret".to_owned(),
+        )])),
+        ..LocalRuntimeDependencies::default()
+    };
+    let error = LocalConversationCore::compose(&paths, &dependencies)
+        .await
+        .expect_err("the obsolete workspace Workflow path is not a fallback");
+    let detail = error.to_string();
+    assert!(
+        detail.contains(".agents/workflows/review_pr.yaml"),
+        "{detail}"
+    );
+    assert!(
+        !detail.contains(".rustx/workflows/review_pr.yaml"),
+        "{detail}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn registered_workflow_can_remain_out_of_main_model_admission() {
+    let root = tempfile::tempdir().expect("temp root");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(workspace.join(".agents/subagents/reviewer"))
+        .expect("subagent directory");
+    std::fs::create_dir_all(workspace.join(".agents/workflows")).expect("workflow directory");
+    std::fs::write(
+        root.path().join("models.jsonc"),
+        models_json_for_base_url("http://127.0.0.1:1/v1"),
+    )
+    .expect("models.jsonc");
+    std::fs::write(
+        root.path().join("rustx.jsonc"),
+        CONFIG.replace("\"main\": [\"review_pr\"]", "\"main\": []"),
+    )
+    .expect("rustx.jsonc");
+    std::fs::write(
+        workspace.join(".agents/subagents/reviewer/instructions.md"),
+        "Review requests carefully.\n",
+    )
+    .expect("reviewer instructions");
+    std::fs::write(workspace.join(".agents/workflows/review_pr.yaml"), WORKFLOW)
+        .expect("workflow YAML");
+
+    let paths = LocalRuntimePaths {
+        models: root.path().join("models.jsonc"),
+        config: root.path().join("rustx.jsonc"),
+        skill_paths: Vec::new(),
+        no_skills: true,
+        no_builtin_tools: false,
+        no_tools: false,
+        startup_session: rustx::local_runtime::StartupSession::Empty,
+        session_name: None,
+        tools: None,
+        exclude_tools: Vec::new(),
+        workspace,
+        runtime_root: root.path().join("private"),
+    };
+    let resources = LocalConversationCore::compose(&paths, &LocalRuntimeDependencies::default())
+        .await
+        .expect("registered but non-main Workflow composes")
+        .runtime()
+        .runtime_resources();
+    assert!(
+        resources
+            .workflows()
+            .definitions()
+            .contains_key(&WorkflowId::parse("review_pr").expect("workflow id"))
+    );
+    assert!(resources.workflows().main().is_empty());
+    assert!(
+        !resources
+            .capability()
+            .tool_registry()
+            .names()
+            .contains(&"review_pr")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

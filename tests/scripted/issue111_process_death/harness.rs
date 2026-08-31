@@ -124,7 +124,7 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
             "definitions": {
                 "explore": {
                     "description": "Read-only exploration of the shared workspace.",
-                    "instructionsFile": "subagents/explore.md",
+                    "instructionsFile": ".agents/subagents/explore/instructions.md",
                     "tools": {"builtin": ["read"]}
                 }
             },
@@ -156,9 +156,11 @@ impl Lab {
         let lab = Self { dir };
         std::fs::create_dir_all(lab.workspace().join(".agents/skills/alpha"))
             .expect("skill directory");
-        std::fs::create_dir_all(lab.workspace().join("subagents")).expect("subagent resources");
+        std::fs::create_dir_all(lab.workspace().join(".agents/subagents/explore"))
+            .expect("subagent resources");
         std::fs::write(
-            lab.workspace().join("subagents/explore.md"),
+            lab.workspace()
+                .join(".agents/subagents/explore/instructions.md"),
             "You are a read-only exploration subagent. Answer the delegated task with the \
              capabilities your definition authorized.\n",
         )

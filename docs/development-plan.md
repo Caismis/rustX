@@ -1362,7 +1362,7 @@ cross-conversation children, or recursion were added.
 ### M9.5 — Native YAML WorkflowRuntime (Issue #83, delivered)
 
 M9.5 adds the bounded native Workflow layer over named SubagentRuntime. The
-authoring surface is `.rustx/workflows/<configured-id>.yaml`, but YAML is only
+authoring surface is `.agents/workflows/<configured-id>.yaml`, but YAML is only
 serialization. Configuration registers exact ids and separately admits
 `workflows.main`; `subagents.definitions` remains the one profile source of
 truth, with independent `subagents.main` and `subagents.workflow` domains.

@@ -1746,11 +1746,21 @@ the launch-boundary policy inheritance.
 ## Issue #83: native YAML WorkflowRuntime
 
 - **YAML is serialization only.** A configured
-  `.rustx/workflows/<id>.yaml` deserializes into `WorkflowDefinition`, is
+  `.agents/workflows/<id>.yaml` deserializes into `WorkflowDefinition`, is
   compiled and validated once into an immutable `WorkflowProgram`, and is
   never interpreted by the execution path. The configured id is the only
   identity; unregistered files and a YAML `name` field cannot create
   admission.
+- **Project Agent resources have one ownership namespace.** Project-authored
+  Skills, Python tools, Subagent files, and native Workflow files belong under
+  the workspace-owned `.agents/` tree. The configured `.rustx/` or other
+  runtime root remains runtime-owned/generated state; it is not a fallback
+  project-resource root.
+- **Workflow registration is path-deterministic.** Each id in
+  `workflows.definitions` maps to exactly
+  `<workspace>/.agents/workflows/<id>.yaml`; the loader never scans that
+  directory, and filesystem presence cannot grant registration or model
+  visibility.
 - **Definitions and admissions are independent.** `subagents.definitions`
   is the one named-profile source of truth. `subagents.main` and
   `subagents.workflow` are independent subsets, and

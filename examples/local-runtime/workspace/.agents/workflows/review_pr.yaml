@@ -1,0 +1,56 @@
+description: Review a request and choose a typed success or failure result.
+input:
+  type: object
+  properties:
+    task:
+      type: string
+  required: [task]
+  additionalProperties: false
+output:
+  type: object
+  properties:
+    summary:
+      type: string
+  required: [summary]
+  additionalProperties: false
+entry: review
+nodes:
+  review:
+    type: agent
+    profile: reviewer
+    task: Review the request and commit the result.
+    input:
+      task:
+        ref: args.task
+    output:
+      type: object
+      properties:
+        passed:
+          type: boolean
+        summary:
+          type: string
+      required: [passed, summary]
+      additionalProperties: false
+  decision:
+    type: branch
+    condition:
+      ref: review.passed
+  success:
+    type: return
+    output:
+      summary:
+        ref: review.summary
+  failure:
+    type: return
+    output:
+      summary:
+        ref: args.task
+edges:
+  - from: review
+    to: decision
+  - from: decision
+    to: success
+    port: true
+  - from: decision
+    to: failure
+    port: false

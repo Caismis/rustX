@@ -72,7 +72,7 @@ const SESSION_JSON: &str = r#"{
     "definitions": {
       "explore": {
         "description": "Read-only repository exploration.",
-        "instructionsFile": "subagents/explore.md",
+        "instructionsFile": ".agents/subagents/explore/instructions.md",
         "tools": {"builtin": ["read", "glob", "grep"]}
       }
     },
@@ -117,9 +117,11 @@ impl Process {
         continue_active: bool,
     ) -> Self {
         let workspace = root.join("workspace");
-        std::fs::create_dir_all(workspace.join("subagents")).expect("workspace");
+        std::fs::create_dir_all(workspace.join(".agents/subagents/explore")).expect("workspace");
         std::fs::write(
-            workspace.join("subagents").join("explore.md"),
+            workspace
+                .join(".agents/subagents/explore")
+                .join("instructions.md"),
             EXPLORE_INSTRUCTIONS,
         )
         .expect("explore instructions");

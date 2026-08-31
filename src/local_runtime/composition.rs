@@ -151,6 +151,12 @@ use super::session::{
 };
 use super::supervisor::{LocalSessionSupervisor, SessionSupervisorError};
 
+/// The one project-owned namespace for Agent resources. Runtime-owned state
+/// remains under the separately configured runtime root.
+const AGENT_RESOURCES_DIRECTORY: &str = ".agents";
+/// The native Workflow source directory inside [`AGENT_RESOURCES_DIRECTORY`].
+const WORKFLOW_RESOURCES_DIRECTORY: &str = "workflows";
+
 /// Which Session a launch binds.
 ///
 /// Startup is not a resume. A process begins on an empty Session and leaves
@@ -961,7 +967,7 @@ fn load_subagent_catalog(
 /// Loads and compiles exactly the configured Workflow definitions.
 ///
 /// The configured id is the only filesystem identity: a registered `id` is
-/// read from `.rustx/workflows/{id}.yaml`. Directory contents are never
+/// read from `.agents/workflows/{id}.yaml`. Directory contents are never
 /// scanned, so an unregistered YAML file cannot become model-visible by
 /// accident. Compilation happens before the candidate reaches the runtime
 /// resource publication boundary.
@@ -970,10 +976,9 @@ fn load_workflow_catalog(
     document: &WorkflowsDocument,
     workflow_profiles: &BTreeSet<crate::runtime::subagent::SubagentName>,
 ) -> Result<WorkflowCatalog, RuntimeResourceLoadError> {
-    let workflow_root = workspace.join(".rustx").join("workflows");
     let mut programs = Vec::with_capacity(document.definitions.len());
     for id in &document.definitions {
-        let path = workflow_root.join(format!("{}.yaml", id.as_str()));
+        let path = workspace_workflow_path(workspace, id);
         let bytes = std::fs::read(&path).map_err(|error| {
             RuntimeResourceLoadError::new(format!(
                 "cannot read registered workflow {id} at {}: {error}",
@@ -1005,6 +1010,16 @@ fn load_workflow_catalog(
     WorkflowCatalog::new(programs, document.main.clone()).map_err(|error| {
         RuntimeResourceLoadError::new(format!("cannot admit Workflow catalog: {error}"))
     })
+}
+
+/// Maps one explicitly registered Workflow identity to its one source file.
+/// This is intentionally not a discovery helper: the caller must provide the
+/// id from `workflows.definitions`.
+fn workspace_workflow_path(workspace: &Path, id: &crate::runtime::workflow::WorkflowId) -> PathBuf {
+    workspace
+        .join(AGENT_RESOURCES_DIRECTORY)
+        .join(WORKFLOW_RESOURCES_DIRECTORY)
+        .join(format!("{}.yaml", id.as_str()))
 }
 
 /// Workflow `main` admission is model-facing capability admission. Include
@@ -3288,9 +3303,9 @@ mod issue163_composition_tests {
     async fn compose_fixture(test_name: &str, arguments: serde_json::Value) -> ComposedFixture {
         let root = tempfile::tempdir().expect("fixture root");
         let workspace = root.path().join("workspace");
-        std::fs::create_dir_all(workspace.join("subagents")).expect("workspace");
+        std::fs::create_dir_all(workspace.join(".agents/subagents/explore")).expect("workspace");
         std::fs::write(
-            workspace.join("subagents/explore.md"),
+            workspace.join(".agents/subagents/explore/instructions.md"),
             "Read-only fixture subagent instructions.\n",
         )
         .expect("subagent instructions");
@@ -3340,7 +3355,7 @@ mod issue163_composition_tests {
                 "definitions": {
                     TEST_AGENT: {
                         "description": "Read the workspace",
-                        "instructionsFile": "subagents/explore.md",
+                        "instructionsFile": ".agents/subagents/explore/instructions.md",
                         "tools": {"builtin": ["read"]},
                     },
                 },

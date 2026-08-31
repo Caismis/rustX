@@ -79,7 +79,7 @@ describe("presentation projection", () => {
     assert.equal(state.capabilities.revision, 4);
     assert.equal(
       state.capabilities.skills?.[0]?.location,
-      ".rustx/skills/review/SKILL.md",
+      ".agents/skills/review/SKILL.md",
     );
     assert.equal(state.sessionModel.configured.model, "alpha/model-a");
     assert.equal(state.attempt, undefined);

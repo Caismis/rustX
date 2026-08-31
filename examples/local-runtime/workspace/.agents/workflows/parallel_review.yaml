@@ -1,0 +1,68 @@
+description: Run two independent review passes and return keyed results.
+input:
+  type: object
+  properties:
+    task:
+      type: string
+  required: [task]
+  additionalProperties: false
+output:
+  type: object
+  properties:
+    security:
+      type: object
+      properties:
+        summary:
+          type: string
+      required: [summary]
+      additionalProperties: false
+    quality:
+      type: object
+      properties:
+        summary:
+          type: string
+      required: [summary]
+      additionalProperties: false
+  required: [security, quality]
+  additionalProperties: false
+entry: fanout
+nodes:
+  fanout:
+    type: parallel
+    branches:
+      security:
+        profile: reviewer
+        task: Review the security implications of the request.
+        input:
+          task:
+            ref: args.task
+        output:
+          type: object
+          properties:
+            summary:
+              type: string
+          required: [summary]
+          additionalProperties: false
+      quality:
+        profile: reviewer
+        task: Review the quality of the request.
+        input:
+          task:
+            ref: args.task
+        output:
+          type: object
+          properties:
+            summary:
+              type: string
+          required: [summary]
+          additionalProperties: false
+  done:
+    type: return
+    output:
+      security:
+        ref: fanout.security
+      quality:
+        ref: fanout.quality
+edges:
+  - from: fanout
+    to: done

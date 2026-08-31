@@ -3,7 +3,7 @@
  *
  * ```text
  * [Context]
- *   AGENTS.md, ~/.rustx/AGENTS.md
+ *   AGENTS.md, /project/AGENTS.md
  *
  * [Skills]
  *   commit, review, release

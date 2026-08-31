@@ -578,9 +578,9 @@ mod tests {
                 catalog_entry: crate::skills::SkillCatalogEntry {
                     name: "repository-navigation".to_owned(),
                     description: "Navigate the repository.".to_owned(),
-                    location: "/w/.rustx/skills/nav/SKILL.md".to_owned(),
+                    location: "/w/.agents/skills/nav/SKILL.md".to_owned(),
                 },
-                source_root: PathBuf::from("/w/.rustx/skills/nav"),
+                source_root: PathBuf::from("/w/.agents/skills/nav"),
                 files: vec![PathBuf::from("SKILL.md"), PathBuf::from("ref/guide.md")],
             }],
             project_instructions: vec![crate::runtime::resources::ProjectContextFile {

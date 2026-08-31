@@ -55,10 +55,7 @@ fn project_discovery(workspace: &Workspace) -> SkillDiscovery {
     SkillDiscovery::with_config(
         workspace,
         SkillDiscoveryConfig {
-            automatic_roots: vec![
-                workspace.root().join(".rustx/skills"),
-                workspace.root().join(".agents/skills"),
-            ],
+            automatic_roots: vec![workspace.root().join(".agents/skills")],
             explicit_paths: Vec::new(),
         },
     )
