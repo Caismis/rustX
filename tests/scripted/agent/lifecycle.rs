@@ -932,33 +932,7 @@ fn ledger_shape(result: &AgentExecutionResult) -> Vec<String> {
         .collect()
 }
 
-fn terminal_events(events: &[RuntimeEvent]) -> Vec<&RuntimeEvent> {
-    events
-        .iter()
-        .filter(|event| {
-            matches!(
-                event,
-                RuntimeEvent::AttemptCompleted { .. }
-                    | RuntimeEvent::AttemptCancelled { .. }
-                    | RuntimeEvent::AttemptTimedOut { .. }
-                    | RuntimeEvent::AttemptLimitExceeded { .. }
-                    | RuntimeEvent::AttemptFailed { .. }
-            )
-        })
-        .collect()
-}
-
-/// Asserts exactly one terminal event and that it is the last event.
-fn assert_single_terminal(events: &[RuntimeEvent]) -> &RuntimeEvent {
-    let terminals = terminal_events(events);
-    assert_eq!(terminals.len(), 1, "exactly one terminal event");
-    assert_eq!(
-        events.last(),
-        Some(terminals[0]),
-        "the terminal event is last"
-    );
-    terminals[0]
-}
+use support::audit::assert_single_terminal;
 
 fn tool_messages(result: &AgentExecutionResult) -> Vec<&rustx::message::types::ToolMessageBlock> {
     result

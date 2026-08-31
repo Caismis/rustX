@@ -114,64 +114,7 @@ async fn run(
     common::durable_agent_result_with_publication(result, store.as_ref(), &publication)
 }
 
-/// The terminal events of an attempt.
-fn terminal_events(events: &[RuntimeEvent]) -> Vec<&RuntimeEvent> {
-    events
-        .iter()
-        .filter(|event| {
-            matches!(
-                event,
-                RuntimeEvent::AttemptCompleted { .. }
-                    | RuntimeEvent::AttemptCancelled { .. }
-                    | RuntimeEvent::AttemptTimedOut { .. }
-                    | RuntimeEvent::AttemptLimitExceeded { .. }
-                    | RuntimeEvent::AttemptFailed { .. }
-            )
-        })
-        .collect()
-}
-
-/// Asserts exactly one terminal event and that it is the last event.
-fn assert_single_terminal(events: &[RuntimeEvent]) -> &RuntimeEvent {
-    let terminals = terminal_events(events);
-    assert_eq!(terminals.len(), 1, "exactly one terminal event");
-    assert_eq!(
-        events.last(),
-        Some(terminals[0]),
-        "no runtime events may follow the terminal event"
-    );
-    terminals[0]
-}
-
-/// Asserts the platform outcome equals the outcome of the terminal event.
-fn assert_outcome(result: &common::DurableExecutionAudit, expected: AttemptOutcome) {
-    assert_eq!(result.outcome, expected, "platform outcome mismatch");
-    let terminal = result.event_history.last().expect("terminal event");
-    assert_eq!(
-        AttemptOutcome::from_terminal_event(terminal),
-        Some(expected),
-        "outcome must match the terminal event"
-    );
-}
-
-/// Asserts the exact recorded trace.
-fn assert_trace(events: &[RuntimeEvent], expected: &[RuntimeEvent]) {
-    assert_eq!(
-        events,
-        expected,
-        "trace mismatch:\nactual:   {}\nexpected: {}",
-        describe_trace(events),
-        describe_trace(expected)
-    );
-}
-
-fn describe_trace(events: &[RuntimeEvent]) -> String {
-    events
-        .iter()
-        .map(|event| serde_json::to_string(event).expect("serialize event"))
-        .collect::<Vec<_>>()
-        .join("\n          ")
-}
+use support::audit::{assert_outcome, assert_single_terminal, assert_trace};
 
 fn started() -> ModelEvent {
     ModelEvent::Started
@@ -278,7 +221,7 @@ async fn text_execution_completes_with_exact_trace() {
     );
     assert_outcome(
         &result,
-        AttemptOutcome::Completed {
+        &AttemptOutcome::Completed {
             finish_reason: ModelFinishReason::Stop,
         },
     );
@@ -382,7 +325,7 @@ async fn model_failure_before_content_fails_attempt() {
     assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
-        AttemptOutcome::Failed {
+        &AttemptOutcome::Failed {
             error: AttemptFailure::Model {
                 error: rustx::model::ModelError {
                     kind: rustx::model::ModelErrorKind::Timeout,
@@ -580,7 +523,7 @@ async fn tool_calls_execute_in_block_order() {
     assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
-        AttemptOutcome::Completed {
+        &AttemptOutcome::Completed {
             finish_reason: ModelFinishReason::Stop,
         },
     );
@@ -632,7 +575,7 @@ async fn continuation_starts_after_tool_completion() {
     assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
-        AttemptOutcome::Completed {
+        &AttemptOutcome::Completed {
             finish_reason: ModelFinishReason::Stop,
         },
     );
@@ -736,7 +679,7 @@ async fn single_tool_call_then_continuation() {
     assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
-        AttemptOutcome::Completed {
+        &AttemptOutcome::Completed {
             finish_reason: ModelFinishReason::Stop,
         },
     );
@@ -899,7 +842,7 @@ async fn unknown_tool_fails_deterministically() {
     );
     assert_outcome(
         &result,
-        AttemptOutcome::Failed {
+        &AttemptOutcome::Failed {
             error: AttemptFailure::Runtime {
                 error: RuntimeError::UnknownTool {
                     name: "missing".to_owned(),
@@ -958,7 +901,7 @@ async fn tool_execution_failure_is_passed_back_and_continues() {
     assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
-        AttemptOutcome::Completed {
+        &AttemptOutcome::Completed {
             finish_reason: ModelFinishReason::Stop,
         },
     );
@@ -1036,7 +979,7 @@ async fn multiple_ordered_tool_calls_continue_once() {
     assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
-        AttemptOutcome::Completed {
+        &AttemptOutcome::Completed {
             finish_reason: ModelFinishReason::Stop,
         },
     );
@@ -1080,7 +1023,7 @@ async fn cancellation_before_start_settles_cancelled() {
     assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
-        AttemptOutcome::Cancelled {
+        &AttemptOutcome::Cancelled {
             reason: CancellationReason::UserRequested,
         },
     );
@@ -1132,7 +1075,7 @@ async fn cancellation_during_generation_after_partial_text() {
     assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
-        AttemptOutcome::Cancelled {
+        &AttemptOutcome::Cancelled {
             reason: CancellationReason::UserRequested,
         },
     );
@@ -1242,7 +1185,7 @@ async fn cancellation_interrupts_waiting_for_tool() {
     );
     assert_outcome(
         &result,
-        AttemptOutcome::Cancelled {
+        &AttemptOutcome::Cancelled {
             reason: CancellationReason::UserRequested,
         },
     );
@@ -1433,7 +1376,7 @@ async fn cancellation_during_continuation_generation() {
     );
     assert_outcome(
         &result,
-        AttemptOutcome::Cancelled {
+        &AttemptOutcome::Cancelled {
             reason: CancellationReason::UserRequested,
         },
     );
@@ -1587,7 +1530,7 @@ async fn opaque_continuation_is_never_inspected() {
     assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
-        AttemptOutcome::Completed {
+        &AttemptOutcome::Completed {
             finish_reason: ModelFinishReason::Stop,
         },
     );
@@ -1630,7 +1573,7 @@ async fn missing_required_continuation_fails_explicitly() {
     assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
-        AttemptOutcome::Failed {
+        &AttemptOutcome::Failed {
             error: AttemptFailure::Model {
                 error: rustx::model::ModelError {
                     kind: rustx::model::ModelErrorKind::Unsupported,
@@ -1705,7 +1648,7 @@ async fn unsupported_capability_stays_terminal_failure() {
     assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
-        AttemptOutcome::Failed {
+        &AttemptOutcome::Failed {
             error: AttemptFailure::Model {
                 error: rustx::model::ModelError {
                     kind: rustx::model::ModelErrorKind::Unsupported,
@@ -1821,7 +1764,7 @@ async fn refusal_semantics_preserved() {
     assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
-        AttemptOutcome::Completed {
+        &AttemptOutcome::Completed {
             finish_reason: ModelFinishReason::Refusal,
         },
     );
@@ -2586,7 +2529,7 @@ async fn foreground_tools_with_empty_mailbox_keep_exact_behavior() {
     assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
-        AttemptOutcome::Completed {
+        &AttemptOutcome::Completed {
             finish_reason: ModelFinishReason::Stop,
         },
     );
@@ -2678,7 +2621,7 @@ async fn foreground_tools_with_inbound_batch_attach_one_ordered_batch() {
     assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
-        AttemptOutcome::Completed {
+        &AttemptOutcome::Completed {
             finish_reason: ModelFinishReason::Stop,
         },
     );
@@ -2787,7 +2730,7 @@ async fn later_correction_ships_one_batch_and_one_continuation() {
     assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
-        AttemptOutcome::Completed {
+        &AttemptOutcome::Completed {
             finish_reason: ModelFinishReason::Stop,
         },
     );
@@ -2878,7 +2821,7 @@ async fn stop_with_pending_inbound_does_not_settle_until_batch_consumed() {
     assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
-        AttemptOutcome::Completed {
+        &AttemptOutcome::Completed {
             finish_reason: ModelFinishReason::Stop,
         },
     );
@@ -2926,7 +2869,7 @@ async fn empty_snapshot_settlement_is_finite_and_never_reopens() {
     assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
-        AttemptOutcome::Completed {
+        &AttemptOutcome::Completed {
             finish_reason: ModelFinishReason::Stop,
         },
     );
@@ -2994,7 +2937,7 @@ async fn cancellation_before_safe_boundary_leaves_mailbox_untouched() {
     assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
-        AttemptOutcome::Cancelled {
+        &AttemptOutcome::Cancelled {
             reason: CancellationReason::UserRequested,
         },
     );
@@ -3082,7 +3025,7 @@ async fn cancellation_mid_continuation_keeps_drained_batch_canonical() {
     assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
-        AttemptOutcome::Cancelled {
+        &AttemptOutcome::Cancelled {
             reason: CancellationReason::UserRequested,
         },
     );
@@ -3204,7 +3147,7 @@ async fn unknown_tool_failure_leaves_pending_inbound_untouched() {
     assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
-        AttemptOutcome::Failed {
+        &AttemptOutcome::Failed {
             error: AttemptFailure::Runtime {
                 error: RuntimeError::UnknownTool {
                     name: "missing".to_owned(),
@@ -3272,7 +3215,7 @@ async fn continuation_retained_across_inbound_drain() {
     assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
-        AttemptOutcome::Completed {
+        &AttemptOutcome::Completed {
             finish_reason: ModelFinishReason::Stop,
         },
     );
@@ -3354,7 +3297,7 @@ async fn one_attempt_consumes_multiple_batches_at_different_boundaries() {
     assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
-        AttemptOutcome::Completed {
+        &AttemptOutcome::Completed {
             finish_reason: ModelFinishReason::Stop,
         },
     );

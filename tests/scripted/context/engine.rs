@@ -310,54 +310,7 @@ fn retry_message_id(turn: u32) -> MessageId {
     MessageId::new(format!("attempt-1-agent-{turn}-retry-1"))
 }
 
-fn terminal_events(events: &[RuntimeEvent]) -> Vec<&RuntimeEvent> {
-    events
-        .iter()
-        .filter(|event| {
-            matches!(
-                event,
-                RuntimeEvent::AttemptCompleted { .. }
-                    | RuntimeEvent::AttemptCancelled { .. }
-                    | RuntimeEvent::AttemptTimedOut { .. }
-                    | RuntimeEvent::AttemptLimitExceeded { .. }
-                    | RuntimeEvent::AttemptFailed { .. }
-            )
-        })
-        .collect()
-}
-
-fn assert_single_terminal(events: &[RuntimeEvent]) -> &RuntimeEvent {
-    let terminals = terminal_events(events);
-    assert_eq!(terminals.len(), 1, "exactly one terminal event");
-    assert_eq!(
-        events.last(),
-        Some(terminals[0]),
-        "no runtime events may follow the terminal event"
-    );
-    terminals[0]
-}
-
-fn assert_outcome(result: &AgentExecutionResult, expected: &AttemptOutcome) {
-    assert_eq!(result.outcome, *expected, "platform outcome mismatch");
-}
-
-fn assert_trace(events: &[RuntimeEvent], expected: &[RuntimeEvent]) {
-    assert_eq!(
-        events,
-        expected,
-        "trace mismatch:\nactual:   {}\nexpected: {}",
-        describe_trace(events),
-        describe_trace(expected)
-    );
-}
-
-fn describe_trace(events: &[RuntimeEvent]) -> String {
-    events
-        .iter()
-        .map(|event| serde_json::to_string(event).expect("serialize event"))
-        .collect::<Vec<_>>()
-        .join("\n          ")
-}
+use support::audit::{assert_outcome, assert_single_terminal, assert_trace};
 
 fn scripted_call() -> ScriptedCall {
     ScriptedCall {

@@ -1,17 +1,29 @@
-//! Issue #138: subagent conformance for retry, timeout, cancellation, and
-//! unresolved-output isolation.
+//! Issue #138: the subagent child ownership boundary.
 //!
 //! A rustX subagent child is a real `ConversationRuntime` with the ordinary
-//! Agent Loop, so the Issue #134–#137 recovery semantics must apply inside
-//! the child unchanged while the parent subagent plane (registry + process
-//! driver) never learns about provider retries, deadlines, publication
-//! audits, or carryover. These tests prove that boundary by wiring a **real
-//! child runtime** (scripted model, manual monotonic clock) to a **real
-//! parent registry/driver** over the **real control IPC** socket pair: the
-//! child side runs the exact production `serve_child_delegation` loop, and
-//! the parent side is the production `SubagentRegistry` settlement path.
-//! Only the OS process is a scripted stand-in (kill/reap semantics),
-//! exactly like the Issue #60 registry regressions.
+//! Agent Loop. Generic retry, deadline, cancellation-phase, publication,
+//! settlement, and carryover semantics are owned by the [`super::agent`]
+//! suites and are deliberately **not** re-proven here; these tests prove
+//! only what the subagent boundary adds:
+//!
+//! - the frozen `ModelTimeoutPolicy` and child definition cross into the
+//!   child;
+//! - child-internal retries, failed-attempt publication, and carryover
+//!   never leak into the parent conversation, projection, or requests;
+//! - the parent registry/driver observes exactly one terminal notice;
+//! - parent cancellation/drain crosses the ownership boundary with exactly
+//!   one winning cause, and child process loss is terminal and never
+//!   relaunched.
+//!
+//! The proofs wire a **real child runtime** (scripted model, manual
+//! monotonic clock) to a **real parent registry/driver** over the **real
+//! control IPC** socket pair: the child side runs the exact production
+//! `serve_child_delegation` loop, and the parent side is the production
+//! `SubagentRegistry` settlement path. Only the OS process is a scripted
+//! stand-in (kill/reap semantics), exactly like the Issue #60 registry
+//! regressions. The real-process half — a launched named child consuming
+//! the frozen definition through the typed spawn path — lives in the
+//! external `subagent` integration target.
 //!
 //! # Determinism
 //!
@@ -28,17 +40,14 @@
 //!   wait.
 //! - Wall-clock time appears only as an outer anti-hang liveness guard.
 
-use super::super::{common, support};
+use super::super::support;
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use rustx::durable::ConversationStore;
 use rustx::events::types::{RuntimeEvent, SubagentTerminalState};
-use rustx::message::content::TextBlock;
-use rustx::message::types::{
-    ContentBlockIndex, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
-};
+use rustx::message::types::{ContentBlockIndex, MessageBlock, UserContentBlock, UserSource};
 use rustx::model::ModelTimeoutPolicy;
 use rustx::model::error::{ModelError, ModelErrorKind, ModelRetryDisposition};
 use rustx::model::event::ModelEvent;
@@ -46,17 +55,12 @@ use rustx::model::finish::ModelFinishReason;
 use rustx::runtime::conversation_runtime::{
     ConversationContextConfig, ConversationRuntime, RuntimeConversationConfig,
 };
-use rustx::runtime::identity::{AgentId, ConversationId, MessageId, ToolCallId};
+use rustx::runtime::identity::{AgentId, ConversationId, ToolCallId};
 use rustx::runtime::types::{CancellationReason, SystemClock};
 use rustx::runtime::{ManualMonotonicClock, MonotonicClock};
 use rustx::tools::executor::ToolRegistry;
-use rustx::tools::types::{ToolCancellationPhase, ToolExecutionStatus};
-use support::fake::{
-    FakeModel, FakeStep, FakeTool, ScriptedCall, await_started, fake_model, model_release,
-    success_result, tool_call_events,
-};
+use support::fake::{FakeModel, FakeStep, fake_model};
 
-use crate::agent::execution::test_sync::RetryBackoffPause;
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::inbound::ConversationInboundMailbox;
 use crate::runtime::observation::PendingObservations;
@@ -134,22 +138,6 @@ fn answer_script(answer: &str) -> Vec<FakeStep> {
     ]
 }
 
-fn timestamped_user(id: &str, text: &str) -> MessageBlock {
-    MessageBlock::User(UserMessageBlock {
-        id: MessageId::new(id),
-        content: vec![UserContentBlock::Text(TextBlock {
-            text: text.to_owned(),
-        })],
-        source: UserSource::Human,
-        kind: rustx::message::types::InboundKind::Message,
-        timestamp: Some(
-            chrono::DateTime::parse_from_rfc3339("2026-08-28T00:00:00Z")
-                .expect("fixed timestamp")
-                .with_timezone(&chrono::Utc),
-        ),
-    })
-}
-
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
@@ -161,7 +149,6 @@ struct ChildFixture {
     runtime: ConversationRuntime,
     observations: Arc<PendingObservations>,
     model: Arc<FakeModel>,
-    clock: Arc<ManualMonotonicClock>,
     store: Arc<dyn ConversationStore>,
 }
 
@@ -248,7 +235,6 @@ async fn child_fixture(
         runtime,
         observations,
         model,
-        clock,
         store,
     }
 }
@@ -1303,553 +1289,6 @@ async fn parent_runtime_drain_during_child_retry_backoff_reaches_quiescence() {
         terminal_publications(&journal(&parent.plane.store)),
         vec![SubagentTerminalState::Cancelled],
         "drain publishes exactly one terminal"
-    );
-    child
-        .runtime
-        .shutdown()
-        .await
-        .expect("child runtime drains");
-}
-
-/// The child's own runtime drain while its attempt sleeps in retry backoff
-/// settles the attempt through the generic drain authority: the cause stays
-/// `RuntimeShutdown` and is never rewritten merely because the cancellation
-/// machinery woke the backoff wait.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn child_runtime_drain_during_retry_backoff_preserves_runtime_shutdown() {
-    let dir = tempfile::tempdir().expect("temp root");
-    let plane = standalone_parent_plane(&dir, "conv-138-child-drain");
-    let child = child_fixture(
-        &dir,
-        &ConversationId::new("conv-138-child-drain-child"),
-        vec![
-            vec![
-                FakeStep::Emit(started()),
-                FakeStep::Emit(transient_failure("R0 boom", None)),
-            ],
-            answer_script("NEVER-REACHED"),
-        ],
-        ToolRegistry::new(),
-        Vec::new(),
-    )
-    .await;
-    let wired = park_child_in_retry_backoff(&child, &plane, "inspect").await;
-
-    // The child runtime itself drains (this is exactly what the production
-    // child does when the parent disappears: control EOF -> drain -> exit).
-    tokio::time::timeout(LIVENESS, child.runtime.shutdown())
-        .await
-        .expect("the child runtime drains its own parked backoff")
-        .expect("child drain succeeds");
-    await_serve(wired.serve).await;
-
-    let child_events = journal(&child.store);
-    assert_eq!(child.model.requests().len(), 1, "no next provider request");
-    assert_eq!(count_events(&child_events, is_request_started), 1);
-    assert_eq!(
-        count_events(&child_events, |event| matches!(
-            event,
-            RuntimeEvent::AttemptCancelled {
-                reason: CancellationReason::RuntimeShutdown,
-                ..
-            }
-        )),
-        1,
-        "the child attempt settlement preserves RuntimeShutdown: {child_events:?}"
-    );
-    // The parent plane settles the child through the ordinary terminal
-    // contract: the child reported its terminal candidate before exiting.
-    let settled = plane
-        .registry
-        .wait_until_settled(&wired.accepted.subagent_id)
-        .await
-        .expect("child settles");
-    assert_eq!(settled.state, SubagentState::Cancelled);
-    assert_eq!(
-        terminal_publications(&journal(&plane.store)),
-        vec![SubagentTerminalState::Cancelled]
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Invariant 5: tool cancellation phases are unchanged in children
-// ---------------------------------------------------------------------------
-
-/// A pre-tool policy gate that parks the attempt inside the policy
-/// evaluation — after the canonical tool call, before the executor start
-/// frontier — until the test releases it.
-struct GatedPolicy {
-    entered: tokio::sync::watch::Sender<bool>,
-    release: tokio::sync::watch::Receiver<bool>,
-}
-
-impl rustx::agent::PreToolPolicy for GatedPolicy {
-    fn evaluate<'a>(
-        &'a self,
-        _view: &'a rustx::agent::PreToolView<'a>,
-    ) -> futures_util::future::BoxFuture<
-        'a,
-        Result<rustx::agent::PreToolDecision, rustx::agent::LifecycleError>,
-    > {
-        let entered = self.entered.clone();
-        let mut release = self.release.clone();
-        Box::pin(async move {
-            entered.send_replace(true);
-            release
-                .wait_for(|released| *released)
-                .await
-                .expect("pre-tool release channel stays open");
-            Ok(rustx::agent::PreToolDecision::Allow)
-        })
-    }
-}
-
-/// A pre-tool policy gate parks the child's attempt after the canonical
-/// tool call but before the executor start frontier. The parent's ordinary
-/// cancellation lands inside that window; the call settles
-/// `Cancelled { phase: BeforeStart }` with zero executor invocations and no
-/// start/completion facts.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn child_tool_cancelled_before_executor_start_records_before_start() {
-    let dir = tempfile::tempdir().expect("temp root");
-    let plane = standalone_parent_plane(&dir, "conv-138-tool-before");
-    let call = ScriptedCall {
-        id: "call-before",
-        tool_id: "tool-before",
-        name: "before",
-        arguments: serde_json::json!({}),
-    };
-    let mut first = vec![FakeStep::Emit(started())];
-    first.extend(tool_call_events(0, &call).into_iter().map(FakeStep::Emit));
-    first.push(FakeStep::Emit(ModelEvent::Completed {
-        finish_reason: ModelFinishReason::ToolCalls,
-        usage: None,
-    }));
-    let tool = FakeTool::new(
-        common::tool("before", "tool-before"),
-        success_result("must not run"),
-    );
-    let calls = tool.calls();
-    let mut tools = ToolRegistry::new();
-    tool.register(&mut tools);
-    let child = child_fixture(
-        &dir,
-        &ConversationId::new("conv-138-tool-before-child"),
-        vec![first, answer_script("NEVER-REACHED")],
-        tools,
-        Vec::new(),
-    )
-    .await;
-
-    // The deterministic pre-start window: the attempt parks inside the
-    // pre-tool policy, after the tool call committed and before any
-    // executor start.
-    let (entered, mut entered_rx) = tokio::sync::watch::channel(false);
-    let (release, release_rx) = tokio::sync::watch::channel(false);
-    child
-        .runtime
-        .install_test_pre_tool_policy(Arc::new(GatedPolicy {
-            entered,
-            release: release_rx,
-        }));
-
-    let wired = launch_wired_child(&plane, &child, "inspect").await;
-
-    // The attempt is provably inside the pre-tool gate: the tool call is
-    // canonical, the executor has not started. Cancellation commits
-    // through the child's ordinary cancellation authority — the exact
-    // entry point the `Cancel` control frame uses — synchronously, before
-    // the gate is released. (The parent->frame->child propagation ordering
-    // itself is proven by the retry-backoff cancellation test; this test
-    // isolates the child-owned phase frontier.)
-    tokio::time::timeout(LIVENESS, entered_rx.wait_for(|entered| *entered))
-        .await
-        .expect("pre-tool gate entered")
-        .expect("pre-tool entered channel stays open");
-    child
-        .runtime
-        .cancel_current_or_next_attempt(CancellationReason::UserRequested)
-        .expect("the current attempt is cancelled while parked pre-start");
-    release.send_replace(true);
-
-    let settled = plane
-        .registry
-        .wait_until_settled(&wired.accepted.subagent_id)
-        .await
-        .expect("child settles");
-    assert_eq!(settled.state, SubagentState::Cancelled);
-    await_serve(wired.serve).await;
-
-    // The child-owned phase fact: the canonical tool result committed as
-    // Cancelled/BeforeStart; the executor never ran.
-    assert!(
-        calls.borrow().is_empty(),
-        "executor invocation count is zero"
-    );
-    let tool_messages: Vec<_> = child_canonical_messages(&child)
-        .into_iter()
-        .filter_map(|message| match message {
-            MessageBlock::Tool(tool) => Some(tool),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(tool_messages.len(), 1, "one canonical result slot exists");
-    assert!(
-        matches!(
-            tool_messages[0].result.status,
-            ToolExecutionStatus::Cancelled {
-                reason: CancellationReason::UserRequested,
-                phase: ToolCancellationPhase::BeforeStart,
-            }
-        ),
-        "the child records BeforeStart: {:?}",
-        tool_messages[0].result.status
-    );
-    let child_events = journal(&child.store);
-    assert_eq!(
-        count_events(&child_events, |event| matches!(
-            event,
-            RuntimeEvent::ToolExecutionStarted { .. }
-        )),
-        0,
-        "no start fact exists before the executor frontier"
-    );
-    child
-        .runtime
-        .shutdown()
-        .await
-        .expect("child runtime drains");
-}
-
-/// The child's tool executor is provably running (its start watch fired)
-/// when the parent's ordinary cancellation arrives. The call settles
-/// `Cancelled { phase: DuringExecution }` with exactly one executor
-/// invocation; no rollback is claimed and no child-specific result shape
-/// exists.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn child_tool_cancelled_after_executor_start_records_during_execution() {
-    let dir = tempfile::tempdir().expect("temp root");
-    let plane = standalone_parent_plane(&dir, "conv-138-tool-during");
-    let call = ScriptedCall {
-        id: "call-during",
-        tool_id: "tool-during",
-        name: "during",
-        arguments: serde_json::json!({}),
-    };
-    let mut first = vec![FakeStep::Emit(started())];
-    first.extend(tool_call_events(0, &call).into_iter().map(FakeStep::Emit));
-    first.push(FakeStep::Emit(ModelEvent::Completed {
-        finish_reason: ModelFinishReason::ToolCalls,
-        usage: None,
-    }));
-    let (tool, _release) = FakeTool::parking(
-        common::tool("during", "tool-during"),
-        success_result("not reached"),
-    );
-    let calls = tool.calls();
-    let mut tool_started = tool.started();
-    let mut tools = ToolRegistry::new();
-    tool.register(&mut tools);
-    let child = child_fixture(
-        &dir,
-        &ConversationId::new("conv-138-tool-during-child"),
-        vec![first, answer_script("NEVER-REACHED")],
-        tools,
-        Vec::new(),
-    )
-    .await;
-    let wired = launch_wired_child(&plane, &child, "inspect").await;
-
-    // The executor start frontier was crossed before cancellation.
-    await_started(&mut tool_started, "child tool").await;
-    let cancelling = plane
-        .registry
-        .cancel(
-            &wired.accepted.subagent_id,
-            CancellationReason::UserRequested,
-        )
-        .expect("known child");
-    assert_eq!(cancelling.state, SubagentState::Cancelling);
-
-    let settled = plane
-        .registry
-        .wait_until_settled(&wired.accepted.subagent_id)
-        .await
-        .expect("child settles");
-    assert_eq!(settled.state, SubagentState::Cancelled);
-    await_serve(wired.serve).await;
-
-    assert_eq!(calls.borrow().len(), 1, "executor invocation count is one");
-    let tool_messages: Vec<_> = child_canonical_messages(&child)
-        .into_iter()
-        .filter_map(|message| match message {
-            MessageBlock::Tool(tool) => Some(tool),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(tool_messages.len(), 1);
-    assert!(
-        matches!(
-            tool_messages[0].result.status,
-            ToolExecutionStatus::Cancelled {
-                phase: ToolCancellationPhase::DuringExecution,
-                ..
-            }
-        ),
-        "the child records DuringExecution: {:?}",
-        tool_messages[0].result.status
-    );
-    let child_events = journal(&child.store);
-    assert_eq!(
-        count_events(&child_events, |event| matches!(
-            event,
-            RuntimeEvent::ToolExecutionStarted { .. }
-        )),
-        1
-    );
-    child
-        .runtime
-        .shutdown()
-        .await
-        .expect("child runtime drains");
-}
-
-// ---------------------------------------------------------------------------
-// Invariant 2 (application): inherited deadlines drive ordinary retry
-// ---------------------------------------------------------------------------
-
-/// The child's response-start deadline (from the inherited frozen policy)
-/// fires while the provider never answers. The timeout enters the ordinary
-/// generic retry path — one durable `ModelRequestFailed { Timeout }`, one
-/// `ModelRetryScheduled` — and the retry succeeds. The parent receives
-/// exactly one success and never observes a deadline or a retry.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn child_response_start_timeout_enters_generic_retry() {
-    let dir = tempfile::tempdir().expect("temp root");
-    let plane = standalone_parent_plane(&dir, "conv-138-response-start");
-    let (_release, release_rx) = model_release();
-    let child = child_fixture(
-        &dir,
-        &ConversationId::new("conv-138-response-start-child"),
-        vec![
-            // The provider connects and then never produces an event.
-            vec![FakeStep::ParkUntilReleased(release_rx)],
-            answer_script("ANSWER-AFTER-TIMEOUT"),
-        ],
-        ToolRegistry::new(),
-        Vec::new(),
-    )
-    .await;
-    let (retry_pause, mut retry_reached, retry_release) = RetryBackoffPause::install();
-    child.runtime.install_retry_backoff_pause(retry_pause);
-    let wired = launch_wired_child(&plane, &child, "inspect").await;
-
-    // The request was dispatched and is awaiting its first event.
-    let mut streams_started = child.model.streams_started();
-    tokio::time::timeout(LIVENESS, streams_started.wait_for(|count| *count >= 1))
-        .await
-        .expect("the child request starts")
-        .expect("stream watch stays open");
-    // The inherited response-start deadline fires on the manual clock.
-    child.clock.advance(INHERITED_RESPONSE_START_MS);
-    // The timeout is transient under Issue #134: the schedule commit is the
-    // synchronization point for the backoff wait.
-    await_journal_fact(
-        &child.store,
-        1,
-        is_retry_scheduled,
-        "the response-start timeout enters ordinary generic retry",
-    )
-    .await;
-    // The durable schedule commits before the backoff wait captures its
-    // absolute deadline. Wait for that capture frontier before advancing the
-    // manual clock; otherwise the test could advance first and make the
-    // retry calculate its deadline from the already-advanced clock.
-    tokio::time::timeout(LIVENESS, retry_reached.wait_for(|count| *count >= 1))
-        .await
-        .expect("the retry backoff captures its deadline")
-        .expect("retry backoff pause stays open");
-    retry_release
-        .send(())
-        .expect("release the captured retry deadline");
-    child.clock.advance(2_000);
-
-    let settled = plane
-        .registry
-        .wait_until_settled(&wired.accepted.subagent_id)
-        .await
-        .expect("child settles");
-    assert_eq!(settled.state, SubagentState::Succeeded);
-    assert_eq!(settled.detail.as_deref(), Some("ANSWER-AFTER-TIMEOUT"));
-    await_serve(wired.serve).await;
-
-    let child_events = journal(&child.store);
-    assert_eq!(
-        count_events(&child_events, |event| matches!(
-            event,
-            RuntimeEvent::ModelRequestFailed { error, .. }
-                if error.kind == ModelErrorKind::Timeout
-        )),
-        1,
-        "one response-start timeout outcome"
-    );
-    assert_eq!(count_events(&child_events, is_retry_scheduled), 1);
-    assert_eq!(child.model.requests().len(), 2, "the retry really ran");
-    let parent_events = journal(&plane.store);
-    assert_eq!(count_events(&parent_events, is_request_started), 0);
-    assert_eq!(count_events(&parent_events, is_retry_scheduled), 0);
-    assert_eq!(
-        terminal_publications(&parent_events),
-        vec![SubagentTerminalState::Succeeded]
-    );
-    child
-        .runtime
-        .shutdown()
-        .await
-        .expect("child runtime drains");
-}
-
-/// The child's stream-idle deadline fires after generation began. The
-/// partial text from the timed-out stream stays child-local; the ordinary
-/// retry succeeds and the parent receives only the final answer.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn child_stream_idle_timeout_enters_generic_retry() {
-    let dir = tempfile::tempdir().expect("temp root");
-    let plane = standalone_parent_plane(&dir, "conv-138-stream-idle");
-    let (_release, release_rx) = model_release();
-    let child = child_fixture(
-        &dir,
-        &ConversationId::new("conv-138-stream-idle-child"),
-        vec![
-            vec![
-                FakeStep::Emit(started()),
-                FakeStep::Emit(text("IDLE-PARTIAL")),
-                FakeStep::ParkUntilReleased(release_rx),
-            ],
-            answer_script("ANSWER-AFTER-IDLE"),
-        ],
-        ToolRegistry::new(),
-        Vec::new(),
-    )
-    .await;
-    let (retry_pause, mut retry_reached, retry_release) = RetryBackoffPause::install();
-    child.runtime.install_retry_backoff_pause(retry_pause);
-    let wired = launch_wired_child(&plane, &child, "inspect").await;
-
-    // Generation began: the stream-idle deadline now owns the request.
-    let mut parked = child.model.parked();
-    tokio::time::timeout(LIVENESS, parked.wait_for(|parked| *parked))
-        .await
-        .expect("the child stream idles")
-        .expect("parked watch stays open");
-    child.clock.advance(INHERITED_STREAM_IDLE_MS);
-    await_journal_fact(
-        &child.store,
-        1,
-        is_retry_scheduled,
-        "the stream-idle timeout enters ordinary generic retry",
-    )
-    .await;
-    // The durable schedule commits before the backoff wait captures its
-    // absolute deadline. Wait for that capture frontier before advancing the
-    // manual clock; otherwise the test could advance first and make the
-    // retry calculate its deadline from the already-advanced clock.
-    tokio::time::timeout(LIVENESS, retry_reached.wait_for(|count| *count >= 1))
-        .await
-        .expect("the retry backoff captures its deadline")
-        .expect("retry backoff pause stays open");
-    retry_release
-        .send(())
-        .expect("release the captured retry deadline");
-    child.clock.advance(2_000);
-
-    let settled = plane
-        .registry
-        .wait_until_settled(&wired.accepted.subagent_id)
-        .await
-        .expect("child settles");
-    assert_eq!(settled.state, SubagentState::Succeeded);
-    assert_eq!(settled.detail.as_deref(), Some("ANSWER-AFTER-IDLE"));
-    await_serve(wired.serve).await;
-
-    let child_events = journal(&child.store);
-    assert_eq!(
-        count_events(&child_events, |event| matches!(
-            event,
-            RuntimeEvent::ModelRequestFailed { error, .. }
-                if error.kind == ModelErrorKind::Timeout
-        )),
-        1
-    );
-    assert_eq!(count_events(&child_events, is_retry_scheduled), 1);
-    assert_eq!(child.model.requests().len(), 2);
-    let texts = parent_pending_texts(&plane);
-    assert_eq!(texts, vec!["ANSWER-AFTER-IDLE".to_owned()]);
-    assert!(
-        !texts[0].contains("IDLE-PARTIAL"),
-        "the timed-out stream's partial text stays child-local"
-    );
-    child
-        .runtime
-        .shutdown()
-        .await
-        .expect("child runtime drains");
-}
-
-// ---------------------------------------------------------------------------
-// Invariant 12: the child's compaction summarizer follows #135 semantics
-// ---------------------------------------------------------------------------
-
-/// The child composition's model-backed summarizer receives the same
-/// inherited policy and shared clock: a parked summary stream times out on
-/// the manual clock and fails as `SummaryFailed` — never converted into
-/// generic primary-model retry (exactly one summary request exists).
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn child_compaction_summarizer_timeout_is_not_generic_retry() {
-    let dir = tempfile::tempdir().expect("temp root");
-    let (_release, release_rx) = model_release();
-    let child = child_fixture(
-        &dir,
-        &ConversationId::new("conv-138-summary-child"),
-        vec![vec![
-            FakeStep::Emit(started()),
-            FakeStep::ParkUntilReleased(release_rx),
-        ]],
-        ToolRegistry::new(),
-        vec![timestamped_user("retired", &"old history ".repeat(512))],
-    )
-    .await;
-
-    // Manual compaction is the real runtime/context admission path. The
-    // parked next pull proves the summarizer consumed `Started` before the
-    // shared manual clock advances past the inherited deadline.
-    let summary_runtime = child.runtime.clone();
-    let summary_task = tokio::spawn(async move { summary_runtime.compact_context().await });
-    let mut parked = child.model.parked();
-    tokio::time::timeout(LIVENESS, parked.wait_for(|parked| *parked))
-        .await
-        .expect("summary provider reaches its parked next pull")
-        .expect("summary parked watch stays open");
-    child
-        .clock
-        .advance(INHERITED_RESPONSE_START_MS + INHERITED_STREAM_IDLE_MS);
-    let summary_error = tokio::time::timeout(LIVENESS, summary_task)
-        .await
-        .expect("summary deadline settles")
-        .expect("summary task joins")
-        .expect_err("the child summary must time out");
-    assert!(
-        matches!(
-            summary_error,
-            rustx::runtime::conversation_runtime::ManualCompactionError::Context(ref error)
-                if error.kind == rustx::context::ContextErrorKind::SummaryFailed
-        ),
-        "the child summarizer follows Issue #135 deadline semantics: {summary_error:?}"
-    );
-    assert_eq!(
-        child.model.requests().len(),
-        1,
-        "the summarizer never enters generic primary-model retry"
     );
     child
         .runtime
