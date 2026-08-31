@@ -22,7 +22,7 @@
 //! The Agent-Loop-facing half of the same contract — bounded coalescing, the
 //! fake-clock latency flush, release-after-commit, and the settlement each
 //! control-flow exit reaches — lives in the in-crate scripted suite
-//! `tests/scripted/issue108_publication.rs`, because it needs the scripted
+//! `tests/scripted/agent/publication.rs`, because it needs the scripted
 //! model adapter.
 
 #![allow(clippy::too_many_lines)] // deterministic store scenarios stay linear

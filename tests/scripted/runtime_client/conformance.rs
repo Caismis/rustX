@@ -15,7 +15,7 @@
 //!
 //! Byte-level framing, record limits, stdout purity, EOF/broken-pipe
 //! lifecycle, and backpressure are transport-specific and live in
-//! `issue38_stdio_transport.rs` instead.
+//! `stdio_transport.rs` (same directory) instead.
 
 use super::super::support::runtime_client_conformance as conformance;
 

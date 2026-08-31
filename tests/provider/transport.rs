@@ -85,7 +85,8 @@ async fn every_adapter_translates_request_only_carryover_without_canonical_ident
     })
     .await;
     let anthropic_server =
-        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse")).await;
+        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse"))
+            .await;
 
     let chat_events = collect(
         &openai_chat(&chat_server),
@@ -187,7 +188,8 @@ async fn openai_chat_one_attempt_on_429() {
 #[tokio::test]
 async fn openai_chat_one_attempt_on_500() {
     let server =
-        crate::common::FixtureServer::start(|_attempt, _head| error_fixture("openai_500.json")).await;
+        crate::common::FixtureServer::start(|_attempt, _head| error_fixture("openai_500.json"))
+            .await;
     let events = collect(&openai_chat(&server), chat_request()).await;
     assert_eq!(
         server.attempt_count(),
@@ -240,7 +242,8 @@ async fn anthropic_one_attempt_on_429() {
 #[tokio::test]
 async fn anthropic_one_attempt_on_500() {
     let server =
-        crate::common::FixtureServer::start(|_attempt, _head| error_fixture("anthropic_500.json")).await;
+        crate::common::FixtureServer::start(|_attempt, _head| error_fixture("anthropic_500.json"))
+            .await;
     let events = collect(&anthropic(&server), anthropic_request()).await;
     assert_eq!(
         server.attempt_count(),
@@ -263,7 +266,8 @@ async fn cancellation_before_network_creates_no_request() {
     })
     .await;
     let anthropic_server =
-        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse")).await;
+        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse"))
+            .await;
     let cases: Vec<(
         &str,
         Box<dyn ModelAdapter>,

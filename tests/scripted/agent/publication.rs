@@ -18,7 +18,7 @@
 //!
 //! The durable-store half of the same contract — the `C => U => P`
 //! implication, settlement exclusivity, crash-boundary classification, and
-//! audit consolidation — lives in `tests/issue108_publication.rs`.
+//! audit consolidation — lives in `tests/durable/publication.rs`.
 
 use super::super::{common, support};
 

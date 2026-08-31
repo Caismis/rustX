@@ -1261,10 +1261,12 @@ attempt commits exactly one terminal `RuntimeEvent`. A failed terminal append
 is an explicit durable failure, not a fabricated event. See
 `docs/agent-loop.md` for the full boundary description.
 
-The M3 test suite drives the loop with scripted fixture models and tools
-(`tests/common/fake.rs`), asserts behavior through the recorded
-`RuntimeEvent` trace and the platform `AttemptOutcome`, and reconstructs
-execution phases from traces (`tests/common/mod.rs`).
+The Agent Loop test suites drive the loop with scripted fixture models and
+tools (`tests/scripted/support/fake.rs`), assert behavior through the
+recorded `RuntimeEvent` trace and the platform `AttemptOutcome`, and
+reconstruct execution phases from traces and durable audits
+(`tests/common/mod.rs`). See `tests/README.md` for the full test
+architecture.
 
 ### Test seams are not published API
 
@@ -1284,9 +1286,10 @@ hides it from documentation without removing it. The suites that need a
 scripted `ModelAdapter` or a scripted `ContextSummarizer` therefore compile
 into the crate's own test build through `src/lib.rs`, with their sources
 under `tests/scripted/` so `src/` carries production code only. The
-remaining `tests/*.rs` binaries use published API exclusively; fixtures
-shared by both live in `tests/common/`, and fixtures that need a seam live
-in `tests/scripted/support/`.
+integration targets under `tests/*/main.rs` use published API exclusively;
+fixtures shared by both live in `tests/common/`, and fixtures that need a
+seam live in `tests/scripted/support/`. `tests/README.md` documents the
+domain ownership and target topology.
 
 ### Three provider fixtures, three bounded purposes
 
@@ -1309,9 +1312,9 @@ test-support/fake-provider         the canonical external provider-emulation
 
 The third is the one that decides what "conformance" means. It is an
 external Python 3.12 process (managed by uv, never a production runtime
-dependency) that speaks the real HTTP/SSE provider protocols, and
-`tests/issue47_conformance.rs` composes the real `LocalConversationRuntime`
-against it:
+dependency) that speaks the real HTTP/SSE provider protocols, and the
+`conformance` integration target (`tests/conformance/`) composes the real
+`LocalConversationRuntime` against it:
 
 ```text
 test driver -> real catalog, binding, adapter, HTTP client, stream parser,

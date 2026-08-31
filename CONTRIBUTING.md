@@ -100,9 +100,9 @@ cargo test --all-targets --all-features
 ### Full pre-PR and CI validation
 
 The baseline commands are only the Rust starting point. The full CI workflow
-also requires the provider emulator, the Issue #47 conformance suite, and the
-TUI checks. Run the following from the repository root with Python 3.12, `uv`,
-and the Node LTS line available:
+also requires the provider emulator checks and the TUI checks. Run the
+following from the repository root with Python 3.12, `uv`, and the Node LTS
+line available:
 
 ```bash
 # Provider emulator, used by both Rust and TUI integration checks.
@@ -110,8 +110,9 @@ and the Node LTS line available:
 (cd test-support/fake-provider && uv run --frozen pytest)
 
 # Rust validation with provider-emulator tests required rather than skipped.
+# One command covers every target, conformance included; tests/README.md
+# documents the domain targets for focused runs.
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features
-RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --test issue47_conformance --all-features
 
 # TUI's locked pnpm workflow.
 nvm install --lts

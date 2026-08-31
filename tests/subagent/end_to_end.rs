@@ -233,7 +233,10 @@ fn route(body: &str) -> crate::common::FixtureReply {
 /// parent receives its delegation tool call normally; only the real child
 /// request is held, which makes the child nonterminal while the parent is
 /// killed abruptly.
-fn hard_parent_death_route(body: &str, gate: &Arc<crate::common::HeaderGate>) -> crate::common::FixtureReply {
+fn hard_parent_death_route(
+    body: &str,
+    gate: &Arc<crate::common::HeaderGate>,
+) -> crate::common::FixtureReply {
     let has_tool_history =
         body.contains("\\\"role\\\":\\\"tool\\\"") || body.contains("\"role\":\"tool\"");
     if body.contains("please delegate hard parent death gate") && !has_tool_history {
@@ -338,7 +341,8 @@ fn has_runtime_interrupted_notice(message: &rustx::message::types::MessageBlock)
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn a_subagent_child_runs_end_to_end_through_the_real_process_stack() {
-    let server = crate::common::FixtureServer::start_with_body(|_attempt, _head, body| route(body)).await;
+    let server =
+        crate::common::FixtureServer::start_with_body(|_attempt, _head, body| route(body)).await;
     let root = tempfile::tempdir().expect("temp root");
     let mut process = Process::spawn(
         root.path(),

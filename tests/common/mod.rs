@@ -21,7 +21,7 @@
 //! that asserts one JSON field. It is **not** the implementation of composed
 //! conformance: a test that exercises the Agent Loop, the context engine, the
 //! tool runtime, or the capability plane belongs in
-//! `tests/issue47_conformance.rs` over [`provider_emulator`].
+//! `tests/conformance/agent_loop.rs` over [`provider_emulator`].
 //!
 //! [`FixtureServer`] itself is a small raw-TCP HTTP/1.1 responder that serves
 //! fixture bodies, counts attempts, and records request bodies.

@@ -5,7 +5,7 @@ their proof against **real process death**: a real child process running the
 real runtime stack over a real durable file, frozen at a named durable
 boundary, ended with an uncatchable `SIGKILL`, then reopened and recovered.
 
-The suite is `tests/scripted/issue111_process_death/` (60 conformance tests
+The suite is `tests/scripted/durable/process_death/` (60 conformance tests
 plus the child entry point). Every row of the tables below names the test that
 proves it.
 
@@ -497,11 +497,11 @@ with the consumption rules, the cancelled-turn case, and indeterminacy
 dominance proven beside the abstraction in `src/runtime/recovery.rs`, and the
 seeded-lineage case (a fork/clone/tree seed owes nothing, but the same lineage's
 own adopted turn does) in
-`tests/issue12_recovery.rs::a_seeded_lineage_owes_no_answer_for_its_bootstrap_prefix`
+`tests/durable/recovery.rs::a_seeded_lineage_owes_no_answer_for_its_bootstrap_prefix`
 — and its real-process-death counterpart in §7 below.
 
 The obligation's survival rule is proven twice more in
-`tests/issue12_recovery.rs`, at the durable-fact level:
+`tests/durable/recovery.rs`, at the durable-fact level:
 `the_answer_obligation_survives_a_chain_of_recovery_terminals`,
 `a_decided_terminal_still_consumes_the_answer_obligation`, and
 `a_known_outcome_terminal_transfers_the_obligation_of_a_later_adopted_turn`.

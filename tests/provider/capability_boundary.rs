@@ -124,7 +124,8 @@ async fn image_references_are_unsupported() {
     })
     .await;
     let anthropic_server =
-        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse")).await;
+        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse"))
+            .await;
     let cases: Vec<(
         &str,
         Box<dyn ModelAdapter>,
@@ -547,7 +548,8 @@ async fn responses_translates_full_history() {
 #[tokio::test]
 async fn anthropic_translates_full_history() {
     let server =
-        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse")).await;
+        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse"))
+            .await;
     let adapter = AnthropicMessagesAdapter::new(AnthropicAdapterConfig::new("k", server.url("")));
     let events = crate::common::collect_events(
         &adapter,

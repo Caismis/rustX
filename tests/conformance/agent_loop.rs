@@ -1137,7 +1137,8 @@ async fn repeated_compaction_invokes_the_real_provider_on_both_summary_policies(
 async fn await_history_len(driver: &Driver, expected: usize) {
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
-            if crate::common::request_snapshots(&driver.host().request_history()).len() == expected {
+            if crate::common::request_snapshots(&driver.host().request_history()).len() == expected
+            {
                 return;
             }
             tokio::task::yield_now().await;

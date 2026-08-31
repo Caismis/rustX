@@ -230,9 +230,10 @@ async fn qwen_null_fields_and_usage_chunk_are_supported() {
 /// Refusal deltas stream as refusal content, never as plain text.
 #[tokio::test]
 async fn refusal_deltas_normalize_as_refusal() {
-    let server =
-        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("openai_chat", "refusal.sse"))
-            .await;
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "refusal.sse")
+    })
+    .await;
     let events = collect_events(
         &adapter(&server),
         simple_request(

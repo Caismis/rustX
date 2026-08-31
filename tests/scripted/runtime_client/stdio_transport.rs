@@ -1,7 +1,7 @@
 //! Issue #38: stdio/JSONL framing, bounds, ordering, and lifecycle.
 //!
 //! These are the transport-specific regressions. Everything semantic lives
-//! in `issue38_conformance.rs`, which runs the same scenarios through this
+//! in `conformance.rs` (same directory), which runs the same scenarios through this
 //! transport and through the direct endpoint; this file asserts the things
 //! only a byte stream can be wrong about:
 //!

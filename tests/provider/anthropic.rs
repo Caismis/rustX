@@ -57,7 +57,8 @@ fn anthropic_state_of(event: &ModelEvent) -> &AnthropicContinuation {
 #[tokio::test]
 async fn text_stream_normalizes() {
     let server =
-        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse")).await;
+        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse"))
+            .await;
     let events = collect_events(
         &adapter(&server),
         simple_request(ModelProtocol::AnthropicMessages, "claude-test", "Hello"),
@@ -191,9 +192,10 @@ async fn multiple_text_blocks_keep_separate_indexes() {
 /// preserved as rustX-owned opaque continuation state.
 #[tokio::test]
 async fn thinking_block_preserves_signature_state() {
-    let server =
-        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "thinking.sse"))
-            .await;
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("anthropic", "thinking.sse")
+    })
+    .await;
     let events = collect_events(
         &adapter(&server),
         simple_request(ModelProtocol::AnthropicMessages, "claude-test", "Compute"),
@@ -413,9 +415,10 @@ async fn thinking_tool_thinking_text_sequence() {
 /// stop, with finish reason `ToolCalls`.
 #[tokio::test]
 async fn tool_use_streams_and_completes() {
-    let server =
-        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "tool_use.sse"))
-            .await;
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("anthropic", "tool_use.sse")
+    })
+    .await;
     let events = collect_events(&adapter(&server), request_with_tools("Weather")).await;
     assert!(matches!(
         events[1],
@@ -488,9 +491,10 @@ async fn multiple_tool_calls_keep_independent_indexes() {
 /// terminal event.
 #[tokio::test]
 async fn fallback_block_is_unsupported() {
-    let server =
-        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "fallback.sse"))
-            .await;
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("anthropic", "fallback.sse")
+    })
+    .await;
     let events = collect_events(
         &adapter(&server),
         simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi"),
@@ -599,9 +603,10 @@ async fn context_window_stop_reason_is_a_typed_failure() {
 /// an ordinary stop.
 #[tokio::test]
 async fn pause_turn_is_other_not_stop() {
-    let server =
-        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "pause_turn.sse"))
-            .await;
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("anthropic", "pause_turn.sse")
+    })
+    .await;
     let events = collect_events(
         &adapter(&server),
         simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi"),
@@ -623,9 +628,10 @@ async fn pause_turn_is_other_not_stop() {
 /// reason is Refusal.
 #[tokio::test]
 async fn refusal_is_a_successful_stop_condition() {
-    let server =
-        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "refusal.sse"))
-            .await;
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("anthropic", "refusal.sse")
+    })
+    .await;
     let events = collect_events(
         &adapter(&server),
         simple_request(ModelProtocol::AnthropicMessages, "claude-test", "No"),
@@ -701,9 +707,10 @@ async fn refusal_without_explanation_does_not_fabricate_text() {
 /// An error SSE event fails the invocation with the provider code preserved.
 #[tokio::test]
 async fn error_event_fails_with_provider_code() {
-    let server =
-        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "error_event.sse"))
-            .await;
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("anthropic", "error_event.sse")
+    })
+    .await;
     let events = collect_events(
         &adapter(&server),
         simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi"),
@@ -965,9 +972,10 @@ async fn response_body_disconnect_is_retryable_transport() {
 /// typed transport evidence.
 #[tokio::test]
 async fn interrupted_stream_fails() {
-    let server =
-        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "interrupted.sse"))
-            .await;
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("anthropic", "interrupted.sse")
+    })
+    .await;
     let events = collect_events(
         &adapter(&server),
         simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi"),
@@ -1117,7 +1125,8 @@ async fn http_errors_normalize() {
 #[tokio::test]
 async fn request_serialization_is_model_facing_only() {
     let server =
-        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse")).await;
+        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse"))
+            .await;
     let mut request = request_with_tools("hi");
     request.invocation.max_output_tokens = 4096;
     let events = collect_events(&adapter(&server), request).await;
@@ -1170,9 +1179,10 @@ async fn reasoning_profiles_produce_their_exact_configured_overlay() {
         ),
     ];
     for (params, label) in cases {
-        let server =
-            crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse"))
-                .await;
+        let server = crate::common::FixtureServer::start(|_attempt, _head| {
+            sse_fixture("anthropic", "text.sse")
+        })
+        .await;
         let mut request = simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi");
         request.invocation.request_params = crate::common::request_params(params.clone());
         let events = collect_events(&adapter(&server), request).await;
@@ -1204,7 +1214,8 @@ async fn reasoning_profiles_produce_their_exact_configured_overlay() {
 #[tokio::test]
 async fn previous_thinking_replays_from_opaque_state() {
     let server =
-        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse")).await;
+        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse"))
+            .await;
     let mut request = simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi");
     let opaque = serde_json::json!({
         "type": "thinking",
@@ -1249,7 +1260,8 @@ async fn previous_thinking_replays_from_opaque_state() {
 #[tokio::test]
 async fn stateless_previous_thinking_fails_explicitly() {
     let server =
-        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse")).await;
+        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse"))
+            .await;
     let mut request = simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi");
     request.messages.insert(
         0,
@@ -1276,7 +1288,8 @@ async fn stateless_previous_thinking_fails_explicitly() {
 #[tokio::test]
 async fn tool_results_merge_into_one_user_message() {
     let server =
-        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse")).await;
+        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse"))
+            .await;
     let mut request = simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi");
     let make_tool_message = |id: &str| {
         rustx::message::types::MessageBlock::Tool(rustx::message::types::ToolMessageBlock {
@@ -1332,7 +1345,8 @@ async fn tool_results_merge_into_one_user_message() {
 #[tokio::test]
 async fn continuation_contradiction_with_boundary_is_rejected() {
     let server =
-        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse")).await;
+        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse"))
+            .await;
     let mut request = simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi");
     request.messages.insert(
         0,
@@ -1367,7 +1381,8 @@ async fn continuation_contradiction_with_boundary_is_rejected() {
 #[tokio::test]
 async fn lifecycle_has_one_terminal_event() {
     let server =
-        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse")).await;
+        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse"))
+            .await;
     let events = collect_events(
         &adapter(&server),
         simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi"),
@@ -1430,7 +1445,8 @@ async fn redacted_thinking_preserves_opaque_data() {
 #[tokio::test]
 async fn redacted_thinking_replays_losslessly() {
     let server =
-        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse")).await;
+        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse"))
+            .await;
     let mut request = simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi");
     let opaque = serde_json::json!({
         "type": "redacted_thinking",
@@ -1612,7 +1628,8 @@ async fn tool_then_consecutive_inbound_users_translate_in_order() {
     use rustx::message::types::{AssistantMessageBlock, ToolMessageBlock, UserMessageBlock};
     use rustx::runtime::identity::MessageId;
     let server =
-        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse")).await;
+        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse"))
+            .await;
     let mut request = request_with_tools("hi");
     let user = |id: &str, text: &str| {
         MessageBlock::User(UserMessageBlock {
@@ -1687,7 +1704,8 @@ async fn tool_then_consecutive_inbound_users_translate_in_order() {
 #[tokio::test]
 async fn model_selectable_execution_mode_schema_reaches_the_provider_verbatim() {
     let server =
-        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse")).await;
+        crate::common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse"))
+            .await;
     let mut request = request_with_tools("hi");
     request.tools = vec![model_selectable_tool("bash", "tool-bash")];
     let events = collect_events(&adapter(&server), request).await;

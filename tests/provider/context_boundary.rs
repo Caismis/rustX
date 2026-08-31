@@ -55,7 +55,8 @@ async fn anthropic_receives_only_the_frozen_effective_prompt() {
     let adapter = rustx::model::AnthropicMessagesAdapter::new(
         rustx::model::AnthropicAdapterConfig::new("test-key", server.url("")),
     );
-    let events = crate::common::collect_events(&adapter, request(ModelProtocol::AnthropicMessages)).await;
+    let events =
+        crate::common::collect_events(&adapter, request(ModelProtocol::AnthropicMessages)).await;
     assert!(matches!(
         events.last(),
         Some(rustx::model::ModelEvent::Completed { .. })
@@ -79,7 +80,8 @@ async fn chat_completions_translates_the_prompt_without_mutating_user_facts() {
         rustx::model::OpenAiAdapterConfig::new("test-key", server.url("/v1")),
     );
     let events =
-        crate::common::collect_events(&adapter, request(ModelProtocol::OpenAiChatCompletions)).await;
+        crate::common::collect_events(&adapter, request(ModelProtocol::OpenAiChatCompletions))
+            .await;
     assert!(matches!(
         events.last(),
         Some(rustx::model::ModelEvent::Completed { .. })

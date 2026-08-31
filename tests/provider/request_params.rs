@@ -48,7 +48,10 @@ impl Protocol {
     /// A fixture server replying with this protocol's success stream.
     async fn server(&self) -> crate::common::FixtureServer {
         let (dir, name) = self.fixture();
-        crate::common::FixtureServer::start(move |_attempt, _head| crate::common::sse_fixture(dir, name)).await
+        crate::common::FixtureServer::start(move |_attempt, _head| {
+            crate::common::sse_fixture(dir, name)
+        })
+        .await
     }
 
     fn adapter(&self, server: &crate::common::FixtureServer) -> Box<dyn ModelAdapter> {
@@ -313,7 +316,8 @@ async fn responses_compat_owns_storage_structure() {
             crate::common::sse_fixture("openai_responses", "plain_text.sse")
         })
         .await;
-        let mut request = crate::common::simple_request(ModelProtocol::OpenAiResponses, "wire-test", "hi");
+        let mut request =
+            crate::common::simple_request(ModelProtocol::OpenAiResponses, "wire-test", "hi");
         request.invocation.compat.responses_storage = mode;
         let adapter =
             OpenAiResponsesAdapter::new(OpenAiAdapterConfig::new("fixture-key", server.url("/v1")));
@@ -388,7 +392,8 @@ async fn unsupported_input_is_rejected_before_any_provider_request() {
 
     for protocol in Protocol::ALL {
         let server = protocol.server().await;
-        let mut request = crate::common::simple_request(protocol.model_protocol(), "wire-test", "hi");
+        let mut request =
+            crate::common::simple_request(protocol.model_protocol(), "wire-test", "hi");
         request.messages = vec![rustx::model::ModelInputMessage::Canonical(
             MessageBlock::User(UserMessageBlock {
                 id: MessageId::new("msg-image-1"),
@@ -403,7 +408,8 @@ async fn unsupported_input_is_rejected_before_any_provider_request() {
                 timestamp: None,
             }),
         )];
-        let events = crate::common::collect_events(protocol.adapter(&server).as_ref(), request).await;
+        let events =
+            crate::common::collect_events(protocol.adapter(&server).as_ref(), request).await;
         assert_eq!(
             events.len(),
             1,
@@ -430,9 +436,11 @@ async fn a_text_only_model_is_usable_and_never_receives_tools() {
     for protocol in Protocol::ALL {
         // A plain text request succeeds.
         let server = protocol.server().await;
-        let mut request = crate::common::simple_request(protocol.model_protocol(), "wire-test", "hi");
+        let mut request =
+            crate::common::simple_request(protocol.model_protocol(), "wire-test", "hi");
         request.invocation.capabilities = ModelCapabilities::text_only(false, false);
-        let events = crate::common::collect_events(protocol.adapter(&server).as_ref(), request).await;
+        let events =
+            crate::common::collect_events(protocol.adapter(&server).as_ref(), request).await;
         assert!(
             matches!(events.last(), Some(ModelEvent::Completed { .. })),
             "a text-only model remains usable"
@@ -443,10 +451,12 @@ async fn a_text_only_model_is_usable_and_never_receives_tools() {
 
         // Supplying tool definitions to it is refused before the network.
         let server = protocol.server().await;
-        let mut request = crate::common::simple_request(protocol.model_protocol(), "wire-test", "hi");
+        let mut request =
+            crate::common::simple_request(protocol.model_protocol(), "wire-test", "hi");
         request.invocation.capabilities = ModelCapabilities::text_only(false, false);
         request.tools = vec![crate::common::model_tool("list_directory", "tool-list")];
-        let events = crate::common::collect_events(protocol.adapter(&server).as_ref(), request).await;
+        let events =
+            crate::common::collect_events(protocol.adapter(&server).as_ref(), request).await;
         assert_eq!(events.len(), 1);
         match events.first() {
             Some(ModelEvent::Failed { error }) => {

@@ -19,7 +19,7 @@
 //!
 //! The store-facing half of the same contract — exactly-once settlement,
 //! settled-without-requested, and the crash/restart behaviour of a historical
-//! approval — lives in `tests/issue109_interaction_audit.rs`, which needs no
+//! approval — lives in `tests/durable/interaction_audit.rs`, which needs no
 //! scripted model.
 //!
 //! There is no sleep and no timing assumption anywhere: the interaction

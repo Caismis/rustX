@@ -10,8 +10,39 @@ permissions:
   contents: read
 
 jobs:
+  # Static checks get their own job so formatting/lint failures report in
+  # about two minutes instead of after a full test build.
   quality:
-    name: Format, lint, and test (${{ matrix.os }})
+    name: Format, lint, and whitespace
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Check whitespace
+        run: git diff --check
+
+  # One `cargo test` run per OS covers the whole suite — the in-crate
+  # scripted contract suites (compiled into the lib test binary), every
+  # integration target, and the provider-emulator conformance target — so no
+  # target is ever executed twice by the same job. The environment variable
+  # turns a missing Python toolchain into a hard failure instead of a
+  # silent skip: emulator conformance is mandatory, never best-effort.
+  rust:
+    name: Test (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -25,13 +56,9 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
 
       # The provider emulator (Issue #47) is an external process the
-      # conformance suite launches with `uv run`. Without it those tests skip
-      # themselves, which is why the run below also sets
-      # RUSTX_REQUIRE_PROVIDER_EMULATOR.
+      # conformance target launches with `uv run`.
       - name: Install Python 3.12
         uses: actions/setup-python@v5
         with:
@@ -44,31 +71,40 @@ jobs:
         working-directory: test-support/fake-provider
         run: uv sync --frozen
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Run Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
       - name: Run the provider-emulator tests
         working-directory: test-support/fake-provider
         run: uv run --frozen pytest
 
-      # One `cargo test` run covers the whole suite, conformance included, so
-      # the workspace is compiled once. The environment variable turns a
-      # missing Python toolchain into a hard failure instead of a silent skip.
-      - name: Run tests
+      # Platform coverage is intentional, not duplicated by habit:
+      #
+      # - Both OSes run the in-crate scripted contracts, the durable SQLite
+      #   boundary, the real-process/composition boundary, the subagent
+      #   process boundary, the tool plane (shell, filesystem, executable
+      #   discovery), and provider-emulator conformance: process, IPC,
+      #   stdio, filesystem, and SQLite behavior genuinely differ across
+      #   platforms.
+      # - The provider adapter translation targets (`provider`) and the pure
+      #   serialization/configuration contract target (`contracts`) assert
+      #   deterministic JSON/SSE translation over loopback HTTP with no
+      #   process or filesystem semantics, so they run on Linux only.
+      - name: Run the full suite (Linux)
+        if: matrix.os == 'ubuntu-latest'
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
         run: cargo test --all-targets --all-features
 
-      - name: Run the Agent Loop conformance suite explicitly
+      - name: Run the platform-sensitive suite (macOS)
+        if: matrix.os == 'macos-latest'
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: cargo test --test issue47_conformance --all-features
-
-      - name: Check whitespace
-        run: git diff --check
+        run: >-
+          cargo test --all-features
+          --lib --bins
+          --test conformance
+          --test durable
+          --test process
+          --test subagent
+          --test tools
 
   # The TUI is a separate job on purpose: the Rust suites must never depend on
   # Node being present.

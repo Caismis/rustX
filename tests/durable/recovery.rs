@@ -24,7 +24,7 @@
 //! auto-admission after restart, the Class B continuation, the attempt-id
 //! allocator across a restart) live beside the coordinator in
 //! `src/runtime/conversation_runtime.rs`, and the real-provider proof that a
-//! recovered runtime resends nothing lives in `tests/issue47_conformance.rs`.
+//! recovered runtime resends nothing lives in `tests/conformance/agent_loop.rs`.
 
 use std::sync::Arc;
 

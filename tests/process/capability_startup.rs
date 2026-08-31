@@ -611,8 +611,9 @@ mod mcp {
             .expect("test executable")
             .display()
             .to_string();
-        let args =
-            fixture::fixture_spawn_args("capability_startup::mcp::no_shared_mcp_revision_is_unavailable_not_fatal");
+        let args = fixture::fixture_spawn_args(
+            "capability_startup::mcp::no_shared_mcp_revision_is_unavailable_not_fatal",
+        );
         let session = serde_json::json!({
             "agentId": "agent-81",
             "model": {"model": "local/composed-model"},

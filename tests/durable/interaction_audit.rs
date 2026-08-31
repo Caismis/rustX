@@ -24,7 +24,7 @@
 //! The Agent-Loop-facing half of the same contract — durable-before-prompt,
 //! `InteractionSettled(Approved)` before `ToolExecutionStarted`, denial
 //! semantics, and client detach/reattach — lives in the in-crate scripted
-//! suite `tests/scripted/issue109_interaction_audit.rs`, because it needs the
+//! suite `tests/scripted/interaction/audit.rs`, because it needs the
 //! scripted model adapter.
 
 #![allow(clippy::too_many_lines)] // deterministic store scenarios stay linear
